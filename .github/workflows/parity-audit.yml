@@ -1,0 +1,60 @@
+name: Feature Parity Audit
+
+on:
+  repository_dispatch:
+    types: [roboticus-release]
+  workflow_dispatch:
+    inputs:
+      roboticus_ref:
+        description: 'Roboticus ref to compare against (tag, branch, or SHA)'
+        required: false
+        default: 'main'
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout goboticus
+        uses: actions/checkout@v4
+
+      - name: Checkout roboticus
+        uses: actions/checkout@v4
+        with:
+          repository: robot-accomplice/roboticus
+          path: _roboticus
+          ref: ${{ github.event.client_payload.tag || inputs.roboticus_ref || 'main' }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build goboticus
+        run: go build ./...
+
+      - name: Run parity audit
+        id: audit
+        run: |
+          go run ./cmd/parity-audit \
+            --roboticus-dir=_roboticus \
+            --goboticus-dir=. \
+            --output=parity-report.md
+          echo "report_path=parity-report.md" >> "$GITHUB_OUTPUT"
+
+      - name: Create or update tracking issue
+        uses: peter-evans/create-issue-from-file@v5
+        with:
+          title: "Parity Audit: roboticus ${{ github.event.client_payload.tag || inputs.roboticus_ref || 'latest' }}"
+          content-filepath: parity-report.md
+          labels: parity-audit,automated
+          assignees: ''
+
+      - name: Upload report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: parity-report
+          path: parity-report.md

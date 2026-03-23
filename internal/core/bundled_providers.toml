@@ -1,0 +1,65 @@
+# Bundled provider defaults — user config always takes precedence.
+
+[providers.ollama]
+url = "http://localhost:11434"
+tier = "T1"
+format = "openai"
+is_local = true
+embedding_path = "/api/embeddings"
+embedding_model = "nomic-embed-text"
+embedding_dimensions = 768
+
+[providers.sglang]
+url = "http://localhost:30000"
+tier = "T1"
+format = "openai"
+is_local = true
+
+[providers.vllm]
+url = "http://localhost:8000"
+tier = "T1"
+format = "openai"
+is_local = true
+
+[providers.docker-model-runner]
+url = "http://localhost:12434"
+tier = "T1"
+format = "openai"
+is_local = true
+
+[providers.openai]
+url = "https://api.openai.com"
+tier = "T3"
+format = "openai"
+api_key_env = "OPENAI_API_KEY"
+embedding_path = "/v1/embeddings"
+embedding_model = "text-embedding-3-small"
+embedding_dimensions = 1536
+
+[providers.anthropic]
+url = "https://api.anthropic.com"
+tier = "T3"
+format = "anthropic"
+api_key_env = "ANTHROPIC_API_KEY"
+auth_header = "x-api-key"
+
+[providers.google]
+url = "https://generativelanguage.googleapis.com"
+tier = "T3"
+format = "google"
+api_key_env = "GOOGLE_API_KEY"
+embedding_path = "/v1beta/models"
+embedding_model = "text-embedding-004"
+embedding_dimensions = 768
+
+[providers.openrouter]
+url = "https://openrouter.ai/api"
+tier = "T2"
+format = "openai"
+api_key_env = "OPENROUTER_API_KEY"
+
+[providers.llama-cpp]
+url = "http://localhost:8080"
+tier = "T1"
+format = "openai"
+is_local = true

@@ -1,0 +1,294 @@
+package llm
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"math"
+	"net/http"
+	"os"
+	"strings"
+	"time"
+	"unicode"
+
+	"github.com/rs/zerolog/log"
+)
+
+const (
+	ngramDim     = 128
+	embedTimeout = 30 * time.Second
+)
+
+// EmbeddingClient generates vector embeddings via a remote provider or local n-gram fallback.
+type EmbeddingClient struct {
+	httpClient *http.Client
+	provider   *Provider
+}
+
+// NewEmbeddingClient creates an embedding client using the given provider.
+// If provider is nil, the client falls back to local n-gram hashing.
+func NewEmbeddingClient(provider *Provider) *EmbeddingClient {
+	return &EmbeddingClient{
+		httpClient: &http.Client{Timeout: embedTimeout},
+		provider:   provider,
+	}
+}
+
+// Embed generates embeddings for a batch of texts.
+func (ec *EmbeddingClient) Embed(ctx context.Context, texts []string) ([][]float32, error) {
+	if ec.provider == nil || ec.provider.EmbeddingPath == "" {
+		return ec.fallbackNgram(texts), nil
+	}
+
+	switch ec.provider.Format {
+	case FormatOpenAI, FormatOllama:
+		return ec.embedOpenAI(ctx, texts)
+	case FormatAnthropic:
+		// Anthropic doesn't have a public embedding endpoint; fall back.
+		return ec.fallbackNgram(texts), nil
+	case FormatGoogle:
+		return ec.embedGoogle(ctx, texts)
+	default:
+		return ec.embedOpenAI(ctx, texts)
+	}
+}
+
+// EmbedSingle generates an embedding for a single text.
+func (ec *EmbeddingClient) EmbedSingle(ctx context.Context, text string) ([]float32, error) {
+	results, err := ec.Embed(ctx, []string{text})
+	if err != nil {
+		return nil, err
+	}
+	if len(results) == 0 {
+		return nil, fmt.Errorf("embedding returned no results")
+	}
+	return results[0], nil
+}
+
+// Dimensions returns the expected embedding dimensions.
+func (ec *EmbeddingClient) Dimensions() int {
+	if ec.provider != nil && ec.provider.EmbeddingModel != "" {
+		// Known models and their dimensions — check the EmbeddingPath for clues.
+		switch {
+		case strings.Contains(ec.provider.EmbeddingModel, "text-embedding-3-small"):
+			return 1536
+		case strings.Contains(ec.provider.EmbeddingModel, "text-embedding-004"):
+			return 768
+		case strings.Contains(ec.provider.EmbeddingModel, "nomic-embed"):
+			return 768
+		}
+	}
+	return ngramDim
+}
+
+// embedOpenAI calls the OpenAI-compatible /v1/embeddings endpoint.
+func (ec *EmbeddingClient) embedOpenAI(ctx context.Context, texts []string) ([][]float32, error) {
+	body := map[string]any{
+		"input": texts,
+		"model": ec.provider.EmbeddingModel,
+	}
+	rawBody, _ := json.Marshal(body)
+
+	url := strings.TrimRight(ec.provider.URL, "/") + ec.provider.EmbeddingPath
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(rawBody))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	ec.setAuth(req)
+
+	resp, err := ec.httpClient.Do(req)
+	if err != nil {
+		log.Warn().Err(err).Msg("embedding request failed, using n-gram fallback")
+		return ec.fallbackNgram(texts), nil
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Warn().Int("status", resp.StatusCode).Msg("embedding API error, using n-gram fallback")
+		return ec.fallbackNgram(texts), nil
+	}
+
+	var result struct {
+		Data []struct {
+			Embedding []float32 `json:"embedding"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decoding embedding response: %w", err)
+	}
+
+	embeddings := make([][]float32, len(result.Data))
+	for i, d := range result.Data {
+		embeddings[i] = d.Embedding
+	}
+	return embeddings, nil
+}
+
+// embedGoogle calls the Google Generative AI batch embed endpoint.
+func (ec *EmbeddingClient) embedGoogle(ctx context.Context, texts []string) ([][]float32, error) {
+	apiKey := ""
+	if ec.provider.APIKeyEnv != "" {
+		apiKey = os.Getenv(ec.provider.APIKeyEnv)
+	}
+
+	// Build batch request.
+	type part struct {
+		Text string `json:"text"`
+	}
+	type content struct {
+		Parts []part `json:"parts"`
+	}
+	type embedReq struct {
+		Model   string  `json:"model"`
+		Content content `json:"content"`
+	}
+	requests := make([]embedReq, len(texts))
+	model := "models/" + ec.provider.EmbeddingModel
+	for i, t := range texts {
+		requests[i] = embedReq{
+			Model:   model,
+			Content: content{Parts: []part{{Text: t}}},
+		}
+	}
+
+	body, _ := json.Marshal(map[string]any{"requests": requests})
+	url := fmt.Sprintf("%s/v1beta/%s:batchEmbedContents?key=%s",
+		strings.TrimRight(ec.provider.URL, "/"), model, apiKey)
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := ec.httpClient.Do(req)
+	if err != nil {
+		log.Warn().Err(err).Msg("google embedding request failed, using n-gram fallback")
+		return ec.fallbackNgram(texts), nil
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Warn().Int("status", resp.StatusCode).Msg("google embedding API error, using n-gram fallback")
+		return ec.fallbackNgram(texts), nil
+	}
+
+	var result struct {
+		Embeddings []struct {
+			Values []float32 `json:"values"`
+		} `json:"embeddings"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decoding google embedding response: %w", err)
+	}
+
+	embeddings := make([][]float32, len(result.Embeddings))
+	for i, e := range result.Embeddings {
+		embeddings[i] = e.Values
+	}
+	return embeddings, nil
+}
+
+// setAuth adds authentication headers to the request.
+func (ec *EmbeddingClient) setAuth(req *http.Request) {
+	if ec.provider == nil {
+		return
+	}
+	apiKey := ""
+	if ec.provider.APIKeyEnv != "" {
+		apiKey = os.Getenv(ec.provider.APIKeyEnv)
+	}
+	if apiKey == "" {
+		return
+	}
+
+	if ec.provider.AuthHeader != "" {
+		req.Header.Set(ec.provider.AuthHeader, apiKey)
+	} else {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+
+	for k, v := range ec.provider.ExtraHeaders {
+		req.Header.Set(k, v)
+	}
+}
+
+// fallbackNgram produces a deterministic character n-gram embedding when no provider is available.
+func (ec *EmbeddingClient) fallbackNgram(texts []string) [][]float32 {
+	results := make([][]float32, len(texts))
+	for i, text := range texts {
+		results[i] = ngramHash(text, ngramDim)
+	}
+	return results
+}
+
+// ngramHash produces a fixed-length embedding from character trigrams.
+func ngramHash(text string, dim int) []float32 {
+	vec := make([]float64, dim)
+	lower := strings.ToLower(text)
+
+	// Remove non-alphanumeric characters.
+	var cleaned strings.Builder
+	for _, r := range lower {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == ' ' {
+			cleaned.WriteRune(r)
+		}
+	}
+	s := cleaned.String()
+
+	// Character trigrams.
+	for i := 0; i+3 <= len(s); i++ {
+		tri := s[i : i+3]
+		h := fnvHash(tri)
+		idx := h % uint32(dim)
+		if (h>>16)&1 == 0 {
+			vec[idx] += 1.0
+		} else {
+			vec[idx] -= 1.0
+		}
+	}
+
+	// L2 normalize.
+	var norm float64
+	for _, v := range vec {
+		norm += v * v
+	}
+	norm = math.Sqrt(norm)
+	result := make([]float32, dim)
+	if norm > 0 {
+		for j, v := range vec {
+			result[j] = float32(v / norm)
+		}
+	}
+	return result
+}
+
+// fnvHash is a simple FNV-1a hash for trigrams.
+func fnvHash(s string) uint32 {
+	h := uint32(2166136261)
+	for i := 0; i < len(s); i++ {
+		h ^= uint32(s[i])
+		h *= 16777619
+	}
+	return h
+}
+
+// CosineSimilarity computes the cosine similarity between two vectors.
+func CosineSimilarity(a, b []float32) float64 {
+	if len(a) != len(b) || len(a) == 0 {
+		return 0
+	}
+	var dot, normA, normB float64
+	for i := range a {
+		dot += float64(a[i]) * float64(b[i])
+		normA += float64(a[i]) * float64(a[i])
+		normB += float64(b[i]) * float64(b[i])
+	}
+	denom := math.Sqrt(normA) * math.Sqrt(normB)
+	if denom == 0 {
+		return 0
+	}
+	return dot / denom
+}
