@@ -38,7 +38,7 @@ func IsPathAllowed(path string, workspace string, allowedPaths []string) bool {
 	if err != nil {
 		return false
 	}
-	if strings.HasPrefix(absPath, absWorkspace) {
+	if absPath == absWorkspace || strings.HasPrefix(absPath, absWorkspace+string(filepath.Separator)) {
 		return true
 	}
 
@@ -48,7 +48,7 @@ func IsPathAllowed(path string, workspace string, allowedPaths []string) bool {
 		if err != nil {
 			continue
 		}
-		if strings.HasPrefix(absPath, absAllowed) {
+		if absPath == absAllowed || strings.HasPrefix(absPath, absAllowed+string(filepath.Separator)) {
 			return true
 		}
 	}

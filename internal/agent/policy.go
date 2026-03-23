@@ -270,8 +270,14 @@ type validationRule struct {
 func (r *validationRule) Name() string  { return "validation" }
 func (r *validationRule) Priority() int { return 6 }
 
-// Shell injection patterns.
-var shellPatterns = []string{"$(", "`", "${"}
+// Shell injection patterns — covers command substitution, chaining, piping, and redirection.
+var shellPatterns = []string{
+	"$(", "`", "${",      // command substitution
+	";", "&&", "||",      // command chaining
+	"|",                  // pipe
+	">", ">>", "<", "<<", // redirection
+	"\n",                 // newline injection
+}
 
 func (r *validationRule) Evaluate(req *ToolCallRequest, _ *ToolRegistry) PolicyDecisionResult {
 	// Size limit.

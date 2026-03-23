@@ -52,7 +52,31 @@ func New(cfg *core.Config) (*Daemon, error) {
 		return nil, fmt.Errorf("daemon: open database: %w", err)
 	}
 
-	llmSvc, err := llm.NewService(llm.ServiceConfig{}, store)
+	// Build LLM service config from validated core.Config.
+	var providers []llm.Provider
+	for name, pc := range cfg.Providers {
+		providers = append(providers, llm.Provider{
+			Name:             name,
+			URL:              pc.URL,
+			Format:           llm.APIFormat(pc.Format),
+			APIKeyEnv:        pc.APIKeyEnv,
+			ChatPath:         pc.ChatPath,
+			EmbeddingPath:    pc.EmbeddingPath,
+			EmbeddingModel:   pc.EmbeddingModel,
+			IsLocal:          pc.IsLocal,
+			CostPerInputTok:  pc.CostPerInputToken,
+			CostPerOutputTok: pc.CostPerOutputToken,
+			AuthHeader:       pc.AuthHeader,
+			ExtraHeaders:     pc.ExtraHeaders,
+			TPMLimit:         pc.TPMLimit,
+			RPMLimit:         pc.RPMLimit,
+		})
+	}
+	llmSvc, err := llm.NewService(llm.ServiceConfig{
+		Providers: providers,
+		Primary:   cfg.Models.Primary,
+		Fallbacks: cfg.Models.Fallback,
+	}, store)
 	if err != nil {
 		store.Close()
 		return nil, fmt.Errorf("daemon: init LLM: %w", err)
@@ -60,9 +84,27 @@ func New(cfg *core.Config) (*Daemon, error) {
 
 	injection := agent.NewInjectionDetector()
 	tools := agent.NewToolRegistry()
-	policyEngine := agent.NewPolicyEngine(agent.PolicyConfig{})
-	memMgr := agent.NewMemoryManager(agent.MemoryConfig{}, store)
-	retriever := agent.NewMemoryRetriever(agent.RetrievalConfig{}, agent.MemoryTierBudget{}, store)
+	policyEngine := agent.NewPolicyEngine(agent.PolicyConfig{
+		MaxTransferCents:   int64(cfg.Treasury.PerPaymentCap * 100),
+		RateLimitPerMinute: 30,
+	})
+	memMgr := agent.NewMemoryManager(agent.MemoryConfig{
+		TotalTokenBudget: 2048,
+		Budgets: agent.MemoryTierBudget{
+			Working:      cfg.Memory.WorkingBudget / 100.0,
+			Episodic:     cfg.Memory.EpisodicBudget / 100.0,
+			Semantic:     cfg.Memory.SemanticBudget / 100.0,
+			Procedural:   cfg.Memory.ProceduralBudget / 100.0,
+			Relationship: cfg.Memory.RelationshipBudget / 100.0,
+		},
+	}, store)
+	retriever := agent.NewMemoryRetriever(agent.DefaultRetrievalConfig(), agent.MemoryTierBudget{
+		Working:      cfg.Memory.WorkingBudget / 100.0,
+		Episodic:     cfg.Memory.EpisodicBudget / 100.0,
+		Semantic:     cfg.Memory.SemanticBudget / 100.0,
+		Procedural:   cfg.Memory.ProceduralBudget / 100.0,
+		Relationship: cfg.Memory.RelationshipBudget / 100.0,
+	}, store)
 	guards := pipeline.DefaultGuardChain()
 
 	dq := channel.NewDeliveryQueue(store)
@@ -78,6 +120,12 @@ func New(cfg *core.Config) (*Daemon, error) {
 		Retriever: retriever,
 		Guards:    guards,
 	})
+
+	// Sync hippocampus schema registry.
+	hippo := db.NewHippocampusRegistry(store)
+	if err := hippo.SyncBuiltinTables(context.Background()); err != nil {
+		log.Warn().Err(err).Msg("hippocampus sync failed")
+	}
 
 	eventBus := api.NewEventBus(256)
 

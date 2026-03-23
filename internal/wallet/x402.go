@@ -2,14 +2,21 @@ package wallet
 
 import (
 	"crypto/ecdsa"
-	"crypto/rand"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"hash"
 	"math/big"
 	"time"
 
 	"golang.org/x/crypto/sha3"
+)
+
+var (
+	hmacNew   = hmac.New
+	sha256New = func() hash.Hash { return sha256.New() }
 )
 
 // PaymentRequirements describes what a 402 response demands.
@@ -160,21 +167,110 @@ func trimHexPrefix(s string) string {
 	return s
 }
 
-// signDigest signs a 32-byte digest with an ECDSA private key, returning the 65-byte (r||s||v) signature.
+// signDigest signs a 32-byte digest with deterministic ECDSA (RFC 6979),
+// returning the 65-byte Ethereum signature (r || s || v).
 func signDigest(key *ecdsa.PrivateKey, digest []byte) ([]byte, error) {
-	// Use standard ECDSA signing — in production this would use a deterministic
-	// RFC 6979 signer to match Ethereum's signature format.
-	r, s, err := ecdsa.Sign(rand.Reader, key, digest)
+	// Generate deterministic k per RFC 6979 using HMAC-SHA256.
+	k := rfc6979K(key, digest)
+
+	curve := key.Curve
+	N := curve.Params().N
+	halfN := new(big.Int).Rsh(N, 1)
+
+	// Compute R = k*G, r = R.x mod N.
+	rx, ry, err := func() (*big.Int, *big.Int, error) {
+		x, y := curve.ScalarBaseMult(k.Bytes())
+		if x.Sign() == 0 && y.Sign() == 0 {
+			return nil, nil, fmt.Errorf("invalid k: point at infinity")
+		}
+		return x, y, nil
+	}()
 	if err != nil {
 		return nil, err
 	}
 
-	// Ethereum signature format: r (32 bytes) || s (32 bytes) || v (1 byte).
-	rBytes := r.Bytes()
-	sBytes := s.Bytes()
+	r := new(big.Int).Mod(rx, N)
+	if r.Sign() == 0 {
+		return nil, fmt.Errorf("r is zero")
+	}
+
+	// Compute s = k^-1 * (hash + r*d) mod N.
+	kInv := new(big.Int).ModInverse(k, N)
+	e := new(big.Int).SetBytes(digest)
+	s := new(big.Int).Mul(r, key.D)
+	s.Add(s, e)
+	s.Mul(s, kInv)
+	s.Mod(s, N)
+	if s.Sign() == 0 {
+		return nil, fmt.Errorf("s is zero")
+	}
+
+	// Ethereum enforces low-s (EIP-2): if s > N/2, flip to N-s.
+	if s.Cmp(halfN) > 0 {
+		s.Sub(N, s)
+	}
+
+	// Recovery ID: v = 27 + (R.y parity), adjusted if s was flipped.
+	v := byte(27)
+	if ry.Bit(0) == 1 {
+		v = 28
+	}
+
 	sig := make([]byte, 65)
-	copy(sig[32-len(rBytes):32], rBytes)
-	copy(sig[64-len(sBytes):64], sBytes)
-	sig[64] = 27 // v = 27 or 28 (needs recovery ID in production)
+	rB := r.Bytes()
+	sB := s.Bytes()
+	copy(sig[32-len(rB):32], rB)
+	copy(sig[64-len(sB):64], sB)
+	sig[64] = v
 	return sig, nil
+}
+
+// rfc6979K generates a deterministic k value per RFC 6979 using HMAC-SHA256.
+func rfc6979K(key *ecdsa.PrivateKey, hash []byte) *big.Int {
+	q := key.Curve.Params().N
+	x := key.D.Bytes()
+
+	// Pad private key to curve byte length.
+	qLen := (q.BitLen() + 7) / 8
+	if len(x) < qLen {
+		padded := make([]byte, qLen)
+		copy(padded[qLen-len(x):], x)
+		x = padded
+	}
+
+	// Step a: h1 = hash (already provided).
+	// Step b: V = 0x01 * 32.
+	v := make([]byte, 32)
+	for i := range v {
+		v[i] = 0x01
+	}
+	// Step c: K = 0x00 * 32.
+	kk := make([]byte, 32)
+
+	// Step d: K = HMAC(K, V || 0x00 || x || h1).
+	kk = hmacSHA256(kk, append(append(append(v, 0x00), x...), hash...))
+	// Step e: V = HMAC(K, V).
+	v = hmacSHA256(kk, v)
+	// Step f: K = HMAC(K, V || 0x01 || x || h1).
+	kk = hmacSHA256(kk, append(append(append(v, 0x01), x...), hash...))
+	// Step g: V = HMAC(K, V).
+	v = hmacSHA256(kk, v)
+
+	// Step h: generate k.
+	for {
+		v = hmacSHA256(kk, v)
+		k := new(big.Int).SetBytes(v)
+		if k.Sign() > 0 && k.Cmp(q) < 0 {
+			return k
+		}
+		kk = hmacSHA256(kk, append(v, 0x00))
+		v = hmacSHA256(kk, v)
+	}
+}
+
+// hmacSHA256 computes HMAC-SHA256.
+func hmacSHA256(key, data []byte) []byte {
+	h := hmacNew(sha256New, key)
+	h.Write(data)
+	return h.Sum(nil)
 }

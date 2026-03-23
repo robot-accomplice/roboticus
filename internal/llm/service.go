@@ -3,7 +3,6 @@ package llm
 import (
 	"context"
 	"fmt"
-	"sync"
 
 	"github.com/rs/zerolog/log"
 
@@ -170,7 +169,9 @@ func (s *Service) Stream(ctx context.Context, req *Request) (<-chan StreamChunk,
 		chunks, errs := client.Stream(ctx, req)
 
 		// Wrap to track circuit breaker state from stream results.
-		return s.wrapStreamBreaker(ctx, chunks, errs, cb, providerName), errs
+		// wrapStreamBreaker owns the original errs channel; a new outErrs is returned to the caller.
+		outChunks, outErrs := s.wrapStreamBreaker(ctx, chunks, errs, cb, providerName)
+		return outChunks, outErrs
 	}
 
 	// No providers available.
@@ -182,11 +183,14 @@ func (s *Service) Stream(ctx context.Context, req *Request) (<-chan StreamChunk,
 	return chunks, errs
 }
 
-// wrapStreamBreaker wraps a stream to record success on first chunk.
-func (s *Service) wrapStreamBreaker(ctx context.Context, in <-chan StreamChunk, errs <-chan error, cb *CircuitBreaker, provider string) <-chan StreamChunk {
+// wrapStreamBreaker wraps a stream to record circuit breaker state.
+// It owns the original errs channel and returns a new one to prevent data races.
+func (s *Service) wrapStreamBreaker(ctx context.Context, in <-chan StreamChunk, errs <-chan error, cb *CircuitBreaker, provider string) (<-chan StreamChunk, <-chan error) {
 	out := make(chan StreamChunk, 32)
+	outErrs := make(chan error, 1)
 	go func() {
 		defer close(out)
+		defer close(outErrs)
 		gotChunk := false
 
 		for chunk := range core.OrDone(ctx.Done(), in) {
@@ -201,19 +205,20 @@ func (s *Service) wrapStreamBreaker(ctx context.Context, in <-chan StreamChunk, 
 			}
 		}
 
-		if !gotChunk {
-			// Stream ended without any chunks — check for errors.
-			select {
-			case err := <-errs:
-				if err != nil {
+		// Drain the original error channel (single reader).
+		select {
+		case err := <-errs:
+			if err != nil {
+				if !gotChunk {
 					cb.RecordFailure()
-					log.Warn().Err(err).Str("provider", provider).Msg("stream failed")
 				}
-			default:
+				log.Warn().Err(err).Str("provider", provider).Msg("stream failed")
+				outErrs <- err
 			}
+		default:
 		}
 	}()
-	return out
+	return out, outErrs
 }
 
 // resolveProviderChain returns the ordered list of providers to try.
@@ -286,12 +291,9 @@ type ProviderStatus struct {
 }
 
 // Status returns the health of all providers (for /api/health).
+// providers is write-once (set only in NewService), so concurrent reads are safe.
 func (s *Service) Status() []ProviderStatus {
-	var mu sync.Mutex
 	var statuses []ProviderStatus
-
-	mu.Lock()
-	defer mu.Unlock()
 
 	for name, client := range s.providers {
 		cb := s.breakers.Get(name)

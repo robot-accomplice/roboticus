@@ -38,6 +38,15 @@ type Input struct {
 	Claim     *ChannelClaimContext
 }
 
+// Runner is the interface for executing the pipeline.
+// Routes and tests should depend on this interface, not the concrete Pipeline.
+type Runner interface {
+	Run(ctx context.Context, cfg Config, input Input) (*Outcome, error)
+}
+
+// Ensure *Pipeline satisfies Runner at compile time.
+var _ Runner = (*Pipeline)(nil)
+
 // Pipeline is the unified factory. Connectors call Run() with a Config preset
 // and an Input — the pipeline handles everything else.
 type Pipeline struct {
@@ -145,8 +154,8 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 	// Stage 6: User message storage.
 	msgID := db.NewID()
 	_, err = p.store.ExecContext(ctx,
-		`INSERT INTO messages (id, session_id, role, content, created_at)
-		 VALUES (?, ?, 'user', ?, datetime('now'))`,
+		`INSERT INTO session_messages (id, session_id, role, content)
+		 VALUES (?, ?, 'user', ?)`,
 		msgID, session.ID, content,
 	)
 	if err != nil {
@@ -241,11 +250,14 @@ func (p *Pipeline) runStandardInference(ctx context.Context, cfg Config, session
 
 	// Store assistant response.
 	assistantMsgID := db.NewID()
-	p.store.ExecContext(ctx,
-		`INSERT INTO messages (id, session_id, role, content, created_at)
-		 VALUES (?, ?, 'assistant', ?, datetime('now'))`,
+	_, storeErr := p.store.ExecContext(ctx,
+		`INSERT INTO session_messages (id, session_id, role, content)
+		 VALUES (?, ?, 'assistant', ?)`,
 		assistantMsgID, session.ID, result,
 	)
+	if storeErr != nil {
+		log.Error().Err(storeErr).Str("session", session.ID).Msg("failed to store assistant message")
+	}
 
 	// Nickname refinement (background, API only).
 	if cfg.NicknameRefinement && session.TurnCount() >= 4 {
@@ -293,7 +305,7 @@ func (p *Pipeline) resolveSession(ctx context.Context, cfg Config, input Input) 
 		scope := fmt.Sprintf("%s:%s", input.Platform, input.ChatID)
 		// Try to find existing session for this channel scope.
 		row := p.store.QueryRowContext(ctx,
-			`SELECT id FROM sessions WHERE agent_id = ? AND scope = ? AND archived_at IS NULL
+			`SELECT id FROM sessions WHERE agent_id = ? AND scope_key = ? AND status = 'active'
 			 ORDER BY created_at DESC LIMIT 1`,
 			input.AgentID, scope,
 		)
@@ -321,7 +333,8 @@ func (p *Pipeline) loadSession(ctx context.Context, input Input) (*agent.Session
 		input.SessionID,
 	)
 	if err != nil {
-		return sess, nil // Continue without history on error
+		log.Warn().Err(err).Str("session_id", input.SessionID).Msg("failed to load session history, continuing without context")
+		return sess, nil
 	}
 	defer rows.Close()
 
@@ -348,26 +361,14 @@ func (p *Pipeline) loadSessionByID(ctx context.Context, sessionID string, input 
 }
 
 func (p *Pipeline) createSession(ctx context.Context, input Input) (*agent.Session, error) {
-	id := db.NewID()
-	_, err := p.store.ExecContext(ctx,
-		`INSERT INTO sessions (id, agent_id, scope, created_at)
-		 VALUES (?, ?, ?, datetime('now'))`,
-		id, input.AgentID, input.Platform,
-	)
-	if err != nil {
-		return nil, err
-	}
-	sess := agent.NewSession(id, input.AgentID, input.AgentName)
-	sess.Channel = input.Platform
-	return sess, nil
+	return p.createSessionWithScope(ctx, input, input.Platform)
 }
 
-func (p *Pipeline) createSessionWithScope(ctx context.Context, input Input, scope string) (*agent.Session, error) {
+func (p *Pipeline) createSessionWithScope(ctx context.Context, input Input, scopeKey string) (*agent.Session, error) {
 	id := db.NewID()
 	_, err := p.store.ExecContext(ctx,
-		`INSERT INTO sessions (id, agent_id, scope, created_at)
-		 VALUES (?, ?, ?, datetime('now'))`,
-		id, input.AgentID, scope,
+		`INSERT INTO sessions (id, agent_id, scope_key) VALUES (?, ?, ?)`,
+		id, input.AgentID, scopeKey,
 	)
 	if err != nil {
 		return nil, err

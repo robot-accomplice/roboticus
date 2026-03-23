@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -208,21 +210,61 @@ func (t *HTTPFetchTool) Execute(ctx context.Context, params string, _ *Context) 
 
 func isPrivateHost(host string) bool {
 	lower := strings.ToLower(host)
-	if lower == "localhost" || lower == "127.0.0.1" || lower == "::1" || lower == "0.0.0.0" {
+
+	// Loopback and special addresses.
+	if lower == "localhost" || lower == "0.0.0.0" {
 		return true
 	}
-	if strings.HasPrefix(lower, "10.") || strings.HasPrefix(lower, "192.168.") {
+
+	// Resolve to IP and check using net.IP methods for comprehensive coverage.
+	// This also handles IPv4-mapped IPv6 (::ffff:127.0.0.1), DNS rebinding defense
+	// is handled by resolving the hostname to IPs before the HTTP call.
+	ips, err := net.LookupHost(host)
+	if err != nil {
+		// If we can't resolve, check string patterns as fallback.
+		return isPrivateHostString(lower)
+	}
+
+	for _, ipStr := range ips {
+		ip := net.ParseIP(ipStr)
+		if ip == nil {
+			continue
+		}
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+			return true
+		}
+		// Cloud metadata endpoints (AWS, GCP, Azure).
+		if ip.Equal(net.ParseIP("169.254.169.254")) {
+			return true
+		}
+		// GCP metadata alternative.
+		if ip.Equal(net.ParseIP("metadata.google.internal")) {
+			return true
+		}
+	}
+	return false
+}
+
+// isPrivateHostString is a fallback string-based check when DNS resolution fails.
+func isPrivateHostString(host string) bool {
+	if host == "127.0.0.1" || host == "::1" || host == "0.0.0.0" || host == "localhost" {
 		return true
 	}
-	if strings.HasPrefix(lower, "172.") {
-		parts := strings.SplitN(lower, ".", 3)
+	if strings.HasPrefix(host, "10.") || strings.HasPrefix(host, "192.168.") || strings.HasPrefix(host, "169.254.") {
+		return true
+	}
+	if strings.HasPrefix(host, "172.") {
+		parts := strings.SplitN(host, ".", 3)
 		if len(parts) >= 2 {
-			var second int
-			fmt.Sscanf(parts[1], "%d", &second)
-			if second >= 16 && second <= 31 {
+			second, err := strconv.Atoi(parts[1])
+			if err == nil && second >= 16 && second <= 31 {
 				return true
 			}
 		}
+	}
+	// IPv6 patterns.
+	if strings.HasPrefix(host, "::ffff:") || strings.HasPrefix(host, "fe80:") || host == "::1" {
+		return true
 	}
 	return false
 }

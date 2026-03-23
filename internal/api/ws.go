@@ -60,7 +60,7 @@ func (eb *EventBus) Unsubscribe(ch chan string) {
 func HandleWebSocket(bus *EventBus, apiKey string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-			InsecureSkipVerify: true, // Auth handled by middleware
+			OriginPatterns: []string{"localhost:*", "127.0.0.1:*", "0.0.0.0:*"},
 		})
 		if err != nil {
 			log.Warn().Err(err).Msg("websocket upgrade failed")

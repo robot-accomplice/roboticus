@@ -299,9 +299,3 @@ func truncate(s string, maxLen int) string {
 	return s[:maxLen] + "..."
 }
 
-func boolStr(v int) string {
-	if v == 1 {
-		return "success"
-	}
-	return "failure"
-}

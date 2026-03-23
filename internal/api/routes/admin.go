@@ -1,6 +1,7 @@
 package routes
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"net/http"
 
@@ -315,14 +316,25 @@ func WebhookTelegram(p *pipeline.Pipeline) http.HandlerFunc {
 }
 
 // WebhookWhatsAppVerify handles WhatsApp webhook verification challenge.
-func WebhookWhatsAppVerify() http.HandlerFunc {
+// verifyToken must match the token configured in the Meta developer console.
+func WebhookWhatsAppVerify(verifyToken string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		mode := r.URL.Query().Get("hub.mode")
+		token := r.URL.Query().Get("hub.verify_token")
 		challenge := r.URL.Query().Get("hub.challenge")
-		if challenge != "" {
-			w.Write([]byte(challenge))
+
+		if mode != "subscribe" || challenge == "" {
+			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
+
+		if verifyToken == "" || subtle.ConstantTimeCompare([]byte(token), []byte(verifyToken)) != 1 {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+
 		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(challenge))
 	}
 }
 

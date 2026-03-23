@@ -3,6 +3,7 @@ package api
 import (
 	"crypto/subtle"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -16,9 +17,12 @@ func APIKeyAuth(apiKey string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// If no API key configured, allow loopback only.
+			// IMPORTANT: Use the raw RemoteAddr (before X-Forwarded-For rewriting)
+			// to prevent header-spoofing auth bypass behind reverse proxies.
 			if apiKey == "" {
-				ip := r.RemoteAddr
-				if strings.HasPrefix(ip, "127.0.0.1") || strings.HasPrefix(ip, "[::1]") || strings.HasPrefix(ip, "localhost") {
+				host, _, _ := net.SplitHostPort(r.RemoteAddr)
+				ip := net.ParseIP(host)
+				if ip != nil && ip.IsLoopback() {
 					next.ServeHTTP(w, r)
 					return
 				}

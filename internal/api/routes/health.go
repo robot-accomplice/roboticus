@@ -6,6 +6,8 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/rs/zerolog/log"
+
 	"goboticus/internal/db"
 	"goboticus/internal/llm"
 )
@@ -76,6 +78,13 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 // writeError is a helper to write JSON error responses.
+// For client-facing errors (400s) the message is passed through.
+// For internal errors (500s) the raw error is logged and a generic message is returned.
 func writeError(w http.ResponseWriter, status int, msg string) {
+	if status >= 500 {
+		log.Error().Str("error", msg).Msg("internal error")
+		writeJSON(w, status, map[string]string{"error": "internal error"})
+		return
+	}
 	writeJSON(w, status, map[string]string{"error": msg})
 }

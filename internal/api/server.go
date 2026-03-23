@@ -62,7 +62,7 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 		r.Get("/health", routes.Health(state.Store, state.LLM))
 		r.Get("/.well-known/agent.json", routes.AgentCard())
 		r.Post("/api/webhooks/telegram", routes.WebhookTelegram(state.Pipeline))
-		r.Get("/api/webhooks/whatsapp", routes.WebhookWhatsAppVerify())
+		r.Get("/api/webhooks/whatsapp", routes.WebhookWhatsAppVerify(state.Config.Channels.WhatsAppTokenEnv))
 		r.Post("/api/webhooks/whatsapp", routes.WebhookWhatsApp(state.Pipeline))
 	})
 

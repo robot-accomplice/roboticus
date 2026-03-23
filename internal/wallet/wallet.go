@@ -6,7 +6,6 @@ import (
 	"crypto/cipher"
 	"crypto/ecdsa"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -18,7 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"golang.org/x/crypto/hkdf"
+	"golang.org/x/crypto/scrypt"
 
 	"github.com/rs/zerolog/log"
 )
@@ -90,13 +89,12 @@ func (w *Wallet) loadOrGenerate() error {
 		}
 	}
 
-	// Try plaintext hex.
-	hexKey := strings.TrimSpace(string(data))
-	if err := w.fromHex(hexKey); err != nil {
-		return fmt.Errorf("wallet: cannot load key: %w", err)
+	// Plaintext wallet keys are rejected for security.
+	// Set GOBOTICUS_WALLET_PASSPHRASE to encrypt the wallet.
+	if w.cfg.Passphrase == "" {
+		return fmt.Errorf("wallet: passphrase required to load wallet (set GOBOTICUS_WALLET_PASSPHRASE)")
 	}
-	log.Info().Str("address", w.address).Msg("wallet loaded (plaintext)")
-	return nil
+	return fmt.Errorf("wallet: cannot decrypt key (wrong passphrase?)")
 }
 
 func (w *Wallet) generateAndSave() error {
@@ -114,7 +112,7 @@ func (w *Wallet) generateAndSave() error {
 			return fmt.Errorf("wallet encrypt: %w", err)
 		}
 	} else {
-		data = []byte(hex.EncodeToString(keyBytes))
+		return fmt.Errorf("wallet: passphrase required to save wallet (set GOBOTICUS_WALLET_PASSPHRASE)")
 	}
 
 	if err := os.WriteFile(w.cfg.Path, data, 0600); err != nil {
@@ -226,12 +224,10 @@ func (w *Wallet) decrypt(data []byte) error {
 }
 
 func deriveKeyFromPassphrase(passphrase string, salt []byte) ([]byte, error) {
-	reader := hkdf.New(sha256.New, []byte(passphrase), salt, []byte("goboticus-wallet"))
-	key := make([]byte, 32)
-	if _, err := io.ReadFull(reader, key); err != nil {
-		return nil, err
-	}
-	return key, nil
+	// scrypt with N=262144, r=8, p=1 — designed for low-entropy passphrases.
+	// Provides ~100ms key derivation on modern hardware, making brute force
+	// infeasible compared to the previous HKDF which was near-instant.
+	return scrypt.Key([]byte(passphrase), salt, 262144, 8, 1, 32)
 }
 
 // GetBalance queries the native balance via JSON-RPC.

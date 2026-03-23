@@ -251,11 +251,11 @@ func (l *Loop) act(ctx context.Context, session *Session) (Action, error) {
 
 		// Policy check.
 		if l.policy != nil {
-			decision := l.policy.Evaluate(&ToolCallRequest{
+			decision := l.policy.EvaluateWithTools(&ToolCallRequest{
 				ToolName:  tc.Function.Name,
 				Arguments: tc.Function.Arguments,
 				Authority: session.Authority,
-			})
+			}, l.tools)
 			if decision.Denied() {
 				result := fmt.Sprintf("Policy denied: %s", decision.Reason)
 				session.AddToolResult(tc.ID, tc.Function.Name, result, true)
