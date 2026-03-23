@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23060e20'/%3E%3Crect x='10' y='5' width='12' height='18' rx='0.8' fill='none' stroke='%23c180ff' stroke-width='2'/%3E%3Ccircle cx='13.6' cy='11.5' r='1.35' fill='%23c180ff'/%3E%3Ccircle cx='18.4' cy='11.5' r='1.35' fill='%23c180ff'/%3E%3Crect x='13.6' y='16.8' width='4.8' height='1.35' fill='%23c180ff'/%3E%3Crect x='15' y='23' width='2' height='4' fill='%23c180ff'/%3E%3C/svg%3E">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='4' fill='%23060e20'/%3E%3Cline x1='16' y1='1' x2='16' y2='5' stroke='%23c180ff' stroke-width='1.5' stroke-linecap='round'/%3E%3Ccircle cx='16' cy='1' r='1.2' fill='%23c180ff'/%3E%3Ccircle cx='7.5' cy='8' r='2.5' fill='none' stroke='%23c180ff' stroke-width='1.5'/%3E%3Ccircle cx='24.5' cy='8' r='2.5' fill='none' stroke='%23c180ff' stroke-width='1.5'/%3E%3Crect x='8' y='5' width='16' height='16' rx='4' fill='none' stroke='%23c180ff' stroke-width='1.8'/%3E%3Ccircle cx='13' cy='11' r='1.8' fill='%23c180ff'/%3E%3Ccircle cx='19' cy='11' r='1.8' fill='%23c180ff'/%3E%3Crect x='14.2' y='17.5' width='1.5' height='2.8' rx='0.4' fill='%23c180ff'/%3E%3Crect x='16.3' y='17.5' width='1.5' height='2.8' rx='0.4' fill='%23c180ff'/%3E%3Crect x='14.5' y='21' width='3' height='3' rx='0.5' fill='%23c180ff'/%3E%3Cline x1='13' y1='16.5' x2='19' y2='16.5' stroke='%23c180ff' stroke-width='1' stroke-linecap='round'/%3E%3C/svg%3E">
   <style>
     :root, [data-theme="ai-purple"] {
       --bg: #060e20;
@@ -681,11 +681,24 @@
       <div class="sidebar-header">
         <svg class="robot-icon" viewBox="0 0 32 32" width="32" height="32" xmlns="http://www.w3.org/2000/svg">
           <rect width="32" height="32" rx="2" fill="var(--surface-4, #142449)"/>
-          <rect x="10" y="5" width="12" height="18" rx="0.8" fill="none" stroke="var(--robot-color, #c180ff)" stroke-width="2"/>
-          <circle cx="13.6" cy="11.5" r="1.35" fill="var(--robot-color, #c180ff)"/>
-          <circle cx="18.4" cy="11.5" r="1.35" fill="var(--robot-color, #c180ff)"/>
-          <rect x="13.6" y="16.8" width="4.8" height="1.35" fill="var(--robot-color, #c180ff)"/>
-          <rect x="15" y="23" width="2" height="4" fill="var(--robot-color, #c180ff)"/>
+          <!-- Antenna (from roboticus) -->
+          <line x1="16" y1="1" x2="16" y2="5" stroke="var(--robot-color, #c180ff)" stroke-width="1.5" stroke-linecap="round"/>
+          <circle cx="16" cy="1" r="1.2" fill="var(--robot-color, #c180ff)"/>
+          <!-- Gopher ears (round, like the Go gopher) -->
+          <circle cx="7.5" cy="8" r="2.5" fill="none" stroke="var(--robot-color, #c180ff)" stroke-width="1.5"/>
+          <circle cx="24.5" cy="8" r="2.5" fill="none" stroke="var(--robot-color, #c180ff)" stroke-width="1.5"/>
+          <!-- Head (roboticus rectangle + gopher roundness) -->
+          <rect x="8" y="5" width="16" height="16" rx="4" fill="none" stroke="var(--robot-color, #c180ff)" stroke-width="1.8"/>
+          <!-- Eyes (roboticus circle style, gopher-large) -->
+          <circle cx="13" cy="11" r="1.8" fill="var(--robot-color, #c180ff)"/>
+          <circle cx="19" cy="11" r="1.8" fill="var(--robot-color, #c180ff)"/>
+          <!-- Gopher teeth (two front teeth) -->
+          <rect x="14.2" y="17.5" width="1.5" height="2.8" rx="0.4" fill="var(--robot-color, #c180ff)"/>
+          <rect x="16.3" y="17.5" width="1.5" height="2.8" rx="0.4" fill="var(--robot-color, #c180ff)"/>
+          <!-- Neck connector (from roboticus) -->
+          <rect x="14.5" y="21" width="3" height="3" rx="0.5" fill="var(--robot-color, #c180ff)"/>
+          <!-- Mouth line -->
+          <line x1="13" y1="16.5" x2="19" y2="16.5" stroke="var(--robot-color, #c180ff)" stroke-width="1" stroke-linecap="round"/>
         </svg>
         <div class="sidebar-brand">
           <div class="sidebar-title glow-text">GOBOTICUS</div>
