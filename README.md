@@ -1,23 +1,18 @@
-<p align="center">
-  <img src="https://img.shields.io/badge/Go-1.26-00ADD8?style=flat-square&logo=go&logoColor=white" alt="Go 1.26" />
-  <img src="https://img.shields.io/github/actions/workflow/status/robot-accomplice/goboticus/parity-audit.yml?style=flat-square&label=parity%20audit" alt="Parity Audit" />
-  <img src="https://img.shields.io/github/license/robot-accomplice/goboticus?style=flat-square" alt="License" />
-  <img src="https://img.shields.io/github/go-mod/go-version/robot-accomplice/goboticus?style=flat-square" alt="Go Version" />
-  <img src="https://img.shields.io/badge/lines-17k%2B-blue?style=flat-square" alt="Lines of Code" />
-  <img src="https://img.shields.io/badge/tests-29%20files-green?style=flat-square" alt="Tests" />
-  <img src="https://img.shields.io/badge/channels-7-purple?style=flat-square" alt="Channels" />
-  <img src="https://img.shields.io/badge/providers-10-orange?style=flat-square" alt="Providers" />
-</p>
+# Goboticus
 
-<h1 align="center">Goboticus</h1>
+![Go 1.26](https://img.shields.io/badge/Go-1.26-00ADD8?style=flat-square&logo=go&logoColor=white)
+![Parity Audit](https://img.shields.io/github/actions/workflow/status/robot-accomplice/goboticus/parity-audit.yml?style=flat-square&label=parity%20audit)
+![License](https://img.shields.io/github/license/robot-accomplice/goboticus?style=flat-square)
+![Go Version](https://img.shields.io/github/go-mod/go-version/robot-accomplice/goboticus?style=flat-square)
+![Lines of Code](https://img.shields.io/badge/lines-17k%2B-blue?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-29%20files-green?style=flat-square)
+![Channels](https://img.shields.io/badge/channels-7-purple?style=flat-square)
+![Providers](https://img.shields.io/badge/providers-10-orange?style=flat-square)
 
-<p align="center">
-  <strong>Autonomous AI agent runtime — idiomatic Go rewrite of <a href="https://github.com/robot-accomplice/roboticus">roboticus</a></strong>
-</p>
+**Autonomous AI agent runtime - idiomatic Go rewrite of
+[roboticus](https://github.com/robot-accomplice/roboticus)**
 
-<p align="center">
-  Multi-model inference &bull; 5-tier memory &bull; 7 channels &bull; On-chain wallet &bull; Full dashboard SPA
-</p>
+Multi-model inference - 5-tier memory - 7 channels - On-chain wallet - Full dashboard SPA
 
 ---
 
@@ -25,30 +20,30 @@
 
 Goboticus is a self-contained AI agent runtime that manages its own context, memory, tools, scheduling, and multi-channel communication. It compiles to a single binary with an embedded web dashboard — no external dependencies beyond an LLM provider and SQLite.
 
-```
+```bash
 goboticus serve --port 18789
 ```
 
 ## Architecture
 
-```
-┌──────────────────────────────────────────────────────────────┐
-│                        HTTP / WebSocket                       │
-│  Dashboard SPA (embedded)  │  REST API  │  SSE Streaming     │
-├──────────────────────────────────────────────────────────────┤
-│                         Pipeline                              │
-│  Validate → Injection Defense → Session → Decomposition →     │
-│  Skill Match → Shortcut → ReAct Loop → Guards → Memory       │
-├──────────────────────────────────────────────────────────────┤
-│  Agent Loop     │  Memory (5-tier)  │  Tool Execution         │
-│  ┌────────────┐ │  Working          │  read_file, write_file  │
-│  │ LLM Call   │ │  Episodic         │  bash, search_files     │
-│  │ Tool Use   │ │  Semantic         │  web_search, http_fetch │
-│  │ Policy     │ │  Procedural       │  introspect, echo       │
-│  │ Guardrails │ │  Relationship     │  glob_files, edit_file  │
-│  └────────────┘ │                   │  list_directory         │
-├──────────────────────────────────────────────────────────────┤
-│  Channels        │  LLM Service      │  Scheduler             │
+```text
+┌────────────────────────────────────────────────────────────────┐
+│                        HTTP / WebSocket                        │
+│  Dashboard SPA (embedded)  │  REST API  │  SSE Streaming       │
+├────────────────────────────────────────────────────────────────┤
+│                         Pipeline                               │
+│  Validate → Injection Defense → Session → Decomposition →      │
+│  Skill Match → Shortcut → ReAct Loop → Guards → Memory         │
+├────────────────────────────────────────────────────────────────┤
+│  Agent Loop     │  Memory (5-tier)  │  Tool Execution          │
+│  ┌────────────┐ │  Working          │  read_file, write_file   │
+│  │ LLM Call   │ │  Episodic         │  bash, search_files      │
+│  │ Tool Use   │ │  Semantic         │  web_search, http_fetch  │
+│  │ Policy     │ │  Procedural       │  introspect, echo        │
+│  │ Guardrails │ │  Relationship     │  glob_files, edit_file   │
+│  └────────────┘ │                   │  list_directory          │
+├────────────────────────────────────────────────────────────────┤
+│  Channels        │  LLM Service      │  Scheduler              │
 │  Telegram        │  Router + Cascade  │  Cron (durable)        │
 │  Discord         │  Circuit Breaker   │  Lease-based locking   │
 │  Signal          │  Semantic Cache    │  Interval + One-shot   │
@@ -56,14 +51,15 @@ goboticus serve --port 18789
 │  Voice (STT/TTS) │  Tiered Inference  │  Wallet                │
 │  Email           │  10 Bundled        │  secp256k1 ECDSA       │
 │  A2A (encrypted) │  Providers         │  x402 EIP-3009 signing │
-├──────────────────────────────────────────────────────────────┤
-│                      SQLite + FTS5                            │
-└──────────────────────────────────────────────────────────────┘
+├────────────────────────────────────────────────────────────────┤
+│                      SQLite + FTS5                             │
+└────────────────────────────────────────────────────────────────┘
 ```
 
 ## Features
 
 ### Inference Engine
+
 - **Multi-model routing** with complexity-based tier selection (Small/Medium/Large/Frontier)
 - **Cascade optimizer** — sliding-window expected utility to decide cheap-first vs direct
 - **Tiered inference** — cache → local → cloud with confidence evaluation
@@ -73,6 +69,7 @@ goboticus serve --port 18789
 - **10 bundled providers** — Ollama, OpenAI, Anthropic, Google, OpenRouter, vLLM, sglang, llama-cpp, docker-model-runner, Moonshot
 
 ### Memory System
+
 - **Working memory** — active session context (goals, notes, turn summaries)
 - **Episodic memory** — past events with temporal decay re-ranking
 - **Semantic memory** — structured knowledge (category/key/value with confidence scores)
@@ -82,14 +79,16 @@ goboticus serve --port 18789
 - **Hybrid retrieval** — FTS5 + cosine similarity with configurable blend weight
 
 ### Pipeline
+
 - 12-stage inference pipeline: validation, injection defense, session resolution, dedup, decomposition, skill-first dispatch, shortcut handling, authority resolution, delegation, ReAct loop, guard chain, memory ingest
 - **Guard chain** with retry support — empty response, system prompt leak, content classification, repetition detection
 - **Context window management** — 5-stage progressive compaction (verbatim → selective trim → semantic compress → topic extract → skeleton)
 - **Semantic compression** — IDF-scored sentence selection preserving high-information content
 
 ### Channels
+
 | Channel | Send | Receive | Features |
-|---------|------|---------|----------|
+| --------- | ------ | --------- | ---------- |
 | **Telegram** | Markdown, reply keyboards | Long-poll + webhook | MarkdownV2 fallback, media |
 | **Discord** | Embeds, reactions | Webhook ingest | Rich formatting |
 | **Signal** | Styled text | JSON-RPC daemon | End-to-end encrypted |
@@ -99,6 +98,7 @@ goboticus serve --port 18789
 | **A2A** | Encrypted | Encrypted | X25519 ECDH + AES-256-GCM |
 
 ### Dashboard
+
 - **Embedded SPA** — 7,395-line single-file app served from the binary via `go:embed`
 - **12 pages** — Overview, Sessions, Context, Memory, Skills, Agents, Scheduler, Metrics, Efficiency, Wallet, Workspace, Settings
 - **4 themes** — AI Purple (default), CRT Orange, CRT Green, Psychedelic
@@ -107,6 +107,7 @@ goboticus serve --port 18789
 - **Canvas charts** — Sparkline cost/token graphs, SVG spider routing profiles
 
 ### Wallet & Payments
+
 - **secp256k1 ECDSA** key generation and management
 - **AES-256-GCM** encrypted key storage with HKDF key derivation
 - **JSON-RPC 2.0** — ETH balance, ERC-20 balances, chain ID, nonce, transaction broadcast
@@ -114,11 +115,13 @@ goboticus serve --port 18789
 - **Treasury policy** — per-payment caps, daily limits, minimum reserve enforcement
 
 ### Scheduling
+
 - **Durable scheduler** — cron (5-field with timezone), interval, one-shot `at` expressions
 - **Lease-based locking** — prevents double-fire across instances
 - **Run history** — success/failure tracking with duration and error recording
 
 ### Skills & Plugins
+
 - **Skill loader** — discovers `.md` (YAML frontmatter) and `.toml`/`.yaml` skills recursively
 - **Hot-reload** — filesystem watcher with SHA-256 change detection
 - **Trigger matching** — keyword-based skill activation injected as system context
@@ -192,7 +195,7 @@ api_key_env = "ANTHROPIC_API_KEY"
 These are pre-configured and available without any TOML entries:
 
 | Provider | URL | Tier | Format |
-|----------|-----|------|--------|
+| ---------- | ----- | ------ | -------- |
 | Ollama | `localhost:11434` | T1 (local) | OpenAI |
 | sglang | `localhost:30000` | T1 (local) | OpenAI |
 | vLLM | `localhost:8000` | T1 (local) | OpenAI |
@@ -206,8 +209,9 @@ These are pre-configured and available without any TOML entries:
 ## API
 
 ### Core Endpoints
+
 | Method | Path | Description |
-|--------|------|-------------|
+| -------- | ------ | ------------- |
 | `POST` | `/api/agent/message` | Send a message (non-streaming) |
 | `POST` | `/api/agent/message/stream` | Send a message (SSE streaming) |
 | `GET` | `/api/health` | Health check with provider status |
@@ -216,8 +220,9 @@ These are pre-configured and available without any TOML entries:
 | `GET` | `/ws` | WebSocket event stream |
 
 ### Sessions & Memory
+
 | Method | Path | Description |
-|--------|------|-------------|
+| -------- | ------ | ------------- |
 | `GET` | `/api/sessions` | List sessions |
 | `POST` | `/api/sessions` | Create session |
 | `GET` | `/api/memory/working` | Working memory entries |
@@ -226,8 +231,9 @@ These are pre-configured and available without any TOML entries:
 | `GET` | `/api/memory/search?q=` | Cross-tier memory search |
 
 ### Scheduling & Tools
+
 | Method | Path | Description |
-|--------|------|-------------|
+| -------- | ------ | ------------- |
 | `GET` | `/api/cron/jobs` | List scheduled jobs |
 | `POST` | `/api/cron/jobs` | Create job |
 | `POST` | `/api/cron/jobs/:id/run` | Trigger job immediately |
@@ -235,8 +241,9 @@ These are pre-configured and available without any TOML entries:
 | `GET` | `/api/subagents` | List sub-agents |
 
 ### Wallet & Finance
+
 | Method | Path | Description |
-|--------|------|-------------|
+| -------- | ------ | ------------- |
 | `GET` | `/api/wallet/balance` | ETH + token balances |
 | `GET` | `/api/wallet/address` | Wallet address and chain |
 | `GET` | `/api/stats/costs` | Inference cost tracking |
@@ -258,7 +265,7 @@ The parity audit compares subsystems (pipeline, memory, LLM, tools, channels, sc
 
 ## Project Structure
 
-```
+```text
 goboticus/
 ├── cmd/                    # CLI commands (serve, migrate, parity-audit)
 ├── internal/
@@ -304,6 +311,4 @@ See [LICENSE](LICENSE) for details.
 
 ---
 
-<p align="center">
-  <sub>Built with Go, SQLite, and idiomatic stubbornness.</sub>
-</p>
+Built with Go, SQLite, and idiomatic stubbornness.
