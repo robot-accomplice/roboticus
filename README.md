@@ -16,7 +16,7 @@
 ![Go 1.26](https://img.shields.io/badge/Go-1.26-00ADD8?style=flat-square&logo=go&logoColor=white)
 ![CI](https://img.shields.io/github/actions/workflow/status/robot-accomplice/goboticus/ci.yml?style=flat-square&label=CI)
 ![Parity Audit](https://img.shields.io/github/actions/workflow/status/robot-accomplice/goboticus/parity-audit.yml?style=flat-square&label=parity%20audit)
-![License](https://img.shields.io/github/license/robot-accomplice/goboticus?style=flat-square)
+![License](https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square)
 ![Go Version](https://img.shields.io/github/go-mod/go-version/robot-accomplice/goboticus?style=flat-square)
 ![Lines of Code](https://img.shields.io/badge/lines-17k%2B-blue?style=flat-square)
 ![Tests](https://img.shields.io/badge/tests-29%20files-green?style=flat-square)
