@@ -20,7 +20,7 @@ func ListSessions(store *db.Store) http.HandlerFunc {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		defer rows.Close()
+		defer func() { _ = rows.Close() }()
 
 		var sessions []map[string]any
 		for rows.Next() {
@@ -122,7 +122,7 @@ func ListMessages(store *db.Store) http.HandlerFunc {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		defer rows.Close()
+		defer func() { _ = rows.Close() }()
 
 		var messages []map[string]string
 		for rows.Next() {

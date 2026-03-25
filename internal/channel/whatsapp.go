@@ -99,7 +99,7 @@ func (w *WhatsAppAdapter) Send(ctx context.Context, msg OutboundMessage) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		respBody, _ := io.ReadAll(resp.Body)
@@ -123,7 +123,7 @@ func (w *WhatsAppAdapter) markRead(ctx context.Context, messageID string) {
 	req.Header.Set("Authorization", "Bearer "+w.cfg.Token)
 	resp, err := w.client.Do(req)
 	if err == nil {
-		resp.Body.Close()
+		_ = resp.Body.Close()
 	}
 }
 

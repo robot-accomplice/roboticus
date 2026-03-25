@@ -13,7 +13,7 @@ func OpenAPIHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/yaml")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Write(openapiSpec)
+		_, _ = w.Write(openapiSpec)
 	}
 }
 
@@ -21,7 +21,7 @@ func OpenAPIHandler() http.HandlerFunc {
 func DocsHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
-		w.Write([]byte(`<!DOCTYPE html>
+		_, _ = w.Write([]byte(`<!DOCTYPE html>
 <html><head><title>Goboticus API Docs</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css">
 </head><body>

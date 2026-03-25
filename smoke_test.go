@@ -126,7 +126,7 @@ func TestLiveSmokeTest(t *testing.T) {
 		// Dashboard should return HTML.
 		assertStatus(t, resp, 200)
 		b, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		if len(b) < 100 {
 			t.Fatal("dashboard response too short")
 		}
@@ -456,7 +456,7 @@ func TestLiveSmokeTest(t *testing.T) {
 		if err != nil {
 			t.Fatalf("seed cron job: %v", err)
 		}
-		defer store.ExecContext(context.Background(), `DELETE FROM cron_jobs WHERE id = 'lease-test'`)
+		defer func() { _, _ = store.ExecContext(context.Background(), `DELETE FROM cron_jobs WHERE id = 'lease-test'`) }()
 
 		// Acquire lease — should succeed on the inline columns.
 		res, err := store.ExecContext(context.Background(),
@@ -544,7 +544,7 @@ func assertStatus(t *testing.T, resp *http.Response, want int) {
 
 func readJSON(t *testing.T, resp *http.Response) map[string]any {
 	t.Helper()
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	var data map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
 		t.Fatalf("decode JSON: %v", err)

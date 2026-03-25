@@ -32,7 +32,7 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to open database: %w", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	log.Info().Str("path", cfg.Database.Path).Msg("migrations complete")
 	return nil

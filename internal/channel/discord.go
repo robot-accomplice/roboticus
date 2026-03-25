@@ -96,7 +96,7 @@ func (d *DiscordAdapter) postChannelMessage(ctx context.Context, channelID, cont
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		respBody, _ := io.ReadAll(resp.Body)
@@ -179,7 +179,7 @@ func (d *DiscordAdapter) getGatewayURL(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var gw struct {
 		URL string `json:"url"`

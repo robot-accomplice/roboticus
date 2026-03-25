@@ -22,7 +22,7 @@ var defragCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("open database: %w", err)
 		}
-		defer store.Close()
+		defer func() { _ = store.Close() }()
 
 		ctx := context.Background()
 
@@ -30,7 +30,7 @@ var defragCmd = &cobra.Command{
 		fmt.Print("Running integrity check... ")
 		var result string
 		row := store.QueryRowContext(ctx, "PRAGMA integrity_check")
-		row.Scan(&result)
+		_ = row.Scan(&result)
 		if result != "ok" {
 			return fmt.Errorf("integrity check failed: %s", result)
 		}
@@ -70,8 +70,8 @@ var defragCmd = &cobra.Command{
 
 		// 6. Report size.
 		var pageCount, pageSize int
-		store.QueryRowContext(ctx, "PRAGMA page_count").Scan(&pageCount)
-		store.QueryRowContext(ctx, "PRAGMA page_size").Scan(&pageSize)
+		_ = store.QueryRowContext(ctx, "PRAGMA page_count").Scan(&pageCount)
+		_ = store.QueryRowContext(ctx, "PRAGMA page_size").Scan(&pageSize)
 		sizeMB := float64(pageCount*pageSize) / (1024 * 1024)
 		fmt.Printf("\nDatabase size: %.2f MB (%d pages)\n", sizeMB, pageCount)
 

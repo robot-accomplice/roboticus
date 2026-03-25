@@ -29,7 +29,7 @@ func apiGet(path string) (map[string]any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("connection failed (is goboticus running?): %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -59,7 +59,7 @@ func apiPost(path string, payload map[string]any) (map[string]any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("connection failed (is goboticus running?): %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -88,7 +88,7 @@ func apiDelete(path string) error {
 	if err != nil {
 		return fmt.Errorf("connection failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))

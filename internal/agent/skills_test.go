@@ -158,10 +158,10 @@ func TestSkillLoader_HashChangesOnContent(t *testing.T) {
 	path := filepath.Join(dir, "skill.md")
 	sl := NewSkillLoader()
 
-	os.WriteFile(path, []byte("---\nname: v1\n---\nVersion 1"), 0644)
+	_ = os.WriteFile(path, []byte("---\nname: v1\n---\nVersion 1"), 0644)
 	skills1 := sl.LoadFromDir(dir)
 
-	os.WriteFile(path, []byte("---\nname: v2\n---\nVersion 2"), 0644)
+	_ = os.WriteFile(path, []byte("---\nname: v2\n---\nVersion 2"), 0644)
 	skills2 := sl.LoadFromDir(dir)
 
 	if skills1[0].Hash == skills2[0].Hash {

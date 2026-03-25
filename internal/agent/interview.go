@@ -138,7 +138,7 @@ func GeneratePersonalityTOML(state *InterviewState) map[string]string {
 	os.WriteString("humor = \"dry\"\n")
 	os.WriteString("domain = \"general\"\n\n")
 	if vals, ok := answers[CatIdentity]; ok {
-		os.WriteString(fmt.Sprintf("# Based on interview:\n# %s\n\n", strings.Join(vals, "\n# ")))
+		fmt.Fprintf(&os, "# Based on interview:\n# %s\n\n", strings.Join(vals, "\n# "))
 	}
 	os.WriteString("prompt_text = \"\"\"\nYou are a helpful AI assistant.\n\"\"\"\n")
 	result["OS.toml"] = os.String()
@@ -150,7 +150,7 @@ func GeneratePersonalityTOML(state *InterviewState) map[string]string {
 	fw.WriteString("require_confirmation = \"risky\"\n\n")
 	if vals, ok := answers[CatBoundaries]; ok {
 		for _, v := range vals {
-			fw.WriteString(fmt.Sprintf("[[rules]]\nrule_type = \"boundary\"\nrule = %q\n\n", v))
+			fmt.Fprintf(&fw, "[[rules]]\nrule_type = \"boundary\"\nrule = %q\n\n", v)
 		}
 	}
 	result["FIRMWARE.toml"] = fw.String()
@@ -159,11 +159,11 @@ func GeneratePersonalityTOML(state *InterviewState) map[string]string {
 	var op strings.Builder
 	op.WriteString("[identity]\n")
 	if vals, ok := answers[CatOperator]; ok && len(vals) > 0 {
-		op.WriteString(fmt.Sprintf("context = %q\n", strings.Join(vals, " ")))
+		fmt.Fprintf(&op, "context = %q\n", strings.Join(vals, " "))
 	}
 	op.WriteString("\n[preferences]\n")
 	if vals, ok := answers[CatCommunication]; ok && len(vals) > 0 {
-		op.WriteString(fmt.Sprintf("communication_notes = %q\n", strings.Join(vals, " ")))
+		fmt.Fprintf(&op, "communication_notes = %q\n", strings.Join(vals, " "))
 	}
 	result["OPERATOR.toml"] = op.String()
 
@@ -172,12 +172,12 @@ func GeneratePersonalityTOML(state *InterviewState) map[string]string {
 	dir.WriteString("[goals]\n")
 	if vals, ok := answers[CatGoals]; ok {
 		for i, v := range vals {
-			dir.WriteString(fmt.Sprintf("goal_%d = %q\n", i+1, v))
+			fmt.Fprintf(&dir, "goal_%d = %q\n", i+1, v)
 		}
 	}
 	dir.WriteString("\n[integrations]\n")
 	if vals, ok := answers[CatIntegrations]; ok && len(vals) > 0 {
-		dir.WriteString(fmt.Sprintf("platforms = %q\n", strings.Join(vals, ", ")))
+		fmt.Fprintf(&dir, "platforms = %q\n", strings.Join(vals, ", "))
 	}
 	result["DIRECTIVES.toml"] = dir.String()
 

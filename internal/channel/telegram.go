@@ -85,7 +85,7 @@ func (t *TelegramAdapter) Recv(ctx context.Context) (*InboundMessage, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusTooManyRequests {
 		retryAfter := resp.Header.Get("Retry-After")
@@ -225,7 +225,7 @@ func (t *TelegramAdapter) postMessage(ctx context.Context, chatID, text, parseMo
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
@@ -247,7 +247,7 @@ func (t *TelegramAdapter) sendChatAction(ctx context.Context, chatID, action str
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := t.client.Do(req)
 	if err == nil {
-		resp.Body.Close()
+		_ = resp.Body.Close()
 	}
 }
 

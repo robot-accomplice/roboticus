@@ -66,7 +66,7 @@ func HandleWebSocket(bus *EventBus, apiKey string) http.HandlerFunc {
 			log.Warn().Err(err).Msg("websocket upgrade failed")
 			return
 		}
-		defer conn.CloseNow()
+		defer func() { _ = conn.CloseNow() }() //nolint:staticcheck // TODO: migrate to github.com/coder/websocket
 
 		ctx := r.Context()
 
@@ -75,7 +75,7 @@ func HandleWebSocket(bus *EventBus, apiKey string) http.HandlerFunc {
 			"type":      "connected",
 			"timestamp": time.Now().UTC().Format(time.RFC3339),
 		})
-		conn.Write(ctx, websocket.MessageText, welcome)
+		_ = conn.Write(ctx, websocket.MessageText, welcome) //nolint:staticcheck // TODO: migrate to github.com/coder/websocket
 
 		// Subscribe to events.
 		sub := bus.Subscribe()
@@ -111,7 +111,7 @@ func HandleWebSocket(bus *EventBus, apiKey string) http.HandlerFunc {
 				// Ack client messages.
 				if len(msg) <= 4096 {
 					ack, _ := json.Marshal(map[string]string{"type": "ack"})
-					conn.Write(ctx, websocket.MessageText, ack) //nolint:staticcheck // TODO: migrate to github.com/coder/websocket
+					_ = conn.Write(ctx, websocket.MessageText, ack) //nolint:staticcheck // TODO: migrate to github.com/coder/websocket
 				}
 			}
 		}()
@@ -120,15 +120,15 @@ func HandleWebSocket(bus *EventBus, apiKey string) http.HandlerFunc {
 		for {
 			select {
 			case <-ctx.Done():
-				conn.Close(websocket.StatusNormalClosure, "server shutting down")
+				_ = conn.Close(websocket.StatusNormalClosure, "server shutting down") //nolint:staticcheck // TODO: migrate to github.com/coder/websocket
 				return
 			case <-clientDone:
 				return
 			case <-idleTimer.C:
-				conn.Close(websocket.StatusNormalClosure, "idle timeout")
+				_ = conn.Close(websocket.StatusNormalClosure, "idle timeout") //nolint:staticcheck // TODO: migrate to github.com/coder/websocket
 				return
 			case <-pingTicker.C:
-				conn.Ping(ctx)
+				_ = conn.Ping(ctx) //nolint:staticcheck // TODO: migrate to github.com/coder/websocket
 			case event := <-sub:
 				if err := conn.Write(ctx, websocket.MessageText, []byte(event)); err != nil { //nolint:staticcheck // TODO: migrate to github.com/coder/websocket
 					return

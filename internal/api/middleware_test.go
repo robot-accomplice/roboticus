@@ -11,7 +11,7 @@ import (
 func TestAPIKeyAuth_CorrectKey(t *testing.T) {
 	handler := APIKeyAuth("test-key-123")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
+		_, _ = w.Write([]byte("ok"))
 	}))
 
 	req := httptest.NewRequest("GET", "/test", nil)
@@ -71,7 +71,7 @@ func TestAPIKeyAuth_BearerToken(t *testing.T) {
 func TestAPIKeyAuth_EmptyKey_Loopback(t *testing.T) {
 	handler := APIKeyAuth("")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
+		_, _ = w.Write([]byte("ok"))
 	}))
 
 	// Loopback should be allowed.
@@ -127,7 +127,7 @@ func TestSecurityHeaders(t *testing.T) {
 func TestBodyLimit(t *testing.T) {
 	handler := BodyLimit(10)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
-		w.Write(body)
+		_, _ = w.Write(body)
 	}))
 
 	// Small body — should work.

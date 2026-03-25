@@ -25,7 +25,7 @@ func GetTurn(store *db.Store) http.HandlerFunc {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		defer rows.Close()
+		defer func() { _ = rows.Close() }()
 
 		var messages []map[string]string
 		for rows.Next() {
@@ -165,7 +165,7 @@ func GetDeadLetters(store *db.Store) http.HandlerFunc {
 			writeJSON(w, http.StatusOK, map[string]any{"dead_letters": []any{}})
 			return
 		}
-		defer rows.Close()
+		defer func() { _ = rows.Close() }()
 
 		var entries []map[string]string
 		for rows.Next() {
@@ -242,7 +242,7 @@ func ListSubagents(store *db.Store) http.HandlerFunc {
 			writeJSON(w, http.StatusOK, map[string]any{"subagents": []any{}})
 			return
 		}
-		defer rows.Close()
+		defer func() { _ = rows.Close() }()
 
 		var agents []map[string]any
 		for rows.Next() {

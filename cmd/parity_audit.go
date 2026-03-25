@@ -167,7 +167,7 @@ func runParityAudit(cmd *cobra.Command, args []string) error {
 	if len(newFiles) > 0 {
 		report.WriteString("## New Rust Files (may need Go equivalents)\n\n")
 		for _, f := range newFiles {
-			report.WriteString(fmt.Sprintf("- `%s`\n", f))
+			fmt.Fprintf(&report, "- `%s`\n", f)
 		}
 		report.WriteString("\n")
 	}
@@ -180,7 +180,7 @@ func runParityAudit(cmd *cobra.Command, args []string) error {
 		if len(missingEndpoints) > 0 {
 			report.WriteString("## API Endpoints in Rust but not Go\n\n")
 			for _, ep := range missingEndpoints {
-				report.WriteString(fmt.Sprintf("- `%s`\n", ep))
+				fmt.Fprintf(&report, "- `%s`\n", ep)
 			}
 			report.WriteString("\n")
 		}
@@ -243,7 +243,7 @@ func findMissingFunctions(root string, patterns []string, funcs []string) []stri
 
 func findNewRustFiles(rustDir string) []string {
 	var newFiles []string
-	filepath.WalkDir(filepath.Join(rustDir, "crates"), func(path string, d os.DirEntry, err error) error {
+	_ = filepath.WalkDir(filepath.Join(rustDir, "crates"), func(path string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return nil
 		}
@@ -265,7 +265,7 @@ func extractEndpoints(root, subdir string) []string {
 	seen := make(map[string]bool)
 
 	dir := filepath.Join(root, subdir)
-	filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+	_ = filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return nil
 		}

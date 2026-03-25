@@ -21,7 +21,7 @@ func ListCronJobs(store *db.Store) http.HandlerFunc {
 			writeJSON(w, http.StatusOK, map[string]any{"jobs": []any{}})
 			return
 		}
-		defer rows.Close()
+		defer func() { _ = rows.Close() }()
 
 		var jobs []map[string]any
 		for rows.Next() {
@@ -119,7 +119,7 @@ func ListCronRuns(store *db.Store) http.HandlerFunc {
 			writeJSON(w, http.StatusOK, map[string]any{"runs": []any{}})
 			return
 		}
-		defer rows.Close()
+		defer func() { _ = rows.Close() }()
 
 		var runs []map[string]any
 		for rows.Next() {
@@ -215,22 +215,22 @@ func UpdateCronJob(store *db.Store) http.HandlerFunc {
 		}
 
 		if req.Name != nil {
-			store.ExecContext(r.Context(), `UPDATE cron_jobs SET name = ? WHERE id = ?`, *req.Name, id)
+			_, _ = store.ExecContext(r.Context(), `UPDATE cron_jobs SET name = ? WHERE id = ?`, *req.Name, id)
 		}
 		if req.Description != nil {
-			store.ExecContext(r.Context(), `UPDATE cron_jobs SET description = ? WHERE id = ?`, *req.Description, id)
+			_, _ = store.ExecContext(r.Context(), `UPDATE cron_jobs SET description = ? WHERE id = ?`, *req.Description, id)
 		}
 		if req.ScheduleKind != nil {
-			store.ExecContext(r.Context(), `UPDATE cron_jobs SET schedule_kind = ? WHERE id = ?`, *req.ScheduleKind, id)
+			_, _ = store.ExecContext(r.Context(), `UPDATE cron_jobs SET schedule_kind = ? WHERE id = ?`, *req.ScheduleKind, id)
 		}
 		if req.ScheduleExpr != nil {
-			store.ExecContext(r.Context(), `UPDATE cron_jobs SET schedule_expr = ? WHERE id = ?`, *req.ScheduleExpr, id)
+			_, _ = store.ExecContext(r.Context(), `UPDATE cron_jobs SET schedule_expr = ? WHERE id = ?`, *req.ScheduleExpr, id)
 		}
 		if req.Enabled != nil {
-			store.ExecContext(r.Context(), `UPDATE cron_jobs SET enabled = ? WHERE id = ?`, *req.Enabled, id)
+			_, _ = store.ExecContext(r.Context(), `UPDATE cron_jobs SET enabled = ? WHERE id = ?`, *req.Enabled, id)
 		}
 		if req.PayloadJSON != nil {
-			store.ExecContext(r.Context(), `UPDATE cron_jobs SET payload_json = ? WHERE id = ?`, *req.PayloadJSON, id)
+			_, _ = store.ExecContext(r.Context(), `UPDATE cron_jobs SET payload_json = ? WHERE id = ?`, *req.PayloadJSON, id)
 		}
 
 		writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})

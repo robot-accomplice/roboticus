@@ -74,7 +74,7 @@ func ConnectCdp(ctx context.Context, wsURL string, timeout time.Duration) (*CdpS
 // Close shuts down the CDP session.
 func (s *CdpSession) Close() {
 	s.cancel()
-	_ = s.conn.Close(websocket.StatusNormalClosure, "done")
+	_ = s.conn.Close(websocket.StatusNormalClosure, "done") //nolint:staticcheck // TODO: migrate to github.com/coder/websocket
 }
 
 // SendCommand sends a CDP method call and waits for the response.

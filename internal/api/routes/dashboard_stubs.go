@@ -185,7 +185,7 @@ func ListSessionTurns(store *db.Store) http.HandlerFunc {
 			writeJSON(w, http.StatusOK, map[string]any{"turns": []any{}})
 			return
 		}
-		defer rows.Close()
+		defer func() { _ = rows.Close() }()
 
 		var turns []map[string]any
 		for rows.Next() {
@@ -227,7 +227,7 @@ func DeleteSession(store *db.Store) http.HandlerFunc {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		store.ExecContext(r.Context(), `DELETE FROM sessions WHERE id = ?`, sessionID)
+		_, _ = store.ExecContext(r.Context(), `DELETE FROM sessions WHERE id = ?`, sessionID)
 		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 	}
 }

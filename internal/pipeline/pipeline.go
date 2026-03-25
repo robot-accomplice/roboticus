@@ -336,7 +336,7 @@ func (p *Pipeline) loadSession(ctx context.Context, input Input) (*agent.Session
 		log.Warn().Err(err).Str("session_id", input.SessionID).Msg("failed to load session history, continuing without context")
 		return sess, nil
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	for rows.Next() {
 		var role, content string

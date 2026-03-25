@@ -125,7 +125,7 @@ func (s *SignalAdapter) rpcCall(ctx context.Context, method string, params map[s
 	if err != nil {
 		return fmt.Errorf("signal rpc %s: %w", method, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)

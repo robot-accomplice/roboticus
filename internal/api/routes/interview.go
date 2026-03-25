@@ -31,7 +31,7 @@ func InterviewStart(mgr *InterviewManager) http.HandlerFunc {
 		var body struct {
 			SessionID string `json:"session_id"`
 		}
-		json.NewDecoder(r.Body).Decode(&body)
+		_ = json.NewDecoder(r.Body).Decode(&body)
 		if body.SessionID == "" {
 			body.SessionID = "interview-" + r.Header.Get("X-Request-Id")
 		}
@@ -90,7 +90,7 @@ func InterviewFinish(mgr *InterviewManager) http.HandlerFunc {
 		var body struct {
 			SessionID string `json:"session_id"`
 		}
-		json.NewDecoder(r.Body).Decode(&body)
+		_ = json.NewDecoder(r.Body).Decode(&body)
 
 		mgr.mu.Lock()
 		sess, ok := mgr.sessions[body.SessionID]

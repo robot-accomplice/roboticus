@@ -78,7 +78,7 @@ func New(cfg *core.Config) (*Daemon, error) {
 		Fallbacks: cfg.Models.Fallback,
 	}, store)
 	if err != nil {
-		store.Close()
+		_ = store.Close()
 		return nil, fmt.Errorf("daemon: init LLM: %w", err)
 	}
 
@@ -184,7 +184,7 @@ func (d *Daemon) Stop(s service.Service) error {
 		log.Warn().Msg("shutdown timed out")
 	}
 
-	d.store.Close()
+	_ = d.store.Close()
 	return nil
 }
 
@@ -262,7 +262,7 @@ func Install(cfg *core.Config) error {
 	if err != nil {
 		return err
 	}
-	d.store.Close() // don't need DB for install
+	_ = d.store.Close() // don't need DB for install
 
 	svc, err := service.New(d, ServiceConfig())
 	if err != nil {
@@ -277,7 +277,7 @@ func Uninstall(cfg *core.Config) error {
 	if err != nil {
 		return err
 	}
-	d.store.Close()
+	_ = d.store.Close()
 
 	svc, err := service.New(d, ServiceConfig())
 	if err != nil {
@@ -292,7 +292,7 @@ func Control(cfg *core.Config, action string) error {
 	if err != nil {
 		return err
 	}
-	d.store.Close()
+	_ = d.store.Close()
 
 	svc, err := service.New(d, ServiceConfig())
 	if err != nil {
@@ -307,7 +307,7 @@ func Status(cfg *core.Config) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	d.store.Close()
+	_ = d.store.Close()
 
 	svc, err := service.New(d, ServiceConfig())
 	if err != nil {
@@ -367,7 +367,7 @@ func (d *Daemon) handleInbound(ctx context.Context, msg channel.InboundMessage) 
 	}
 
 	if result.Content != "" {
-		d.router.SendReply(ctx, msg.Platform, msg.ChatID, result.Content)
+		_ = d.router.SendReply(ctx, msg.Platform, msg.ChatID, result.Content)
 	}
 }
 

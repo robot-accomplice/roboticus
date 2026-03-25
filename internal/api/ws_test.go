@@ -128,7 +128,7 @@ func TestEventBus_PublishF(t *testing.T) {
 	select {
 	case msg := <-ch:
 		var parsed map[string]any
-		json.Unmarshal([]byte(msg), &parsed)
+		_ = json.Unmarshal([]byte(msg), &parsed)
 		if parsed["type"] != "status" {
 			t.Errorf("type = %v", parsed["type"])
 		}

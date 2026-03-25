@@ -18,7 +18,7 @@ func GetWorkingMemory(store *db.Store) http.HandlerFunc {
 			writeJSON(w, http.StatusOK, map[string]any{"entries": []any{}})
 			return
 		}
-		defer rows.Close()
+		defer func() { _ = rows.Close() }()
 
 		var entries []map[string]any
 		for rows.Next() {
@@ -50,7 +50,7 @@ func GetSessionWorkingMemory(store *db.Store) http.HandlerFunc {
 			writeJSON(w, http.StatusOK, map[string]any{"entries": []any{}})
 			return
 		}
-		defer rows.Close()
+		defer func() { _ = rows.Close() }()
 
 		var entries []map[string]any
 		for rows.Next() {
@@ -81,7 +81,7 @@ func GetEpisodicMemory(store *db.Store) http.HandlerFunc {
 			writeJSON(w, http.StatusOK, map[string]any{"entries": []any{}})
 			return
 		}
-		defer rows.Close()
+		defer func() { _ = rows.Close() }()
 
 		var entries []map[string]any
 		for rows.Next() {
@@ -112,7 +112,7 @@ func GetSemanticMemory(store *db.Store) http.HandlerFunc {
 			writeJSON(w, http.StatusOK, map[string]any{"entries": []any{}})
 			return
 		}
-		defer rows.Close()
+		defer func() { _ = rows.Close() }()
 
 		var entries []map[string]any
 		for rows.Next() {
@@ -150,7 +150,7 @@ func SearchMemory(store *db.Store) http.HandlerFunc {
 			`SELECT id, 'working' as tier, entry_type, content, created_at
 			 FROM working_memory WHERE content LIKE ? LIMIT 20`, pattern)
 		if err == nil {
-			defer rows.Close()
+			defer func() { _ = rows.Close() }()
 			for rows.Next() {
 				var id, tier, entryType, content, createdAt string
 				if rows.Scan(&id, &tier, &entryType, &content, &createdAt) == nil {
@@ -167,7 +167,7 @@ func SearchMemory(store *db.Store) http.HandlerFunc {
 			`SELECT id, 'episodic' as tier, classification, content, created_at
 			 FROM episodic_memory WHERE content LIKE ? LIMIT 20`, pattern)
 		if err == nil {
-			defer rows2.Close()
+			defer func() { _ = rows2.Close() }()
 			for rows2.Next() {
 				var id, tier, classification, content, createdAt string
 				if rows2.Scan(&id, &tier, &classification, &content, &createdAt) == nil {
@@ -184,7 +184,7 @@ func SearchMemory(store *db.Store) http.HandlerFunc {
 			`SELECT id, 'semantic' as tier, category, value, created_at
 			 FROM semantic_memory WHERE value LIKE ? OR key LIKE ? LIMIT 20`, pattern, pattern)
 		if err == nil {
-			defer rows3.Close()
+			defer func() { _ = rows3.Close() }()
 			for rows3.Next() {
 				var id, tier, category, value, createdAt string
 				if rows3.Scan(&id, &tier, &category, &value, &createdAt) == nil {

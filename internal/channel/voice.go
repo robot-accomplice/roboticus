@@ -108,7 +108,7 @@ func (v *VoiceAdapter) Transcribe(ctx context.Context, audio []byte, format Audi
 	if err != nil {
 		return nil, fmt.Errorf("voice transcribe: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
@@ -156,7 +156,7 @@ func (v *VoiceAdapter) Synthesize(ctx context.Context, text string) ([]byte, err
 	if err != nil {
 		return nil, fmt.Errorf("voice synthesize: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)

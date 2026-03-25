@@ -204,7 +204,7 @@ func (t *AbuseTracker) ListRecentEvents(ctx context.Context, limit int) ([]Abuse
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var events []AbuseEvent
 	for rows.Next() {

@@ -83,22 +83,22 @@ func (e *EmailAdapter) Send(ctx context.Context, msg OutboundMessage) error {
 
 	// Build email with threading headers.
 	var headers strings.Builder
-	headers.WriteString(fmt.Sprintf("From: %s\r\n", e.cfg.FromAddress))
-	headers.WriteString(fmt.Sprintf("To: %s\r\n", msg.RecipientID))
-	headers.WriteString(fmt.Sprintf("Message-ID: %s\r\n", messageID))
-	headers.WriteString(fmt.Sprintf("Date: %s\r\n", time.Now().UTC().Format(time.RFC1123Z)))
+	fmt.Fprintf(&headers, "From: %s\r\n", e.cfg.FromAddress)
+	fmt.Fprintf(&headers, "To: %s\r\n", msg.RecipientID)
+	fmt.Fprintf(&headers, "Message-ID: %s\r\n", messageID)
+	fmt.Fprintf(&headers, "Date: %s\r\n", time.Now().UTC().Format(time.RFC1123Z))
 
 	subject := "Re: Conversation"
 	if s, ok := msg.Metadata["subject"].(string); ok && s != "" {
 		subject = s
 	}
-	headers.WriteString(fmt.Sprintf("Subject: %s\r\n", subject))
+	fmt.Fprintf(&headers, "Subject: %s\r\n", subject)
 
 	// Thread continuation.
 	e.mu.Lock()
 	if lastMsgID, ok := e.threads[msg.RecipientID]; ok {
-		headers.WriteString(fmt.Sprintf("In-Reply-To: %s\r\n", lastMsgID))
-		headers.WriteString(fmt.Sprintf("References: %s\r\n", lastMsgID))
+		fmt.Fprintf(&headers, "In-Reply-To: %s\r\n", lastMsgID)
+		fmt.Fprintf(&headers, "References: %s\r\n", lastMsgID)
 	}
 	e.threads[msg.RecipientID] = messageID
 	e.mu.Unlock()

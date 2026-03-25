@@ -84,7 +84,7 @@ func (t *WebSearchTool) Execute(ctx context.Context, params string, _ *Context) 
 	if err != nil {
 		return nil, fmt.Errorf("search request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 	if err != nil {
@@ -192,7 +192,7 @@ func (t *HTTPFetchTool) Execute(ctx context.Context, params string, _ *Context) 
 	if err != nil {
 		return nil, fmt.Errorf("fetch failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
 	if err != nil {

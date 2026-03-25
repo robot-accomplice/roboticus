@@ -103,7 +103,7 @@ func (ec *EmbeddingClient) embedOpenAI(ctx context.Context, texts []string) ([][
 		log.Warn().Err(err).Msg("embedding request failed, using n-gram fallback")
 		return ec.fallbackNgram(texts), nil
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		log.Warn().Int("status", resp.StatusCode).Msg("embedding API error, using n-gram fallback")
@@ -168,7 +168,7 @@ func (ec *EmbeddingClient) embedGoogle(ctx context.Context, texts []string) ([][
 		log.Warn().Err(err).Msg("google embedding request failed, using n-gram fallback")
 		return ec.fallbackNgram(texts), nil
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		log.Warn().Int("status", resp.StatusCode).Msg("google embedding API error, using n-gram fallback")

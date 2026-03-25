@@ -37,8 +37,8 @@ func init() {
 	rootCmd.PersistentFlags().Int("port", core.DefaultServerPort, "server port")
 	rootCmd.PersistentFlags().String("bind", core.DefaultServerBind, "server bind address")
 
-	viper.BindPFlag("server.port", rootCmd.PersistentFlags().Lookup("port"))
-	viper.BindPFlag("server.bind", rootCmd.PersistentFlags().Lookup("bind"))
+	_ = viper.BindPFlag("server.port", rootCmd.PersistentFlags().Lookup("port"))
+	_ = viper.BindPFlag("server.bind", rootCmd.PersistentFlags().Lookup("bind"))
 }
 
 func initConfig() {

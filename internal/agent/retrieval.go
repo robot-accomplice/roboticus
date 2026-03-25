@@ -137,7 +137,7 @@ func (mr *MemoryRetriever) retrieveWorkingMemory(ctx context.Context, sessionID 
 	if err != nil {
 		return ""
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var b strings.Builder
 	used := 0
@@ -180,7 +180,7 @@ func (mr *MemoryRetriever) retrieveEpisodic(ctx context.Context, query string, q
 	if err != nil {
 		return ""
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	type scored struct {
 		content string
@@ -225,7 +225,7 @@ func (mr *MemoryRetriever) retrieveEpisodic(ctx context.Context, query string, q
 		if used+len(e.content) > maxChars {
 			break
 		}
-		b.WriteString(fmt.Sprintf("- (sim=%.2f) %s\n", e.score, e.content))
+		fmt.Fprintf(&b, "- (sim=%.2f) %s\n", e.score, e.content)
 		used += len(e.content)
 	}
 	return b.String()
@@ -252,7 +252,7 @@ func (mr *MemoryRetriever) retrieveSemanticMemory(ctx context.Context, query str
 	if err != nil {
 		return ""
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var b strings.Builder
 	used := 0
@@ -281,7 +281,7 @@ func (mr *MemoryRetriever) retrieveProceduralMemory(ctx context.Context, budgetT
 	if err != nil {
 		return ""
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var b strings.Builder
 	for rows.Next() {
@@ -295,7 +295,7 @@ func (mr *MemoryRetriever) retrieveProceduralMemory(ctx context.Context, budgetT
 			continue
 		}
 		pct := float64(successCount) / float64(total) * 100
-		b.WriteString(fmt.Sprintf("- %s: %d/%d (%.0f%% success)\n", name, successCount, total, pct))
+		fmt.Fprintf(&b, "- %s: %d/%d (%.0f%% success)\n", name, successCount, total, pct)
 	}
 	return b.String()
 }
@@ -311,7 +311,7 @@ func (mr *MemoryRetriever) retrieveRelationshipMemory(ctx context.Context, budge
 	if err != nil {
 		return ""
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var b strings.Builder
 	used := 0

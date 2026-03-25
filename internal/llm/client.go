@@ -70,7 +70,7 @@ func (c *Client) Complete(ctx context.Context, req *Request) (*Response, error) 
 	if err != nil {
 		return nil, core.WrapError(core.ErrNetwork, "request failed", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, c.parseErrorResponse(resp)
@@ -109,7 +109,7 @@ func (c *Client) Stream(ctx context.Context, req *Request) (<-chan StreamChunk, 
 			errs <- core.WrapError(core.ErrNetwork, "stream request failed", err)
 			return
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		if resp.StatusCode != http.StatusOK {
 			errs <- c.parseErrorResponse(resp)
