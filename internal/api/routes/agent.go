@@ -46,7 +46,7 @@ func AgentMessage(p *pipeline.Pipeline, bus ...EventPublisher) http.HandlerFunc 
 			Platform:  "api",
 		}
 
-		outcome, err := p.Run(r.Context(), pipeline.PresetAPI(), input)
+		outcome, err := pipeline.RunPipeline(r.Context(), p, pipeline.PresetAPI(), input)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -92,7 +92,7 @@ func AgentMessageStream(p *pipeline.Pipeline, llmSvc *llm.Service) http.HandlerF
 		}
 
 		// Run pipeline to get session set up.
-		outcome, err := p.Run(r.Context(), pipeline.PresetStreaming(), input)
+		outcome, err := pipeline.RunPipeline(r.Context(), p, pipeline.PresetStreaming(), input)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return

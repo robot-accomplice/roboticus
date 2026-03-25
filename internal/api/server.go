@@ -19,16 +19,18 @@ import (
 
 // AppState holds all shared state for the API server.
 type AppState struct {
-	Store    *db.Store
-	Pipeline *pipeline.Pipeline
-	LLM      *llm.Service
-	Config   *core.Config
-	EventBus *EventBus
+	Store     *db.Store
+	Pipeline  *pipeline.Pipeline
+	LLM       *llm.Service
+	Config    *core.Config
+	EventBus  *EventBus
+	Approvals routes.ApprovalService
 }
 
 // ServerConfig controls the HTTP server.
 type ServerConfig struct {
 	Port         int
+	Bind         string
 	ReadTimeout  time.Duration
 	WriteTimeout time.Duration
 	APIKey       string // empty = loopback-only
@@ -38,6 +40,7 @@ type ServerConfig struct {
 func DefaultServerConfig() ServerConfig {
 	return ServerConfig{
 		Port:         core.DefaultServerPort,
+		Bind:         core.DefaultServerBind,
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 60 * time.Second,
 	}
@@ -55,12 +58,19 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 	r.Use(chimw.Timeout(cfg.WriteTimeout))
 	r.Use(SecurityHeaders)
 	r.Use(BodyLimit(1 << 20)) // 1MB
+	r.Use(RateLimitMiddleware(
+		state.Config.RateLimit.Enabled,
+		state.Config.RateLimit.RequestsPerWindow,
+		state.Config.RateLimit.WindowSeconds,
+	))
 
 	// Public routes (no auth).
 	r.Group(func(r chi.Router) {
 		r.Get("/api/health", routes.Health(state.Store, state.LLM))
 		r.Get("/health", routes.Health(state.Store, state.LLM))
 		r.Get("/.well-known/agent.json", routes.AgentCard())
+		r.Get("/openapi.yaml", OpenAPIHandler())
+		r.Get("/api/docs", DocsHandler())
 		r.Post("/api/webhooks/telegram", routes.WebhookTelegram(state.Pipeline))
 		r.Get("/api/webhooks/whatsapp", routes.WebhookWhatsAppVerify(state.Config.Channels.WhatsAppTokenEnv))
 		r.Post("/api/webhooks/whatsapp", routes.WebhookWhatsApp(state.Pipeline))
@@ -187,13 +197,27 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 		r.Post("/api/subagents/{name}/toggle", routes.ToggleSubagent(state.Store))
 		r.Delete("/api/subagents/{name}", routes.DeleteSubagent(state.Store))
 
+		// Interview.
+		interviewMgr := routes.NewInterviewManager()
+		r.Post("/api/interview/start", routes.InterviewStart(interviewMgr))
+		r.Post("/api/interview/turn", routes.InterviewTurn(interviewMgr))
+		r.Post("/api/interview/finish", routes.InterviewFinish(interviewMgr))
+
+		// Approvals.
+		if state.Approvals != nil {
+			r.Get("/api/approvals", routes.ListApprovals(state.Approvals))
+			r.Get("/api/approvals/{id}", routes.GetApproval(state.Approvals))
+			r.Post("/api/approvals/{id}/approve", routes.ApproveRequest(state.Approvals))
+			r.Post("/api/approvals/{id}/deny", routes.DenyRequest(state.Approvals))
+		}
+
 		// WebSocket.
 		r.Get("/ws", HandleWebSocket(state.EventBus, cfg.APIKey))
 		r.Post("/api/ws-ticket", routes.IssueWSTicket())
 	})
 
 	return &http.Server{
-		Addr:         fmt.Sprintf(":%d", cfg.Port),
+		Addr:         fmt.Sprintf("%s:%d", cfg.Bind, cfg.Port),
 		Handler:      r,
 		ReadTimeout:  cfg.ReadTimeout,
 		WriteTimeout: cfg.WriteTimeout,

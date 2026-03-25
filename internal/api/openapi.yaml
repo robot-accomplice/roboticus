@@ -1,0 +1,244 @@
+openapi: "3.1.0"
+info:
+  title: Goboticus Agent API
+  version: "0.1.0"
+  description: Autonomous AI agent runtime with multi-channel support.
+
+servers:
+  - url: http://localhost:18789
+    description: Local development
+
+security:
+  - apiKey: []
+  - bearerAuth: []
+
+components:
+  securitySchemes:
+    apiKey:
+      type: apiKey
+      in: header
+      name: x-api-key
+    bearerAuth:
+      type: http
+      scheme: bearer
+
+paths:
+  /api/health:
+    get:
+      summary: Health check
+      security: []
+      responses:
+        "200":
+          description: OK
+
+  /.well-known/agent.json:
+    get:
+      summary: A2A agent discovery card
+      security: []
+      responses:
+        "200":
+          description: Agent card
+
+  /api/agent/message:
+    post:
+      summary: Send a message (standard inference)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [content]
+              properties:
+                content: { type: string }
+                session_id: { type: string }
+                agent_id: { type: string }
+      responses:
+        "200":
+          description: Agent response
+
+  /api/agent/message/stream:
+    post:
+      summary: Send a message (SSE streaming)
+      responses:
+        "200":
+          description: SSE event stream
+
+  /api/agent/status:
+    get:
+      summary: Agent and provider diagnostics
+      responses:
+        "200":
+          description: Status
+
+  /api/sessions:
+    get:
+      summary: List sessions
+      responses:
+        "200":
+          description: Sessions list
+    post:
+      summary: Create session
+      responses:
+        "201":
+          description: Session created
+
+  /api/sessions/{id}:
+    get:
+      summary: Get session details
+      responses:
+        "200":
+          description: Session
+    delete:
+      summary: Delete session
+      responses:
+        "200":
+          description: Deleted
+
+  /api/sessions/{id}/messages:
+    get:
+      summary: List session messages
+      responses:
+        "200":
+          description: Messages
+
+  /api/memory/working:
+    get:
+      summary: Working memory entries
+      responses:
+        "200":
+          description: Entries
+
+  /api/memory/episodic:
+    get:
+      summary: Episodic memory entries
+      responses:
+        "200":
+          description: Entries
+
+  /api/memory/semantic:
+    get:
+      summary: Semantic knowledge store
+      responses:
+        "200":
+          description: Entries
+
+  /api/memory/search:
+    get:
+      summary: Cross-tier hybrid memory search
+      parameters:
+        - name: q
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: Search results
+
+  /api/cron/jobs:
+    get:
+      summary: List cron jobs
+      responses:
+        "200":
+          description: Jobs
+    post:
+      summary: Create cron job
+      responses:
+        "201":
+          description: Created
+
+  /api/skills:
+    get:
+      summary: List loaded skills
+      responses:
+        "200":
+          description: Skills
+
+  /api/stats/costs:
+    get:
+      summary: Inference cost tracking
+      responses:
+        "200":
+          description: Costs
+
+  /api/stats/efficiency:
+    get:
+      summary: Model efficiency metrics
+      responses:
+        "200":
+          description: Metrics
+
+  /api/config:
+    get:
+      summary: Current configuration
+      responses:
+        "200":
+          description: Config
+
+  /api/wallet/balance:
+    get:
+      summary: Wallet balance
+      responses:
+        "200":
+          description: Balance
+
+  /api/approvals:
+    get:
+      summary: List approval requests
+      responses:
+        "200":
+          description: Approvals
+
+  /api/approvals/{id}/approve:
+    post:
+      summary: Approve a pending request
+      responses:
+        "200":
+          description: Approved
+
+  /api/approvals/{id}/deny:
+    post:
+      summary: Deny a pending request
+      responses:
+        "200":
+          description: Denied
+
+  /api/interview/start:
+    post:
+      summary: Start personality interview
+      responses:
+        "200":
+          description: Interview started
+
+  /api/interview/turn:
+    post:
+      summary: Submit interview Q&A turn
+      responses:
+        "200":
+          description: Turn recorded
+
+  /api/interview/finish:
+    post:
+      summary: Finish interview and generate config
+      responses:
+        "200":
+          description: Config files generated
+
+  /api/subagents:
+    get:
+      summary: List sub-agents
+      responses:
+        "200":
+          description: Subagents
+
+  /api/breaker/status:
+    get:
+      summary: Circuit breaker status
+      responses:
+        "200":
+          description: Status
+
+  /ws:
+    get:
+      summary: WebSocket event stream
+      responses:
+        "101":
+          description: WebSocket upgrade
