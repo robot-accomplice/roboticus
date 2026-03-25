@@ -127,14 +127,22 @@ func New(cfg *core.Config) (*Daemon, error) {
 		log.Warn().Err(err).Msg("hippocampus sync failed")
 	}
 
+	approvalMgr := agent.NewApprovalManager(agent.ApprovalsConfig{
+		Enabled:        cfg.Approvals.Enabled,
+		GatedTools:     cfg.Approvals.GatedTools,
+		BlockedTools:   cfg.Approvals.BlockedTools,
+		TimeoutSeconds: cfg.Approvals.TimeoutSeconds,
+	})
+
 	eventBus := api.NewEventBus(256)
 
 	appState := &api.AppState{
-		Store:    store,
-		Pipeline: pipe,
-		LLM:      llmSvc,
-		Config:   cfg,
-		EventBus: eventBus,
+		Store:     store,
+		Pipeline:  pipe,
+		LLM:       llmSvc,
+		Config:    cfg,
+		EventBus:  eventBus,
+		Approvals: approvalMgr,
 	}
 
 	return &Daemon{
@@ -189,6 +197,9 @@ func (d *Daemon) run() {
 	srvCfg := api.DefaultServerConfig()
 	if d.cfg.Server.Port > 0 {
 		srvCfg.Port = d.cfg.Server.Port
+	}
+	if d.cfg.Server.Bind != "" {
+		srvCfg.Bind = d.cfg.Server.Bind
 	}
 	httpSrv := api.NewServer(srvCfg, d.appState)
 
@@ -344,7 +355,7 @@ func (d *Daemon) handleInbound(ctx context.Context, msg channel.InboundMessage) 
 		Msg("processing inbound message")
 
 	cfg := pipeline.PresetChannel(msg.Platform)
-	result, err := d.pipe.Run(ctx, cfg, pipeline.Input{
+	result, err := pipeline.RunPipeline(ctx, d.pipe, cfg, pipeline.Input{
 		Content:  msg.Content,
 		Platform: msg.Platform,
 		SenderID: msg.SenderID,

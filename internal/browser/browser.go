@@ -87,6 +87,7 @@ type Browser struct {
 	process *exec.Cmd
 	client  *http.Client
 	running bool
+	session *CdpSession
 }
 
 // NewBrowser creates a browser automation instance.
@@ -145,6 +146,22 @@ func (b *Browser) Start() error {
 	}
 
 	b.running = true
+
+	// Connect CDP WebSocket session to the first page target.
+	target, err := FindPageTarget(b.cdpURL(""))
+	if err == nil && target.WebSocketDebuggerURL != "" {
+		timeout := time.Duration(b.cfg.TimeoutSeconds) * time.Second
+		sess, sessErr := ConnectCdp(context.Background(), target.WebSocketDebuggerURL, timeout)
+		if sessErr == nil {
+			b.session = sess
+			// Enable required domains.
+			ctx := context.Background()
+			sess.SendCommand(ctx, "Page.enable", nil)
+			sess.SendCommand(ctx, "Runtime.enable", nil)
+			sess.SendCommand(ctx, "Network.enable", nil)
+		}
+	}
+
 	log.Info().Int("port", b.cfg.CDPPort).Msg("browser started")
 	return nil
 }
@@ -158,6 +175,10 @@ func (b *Browser) Stop() error {
 		return nil
 	}
 
+	if b.session != nil {
+		b.session.Close()
+		b.session = nil
+	}
 	if b.process != nil && b.process.Process != nil {
 		b.process.Process.Kill()
 		b.process.Wait()
@@ -238,28 +259,64 @@ func (b *Browser) cdpURL(path string) string {
 }
 
 func (b *Browser) cdpNavigate(ctx context.Context, url string) ActionResult {
-	// For a full implementation, this would send Page.navigate via WebSocket.
-	// Simplified: use HTTP endpoint.
-	return ActionResult{Action: ActionNavigate, Success: true}
+	if b.session == nil {
+		return ActionResult{Action: ActionNavigate, Error: "no CDP session"}
+	}
+	result, err := b.session.SendCommand(ctx, "Page.navigate", map[string]string{"url": url})
+	if err != nil {
+		return ActionResult{Action: ActionNavigate, Error: err.Error()}
+	}
+	return ActionResult{Action: ActionNavigate, Success: true, Data: result}
 }
 
 func (b *Browser) cdpEvaluate(ctx context.Context, script string) ActionResult {
-	return ActionResult{Action: ActionEvaluate, Success: true}
+	if b.session == nil {
+		return ActionResult{Action: ActionEvaluate, Error: "no CDP session"}
+	}
+	result, err := b.session.SendCommand(ctx, "Runtime.evaluate", map[string]any{
+		"expression":    script,
+		"returnByValue": true,
+	})
+	if err != nil {
+		return ActionResult{Action: ActionEvaluate, Error: err.Error()}
+	}
+	return ActionResult{Action: ActionEvaluate, Success: true, Data: result}
 }
 
 func (b *Browser) cdpScreenshot(ctx context.Context) ActionResult {
-	return ActionResult{Action: ActionScreenshot, Success: true}
+	if b.session == nil {
+		return ActionResult{Action: ActionScreenshot, Error: "no CDP session"}
+	}
+	result, err := b.session.SendCommand(ctx, "Page.captureScreenshot", map[string]string{"format": "png"})
+	if err != nil {
+		return ActionResult{Action: ActionScreenshot, Error: err.Error()}
+	}
+	return ActionResult{Action: ActionScreenshot, Success: true, Data: result}
 }
 
 func (b *Browser) cdpReadPage(ctx context.Context) ActionResult {
-	return ActionResult{Action: ActionReadPage, Success: true}
+	return b.cdpEvaluate(ctx, `({url: document.URL, title: document.title, text: document.body.innerText, htmlLength: document.documentElement.outerHTML.length})`)
 }
 
 func (b *Browser) cdpGetCookies(ctx context.Context) ActionResult {
-	return ActionResult{Action: ActionGetCookies, Success: true}
+	if b.session == nil {
+		return ActionResult{Action: ActionGetCookies, Error: "no CDP session"}
+	}
+	result, err := b.session.SendCommand(ctx, "Network.getCookies", nil)
+	if err != nil {
+		return ActionResult{Action: ActionGetCookies, Error: err.Error()}
+	}
+	return ActionResult{Action: ActionGetCookies, Success: true, Data: result}
 }
 
 func (b *Browser) cdpSimpleCommand(ctx context.Context, method string, kind ActionKind) ActionResult {
+	if b.session == nil {
+		return ActionResult{Action: kind, Error: "no CDP session"}
+	}
+	_, err := b.session.SendCommand(ctx, method, nil)
+	if err != nil {
+		return ActionResult{Action: kind, Error: err.Error()}
+	}
 	return ActionResult{Action: kind, Success: true}
 }
 

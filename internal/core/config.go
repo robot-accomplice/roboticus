@@ -30,6 +30,32 @@ type Config struct {
 	Session   SessionConfig            `json:"session" mapstructure:"session"`
 	Wallet    WalletConfig             `json:"wallet" mapstructure:"wallet"`
 	Plugins   PluginsConfig            `json:"plugins" mapstructure:"plugins"`
+	Approvals ApprovalsConfig          `json:"approvals" mapstructure:"approvals"`
+	Abuse     AbuseConfig              `json:"abuse" mapstructure:"abuse"`
+	RateLimit RateLimitConfig          `json:"rate_limit" mapstructure:"rate_limit"`
+}
+
+// ApprovalsConfig controls human-in-the-loop tool gating.
+type ApprovalsConfig struct {
+	Enabled        bool     `json:"enabled" mapstructure:"enabled"`
+	GatedTools     []string `json:"gated_tools" mapstructure:"gated_tools"`
+	BlockedTools   []string `json:"blocked_tools" mapstructure:"blocked_tools"`
+	TimeoutSeconds int      `json:"timeout_seconds" mapstructure:"timeout_seconds"`
+}
+
+// AbuseConfig controls the abuse tracking system.
+type AbuseConfig struct {
+	Enabled             bool    `json:"enabled" mapstructure:"enabled"`
+	WindowMinutes       int     `json:"window_minutes" mapstructure:"window_minutes"`
+	SlowdownThreshold   float64 `json:"slowdown_threshold" mapstructure:"slowdown_threshold"`
+	QuarantineThreshold float64 `json:"quarantine_threshold" mapstructure:"quarantine_threshold"`
+}
+
+// RateLimitConfig controls per-IP HTTP rate limiting.
+type RateLimitConfig struct {
+	Enabled           bool `json:"enabled" mapstructure:"enabled"`
+	RequestsPerWindow int  `json:"requests_per_window" mapstructure:"requests_per_window"`
+	WindowSeconds     int  `json:"window_seconds" mapstructure:"window_seconds"`
 }
 
 // AgentConfig holds agent identity and workspace settings.
