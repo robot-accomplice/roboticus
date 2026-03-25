@@ -1,7 +1,7 @@
 ```
        o╔═══╗o
-        ║◉_◉║
-        ║ ▯▯║
+        ║◉ ◉║
+        ║ UU║
         ╚═╤═╝
       ╔═══╪═══╗       G O B O T I C U S
   ╔═══╣ ▓▓║▓▓ ╠═══╗   Autonomous Agent Runtime
