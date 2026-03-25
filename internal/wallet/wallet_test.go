@@ -80,7 +80,7 @@ func TestYieldEngine(t *testing.T) {
 		Enabled:             true,
 		MinDeposit:          10.0,
 		WithdrawalThreshold: 20.0,
-	})
+	}, nil)
 
 	excess := y.CalculateExcess(150.0, 100.0) // 150 - 100 - 10 buffer = 40
 	if excess != 40.0 {

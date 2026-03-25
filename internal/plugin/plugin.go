@@ -273,6 +273,67 @@ func (r *Registry) isPermissionAllowed(perm string) bool {
 	return false
 }
 
+// ScanDirectory walks a directory and auto-registers plugins found via manifest files.
+func (r *Registry) ScanDirectory(dir string) (int, error) {
+	if dir == "" {
+		return 0, nil
+	}
+
+	count := 0
+	err := filepath.Walk(dir, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil || info.IsDir() {
+			return walkErr
+		}
+		base := strings.ToLower(info.Name())
+		if base != "manifest.toml" && base != "manifest.yaml" && base != "manifest.yml" {
+			return nil
+		}
+
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return nil
+		}
+
+		var manifest Manifest
+		// Simple line-based parsing (avoids TOML/YAML library dependency).
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			parts := strings.SplitN(line, "=", 2)
+			if len(parts) != 2 {
+				parts = strings.SplitN(line, ":", 2)
+			}
+			if len(parts) != 2 {
+				continue
+			}
+			key := strings.TrimSpace(parts[0])
+			val := strings.Trim(strings.TrimSpace(parts[1]), `"'`)
+			switch key {
+			case "name":
+				manifest.Name = val
+			case "version":
+				manifest.Version = val
+			case "description":
+				manifest.Description = val
+			}
+		}
+
+		if manifest.Name == "" {
+			return nil
+		}
+
+		pluginDir := filepath.Dir(path)
+		sp := NewScriptPlugin(manifest, pluginDir)
+		if err := r.Register(sp); err != nil {
+			log.Warn().Err(err).Str("plugin", manifest.Name).Msg("plugin registration failed")
+			return nil
+		}
+		count++
+		return nil
+	})
+
+	return count, err
+}
+
 // --- File hash for hot-reload ---
 
 // FileHash returns the SHA-256 hex digest of a file.

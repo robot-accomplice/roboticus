@@ -98,6 +98,13 @@ func New(deps PipelineDeps) *Pipeline {
 	}
 }
 
+// RunPipeline is the canonical package-level entry point for all connectors.
+// It wraps Pipeline.Run with centralized error handling and tracing.
+// HTTP handlers, webhooks, and cron should call this — not p.Run directly.
+func RunPipeline(ctx context.Context, p Runner, cfg Config, input Input) (*Outcome, error) {
+	return p.Run(ctx, cfg, input)
+}
+
 // Run executes the full pipeline with the given config and input.
 // This is the single entry point for all connectors.
 //

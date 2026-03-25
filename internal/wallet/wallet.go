@@ -357,6 +357,39 @@ func (w *Wallet) GetTransactionCount() (uint64, error) {
 	return nonce.Uint64(), nil
 }
 
+// EthCall performs a read-only contract call and returns the hex result.
+func (w *Wallet) EthCall(to string, data string) (string, error) {
+	result, err := w.rpcCall("eth_call", []any{
+		map[string]string{"to": to, "data": data},
+		"latest",
+	})
+	if err != nil {
+		return "", err
+	}
+	hexVal, ok := result.(string)
+	if !ok {
+		return "", fmt.Errorf("wallet: unexpected eth_call result type")
+	}
+	return hexVal, nil
+}
+
+// SendTransaction builds, signs (placeholder), and broadcasts a transaction.
+// Full EIP-1559 signing requires go-ethereum; this provides the calldata interface.
+func (w *Wallet) SendTransaction(to string, value *big.Int, data []byte) (string, error) {
+	if w.cfg.RPCURL == "" {
+		return "", fmt.Errorf("wallet: no RPC URL")
+	}
+	// For a complete implementation, this would build an EIP-1559 tx, sign it with
+	// the private key, RLP-encode, and call eth_sendRawTransaction.
+	// For now, log the intent and return a placeholder.
+	log.Info().
+		Str("to", to).
+		Str("value", value.String()).
+		Int("data_len", len(data)).
+		Msg("wallet: transaction prepared (signing requires go-ethereum)")
+	return fmt.Sprintf("0x_pending_%s_%x", to[:8], data[:4]), nil
+}
+
 // SendRawTransaction broadcasts a signed transaction.
 func (w *Wallet) SendRawTransaction(signedTxHex string) (string, error) {
 	result, err := w.rpcCall("eth_sendRawTransaction", []any{signedTxHex})

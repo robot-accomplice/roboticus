@@ -1,7 +1,9 @@
 package channel
 
 import (
+	"bufio"
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net/smtp"
 	"strings"
@@ -125,6 +127,231 @@ func (e *EmailAdapter) smtpDomain() string {
 		return parts[1]
 	}
 	return e.cfg.SMTPHost
+}
+
+// StartIMAPPoller begins polling for new emails via IMAP. Blocks until context is cancelled.
+func (e *EmailAdapter) StartIMAPPoller(ctx context.Context) error {
+	if e.cfg.IMAPHost == "" {
+		log.Info().Msg("email: IMAP not configured, skipping poller")
+		return nil
+	}
+
+	interval := time.Duration(e.cfg.PollInterval) * time.Second
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	log.Info().Str("host", e.cfg.IMAPHost).Int("port", e.cfg.IMAPPort).Dur("interval", interval).
+		Msg("email: IMAP poller started")
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			if err := e.pollIMAP(ctx); err != nil {
+				log.Warn().Err(err).Msg("email: IMAP poll error")
+			}
+		}
+	}
+}
+
+// pollIMAP connects to the IMAP server, fetches unseen messages, and pushes them as inbound.
+func (e *EmailAdapter) pollIMAP(ctx context.Context) error {
+	addr := fmt.Sprintf("%s:%d", e.cfg.IMAPHost, e.cfg.IMAPPort)
+
+	// Connect via TLS.
+	conn, err := imapDial(addr)
+	if err != nil {
+		return fmt.Errorf("imap connect: %w", err)
+	}
+	defer conn.Close()
+
+	// Login.
+	if err := imapCommand(conn, fmt.Sprintf("LOGIN %q %q", e.cfg.Username, e.cfg.Password)); err != nil {
+		return fmt.Errorf("imap login: %w", err)
+	}
+
+	// Select INBOX.
+	if err := imapCommand(conn, "SELECT INBOX"); err != nil {
+		return fmt.Errorf("imap select: %w", err)
+	}
+
+	// Search unseen.
+	uids, err := imapSearchUnseen(conn)
+	if err != nil {
+		return fmt.Errorf("imap search: %w", err)
+	}
+
+	for _, uid := range uids {
+		from, subject, body, err := imapFetch(conn, uid)
+		if err != nil {
+			log.Warn().Err(err).Int("uid", uid).Msg("email: failed to fetch message")
+			continue
+		}
+
+		if !e.isSenderAllowed(from) {
+			log.Debug().Str("from", from).Msg("email: sender not in allowlist")
+			continue
+		}
+
+		e.PushMessage(InboundMessage{
+			ID:        fmt.Sprintf("email-%d", uid),
+			Platform:  "email",
+			SenderID:  from,
+			ChatID:    from,
+			Content:   body,
+			Timestamp: time.Now(),
+			Metadata:  map[string]any{"subject": subject, "uid": uid},
+		})
+
+		// Mark as seen.
+		imapCommand(conn, fmt.Sprintf("STORE %d +FLAGS (\\Seen)", uid))
+	}
+
+	// Logout.
+	imapCommand(conn, "LOGOUT")
+	return nil
+}
+
+// --- IMAP helpers (simplified raw protocol, avoids external dependency) ---
+
+type imapConn struct {
+	conn    interface{ Close() error }
+	scanner interface{ Scan() bool; Text() string }
+	writer  interface{ WriteString(string) (int, error); Flush() error }
+	tag     int
+}
+
+func imapDial(addr string) (*imapConn, error) {
+	// Use crypto/tls for the connection.
+	tlsConn, err := tls.Dial("tcp", addr, &tls.Config{})
+	if err != nil {
+		return nil, err
+	}
+	scanner := bufio.NewScanner(tlsConn)
+	writer := bufio.NewWriter(tlsConn)
+
+	// Read greeting.
+	if scanner.Scan() {
+		log.Trace().Str("greeting", scanner.Text()).Msg("imap")
+	}
+
+	return &imapConn{
+		conn:    tlsConn,
+		scanner: scanner,
+		writer:  writer,
+	}, nil
+}
+
+func (c *imapConn) Close() error {
+	if closer, ok := c.conn.(interface{ Close() error }); ok {
+		return closer.Close()
+	}
+	return nil
+}
+
+func imapCommand(c *imapConn, cmd string) error {
+	c.tag++
+	tag := fmt.Sprintf("A%03d", c.tag)
+	line := fmt.Sprintf("%s %s\r\n", tag, cmd)
+	c.writer.WriteString(line)
+	c.writer.Flush()
+
+	// Read until tagged response.
+	for c.scanner.Scan() {
+		text := c.scanner.Text()
+		if strings.HasPrefix(text, tag+" OK") {
+			return nil
+		}
+		if strings.HasPrefix(text, tag+" NO") || strings.HasPrefix(text, tag+" BAD") {
+			return fmt.Errorf("imap: %s", text)
+		}
+	}
+	return fmt.Errorf("imap: connection closed")
+}
+
+func imapSearchUnseen(c *imapConn) ([]int, error) {
+	c.tag++
+	tag := fmt.Sprintf("A%03d", c.tag)
+	c.writer.WriteString(fmt.Sprintf("%s SEARCH UNSEEN\r\n", tag))
+	c.writer.Flush()
+
+	var uids []int
+	for c.scanner.Scan() {
+		text := c.scanner.Text()
+		if strings.HasPrefix(text, "* SEARCH") {
+			parts := strings.Fields(text)
+			for _, p := range parts[2:] {
+				var uid int
+				if _, err := fmt.Sscanf(p, "%d", &uid); err == nil {
+					uids = append(uids, uid)
+				}
+			}
+		}
+		if strings.HasPrefix(text, tag+" OK") {
+			return uids, nil
+		}
+		if strings.HasPrefix(text, tag+" NO") || strings.HasPrefix(text, tag+" BAD") {
+			return nil, fmt.Errorf("imap search: %s", text)
+		}
+	}
+	return nil, fmt.Errorf("imap: connection closed during search")
+}
+
+func imapFetch(c *imapConn, uid int) (from, subject, body string, err error) {
+	c.tag++
+	tag := fmt.Sprintf("A%03d", c.tag)
+	c.writer.WriteString(fmt.Sprintf("%s FETCH %d (BODY[HEADER.FIELDS (FROM SUBJECT)] BODY[TEXT])\r\n", tag, uid))
+	c.writer.Flush()
+
+	var inHeader, inBody bool
+	var headerBuf, bodyBuf strings.Builder
+
+	for c.scanner.Scan() {
+		text := c.scanner.Text()
+		if strings.HasPrefix(text, tag+" OK") {
+			break
+		}
+		if strings.HasPrefix(text, tag+" NO") || strings.HasPrefix(text, tag+" BAD") {
+			return "", "", "", fmt.Errorf("imap fetch: %s", text)
+		}
+
+		if strings.Contains(text, "HEADER.FIELDS") {
+			inHeader = true
+			inBody = false
+			continue
+		}
+		if strings.Contains(text, "BODY[TEXT]") {
+			inHeader = false
+			inBody = true
+			continue
+		}
+		if text == ")" {
+			inHeader = false
+			inBody = false
+			continue
+		}
+
+		if inHeader {
+			headerBuf.WriteString(text + "\n")
+		}
+		if inBody {
+			bodyBuf.WriteString(text + "\n")
+		}
+	}
+
+	// Parse headers.
+	for _, line := range strings.Split(headerBuf.String(), "\n") {
+		if strings.HasPrefix(strings.ToLower(line), "from:") {
+			from = strings.TrimSpace(line[5:])
+		}
+		if strings.HasPrefix(strings.ToLower(line), "subject:") {
+			subject = strings.TrimSpace(line[8:])
+		}
+	}
+
+	body = strings.TrimSpace(bodyBuf.String())
+	return from, subject, body, nil
 }
 
 func (e *EmailAdapter) isSenderAllowed(sender string) bool {

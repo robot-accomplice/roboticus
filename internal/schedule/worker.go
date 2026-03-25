@@ -133,28 +133,24 @@ func (w *CronWorker) listEnabledJobs(ctx context.Context) ([]*CronJob, error) {
 }
 
 func (w *CronWorker) acquireLease(ctx context.Context, jobID string) bool {
-	// Try to insert a lease; fails if one exists (unique constraint).
-	_, err := w.store.ExecContext(ctx,
-		`INSERT OR IGNORE INTO cron_leases (job_id, instance_id, acquired_at)
-		 SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM cron_leases WHERE job_id = ?)`,
-		jobID, w.instanceID, time.Now().UTC().Format(time.RFC3339), jobID)
+	// Use inline lease columns on cron_jobs (matches roboticus approach).
+	// Atomically claim the job if unleased or if the previous lease has expired.
+	res, err := w.store.ExecContext(ctx,
+		`UPDATE cron_jobs
+		 SET lease_holder = ?, lease_expires_at = datetime('now', '+60 seconds')
+		 WHERE id = ? AND (lease_holder IS NULL OR lease_expires_at < datetime('now'))`,
+		w.instanceID, jobID)
 	if err != nil {
 		return false
 	}
-
-	// Verify we hold the lease.
-	var holder string
-	row := w.store.QueryRowContext(ctx,
-		`SELECT instance_id FROM cron_leases WHERE job_id = ?`, jobID)
-	if row.Scan(&holder) != nil || holder != w.instanceID {
-		return false
-	}
-	return true
+	n, _ := res.RowsAffected()
+	return n > 0
 }
 
 func (w *CronWorker) releaseLease(ctx context.Context, jobID string) {
 	w.store.ExecContext(ctx,
-		`DELETE FROM cron_leases WHERE job_id = ? AND instance_id = ?`,
+		`UPDATE cron_jobs SET lease_holder = NULL, lease_expires_at = NULL
+		 WHERE id = ? AND lease_holder = ?`,
 		jobID, w.instanceID)
 }
 
