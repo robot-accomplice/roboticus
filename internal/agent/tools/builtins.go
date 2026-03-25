@@ -15,14 +15,18 @@ import (
 // EchoTool echoes input back (for testing/debug).
 type EchoTool struct{}
 
-func (t *EchoTool) Name() string        { return "echo" }
-func (t *EchoTool) Description() string { return "Echo the input message back as output. Useful for testing." }
-func (t *EchoTool) Risk() RiskLevel     { return RiskSafe }
+func (t *EchoTool) Name() string { return "echo" }
+func (t *EchoTool) Description() string {
+	return "Echo the input message back as output. Useful for testing."
+}
+func (t *EchoTool) Risk() RiskLevel { return RiskSafe }
 func (t *EchoTool) ParameterSchema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{"message":{"type":"string","description":"Message to echo"}},"required":["message"]}`)
 }
 func (t *EchoTool) Execute(_ context.Context, params string, _ *Context) (*Result, error) {
-	var args struct{ Message string `json:"message"` }
+	var args struct {
+		Message string `json:"message"`
+	}
 	if err := json.Unmarshal([]byte(params), &args); err != nil {
 		return nil, fmt.Errorf("invalid params: %w", err)
 	}
@@ -34,14 +38,18 @@ func (t *EchoTool) Execute(_ context.Context, params string, _ *Context) (*Resul
 // ReadFileTool reads a text file from the workspace.
 type ReadFileTool struct{}
 
-func (t *ReadFileTool) Name() string        { return "read_file" }
-func (t *ReadFileTool) Description() string { return "Read a UTF-8 text file from the workspace (max 1MB)." }
-func (t *ReadFileTool) Risk() RiskLevel     { return RiskCaution }
+func (t *ReadFileTool) Name() string { return "read_file" }
+func (t *ReadFileTool) Description() string {
+	return "Read a UTF-8 text file from the workspace (max 1MB)."
+}
+func (t *ReadFileTool) Risk() RiskLevel { return RiskCaution }
 func (t *ReadFileTool) ParameterSchema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Relative path within workspace"}},"required":["path"]}`)
 }
 func (t *ReadFileTool) Execute(_ context.Context, params string, tctx *Context) (*Result, error) {
-	var args struct{ Path string `json:"path"` }
+	var args struct {
+		Path string `json:"path"`
+	}
 	if err := json.Unmarshal([]byte(params), &args); err != nil {
 		return nil, fmt.Errorf("invalid params: %w", err)
 	}
@@ -69,9 +77,11 @@ func (t *ReadFileTool) Execute(_ context.Context, params string, tctx *Context) 
 // WriteFileTool writes content to a workspace file.
 type WriteFileTool struct{}
 
-func (t *WriteFileTool) Name() string        { return "write_file" }
-func (t *WriteFileTool) Description() string { return "Write text content to a file in the workspace. Creates parent directories if needed." }
-func (t *WriteFileTool) Risk() RiskLevel     { return RiskCaution }
+func (t *WriteFileTool) Name() string { return "write_file" }
+func (t *WriteFileTool) Description() string {
+	return "Write text content to a file in the workspace. Creates parent directories if needed."
+}
+func (t *WriteFileTool) Risk() RiskLevel { return RiskCaution }
 func (t *WriteFileTool) ParameterSchema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Relative path within workspace"},"content":{"type":"string","description":"Content to write"},"append":{"type":"boolean","description":"Append instead of overwrite","default":false}},"required":["path","content"]}`)
 }
@@ -170,14 +180,18 @@ func (t *EditFileTool) Execute(_ context.Context, params string, tctx *Context) 
 // ListDirectoryTool lists files and folders.
 type ListDirectoryTool struct{}
 
-func (t *ListDirectoryTool) Name() string        { return "list_directory" }
-func (t *ListDirectoryTool) Description() string { return "List files and folders in a workspace directory." }
-func (t *ListDirectoryTool) Risk() RiskLevel     { return RiskCaution }
+func (t *ListDirectoryTool) Name() string { return "list_directory" }
+func (t *ListDirectoryTool) Description() string {
+	return "List files and folders in a workspace directory."
+}
+func (t *ListDirectoryTool) Risk() RiskLevel { return RiskCaution }
 func (t *ListDirectoryTool) ParameterSchema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Relative path within workspace","default":"."}},"required":[]}`)
 }
 func (t *ListDirectoryTool) Execute(_ context.Context, params string, tctx *Context) (*Result, error) {
-	var args struct{ Path string `json:"path"` }
+	var args struct {
+		Path string `json:"path"`
+	}
 	args.Path = "."
 	if params != "" {
 		_ = json.Unmarshal([]byte(params), &args)
@@ -214,9 +228,11 @@ func (t *ListDirectoryTool) Execute(_ context.Context, params string, tctx *Cont
 // SearchFilesTool searches for text content across files.
 type SearchFilesTool struct{}
 
-func (t *SearchFilesTool) Name() string        { return "search_files" }
-func (t *SearchFilesTool) Description() string { return "Search for text content across workspace files with line number reporting." }
-func (t *SearchFilesTool) Risk() RiskLevel     { return RiskCaution }
+func (t *SearchFilesTool) Name() string { return "search_files" }
+func (t *SearchFilesTool) Description() string {
+	return "Search for text content across workspace files with line number reporting."
+}
+func (t *SearchFilesTool) Risk() RiskLevel { return RiskCaution }
 func (t *SearchFilesTool) ParameterSchema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{"query":{"type":"string","description":"Text to search for"},"path":{"type":"string","description":"Directory to search in","default":"."},"limit":{"type":"integer","description":"Max results","default":20},"case_sensitive":{"type":"boolean","default":false}},"required":["query"]}`)
 }
@@ -311,9 +327,11 @@ func (t *SearchFilesTool) Execute(_ context.Context, params string, tctx *Contex
 // GlobFilesTool finds files matching a pattern.
 type GlobFilesTool struct{}
 
-func (t *GlobFilesTool) Name() string        { return "glob_files" }
-func (t *GlobFilesTool) Description() string { return "Find files matching a wildcard pattern under the workspace." }
-func (t *GlobFilesTool) Risk() RiskLevel     { return RiskCaution }
+func (t *GlobFilesTool) Name() string { return "glob_files" }
+func (t *GlobFilesTool) Description() string {
+	return "Find files matching a wildcard pattern under the workspace."
+}
+func (t *GlobFilesTool) Risk() RiskLevel { return RiskCaution }
 func (t *GlobFilesTool) ParameterSchema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{"pattern":{"type":"string","description":"Glob pattern (e.g., **/*.go)"},"path":{"type":"string","default":"."},"limit":{"type":"integer","default":50}},"required":["pattern"]}`)
 }
@@ -368,9 +386,11 @@ func (t *GlobFilesTool) Execute(_ context.Context, params string, tctx *Context)
 // BashTool executes shell commands.
 type BashTool struct{}
 
-func (t *BashTool) Name() string        { return "bash" }
-func (t *BashTool) Description() string { return "Execute a shell command in the workspace. Use with caution." }
-func (t *BashTool) Risk() RiskLevel     { return RiskDangerous }
+func (t *BashTool) Name() string { return "bash" }
+func (t *BashTool) Description() string {
+	return "Execute a shell command in the workspace. Use with caution."
+}
+func (t *BashTool) Risk() RiskLevel { return RiskDangerous }
 func (t *BashTool) ParameterSchema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{"command":{"type":"string","description":"Shell command to execute"},"cwd":{"type":"string","default":"."},"timeout_seconds":{"type":"integer","default":20,"minimum":1,"maximum":120}},"required":["command"]}`)
 }
@@ -417,9 +437,11 @@ func (t *BashTool) Execute(ctx context.Context, params string, tctx *Context) (*
 // RuntimeContextTool reports agent runtime information.
 type RuntimeContextTool struct{}
 
-func (t *RuntimeContextTool) Name() string        { return "get_runtime_context" }
-func (t *RuntimeContextTool) Description() string { return "Report runtime context (agent id, session, workspace, allowed paths)." }
-func (t *RuntimeContextTool) Risk() RiskLevel     { return RiskSafe }
+func (t *RuntimeContextTool) Name() string { return "get_runtime_context" }
+func (t *RuntimeContextTool) Description() string {
+	return "Report runtime context (agent id, session, workspace, allowed paths)."
+}
+func (t *RuntimeContextTool) Risk() RiskLevel { return RiskSafe }
 func (t *RuntimeContextTool) ParameterSchema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{}}`)
 }

@@ -10,18 +10,18 @@ type ModelTier int
 
 const (
 	TierSmall    ModelTier = iota // fast, cheap, simple tasks
-	TierMedium                   // balanced
-	TierLarge                    // capable, more expensive
-	TierFrontier                 // most capable, highest cost
+	TierMedium                    // balanced
+	TierLarge                     // capable, more expensive
+	TierFrontier                  // most capable, highest cost
 )
 
 // Router selects the best model for a given request based on complexity
 // heuristics. Unlike the Rust version's separate heuristic + ML backends,
 // we start with a clean heuristic router and add ML scoring as a layer later.
 type Router struct {
-	models      []RouteTarget
-	costAware   bool
-	localFirst  bool
+	models     []RouteTarget
+	costAware  bool
+	localFirst bool
 }
 
 // RouteTarget pairs a model name with its provider and tier.
@@ -42,8 +42,8 @@ type RouterConfig struct {
 // NewRouter creates a model router with the given targets.
 func NewRouter(targets []RouteTarget, cfg RouterConfig) *Router {
 	return &Router{
-		models:    targets,
-		costAware: cfg.CostAware,
+		models:     targets,
+		costAware:  cfg.CostAware,
 		localFirst: cfg.LocalFirst,
 	}
 }

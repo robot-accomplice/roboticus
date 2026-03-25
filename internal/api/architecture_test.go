@@ -64,7 +64,7 @@ func TestArchitecture_ChannelsDontImportPipeline(t *testing.T) {
 			importPath := strings.Trim(imp.Path.Value, `"`)
 			if importPath == "goboticus/internal/pipeline" {
 				t.Errorf("%s imports pipeline — channel adapters must not depend on pipeline",
-					entry.Name(), )
+					entry.Name())
 			}
 			if importPath == "goboticus/internal/agent" ||
 				strings.HasPrefix(importPath, "goboticus/internal/agent/") {

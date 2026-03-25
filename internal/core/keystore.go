@@ -26,11 +26,11 @@ import (
 //	ks.Set("anthropic_api_key", "sk-ant-...")
 //	ks.Save()
 type Keystore struct {
-	mu         sync.RWMutex
-	path       string
-	masterKey  []byte // derived from passphrase via scrypt
-	secrets    map[string]string
-	dirty      bool
+	mu        sync.RWMutex
+	path      string
+	masterKey []byte // derived from passphrase via scrypt
+	secrets   map[string]string
+	dirty     bool
 }
 
 // KeystoreConfig holds keystore initialization options.

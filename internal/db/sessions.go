@@ -10,16 +10,16 @@ import (
 
 // Session represents a conversation session.
 type Session struct {
-	ID                   string
-	AgentID              string
-	ScopeKey             string
-	Status               string
-	Model                sql.NullString
-	Nickname             sql.NullString
-	CreatedAt            time.Time
-	UpdatedAt            time.Time
-	Metadata             sql.NullString
-	CrossChannelConsent  bool
+	ID                  string
+	AgentID             string
+	ScopeKey            string
+	Status              string
+	Model               sql.NullString
+	Nickname            sql.NullString
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+	Metadata            sql.NullString
+	CrossChannelConsent bool
 }
 
 // FindOrCreateSession returns the active session for the given agent and scope,

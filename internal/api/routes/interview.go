@@ -13,11 +13,11 @@ type InterviewManager struct {
 }
 
 type interviewSession struct {
-	SessionID string                 `json:"session_id"`
-	Turns     int                    `json:"turns"`
-	Coverage  int                    `json:"coverage"`
-	Finished  bool                   `json:"finished"`
-	Data      map[string]any         `json:"data,omitempty"`
+	SessionID string         `json:"session_id"`
+	Turns     int            `json:"turns"`
+	Coverage  int            `json:"coverage"`
+	Finished  bool           `json:"finished"`
+	Data      map[string]any `json:"data,omitempty"`
 }
 
 // NewInterviewManager creates an interview manager.

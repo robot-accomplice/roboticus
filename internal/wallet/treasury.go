@@ -4,10 +4,10 @@ import "fmt"
 
 // TreasuryConfig holds spending limit parameters.
 type TreasuryConfig struct {
-	PerPaymentCap       float64 `mapstructure:"per_payment_cap"`       // single payment max ($)
-	HourlyTransferLimit float64 `mapstructure:"hourly_transfer_limit"` // hourly budget ($)
-	DailyTransferLimit  float64 `mapstructure:"daily_transfer_limit"`  // daily budget ($)
-	MinimumReserve      float64 `mapstructure:"minimum_reserve"`       // balance floor ($)
+	PerPaymentCap        float64 `mapstructure:"per_payment_cap"`        // single payment max ($)
+	HourlyTransferLimit  float64 `mapstructure:"hourly_transfer_limit"`  // hourly budget ($)
+	DailyTransferLimit   float64 `mapstructure:"daily_transfer_limit"`   // daily budget ($)
+	MinimumReserve       float64 `mapstructure:"minimum_reserve"`        // balance floor ($)
 	DailyInferenceBudget float64 `mapstructure:"daily_inference_budget"` // LLM spend cap ($)
 }
 

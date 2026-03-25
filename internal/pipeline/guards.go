@@ -30,10 +30,10 @@ func NewGuardChain(guards ...Guard) *GuardChain {
 
 // ApplyResult holds the outcome of the guard chain, including retry requests.
 type ApplyResult struct {
-	Content       string
+	Content        string
 	RetryRequested bool
-	RetryReason   string
-	Violations    []string
+	RetryReason    string
+	Violations     []string
 }
 
 // Apply runs all guards on the content. Returns the final result.

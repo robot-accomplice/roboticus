@@ -11,11 +11,11 @@ import (
 type CompactionStage int
 
 const (
-	StageVerbatim        CompactionStage = iota // Full messages
-	StageSelectiveTrim                          // Drop social filler
-	StageSemanticCompress                       // Compress long messages
-	StageTopicExtract                           // First sentence only
-	StageSkeleton                               // Conversation outline
+	StageVerbatim         CompactionStage = iota // Full messages
+	StageSelectiveTrim                           // Drop social filler
+	StageSemanticCompress                        // Compress long messages
+	StageTopicExtract                            // First sentence only
+	StageSkeleton                                // Conversation outline
 )
 
 // stageFromExcess selects compaction based on how far over budget we are.
@@ -36,11 +36,11 @@ func stageFromExcess(ratio float64) CompactionStage {
 
 // ContextConfig controls context window management.
 type ContextConfig struct {
-	MaxTokens        int     // Token budget for context
-	SoftTrimRatio    float64 // Start trimming at this fraction (default 0.8)
-	HardClearRatio   float64 // Emergency clear at this fraction (default 0.95)
-	CharsPerToken    int     // Rough estimation factor (default 4)
-	AntiFadeAfter    int     // Inject reminder after this many non-system turns
+	MaxTokens      int     // Token budget for context
+	SoftTrimRatio  float64 // Start trimming at this fraction (default 0.8)
+	HardClearRatio float64 // Emergency clear at this fraction (default 0.95)
+	CharsPerToken  int     // Rough estimation factor (default 4)
+	AntiFadeAfter  int     // Inject reminder after this many non-system turns
 }
 
 // DefaultContextConfig returns sensible defaults.
@@ -57,10 +57,10 @@ func DefaultContextConfig() ContextConfig {
 // ContextBuilder constructs LLM requests from session state with progressive
 // context loading and token budget management.
 type ContextBuilder struct {
-	config      ContextConfig
+	config       ContextConfig
 	systemPrompt string
-	toolDefs    []llm.ToolDef
-	memory      string // current memory block
+	toolDefs     []llm.ToolDef
+	memory       string // current memory block
 }
 
 // NewContextBuilder creates a builder with the given config.

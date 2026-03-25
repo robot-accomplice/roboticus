@@ -26,10 +26,10 @@ var rpcRequestID atomic.Int64
 
 // WalletConfig holds wallet configuration.
 type WalletConfig struct {
-	Path       string `mapstructure:"path"`        // file path for encrypted key
-	ChainID    int64  `mapstructure:"chain_id"`    // default 8453 (Base)
-	RPCURL     string `mapstructure:"rpc_url"`     // EVM JSON-RPC endpoint
-	Passphrase string `mapstructure:"-"`           // from env: GOBOTICUS_WALLET_PASSPHRASE
+	Path       string `mapstructure:"path"`     // file path for encrypted key
+	ChainID    int64  `mapstructure:"chain_id"` // default 8453 (Base)
+	RPCURL     string `mapstructure:"rpc_url"`  // EVM JSON-RPC endpoint
+	Passphrase string `mapstructure:"-"`        // from env: GOBOTICUS_WALLET_PASSPHRASE
 }
 
 // Wallet manages an Ethereum-compatible HD wallet.

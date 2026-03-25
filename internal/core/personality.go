@@ -2,9 +2,9 @@ package core
 
 // OsConfig represents the agent's identity and voice configuration (OS.toml).
 type OsConfig struct {
-	Identity OsIdentity `json:"identity" mapstructure:"identity"`
-	Voice    OsVoice    `json:"voice" mapstructure:"voice"`
-	PromptText string   `json:"prompt_text" mapstructure:"prompt_text"`
+	Identity   OsIdentity `json:"identity" mapstructure:"identity"`
+	Voice      OsVoice    `json:"voice" mapstructure:"voice"`
+	PromptText string     `json:"prompt_text" mapstructure:"prompt_text"`
 }
 
 // OsIdentity holds agent identity fields.
@@ -31,8 +31,8 @@ type FirmwareConfig struct {
 
 // FirmwareApprovals holds approval thresholds.
 type FirmwareApprovals struct {
-	SpendingThreshold    float64 `json:"spending_threshold" mapstructure:"spending_threshold"`
-	RequireConfirmation  string  `json:"require_confirmation" mapstructure:"require_confirmation"`
+	SpendingThreshold   float64 `json:"spending_threshold" mapstructure:"spending_threshold"`
+	RequireConfirmation string  `json:"require_confirmation" mapstructure:"require_confirmation"`
 }
 
 // FirmwareRule is a single guardrail rule.

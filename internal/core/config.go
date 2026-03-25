@@ -16,23 +16,23 @@ var bundledProvidersTOML string
 
 // Config is the top-level application configuration, loaded from TOML.
 type Config struct {
-	Agent     AgentConfig              `json:"agent" mapstructure:"agent"`
-	Server    ServerConfig             `json:"server" mapstructure:"server"`
-	Database  DatabaseConfig           `json:"database" mapstructure:"database"`
-	Models    ModelsConfig             `json:"models" mapstructure:"models"`
+	Agent     AgentConfig               `json:"agent" mapstructure:"agent"`
+	Server    ServerConfig              `json:"server" mapstructure:"server"`
+	Database  DatabaseConfig            `json:"database" mapstructure:"database"`
+	Models    ModelsConfig              `json:"models" mapstructure:"models"`
 	Providers map[string]ProviderConfig `json:"providers" mapstructure:"providers"`
-	Memory    MemoryConfig             `json:"memory" mapstructure:"memory"`
-	Cache     CacheConfig              `json:"cache" mapstructure:"cache"`
-	Treasury  TreasuryConfig           `json:"treasury" mapstructure:"treasury"`
-	Channels  ChannelsConfig           `json:"channels" mapstructure:"channels"`
-	Security  SecurityConfig           `json:"security" mapstructure:"security"`
-	Skills    SkillsConfig             `json:"skills" mapstructure:"skills"`
-	Session   SessionConfig            `json:"session" mapstructure:"session"`
-	Wallet    WalletConfig             `json:"wallet" mapstructure:"wallet"`
-	Plugins   PluginsConfig            `json:"plugins" mapstructure:"plugins"`
-	Approvals ApprovalsConfig          `json:"approvals" mapstructure:"approvals"`
-	Abuse     AbuseConfig              `json:"abuse" mapstructure:"abuse"`
-	RateLimit RateLimitConfig          `json:"rate_limit" mapstructure:"rate_limit"`
+	Memory    MemoryConfig              `json:"memory" mapstructure:"memory"`
+	Cache     CacheConfig               `json:"cache" mapstructure:"cache"`
+	Treasury  TreasuryConfig            `json:"treasury" mapstructure:"treasury"`
+	Channels  ChannelsConfig            `json:"channels" mapstructure:"channels"`
+	Security  SecurityConfig            `json:"security" mapstructure:"security"`
+	Skills    SkillsConfig              `json:"skills" mapstructure:"skills"`
+	Session   SessionConfig             `json:"session" mapstructure:"session"`
+	Wallet    WalletConfig              `json:"wallet" mapstructure:"wallet"`
+	Plugins   PluginsConfig             `json:"plugins" mapstructure:"plugins"`
+	Approvals ApprovalsConfig           `json:"approvals" mapstructure:"approvals"`
+	Abuse     AbuseConfig               `json:"abuse" mapstructure:"abuse"`
+	RateLimit RateLimitConfig           `json:"rate_limit" mapstructure:"rate_limit"`
 }
 
 // ApprovalsConfig controls human-in-the-loop tool gating.
@@ -69,10 +69,10 @@ type AgentConfig struct {
 
 // ServerConfig holds HTTP server settings.
 type ServerConfig struct {
-	Port                  int    `json:"port" mapstructure:"port"`
-	Bind                  string `json:"bind" mapstructure:"bind"`
-	LogDir                string `json:"log_dir" mapstructure:"log_dir"`
-	CronMaxConcurrency    int    `json:"cron_max_concurrency" mapstructure:"cron_max_concurrency"`
+	Port               int    `json:"port" mapstructure:"port"`
+	Bind               string `json:"bind" mapstructure:"bind"`
+	LogDir             string `json:"log_dir" mapstructure:"log_dir"`
+	CronMaxConcurrency int    `json:"cron_max_concurrency" mapstructure:"cron_max_concurrency"`
 }
 
 // DatabaseConfig holds SQLite connection settings.
@@ -89,19 +89,19 @@ type ModelsConfig struct {
 
 // RoutingConfig holds model routing parameters.
 type RoutingConfig struct {
-	Mode                     string   `json:"mode" mapstructure:"mode"`
-	ConfidenceThreshold      float64  `json:"confidence_threshold" mapstructure:"confidence_threshold"`
-	EstimatedOutputTokens    int      `json:"estimated_output_tokens" mapstructure:"estimated_output_tokens"`
-	AccuracyFloor            float64  `json:"accuracy_floor" mapstructure:"accuracy_floor"`
-	AccuracyMinObs           int      `json:"accuracy_min_obs" mapstructure:"accuracy_min_obs"`
-	CostWeight               *float64 `json:"cost_weight,omitempty" mapstructure:"cost_weight"`
-	CostAware                bool     `json:"cost_aware" mapstructure:"cost_aware"`
-	CanaryFraction           float64  `json:"canary_fraction" mapstructure:"canary_fraction"`
-	CanaryModel              string   `json:"canary_model" mapstructure:"canary_model"`
-	BlockedModels            []string `json:"blocked_models" mapstructure:"blocked_models"`
-	PerProviderTimeoutSecs   int      `json:"per_provider_timeout_seconds" mapstructure:"per_provider_timeout_seconds"`
-	MaxTotalInferenceSecs    int      `json:"max_total_inference_seconds" mapstructure:"max_total_inference_seconds"`
-	MaxFallbackAttempts      int      `json:"max_fallback_attempts" mapstructure:"max_fallback_attempts"`
+	Mode                   string   `json:"mode" mapstructure:"mode"`
+	ConfidenceThreshold    float64  `json:"confidence_threshold" mapstructure:"confidence_threshold"`
+	EstimatedOutputTokens  int      `json:"estimated_output_tokens" mapstructure:"estimated_output_tokens"`
+	AccuracyFloor          float64  `json:"accuracy_floor" mapstructure:"accuracy_floor"`
+	AccuracyMinObs         int      `json:"accuracy_min_obs" mapstructure:"accuracy_min_obs"`
+	CostWeight             *float64 `json:"cost_weight,omitempty" mapstructure:"cost_weight"`
+	CostAware              bool     `json:"cost_aware" mapstructure:"cost_aware"`
+	CanaryFraction         float64  `json:"canary_fraction" mapstructure:"canary_fraction"`
+	CanaryModel            string   `json:"canary_model" mapstructure:"canary_model"`
+	BlockedModels          []string `json:"blocked_models" mapstructure:"blocked_models"`
+	PerProviderTimeoutSecs int      `json:"per_provider_timeout_seconds" mapstructure:"per_provider_timeout_seconds"`
+	MaxTotalInferenceSecs  int      `json:"max_total_inference_seconds" mapstructure:"max_total_inference_seconds"`
+	MaxFallbackAttempts    int      `json:"max_fallback_attempts" mapstructure:"max_fallback_attempts"`
 }
 
 // ProviderConfig describes a single LLM provider endpoint.
@@ -145,9 +145,9 @@ type CacheConfig struct {
 
 // TreasuryConfig holds financial policy limits.
 type TreasuryConfig struct {
-	DailyCap      float64 `json:"daily_cap" mapstructure:"daily_cap"`
-	PerPaymentCap float64 `json:"per_payment_cap" mapstructure:"per_payment_cap"`
-	TransferLimit float64 `json:"transfer_limit" mapstructure:"transfer_limit"`
+	DailyCap       float64 `json:"daily_cap" mapstructure:"daily_cap"`
+	PerPaymentCap  float64 `json:"per_payment_cap" mapstructure:"per_payment_cap"`
+	TransferLimit  float64 `json:"transfer_limit" mapstructure:"transfer_limit"`
 	MinimumReserve float64 `json:"minimum_reserve" mapstructure:"minimum_reserve"`
 }
 

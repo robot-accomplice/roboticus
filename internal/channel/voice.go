@@ -25,23 +25,23 @@ const (
 
 // VoiceConfig holds voice adapter configuration.
 type VoiceConfig struct {
-	STTModel   string `mapstructure:"stt_model"`    // default whisper-large-v3
-	TTSModel   string `mapstructure:"tts_model"`    // default tts-1
-	TTSVoice   string `mapstructure:"tts_voice"`    // default alloy
+	STTModel   string `mapstructure:"stt_model"` // default whisper-large-v3
+	TTSModel   string `mapstructure:"tts_model"` // default tts-1
+	TTSVoice   string `mapstructure:"tts_voice"` // default alloy
 	LocalSTT   bool   `mapstructure:"local_stt"`
 	LocalTTS   bool   `mapstructure:"local_tts"`
-	SampleRate int    `mapstructure:"sample_rate"`   // default 16000
+	SampleRate int    `mapstructure:"sample_rate"` // default 16000
 	APIKey     string `mapstructure:"api_key"`
-	APIBaseURL string `mapstructure:"api_base_url"`  // default OpenAI
+	APIBaseURL string `mapstructure:"api_base_url"` // default OpenAI
 }
 
 // VoiceAdapter handles speech-to-text and text-to-speech.
 // Not a full Adapter (no Recv/Send cycle) — used as a service by other adapters.
 type VoiceAdapter struct {
-	cfg              VoiceConfig
-	client           *http.Client
-	transcribeCount  atomic.Int64
-	synthesizeCount  atomic.Int64
+	cfg             VoiceConfig
+	client          *http.Client
+	transcribeCount atomic.Int64
+	synthesizeCount atomic.Int64
 }
 
 // TranscriptionResult holds the output of speech-to-text.

@@ -111,8 +111,8 @@ func (pe *PolicyEngine) EvaluateWithTools(req *ToolCallRequest, reg *ToolRegistr
 
 type authorityRule struct{}
 
-func (r *authorityRule) Name() string     { return "authority" }
-func (r *authorityRule) Priority() int    { return 1 }
+func (r *authorityRule) Name() string  { return "authority" }
+func (r *authorityRule) Priority() int { return 1 }
 
 func (r *authorityRule) Evaluate(req *ToolCallRequest, reg *ToolRegistry) PolicyDecisionResult {
 	if reg == nil {
@@ -272,11 +272,11 @@ func (r *validationRule) Priority() int { return 6 }
 
 // Shell injection patterns — covers command substitution, chaining, piping, and redirection.
 var shellPatterns = []string{
-	"$(", "`", "${",      // command substitution
-	";", "&&", "||",      // command chaining
+	"$(", "`", "${", // command substitution
+	";", "&&", "||", // command chaining
 	"|",                  // pipe
 	">", ">>", "<", "<<", // redirection
-	"\n",                 // newline injection
+	"\n", // newline injection
 }
 
 func (r *validationRule) Evaluate(req *ToolCallRequest, _ *ToolRegistry) PolicyDecisionResult {

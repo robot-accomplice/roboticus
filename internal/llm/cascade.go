@@ -17,21 +17,21 @@ const (
 
 // CascadeOutcome records the result of a cascade decision for learning.
 type CascadeOutcome struct {
-	QueryClass      string
-	WeakModelUsed   bool
-	WeakSucceeded   bool
-	WeakLatency     time.Duration
-	StrongLatency   time.Duration
-	RecordedAt      time.Time
+	QueryClass    string
+	WeakModelUsed bool
+	WeakSucceeded bool
+	WeakLatency   time.Duration
+	StrongLatency time.Duration
+	RecordedAt    time.Time
 }
 
 // CascadeOptimizer tracks per-query-class statistics to decide whether
 // cascading (try cheap model first) has positive expected utility vs going direct.
 type CascadeOptimizer struct {
-	mu           sync.Mutex
-	windowSize   int
+	mu            sync.Mutex
+	windowSize    int
 	latencyWeight float64
-	outcomes     map[string][]CascadeOutcome
+	outcomes      map[string][]CascadeOutcome
 }
 
 // NewCascadeOptimizer creates an optimizer with the given sliding window size.

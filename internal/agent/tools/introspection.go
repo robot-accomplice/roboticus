@@ -27,9 +27,11 @@ func NewIntrospectionTool(agentName, version string, toolNames func() []string) 
 	}
 }
 
-func (t *IntrospectionTool) Name() string        { return "introspect" }
-func (t *IntrospectionTool) Description() string  { return "Inspect agent capabilities, available tools, and runtime state." }
-func (t *IntrospectionTool) Risk() RiskLevel      { return RiskSafe }
+func (t *IntrospectionTool) Name() string { return "introspect" }
+func (t *IntrospectionTool) Description() string {
+	return "Inspect agent capabilities, available tools, and runtime state."
+}
+func (t *IntrospectionTool) Risk() RiskLevel { return RiskSafe }
 func (t *IntrospectionTool) ParameterSchema() json.RawMessage {
 	return json.RawMessage(`{
 		"type": "object",

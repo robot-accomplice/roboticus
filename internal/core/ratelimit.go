@@ -7,7 +7,7 @@ import (
 
 // RateLimiter implements a simple sliding window rate limiter.
 type RateLimiter struct {
-	mu         sync.Mutex
+	mu          sync.Mutex
 	maxRequests int
 	window      time.Duration
 	timestamps  []time.Time

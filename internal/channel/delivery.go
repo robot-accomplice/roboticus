@@ -17,7 +17,7 @@ import (
 type DeliveryStatus int
 
 const (
-	DeliveryPending    DeliveryStatus = iota
+	DeliveryPending DeliveryStatus = iota
 	DeliveryInFlight
 	DeliveryDelivered
 	DeliveryFailed

@@ -83,10 +83,10 @@ type Loop struct {
 	config LoopConfig
 	state  LoopState
 
-	turnCount     int
-	noOpCount     int
-	recentCalls   []recentCall
-	doneReason    string
+	turnCount   int
+	noOpCount   int
+	recentCalls []recentCall
+	doneReason  string
 
 	// Dependencies injected at construction.
 	llm       llm.Completer

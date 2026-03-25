@@ -217,9 +217,15 @@ func (e *EmailAdapter) pollIMAP(ctx context.Context) error {
 
 type imapConn struct {
 	conn    interface{ Close() error }
-	scanner interface{ Scan() bool; Text() string }
-	writer  interface{ WriteString(string) (int, error); Flush() error }
-	tag     int
+	scanner interface {
+		Scan() bool
+		Text() string
+	}
+	writer interface {
+		WriteString(string) (int, error)
+		Flush() error
+	}
+	tag int
 }
 
 func imapDial(addr string) (*imapConn, error) {

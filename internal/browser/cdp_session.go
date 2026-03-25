@@ -15,10 +15,10 @@ import (
 
 // CdpTarget represents a CDP debugging target.
 type CdpTarget struct {
-	ID                 string `json:"id"`
-	URL                string `json:"url"`
-	Title              string `json:"title"`
-	Type               string `json:"type"`
+	ID                   string `json:"id"`
+	URL                  string `json:"url"`
+	Title                string `json:"title"`
+	Type                 string `json:"type"`
 	WebSocketDebuggerURL string `json:"webSocketDebuggerUrl"`
 }
 
@@ -41,9 +41,9 @@ type cdpCommand struct {
 
 // cdpResponse is a JSON-RPC response from CDP.
 type cdpResponse struct {
-	ID     int64            `json:"id"`
-	Result json.RawMessage  `json:"result,omitempty"`
-	Error  *cdpError        `json:"error,omitempty"`
+	ID     int64           `json:"id"`
+	Result json.RawMessage `json:"result,omitempty"`
+	Error  *cdpError       `json:"error,omitempty"`
 }
 
 type cdpError struct {

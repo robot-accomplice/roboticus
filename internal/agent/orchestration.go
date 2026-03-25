@@ -10,17 +10,17 @@ import (
 type OrchestrationPattern int
 
 const (
-	PatternSequential OrchestrationPattern = iota // Tasks run one after another
-	PatternParallel                               // Tasks run concurrently
-	PatternFanOutFanIn                            // Distribute then collect
-	PatternHandoff                                // Pass context in sequence
+	PatternSequential  OrchestrationPattern = iota // Tasks run one after another
+	PatternParallel                                // Tasks run concurrently
+	PatternFanOutFanIn                             // Distribute then collect
+	PatternHandoff                                 // Pass context in sequence
 )
 
 // SubtaskStatus tracks the state of a subtask.
 type SubtaskStatus int
 
 const (
-	SubtaskPending   SubtaskStatus = iota
+	SubtaskPending SubtaskStatus = iota
 	SubtaskAssigned
 	SubtaskRunning
 	SubtaskCompleted
@@ -43,7 +43,7 @@ type Subtask struct {
 type WorkflowStatus int
 
 const (
-	WorkflowCreated   WorkflowStatus = iota
+	WorkflowCreated WorkflowStatus = iota
 	WorkflowRunning
 	WorkflowCompleted
 	WorkflowFailed

@@ -17,7 +17,7 @@ import (
 // TelegramConfig holds Telegram Bot API connection parameters.
 type TelegramConfig struct {
 	Token          string  `mapstructure:"token"`
-	PollTimeout    int     `mapstructure:"poll_timeout"`    // seconds, default 30
+	PollTimeout    int     `mapstructure:"poll_timeout"` // seconds, default 30
 	AllowedChatIDs []int64 `mapstructure:"allowed_chat_ids"`
 	DenyOnEmpty    bool    `mapstructure:"deny_on_empty"` // secure default: true
 	WebhookSecret  string  `mapstructure:"webhook_secret"`
@@ -25,11 +25,11 @@ type TelegramConfig struct {
 
 // TelegramAdapter implements Adapter for the Telegram Bot API.
 type TelegramAdapter struct {
-	cfg            TelegramConfig
-	client         *http.Client
-	lastUpdateID   int64
-	mu             sync.Mutex
-	messageBuffer  []InboundMessage
+	cfg           TelegramConfig
+	client        *http.Client
+	lastUpdateID  int64
+	mu            sync.Mutex
+	messageBuffer []InboundMessage
 }
 
 // NewTelegramAdapter creates a Telegram channel adapter.

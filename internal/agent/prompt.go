@@ -7,14 +7,14 @@ import (
 
 // PromptConfig holds parameters for system prompt construction.
 type PromptConfig struct {
-	AgentName    string
-	Firmware     string   // optional platform instructions
-	Personality  string   // optional OS personality/identity
-	Version      string   // runtime version
-	Model        string   // primary model name
-	Workspace    string   // workspace root path
-	Skills       []string // active skill names
-	IsSubagent   bool     // include orchestration workflow block
+	AgentName   string
+	Firmware    string   // optional platform instructions
+	Personality string   // optional OS personality/identity
+	Version     string   // runtime version
+	Model       string   // primary model name
+	Workspace   string   // workspace root path
+	Skills      []string // active skill names
+	IsSubagent  bool     // include orchestration workflow block
 }
 
 // BuildSystemPrompt constructs the full system prompt from config sections.

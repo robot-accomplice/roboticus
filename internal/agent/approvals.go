@@ -10,9 +10,9 @@ import (
 type ToolClassification int
 
 const (
-	ToolSafe   ToolClassification = iota // Execute without approval
-	ToolGated                            // Requires human approval before execution
-	ToolBlocked                          // Never allowed
+	ToolSafe    ToolClassification = iota // Execute without approval
+	ToolGated                             // Requires human approval before execution
+	ToolBlocked                           // Never allowed
 )
 
 // ApprovalStatus tracks the lifecycle of an approval request.
@@ -27,17 +27,17 @@ const (
 
 // ApprovalRequest represents a pending approval for a gated tool call.
 type ApprovalRequest struct {
-	ID         string         `json:"id"`
-	ToolName   string         `json:"tool_name"`
-	ToolInput  string         `json:"tool_input"`
-	SessionID  string         `json:"session_id"`
-	TurnID     string         `json:"turn_id"`
-	Status     ApprovalStatus `json:"status"`
-	Operator   string         `json:"operator,omitempty"`
-	Reason     string         `json:"reason,omitempty"`
-	CreatedAt  time.Time      `json:"created_at"`
-	DecidedAt  *time.Time     `json:"decided_at,omitempty"`
-	TimeoutAt  time.Time      `json:"timeout_at"`
+	ID        string         `json:"id"`
+	ToolName  string         `json:"tool_name"`
+	ToolInput string         `json:"tool_input"`
+	SessionID string         `json:"session_id"`
+	TurnID    string         `json:"turn_id"`
+	Status    ApprovalStatus `json:"status"`
+	Operator  string         `json:"operator,omitempty"`
+	Reason    string         `json:"reason,omitempty"`
+	CreatedAt time.Time      `json:"created_at"`
+	DecidedAt *time.Time     `json:"decided_at,omitempty"`
+	TimeoutAt time.Time      `json:"timeout_at"`
 }
 
 // ApprovalsConfig controls the approval system.

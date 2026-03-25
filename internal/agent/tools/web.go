@@ -33,8 +33,8 @@ func NewWebSearchTool(searchURL, apiKey string) *WebSearchTool {
 }
 
 func (t *WebSearchTool) Name() string        { return "web_search" }
-func (t *WebSearchTool) Description() string  { return "Search the web for current information." }
-func (t *WebSearchTool) Risk() RiskLevel      { return RiskCaution }
+func (t *WebSearchTool) Description() string { return "Search the web for current information." }
+func (t *WebSearchTool) Risk() RiskLevel     { return RiskCaution }
 func (t *WebSearchTool) ParameterSchema() json.RawMessage {
 	return json.RawMessage(`{
 		"type": "object",
@@ -141,8 +141,8 @@ func NewHTTPFetchTool() *HTTPFetchTool {
 }
 
 func (t *HTTPFetchTool) Name() string        { return "http_fetch" }
-func (t *HTTPFetchTool) Description() string  { return "Fetch content from a URL via HTTP GET." }
-func (t *HTTPFetchTool) Risk() RiskLevel      { return RiskCaution }
+func (t *HTTPFetchTool) Description() string { return "Fetch content from a URL via HTTP GET." }
+func (t *HTTPFetchTool) Risk() RiskLevel     { return RiskCaution }
 func (t *HTTPFetchTool) ParameterSchema() json.RawMessage {
 	return json.RawMessage(`{
 		"type": "object",

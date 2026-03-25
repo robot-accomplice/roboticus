@@ -15,15 +15,15 @@ import (
 
 // Outcome represents the result of a pipeline run.
 type Outcome struct {
-	SessionID     string `json:"session_id"`
-	MessageID     string `json:"message_id"`
-	Content       string `json:"content"`
-	Model         string `json:"model,omitempty"`
-	TokensIn      int    `json:"tokens_in,omitempty"`
-	TokensOut     int    `json:"tokens_out,omitempty"`
-	ReactTurns    int    `json:"react_turns,omitempty"`
-	FromCache     bool   `json:"from_cache,omitempty"`
-	Stream        bool   `json:"stream,omitempty"`
+	SessionID  string `json:"session_id"`
+	MessageID  string `json:"message_id"`
+	Content    string `json:"content"`
+	Model      string `json:"model,omitempty"`
+	TokensIn   int    `json:"tokens_in,omitempty"`
+	TokensOut  int    `json:"tokens_out,omitempty"`
+	ReactTurns int    `json:"react_turns,omitempty"`
+	FromCache  bool   `json:"from_cache,omitempty"`
+	Stream     bool   `json:"stream,omitempty"`
 }
 
 // Input is the raw request to the pipeline.
@@ -465,7 +465,7 @@ func (p *Pipeline) tryShortcut(_ context.Context, session *agent.Session, conten
 	if lower == "help" || lower == "/help" {
 		return &Outcome{
 			SessionID: session.ID,
-			Content: fmt.Sprintf("%s can help with:\n- General conversation and reasoning\n- File operations and code tasks\n- Web search and information retrieval\n- Scheduling and reminders\n- Financial operations\n\nJust describe what you need.", p.promptCfg.AgentName),
+			Content:   fmt.Sprintf("%s can help with:\n- General conversation and reasoning\n- File operations and code tasks\n- Web search and information retrieval\n- Scheduling and reminders\n- Financial operations\n\nJust describe what you need.", p.promptCfg.AgentName),
 		}
 	}
 

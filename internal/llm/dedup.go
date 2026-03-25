@@ -11,7 +11,7 @@ import (
 // instead of hitting the provider again. This is cheaper and faster than
 // cache because it handles the exact moment of concurrent duplicate calls.
 type Dedup struct {
-	mu      sync.Mutex
+	mu       sync.Mutex
 	inflight map[string]*inflightEntry
 	ttl      time.Duration
 }

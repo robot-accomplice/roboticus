@@ -72,13 +72,13 @@ func ListCronJobs(store *db.Store) http.HandlerFunc {
 func CreateCronJob(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			Name           string `json:"name"`
-			Description    string `json:"description"`
-			ScheduleKind   string `json:"schedule_kind"`
-			ScheduleExpr   string `json:"schedule_expr"`
+			Name            string `json:"name"`
+			Description     string `json:"description"`
+			ScheduleKind    string `json:"schedule_kind"`
+			ScheduleExpr    string `json:"schedule_expr"`
 			ScheduleEveryMs *int64 `json:"schedule_every_ms"`
-			AgentID        string `json:"agent_id"`
-			PayloadJSON    string `json:"payload_json"`
+			AgentID         string `json:"agent_id"`
+			PayloadJSON     string `json:"payload_json"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid JSON body")

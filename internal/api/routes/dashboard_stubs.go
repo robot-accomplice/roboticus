@@ -93,10 +93,10 @@ func GetRoutingDiagnostics(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"config": map[string]any{
-				"accuracy_floor":        0.7,
-				"cost_aware":            true,
-				"cost_weight":           0.3,
-				"confidence_threshold":  0.9,
+				"accuracy_floor":          0.7,
+				"cost_aware":              true,
+				"cost_weight":             0.3,
+				"confidence_threshold":    0.9,
 				"estimated_output_tokens": 800,
 			},
 		})

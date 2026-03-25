@@ -44,7 +44,7 @@ func NewClient(p *Provider) (*Client, error) {
 			Timeout: 120 * time.Second,
 			Transport: &http.Transport{
 				MaxIdleConnsPerHost: 10,
-				IdleConnTimeout:    90 * time.Second,
+				IdleConnTimeout:     90 * time.Second,
 			},
 		},
 		apiKey: apiKey,

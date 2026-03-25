@@ -16,10 +16,10 @@ import (
 // BrowserConfig holds browser automation configuration.
 type BrowserConfig struct {
 	Enabled        bool   `mapstructure:"enabled"`
-	Headless       bool   `mapstructure:"headless"`         // default true
-	CDPPort        int    `mapstructure:"cdp_port"`         // default 9222
-	ExecutablePath string `mapstructure:"executable_path"`  // custom chromium binary
-	TimeoutSeconds int    `mapstructure:"timeout_seconds"`  // default 30
+	Headless       bool   `mapstructure:"headless"`        // default true
+	CDPPort        int    `mapstructure:"cdp_port"`        // default 9222
+	ExecutablePath string `mapstructure:"executable_path"` // custom chromium binary
+	TimeoutSeconds int    `mapstructure:"timeout_seconds"` // default 30
 }
 
 // ActionKind enumerates browser actions.

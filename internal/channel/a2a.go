@@ -21,11 +21,11 @@ import (
 
 // A2AConfig holds agent-to-agent communication parameters.
 type A2AConfig struct {
-	MaxMessageSize     int `mapstructure:"max_message_size"`      // bytes, default 64KB
-	SessionTimeout     int `mapstructure:"session_timeout"`       // seconds, default 3600
-	RateLimitPerPeer   int `mapstructure:"rate_limit_per_peer"`   // requests per 60s, default 30
-	NonceTTL           int `mapstructure:"nonce_ttl"`             // seconds, default 300
-	MaxSessions        int `mapstructure:"max_sessions"`          // default 256
+	MaxMessageSize   int `mapstructure:"max_message_size"`    // bytes, default 64KB
+	SessionTimeout   int `mapstructure:"session_timeout"`     // seconds, default 3600
+	RateLimitPerPeer int `mapstructure:"rate_limit_per_peer"` // requests per 60s, default 30
+	NonceTTL         int `mapstructure:"nonce_ttl"`           // seconds, default 300
+	MaxSessions      int `mapstructure:"max_sessions"`        // default 256
 }
 
 // a2aSession represents an established encrypted session with a peer.

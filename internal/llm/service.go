@@ -32,12 +32,12 @@ type Service struct {
 
 // ServiceConfig holds configuration for the LLM service.
 type ServiceConfig struct {
-	Providers  []Provider
-	Primary    string
-	Fallbacks  []string
-	Cache      CacheConfig
-	Breaker    CircuitBreakerConfig
-	Router     RouterConfig
+	Providers []Provider
+	Primary   string
+	Fallbacks []string
+	Cache     CacheConfig
+	Breaker   CircuitBreakerConfig
+	Router    RouterConfig
 }
 
 // NewService creates the LLM orchestrator.

@@ -153,12 +153,12 @@ func (s *SignalAdapter) rpcCall(ctx context.Context, method string, params map[s
 func (s *SignalAdapter) ProcessWebhook(data []byte) (*InboundMessage, error) {
 	var envelope struct {
 		Envelope struct {
-			Source        string `json:"source"`
-			SourceNumber  string `json:"sourceNumber"`
-			Timestamp     int64  `json:"timestamp"`
-			DataMessage   *struct {
-				Message    string `json:"message"`
-				GroupInfo  *struct {
+			Source       string `json:"source"`
+			SourceNumber string `json:"sourceNumber"`
+			Timestamp    int64  `json:"timestamp"`
+			DataMessage  *struct {
+				Message   string `json:"message"`
+				GroupInfo *struct {
 					GroupID string `json:"groupId"`
 				} `json:"groupInfo"`
 			} `json:"dataMessage"`

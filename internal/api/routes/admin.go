@@ -345,4 +345,3 @@ func WebhookWhatsApp(p *pipeline.Pipeline) http.HandlerFunc {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "received"})
 	}
 }
-

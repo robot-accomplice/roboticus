@@ -18,16 +18,16 @@ const (
 
 // CronJob represents a scheduled job definition.
 type CronJob struct {
-	ID             string       `json:"id"`
-	Name           string       `json:"name"`
-	AgentID        string       `json:"agent_id"`
-	Kind           ScheduleKind `json:"schedule_kind"`
-	Expression     string       `json:"schedule_expr"`       // cron expr or at timestamp
-	IntervalMs     int64        `json:"schedule_every_ms"`   // for interval kind
-	PayloadJSON    string       `json:"payload_json"`
-	Enabled        bool         `json:"enabled"`
-	LastRunAt      *time.Time   `json:"last_run_at,omitempty"`
-	NextRunAt      *time.Time   `json:"next_run_at,omitempty"`
+	ID          string       `json:"id"`
+	Name        string       `json:"name"`
+	AgentID     string       `json:"agent_id"`
+	Kind        ScheduleKind `json:"schedule_kind"`
+	Expression  string       `json:"schedule_expr"`     // cron expr or at timestamp
+	IntervalMs  int64        `json:"schedule_every_ms"` // for interval kind
+	PayloadJSON string       `json:"payload_json"`
+	Enabled     bool         `json:"enabled"`
+	LastRunAt   *time.Time   `json:"last_run_at,omitempty"`
+	NextRunAt   *time.Time   `json:"next_run_at,omitempty"`
 }
 
 // DurableScheduler evaluates cron/interval/at schedules (pure function, no DB).

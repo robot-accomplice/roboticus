@@ -37,17 +37,17 @@ const (
 // Model is the bubbletea application model for the TUI.
 type Model struct {
 	// State.
-	focused    FocusedPanel
-	input      string
-	cursor     int
-	messages   []ChatMessage
-	logs       []string
-	sessionID  string
-	status     ConnectionStatus
-	model      string
-	streaming  bool
-	width      int
-	height     int
+	focused   FocusedPanel
+	input     string
+	cursor    int
+	messages  []ChatMessage
+	logs      []string
+	sessionID string
+	status    ConnectionStatus
+	model     string
+	streaming bool
+	width     int
+	height    int
 
 	// Scroll offsets.
 	chatScroll int

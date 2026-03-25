@@ -17,13 +17,13 @@ func TestValidateE164(t *testing.T) {
 	}
 
 	invalid := []string{
-		"14155552671",   // no +
-		"+0123456789",   // starts with 0
-		"+",             // no digits
-		"",              // empty
+		"14155552671",       // no +
+		"+0123456789",       // starts with 0
+		"+",                 // no digits
+		"",                  // empty
 		"+1234567890123456", // too long (16 digits)
 		"hello",
-		"+1 234",        // spaces
+		"+1 234", // spaces
 	}
 	for _, num := range invalid {
 		if ValidateE164(num) {

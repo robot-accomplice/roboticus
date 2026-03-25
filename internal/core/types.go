@@ -239,14 +239,14 @@ func (m MemoryTier) String() string {
 
 // ChannelContext carries per-request channel metadata through the pipeline.
 type ChannelContext struct {
-	Platform   string `json:"platform"`
-	ChannelID  string `json:"channel_id"`
-	UserID     string `json:"user_id"`
-	Username   string `json:"username,omitempty"`
-	SessionID  string `json:"session_id,omitempty"`
-	ThreadID   string `json:"thread_id,omitempty"`
-	IsGroup    bool   `json:"is_group"`
-	Authority  AuthorityLevel `json:"authority"`
+	Platform  string         `json:"platform"`
+	ChannelID string         `json:"channel_id"`
+	UserID    string         `json:"user_id"`
+	Username  string         `json:"username,omitempty"`
+	SessionID string         `json:"session_id,omitempty"`
+	ThreadID  string         `json:"thread_id,omitempty"`
+	IsGroup   bool           `json:"is_group"`
+	Authority AuthorityLevel `json:"authority"`
 }
 
 // InboundMessage is the normalized message received from any channel.

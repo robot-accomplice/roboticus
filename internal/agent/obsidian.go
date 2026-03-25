@@ -48,8 +48,8 @@ type ObsidianVault struct {
 }
 
 var (
-	wikilinkRE   = regexp.MustCompile(`\[\[([^\]]+)\]\]`)
-	tagRE        = regexp.MustCompile(`(?:^|\s)#([a-zA-Z][a-zA-Z0-9_/-]*)`)
+	wikilinkRE    = regexp.MustCompile(`\[\[([^\]]+)\]\]`)
+	tagRE         = regexp.MustCompile(`(?:^|\s)#([a-zA-Z][a-zA-Z0-9_/-]*)`)
 	frontmatterRE = regexp.MustCompile(`(?s)^---\n(.+?)\n---`)
 )
 

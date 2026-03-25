@@ -11,14 +11,14 @@ import (
 type InterviewCategory string
 
 const (
-	CatIdentity       InterviewCategory = "identity_voice"
-	CatCommunication  InterviewCategory = "communication_style"
-	CatProactiveness  InterviewCategory = "proactiveness_autonomy"
-	CatDomain         InterviewCategory = "domain_expertise"
-	CatBoundaries     InterviewCategory = "boundaries_guardrails"
-	CatOperator       InterviewCategory = "operator_profile"
-	CatGoals          InterviewCategory = "goals_directives"
-	CatIntegrations   InterviewCategory = "integrations_workflow"
+	CatIdentity      InterviewCategory = "identity_voice"
+	CatCommunication InterviewCategory = "communication_style"
+	CatProactiveness InterviewCategory = "proactiveness_autonomy"
+	CatDomain        InterviewCategory = "domain_expertise"
+	CatBoundaries    InterviewCategory = "boundaries_guardrails"
+	CatOperator      InterviewCategory = "operator_profile"
+	CatGoals         InterviewCategory = "goals_directives"
+	CatIntegrations  InterviewCategory = "integrations_workflow"
 )
 
 // AllInterviewCategories lists all 8 categories.
@@ -32,18 +32,18 @@ const MinCategoriesForGeneration = 5
 
 // InterviewState tracks an in-progress personality interview.
 type InterviewState struct {
-	mu              sync.Mutex
-	SessionID       string
-	StartedAt       time.Time
-	Turns           []InterviewTurn
+	mu                sync.Mutex
+	SessionID         string
+	StartedAt         time.Time
+	Turns             []InterviewTurn
 	CoveredCategories map[InterviewCategory]bool
-	Finished        bool
+	Finished          bool
 }
 
 // InterviewTurn is a single Q&A exchange in the interview.
 type InterviewTurn struct {
-	Question string `json:"question"`
-	Answer   string `json:"answer"`
+	Question string            `json:"question"`
+	Answer   string            `json:"answer"`
 	Category InterviewCategory `json:"category"`
 }
 

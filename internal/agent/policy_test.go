@@ -127,10 +127,10 @@ type mockToolAdapter struct {
 	risk tools.RiskLevel
 }
 
-func (m *mockToolAdapter) Name() string                          { return m.name }
-func (m *mockToolAdapter) Description() string                   { return "mock" }
-func (m *mockToolAdapter) Risk() tools.RiskLevel                 { return m.risk }
-func (m *mockToolAdapter) ParameterSchema() json.RawMessage      { return nil }
+func (m *mockToolAdapter) Name() string                     { return m.name }
+func (m *mockToolAdapter) Description() string              { return "mock" }
+func (m *mockToolAdapter) Risk() tools.RiskLevel            { return m.risk }
+func (m *mockToolAdapter) ParameterSchema() json.RawMessage { return nil }
 func (m *mockToolAdapter) Execute(_ context.Context, _ string, _ *tools.Context) (*tools.Result, error) {
 	return &tools.Result{Output: "ok"}, nil
 }

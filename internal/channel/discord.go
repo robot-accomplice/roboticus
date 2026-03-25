@@ -28,11 +28,11 @@ type DiscordConfig struct {
 
 // Discord Gateway opcodes.
 const (
-	gwOpDispatch        = 0
-	gwOpHeartbeat       = 1
-	gwOpIdentify        = 2
-	gwOpHeartbeatAck    = 11
-	gwOpHello           = 10
+	gwOpDispatch     = 0
+	gwOpHeartbeat    = 1
+	gwOpIdentify     = 2
+	gwOpHeartbeatAck = 11
+	gwOpHello        = 10
 )
 
 // DiscordAdapter implements Adapter for Discord.
@@ -42,8 +42,8 @@ type DiscordAdapter struct {
 	client        *http.Client
 	mu            sync.Mutex
 	messageBuffer []InboundMessage
-	gwSequence    *int64  // last gateway sequence number
-	gwSessionID   string  // gateway session ID
+	gwSequence    *int64 // last gateway sequence number
+	gwSessionID   string // gateway session ID
 }
 
 // NewDiscordAdapter creates a Discord channel adapter.
@@ -119,8 +119,8 @@ func (d *DiscordAdapter) postChannelMessage(ctx context.Context, channelID, cont
 // ProcessWebhook handles a Discord interaction or MESSAGE_CREATE event.
 func (d *DiscordAdapter) ProcessWebhook(data []byte) (*InboundMessage, error) {
 	var event struct {
-		Type    string `json:"t"`
-		Data    json.RawMessage `json:"d"`
+		Type string          `json:"t"`
+		Data json.RawMessage `json:"d"`
 	}
 	if err := json.Unmarshal(data, &event); err != nil {
 		return nil, fmt.Errorf("discord webhook decode: %w", err)

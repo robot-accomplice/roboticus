@@ -12,8 +12,8 @@ type testPlugin struct {
 	tools   []ToolDef
 }
 
-func (p *testPlugin) Name() string    { return p.name }
-func (p *testPlugin) Version() string { return p.version }
+func (p *testPlugin) Name() string     { return p.name }
+func (p *testPlugin) Version() string  { return p.version }
 func (p *testPlugin) Tools() []ToolDef { return p.tools }
 func (p *testPlugin) Init() error      { return nil }
 func (p *testPlugin) ExecuteTool(ctx context.Context, toolName string, input json.RawMessage) (*ToolResult, error) {

@@ -1,8 +1,8 @@
 package api
 
 import (
-	_ "embed"
 	"crypto/rand"
+	_ "embed"
 	"encoding/hex"
 	"net/http"
 	"strings"

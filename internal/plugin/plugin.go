@@ -53,41 +53,41 @@ type Plugin interface {
 
 // Manifest describes a plugin's metadata (loaded from TOML/YAML).
 type Manifest struct {
-	Name            string          `json:"name" yaml:"name"`
-	Version         string          `json:"version" yaml:"version"`
-	Description     string          `json:"description" yaml:"description"`
-	Author          string          `json:"author" yaml:"author"`
-	Permissions     []string        `json:"permissions" yaml:"permissions"`
-	TimeoutSeconds  int             `json:"timeout_seconds" yaml:"timeout_seconds"`
-	Requirements    []Requirement   `json:"requirements" yaml:"requirements"`
-	CompanionSkills []string        `json:"companion_skills" yaml:"companion_skills"`
-	Tools           []ManifestTool  `json:"tools" yaml:"tools"`
+	Name            string         `json:"name" yaml:"name"`
+	Version         string         `json:"version" yaml:"version"`
+	Description     string         `json:"description" yaml:"description"`
+	Author          string         `json:"author" yaml:"author"`
+	Permissions     []string       `json:"permissions" yaml:"permissions"`
+	TimeoutSeconds  int            `json:"timeout_seconds" yaml:"timeout_seconds"`
+	Requirements    []Requirement  `json:"requirements" yaml:"requirements"`
+	CompanionSkills []string       `json:"companion_skills" yaml:"companion_skills"`
+	Tools           []ManifestTool `json:"tools" yaml:"tools"`
 }
 
 // Requirement is an external dependency check.
 type Requirement struct {
 	Name        string `json:"name" yaml:"name"`
-	Command     string `json:"command" yaml:"command"`       // checked via which/where
+	Command     string `json:"command" yaml:"command"` // checked via which/where
 	InstallHint string `json:"install_hint" yaml:"install_hint"`
 	Optional    bool   `json:"optional" yaml:"optional"`
 }
 
 // ManifestTool defines a tool in the manifest.
 type ManifestTool struct {
-	Name            string `json:"name" yaml:"name"`
-	Description     string `json:"description" yaml:"description"`
-	Dangerous       bool   `json:"dangerous" yaml:"dangerous"`
-	Permissions     []string `json:"permissions" yaml:"permissions"`
-	ParametersSchema string `json:"parameters_schema" yaml:"parameters_schema"` // JSON string
-	PairedSkill     string `json:"paired_skill" yaml:"paired_skill"`
+	Name             string   `json:"name" yaml:"name"`
+	Description      string   `json:"description" yaml:"description"`
+	Dangerous        bool     `json:"dangerous" yaml:"dangerous"`
+	Permissions      []string `json:"permissions" yaml:"permissions"`
+	ParametersSchema string   `json:"parameters_schema" yaml:"parameters_schema"` // JSON string
+	PairedSkill      string   `json:"paired_skill" yaml:"paired_skill"`
 }
 
 // --- Plugin Registry ---
 
 // PermissionPolicy controls what plugins are allowed to do.
 type PermissionPolicy struct {
-	StrictMode  bool     `json:"strict_mode"`
-	Allowed     []string `json:"allowed"`
+	StrictMode bool     `json:"strict_mode"`
+	Allowed    []string `json:"allowed"`
 }
 
 type pluginEntry struct {
@@ -98,11 +98,11 @@ type pluginEntry struct {
 
 // Registry manages plugins with allow/deny lists and permission enforcement.
 type Registry struct {
-	mu         sync.RWMutex
-	plugins    map[string]*pluginEntry
-	allowList  map[string]bool
-	denyList   map[string]bool
-	policy     PermissionPolicy
+	mu        sync.RWMutex
+	plugins   map[string]*pluginEntry
+	allowList map[string]bool
+	denyList  map[string]bool
+	policy    PermissionPolicy
 }
 
 // NewRegistry creates a plugin registry.

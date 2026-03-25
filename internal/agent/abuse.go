@@ -12,11 +12,11 @@ import (
 type AbuseSignalType string
 
 const (
-	SignalRateBurst      AbuseSignalType = "rate_burst"
+	SignalRateBurst       AbuseSignalType = "rate_burst"
 	SignalPolicyViolation AbuseSignalType = "policy_violation"
-	SignalRepetitionSpam AbuseSignalType = "repetition_spam"
-	SignalSessionChurn   AbuseSignalType = "session_churn"
-	SignalSensitiveProbe AbuseSignalType = "sensitive_probe"
+	SignalRepetitionSpam  AbuseSignalType = "repetition_spam"
+	SignalSessionChurn    AbuseSignalType = "session_churn"
+	SignalSensitiveProbe  AbuseSignalType = "sensitive_probe"
 )
 
 // EnforcementAction is the graduated response to abuse.
@@ -40,22 +40,22 @@ type AbuseSignal struct {
 
 // AbuseEvent is a stored abuse signal with metadata.
 type AbuseEvent struct {
-	ID        string          `json:"id"`
-	ActorID   string          `json:"actor_id"`
-	Signal    AbuseSignalType `json:"signal_type"`
-	Severity  float64         `json:"severity"`
-	Detail    string          `json:"detail"`
+	ID        string            `json:"id"`
+	ActorID   string            `json:"actor_id"`
+	Signal    AbuseSignalType   `json:"signal_type"`
+	Severity  float64           `json:"severity"`
+	Detail    string            `json:"detail"`
 	Action    EnforcementAction `json:"action_taken"`
-	CreatedAt time.Time       `json:"created_at"`
+	CreatedAt time.Time         `json:"created_at"`
 }
 
 // AbuseTrackerConfig controls the abuse detection system.
 type AbuseTrackerConfig struct {
-	Enabled              bool    `toml:"enabled"`
-	WindowMinutes        int     `toml:"window_minutes"`
-	SlowdownThreshold    float64 `toml:"slowdown_threshold"`
-	QuarantineThreshold  float64 `toml:"quarantine_threshold"`
-	MaxTrackedActors     int     `toml:"max_tracked_actors"`
+	Enabled             bool    `toml:"enabled"`
+	WindowMinutes       int     `toml:"window_minutes"`
+	SlowdownThreshold   float64 `toml:"slowdown_threshold"`
+	QuarantineThreshold float64 `toml:"quarantine_threshold"`
+	MaxTrackedActors    int     `toml:"max_tracked_actors"`
 }
 
 // DefaultAbuseTrackerConfig returns sensible defaults.
@@ -79,8 +79,8 @@ type AbuseTracker struct {
 }
 
 type actorScore struct {
-	score     float64
-	lastSeen  time.Time
+	score       float64
+	lastSeen    time.Time
 	signalCount int
 }
 

@@ -23,7 +23,7 @@ const (
 type GuardSetPreset int
 
 const (
-	GuardSetFull    GuardSetPreset = iota // All guards (10)
+	GuardSetFull   GuardSetPreset = iota // All guards (10)
 	GuardSetCached                       // Guards for cache hits
 	GuardSetStream                       // Reduced set for SSE (6)
 	GuardSetNone                         // No guards
@@ -33,9 +33,9 @@ const (
 type AuthorityMode int
 
 const (
-	AuthorityAPIKey      AuthorityMode = iota // Resolved from API key claims
-	AuthorityChannel                          // Resolved from channel sender context
-	AuthoritySelfGen                          // Self-generated (cron, internal)
+	AuthorityAPIKey  AuthorityMode = iota // Resolved from API key claims
+	AuthorityChannel                      // Resolved from channel sender context
+	AuthoritySelfGen                      // Self-generated (cron, internal)
 )
 
 // Config declares which pipeline stages are active. Every boolean flag
@@ -174,12 +174,12 @@ func PresetCron() Config {
 
 // ChannelClaimContext carries channel-specific authority data for ChannelClaim resolution.
 type ChannelClaimContext struct {
-	SenderID           string
-	ChatID             string
-	Platform           string
-	SenderInAllowlist  bool
+	SenderID            string
+	ChatID              string
+	Platform            string
+	SenderInAllowlist   bool
 	AllowlistConfigured bool
-	TrustedSenderIDs   []string
+	TrustedSenderIDs    []string
 }
 
 // ResolveAuthority maps AuthorityMode to an AuthorityLevel.

@@ -59,7 +59,7 @@ func TestExtractEntities(t *testing.T) {
 		{"@alice @alice @alice", 1}, // dedup
 		{"No mentions here", 0},
 		{"@user. @other!", 2}, // punctuation stripped
-		{"@", 0},               // bare @ ignored
+		{"@", 0},              // bare @ ignored
 		{"", 0},
 	}
 

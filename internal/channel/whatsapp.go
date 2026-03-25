@@ -18,11 +18,11 @@ import (
 
 // WhatsAppConfig holds WhatsApp Cloud API configuration.
 type WhatsAppConfig struct {
-	Token          string   `mapstructure:"token"`            // Cloud API access token
-	PhoneNumberID  string   `mapstructure:"phone_number_id"`  // Business phone number ID
-	VerifyToken    string   `mapstructure:"verify_token"`     // Webhook challenge token
-	AppSecret      string   `mapstructure:"app_secret"`       // Webhook HMAC-SHA256 verification
-	APIVersion     string   `mapstructure:"api_version"`      // Graph API version, default v21.0
+	Token          string   `mapstructure:"token"`           // Cloud API access token
+	PhoneNumberID  string   `mapstructure:"phone_number_id"` // Business phone number ID
+	VerifyToken    string   `mapstructure:"verify_token"`    // Webhook challenge token
+	AppSecret      string   `mapstructure:"app_secret"`      // Webhook HMAC-SHA256 verification
+	APIVersion     string   `mapstructure:"api_version"`     // Graph API version, default v21.0
 	AllowedNumbers []string `mapstructure:"allowed_numbers"`
 	DenyOnEmpty    bool     `mapstructure:"deny_on_empty"`
 }

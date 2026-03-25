@@ -10,15 +10,15 @@ type DecompositionDecision int
 
 const (
 	DecompCentralized        DecompositionDecision = iota // Single agent handles it
-	DecompDelegated                                      // Multi-agent delegation
-	DecompSpecialistProposal                             // Propose specialist creation
+	DecompDelegated                                       // Multi-agent delegation
+	DecompSpecialistProposal                              // Propose specialist creation
 )
 
 // DecompositionResult holds the gate evaluation result.
 type DecompositionResult struct {
-	Decision    DecompositionDecision
-	Subtasks    []string // for delegation
-	Rationale   string
+	Decision  DecompositionDecision
+	Subtasks  []string // for delegation
+	Rationale string
 }
 
 // EvaluateDecomposition decides whether a request needs multi-agent delegation.
@@ -41,11 +41,11 @@ func EvaluateDecomposition(content string, sessionTurns int) DecompositionResult
 		// Check for domain-specific keywords suggesting specialist need.
 		lower := strings.ToLower(content)
 		specialists := map[string]string{
-			"financial analysis":   "finance",
-			"code review":          "code-review",
-			"security audit":       "security",
-			"data analysis":        "data",
-			"system architecture":  "architecture",
+			"financial analysis":  "finance",
+			"code review":         "code-review",
+			"security audit":      "security",
+			"data analysis":       "data",
+			"system architecture": "architecture",
 		}
 		for phrase, domain := range specialists {
 			if strings.Contains(lower, phrase) {
