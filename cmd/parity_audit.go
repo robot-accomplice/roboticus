@@ -114,10 +114,10 @@ func runParityAudit(cmd *cobra.Command, args []string) error {
 	output, _ := cmd.Flags().GetString("output")
 
 	var report strings.Builder
-	report.WriteString(fmt.Sprintf("# Feature Parity Audit Report\n\n"))
+	report.WriteString("# Feature Parity Audit Report\n\n")
 	report.WriteString(fmt.Sprintf("Generated: %s\n\n", time.Now().Format(time.RFC3339)))
-	report.WriteString(fmt.Sprintf("| Subsystem | Rust Files | Go Files | Coverage | Status |\n"))
-	report.WriteString(fmt.Sprintf("|-----------|-----------|---------|----------|--------|\n"))
+	report.WriteString("| Subsystem | Rust Files | Go Files | Coverage | Status |\n")
+	report.WriteString("|-----------|-----------|---------|----------|--------|\n")
 
 	var gaps []string
 	var totalRust, totalGo int

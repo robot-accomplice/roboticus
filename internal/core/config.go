@@ -318,9 +318,6 @@ func (c *Config) MergeBundledProviders() {
 
 // parseBundledProviders decodes the embedded bundled_providers.toml.
 func parseBundledProviders() map[string]ProviderConfig {
-	type wrapper struct {
-		Providers map[string]ProviderConfig `mapstructure:"providers"`
-	}
 	// Parse manually since we don't want a viper dependency here.
 	// The bundled file is simple enough for a lightweight parse.
 	result := make(map[string]ProviderConfig)
@@ -370,7 +367,7 @@ func parseBundledProviders() map[string]ProviderConfig {
 		case "embedding_model":
 			cfg.EmbeddingModel = val
 		case "embedding_dimensions":
-			fmt.Sscanf(val, "%d", &cfg.EmbeddingDimensions)
+			_, _ = fmt.Sscanf(val, "%d", &cfg.EmbeddingDimensions)
 		}
 	}
 	if current != "" {

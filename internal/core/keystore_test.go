@@ -13,7 +13,7 @@ func TestKeystore_SetGetDelete(t *testing.T) {
 	}
 
 	// Set and get.
-	ks.Set("api_key", "sk-test-123")
+	_ = ks.Set("api_key", "sk-test-123")
 	val, err := ks.Get("api_key")
 	if err != nil {
 		t.Fatal(err)
@@ -46,8 +46,8 @@ func TestKeystore_SetGetDelete(t *testing.T) {
 func TestKeystore_EnvFallback(t *testing.T) {
 	ks, _ := OpenKeystore(KeystoreConfig{})
 
-	os.Setenv("TEST_GOBOTICUS_KEY", "from-env")
-	defer os.Unsetenv("TEST_GOBOTICUS_KEY")
+	_ = os.Setenv("TEST_GOBOTICUS_KEY", "from-env")
+	defer func() { _ = os.Unsetenv("TEST_GOBOTICUS_KEY") }()
 
 	val, err := ks.Get("TEST_GOBOTICUS_KEY")
 	if err != nil {
@@ -67,8 +67,8 @@ func TestKeystore_SaveAndLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ks1.Set("secret1", "value1")
-	ks1.Set("secret2", "value2")
+	_ = ks1.Set("secret1", "value1")
+	_ = ks1.Set("secret2", "value2")
 	if err := ks1.Save(); err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestKeystore_EmptyName(t *testing.T) {
 
 func TestKeystore_SaveWithoutMasterKey(t *testing.T) {
 	ks, _ := OpenKeystore(KeystoreConfig{})
-	ks.Set("key", "val")
+	_ = ks.Set("key", "val")
 	if err := ks.Save(); err == nil {
 		t.Error("expected error when saving without master key")
 	}
@@ -118,7 +118,7 @@ func TestKeystore_HasUnsavedChanges(t *testing.T) {
 	if ks.HasUnsavedChanges() {
 		t.Error("fresh keystore should not have unsaved changes")
 	}
-	ks.Set("key", "val")
+	_ = ks.Set("key", "val")
 	if !ks.HasUnsavedChanges() {
 		t.Error("should have unsaved changes after Set")
 	}
@@ -126,10 +126,10 @@ func TestKeystore_HasUnsavedChanges(t *testing.T) {
 
 func TestResolveSecret(t *testing.T) {
 	ks, _ := OpenKeystore(KeystoreConfig{Passphrase: "test"})
-	ks.Set("MY_KEY", "from-keystore")
+	_ = ks.Set("MY_KEY", "from-keystore")
 
-	os.Setenv("MY_OTHER_KEY", "from-env")
-	defer os.Unsetenv("MY_OTHER_KEY")
+	_ = os.Setenv("MY_OTHER_KEY", "from-env")
+	defer func() { _ = os.Unsetenv("MY_OTHER_KEY") }()
 
 	// Keystore takes precedence.
 	if got := ResolveSecret(ks, "MY_KEY"); got != "from-keystore" {
@@ -152,7 +152,7 @@ func TestKeystore_GetOrEmpty(t *testing.T) {
 	if got := ks.GetOrEmpty("nonexistent"); got != "" {
 		t.Errorf("got %q, want empty", got)
 	}
-	ks.Set("key", "val")
+	_ = ks.Set("key", "val")
 	if got := ks.GetOrEmpty("key"); got != "val" {
 		t.Errorf("got %q, want val", got)
 	}

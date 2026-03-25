@@ -30,8 +30,8 @@ func TestA2A_EncryptDecrypt(t *testing.T) {
 	alice, _ := NewA2AAdapter(A2AConfig{})
 	bob, _ := NewA2AAdapter(A2AConfig{})
 
-	alice.EstablishSession("bob", bob.PublicKeyHex(), "nonce-1")
-	bob.EstablishSession("alice", alice.PublicKeyHex(), "nonce-2")
+	_ = alice.EstablishSession("bob", bob.PublicKeyHex(), "nonce-1")
+	_ = bob.EstablishSession("alice", alice.PublicKeyHex(), "nonce-2")
 
 	// Alice encrypts.
 	alice.mu.Lock()

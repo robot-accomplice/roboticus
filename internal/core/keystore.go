@@ -165,7 +165,9 @@ func (ks *Keystore) Save() error {
 
 	// Ensure directory exists.
 	if dir := filepath.Dir(ks.path); dir != "" {
-		os.MkdirAll(dir, 0700)
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			return fmt.Errorf("keystore: mkdir failed: %w", err)
+		}
 	}
 
 	if err := os.WriteFile(ks.path, ciphertext, 0600); err != nil {

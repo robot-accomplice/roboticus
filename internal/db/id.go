@@ -18,6 +18,6 @@ func encodeHex(b []byte) string {
 // NewID generates a cryptographically random 16-byte hex ID.
 func NewID() string {
 	b := make([]byte, 16)
-	readRandom(b)
+	_, _ = readRandom(b)
 	return encodeHex(b)
 }

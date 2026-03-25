@@ -80,12 +80,6 @@ func initLogger() {
 	zerolog.SetGlobalLevel(zerolog.InfoLevel)
 }
 
-// ensureConfigDir creates the config directory if it doesn't exist.
-func ensureConfigDir() error {
-	dir := core.ConfigDir()
-	return os.MkdirAll(dir, 0o700)
-}
-
 // ensureParentDir creates the parent directory for a file path.
 func ensureParentDir(path string) error {
 	return os.MkdirAll(filepath.Dir(path), 0o700)

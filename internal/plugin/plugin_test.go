@@ -88,7 +88,7 @@ func TestRegistry_InvalidName(t *testing.T) {
 
 func TestRegistry_EnableDisable(t *testing.T) {
 	reg := NewRegistry(nil, nil, PermissionPolicy{})
-	reg.Register(&testPlugin{
+	_ = reg.Register(&testPlugin{
 		name: "toggle", version: "1.0.0",
 		tools: []ToolDef{{Name: "tool1"}},
 	})
@@ -103,7 +103,7 @@ func TestRegistry_EnableDisable(t *testing.T) {
 		t.Error("disabled plugin tools should not execute")
 	}
 
-	reg.Enable("toggle")
+	_ = reg.Enable("toggle")
 	_, err = reg.ExecuteTool(context.Background(), "tool1", nil)
 	if err != nil {
 		t.Errorf("re-enabled plugin should work: %v", err)

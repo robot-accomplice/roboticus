@@ -250,10 +250,7 @@ func imapDial(addr string) (*imapConn, error) {
 }
 
 func (c *imapConn) Close() error {
-	if closer, ok := c.conn.(interface{ Close() error }); ok {
-		return closer.Close()
-	}
-	return nil
+	return c.conn.Close()
 }
 
 func imapCommand(c *imapConn, cmd string) error {

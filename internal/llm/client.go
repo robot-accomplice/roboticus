@@ -526,14 +526,14 @@ func (c *Client) unmarshalAnthropicChunk(data []byte) (*StreamChunk, error) {
 func (c *Client) parseErrorResponse(resp *http.Response) error {
 	body, _ := io.ReadAll(resp.Body)
 
-	switch {
-	case resp.StatusCode == 429:
+	switch resp.StatusCode {
+	case 429:
 		return core.NewError(core.ErrRateLimited,
 			fmt.Sprintf("provider %s: %s", c.provider.Name, string(body)))
-	case resp.StatusCode == 401 || resp.StatusCode == 403:
+	case 401, 403:
 		return core.NewError(core.ErrUnauthorized,
 			fmt.Sprintf("provider %s: %s", c.provider.Name, string(body)))
-	case resp.StatusCode == 402:
+	case 402:
 		return core.NewError(core.ErrCreditExhausted,
 			fmt.Sprintf("provider %s: %s", c.provider.Name, string(body)))
 	default:

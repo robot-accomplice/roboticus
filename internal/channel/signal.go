@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -30,7 +29,6 @@ type SignalConfig struct {
 type SignalAdapter struct {
 	cfg     SignalConfig
 	client  *http.Client
-	mu      sync.Mutex
 	inbound chan InboundMessage // bounded buffer
 	limiter *core.RateLimiter
 }

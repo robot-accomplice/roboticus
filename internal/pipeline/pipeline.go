@@ -171,11 +171,7 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 	session.AddUserMessage(content)
 
 	// Stage 7: Decomposition gate.
-	if cfg.DecompositionGate {
-		// Evaluate complexity for potential delegation.
-		// For now, all requests go through standard inference.
-		// Multi-agent delegation will be wired in Phase 6.
-	}
+	// TODO: evaluate complexity for potential delegation when multi-agent delegation is wired in Phase 6.
 
 	// Stage 8: Authority resolution.
 	authority := ResolveAuthority(cfg.AuthorityMode, input.Claim)
@@ -198,10 +194,7 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 		}
 	}
 
-	// Cache check.
-	if cfg.CacheEnabled && cfg.InferenceMode == InferenceStandard {
-		// Cache is handled inside the LLM service.
-	}
+	// Cache check: handled inside the LLM service when cfg.CacheEnabled.
 
 	// Stage 11b: Inference.
 	switch cfg.InferenceMode {

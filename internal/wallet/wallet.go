@@ -6,7 +6,6 @@ import (
 	"crypto/cipher"
 	"crypto/ecdsa"
 	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -102,7 +101,7 @@ func (w *Wallet) generateAndSave() error {
 		return err
 	}
 
-	keyBytes := w.privateKey.D.Bytes()
+	keyBytes := w.privateKey.D.Bytes() //nolint:staticcheck // TODO: migrate to modern crypto API
 	var data []byte
 
 	if w.cfg.Passphrase != "" {
@@ -132,21 +131,12 @@ func (w *Wallet) generate() error {
 	return w.fromBytes(keyBytes)
 }
 
-func (w *Wallet) fromHex(hexKey string) error {
-	hexKey = strings.TrimPrefix(hexKey, "0x")
-	keyBytes, err := hex.DecodeString(hexKey)
-	if err != nil {
-		return err
-	}
-	return w.fromBytes(keyBytes)
-}
-
 func (w *Wallet) fromBytes(keyBytes []byte) error {
 	// Construct ECDSA private key on secp256k1 curve.
 	privKey := new(ecdsa.PrivateKey)
-	privKey.D = new(big.Int).SetBytes(keyBytes)
-	privKey.PublicKey.Curve = secp256k1Curve()
-	privKey.PublicKey.X, privKey.PublicKey.Y = privKey.PublicKey.Curve.ScalarBaseMult(keyBytes)
+	privKey.D = new(big.Int).SetBytes(keyBytes)                                              //nolint:staticcheck // TODO: migrate to modern crypto API
+	privKey.PublicKey.Curve = secp256k1Curve()                                                 //nolint:staticcheck // TODO: migrate to modern crypto API
+	privKey.PublicKey.X, privKey.PublicKey.Y = privKey.PublicKey.Curve.ScalarBaseMult(keyBytes) //nolint:staticcheck // TODO: migrate to modern crypto API
 
 	w.privateKey = privKey
 	w.address = pubKeyToAddress(&privKey.PublicKey)
@@ -272,7 +262,7 @@ func (w *Wallet) rpcCall(method string, params []any) (any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("wallet: RPC request to %s failed: %w", w.cfg.RPCURL, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 	if err != nil {

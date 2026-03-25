@@ -93,7 +93,6 @@ type PermissionPolicy struct {
 type pluginEntry struct {
 	plugin Plugin
 	status PluginStatus
-	hash   string // SHA-256 of plugin source for change detection
 }
 
 // Registry manages plugins with allow/deny lists and permission enforcement.

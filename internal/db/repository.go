@@ -73,7 +73,7 @@ func (r *SessionRepository) LoadMessages(ctx context.Context, sessionID string, 
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var msgs []SessionMessage
 	for rows.Next() {
@@ -139,7 +139,7 @@ func (h *HippocampusRegistry) ListTables(ctx context.Context) ([]TableEntry, err
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var entries []TableEntry
 	for rows.Next() {

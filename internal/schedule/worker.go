@@ -148,14 +148,14 @@ func (w *CronWorker) acquireLease(ctx context.Context, jobID string) bool {
 }
 
 func (w *CronWorker) releaseLease(ctx context.Context, jobID string) {
-	w.store.ExecContext(ctx,
+	_, _ = w.store.ExecContext(ctx,
 		`UPDATE cron_jobs SET lease_holder = NULL, lease_expires_at = NULL
 		 WHERE id = ? AND lease_holder = ?`,
 		jobID, w.instanceID)
 }
 
 func (w *CronWorker) recordRun(ctx context.Context, run *CronRun) {
-	w.store.ExecContext(ctx,
+	_, _ = w.store.ExecContext(ctx,
 		`INSERT INTO cron_runs (job_id, status, duration_ms, error_msg, timestamp)
 		 VALUES (?, ?, ?, ?, ?)`,
 		run.JobID, run.Status, run.DurationMs, run.ErrorMsg,
@@ -169,7 +169,7 @@ func (w *CronWorker) updateLastRun(ctx context.Context, job *CronJob, now time.T
 		s := nextRun.UTC().Format(time.RFC3339)
 		nextRunStr = &s
 	}
-	w.store.ExecContext(ctx,
+	_, _ = w.store.ExecContext(ctx,
 		`UPDATE cron_jobs SET last_run_at = ?, next_run_at = ? WHERE id = ?`,
 		now.UTC().Format(time.RFC3339), nextRunStr, job.ID)
 }

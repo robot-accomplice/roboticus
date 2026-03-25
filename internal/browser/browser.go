@@ -141,7 +141,7 @@ func (b *Browser) Start() error {
 
 	// Wait for CDP to be ready.
 	if err := b.waitForCDP(5 * time.Second); err != nil {
-		b.process.Process.Kill()
+		_ = b.process.Process.Kill()
 		return fmt.Errorf("browser: CDP not ready: %w", err)
 	}
 
@@ -156,9 +156,9 @@ func (b *Browser) Start() error {
 			b.session = sess
 			// Enable required domains.
 			ctx := context.Background()
-			sess.SendCommand(ctx, "Page.enable", nil)
-			sess.SendCommand(ctx, "Runtime.enable", nil)
-			sess.SendCommand(ctx, "Network.enable", nil)
+			_, _ = sess.SendCommand(ctx, "Page.enable", nil)
+			_, _ = sess.SendCommand(ctx, "Runtime.enable", nil)
+			_, _ = sess.SendCommand(ctx, "Network.enable", nil)
 		}
 	}
 
@@ -180,8 +180,8 @@ func (b *Browser) Stop() error {
 		b.session = nil
 	}
 	if b.process != nil && b.process.Process != nil {
-		b.process.Process.Kill()
-		b.process.Wait()
+		_ = b.process.Process.Kill()
+		_ = b.process.Wait()
 	}
 	b.running = false
 	log.Info().Msg("browser stopped")
@@ -361,7 +361,7 @@ func (b *Browser) waitForCDP(timeout time.Duration) error {
 }
 
 func (b *Browser) recover() error {
-	b.Stop()
+	_ = b.Stop()
 	return b.Start()
 }
 

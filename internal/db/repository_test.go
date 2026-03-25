@@ -13,7 +13,7 @@ func tempStore(t *testing.T) *Store {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { s.Close() })
+	t.Cleanup(func() { _ = s.Close() })
 	return s
 }
 
@@ -56,13 +56,13 @@ func TestSessionRepository_SetNickname(t *testing.T) {
 	ctx := context.Background()
 
 	id := NewID()
-	repo.CreateSession(ctx, id, "agent1", "api")
+	_ = repo.CreateSession(ctx, id, "agent1", "api")
 	if err := repo.SetNickname(ctx, id, "Test Chat"); err != nil {
 		t.Fatal(err)
 	}
 
 	var nickname *string
-	store.QueryRowContext(ctx, `SELECT nickname FROM sessions WHERE id = ?`, id).Scan(&nickname)
+	_ = store.QueryRowContext(ctx, `SELECT nickname FROM sessions WHERE id = ?`, id).Scan(&nickname)
 	if nickname == nil || *nickname != "Test Chat" {
 		t.Errorf("nickname = %v, want 'Test Chat'", nickname)
 	}
@@ -74,11 +74,11 @@ func TestSessionRepository_StoreAndLoadMessages(t *testing.T) {
 	ctx := context.Background()
 
 	sessionID := NewID()
-	repo.CreateSession(ctx, sessionID, "agent1", "api")
+	_ = repo.CreateSession(ctx, sessionID, "agent1", "api")
 
-	repo.StoreMessage(ctx, NewID(), sessionID, "user", "Hello")
-	repo.StoreMessage(ctx, NewID(), sessionID, "assistant", "Hi there!")
-	repo.StoreMessage(ctx, NewID(), sessionID, "user", "How are you?")
+	_ = repo.StoreMessage(ctx, NewID(), sessionID, "user", "Hello")
+	_ = repo.StoreMessage(ctx, NewID(), sessionID, "assistant", "Hi there!")
+	_ = repo.StoreMessage(ctx, NewID(), sessionID, "user", "How are you?")
 
 	msgs, err := repo.LoadMessages(ctx, sessionID, 10)
 	if err != nil {
@@ -120,7 +120,7 @@ func TestSessionRepository_RecordInferenceCost(t *testing.T) {
 	}
 
 	var count int
-	store.QueryRowContext(ctx, `SELECT COUNT(*) FROM inference_costs`).Scan(&count)
+	_ = store.QueryRowContext(ctx, `SELECT COUNT(*) FROM inference_costs`).Scan(&count)
 	if count != 1 {
 		t.Errorf("inference_costs count = %d, want 1", count)
 	}
@@ -184,7 +184,7 @@ func TestHippocampusRegistry_RegisterCustomTable(t *testing.T) {
 	}
 
 	// Update should work (upsert).
-	hippo.RegisterTable(ctx, "custom_data", "Updated description", `["id","value","updated_at"]`)
+	_ = hippo.RegisterTable(ctx, "custom_data", "Updated description", `["id","value","updated_at"]`)
 	tables, _ = hippo.ListTables(ctx)
 	for _, tbl := range tables {
 		if tbl.Name == "custom_data" && tbl.Description != "Updated description" {

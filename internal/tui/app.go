@@ -44,7 +44,6 @@ type Model struct {
 	logs      []string
 	sessionID string
 	status    ConnectionStatus
-	model     string
 	streaming bool
 	width     int
 	height    int
@@ -161,17 +160,23 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "up":
-		if m.focused == PanelChat && m.chatScroll > 0 {
-			m.chatScroll--
-		} else if m.focused == PanelLogs && m.logScroll > 0 {
-			m.logScroll--
+		switch m.focused {
+		case PanelChat:
+			if m.chatScroll > 0 {
+				m.chatScroll--
+			}
+		case PanelLogs:
+			if m.logScroll > 0 {
+				m.logScroll--
+			}
 		}
 		return m, nil
 
 	case "down":
-		if m.focused == PanelChat {
+		switch m.focused {
+		case PanelChat:
 			m.chatScroll++
-		} else if m.focused == PanelLogs {
+		case PanelLogs:
 			m.logScroll++
 		}
 		return m, nil
@@ -253,11 +258,14 @@ func (m Model) View() string {
 	inputPanel := inputStyle.Render(inputContent)
 
 	// Status bar.
-	statusText := "CONNECTING"
-	if m.status == StatusConnected {
+	var statusText string
+	switch m.status {
+	case StatusConnected:
 		statusText = "CONNECTED"
-	} else if m.status == StatusDisconnected {
+	case StatusDisconnected:
 		statusText = "DISCONNECTED"
+	default:
+		statusText = "CONNECTING"
 	}
 	sessionText := ""
 	if m.sessionID != "" && len(m.sessionID) >= 8 {

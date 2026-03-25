@@ -33,19 +33,19 @@ func Open(dbPath string) (*Store, error) {
 	db.SetMaxOpenConns(4)
 
 	if err := db.Ping(); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, core.WrapError(core.ErrDatabase, "failed to ping database", err)
 	}
 
 	s := &Store{db: db}
 
 	if err := s.initSchema(); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, err
 	}
 
 	if err := s.runMigrations(); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, err
 	}
 
@@ -86,7 +86,7 @@ func (s *Store) InTx(ctx context.Context, fn func(tx *sql.Tx) error) error {
 		return core.WrapError(core.ErrDatabase, "failed to begin transaction", err)
 	}
 	if err := fn(tx); err != nil {
-		tx.Rollback()
+		_ = tx.Rollback()
 		return err
 	}
 	if err := tx.Commit(); err != nil {

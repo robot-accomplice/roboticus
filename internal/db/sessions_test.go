@@ -87,9 +87,9 @@ func TestListSessions(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
 
-	store.FindOrCreateSession(ctx, "agent-1", "scope1")
-	store.FindOrCreateSession(ctx, "agent-1", "scope2")
-	store.FindOrCreateSession(ctx, "agent-2", "scope1")
+	_, _ = store.FindOrCreateSession(ctx, "agent-1", "scope1")
+	_, _ = store.FindOrCreateSession(ctx, "agent-1", "scope2")
+	_, _ = store.FindOrCreateSession(ctx, "agent-2", "scope1")
 
 	sessions, err := store.ListSessions(ctx, "agent-1", 10)
 	if err != nil {

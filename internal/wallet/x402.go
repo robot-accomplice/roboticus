@@ -179,7 +179,7 @@ func signDigest(key *ecdsa.PrivateKey, digest []byte) ([]byte, error) {
 
 	// Compute R = k*G, r = R.x mod N.
 	rx, ry, err := func() (*big.Int, *big.Int, error) {
-		x, y := curve.ScalarBaseMult(k.Bytes())
+		x, y := curve.ScalarBaseMult(k.Bytes()) //nolint:staticcheck // TODO: migrate to modern crypto API
 		if x.Sign() == 0 && y.Sign() == 0 {
 			return nil, nil, fmt.Errorf("invalid k: point at infinity")
 		}
@@ -197,7 +197,7 @@ func signDigest(key *ecdsa.PrivateKey, digest []byte) ([]byte, error) {
 	// Compute s = k^-1 * (hash + r*d) mod N.
 	kInv := new(big.Int).ModInverse(k, N)
 	e := new(big.Int).SetBytes(digest)
-	s := new(big.Int).Mul(r, key.D)
+	s := new(big.Int).Mul(r, key.D) //nolint:staticcheck // TODO: migrate to modern crypto API
 	s.Add(s, e)
 	s.Mul(s, kInv)
 	s.Mod(s, N)
@@ -228,7 +228,7 @@ func signDigest(key *ecdsa.PrivateKey, digest []byte) ([]byte, error) {
 // rfc6979K generates a deterministic k value per RFC 6979 using HMAC-SHA256.
 func rfc6979K(key *ecdsa.PrivateKey, hash []byte) *big.Int {
 	q := key.Curve.Params().N
-	x := key.D.Bytes()
+	x := key.D.Bytes() //nolint:staticcheck // TODO: migrate to modern crypto API
 
 	// Pad private key to curve byte length.
 	qLen := (q.BitLen() + 7) / 8

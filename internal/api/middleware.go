@@ -2,7 +2,6 @@ package api
 
 import (
 	"crypto/subtle"
-	"io"
 	"net"
 	"net/http"
 	"strings"
@@ -120,10 +119,3 @@ func (rw *responseWriter) Unwrap() http.ResponseWriter {
 	return rw.ResponseWriter
 }
 
-// drainBody reads and discards the request body (for error paths).
-func drainBody(r *http.Request) {
-	if r.Body != nil {
-		io.Copy(io.Discard, r.Body)
-		r.Body.Close()
-	}
-}

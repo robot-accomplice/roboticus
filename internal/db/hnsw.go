@@ -59,7 +59,7 @@ func (h *HNSWIndex) BuildFromStore(store *Store) error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	h.mu.Lock()
 	defer h.mu.Unlock()

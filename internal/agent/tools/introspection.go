@@ -89,7 +89,7 @@ func (t *IntrospectionTool) tools() string {
 	var sb strings.Builder
 	sb.WriteString("## Available Tools\n")
 	for _, name := range names {
-		sb.WriteString(fmt.Sprintf("- %s\n", name))
+		fmt.Fprintf(&sb, "- %s\n", name)
 	}
 	return sb.String()
 }

@@ -111,7 +111,7 @@ func (t *WebSearchTool) Execute(ctx context.Context, params string, _ *Context) 
 		if i >= p.NumResults {
 			break
 		}
-		sb.WriteString(fmt.Sprintf("%d. %s\n   %s\n   %s\n\n", i+1, r.Title, r.URL, r.Content))
+		fmt.Fprintf(&sb, "%d. %s\n   %s\n   %s\n\n", i+1, r.Title, r.URL, r.Content)
 	}
 
 	if sb.Len() == 0 {

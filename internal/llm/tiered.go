@@ -2,7 +2,6 @@ package llm
 
 import (
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -98,12 +97,12 @@ func (ce *ConfidenceEvaluator) hedgingScore(content string) float64 {
 		}
 	}
 
-	switch {
-	case count == 0:
+	switch count {
+	case 0:
 		return 1.0
-	case count == 1:
+	case 1:
 		return 0.7
-	case count == 2:
+	case 2:
 		return 0.4
 	default:
 		return 0.1
@@ -147,7 +146,6 @@ type EscalationTracker struct {
 	localAccepted  atomic.Int64
 	localEscalated atomic.Int64
 	cloudDirect    atomic.Int64
-	mu             sync.Mutex
 }
 
 // NewEscalationTracker creates a new tracker.

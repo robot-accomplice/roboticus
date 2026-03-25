@@ -162,8 +162,8 @@ func (c *secp256k1curve) addPoint(x1, y1, x2, y2 *big.Int) (*big.Int, *big.Int) 
 // pubKeyToAddress derives an Ethereum address from a public key.
 // Address = last 20 bytes of Keccak256(X || Y).
 func pubKeyToAddress(pub *ecdsa.PublicKey) string {
-	xBytes := pub.X.Bytes()
-	yBytes := pub.Y.Bytes()
+	xBytes := pub.X.Bytes() //nolint:staticcheck // TODO: migrate to modern crypto API
+	yBytes := pub.Y.Bytes() //nolint:staticcheck // TODO: migrate to modern crypto API
 
 	// Pad to 32 bytes each.
 	pubBytes := make([]byte, 64)

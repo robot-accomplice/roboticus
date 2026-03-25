@@ -138,9 +138,3 @@ func TestRetrieve_ActiveMemoryWrapper(t *testing.T) {
 	}
 }
 
-func min2(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}

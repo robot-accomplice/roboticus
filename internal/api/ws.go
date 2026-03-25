@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
-	"nhooyr.io/websocket"
+	"nhooyr.io/websocket" //nolint:staticcheck // TODO: migrate to github.com/coder/websocket
 )
 
 // EventBus is a publish/subscribe hub for real-time events over WebSocket.
@@ -59,7 +59,7 @@ func (eb *EventBus) Unsubscribe(ch chan string) {
 // HandleWebSocket upgrades an HTTP connection to a WebSocket and streams events.
 func HandleWebSocket(bus *EventBus, apiKey string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
+		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{ //nolint:staticcheck // TODO: migrate to github.com/coder/websocket
 			OriginPatterns: []string{"localhost:*", "127.0.0.1:*", "0.0.0.0:*"},
 		})
 		if err != nil {
@@ -95,7 +95,7 @@ func HandleWebSocket(bus *EventBus, apiKey string) http.HandlerFunc {
 		go func() {
 			defer close(clientDone)
 			for {
-				_, msg, err := conn.Read(ctx)
+				_, msg, err := conn.Read(ctx) //nolint:staticcheck // TODO: migrate to github.com/coder/websocket
 				if err != nil {
 					return
 				}
@@ -111,7 +111,7 @@ func HandleWebSocket(bus *EventBus, apiKey string) http.HandlerFunc {
 				// Ack client messages.
 				if len(msg) <= 4096 {
 					ack, _ := json.Marshal(map[string]string{"type": "ack"})
-					conn.Write(ctx, websocket.MessageText, ack)
+					conn.Write(ctx, websocket.MessageText, ack) //nolint:staticcheck // TODO: migrate to github.com/coder/websocket
 				}
 			}
 		}()
@@ -130,7 +130,7 @@ func HandleWebSocket(bus *EventBus, apiKey string) http.HandlerFunc {
 			case <-pingTicker.C:
 				conn.Ping(ctx)
 			case event := <-sub:
-				if err := conn.Write(ctx, websocket.MessageText, []byte(event)); err != nil {
+				if err := conn.Write(ctx, websocket.MessageText, []byte(event)); err != nil { //nolint:staticcheck // TODO: migrate to github.com/coder/websocket
 					return
 				}
 			}

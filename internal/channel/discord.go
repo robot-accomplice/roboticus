@@ -26,15 +26,6 @@ type DiscordConfig struct {
 	GatewayEnabled  bool     `mapstructure:"gateway_enabled"`
 }
 
-// Discord Gateway opcodes.
-const (
-	gwOpDispatch     = 0
-	gwOpHeartbeat    = 1
-	gwOpIdentify     = 2
-	gwOpHeartbeatAck = 11
-	gwOpHello        = 10
-)
-
 // DiscordAdapter implements Adapter for Discord.
 // Uses REST API for sending. Inbound messages arrive via gateway or webhook.
 type DiscordAdapter struct {
@@ -42,8 +33,6 @@ type DiscordAdapter struct {
 	client        *http.Client
 	mu            sync.Mutex
 	messageBuffer []InboundMessage
-	gwSequence    *int64 // last gateway sequence number
-	gwSessionID   string // gateway session ID
 }
 
 // NewDiscordAdapter creates a Discord channel adapter.
@@ -247,25 +236,6 @@ func (d *DiscordAdapter) gatewaySession(ctx context.Context, _ string) error {
 	}
 }
 
-// handleGatewayDispatch processes a DISPATCH (op=0) event from the gateway.
-func (d *DiscordAdapter) handleGatewayDispatch(eventType string, data json.RawMessage) {
-	switch eventType {
-	case "MESSAGE_CREATE":
-		raw, _ := json.Marshal(map[string]any{"t": eventType, "d": data})
-		msg, err := d.ProcessWebhook(raw)
-		if err != nil || msg == nil {
-			return
-		}
-		d.PushMessage(*msg)
-	case "READY":
-		var ready struct {
-			SessionID string `json:"session_id"`
-		}
-		json.Unmarshal(data, &ready)
-		d.gwSessionID = ready.SessionID
-		log.Info().Str("session_id", ready.SessionID).Msg("discord: gateway ready")
-	}
-}
 
 func (d *DiscordAdapter) isGuildAllowed(guildID string) bool {
 	if len(d.cfg.AllowedGuildIDs) == 0 {

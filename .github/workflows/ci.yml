@@ -46,7 +46,6 @@ jobs:
         uses: golangci/golangci-lint-action@v7
         with:
           version: v2.11.4
-          only-new-issues: true
 
   # --------------------------------------------------------------------------
   # Stage 2a: Unit Tests

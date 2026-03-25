@@ -217,7 +217,7 @@ func (t *ListDirectoryTool) Execute(_ context.Context, params string, tctx *Cont
 			if info != nil {
 				size = info.Size()
 			}
-			b.WriteString(fmt.Sprintf("%s (%d bytes)\n", e.Name(), size))
+			fmt.Fprintf(&b, "%s (%d bytes)\n", e.Name(), size)
 		}
 	}
 	return &Result{Output: b.String()}, nil
