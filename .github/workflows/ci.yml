@@ -1,0 +1,191 @@
+# ============================================================================
+# Goboticus CI Pipeline
+# ============================================================================
+# Multi-stage workflow: lint -> test/fuzz/integration (parallel) -> build/security
+# Pure-Go project with modernc.org/sqlite (no CGO required).
+# ============================================================================
+
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+# Cancel in-progress runs for the same branch/PR to save runner minutes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # --------------------------------------------------------------------------
+  # Stage 1: Lint
+  # Runs go vet and golangci-lint with default linter set.
+  # All subsequent jobs depend on this passing first.
+  # --------------------------------------------------------------------------
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Run go vet
+        run: go vet ./...
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v6
+
+  # --------------------------------------------------------------------------
+  # Stage 2a: Unit Tests
+  # Race detector enabled, coverage artifact uploaded.
+  # --------------------------------------------------------------------------
+  test:
+    name: Test
+    needs: [lint]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Run unit tests with race detector and coverage
+        run: go test -race -coverprofile=coverage.out -covermode=atomic ./...
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.out
+          retention-days: 14
+
+  # --------------------------------------------------------------------------
+  # Stage 2b: Integration / Smoke Test
+  # Boots a full API server against a temp DB and hits every endpoint.
+  # Separated from unit tests because it is heavier and tests wiring.
+  # --------------------------------------------------------------------------
+  test-integration:
+    name: Integration (Smoke)
+    needs: [lint]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Run smoke test
+        run: go test -v -run TestLiveSmokeTest -timeout 120s .
+
+  # --------------------------------------------------------------------------
+  # Stage 2c: Fuzz Testing
+  # Short fuzz run (10s per target) to catch panics and obvious crashes.
+  # Each target gets its own step because go test -fuzz accepts one regex.
+  # --------------------------------------------------------------------------
+  fuzz:
+    name: Fuzz
+    needs: [lint]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: "Fuzz: InjectionDetector_CheckInput"
+        run: go test -fuzz=FuzzInjectionDetector_CheckInput -fuzztime=10s ./internal/agent/
+
+      - name: "Fuzz: InjectionDetector_Sanitize"
+        run: go test -fuzz=FuzzInjectionDetector_Sanitize -fuzztime=10s ./internal/agent/
+
+      - name: "Fuzz: TelegramFormatter"
+        run: go test -fuzz=FuzzTelegramFormatter -fuzztime=10s ./internal/channel/
+
+      - name: "Fuzz: SignalFormatter"
+        run: go test -fuzz=FuzzSignalFormatter -fuzztime=10s ./internal/channel/
+
+      - name: "Fuzz: WhatsAppFormatter"
+        run: go test -fuzz=FuzzWhatsAppFormatter -fuzztime=10s ./internal/channel/
+
+      - name: "Fuzz: ValidateE164"
+        run: go test -fuzz=FuzzValidateE164 -fuzztime=10s ./internal/channel/
+
+      - name: "Fuzz: IsValidCronExpression"
+        run: go test -fuzz=FuzzIsValidCronExpression -fuzztime=10s ./internal/schedule/
+
+      - name: "Fuzz: MatchesCron"
+        run: go test -fuzz=FuzzMatchesCron -fuzztime=10s ./internal/schedule/
+
+  # --------------------------------------------------------------------------
+  # Stage 3a: Build
+  # Produces a statically-linked linux/amd64 binary.
+  # CGO_ENABLED=0 is safe — modernc.org/sqlite is pure Go.
+  # --------------------------------------------------------------------------
+  build:
+    name: Build
+    needs: [test, test-integration, fuzz]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build linux/amd64 binary
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+          GOARCH: amd64
+        run: go build -trimpath -ldflags="-s -w" -o goboticus .
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: goboticus-linux-amd64
+          path: goboticus
+          retention-days: 30
+
+  # --------------------------------------------------------------------------
+  # Stage 3b: Security / Vulnerability Scan
+  # Uses govulncheck to scan for known vulnerabilities in dependencies.
+  # --------------------------------------------------------------------------
+  security:
+    name: Security (govulncheck)
+    needs: [test, test-integration, fuzz]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: Run govulncheck
+        run: govulncheck ./...
