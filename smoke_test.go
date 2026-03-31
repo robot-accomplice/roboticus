@@ -495,6 +495,95 @@ func TestLiveSmokeTest(t *testing.T) {
 		t.Log("PASS: scheduler inline lease — acquire/contention/release all correct")
 	})
 
+	// --- v0.11.3 Parity endpoints ---
+
+	t.Run("throttle-stats", func(t *testing.T) {
+		resp := get(t, client, base+"/api/stats/throttle")
+		assertStatus(t, resp, 200)
+		body := readJSON(t, resp)
+		if _, ok := body["total_events"]; !ok {
+			t.Fatal("missing total_events")
+		}
+	})
+
+	t.Run("delegations", func(t *testing.T) {
+		resp := get(t, client, base+"/api/delegations")
+		assertStatus(t, resp, 200)
+		body := readJSON(t, resp)
+		if _, ok := body["delegations"]; !ok {
+			t.Fatal("missing delegations")
+		}
+	})
+
+	t.Run("theme-catalog", func(t *testing.T) {
+		resp := get(t, client, base+"/api/themes/catalog")
+		assertStatus(t, resp, 200)
+		body := readJSON(t, resp)
+		themes := body["themes"].([]any)
+		if len(themes) < 5 {
+			t.Errorf("themes = %d, want >= 5", len(themes))
+		}
+	})
+
+	t.Run("theme-active", func(t *testing.T) {
+		resp := get(t, client, base+"/api/themes/active")
+		assertStatus(t, resp, 200)
+		body := readJSON(t, resp)
+		if _, ok := body["id"]; !ok {
+			t.Fatal("missing id")
+		}
+	})
+
+	t.Run("traces", func(t *testing.T) {
+		resp := get(t, client, base+"/api/traces")
+		assertStatus(t, resp, 200)
+		body := readJSON(t, resp)
+		if _, ok := body["traces"]; !ok {
+			t.Fatal("missing traces")
+		}
+	})
+
+	t.Run("mcp-connections", func(t *testing.T) {
+		resp := get(t, client, base+"/api/mcp/connections")
+		assertStatus(t, resp, 200)
+		body := readJSON(t, resp)
+		if _, ok := body["connections"]; !ok {
+			t.Fatal("missing connections")
+		}
+	})
+
+	t.Run("mcp-tools", func(t *testing.T) {
+		resp := get(t, client, base+"/api/mcp/tools")
+		assertStatus(t, resp, 200)
+		body := readJSON(t, resp)
+		if _, ok := body["tools"]; !ok {
+			t.Fatal("missing tools")
+		}
+	})
+
+	t.Run("plugins-list", func(t *testing.T) {
+		resp := get(t, client, base+"/api/plugins")
+		assertStatus(t, resp, 200)
+		body := readJSON(t, resp)
+		if _, ok := body["plugins"]; !ok {
+			t.Fatal("missing plugins")
+		}
+	})
+
+	t.Run("memory-analytics", func(t *testing.T) {
+		resp := get(t, client, base+"/api/stats/memory-analytics")
+		assertStatus(t, resp, 200)
+		body := readJSON(t, resp)
+		if _, ok := body["period_hours"]; !ok {
+			t.Fatal("missing period_hours")
+		}
+	})
+
+	t.Run("escalation-stats", func(t *testing.T) {
+		resp := get(t, client, base+"/api/stats/escalation")
+		assertStatus(t, resp, 200)
+	})
+
 	// Print summary.
 	t.Log("")
 	t.Log("=== SMOKE TEST SUMMARY ===")
@@ -511,6 +600,9 @@ func TestLiveSmokeTest(t *testing.T) {
 	t.Log("  [x] Subagents, Roster, Workspace")
 	t.Log("  [x] MCP tool registry + ExportToMcp")
 	t.Log("  [x] Circuit breaker status")
+	t.Log("  [x] Throttle, Delegations, Themes, Traces")
+	t.Log("  [x] MCP connections, Plugins, Memory analytics")
+	t.Log("  [x] Escalation stats")
 }
 
 // --- helpers ---

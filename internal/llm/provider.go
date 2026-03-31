@@ -35,12 +35,13 @@ const (
 
 // Message is a single chat message in the conversation.
 type Message struct {
-	Role       string          `json:"role"`
-	Content    string          `json:"content,omitempty"`
-	ToolCalls  []ToolCall      `json:"tool_calls,omitempty"`
-	ToolCallID string          `json:"tool_call_id,omitempty"`
-	Name       string          `json:"name,omitempty"`
-	Metadata   json.RawMessage `json:"metadata,omitempty"`
+	Role         string          `json:"role"`
+	Content      string          `json:"content,omitempty"`
+	ContentParts []ContentPart   `json:"content_parts,omitempty"` // multimodal; takes precedence over Content
+	ToolCalls    []ToolCall      `json:"tool_calls,omitempty"`
+	ToolCallID   string          `json:"tool_call_id,omitempty"`
+	Name         string          `json:"name,omitempty"`
+	Metadata     json.RawMessage `json:"metadata,omitempty"`
 }
 
 // ToolCall represents a tool invocation requested by the model.

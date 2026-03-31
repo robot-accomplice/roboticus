@@ -34,6 +34,53 @@ type Config struct {
 	Abuse     AbuseConfig               `json:"abuse" mapstructure:"abuse"`
 	RateLimit RateLimitConfig           `json:"rate_limit" mapstructure:"rate_limit"`
 	MCP       MCPConfig                 `json:"mcp" mapstructure:"mcp"`
+	Matrix    MatrixChannelConfig       `json:"matrix" mapstructure:"matrix"`
+	Sandbox   SandboxCfg                `json:"sandbox" mapstructure:"sandbox"`
+	Classifier ClassifierConfig         `json:"classifier" mapstructure:"classifier"`
+	Planner   PlannerConfig             `json:"planner" mapstructure:"planner"`
+	Themes    ThemesConfig              `json:"themes" mapstructure:"themes"`
+	DKIM      DKIMConfig                `json:"dkim" mapstructure:"dkim"`
+}
+
+// MatrixChannelConfig holds Matrix homeserver connection settings.
+type MatrixChannelConfig struct {
+	Enabled       bool     `json:"enabled" mapstructure:"enabled"`
+	HomeserverURL string   `json:"homeserver_url" mapstructure:"homeserver_url"`
+	AccessToken   string   `json:"access_token" mapstructure:"access_token"`
+	DeviceID      string   `json:"device_id" mapstructure:"device_id"`
+	AllowedRooms  []string `json:"allowed_rooms" mapstructure:"allowed_rooms"`
+	AutoJoin      bool     `json:"auto_join" mapstructure:"auto_join"`
+	E2EEEnabled   bool     `json:"e2ee_enabled" mapstructure:"e2ee_enabled"`
+}
+
+// SandboxCfg holds OS-level process confinement settings.
+type SandboxCfg struct {
+	Enabled        bool     `json:"enabled" mapstructure:"enabled"`
+	MaxMemoryBytes int64    `json:"max_memory_bytes" mapstructure:"max_memory_bytes"`
+	AllowedPaths   []string `json:"allowed_paths" mapstructure:"allowed_paths"`
+}
+
+// ClassifierConfig holds intent classification settings.
+type ClassifierConfig struct {
+	Enabled             bool    `json:"enabled" mapstructure:"enabled"`
+	ConfidenceThreshold float64 `json:"confidence_threshold" mapstructure:"confidence_threshold"`
+}
+
+// PlannerConfig holds action planner settings.
+type PlannerConfig struct {
+	Enabled                  bool `json:"enabled" mapstructure:"enabled"`
+	MaxNormalizationRetries  int  `json:"max_normalization_retries" mapstructure:"max_normalization_retries"`
+}
+
+// ThemesConfig holds theme marketplace settings.
+type ThemesConfig struct {
+	CatalogURL string `json:"catalog_url" mapstructure:"catalog_url"`
+}
+
+// DKIMConfig holds DKIM verification settings.
+type DKIMConfig struct {
+	Enabled      bool `json:"enabled" mapstructure:"enabled"`
+	RequireValid bool `json:"require_valid" mapstructure:"require_valid"`
 }
 
 // MCPConfig holds MCP (Model Context Protocol) server configuration.

@@ -156,6 +156,8 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 		r.Get("/api/stats/efficiency", routes.GetEfficiency(state.Store))
 		r.Get("/api/stats/timeseries", routes.GetTimeseries(state.Store))
 		r.Get("/api/stats/escalation", routes.GetEscalationStats(state.LLM))
+		r.Get("/api/stats/throttle", routes.GetThrottleStats(state.Store))
+		r.Get("/api/delegations", routes.ListDelegations(state.Store))
 
 		// Models.
 		r.Get("/api/models/available", routes.GetAvailableModels(state.LLM))
@@ -196,6 +198,11 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 		// Traces.
 		r.Get("/api/traces", routes.ListTraces(state.Store))
 		r.Get("/api/traces/{turn_id}", routes.GetTrace(state.Store))
+
+		// Themes.
+		r.Get("/api/themes/catalog", routes.GetThemeCatalog())
+		r.Get("/api/themes/active", routes.GetActiveTheme(state.Store))
+		r.Put("/api/themes/active", routes.SetActiveTheme(state.Store))
 
 		// MCP.
 		r.Get("/api/mcp/connections", routes.ListMCPConnections(state.MCP))
