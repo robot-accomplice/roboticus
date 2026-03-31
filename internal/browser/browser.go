@@ -13,6 +13,12 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// Browser defaults.
+const (
+	DefaultCDPPort        = 9222
+	DefaultTimeoutSeconds = 30
+)
+
 // BrowserConfig holds browser automation configuration.
 type BrowserConfig struct {
 	Enabled        bool   `mapstructure:"enabled"`
@@ -93,7 +99,7 @@ type Browser struct {
 // NewBrowser creates a browser automation instance.
 func NewBrowser(cfg BrowserConfig) *Browser {
 	if cfg.CDPPort == 0 {
-		cfg.CDPPort = 9222
+		cfg.CDPPort = DefaultCDPPort
 	}
 	if cfg.TimeoutSeconds == 0 {
 		cfg.TimeoutSeconds = 30

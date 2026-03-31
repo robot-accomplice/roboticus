@@ -33,6 +33,23 @@ type Config struct {
 	Approvals ApprovalsConfig           `json:"approvals" mapstructure:"approvals"`
 	Abuse     AbuseConfig               `json:"abuse" mapstructure:"abuse"`
 	RateLimit RateLimitConfig           `json:"rate_limit" mapstructure:"rate_limit"`
+	MCP       MCPConfig                 `json:"mcp" mapstructure:"mcp"`
+}
+
+// MCPConfig holds MCP (Model Context Protocol) server configuration.
+type MCPConfig struct {
+	Servers []MCPServerEntry `json:"servers" mapstructure:"servers"`
+}
+
+// MCPServerEntry defines an MCP server to connect to.
+type MCPServerEntry struct {
+	Name      string            `json:"name" mapstructure:"name"`
+	Transport string            `json:"transport" mapstructure:"transport"` // "stdio" or "sse"
+	Command   string            `json:"command" mapstructure:"command"`
+	Args      []string          `json:"args" mapstructure:"args"`
+	URL       string            `json:"url" mapstructure:"url"`
+	Env       map[string]string `json:"env" mapstructure:"env"`
+	Enabled   bool              `json:"enabled" mapstructure:"enabled"`
 }
 
 // ApprovalsConfig controls human-in-the-loop tool gating.

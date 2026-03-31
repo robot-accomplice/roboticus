@@ -12,7 +12,9 @@ import (
 
 	"goboticus/internal/agent"
 	"goboticus/internal/api"
+	"goboticus/internal/api/routes"
 	"goboticus/internal/channel"
+	"goboticus/internal/mcp"
 	"goboticus/internal/core"
 	"goboticus/internal/db"
 	"goboticus/internal/llm"
@@ -31,6 +33,7 @@ type Daemon struct {
 	router   *channel.Router
 	appState *api.AppState
 	eventBus *api.EventBus
+	bgWorker *core.BackgroundWorker
 
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -72,10 +75,13 @@ func New(cfg *core.Config) (*Daemon, error) {
 			RPMLimit:         pc.RPMLimit,
 		})
 	}
+	bgWorker := core.NewBackgroundWorker(32)
+
 	llmSvc, err := llm.NewService(llm.ServiceConfig{
 		Providers: providers,
 		Primary:   cfg.Models.Primary,
 		Fallbacks: cfg.Models.Fallback,
+		BGWorker:  bgWorker,
 	}, store)
 	if err != nil {
 		_ = store.Close()
@@ -119,6 +125,7 @@ func New(cfg *core.Config) (*Daemon, error) {
 		Memory:    memMgr,
 		Retriever: retriever,
 		Guards:    guards,
+		BGWorker:  bgWorker,
 	})
 
 	// Sync hippocampus schema registry.
@@ -136,6 +143,20 @@ func New(cfg *core.Config) (*Daemon, error) {
 
 	eventBus := api.NewEventBus(256)
 
+	// Log ring buffer: captures structured logs for /api/logs endpoint.
+	logBuf := api.NewLogRingBuffer(5000)
+	routes.SetLogBuffer(func(n int, level string) []any {
+		entries := logBuf.Tail(n, level)
+		result := make([]any, len(entries))
+		for i, e := range entries {
+			result[i] = e
+		}
+		return result
+	})
+
+	// MCP connection manager.
+	mcpMgr := mcp.NewConnectionManager()
+
 	appState := &api.AppState{
 		Store:     store,
 		Pipeline:  pipe,
@@ -143,6 +164,7 @@ func New(cfg *core.Config) (*Daemon, error) {
 		Config:    cfg,
 		EventBus:  eventBus,
 		Approvals: approvalMgr,
+		MCP:       mcpMgr,
 	}
 
 	return &Daemon{
@@ -153,6 +175,7 @@ func New(cfg *core.Config) (*Daemon, error) {
 		router:   router,
 		appState: appState,
 		eventBus: eventBus,
+		bgWorker: bgWorker,
 	}, nil
 }
 
@@ -182,6 +205,11 @@ func (d *Daemon) Stop(s service.Service) error {
 		log.Info().Msg("graceful shutdown complete")
 	case <-time.After(15 * time.Second):
 		log.Warn().Msg("shutdown timed out")
+	}
+
+	// Drain background worker pool.
+	if d.bgWorker != nil {
+		d.bgWorker.Drain(5 * time.Second)
 	}
 
 	_ = d.store.Close()

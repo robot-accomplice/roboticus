@@ -86,10 +86,36 @@ func PostTurnFeedback(store *db.Store) http.HandlerFunc {
 
 // --- Skills ---
 
-// ListSkills returns loaded skills.
+// ListSkills returns loaded skills from the database.
 func ListSkills(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"skills": []any{}})
+		rows, err := store.QueryContext(r.Context(),
+			`SELECT id, name, kind, description, enabled, version, risk_level, created_at
+			 FROM skills ORDER BY name`)
+		if err != nil {
+			writeJSON(w, http.StatusOK, map[string]any{"skills": []any{}})
+			return
+		}
+		defer func() { _ = rows.Close() }()
+
+		skills := make([]map[string]any, 0)
+		for rows.Next() {
+			var id, name, kind, riskLevel, createdAt, version string
+			var description *string
+			var enabled bool
+			if err := rows.Scan(&id, &name, &kind, &description, &enabled, &version, &riskLevel, &createdAt); err != nil {
+				continue
+			}
+			s := map[string]any{
+				"id": id, "name": name, "kind": kind, "enabled": enabled,
+				"version": version, "risk_level": riskLevel, "created_at": createdAt,
+			}
+			if description != nil {
+				s["description"] = *description
+			}
+			skills = append(skills, s)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"skills": skills})
 	}
 }
 

@@ -340,6 +340,52 @@ because the registry `manifest.json` had no `plugins` section at all. The code u
 **Fix:** Added empty `plugins` section to manifest.json. Changed error handling to show
 a helpful message suggesting `--path` for local installs when the catalog is empty.
 
+#### 4. Parity Audit False Positives Are Persistent (NEW — Observed)
+
+**Problem:** The parity audit uses keyword matching against file names, which creates
+persistent false positives. `hybrid_search`, `cron_worker`, `eip3009`, `csp_nonce`, and
+`plugin_registry` are all implemented in goboticus under different names/files but flagged
+as missing every time.
+
+**Recommendation:** The parity audit should use semantic matching or maintain an explicit
+aliases map (e.g., `hybrid_search → retrieval.go`, `eip3009 → x402.go`) to suppress
+known false positives.
+
+#### 5. Go Log Capture Is Simpler Than Rust File-Based Approach (NEW — Go Improvement)
+
+**Problem:** Roboticus reads `.log` files from disk for `/api/logs`, which requires
+parsing JSON lines from files, handling file rotation, and is fragile to path changes.
+
+**Go improvement:** Goboticus uses an `io.Writer`-based ring buffer injected into zerolog's
+multi-writer. This captures logs directly in memory with no disk I/O, no file parsing,
+and no rotation handling. The ring buffer is thread-safe and fixed-size (5000 entries).
+This is a pattern worth adopting in roboticus — a `tracing::Subscriber` layer that writes
+to a shared ring buffer would eliminate the file-reading approach entirely.
+
+#### 6. Tiered Inference Was Already Partially Implemented (NEW — Observed)
+
+**Problem:** During the parity audit, `tiered` was flagged as missing. Investigation
+revealed that `internal/llm/tiered.go` already contained a full `ConfidenceEvaluator`
+and `EscalationTracker` implementation — it just wasn't wired into the inference flow.
+A duplicate implementation was created before discovering the existing one.
+
+**Lesson:** Always grep for existing implementations before writing new code. The parity
+audit's keyword matching can mask existing implementations under different file names.
+This was documented in CLAUDE.md but still happened — check types and interfaces, not
+just file names.
+
+#### 7. Pipeline Trace Capture as First-Class Concern (NEW — Go Improvement)
+
+**Problem:** Roboticus stores pipeline traces as JSON blobs with complex nested types
+(`PipelineTrace`, `ReactTrace`, `TraceSpan` with `SpanOutcome` enums). The Go version
+simplifies this to a flat `TraceRecorder` with `BeginSpan`/`EndSpan` that automatically
+handles timing and nesting.
+
+**Go improvement:** The trace recorder uses auto-closing of active spans (calling
+`BeginSpan` automatically ends the previous one), which eliminates a common bug class
+where spans are opened but not closed. The `Finish()` method handles cleanup. This is
+more ergonomic than the manual namespace + annotate pattern in Rust.
+
 #### 4. Sandbox Error Messages Were Opaque (NEW — Fixed)
 
 **Problem:** When a skill script hit a sandbox boundary (path outside workspace, interpreter

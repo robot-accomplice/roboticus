@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/rs/zerolog/log"
 
@@ -20,24 +21,29 @@ import (
 //	Circuit breaker → Client (format translation + HTTP) →
 //	Cache store → Response
 type Service struct {
-	providers map[string]*Client
-	router    *Router
-	breakers  *BreakerRegistry
-	cache     *Cache
-	dedup     *Dedup
-	primary   string   // primary model name
-	fallbacks []string // fallback model names
-	store     *db.Store
+	providers  map[string]*Client
+	router     *Router
+	breakers   *BreakerRegistry
+	cache      *Cache
+	dedup      *Dedup
+	primary    string   // primary model name
+	fallbacks  []string // fallback model names
+	store      *db.Store
+	bgWorker   *core.BackgroundWorker
+	Confidence *ConfidenceEvaluator
+	Escalation *EscalationTracker
 }
 
 // ServiceConfig holds configuration for the LLM service.
 type ServiceConfig struct {
-	Providers []Provider
-	Primary   string
-	Fallbacks []string
-	Cache     CacheConfig
-	Breaker   CircuitBreakerConfig
-	Router    RouterConfig
+	Providers       []Provider
+	Primary         string
+	Fallbacks       []string
+	Cache           CacheConfig
+	Breaker         CircuitBreakerConfig
+	Router          RouterConfig
+	ConfidenceFloor float64              // minimum confidence to accept local response (0 = use default)
+	BGWorker        *core.BackgroundWorker // shared worker pool for async tasks
 }
 
 // NewService creates the LLM orchestrator.
@@ -66,15 +72,28 @@ func NewService(cfg ServiceConfig, store *db.Store) (*Service, error) {
 		log.Warn().Msg("no LLM providers configured — inference will fail until a provider is added")
 	}
 
+	floor := 0.7
+	if cfg.ConfidenceFloor > 0 {
+		floor = cfg.ConfidenceFloor
+	}
+
+	bgw := cfg.BGWorker
+	if bgw == nil {
+		bgw = core.NewBackgroundWorker(16)
+	}
+
 	return &Service{
-		providers: clients,
-		router:    NewRouter(targets, cfg.Router),
-		breakers:  NewBreakerRegistry(cfg.Breaker),
-		cache:     NewCache(cfg.Cache, store),
-		dedup:     NewDedup(2000), // 2s dedup window
-		primary:   cfg.Primary,
-		fallbacks: cfg.Fallbacks,
-		store:     store,
+		providers:  clients,
+		router:     NewRouter(targets, cfg.Router),
+		breakers:   NewBreakerRegistry(cfg.Breaker),
+		cache:      NewCache(cfg.Cache, store),
+		dedup:      NewDedup(2000), // 2s dedup window
+		primary:    cfg.Primary,
+		fallbacks:  cfg.Fallbacks,
+		store:      store,
+		bgWorker:   bgw,
+		Confidence: NewConfidenceEvaluator(floor),
+		Escalation: NewEscalationTracker(),
 	}, nil
 }
 
@@ -117,7 +136,9 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 			continue
 		}
 
+		start := time.Now()
 		resp, err := client.Complete(ctx, req)
+		latencyMs := time.Since(start).Milliseconds()
 		if err != nil {
 			cb.RecordFailure()
 			lastErr = err
@@ -127,11 +148,32 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 
 		cb.RecordSuccess()
 
+		// Tiered inference: if the provider is local, evaluate confidence.
+		// If confidence is too low and non-local providers are available, escalate.
+		if client.provider.IsLocal && s.Confidence != nil {
+			latency := time.Duration(latencyMs) * time.Millisecond
+			if !s.Confidence.IsConfident(resp.Content, latency) {
+				s.Escalation.RecordLocalEscalated()
+				log.Info().
+					Float64("confidence", s.Confidence.ConfidenceScore(resp.Content, latency)).
+					Str("provider", providerName).
+					Msg("local response below confidence floor, escalating to cloud")
+				// Continue to next (non-local) provider.
+				continue
+			}
+			s.Escalation.RecordLocalAccepted()
+		} else {
+			s.Escalation.RecordCloudDirect()
+		}
+
 		// Cache the successful response.
 		s.cache.Put(ctx, req, resp)
 
-		// Record cost asynchronously.
-		go s.recordCost(context.Background(), providerName, resp)
+		// Record cost asynchronously via tracked worker pool.
+		pName := providerName
+		s.bgWorker.Submit("recordCost", func(ctx context.Context) {
+			s.recordCost(ctx, pName, resp)
+		})
 
 		return resp, nil
 	}

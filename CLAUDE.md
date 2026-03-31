@@ -58,3 +58,9 @@ go vet ./...                # Lint
 | CLI commands | `cmd/` |
 | Smoke test | `smoke_test.go` |
 | Test infrastructure | `testutil/` |
+| Pipeline traces | `internal/pipeline/trace.go` |
+| Log ring buffer | `internal/api/logbuffer.go` |
+| Memory analytics | `internal/api/routes/memory_analytics.go` |
+| MCP client | `internal/mcp/` |
+| Plugin API routes | `internal/api/routes/plugins.go` |
+| Trace API routes | `internal/api/routes/traces.go` |
