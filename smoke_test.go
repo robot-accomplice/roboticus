@@ -584,6 +584,94 @@ func TestLiveSmokeTest(t *testing.T) {
 		assertStatus(t, resp, 200)
 	})
 
+	// --- Deeper API flows ---
+
+	t.Run("session-get", func(t *testing.T) {
+		if sessionID == "" {
+			t.Skip("no session")
+		}
+		resp := get(t, client, base+"/api/sessions/"+sessionID)
+		assertStatus(t, resp, 200)
+	})
+
+	t.Run("session-turns", func(t *testing.T) {
+		if sessionID == "" {
+			t.Skip("no session")
+		}
+		resp := get(t, client, base+"/api/sessions/"+sessionID+"/turns")
+		assertStatus(t, resp, 200)
+	})
+
+	t.Run("session-feedback", func(t *testing.T) {
+		if sessionID == "" {
+			t.Skip("no session")
+		}
+		resp := get(t, client, base+"/api/sessions/"+sessionID+"/feedback")
+		assertStatus(t, resp, 200)
+	})
+
+	t.Run("session-insights", func(t *testing.T) {
+		if sessionID == "" {
+			t.Skip("no session")
+		}
+		resp := get(t, client, base+"/api/sessions/"+sessionID+"/insights")
+		assertStatus(t, resp, 200)
+	})
+
+	t.Run("openapi-spec", func(t *testing.T) {
+		resp := get(t, client, base+"/openapi.yaml")
+		assertStatus(t, resp, 200)
+	})
+
+	t.Run("api-docs", func(t *testing.T) {
+		resp := get(t, client, base+"/api/docs")
+		assertStatus(t, resp, 200)
+	})
+
+	t.Run("agent-status", func(t *testing.T) {
+		resp := get(t, client, base+"/api/agent/status")
+		assertStatus(t, resp, 200)
+	})
+
+	t.Run("logs", func(t *testing.T) {
+		resp := get(t, client, base+"/api/logs")
+		assertStatus(t, resp, 200)
+	})
+
+	t.Run("ws-ticket", func(t *testing.T) {
+		resp := post(t, client, base+"/api/ws-ticket", map[string]any{})
+		assertStatus(t, resp, 200)
+		body := readJSON(t, resp)
+		if body["ticket"] == nil {
+			t.Error("should return ticket")
+		}
+	})
+
+	t.Run("plugin-tools", func(t *testing.T) {
+		resp := get(t, client, base+"/api/plugins/tools")
+		assertStatus(t, resp, 200)
+	})
+
+	t.Run("timeseries", func(t *testing.T) {
+		resp := get(t, client, base+"/api/stats/timeseries")
+		assertStatus(t, resp, 200)
+	})
+
+	t.Run("transactions", func(t *testing.T) {
+		resp := get(t, client, base+"/api/stats/transactions")
+		assertStatus(t, resp, 200)
+	})
+
+	t.Run("capacity", func(t *testing.T) {
+		resp := get(t, client, base+"/api/stats/capacity")
+		assertStatus(t, resp, 200)
+	})
+
+	t.Run("model-selections", func(t *testing.T) {
+		resp := get(t, client, base+"/api/models/selections")
+		assertStatus(t, resp, 200)
+	})
+
 	// Print summary.
 	t.Log("")
 	t.Log("=== SMOKE TEST SUMMARY ===")
