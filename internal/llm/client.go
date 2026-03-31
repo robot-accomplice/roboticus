@@ -20,7 +20,7 @@ import (
 // format. It implements Completer.
 type Client struct {
 	provider   *Provider
-	httpClient *http.Client
+	httpClient core.HTTPDoer
 	apiKey     string
 }
 
@@ -47,6 +47,20 @@ func NewClient(p *Provider) (*Client, error) {
 			},
 		},
 		apiKey: apiKey,
+	}, nil
+}
+
+// NewClientWithHTTP creates a Client with an injected HTTP implementation.
+// Use this in tests to provide a mock HTTPDoer.
+func NewClientWithHTTP(p *Provider, httpClient core.HTTPDoer) (*Client, error) {
+	var apiKey string
+	if p.APIKeyEnv != "" && !p.IsLocal {
+		apiKey = os.Getenv(p.APIKeyEnv)
+	}
+	return &Client{
+		provider:   p,
+		httpClient: httpClient,
+		apiKey:     apiKey,
 	}, nil
 }
 

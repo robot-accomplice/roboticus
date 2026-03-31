@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+
+	"goboticus/internal/core"
 )
 
 // MatrixConfig holds Matrix homeserver connection settings.
@@ -33,7 +35,7 @@ const (
 // MatrixAdapter implements the Adapter interface for Matrix.
 type MatrixAdapter struct {
 	cfg       MatrixConfig
-	client    *http.Client
+	client    core.HTTPDoer
 	userID    string
 	syncToken string
 	mu        sync.Mutex
@@ -42,6 +44,11 @@ type MatrixAdapter struct {
 
 // NewMatrixAdapter creates a Matrix channel adapter.
 func NewMatrixAdapter(cfg MatrixConfig) (*MatrixAdapter, error) {
+	return NewMatrixAdapterWithHTTP(cfg, nil)
+}
+
+// NewMatrixAdapterWithHTTP creates a Matrix adapter with an injected HTTP client.
+func NewMatrixAdapterWithHTTP(cfg MatrixConfig, httpClient core.HTTPDoer) (*MatrixAdapter, error) {
 	if cfg.HomeserverURL == "" {
 		return nil, fmt.Errorf("matrix: homeserver_url required")
 	}
@@ -51,12 +58,15 @@ func NewMatrixAdapter(cfg MatrixConfig) (*MatrixAdapter, error) {
 	if cfg.SyncTimeoutMs <= 0 {
 		cfg.SyncTimeoutMs = defaultMatrixSyncTimeout
 	}
+	if httpClient == nil {
+		httpClient = &http.Client{
+			Timeout: time.Duration(cfg.SyncTimeoutMs+5000) * time.Millisecond,
+		}
+	}
 
 	adapter := &MatrixAdapter{
-		cfg: cfg,
-		client: &http.Client{
-			Timeout: time.Duration(cfg.SyncTimeoutMs+5000) * time.Millisecond,
-		},
+		cfg:     cfg,
+		client:  httpClient,
 		inbound: make(chan InboundMessage, 64),
 	}
 

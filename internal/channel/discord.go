@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+
+	"goboticus/internal/core"
 )
 
 const (
@@ -27,24 +29,29 @@ type DiscordConfig struct {
 }
 
 // DiscordAdapter implements Adapter for Discord.
-// Uses REST API for sending. Inbound messages arrive via gateway or webhook.
 type DiscordAdapter struct {
 	cfg           DiscordConfig
-	client        *http.Client
+	client        core.HTTPDoer
 	mu            sync.Mutex
 	messageBuffer []InboundMessage
 }
 
 // NewDiscordAdapter creates a Discord channel adapter.
 func NewDiscordAdapter(cfg DiscordConfig) *DiscordAdapter {
+	return NewDiscordAdapterWithHTTP(cfg, nil)
+}
+
+// NewDiscordAdapterWithHTTP creates a Discord adapter with an injected HTTP client.
+func NewDiscordAdapterWithHTTP(cfg DiscordConfig, httpClient core.HTTPDoer) *DiscordAdapter {
 	if len(cfg.AllowedGuildIDs) == 0 {
 		cfg.DenyOnEmpty = true
 	}
+	if httpClient == nil {
+		httpClient = &http.Client{Timeout: 30 * time.Second}
+	}
 	return &DiscordAdapter{
-		cfg: cfg,
-		client: &http.Client{
-			Timeout: 30 * time.Second,
-		},
+		cfg:    cfg,
+		client: httpClient,
 	}
 }
 

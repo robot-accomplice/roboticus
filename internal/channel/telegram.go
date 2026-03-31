@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+
+	"goboticus/internal/core"
 )
 
 // TelegramConfig holds Telegram Bot API connection parameters.
@@ -26,7 +28,7 @@ type TelegramConfig struct {
 // TelegramAdapter implements Adapter for the Telegram Bot API.
 type TelegramAdapter struct {
 	cfg           TelegramConfig
-	client        *http.Client
+	client        core.HTTPDoer
 	lastUpdateID  int64
 	mu            sync.Mutex
 	messageBuffer []InboundMessage
@@ -34,17 +36,25 @@ type TelegramAdapter struct {
 
 // NewTelegramAdapter creates a Telegram channel adapter.
 func NewTelegramAdapter(cfg TelegramConfig) *TelegramAdapter {
+	return NewTelegramAdapterWithHTTP(cfg, nil)
+}
+
+// NewTelegramAdapterWithHTTP creates a Telegram adapter with an injected HTTP client.
+func NewTelegramAdapterWithHTTP(cfg TelegramConfig, httpClient core.HTTPDoer) *TelegramAdapter {
 	if cfg.PollTimeout == 0 {
 		cfg.PollTimeout = 30
 	}
 	if len(cfg.AllowedChatIDs) == 0 {
 		cfg.DenyOnEmpty = true
 	}
-	return &TelegramAdapter{
-		cfg: cfg,
-		client: &http.Client{
+	if httpClient == nil {
+		httpClient = &http.Client{
 			Timeout: time.Duration(cfg.PollTimeout+10) * time.Second,
-		},
+		}
+	}
+	return &TelegramAdapter{
+		cfg:    cfg,
+		client: httpClient,
 	}
 }
 
