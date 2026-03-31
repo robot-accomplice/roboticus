@@ -102,11 +102,19 @@ func (t *AbuseTracker) RecordSignal(ctx context.Context, signal AbuseSignal) (En
 	// Store the event in the database.
 	action := t.computeAction(signal.ActorID, signal.Severity)
 
+	severityText := "low"
+	if signal.Severity >= 0.5 {
+		severityText = "high"
+	} else if signal.Severity >= 0.2 {
+		severityText = "medium"
+	}
+
 	_, err := t.store.ExecContext(ctx,
-		`INSERT INTO abuse_events (id, actor_id, signal_type, severity, detail, action_taken)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		db.NewID(), signal.ActorID, string(signal.SignalType),
-		signal.Severity, signal.Detail, string(action))
+		`INSERT INTO abuse_events (id, actor_id, origin, channel, signal_type, severity, action_taken, detail, score)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		db.NewID(), signal.ActorID, signal.Origin, signal.Channel,
+		string(signal.SignalType), severityText, string(action),
+		signal.Detail, signal.Severity)
 	if err != nil {
 		return ActionAllow, err
 	}
@@ -199,7 +207,7 @@ func (t *AbuseTracker) ListRecentEvents(ctx context.Context, limit int) ([]Abuse
 	}
 
 	rows, err := t.store.QueryContext(ctx,
-		`SELECT id, actor_id, signal_type, severity, detail, action_taken, created_at
+		`SELECT id, actor_id, signal_type, score, detail, action_taken, created_at
 		 FROM abuse_events ORDER BY created_at DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
