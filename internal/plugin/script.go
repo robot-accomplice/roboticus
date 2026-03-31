@@ -11,6 +11,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"goboticus/internal/core"
 )
 
 // ScriptPlugin implements Plugin by executing external scripts.
@@ -20,10 +22,16 @@ type ScriptPlugin struct {
 	scripts  map[string]string // tool name → script path
 	timeout  time.Duration
 	env      map[string]string
+	runner   core.ProcessRunner // nil defaults to OSProcessRunner
 }
 
-// NewScriptPlugin creates a script-based plugin.
+// NewScriptPlugin creates a script-based plugin with default OS process runner.
 func NewScriptPlugin(manifest Manifest, dir string) *ScriptPlugin {
+	return NewScriptPluginWithRunner(manifest, dir, nil)
+}
+
+// NewScriptPluginWithRunner creates a plugin with an injected process runner.
+func NewScriptPluginWithRunner(manifest Manifest, dir string, runner core.ProcessRunner) *ScriptPlugin {
 	timeout := 30 * time.Second
 	if manifest.TimeoutSeconds > 0 {
 		timeout = time.Duration(manifest.TimeoutSeconds) * time.Second
@@ -34,6 +42,7 @@ func NewScriptPlugin(manifest Manifest, dir string) *ScriptPlugin {
 		scripts:  make(map[string]string),
 		timeout:  timeout,
 		env:      make(map[string]string),
+		runner:   runner,
 	}
 	sp.discoverScripts()
 	return sp

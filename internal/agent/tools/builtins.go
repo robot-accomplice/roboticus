@@ -59,7 +59,7 @@ func (t *ReadFileTool) Execute(_ context.Context, params string, tctx *Context) 
 		return nil, err
 	}
 
-	data, err := os.ReadFile(resolved)
+	data, err := tctx.GetFS().ReadFile(resolved)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file: %w", err)
 	}
@@ -100,7 +100,7 @@ func (t *WriteFileTool) Execute(_ context.Context, params string, tctx *Context)
 		return nil, err
 	}
 
-	if err := os.MkdirAll(filepath.Dir(resolved), 0o755); err != nil {
+	if err := tctx.GetFS().MkdirAll(filepath.Dir(resolved), 0o755); err != nil {
 		return nil, fmt.Errorf("failed to create directories: %w", err)
 	}
 
@@ -111,7 +111,7 @@ func (t *WriteFileTool) Execute(_ context.Context, params string, tctx *Context)
 		flag |= os.O_TRUNC
 	}
 
-	f, err := os.OpenFile(resolved, flag, 0o644)
+	f, err := tctx.GetFS().OpenFile(resolved, flag, 0o644)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file: %w", err)
 	}
@@ -151,7 +151,7 @@ func (t *EditFileTool) Execute(_ context.Context, params string, tctx *Context) 
 		return nil, err
 	}
 
-	data, err := os.ReadFile(resolved)
+	data, err := tctx.GetFS().ReadFile(resolved)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file: %w", err)
 	}
@@ -168,7 +168,7 @@ func (t *EditFileTool) Execute(_ context.Context, params string, tctx *Context) 
 		newContent = strings.Replace(content, args.OldText, args.NewText, 1)
 	}
 
-	if err := os.WriteFile(resolved, []byte(newContent), 0o644); err != nil {
+	if err := tctx.GetFS().WriteFile(resolved, []byte(newContent), 0o644); err != nil {
 		return nil, fmt.Errorf("failed to write file: %w", err)
 	}
 
@@ -202,7 +202,7 @@ func (t *ListDirectoryTool) Execute(_ context.Context, params string, tctx *Cont
 		return nil, err
 	}
 
-	entries, err := os.ReadDir(resolved)
+	entries, err := tctx.GetFS().ReadDir(resolved)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read directory: %w", err)
 	}
@@ -266,7 +266,7 @@ func (t *SearchFilesTool) Execute(_ context.Context, params string, tctx *Contex
 	count := 0
 	maxWalk := 5000
 
-	_ = filepath.Walk(resolved, func(path string, info os.FileInfo, err error) error {
+	_ = tctx.GetFS().Walk(resolved, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() || info.Size() > 1<<20 {
 			return nil
 		}
@@ -285,7 +285,7 @@ func (t *SearchFilesTool) Execute(_ context.Context, params string, tctx *Contex
 			return nil
 		}
 
-		data, err := os.ReadFile(path)
+		data, err := tctx.GetFS().ReadFile(path)
 		if err != nil {
 			return nil
 		}
@@ -356,7 +356,7 @@ func (t *GlobFilesTool) Execute(_ context.Context, params string, tctx *Context)
 	}
 
 	pattern := filepath.Join(resolved, args.Pattern)
-	matches, err := filepath.Glob(pattern)
+	matches, err := tctx.GetFS().Glob(pattern)
 	if err != nil {
 		return nil, fmt.Errorf("invalid glob pattern: %w", err)
 	}
@@ -421,15 +421,14 @@ func (t *BashTool) Execute(ctx context.Context, params string, tctx *Context) (*
 	execCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := execCommand(execCtx, args.Command)
-	cmd.Dir = resolved
-
-	output, err := cmd.CombinedOutput()
+	shellName, shellArgs := shellCommand(args.Command)
+	stdout, stderr, err := tctx.GetRunner().Run(execCtx, shellName, shellArgs, resolved, nil)
+	combined := string(stdout) + string(stderr)
 	if err != nil {
-		return &Result{Output: fmt.Sprintf("error: %v\n%s", err, string(output))}, nil
+		return &Result{Output: fmt.Sprintf("error: %v\n%s", err, combined)}, nil
 	}
 
-	return &Result{Output: string(output)}, nil
+	return &Result{Output: combined}, nil
 }
 
 // --- Runtime Context Tool ---
