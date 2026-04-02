@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -51,6 +52,24 @@ func NewService(cfg ServiceConfig, store *db.Store) (*Service, error) {
 	clients := make(map[string]*Client)
 	var targets []RouteTarget
 
+	// Build a map of provider → model name from primary + fallback specs.
+	// "ollama/qwen3.5:35b-a3b" → providerModels["ollama"] = "qwen3.5:35b-a3b"
+	providerModels := make(map[string]string)
+	if cfg.Primary != "" {
+		prov, model := splitModelSpec(cfg.Primary)
+		if model != "" {
+			providerModels[prov] = model
+		}
+	}
+	for _, fb := range cfg.Fallbacks {
+		prov, model := splitModelSpec(fb)
+		if model != "" {
+			if _, exists := providerModels[prov]; !exists {
+				providerModels[prov] = model
+			}
+		}
+	}
+
 	for i := range cfg.Providers {
 		p := &cfg.Providers[i]
 		client, err := NewClient(p)
@@ -60,8 +79,15 @@ func NewService(cfg ServiceConfig, store *db.Store) (*Service, error) {
 		}
 		clients[p.Name] = client
 
+		// Use the model name from primary/fallback spec if available,
+		// otherwise fall back to provider name (for direct model selection).
+		modelName := p.Name
+		if m, ok := providerModels[p.Name]; ok {
+			modelName = m
+		}
+
 		targets = append(targets, RouteTarget{
-			Model:    p.Name,
+			Model:    modelName,
 			Provider: p.Name,
 			IsLocal:  p.IsLocal,
 			Cost:     p.CostPerOutputTok,
@@ -120,8 +146,14 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 		req.Model = target.Model
 	}
 
+	// Parse "provider/model" format: "ollama/qwen3.5:35b-a3b" → provider="ollama", model="qwen3.5:35b-a3b".
+	providerHint, modelName := splitModelSpec(req.Model)
+	if modelName != "" {
+		req.Model = modelName
+	}
+
 	// Try primary provider, then fallbacks.
-	providers := s.resolveProviderChain(req.Model)
+	providers := s.resolveProviderChain(providerHint)
 	var lastErr error
 
 	for _, providerName := range providers {
@@ -195,7 +227,13 @@ func (s *Service) Stream(ctx context.Context, req *Request) (<-chan StreamChunk,
 		req.Model = target.Model
 	}
 
-	providers := s.resolveProviderChain(req.Model)
+	// Parse "provider/model" format.
+	providerHint, modelName := splitModelSpec(req.Model)
+	if modelName != "" {
+		req.Model = modelName
+	}
+
+	providers := s.resolveProviderChain(providerHint)
 
 	for _, providerName := range providers {
 		client, ok := s.providers[providerName]
@@ -264,23 +302,40 @@ func (s *Service) wrapStreamBreaker(ctx context.Context, in <-chan StreamChunk, 
 }
 
 // resolveProviderChain returns the ordered list of providers to try.
-func (s *Service) resolveProviderChain(model string) []string {
+// splitModelSpec parses "provider/model" format into (provider, model).
+// If there's no slash, returns (spec, "") — the spec is treated as a provider name.
+func splitModelSpec(spec string) (provider, model string) {
+	if i := strings.Index(spec, "/"); i >= 0 {
+		return spec[:i], spec[i+1:]
+	}
+	return spec, ""
+}
+
+func (s *Service) resolveProviderChain(providerHint string) []string {
 	var chain []string
 
-	// If the model matches a provider name directly, use it first.
-	if _, ok := s.providers[model]; ok {
-		chain = append(chain, model)
+	// If the hint matches a provider name directly, use it first.
+	if _, ok := s.providers[providerHint]; ok {
+		chain = append(chain, providerHint)
 	}
 
-	// Add primary if different.
-	if s.primary != "" && s.primary != model {
-		chain = append(chain, s.primary)
+	// Add primary provider (extracted from "provider/model" format).
+	if s.primary != "" {
+		primaryProvider, _ := splitModelSpec(s.primary)
+		if !contains(chain, primaryProvider) {
+			if _, ok := s.providers[primaryProvider]; ok {
+				chain = append(chain, primaryProvider)
+			}
+		}
 	}
 
-	// Add fallbacks.
+	// Add fallback providers.
 	for _, fb := range s.fallbacks {
-		if !contains(chain, fb) {
-			chain = append(chain, fb)
+		fbProvider, _ := splitModelSpec(fb)
+		if !contains(chain, fbProvider) {
+			if _, ok := s.providers[fbProvider]; ok {
+				chain = append(chain, fbProvider)
+			}
 		}
 	}
 

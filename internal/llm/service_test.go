@@ -41,8 +41,13 @@ func TestResolveProviderChain_IncludesPrimaryAndFallbacks(t *testing.T) {
 	svc, _ := NewService(ServiceConfig{
 		Primary:   "openai",
 		Fallbacks: []string{"anthropic", "ollama"},
+		Providers: []Provider{
+			{Name: "openai", URL: "http://test", Format: FormatOpenAI},
+			{Name: "anthropic", URL: "http://test", Format: FormatAnthropic},
+			{Name: "ollama", URL: "http://test", Format: FormatOpenAI, IsLocal: true},
+		},
 	}, nil)
-	chain := svc.resolveProviderChain("gpt-4")
+	chain := svc.resolveProviderChain("openai")
 	hasPrimary, hasFallback := false, false
 	for _, p := range chain {
 		if p == "openai" {
@@ -57,6 +62,25 @@ func TestResolveProviderChain_IncludesPrimaryAndFallbacks(t *testing.T) {
 	}
 	if !hasFallback {
 		t.Error("chain should include fallbacks")
+	}
+}
+
+func TestSplitModelSpec(t *testing.T) {
+	tests := []struct {
+		input    string
+		provider string
+		model    string
+	}{
+		{"ollama/qwen3.5:35b-a3b", "ollama", "qwen3.5:35b-a3b"},
+		{"openrouter/openai/gpt-4o-mini", "openrouter", "openai/gpt-4o-mini"},
+		{"anthropic", "anthropic", ""},
+		{"gpt-4", "gpt-4", ""},
+	}
+	for _, tc := range tests {
+		p, m := splitModelSpec(tc.input)
+		if p != tc.provider || m != tc.model {
+			t.Errorf("splitModelSpec(%q) = (%q, %q), want (%q, %q)", tc.input, p, m, tc.provider, tc.model)
+		}
 	}
 }
 

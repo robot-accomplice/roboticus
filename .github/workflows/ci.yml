@@ -184,7 +184,30 @@ jobs:
           if-no-files-found: ignore
 
   # --------------------------------------------------------------------------
-  # Stage 2e: Architecture Constraints
+  # Stage 2e: Soak/Fuzz Battery
+  # Deterministic soak loops + bounded fuzzing (reduced rounds for CI).
+  # --------------------------------------------------------------------------
+  soak-fuzz:
+    name: Soak/Fuzz
+    needs: [lint]
+    runs-on: ubuntu-latest
+    env:
+      SOAK_ROUNDS: "2"
+      FUZZ_SECONDS: "20"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ env.GO_VERSION_FILE }}
+
+      - name: Run soak/fuzz battery
+        run: bash scripts/run-soak-fuzz.sh
+
+  # --------------------------------------------------------------------------
+  # Stage 2f: Architecture Constraints
   # Dedicated job so architecture drift is a visible, named check.
   # --------------------------------------------------------------------------
   architecture:
@@ -210,7 +233,7 @@ jobs:
   # --------------------------------------------------------------------------
   build:
     name: Build
-    needs: [test, test-integration, fuzz, parity-audit, architecture]
+    needs: [test, test-integration, fuzz, soak-fuzz, parity-audit, architecture]
     runs-on: ubuntu-latest
     env:
       COMMIT_SHA: ${{ github.sha }}
@@ -248,7 +271,7 @@ jobs:
   # --------------------------------------------------------------------------
   security:
     name: Security (govulncheck)
-    needs: [test, test-integration, fuzz, parity-audit, architecture]
+    needs: [test, test-integration, fuzz, soak-fuzz, parity-audit, architecture]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code

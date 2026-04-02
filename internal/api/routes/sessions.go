@@ -47,6 +47,8 @@ func ListSessions(store *db.Store) http.HandlerFunc {
 }
 
 // CreateSession creates a new session.
+// The scope_key is made unique per session to avoid UNIQUE constraint violations
+// on the (agent_id, scope_key) partial index for active sessions.
 func CreateSession(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
@@ -65,9 +67,13 @@ func CreateSession(store *db.Store) http.HandlerFunc {
 		}
 
 		id := db.NewID()
+		// Append session ID to scope to make it unique per session.
+		// The partial unique index on (agent_id, scope_key) WHERE status='active'
+		// prevents duplicate active sessions with the same scope.
+		scopeKey := req.Scope + ":" + id
 		_, err := store.ExecContext(r.Context(),
 			`INSERT INTO sessions (id, agent_id, scope_key) VALUES (?, ?, ?)`,
-			id, req.AgentID, req.Scope,
+			id, req.AgentID, scopeKey,
 		)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())

@@ -149,11 +149,18 @@ func (p *Pipeline) loadSessionByID(ctx context.Context, sessionID string, input 
 }
 
 func (p *Pipeline) createSession(ctx context.Context, input Input) (*Session, error) {
-	return p.createSessionWithScope(ctx, input, input.Platform)
+	// Use a unique scope per session (platform + session ID) to avoid
+	// UNIQUE constraint on (agent_id, scope_key) for active sessions.
+	id := db.NewID()
+	scopeKey := input.Platform + ":" + id
+	return p.createSessionWithID(ctx, input, id, scopeKey)
 }
 
 func (p *Pipeline) createSessionWithScope(ctx context.Context, input Input, scopeKey string) (*Session, error) {
-	id := db.NewID()
+	return p.createSessionWithID(ctx, input, db.NewID(), scopeKey)
+}
+
+func (p *Pipeline) createSessionWithID(ctx context.Context, input Input, id, scopeKey string) (*Session, error) {
 	_, err := p.store.ExecContext(ctx,
 		`INSERT INTO sessions (id, agent_id, scope_key) VALUES (?, ?, ?)`,
 		id, input.AgentID, scopeKey,
