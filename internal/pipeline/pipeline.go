@@ -22,6 +22,12 @@ type Outcome struct {
 	ReactTurns int    `json:"react_turns,omitempty"`
 	FromCache  bool   `json:"from_cache,omitempty"`
 	Stream     bool   `json:"stream,omitempty"`
+
+	// StreamRequest is the fully-prepared LLM request for streaming inference.
+	// Set when InferenceMode is InferenceStreaming and the pipeline has prepared
+	// full context (session history, memory, tools, system prompt). The SSE handler
+	// must use this instead of building its own request, to avoid context divergence.
+	StreamRequest *llm.Request `json:"-"`
 }
 
 // Input is the raw request to the pipeline.

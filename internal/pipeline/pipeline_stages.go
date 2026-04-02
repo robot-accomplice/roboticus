@@ -9,6 +9,7 @@ import (
 
 	"goboticus/internal/core"
 	"goboticus/internal/db"
+	"goboticus/internal/llm"
 )
 
 // runStandardInference executes the full ReAct loop via the ToolExecutor interface.
@@ -63,18 +64,23 @@ func (p *Pipeline) runStandardInference(ctx context.Context, cfg Config, session
 }
 
 // prepareStreamInference sets up streaming inference via the StreamPreparer interface.
+// Returns the fully-prepared LLM request in Outcome.StreamRequest so the SSE handler
+// uses the same context (session history, memory, tools, system prompt) as standard inference.
 func (p *Pipeline) prepareStreamInference(ctx context.Context, _ Config, session *Session, msgID string) (*Outcome, error) {
+	var streamReq *llm.Request
 	if p.streamer != nil {
-		_, err := p.streamer.PrepareStream(ctx, session)
+		req, err := p.streamer.PrepareStream(ctx, session)
 		if err != nil {
 			return nil, core.WrapError(core.ErrLLM, "stream preparation failed", err)
 		}
+		streamReq = req
 	}
 
 	return &Outcome{
-		SessionID: session.ID,
-		MessageID: msgID,
-		Stream:    true,
+		SessionID:     session.ID,
+		MessageID:     msgID,
+		Stream:        true,
+		StreamRequest: streamReq,
 	}, nil
 }
 

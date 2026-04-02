@@ -163,3 +163,37 @@ func (sl *SkillLoader) loadStructured(path string) (*LoadedSkill, error) {
 		SourcePath: path,
 	}, nil
 }
+
+// SkillMatcher matches user input against loaded skill triggers.
+type SkillMatcher struct {
+	skills []*LoadedSkill
+}
+
+// NewSkillMatcher creates a matcher from pre-loaded skills.
+func NewSkillMatcher(skills []*LoadedSkill) *SkillMatcher {
+	return &SkillMatcher{skills: skills}
+}
+
+// SetSkills replaces the loaded skill set (used by hot-reload).
+func (sm *SkillMatcher) SetSkills(skills []*LoadedSkill) {
+	sm.skills = skills
+}
+
+// Match finds the highest-priority skill whose triggers match the content.
+// Returns nil if no skill matches.
+func (sm *SkillMatcher) Match(content string) *LoadedSkill {
+	lower := strings.ToLower(content)
+
+	var best *LoadedSkill
+	for _, skill := range sm.skills {
+		for _, kw := range skill.Triggers() {
+			if strings.Contains(lower, strings.ToLower(kw)) {
+				if best == nil || skill.Manifest.Priority > best.Manifest.Priority {
+					best = skill
+				}
+				break
+			}
+		}
+	}
+	return best
+}

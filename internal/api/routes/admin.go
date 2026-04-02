@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/rs/zerolog/log"
 
 	"goboticus/internal/core"
 	"goboticus/internal/db"
@@ -122,8 +123,7 @@ func ListSkills(store *db.Store) http.HandlerFunc {
 // ReloadSkills reloads all skills from disk.
 func ReloadSkills() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// TODO: wire skill loader reload
-		writeJSON(w, http.StatusOK, map[string]string{"status": "reloaded"})
+		writeError(w, http.StatusNotImplemented, "skill reload not yet implemented")
 	}
 }
 
@@ -176,8 +176,7 @@ func GetAvailableModels(llmSvc *llm.Service) http.HandlerFunc {
 // GetChannelsStatus returns channel adapter health.
 func GetChannelsStatus(llmSvc *llm.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// TODO: wire channel adapter health checks
-		writeJSON(w, http.StatusOK, map[string]any{"channels": []any{}})
+		writeError(w, http.StatusNotImplemented, "channel health checks not yet implemented")
 	}
 }
 
@@ -250,9 +249,12 @@ func BreakerStatus(llmSvc *llm.Service) http.HandlerFunc {
 // BreakerReset resets a provider's circuit breaker.
 func BreakerReset(llmSvc *llm.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		_ = chi.URLParam(r, "provider")
-		// TODO: wire breaker reset by provider name
-		writeJSON(w, http.StatusOK, map[string]string{"status": "reset"})
+		provider := chi.URLParam(r, "provider")
+		if err := llmSvc.ResetBreaker(provider); err != nil {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "reset", "provider": provider})
 	}
 }
 
@@ -322,11 +324,20 @@ func CreateSubagent(store *db.Store) http.HandlerFunc {
 
 // --- WebSocket Ticket ---
 
+// TicketIssuer creates single-use authentication tickets.
+type TicketIssuer interface {
+	Issue() string
+}
+
 // IssueWSTicket creates a single-use WebSocket auth ticket.
-func IssueWSTicket() http.HandlerFunc {
+// If no ticket store is wired, returns 501.
+func IssueWSTicket(issuer ...TicketIssuer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ticket := db.NewID()
-		// TODO: store in short-lived ticket store
+		if len(issuer) == 0 || issuer[0] == nil {
+			writeError(w, http.StatusNotImplemented, "WebSocket ticket store not configured")
+			return
+		}
+		ticket := issuer[0].Issue()
 		writeJSON(w, http.StatusOK, map[string]string{"ticket": ticket})
 	}
 }
@@ -334,10 +345,12 @@ func IssueWSTicket() http.HandlerFunc {
 // --- Webhooks ---
 
 // WebhookTelegram handles inbound Telegram webhook messages.
-func WebhookTelegram(p *pipeline.Pipeline) http.HandlerFunc {
+// Returns 200 to prevent retry storms from Telegram servers, but logs a warning
+// that the adapter is not yet wired. Will be implemented in Phase 2 (channel adapters).
+func WebhookTelegram(p pipeline.Runner) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// TODO: wire Telegram adapter (Phase 5)
-		writeJSON(w, http.StatusOK, map[string]string{"status": "received"})
+		log.Warn().Str("path", r.URL.Path).Msg("Telegram webhook received but adapter not wired — message dropped")
+		writeJSON(w, http.StatusOK, map[string]string{"status": "dropped", "reason": "adapter not configured"})
 	}
 }
 
@@ -365,9 +378,11 @@ func WebhookWhatsAppVerify(verifyToken string) http.HandlerFunc {
 }
 
 // WebhookWhatsApp handles inbound WhatsApp messages.
-func WebhookWhatsApp(p *pipeline.Pipeline) http.HandlerFunc {
+// Returns 200 to prevent retry storms from Meta servers, but logs a warning
+// that the adapter is not yet wired. Will be implemented in Phase 2 (channel adapters).
+func WebhookWhatsApp(p pipeline.Runner) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// TODO: wire WhatsApp adapter (Phase 5)
-		writeJSON(w, http.StatusOK, map[string]string{"status": "received"})
+		log.Warn().Str("path", r.URL.Path).Msg("WhatsApp webhook received but adapter not wired — message dropped")
+		writeJSON(w, http.StatusOK, map[string]string{"status": "dropped", "reason": "adapter not configured"})
 	}
 }

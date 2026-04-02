@@ -3,6 +3,7 @@ package routes
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -197,7 +198,8 @@ func GetCronJob(store *db.Store) http.HandlerFunc {
 	}
 }
 
-// UpdateCronJob updates a cron job.
+// UpdateCronJob updates a cron job atomically. All field updates happen in a
+// single transaction — on any failure, all changes are rolled back.
 func UpdateCronJob(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
@@ -214,23 +216,52 @@ func UpdateCronJob(store *db.Store) http.HandlerFunc {
 			return
 		}
 
+		// Build a single UPDATE with dynamic SET clauses.
+		var setClauses []string
+		var args []any
+
 		if req.Name != nil {
-			_, _ = store.ExecContext(r.Context(), `UPDATE cron_jobs SET name = ? WHERE id = ?`, *req.Name, id)
+			setClauses = append(setClauses, "name = ?")
+			args = append(args, *req.Name)
 		}
 		if req.Description != nil {
-			_, _ = store.ExecContext(r.Context(), `UPDATE cron_jobs SET description = ? WHERE id = ?`, *req.Description, id)
+			setClauses = append(setClauses, "description = ?")
+			args = append(args, *req.Description)
 		}
 		if req.ScheduleKind != nil {
-			_, _ = store.ExecContext(r.Context(), `UPDATE cron_jobs SET schedule_kind = ? WHERE id = ?`, *req.ScheduleKind, id)
+			setClauses = append(setClauses, "schedule_kind = ?")
+			args = append(args, *req.ScheduleKind)
 		}
 		if req.ScheduleExpr != nil {
-			_, _ = store.ExecContext(r.Context(), `UPDATE cron_jobs SET schedule_expr = ? WHERE id = ?`, *req.ScheduleExpr, id)
+			setClauses = append(setClauses, "schedule_expr = ?")
+			args = append(args, *req.ScheduleExpr)
 		}
 		if req.Enabled != nil {
-			_, _ = store.ExecContext(r.Context(), `UPDATE cron_jobs SET enabled = ? WHERE id = ?`, *req.Enabled, id)
+			setClauses = append(setClauses, "enabled = ?")
+			args = append(args, *req.Enabled)
 		}
 		if req.PayloadJSON != nil {
-			_, _ = store.ExecContext(r.Context(), `UPDATE cron_jobs SET payload_json = ? WHERE id = ?`, *req.PayloadJSON, id)
+			setClauses = append(setClauses, "payload_json = ?")
+			args = append(args, *req.PayloadJSON)
+		}
+
+		if len(setClauses) == 0 {
+			writeJSON(w, http.StatusOK, map[string]string{"status": "no changes"})
+			return
+		}
+
+		args = append(args, id)
+		query := "UPDATE cron_jobs SET " + strings.Join(setClauses, ", ") + " WHERE id = ?"
+
+		result, err := store.ExecContext(r.Context(), query, args...)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to update cron job")
+			return
+		}
+		rows, _ := result.RowsAffected()
+		if rows == 0 {
+			writeError(w, http.StatusNotFound, "cron job not found")
+			return
 		}
 
 		writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
@@ -251,7 +282,7 @@ func DeleteCronJob(store *db.Store) http.HandlerFunc {
 }
 
 // RunCronJobNow triggers immediate execution of a cron job.
-func RunCronJobNow(p *pipeline.Pipeline, store *db.Store) http.HandlerFunc {
+func RunCronJobNow(p pipeline.Runner, store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
 		row := store.QueryRowContext(r.Context(),
@@ -270,7 +301,7 @@ func RunCronJobNow(p *pipeline.Pipeline, store *db.Store) http.HandlerFunc {
 			Platform:  "cron",
 		}
 
-		outcome, err := p.Run(r.Context(), pipeline.PresetCron(), input)
+		outcome, err := pipeline.RunPipeline(r.Context(), p, pipeline.PresetCron(), input)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return

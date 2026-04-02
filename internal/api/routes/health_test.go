@@ -81,13 +81,17 @@ func TestReloadSkills(t *testing.T) {
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Errorf("status = %d", rec.Code)
+	if rec.Code != http.StatusNotImplemented {
+		t.Errorf("status = %d, want 501", rec.Code)
 	}
 }
 
+type mockTicketIssuer struct{}
+
+func (m *mockTicketIssuer) Issue() string { return "wst_test_ticket_1234567890" }
+
 func TestIssueWSTicket(t *testing.T) {
-	handler := IssueWSTicket()
+	handler := IssueWSTicket(&mockTicketIssuer{})
 	req := httptest.NewRequest("POST", "/api/ws-ticket", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -96,6 +100,17 @@ func TestIssueWSTicket(t *testing.T) {
 	ticket := body["ticket"].(string)
 	if len(ticket) < 10 {
 		t.Errorf("ticket too short: %s", ticket)
+	}
+}
+
+func TestIssueWSTicket_NoIssuer(t *testing.T) {
+	handler := IssueWSTicket()
+	req := httptest.NewRequest("POST", "/api/ws-ticket", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotImplemented {
+		t.Errorf("expected 501, got %d", rec.Code)
 	}
 }
 
@@ -117,8 +132,8 @@ func TestTestChannel(t *testing.T) {
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Errorf("status = %d", rec.Code)
+	if rec.Code != http.StatusNotImplemented {
+		t.Errorf("status = %d, want 501", rec.Code)
 	}
 }
 

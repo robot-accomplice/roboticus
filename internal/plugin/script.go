@@ -1,14 +1,12 @@
 package plugin
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
@@ -97,29 +95,24 @@ func (sp *ScriptPlugin) ExecuteTool(ctx context.Context, toolName string, input 
 	ctx, cancel := context.WithTimeout(ctx, sp.timeout)
 	defer cancel()
 
-	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
-		cmd = exec.CommandContext(ctx, "cmd", "/C", scriptPath)
-	} else {
-		cmd = exec.CommandContext(ctx, "sh", "-c", scriptPath)
-	}
-
-	// Pass input via environment variable.
-	cmd.Env = append(os.Environ(), fmt.Sprintf("GOBOTICUS_INPUT=%s", string(input)))
+	// Build environment: inherit OS env + plugin env + input.
+	env := os.Environ()
+	env = append(env, fmt.Sprintf("GOBOTICUS_INPUT=%s", string(input)))
 	for k, v := range sp.env {
-		cmd.Env = append(cmd.Env, k+"="+v)
+		env = append(env, k+"="+v)
 	}
-	cmd.Dir = sp.dir
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	// Use the injected ProcessRunner if available, otherwise fall back to OS runner.
+	runner := sp.runner
+	if runner == nil {
+		runner = core.OSProcessRunner{}
+	}
 
-	err := cmd.Run()
+	stdout, stderr, err := runner.Run(ctx, scriptPath, nil, sp.dir, env)
 
 	// Truncate output at 10MB.
 	const maxOutput = 10 * 1024 * 1024
-	output := stdout.String()
+	output := string(stdout)
 	if len(output) > maxOutput {
 		output = output[:maxOutput] + "\n...[truncated]"
 	}
@@ -127,7 +120,7 @@ func (sp *ScriptPlugin) ExecuteTool(ctx context.Context, toolName string, input 
 	if err != nil {
 		return &ToolResult{
 			Success: false,
-			Output:  fmt.Sprintf("error: %v\nstderr: %s", err, stderr.String()),
+			Output:  fmt.Sprintf("error: %v\nstderr: %s", err, string(stderr)),
 		}, nil
 	}
 

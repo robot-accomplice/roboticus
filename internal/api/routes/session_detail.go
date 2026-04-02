@@ -180,20 +180,20 @@ func GetSkillsCatalog() http.HandlerFunc {
 // InstallSkillFromCatalog installs a skill from the catalog.
 func InstallSkillFromCatalog() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "installed"})
+		writeError(w, http.StatusNotImplemented, "skill catalog installation not yet implemented")
 	}
 }
 
 // ActivateSkillFromCatalog activates a catalog skill.
 func ActivateSkillFromCatalog() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "activated"})
+		writeError(w, http.StatusNotImplemented, "skill catalog activation not yet implemented")
 	}
 }
 
 // InstallPlugin installs a plugin.
 func InstallPlugin() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "installed"})
+		writeError(w, http.StatusNotImplemented, "plugin installation not yet implemented")
 	}
 }

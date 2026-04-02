@@ -22,7 +22,7 @@ import (
 // AppState holds all shared state for the API server.
 type AppState struct {
 	Store     *db.Store
-	Pipeline  *pipeline.Pipeline
+	Pipeline  pipeline.Runner // connectors must depend on the interface, not *pipeline.Pipeline
 	LLM       *llm.Service
 	Config    *core.Config
 	EventBus  *EventBus

@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
+
+	"github.com/rs/zerolog/log"
 
 	"goboticus/internal/llm"
 	"goboticus/internal/pipeline"
@@ -23,7 +26,7 @@ type agentMessageRequest struct {
 }
 
 // AgentMessage handles standard (non-streaming) inference requests.
-func AgentMessage(p *pipeline.Pipeline, bus ...EventPublisher) http.HandlerFunc {
+func AgentMessage(p pipeline.Runner, bus ...EventPublisher) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req agentMessageRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -68,7 +71,10 @@ func AgentMessage(p *pipeline.Pipeline, bus ...EventPublisher) http.HandlerFunc 
 }
 
 // AgentMessageStream handles SSE streaming inference requests.
-func AgentMessageStream(p *pipeline.Pipeline, llmSvc *llm.Service) http.HandlerFunc {
+// The pipeline prepares full context (session history, memory, tools, system prompt)
+// via StreamPreparer, returned in outcome.StreamRequest. This handler only does
+// SSE plumbing — it never builds its own LLM request.
+func AgentMessageStream(p pipeline.Runner, llmSvc *llm.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req agentMessageRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -91,7 +97,9 @@ func AgentMessageStream(p *pipeline.Pipeline, llmSvc *llm.Service) http.HandlerF
 			Platform:  "api",
 		}
 
-		// Run pipeline to get session set up.
+		// Run pipeline: validates input, resolves session, runs injection defense,
+		// stores user message, and prepares the full streaming LLM request with
+		// session context, memory retrieval, tools, and system prompt.
 		outcome, err := pipeline.RunPipeline(r.Context(), p, pipeline.PresetStreaming(), input)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
@@ -99,10 +107,24 @@ func AgentMessageStream(p *pipeline.Pipeline, llmSvc *llm.Service) http.HandlerF
 		}
 
 		if !outcome.Stream {
-			// Non-stream result (e.g., cache hit).
+			// Non-stream result (e.g., cache hit, shortcut, skill match).
 			writeJSON(w, http.StatusOK, outcome)
 			return
 		}
+
+		// Use the pipeline-prepared request. This includes full session history,
+		// system prompt, memory context, and tool definitions — identical context
+		// to what standard (non-streaming) inference would use.
+		streamReq := outcome.StreamRequest
+		if streamReq == nil {
+			// Fallback: if StreamPreparer was not wired, build a minimal request.
+			// This is a degraded path — log it so operators notice.
+			log.Warn().Msg("SSE streaming without StreamPreparer — context will be incomplete")
+			streamReq = &llm.Request{
+				Messages: []llm.Message{{Role: "user", Content: req.Content}},
+			}
+		}
+		streamReq.Stream = true
 
 		// Set up SSE headers.
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -115,14 +137,12 @@ func AgentMessageStream(p *pipeline.Pipeline, llmSvc *llm.Service) http.HandlerF
 			return
 		}
 
-		// Start LLM stream.
-		streamReq := &llm.Request{
-			Messages: []llm.Message{{Role: "user", Content: req.Content}},
-			Stream:   true,
-		}
+		// Stream from LLM using the pipeline-prepared request.
 		chunks, errs := llmSvc.Stream(r.Context(), streamReq)
 
+		var fullContent strings.Builder
 		for chunk := range chunks {
+			fullContent.WriteString(chunk.Delta)
 			data, _ := json.Marshal(map[string]string{"delta": chunk.Delta})
 			_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
 			flusher.Flush()
@@ -130,9 +150,9 @@ func AgentMessageStream(p *pipeline.Pipeline, llmSvc *llm.Service) http.HandlerF
 
 		// Check for stream errors.
 		select {
-		case err := <-errs:
-			if err != nil {
-				data, _ := json.Marshal(map[string]string{"error": err.Error()})
+		case streamErr := <-errs:
+			if streamErr != nil {
+				data, _ := json.Marshal(map[string]string{"error": streamErr.Error()})
 				_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
 				flusher.Flush()
 			}

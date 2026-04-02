@@ -142,7 +142,7 @@ func ListMessages(store *db.Store) http.HandlerFunc {
 }
 
 // PostMessage sends a message to a session via the pipeline.
-func PostMessage(p *pipeline.Pipeline) http.HandlerFunc {
+func PostMessage(p pipeline.Runner) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessionID := chi.URLParam(r, "id")
 		var req struct {
@@ -169,7 +169,7 @@ func PostMessage(p *pipeline.Pipeline) http.HandlerFunc {
 			Platform:  "api",
 		}
 
-		outcome, err := p.Run(r.Context(), pipeline.PresetAPI(), input)
+		outcome, err := pipeline.RunPipeline(r.Context(), p, pipeline.PresetAPI(), input)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return

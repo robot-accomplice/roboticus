@@ -136,11 +136,7 @@ func UpdateConfig(store *db.Store) http.HandlerFunc {
 // TestChannel sends a test message to a channel.
 func TestChannel() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		name := chi.URLParam(r, "name")
-		writeJSON(w, http.StatusOK, map[string]any{
-			"channel": name,
-			"status":  "test sent",
-		})
+		writeError(w, http.StatusNotImplemented, "channel test not yet implemented")
 	}
 }
 

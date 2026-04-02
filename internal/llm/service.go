@@ -332,6 +332,16 @@ type ProviderStatus struct {
 	IsLocal bool         `json:"is_local"`
 }
 
+// ResetBreaker resets the circuit breaker for a named provider.
+// Returns an error if the provider does not exist.
+func (s *Service) ResetBreaker(providerName string) error {
+	if _, ok := s.providers[providerName]; !ok {
+		return fmt.Errorf("unknown provider: %s", providerName)
+	}
+	s.breakers.Get(providerName).Reset()
+	return nil
+}
+
 // Status returns the health of all providers (for /api/health).
 // providers is write-once (set only in NewService), so concurrent reads are safe.
 func (s *Service) Status() []ProviderStatus {

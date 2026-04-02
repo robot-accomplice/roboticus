@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"goboticus/internal/db"
 )
 
 var ingestCmd = &cobra.Command{
@@ -72,6 +74,20 @@ func runIngest(cmd *cobra.Command, args []string) error {
 
 	fmt.Printf("Found %d files to ingest\n", len(files))
 
+	// Open database for persistence (unless dry-run).
+	var store *db.Store
+	if !dryRun {
+		cfg, err := loadConfig()
+		if err != nil {
+			return fmt.Errorf("load config: %w", err)
+		}
+		store, err = db.Open(cfg.Database.Path)
+		if err != nil {
+			return fmt.Errorf("open database: %w", err)
+		}
+		defer func() { _ = store.Close() }()
+	}
+
 	totalChunks := 0
 	for _, file := range files {
 		data, err := os.ReadFile(file)
@@ -89,13 +105,33 @@ func runIngest(cmd *cobra.Command, args []string) error {
 			continue
 		}
 
+		// Derive category from file path relative to ingest root.
+		relPath, _ := filepath.Rel(dirPath, file)
+		if relPath == "" {
+			relPath = filepath.Base(file)
+		}
+		category := "ingested:" + strings.TrimSuffix(filepath.Base(file), filepath.Ext(file))
+
+		for i, chunk := range chunks {
+			chunkKey := fmt.Sprintf("%s#chunk%d", relPath, i)
+			id := db.NewID()
+			_, err := store.ExecContext(cmd.Context(),
+				`INSERT OR REPLACE INTO semantic_memory (id, category, key, value, confidence)
+				 VALUES (?, ?, ?, ?, 0.7)`,
+				id, category, chunkKey, chunk,
+			)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: failed to store chunk %s: %v\n", chunkKey, err)
+			}
+		}
+
 		fmt.Printf("  Ingested %s: %d chunks\n", file, len(chunks))
 	}
 
 	if dryRun {
 		fmt.Printf("\nDry run: would ingest %d chunks from %d files\n", totalChunks, len(files))
 	} else {
-		fmt.Printf("\nIngested %d chunks from %d files\n", totalChunks, len(files))
+		fmt.Printf("\nIngested %d chunks from %d files into semantic memory\n", totalChunks, len(files))
 	}
 
 	return nil

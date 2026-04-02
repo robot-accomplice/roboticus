@@ -219,6 +219,33 @@ func (a *nicknameAdapter) Refine(ctx context.Context, session *pipeline.Session)
 	}
 }
 
+// skillAdapter bridges agent.SkillMatcher → pipeline.SkillMatcher.
+type skillAdapter struct {
+	matcher *agent.SkillMatcher
+}
+
+func (a *skillAdapter) TryMatch(_ context.Context, session *pipeline.Session, content string) *pipeline.Outcome {
+	skill := a.matcher.Match(content)
+	if skill == nil {
+		return nil
+	}
+
+	switch skill.Type {
+	case agent.SkillInstruction:
+		// Instruction skills return their body directly as the response.
+		return &pipeline.Outcome{
+			SessionID: session.ID,
+			Content:   skill.Body,
+		}
+	case agent.SkillStructured:
+		// Structured skills require tool chain execution — not yet supported.
+		// Fall through to normal inference.
+		log.Debug().Str("skill", skill.Name()).Msg("structured skill matched but tool chain execution not yet implemented")
+		return nil
+	}
+	return nil
+}
+
 // streamAdapter wraps agent context builder deps → pipeline.StreamPreparer.
 type streamAdapter struct {
 	llmSvc    *llm.Service
@@ -354,6 +381,15 @@ func New(cfg *core.Config) (*Daemon, error) {
 	}, store)
 	guards := pipeline.DefaultGuardChain()
 
+	// Load skills from configured directory.
+	skillLoader := agent.NewSkillLoader()
+	var loadedSkills []*agent.LoadedSkill
+	if cfg.Skills.Directory != "" {
+		loadedSkills = skillLoader.LoadFromDir(cfg.Skills.Directory)
+		log.Info().Int("count", len(loadedSkills)).Str("dir", cfg.Skills.Directory).Msg("loaded skills")
+	}
+	skillMatcher := agent.NewSkillMatcher(loadedSkills)
+
 	dq := channel.NewDeliveryQueue(store)
 	router := channel.NewRouter(dq)
 
@@ -362,7 +398,7 @@ func New(cfg *core.Config) (*Daemon, error) {
 		LLM:       llmSvc,
 		Injection: &injectionAdapter{det: injection},
 		Retriever: &retrieverAdapter{r: retriever},
-		Skills:    nil, // skill matching wired later
+		Skills:    &skillAdapter{matcher: skillMatcher},
 		Executor: &executorAdapter{
 			llmSvc:    llmSvc,
 			tools:     tools,
