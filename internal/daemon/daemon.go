@@ -105,12 +105,13 @@ func (a *ingestorAdapter) IngestTurn(ctx context.Context, session *pipeline.Sess
 
 // executorAdapter wraps the full agent loop deps → pipeline.ToolExecutor.
 type executorAdapter struct {
-	llmSvc    *llm.Service
-	tools     *agent.ToolRegistry
-	policy    *agent.PolicyEngine
-	injection *agent.InjectionDetector
-	memMgr    *agent.MemoryManager
-	retriever *agent.MemoryRetriever
+	llmSvc       *llm.Service
+	tools        *agent.ToolRegistry
+	policy       *agent.PolicyEngine
+	injection    *agent.InjectionDetector
+	memMgr       *agent.MemoryManager
+	retriever    *agent.MemoryRetriever
+	promptConfig agent.PromptConfig
 }
 
 func (a *executorAdapter) RunLoop(ctx context.Context, session *pipeline.Session) (string, int, error) {
@@ -119,9 +120,9 @@ func (a *executorAdapter) RunLoop(ctx context.Context, session *pipeline.Session
 	// Build context: system prompt + memory retrieval.
 	ctxBuilder := agent.NewContextBuilder(agent.DefaultContextConfig())
 
-	prompt := agent.BuildSystemPrompt(agent.PromptConfig{
-		AgentName: as.AgentName,
-	})
+	cfg := a.promptConfig
+	cfg.AgentName = as.AgentName
+	prompt := agent.BuildSystemPrompt(cfg)
 	ctxBuilder.SetSystemPrompt(prompt)
 
 	// Set tool definitions.
@@ -248,9 +249,10 @@ func (a *skillAdapter) TryMatch(_ context.Context, session *pipeline.Session, co
 
 // streamAdapter wraps agent context builder deps → pipeline.StreamPreparer.
 type streamAdapter struct {
-	llmSvc    *llm.Service
-	tools     *agent.ToolRegistry
-	retriever *agent.MemoryRetriever
+	llmSvc       *llm.Service
+	tools        *agent.ToolRegistry
+	retriever    *agent.MemoryRetriever
+	promptConfig agent.PromptConfig
 }
 
 func (a *streamAdapter) PrepareStream(ctx context.Context, session *pipeline.Session) (*llm.Request, error) {
@@ -258,9 +260,9 @@ func (a *streamAdapter) PrepareStream(ctx context.Context, session *pipeline.Ses
 
 	ctxBuilder := agent.NewContextBuilder(agent.DefaultContextConfig())
 
-	prompt := agent.BuildSystemPrompt(agent.PromptConfig{
-		AgentName: as.AgentName,
-	})
+	cfg := a.promptConfig
+	cfg.AgentName = as.AgentName
+	prompt := agent.BuildSystemPrompt(cfg)
 	ctxBuilder.SetSystemPrompt(prompt)
 
 	if a.tools != nil {
@@ -390,6 +392,37 @@ func New(cfg *core.Config) (*Daemon, error) {
 	}
 	skillMatcher := agent.NewSkillMatcher(loadedSkills)
 
+	// Load personality files from workspace.
+	osCfg, err := core.LoadOsConfig(cfg.Agent.Workspace, "OS.toml")
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to load OS personality, using defaults")
+		osCfg = core.DefaultOsConfig()
+	}
+	fwCfg, err := core.LoadFirmwareConfig(cfg.Agent.Workspace, "FIRMWARE.toml")
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to load firmware, using defaults")
+		fwCfg = core.DefaultFirmwareConfig()
+	}
+
+	// Build shared prompt config with personality and workspace context.
+	var skillNames []string
+	for _, s := range loadedSkills {
+		skillNames = append(skillNames, s.Name())
+	}
+	basePromptCfg := agent.PromptConfig{
+		AgentName:   cfg.Agent.Name,
+		Firmware:    core.FormatFirmwareRules(fwCfg),
+		Personality: core.FormatOsPersonality(osCfg),
+		Workspace:   cfg.Agent.Workspace,
+		Skills:      skillNames,
+		Model:       cfg.Models.Primary,
+	}
+	log.Info().
+		Str("agent", cfg.Agent.Name).
+		Bool("has_firmware", basePromptCfg.Firmware != "").
+		Bool("has_personality", basePromptCfg.Personality != "").
+		Msg("personality loaded")
+
 	dq := channel.NewDeliveryQueue(store)
 	router := channel.NewRouter(dq)
 
@@ -400,19 +433,21 @@ func New(cfg *core.Config) (*Daemon, error) {
 		Retriever: &retrieverAdapter{r: retriever},
 		Skills:    &skillAdapter{matcher: skillMatcher},
 		Executor: &executorAdapter{
-			llmSvc:    llmSvc,
-			tools:     tools,
-			policy:    policyEngine,
-			injection: injection,
-			memMgr:    memMgr,
-			retriever: retriever,
+			llmSvc:       llmSvc,
+			tools:        tools,
+			policy:       policyEngine,
+			injection:    injection,
+			memMgr:       memMgr,
+			retriever:    retriever,
+			promptConfig: basePromptCfg,
 		},
 		Ingestor: &ingestorAdapter{m: memMgr},
 		Refiner:  &nicknameAdapter{llm: llmSvc, store: store},
 		Streamer: &streamAdapter{
-			llmSvc:    llmSvc,
-			tools:     tools,
-			retriever: retriever,
+			llmSvc:       llmSvc,
+			tools:        tools,
+			retriever:    retriever,
+			promptConfig: basePromptCfg,
 		},
 		Guards:   guards,
 		BGWorker: bgWorker,
