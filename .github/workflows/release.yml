@@ -1,0 +1,180 @@
+# ============================================================================
+# Goboticus Release Pipeline
+# ============================================================================
+# Triggered by pushing a version tag: v2025.04.02, v2025.04.02.1, etc.
+# Builds cross-platform binaries, generates checksums, creates GitHub Release.
+#
+# Versioning: YYYY.MM.DD[.N]
+#   v2025.04.02   — first release of the day
+#   v2025.04.02.1 — same-day patch
+#
+# All binaries are statically linked (CGO_ENABLED=0, pure-Go SQLite).
+# ============================================================================
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]*"
+
+permissions:
+  contents: write  # required to create GitHub Releases and upload assets
+
+env:
+  GO_VERSION_FILE: go.mod
+
+jobs:
+  # --------------------------------------------------------------------------
+  # Gate: Run tests before building release artifacts.
+  # Prevents shipping a broken tag.
+  # --------------------------------------------------------------------------
+  test:
+    name: Pre-release Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ env.GO_VERSION_FILE }}
+
+      - name: Run go vet
+        run: go vet ./...
+
+      - name: Run tests with race detector
+        run: go test -race -timeout 300s ./...
+
+      - name: Run smoke test
+        run: go test -v -run TestLiveSmokeTest -timeout 120s .
+
+      - name: Run architecture tests
+        run: go test -v -run TestArchitecture ./internal/api/
+
+  # --------------------------------------------------------------------------
+  # Build: Cross-compile for all target platforms.
+  # Uses a matrix to produce one artifact per GOOS/GOARCH pair.
+  # --------------------------------------------------------------------------
+  build:
+    name: Build (${{ matrix.goos }}/${{ matrix.goarch }})
+    needs: [test]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            suffix: ""
+          - goos: linux
+            goarch: arm64
+            suffix: ""
+          - goos: darwin
+            goarch: amd64
+            suffix: ""
+          - goos: darwin
+            goarch: arm64
+            suffix: ""
+          - goos: windows
+            goarch: amd64
+            suffix: ".exe"
+    env:
+      TAG_NAME: ${{ github.ref_name }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ env.GO_VERSION_FILE }}
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${TAG_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build binary
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          SUFFIX: ${{ matrix.suffix }}
+          BUILD_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          BINARY_NAME="goboticus-${GOOS}-${GOARCH}${SUFFIX}"
+          go build -trimpath \
+            -ldflags="-s -w -X goboticus/cmd.version=${BUILD_VERSION}" \
+            -o "${BINARY_NAME}" .
+          echo "binary=${BINARY_NAME}" >> "$GITHUB_ENV"
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: goboticus-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: ${{ env.binary }}
+          retention-days: 7
+
+  # --------------------------------------------------------------------------
+  # Release: Collect all binaries, generate checksums, publish GitHub Release.
+  # --------------------------------------------------------------------------
+  release:
+    name: Publish Release
+    needs: [build]
+    runs-on: ubuntu-latest
+    env:
+      TAG_NAME: ${{ github.ref_name }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # needed for changelog generation
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/
+          pattern: goboticus-*
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -lh dist/
+
+      - name: Generate SHA-256 checksums
+        working-directory: dist
+        run: |
+          sha256sum goboticus-* > checksums-sha256.txt
+          cat checksums-sha256.txt
+
+      - name: Generate changelog from commits
+        id: changelog
+        run: |
+          # Find the previous tag for changelog diff.
+          PREV_TAG=$(git tag --sort=-v:refname | grep -E '^v[0-9]' | head -2 | tail -1)
+          if [ -z "${PREV_TAG}" ] || [ "${PREV_TAG}" = "${TAG_NAME}" ]; then
+            echo "body=Initial release." >> "$GITHUB_OUTPUT"
+          else
+            CHANGES=$(git log "${PREV_TAG}..${TAG_NAME}" --pretty=format:"- %s (%h)" --no-merges | head -50)
+            # Write multiline output safely via delimiter.
+            {
+              echo "body<<CHANGELOG_EOF"
+              echo "## Changes since ${PREV_TAG}"
+              echo ""
+              echo "${CHANGES}"
+              echo ""
+              echo "CHANGELOG_EOF"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Goboticus ${{ github.ref_name }}"
+          body: ${{ steps.changelog.outputs.body }}
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-rc') }}
+          files: |
+            dist/goboticus-*
+            dist/checksums-sha256.txt
+          fail_on_unmatched_files: true
