@@ -27,6 +27,7 @@ var (
 	ErrUnauthorized     = errors.New("unauthorized")
 	ErrRateLimited      = errors.New("rate limited")
 	ErrCreditExhausted  = errors.New("credit exhausted")
+	ErrGuardExhausted   = errors.New("guard retries exhausted")
 )
 
 // GobError wraps an error with a category and optional context.
