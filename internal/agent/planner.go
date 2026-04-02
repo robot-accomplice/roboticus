@@ -5,11 +5,11 @@ import (
 	"sort"
 )
 
-// PlannedAction is the action type the planner recommends.
-type PlannedAction int
+// TaskPlannedAction is the action type the task planner recommends.
+type TaskPlannedAction int
 
 const (
-	ActionAnswerDirectly PlannedAction = iota
+	ActionAnswerDirectly TaskPlannedAction = iota
 	ActionContinueCentralized
 	ActionInspectMemory
 	ActionComposeSkill
@@ -19,7 +19,7 @@ const (
 	ActionNormalizationRetry
 )
 
-func (a PlannedAction) String() string {
+func (a TaskPlannedAction) String() string {
 	switch a {
 	case ActionAnswerDirectly:
 		return "answer_directly"
@@ -42,17 +42,17 @@ func (a PlannedAction) String() string {
 	}
 }
 
-// ActionCandidate is a scored action proposal.
-type ActionCandidate struct {
-	Action     PlannedAction
+// TaskActionCandidate is a scored action proposal.
+type TaskActionCandidate struct {
+	Action     TaskPlannedAction
 	Confidence float64
 	Rationale  string
 }
 
-// ActionPlan is the planner's output: ranked candidates and selected action.
-type ActionPlan struct {
-	Candidates []ActionCandidate
-	Selected   PlannedAction
+// TaskActionPlan is the task planner's output: ranked candidates and selected action.
+type TaskActionPlan struct {
+	Candidates []TaskActionCandidate
+	Selected   TaskPlannedAction
 	Rationale  string
 }
 
@@ -68,19 +68,19 @@ func NewActionPlanner(enabled bool) *ActionPlanner {
 }
 
 // Plan evaluates 10 deterministic rules and returns a ranked action plan.
-func (p *ActionPlanner) Plan(state *TaskOperatingState) ActionPlan {
+func (p *ActionPlanner) Plan(state *TaskOperatingState) TaskActionPlan {
 	if !p.enabled || state == nil {
-		return ActionPlan{
+		return TaskActionPlan{
 			Selected:  ActionContinueCentralized,
 			Rationale: "planner disabled",
 		}
 	}
 
-	var candidates []ActionCandidate
+	var candidates []TaskActionCandidate
 
 	// Rule 1: Conversation → AnswerDirectly.
 	if state.Classification == ClassConversation {
-		candidates = append(candidates, ActionCandidate{
+		candidates = append(candidates, TaskActionCandidate{
 			Action: ActionAnswerDirectly, Confidence: 0.95,
 			Rationale: "conversational turn, no task routing needed",
 		})
@@ -88,7 +88,7 @@ func (p *ActionPlanner) Plan(state *TaskOperatingState) ActionPlan {
 
 	// Rule 2: Provider breaker open → ReturnBlocker.
 	if state.RuntimeConstraint.BreakerOpen {
-		candidates = append(candidates, ActionCandidate{
+		candidates = append(candidates, TaskActionCandidate{
 			Action: ActionReturnBlocker, Confidence: 0.8,
 			Rationale: "provider circuit breaker is open",
 		})
@@ -96,7 +96,7 @@ func (p *ActionPlanner) Plan(state *TaskOperatingState) ActionPlan {
 
 	// Rule 3: Explicit workflow + matching roster → DelegateToSpecialist.
 	if state.RosterFit.ExplicitWorkflow && state.RosterFit.FitCount > 0 {
-		candidates = append(candidates, ActionCandidate{
+		candidates = append(candidates, TaskActionCandidate{
 			Action: ActionDelegateToSpecialist, Confidence: 0.9,
 			Rationale: fmt.Sprintf("explicit workflow matches %d specialist(s)", state.RosterFit.FitCount),
 		})
@@ -104,7 +104,7 @@ func (p *ActionPlanner) Plan(state *TaskOperatingState) ActionPlan {
 
 	// Rule 3b: Explicit workflow + named plugin tool match → ContinueCentralized.
 	if state.RosterFit.ExplicitWorkflow && state.RosterFit.NamedToolMatch {
-		candidates = append(candidates, ActionCandidate{
+		candidates = append(candidates, TaskActionCandidate{
 			Action: ActionContinueCentralized, Confidence: 0.88,
 			Rationale: "explicit workflow resolved to named plugin tool",
 		})
@@ -112,7 +112,7 @@ func (p *ActionPlanner) Plan(state *TaskOperatingState) ActionPlan {
 
 	// Rule 4: Explicit workflow + empty roster + creator authority → ComposeSubagent.
 	if state.RosterFit.ExplicitWorkflow && state.RosterFit.FitCount == 0 {
-		candidates = append(candidates, ActionCandidate{
+		candidates = append(candidates, TaskActionCandidate{
 			Action: ActionComposeSubagent, Confidence: 0.85,
 			Rationale: "explicit workflow but no matching specialist",
 		})
@@ -120,7 +120,7 @@ func (p *ActionPlanner) Plan(state *TaskOperatingState) ActionPlan {
 
 	// Rule 5: Delegation recommended + fit exists → DelegateToSpecialist.
 	if state.RosterFit.FitCount > 0 && state.Classification == ClassTask {
-		candidates = append(candidates, ActionCandidate{
+		candidates = append(candidates, TaskActionCandidate{
 			Action: ActionDelegateToSpecialist, Confidence: 0.75,
 			Rationale: "task classification with available specialist",
 		})
@@ -128,7 +128,7 @@ func (p *ActionPlanner) Plan(state *TaskOperatingState) ActionPlan {
 
 	// Rule 6: Memory recall gap → InspectMemory.
 	if state.MemoryConfidence.RecallGap && !state.RuntimeConstraint.BudgetPressured {
-		candidates = append(candidates, ActionCandidate{
+		candidates = append(candidates, TaskActionCandidate{
 			Action: ActionInspectMemory, Confidence: 0.7,
 			Rationale: "recall gap detected, deeper retrieval recommended",
 		})
@@ -136,7 +136,7 @@ func (p *ActionPlanner) Plan(state *TaskOperatingState) ActionPlan {
 
 	// Rule 7: Missing skills + task → ComposeSkill.
 	if len(state.SkillFit.MissingSkills) > 0 && state.Classification == ClassTask {
-		candidates = append(candidates, ActionCandidate{
+		candidates = append(candidates, TaskActionCandidate{
 			Action: ActionComposeSkill, Confidence: 0.65,
 			Rationale: fmt.Sprintf("missing skills: %v", state.SkillFit.MissingSkills),
 		})
@@ -148,7 +148,7 @@ func (p *ActionPlanner) Plan(state *TaskOperatingState) ActionPlan {
 		if conf > 0.85 {
 			conf = 0.85
 		}
-		candidates = append(candidates, ActionCandidate{
+		candidates = append(candidates, TaskActionCandidate{
 			Action: ActionNormalizationRetry, Confidence: conf,
 			Rationale: fmt.Sprintf("protocol issues detected, retry streak: %d", state.Behavioral.NormRetryStreak),
 		})
@@ -156,7 +156,7 @@ func (p *ActionPlanner) Plan(state *TaskOperatingState) ActionPlan {
 
 	// Rule 9: Structural repetition → ContinueCentralized with variation.
 	if state.Behavioral.StructuralRepetition {
-		candidates = append(candidates, ActionCandidate{
+		candidates = append(candidates, TaskActionCandidate{
 			Action: ActionContinueCentralized, Confidence: 0.55,
 			Rationale: fmt.Sprintf("structural repetition detected (%d consecutive)", state.Behavioral.RepetitionStreak),
 		})
@@ -164,7 +164,7 @@ func (p *ActionPlanner) Plan(state *TaskOperatingState) ActionPlan {
 
 	// Rule 10: Engagement declining → ContinueCentralized.
 	if state.Behavioral.EngagementDeclining {
-		candidates = append(candidates, ActionCandidate{
+		candidates = append(candidates, TaskActionCandidate{
 			Action: ActionContinueCentralized, Confidence: 0.5,
 			Rationale: "user engagement declining",
 		})
@@ -172,7 +172,7 @@ func (p *ActionPlanner) Plan(state *TaskOperatingState) ActionPlan {
 
 	// Fallback.
 	if len(candidates) == 0 {
-		candidates = append(candidates, ActionCandidate{
+		candidates = append(candidates, TaskActionCandidate{
 			Action: ActionContinueCentralized, Confidence: 0.6,
 			Rationale: "no specific rule matched, proceeding with standard inference",
 		})
@@ -183,7 +183,7 @@ func (p *ActionPlanner) Plan(state *TaskOperatingState) ActionPlan {
 		return candidates[i].Confidence > candidates[j].Confidence
 	})
 
-	return ActionPlan{
+	return TaskActionPlan{
 		Candidates: candidates,
 		Selected:   candidates[0].Action,
 		Rationale:  candidates[0].Rationale,

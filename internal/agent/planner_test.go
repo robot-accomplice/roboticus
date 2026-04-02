@@ -14,6 +14,7 @@ func TestPlanner_Conversation(t *testing.T) {
 	}
 }
 
+
 func TestPlanner_BreakerOpen(t *testing.T) {
 	p := NewActionPlanner(true)
 	state := &TaskOperatingState{
