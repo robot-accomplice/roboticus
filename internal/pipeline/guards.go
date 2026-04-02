@@ -36,6 +36,9 @@ type ApplyResult struct {
 	Violations     []string
 }
 
+// Len returns the number of guards in the chain.
+func (gc *GuardChain) Len() int { return len(gc.guards) }
+
 // Apply runs all guards on the content. Returns the final result.
 func (gc *GuardChain) Apply(content string) string {
 	result := gc.ApplyFull(content)
