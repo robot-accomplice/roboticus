@@ -567,6 +567,7 @@ CREATE INDEX IF NOT EXISTS idx_hygiene_log_sweep ON hygiene_log(sweep_at DESC);
 CREATE TABLE IF NOT EXISTS pipeline_traces (
     id TEXT PRIMARY KEY,
     turn_id TEXT NOT NULL REFERENCES turns(id),
+    session_id TEXT NOT NULL DEFAULT '',
     channel TEXT NOT NULL DEFAULT 'api',
     total_ms INTEGER NOT NULL DEFAULT 0,
     stages_json TEXT NOT NULL DEFAULT '[]',
@@ -574,6 +575,15 @@ CREATE TABLE IF NOT EXISTS pipeline_traces (
 );
 CREATE INDEX IF NOT EXISTS idx_pipeline_traces_turn ON pipeline_traces(turn_id);
 CREATE INDEX IF NOT EXISTS idx_pipeline_traces_created ON pipeline_traces(created_at);
+CREATE INDEX IF NOT EXISTS idx_pipeline_traces_session ON pipeline_traces(session_id);
+
+CREATE TABLE IF NOT EXISTS react_traces (
+    id TEXT PRIMARY KEY,
+    pipeline_trace_id TEXT NOT NULL REFERENCES pipeline_traces(id),
+    react_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_react_traces_pipeline ON react_traces(pipeline_trace_id);
 
 CREATE TABLE IF NOT EXISTS heartbeat_task_results (
     id TEXT PRIMARY KEY,
