@@ -1,5 +1,21 @@
 package agent
 
+// OperatingState is a lightweight decision context for the action planner.
+// It captures the minimal signals needed for pure-function action planning.
+type OperatingState struct {
+	// PendingApproval indicates a tool call is gated awaiting human approval.
+	PendingApproval bool
+	// PendingDelegation indicates a subagent result is awaited.
+	PendingDelegation bool
+	// MatchedSkill is non-empty when a skill trigger has been matched.
+	MatchedSkill string
+	// Confidence is the agent's self-assessed confidence (0.0–1.0).
+	// Zero means unset.
+	Confidence float64
+	// CanEscalate indicates a higher-tier model is available for escalation.
+	CanEscalate bool
+}
+
 // TaskStateInput gathers raw signals from all subsystems for state synthesis.
 type TaskStateInput struct {
 	UserContent string
