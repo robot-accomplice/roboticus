@@ -10,6 +10,22 @@ import (
 	"goboticus/testutil"
 )
 
+// stubExecutor is a minimal ToolExecutor for pipeline tests.
+// Returns a canned response without calling LLM, since these tests exercise
+// pipeline orchestration (injection, shortcuts, guards) not inference.
+type stubExecutor struct {
+	response string
+}
+
+func (s *stubExecutor) RunLoop(_ context.Context, session *Session) (string, int, error) {
+	content := s.response
+	if content == "" {
+		content = "stub response"
+	}
+	session.AddAssistantMessage(content, nil)
+	return content, 1, nil
+}
+
 func TestPipeline_Run_SimpleMessage(t *testing.T) {
 	store := testutil.TempStore(t)
 
@@ -37,18 +53,13 @@ func TestPipeline_Run_SimpleMessage(t *testing.T) {
 	}
 
 	injection := agent.NewInjectionDetector()
-	tools := agent.NewToolRegistry()
-	policy := agent.NewPolicyEngine(agent.PolicyConfig{MaxTransferCents: 1000, RateLimitPerMinute: 30})
-	memMgr := agent.NewMemoryManager(agent.MemoryConfig{TotalTokenBudget: 2048}, store)
 	guards := DefaultGuardChain()
 
 	pipe := New(PipelineDeps{
 		Store:     store,
 		LLM:       llmSvc,
 		Injection: injection,
-		Tools:     tools,
-		Policy:    policy,
-		Memory:    memMgr,
+		Executor:  &stubExecutor{},
 		Guards:    guards,
 	})
 
@@ -110,8 +121,7 @@ func TestPipeline_Run_WithInjectionDefense(t *testing.T) {
 		Store:     store,
 		LLM:       llmSvc,
 		Injection: injection,
-		Tools:     agent.NewToolRegistry(),
-		Policy:    agent.NewPolicyEngine(agent.PolicyConfig{}),
+		Executor:  &stubExecutor{},
 		Guards:    DefaultGuardChain(),
 	})
 

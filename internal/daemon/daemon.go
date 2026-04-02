@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -14,13 +15,253 @@ import (
 	"goboticus/internal/api"
 	"goboticus/internal/api/routes"
 	"goboticus/internal/channel"
-	"goboticus/internal/mcp"
 	"goboticus/internal/core"
 	"goboticus/internal/db"
 	"goboticus/internal/llm"
+	"goboticus/internal/mcp"
 	"goboticus/internal/pipeline"
 	"goboticus/internal/schedule"
 )
+
+// ---------------------------------------------------------------------------
+// Adapter types: bridge concrete agent types to pipeline interfaces.
+// These are private wiring glue — not reusable outside the composition root.
+// ---------------------------------------------------------------------------
+
+// pipelineToAgentSession converts a pipeline.Session to an agent.Session,
+// copying identity fields and replaying the message history.
+func pipelineToAgentSession(ps *pipeline.Session) *agent.Session {
+	as := agent.NewSession(ps.ID, ps.AgentID, ps.AgentName)
+	as.Authority = ps.Authority
+	as.Workspace = ps.Workspace
+	as.AllowedPaths = ps.AllowedPaths
+	as.Channel = ps.Channel
+
+	for _, m := range ps.Messages() {
+		switch m.Role {
+		case "user":
+			as.AddUserMessage(m.Content)
+		case "assistant":
+			as.AddAssistantMessage(m.Content, m.ToolCalls)
+		case "system":
+			as.AddSystemMessage(m.Content)
+		case "tool":
+			as.AddToolResult(m.ToolCallID, m.Name, m.Content, false)
+		}
+	}
+	return as
+}
+
+// syncAgentToPipeline copies new messages from agent session back to pipeline session.
+func syncAgentToPipeline(as *agent.Session, ps *pipeline.Session) {
+	existingCount := ps.MessageCount()
+	agentMsgs := as.Messages()
+	for i := existingCount; i < len(agentMsgs); i++ {
+		m := agentMsgs[i]
+		switch m.Role {
+		case "user":
+			ps.AddUserMessage(m.Content)
+		case "assistant":
+			ps.AddAssistantMessage(m.Content, m.ToolCalls)
+		case "system":
+			ps.AddSystemMessage(m.Content)
+		case "tool":
+			ps.AddToolResult(m.ToolCallID, m.Name, m.Content, false)
+		}
+	}
+}
+
+// injectionAdapter wraps *agent.InjectionDetector → pipeline.InjectionChecker.
+type injectionAdapter struct {
+	det *agent.InjectionDetector
+}
+
+func (a *injectionAdapter) CheckInput(text string) core.ThreatScore {
+	return a.det.CheckInput(text)
+}
+
+func (a *injectionAdapter) Sanitize(text string) string {
+	return a.det.Sanitize(text)
+}
+
+// retrieverAdapter wraps *agent.MemoryRetriever → pipeline.MemoryRetriever.
+type retrieverAdapter struct {
+	r *agent.MemoryRetriever
+}
+
+func (a *retrieverAdapter) Retrieve(ctx context.Context, sessionID, query string, budget int) string {
+	return a.r.Retrieve(ctx, sessionID, query, budget)
+}
+
+// ingestorAdapter wraps *agent.MemoryManager → pipeline.Ingestor.
+type ingestorAdapter struct {
+	m *agent.MemoryManager
+}
+
+func (a *ingestorAdapter) IngestTurn(ctx context.Context, session *pipeline.Session) {
+	as := pipelineToAgentSession(session)
+	a.m.IngestTurn(ctx, as)
+}
+
+// executorAdapter wraps the full agent loop deps → pipeline.ToolExecutor.
+type executorAdapter struct {
+	llmSvc    *llm.Service
+	tools     *agent.ToolRegistry
+	policy    *agent.PolicyEngine
+	injection *agent.InjectionDetector
+	memMgr    *agent.MemoryManager
+	retriever *agent.MemoryRetriever
+}
+
+func (a *executorAdapter) RunLoop(ctx context.Context, session *pipeline.Session) (string, int, error) {
+	as := pipelineToAgentSession(session)
+
+	// Build context: system prompt + memory retrieval.
+	ctxBuilder := agent.NewContextBuilder(agent.DefaultContextConfig())
+
+	prompt := agent.BuildSystemPrompt(agent.PromptConfig{
+		AgentName: as.AgentName,
+	})
+	ctxBuilder.SetSystemPrompt(prompt)
+
+	// Set tool definitions.
+	if a.tools != nil {
+		ctxBuilder.SetTools(a.tools.ToolDefs())
+	}
+
+	// Run retrieval if available.
+	if a.retriever != nil {
+		lastUserMsg := ""
+		msgs := as.Messages()
+		for i := len(msgs) - 1; i >= 0; i-- {
+			if msgs[i].Role == "user" {
+				lastUserMsg = msgs[i].Content
+				break
+			}
+		}
+		if lastUserMsg != "" {
+			mem := a.retriever.Retrieve(ctx, as.ID, lastUserMsg, 2048)
+			if mem != "" {
+				ctxBuilder.SetMemory(mem)
+			}
+		}
+	}
+
+	// Create loop and run.
+	loop := agent.NewLoop(agent.DefaultLoopConfig(), agent.LoopDeps{
+		LLM:       a.llmSvc,
+		Tools:     a.tools,
+		Policy:    a.policy,
+		Injection: a.injection,
+		Memory:    a.memMgr,
+		Context:   ctxBuilder,
+	})
+
+	content, err := loop.Run(ctx, as)
+	turns := loop.TurnCount()
+
+	// Sync new messages back to the pipeline session.
+	syncAgentToPipeline(as, session)
+
+	return content, turns, err
+}
+
+// nicknameAdapter wraps *llm.Service + *db.Store → pipeline.NicknameRefiner.
+type nicknameAdapter struct {
+	llm   *llm.Service
+	store *db.Store
+}
+
+func (a *nicknameAdapter) Refine(ctx context.Context, session *pipeline.Session) {
+	// Find first user message to use as basis for title generation.
+	var firstUserMsg string
+	for _, m := range session.Messages() {
+		if m.Role == "user" {
+			firstUserMsg = m.Content
+			break
+		}
+	}
+	if firstUserMsg == "" {
+		return
+	}
+
+	// Truncate long messages for the prompt.
+	snippet := firstUserMsg
+	if len(snippet) > 200 {
+		snippet = snippet[:200]
+	}
+
+	req := &llm.Request{
+		Messages: []llm.Message{
+			{Role: "system", Content: "Generate a concise 2-4 word title for a conversation that starts with the following message. Respond with ONLY the title, no quotes or punctuation."},
+			{Role: "user", Content: snippet},
+		},
+		MaxTokens: 20,
+	}
+
+	resp, err := a.llm.Complete(ctx, req)
+	if err != nil {
+		log.Debug().Err(err).Msg("nickname refinement LLM call failed")
+		return
+	}
+
+	title := strings.TrimSpace(resp.Content)
+	if title == "" || len(title) > 60 {
+		return
+	}
+
+	_, err = a.store.ExecContext(ctx,
+		`UPDATE sessions SET nickname = ? WHERE id = ?`,
+		title, session.ID,
+	)
+	if err != nil {
+		log.Debug().Err(err).Str("session", session.ID).Msg("failed to update session nickname")
+	}
+}
+
+// streamAdapter wraps agent context builder deps → pipeline.StreamPreparer.
+type streamAdapter struct {
+	llmSvc    *llm.Service
+	tools     *agent.ToolRegistry
+	retriever *agent.MemoryRetriever
+}
+
+func (a *streamAdapter) PrepareStream(ctx context.Context, session *pipeline.Session) (*llm.Request, error) {
+	as := pipelineToAgentSession(session)
+
+	ctxBuilder := agent.NewContextBuilder(agent.DefaultContextConfig())
+
+	prompt := agent.BuildSystemPrompt(agent.PromptConfig{
+		AgentName: as.AgentName,
+	})
+	ctxBuilder.SetSystemPrompt(prompt)
+
+	if a.tools != nil {
+		ctxBuilder.SetTools(a.tools.ToolDefs())
+	}
+
+	// Run retrieval if available.
+	if a.retriever != nil {
+		lastUserMsg := ""
+		msgs := as.Messages()
+		for i := len(msgs) - 1; i >= 0; i-- {
+			if msgs[i].Role == "user" {
+				lastUserMsg = msgs[i].Content
+				break
+			}
+		}
+		if lastUserMsg != "" {
+			mem := a.retriever.Retrieve(ctx, as.ID, lastUserMsg, 2048)
+			if mem != "" {
+				ctxBuilder.SetMemory(mem)
+			}
+		}
+	}
+
+	req := ctxBuilder.BuildRequest(as)
+	req.Stream = true
+	return req, nil
+}
 
 // Daemon manages the lifecycle of all goboticus subsystems.
 // Implements kardianos/service.Interface for cross-platform service management
@@ -119,13 +360,26 @@ func New(cfg *core.Config) (*Daemon, error) {
 	pipe := pipeline.New(pipeline.PipelineDeps{
 		Store:     store,
 		LLM:       llmSvc,
-		Injection: injection,
-		Tools:     tools,
-		Policy:    policyEngine,
-		Memory:    memMgr,
-		Retriever: retriever,
-		Guards:    guards,
-		BGWorker:  bgWorker,
+		Injection: &injectionAdapter{det: injection},
+		Retriever: &retrieverAdapter{r: retriever},
+		Skills:    nil, // skill matching wired later
+		Executor: &executorAdapter{
+			llmSvc:    llmSvc,
+			tools:     tools,
+			policy:    policyEngine,
+			injection: injection,
+			memMgr:    memMgr,
+			retriever: retriever,
+		},
+		Ingestor: &ingestorAdapter{m: memMgr},
+		Refiner:  &nicknameAdapter{llm: llmSvc, store: store},
+		Streamer: &streamAdapter{
+			llmSvc:    llmSvc,
+			tools:     tools,
+			retriever: retriever,
+		},
+		Guards:   guards,
+		BGWorker: bgWorker,
 	})
 
 	// Sync hippocampus schema registry.

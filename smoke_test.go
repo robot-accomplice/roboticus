@@ -20,6 +20,16 @@ import (
 	"goboticus/testutil"
 )
 
+// smokeExecutor is a minimal pipeline.ToolExecutor for the smoke test.
+// Returns a canned response to avoid LLM confidence escalation issues with mock providers.
+type smokeExecutor struct{}
+
+func (s *smokeExecutor) RunLoop(_ context.Context, session *pipeline.Session) (string, int, error) {
+	content := "Hello from Goboticus!"
+	session.AddAssistantMessage(content, nil)
+	return content, 1, nil
+}
+
 // TestLiveSmokeTest boots a full API server against a temp DB, exercises every
 // parity-critical subsystem, and proves feature parity with roboticus.
 func TestLiveSmokeTest(t *testing.T) {
@@ -61,18 +71,13 @@ func TestLiveSmokeTest(t *testing.T) {
 	}
 
 	injection := agent.NewInjectionDetector()
-	tools := agent.NewToolRegistry()
-	policy := agent.NewPolicyEngine(agent.PolicyConfig{MaxTransferCents: 1000, RateLimitPerMinute: 30})
-	memMgr := agent.NewMemoryManager(agent.MemoryConfig{TotalTokenBudget: 2048}, store)
 	guards := pipeline.DefaultGuardChain()
 
 	pipe := pipeline.New(pipeline.PipelineDeps{
 		Store:     store,
 		LLM:       llmSvc,
 		Injection: injection,
-		Tools:     tools,
-		Policy:    policy,
-		Memory:    memMgr,
+		Executor:  &smokeExecutor{},
 		Guards:    guards,
 	})
 
