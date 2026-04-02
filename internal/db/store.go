@@ -78,6 +78,11 @@ func (s *Store) QueryRowContext(ctx context.Context, query string, args ...any) 
 	return s.db.QueryRowContext(ctx, query, args...)
 }
 
+// Ping verifies the database connection is alive.
+func (s *Store) Ping() error {
+	return s.db.Ping()
+}
+
 // InTx executes fn within a transaction. If fn returns an error, the
 // transaction is rolled back; otherwise it is committed.
 func (s *Store) InTx(ctx context.Context, fn func(tx *sql.Tx) error) error {
