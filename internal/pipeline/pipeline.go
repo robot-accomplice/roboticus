@@ -6,7 +6,6 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"goboticus/internal/agent"
 	"goboticus/internal/core"
 	"goboticus/internal/db"
 	"goboticus/internal/llm"
@@ -51,34 +50,30 @@ var _ Runner = (*Pipeline)(nil)
 type Pipeline struct {
 	store     *db.Store
 	llmSvc    *llm.Service
-	injection *agent.InjectionDetector
-	tools     *agent.ToolRegistry
-	policy    *agent.PolicyEngine
-	memory    *agent.MemoryManager
-	retriever *agent.MemoryRetriever
-	skills    []*agent.LoadedSkill
+	injection InjectionChecker
+	retriever MemoryRetriever
+	skills    SkillMatcher
+	executor  ToolExecutor
+	ingestor  Ingestor
+	refiner   NicknameRefiner
+	streamer  StreamPreparer
 	guards    *GuardChain
 	bgWorker  *core.BackgroundWorker
-	loopCfg   agent.LoopConfig
-	ctxCfg    agent.ContextConfig
-	promptCfg agent.PromptConfig
 }
 
 // PipelineDeps bundles dependencies for the Pipeline.
 type PipelineDeps struct {
 	Store     *db.Store
 	LLM       *llm.Service
-	Injection *agent.InjectionDetector
-	Tools     *agent.ToolRegistry
-	Policy    *agent.PolicyEngine
-	Memory    *agent.MemoryManager
-	Retriever *agent.MemoryRetriever
-	Skills    []*agent.LoadedSkill
+	Injection InjectionChecker
+	Retriever MemoryRetriever
+	Skills    SkillMatcher
+	Executor  ToolExecutor
+	Ingestor  Ingestor
+	Refiner   NicknameRefiner
+	Streamer  StreamPreparer
 	Guards    *GuardChain
 	BGWorker  *core.BackgroundWorker
-	LoopCfg   agent.LoopConfig
-	CtxCfg    agent.ContextConfig
-	PromptCfg agent.PromptConfig
 }
 
 // New creates the unified pipeline.
@@ -91,16 +86,14 @@ func New(deps PipelineDeps) *Pipeline {
 		store:     deps.Store,
 		llmSvc:    deps.LLM,
 		injection: deps.Injection,
-		tools:     deps.Tools,
-		policy:    deps.Policy,
-		memory:    deps.Memory,
 		retriever: deps.Retriever,
 		skills:    deps.Skills,
+		executor:  deps.Executor,
+		ingestor:  deps.Ingestor,
+		refiner:   deps.Refiner,
+		streamer:  deps.Streamer,
 		guards:    deps.Guards,
 		bgWorker:  bgw,
-		loopCfg:   deps.LoopCfg,
-		ctxCfg:    deps.CtxCfg,
-		promptCfg: deps.PromptCfg,
 	}
 }
 
@@ -119,8 +112,8 @@ func RunPipeline(ctx context.Context, p Runner, cfg Config, input Input) (*Outco
 //  5. User message storage
 //  6. Authority resolution
 //  7. Skill-first fulfillment
-//  8. Shortcut dispatch → Inference
-//  9. Guard chain → Post-turn ingest → Response
+//  8. Shortcut dispatch -> Inference
+//  9. Guard chain -> Post-turn ingest -> Response
 func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, error) {
 	tr := NewTraceRecorder()
 
@@ -193,8 +186,8 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 
 	// Stage 7: Skill-first fulfillment.
 	tr.BeginSpan("skill_dispatch")
-	if cfg.SkillFirstEnabled && authority == core.AuthorityCreator {
-		if result := p.trySkillFirst(ctx, session, content); result != nil {
+	if cfg.SkillFirstEnabled && authority == core.AuthorityCreator && p.skills != nil {
+		if result := p.skills.TryMatch(ctx, session, content); result != nil {
 			tr.Annotate("matched", true)
 			tr.EndSpan("ok")
 			p.storeTrace(ctx, tr, msgID, cfg.ChannelLabel)

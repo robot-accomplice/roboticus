@@ -7,36 +7,17 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"goboticus/internal/agent"
 	"goboticus/internal/core"
 	"goboticus/internal/db"
-	"goboticus/internal/llm"
 )
 
-// runStandardInference executes the full ReAct loop.
-func (p *Pipeline) runStandardInference(ctx context.Context, cfg Config, session *agent.Session, msgID string) (*Outcome, error) {
-	ctxBuilder := agent.NewContextBuilder(p.ctxCfg)
-	ctxBuilder.SetSystemPrompt(agent.BuildSystemPrompt(p.promptCfg))
-	ctxBuilder.SetTools(p.tools.ToolDefs())
-
-	if p.retriever != nil {
-		memBlock := p.retriever.Retrieve(ctx, session.ID, session.LastAssistantContent(), p.ctxCfg.MaxTokens/4)
-		if memBlock != "" {
-			ctxBuilder.SetMemory(memBlock)
-		}
+// runStandardInference executes the full ReAct loop via the ToolExecutor interface.
+func (p *Pipeline) runStandardInference(ctx context.Context, cfg Config, session *Session, msgID string) (*Outcome, error) {
+	if p.executor == nil {
+		return nil, core.NewError(core.ErrConfig, "no tool executor configured")
 	}
 
-	deps := agent.LoopDeps{
-		LLM:       p.llmSvc,
-		Tools:     p.tools,
-		Policy:    p.policy,
-		Injection: p.injection,
-		Memory:    p.memory,
-		Context:   ctxBuilder,
-	}
-	loop := agent.NewLoop(p.loopCfg, deps)
-
-	result, err := loop.Run(ctx, session)
+	result, turns, err := p.executor.RunLoop(ctx, session)
 	if err != nil {
 		return nil, core.WrapError(core.ErrLLM, "inference failed", err)
 	}
@@ -47,10 +28,10 @@ func (p *Pipeline) runStandardInference(ctx context.Context, cfg Config, session
 	}
 
 	// Post-turn ingest (background, tracked by worker pool).
-	if cfg.PostTurnIngest && p.memory != nil {
+	if cfg.PostTurnIngest && p.ingestor != nil {
 		sess := session
 		p.bgWorker.Submit("ingestTurn", func(bgCtx context.Context) {
-			p.memory.IngestTurn(bgCtx, sess)
+			p.ingestor.IngestTurn(bgCtx, sess)
 		})
 	}
 
@@ -66,10 +47,10 @@ func (p *Pipeline) runStandardInference(ctx context.Context, cfg Config, session
 	}
 
 	// Nickname refinement (background, tracked by worker pool).
-	if cfg.NicknameRefinement && session.TurnCount() >= 4 {
+	if cfg.NicknameRefinement && session.TurnCount() >= 4 && p.refiner != nil {
 		sess := session
 		p.bgWorker.Submit("refineNickname", func(bgCtx context.Context) {
-			p.refineNickname(bgCtx, sess)
+			p.refiner.Refine(bgCtx, sess)
 		})
 	}
 
@@ -77,17 +58,18 @@ func (p *Pipeline) runStandardInference(ctx context.Context, cfg Config, session
 		SessionID:  session.ID,
 		MessageID:  msgID,
 		Content:    result,
-		ReactTurns: loop.TurnCount(),
+		ReactTurns: turns,
 	}, nil
 }
 
-// prepareStreamInference sets up streaming inference.
-func (p *Pipeline) prepareStreamInference(_ context.Context, _ Config, session *agent.Session, msgID string) (*Outcome, error) {
-	ctxBuilder := agent.NewContextBuilder(p.ctxCfg)
-	ctxBuilder.SetSystemPrompt(agent.BuildSystemPrompt(p.promptCfg))
-
-	req := ctxBuilder.BuildRequest(session)
-	req.Stream = true
+// prepareStreamInference sets up streaming inference via the StreamPreparer interface.
+func (p *Pipeline) prepareStreamInference(ctx context.Context, _ Config, session *Session, msgID string) (*Outcome, error) {
+	if p.streamer != nil {
+		_, err := p.streamer.PrepareStream(ctx, session)
+		if err != nil {
+			return nil, core.WrapError(core.ErrLLM, "stream preparation failed", err)
+		}
+	}
 
 	return &Outcome{
 		SessionID: session.ID,
@@ -97,7 +79,7 @@ func (p *Pipeline) prepareStreamInference(_ context.Context, _ Config, session *
 }
 
 // resolveSession finds or creates a session based on the resolution mode.
-func (p *Pipeline) resolveSession(ctx context.Context, cfg Config, input Input) (*agent.Session, error) {
+func (p *Pipeline) resolveSession(ctx context.Context, cfg Config, input Input) (*Session, error) {
 	switch cfg.SessionResolution {
 	case SessionFromBody:
 		if input.SessionID != "" {
@@ -124,12 +106,12 @@ func (p *Pipeline) resolveSession(ctx context.Context, cfg Config, input Input) 
 	return nil, core.NewError(core.ErrConfig, "unknown session resolution mode")
 }
 
-func (p *Pipeline) loadSession(ctx context.Context, input Input) (*agent.Session, error) {
-	sess := agent.NewSession(input.SessionID, input.AgentID, input.AgentName)
+func (p *Pipeline) loadSession(ctx context.Context, input Input) (*Session, error) {
+	sess := NewSession(input.SessionID, input.AgentID, input.AgentName)
 	sess.Channel = input.Platform
 
 	rows, err := p.store.QueryContext(ctx,
-		`SELECT role, content FROM messages WHERE session_id = ? ORDER BY created_at ASC LIMIT 50`,
+		`SELECT role, content FROM session_messages WHERE session_id = ? ORDER BY created_at ASC LIMIT 50`,
 		input.SessionID,
 	)
 	if err != nil {
@@ -155,16 +137,16 @@ func (p *Pipeline) loadSession(ctx context.Context, input Input) (*agent.Session
 	return sess, nil
 }
 
-func (p *Pipeline) loadSessionByID(ctx context.Context, sessionID string, input Input) (*agent.Session, error) {
+func (p *Pipeline) loadSessionByID(ctx context.Context, sessionID string, input Input) (*Session, error) {
 	input.SessionID = sessionID
 	return p.loadSession(ctx, input)
 }
 
-func (p *Pipeline) createSession(ctx context.Context, input Input) (*agent.Session, error) {
+func (p *Pipeline) createSession(ctx context.Context, input Input) (*Session, error) {
 	return p.createSessionWithScope(ctx, input, input.Platform)
 }
 
-func (p *Pipeline) createSessionWithScope(ctx context.Context, input Input, scopeKey string) (*agent.Session, error) {
+func (p *Pipeline) createSessionWithScope(ctx context.Context, input Input, scopeKey string) (*Session, error) {
 	id := db.NewID()
 	_, err := p.store.ExecContext(ctx,
 		`INSERT INTO sessions (id, agent_id, scope_key) VALUES (?, ?, ?)`,
@@ -173,13 +155,13 @@ func (p *Pipeline) createSessionWithScope(ctx context.Context, input Input, scop
 	if err != nil {
 		return nil, err
 	}
-	sess := agent.NewSession(id, input.AgentID, input.AgentName)
+	sess := NewSession(id, input.AgentID, input.AgentName)
 	sess.Channel = input.Platform
 	return sess, nil
 }
 
 // expandShortFollowup detects short reactions and prepends prior context.
-func (p *Pipeline) expandShortFollowup(session *agent.Session, content string) string {
+func (p *Pipeline) expandShortFollowup(session *Session, content string) string {
 	if len(content) < 20 && session.TurnCount() > 0 {
 		prior := session.LastAssistantContent()
 		if prior != "" {
@@ -193,46 +175,14 @@ func (p *Pipeline) expandShortFollowup(session *agent.Session, content string) s
 	return content
 }
 
-// trySkillFirst checks if input matches any skill trigger.
-func (p *Pipeline) trySkillFirst(_ context.Context, session *agent.Session, content string) *Outcome {
-	if len(p.skills) == 0 {
-		return nil
-	}
-
-	lower := strings.ToLower(content)
-	var bestSkill *agent.LoadedSkill
-	var bestScore int
-
-	for _, skill := range p.skills {
-		score := 0
-		for _, trigger := range skill.Triggers() {
-			if strings.Contains(lower, strings.ToLower(trigger)) {
-				score++
-			}
-		}
-		if score > bestScore {
-			bestScore = score
-			bestSkill = skill
-		}
-	}
-
-	if bestSkill == nil || bestScore == 0 {
-		return nil
-	}
-
-	log.Info().Str("skill", bestSkill.Name()).Int("score", bestScore).Msg("skill matched")
-	session.AddSystemMessage(fmt.Sprintf("[Skill: %s]\n%s", bestSkill.Name(), bestSkill.Body))
-	return nil
-}
-
 // tryShortcut checks for simple shortcuts that don't need full LLM inference.
-func (p *Pipeline) tryShortcut(_ context.Context, session *agent.Session, content string) *Outcome {
+func (p *Pipeline) tryShortcut(_ context.Context, session *Session, content string) *Outcome {
 	lower := strings.TrimSpace(strings.ToLower(content))
 
 	if lower == "who are you" || lower == "who are you?" || lower == "what are you?" {
 		return &Outcome{
 			SessionID: session.ID,
-			Content:   fmt.Sprintf("I am %s, an autonomous AI agent.", p.promptCfg.AgentName),
+			Content:   fmt.Sprintf("I am %s, an autonomous AI agent.", session.AgentName),
 		}
 	}
 
@@ -247,55 +197,9 @@ func (p *Pipeline) tryShortcut(_ context.Context, session *agent.Session, conten
 	if lower == "help" || lower == "/help" {
 		return &Outcome{
 			SessionID: session.ID,
-			Content: fmt.Sprintf("%s can help with:\n- General conversation and reasoning\n- File operations and code tasks\n- Web search and information retrieval\n- Scheduling and reminders\n- Financial operations\n\nJust describe what you need.", p.promptCfg.AgentName),
+			Content: fmt.Sprintf("%s can help with:\n- General conversation and reasoning\n- File operations and code tasks\n- Web search and information retrieval\n- Scheduling and reminders\n- Financial operations\n\nJust describe what you need.", session.AgentName),
 		}
 	}
 
 	return nil
-}
-
-// refineNickname uses the first user message to generate a short session name.
-func (p *Pipeline) refineNickname(ctx context.Context, session *agent.Session) {
-	messages := session.Messages()
-	if len(messages) == 0 {
-		return
-	}
-
-	var firstUser string
-	for _, m := range messages {
-		if m.Role == "user" && m.Content != "" {
-			firstUser = m.Content
-			break
-		}
-	}
-	if firstUser == "" {
-		return
-	}
-
-	req := &llm.Request{
-		Model:     "",
-		MaxTokens: 20,
-		Messages: []llm.Message{
-			{Role: "system", Content: "Generate a 2-4 word title for this conversation. Reply with ONLY the title, nothing else."},
-			{Role: "user", Content: firstUser},
-		},
-	}
-
-	resp, err := p.llmSvc.Complete(ctx, req)
-	if err != nil {
-		log.Debug().Err(err).Msg("nickname refinement failed")
-		return
-	}
-
-	nickname := strings.TrimSpace(resp.Content)
-	if nickname == "" || len(nickname) > 50 {
-		return
-	}
-
-	if p.store != nil {
-		_, _ = p.store.ExecContext(ctx,
-			`UPDATE sessions SET nickname = ? WHERE id = ?`,
-			nickname, session.ID,
-		)
-	}
 }
