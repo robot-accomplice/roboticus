@@ -11,6 +11,14 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+
+	"goboticus/internal/core"
+)
+
+// Browser defaults.
+const (
+	DefaultCDPPort        = 9222
+	DefaultTimeoutSeconds = 30
 )
 
 // BrowserConfig holds browser automation configuration.
@@ -85,25 +93,42 @@ type Browser struct {
 	cfg     BrowserConfig
 	mu      sync.Mutex
 	process *exec.Cmd
-	client  *http.Client
+	client  core.HTTPDoer
 	running bool
 	session *CdpSession
 }
 
 // NewBrowser creates a browser automation instance.
 func NewBrowser(cfg BrowserConfig) *Browser {
+	return NewBrowserWithHTTP(cfg, nil)
+}
+
+// NewBrowserWithHTTP creates a browser with an injected HTTP client.
+func NewBrowserWithHTTP(cfg BrowserConfig, httpClient core.HTTPDoer) *Browser {
 	if cfg.CDPPort == 0 {
-		cfg.CDPPort = 9222
+		cfg.CDPPort = DefaultCDPPort
 	}
 	if cfg.TimeoutSeconds == 0 {
-		cfg.TimeoutSeconds = 30
+		cfg.TimeoutSeconds = DefaultTimeoutSeconds
+	}
+	if httpClient == nil {
+		httpClient = &http.Client{
+			Timeout: time.Duration(cfg.TimeoutSeconds) * time.Second,
+		}
 	}
 	return &Browser{
-		cfg: cfg,
-		client: &http.Client{
-			Timeout: time.Duration(cfg.TimeoutSeconds) * time.Second,
-		},
+		cfg:    cfg,
+		client: httpClient,
 	}
+}
+
+// httpGet is a helper that wraps Do() for GET requests (HTTPDoer doesn't have Get).
+func (b *Browser) httpGet(url string) (*http.Response, error) {
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	return b.client.Do(req)
 }
 
 // Start launches the Chromium process with CDP enabled.
@@ -322,7 +347,7 @@ func (b *Browser) cdpSimpleCommand(ctx context.Context, method string, kind Acti
 
 // ListTargets returns all CDP targets (tabs).
 func (b *Browser) ListTargets() ([]PageInfo, error) {
-	resp, err := b.client.Get(b.cdpURL("/json/list"))
+	resp, err := b.httpGet(b.cdpURL("/json/list"))
 	if err != nil {
 		return nil, fmt.Errorf("browser: list targets: %w", err)
 	}
@@ -350,7 +375,7 @@ func (b *Browser) ListTargets() ([]PageInfo, error) {
 func (b *Browser) waitForCDP(timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		resp, err := b.client.Get(b.cdpURL("/json/version"))
+		resp, err := b.httpGet(b.cdpURL("/json/version"))
 		if err == nil {
 			_ = resp.Body.Close()
 			return nil

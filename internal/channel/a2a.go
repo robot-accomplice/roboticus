@@ -19,6 +19,15 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// A2A protocol defaults.
+const (
+	DefaultA2AMaxMessageSize   = 64 * 1024
+	DefaultA2ASessionTimeout   = 3600 // seconds
+	DefaultA2ARateLimitPerPeer = 30
+	DefaultA2ANonceTTL         = 300 // seconds
+	DefaultA2AMaxSessions      = 256
+)
+
 // A2AConfig holds agent-to-agent communication parameters.
 type A2AConfig struct {
 	MaxMessageSize   int `mapstructure:"max_message_size"`    // bytes, default 64KB
@@ -59,19 +68,19 @@ type A2AAdapter struct {
 // NewA2AAdapter creates an agent-to-agent channel adapter.
 func NewA2AAdapter(cfg A2AConfig) (*A2AAdapter, error) {
 	if cfg.MaxMessageSize <= 0 {
-		cfg.MaxMessageSize = 64 * 1024
+		cfg.MaxMessageSize = DefaultA2AMaxMessageSize
 	}
 	if cfg.SessionTimeout <= 0 {
-		cfg.SessionTimeout = 3600
+		cfg.SessionTimeout = DefaultA2ASessionTimeout
 	}
 	if cfg.RateLimitPerPeer <= 0 {
-		cfg.RateLimitPerPeer = 30
+		cfg.RateLimitPerPeer = DefaultA2ARateLimitPerPeer
 	}
 	if cfg.NonceTTL <= 0 {
-		cfg.NonceTTL = 300
+		cfg.NonceTTL = DefaultA2ANonceTTL
 	}
 	if cfg.MaxSessions <= 0 {
-		cfg.MaxSessions = 256
+		cfg.MaxSessions = DefaultA2AMaxSessions
 	}
 
 	// Generate X25519 key pair.

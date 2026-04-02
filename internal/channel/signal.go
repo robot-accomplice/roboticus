@@ -28,13 +28,18 @@ type SignalConfig struct {
 // no std::sync::Mutex in async context.
 type SignalAdapter struct {
 	cfg     SignalConfig
-	client  *http.Client
+	client  core.HTTPDoer
 	inbound chan InboundMessage // bounded buffer
 	limiter *core.RateLimiter
 }
 
 // NewSignalAdapter creates a Signal channel adapter.
 func NewSignalAdapter(cfg SignalConfig) *SignalAdapter {
+	return NewSignalAdapterWithHTTP(cfg, nil)
+}
+
+// NewSignalAdapterWithHTTP creates a Signal adapter with an injected HTTP client.
+func NewSignalAdapterWithHTTP(cfg SignalConfig, httpClient core.HTTPDoer) *SignalAdapter {
 	if cfg.DaemonURL == "" {
 		cfg.DaemonURL = "http://localhost:8080"
 	}
@@ -44,12 +49,13 @@ func NewSignalAdapter(cfg SignalConfig) *SignalAdapter {
 	if len(cfg.AllowedNumbers) == 0 {
 		cfg.DenyOnEmpty = true
 	}
+	if httpClient == nil {
+		httpClient = &http.Client{Timeout: 30 * time.Second}
+	}
 
 	return &SignalAdapter{
-		cfg: cfg,
-		client: &http.Client{
-			Timeout: 30 * time.Second,
-		},
+		cfg:     cfg,
+		client:  httpClient,
 		inbound: make(chan InboundMessage, cfg.BufferSize),
 		limiter: core.NewRateLimiter(30, time.Minute),
 	}

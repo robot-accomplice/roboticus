@@ -3,6 +3,8 @@ package tools
 import (
 	"context"
 	"encoding/json"
+
+	"goboticus/internal/core"
 )
 
 // Tool is the interface every agent tool must implement.
@@ -47,6 +49,24 @@ type Context struct {
 	Workspace    string
 	AllowedPaths []string
 	Channel      string
+	FS           FileSystem         // file operations; nil defaults to OSFileSystem
+	Runner       core.ProcessRunner // subprocess execution; nil defaults to OSProcessRunner
+}
+
+// GetFS returns the filesystem, defaulting to real OS operations.
+func (c *Context) GetFS() FileSystem {
+	if c.FS != nil {
+		return c.FS
+	}
+	return OSFileSystem{}
+}
+
+// GetRunner returns the process runner, defaulting to real OS execution.
+func (c *Context) GetRunner() core.ProcessRunner {
+	if c.Runner != nil {
+		return c.Runner
+	}
+	return core.OSProcessRunner{}
 }
 
 // Result holds the output of a tool execution.

@@ -20,6 +20,16 @@ import (
 	"goboticus/testutil"
 )
 
+// smokeExecutor is a minimal pipeline.ToolExecutor for the smoke test.
+// Returns a canned response to avoid LLM confidence escalation issues with mock providers.
+type smokeExecutor struct{}
+
+func (s *smokeExecutor) RunLoop(_ context.Context, session *pipeline.Session) (string, int, error) {
+	content := "Hello from Goboticus!"
+	session.AddAssistantMessage(content, nil)
+	return content, 1, nil
+}
+
 // TestLiveSmokeTest boots a full API server against a temp DB, exercises every
 // parity-critical subsystem, and proves feature parity with roboticus.
 func TestLiveSmokeTest(t *testing.T) {
@@ -61,18 +71,13 @@ func TestLiveSmokeTest(t *testing.T) {
 	}
 
 	injection := agent.NewInjectionDetector()
-	tools := agent.NewToolRegistry()
-	policy := agent.NewPolicyEngine(agent.PolicyConfig{MaxTransferCents: 1000, RateLimitPerMinute: 30})
-	memMgr := agent.NewMemoryManager(agent.MemoryConfig{TotalTokenBudget: 2048}, store)
 	guards := pipeline.DefaultGuardChain()
 
 	pipe := pipeline.New(pipeline.PipelineDeps{
 		Store:     store,
 		LLM:       llmSvc,
 		Injection: injection,
-		Tools:     tools,
-		Policy:    policy,
-		Memory:    memMgr,
+		Executor:  &smokeExecutor{},
 		Guards:    guards,
 	})
 
@@ -495,6 +500,183 @@ func TestLiveSmokeTest(t *testing.T) {
 		t.Log("PASS: scheduler inline lease — acquire/contention/release all correct")
 	})
 
+	// --- v0.11.3 Parity endpoints ---
+
+	t.Run("throttle-stats", func(t *testing.T) {
+		resp := get(t, client, base+"/api/stats/throttle")
+		assertStatus(t, resp, 200)
+		body := readJSON(t, resp)
+		if _, ok := body["total_events"]; !ok {
+			t.Fatal("missing total_events")
+		}
+	})
+
+	t.Run("delegations", func(t *testing.T) {
+		resp := get(t, client, base+"/api/delegations")
+		assertStatus(t, resp, 200)
+		body := readJSON(t, resp)
+		if _, ok := body["delegations"]; !ok {
+			t.Fatal("missing delegations")
+		}
+	})
+
+	t.Run("theme-catalog", func(t *testing.T) {
+		resp := get(t, client, base+"/api/themes/catalog")
+		assertStatus(t, resp, 200)
+		body := readJSON(t, resp)
+		themes := body["themes"].([]any)
+		if len(themes) < 5 {
+			t.Errorf("themes = %d, want >= 5", len(themes))
+		}
+	})
+
+	t.Run("theme-active", func(t *testing.T) {
+		resp := get(t, client, base+"/api/themes/active")
+		assertStatus(t, resp, 200)
+		body := readJSON(t, resp)
+		if _, ok := body["id"]; !ok {
+			t.Fatal("missing id")
+		}
+	})
+
+	t.Run("traces", func(t *testing.T) {
+		resp := get(t, client, base+"/api/traces")
+		assertStatus(t, resp, 200)
+		body := readJSON(t, resp)
+		if _, ok := body["traces"]; !ok {
+			t.Fatal("missing traces")
+		}
+	})
+
+	t.Run("mcp-connections", func(t *testing.T) {
+		resp := get(t, client, base+"/api/mcp/connections")
+		assertStatus(t, resp, 200)
+		body := readJSON(t, resp)
+		if _, ok := body["connections"]; !ok {
+			t.Fatal("missing connections")
+		}
+	})
+
+	t.Run("mcp-tools", func(t *testing.T) {
+		resp := get(t, client, base+"/api/mcp/tools")
+		assertStatus(t, resp, 200)
+		body := readJSON(t, resp)
+		if _, ok := body["tools"]; !ok {
+			t.Fatal("missing tools")
+		}
+	})
+
+	t.Run("plugins-list", func(t *testing.T) {
+		resp := get(t, client, base+"/api/plugins")
+		assertStatus(t, resp, 200)
+		body := readJSON(t, resp)
+		if _, ok := body["plugins"]; !ok {
+			t.Fatal("missing plugins")
+		}
+	})
+
+	t.Run("memory-analytics", func(t *testing.T) {
+		resp := get(t, client, base+"/api/stats/memory-analytics")
+		assertStatus(t, resp, 200)
+		body := readJSON(t, resp)
+		if _, ok := body["period_hours"]; !ok {
+			t.Fatal("missing period_hours")
+		}
+	})
+
+	t.Run("escalation-stats", func(t *testing.T) {
+		resp := get(t, client, base+"/api/stats/escalation")
+		assertStatus(t, resp, 200)
+	})
+
+	// --- Deeper API flows ---
+
+	t.Run("session-get", func(t *testing.T) {
+		if sessionID == "" {
+			t.Skip("no session")
+		}
+		resp := get(t, client, base+"/api/sessions/"+sessionID)
+		assertStatus(t, resp, 200)
+	})
+
+	t.Run("session-turns", func(t *testing.T) {
+		if sessionID == "" {
+			t.Skip("no session")
+		}
+		resp := get(t, client, base+"/api/sessions/"+sessionID+"/turns")
+		assertStatus(t, resp, 200)
+	})
+
+	t.Run("session-feedback", func(t *testing.T) {
+		if sessionID == "" {
+			t.Skip("no session")
+		}
+		resp := get(t, client, base+"/api/sessions/"+sessionID+"/feedback")
+		assertStatus(t, resp, 200)
+	})
+
+	t.Run("session-insights", func(t *testing.T) {
+		if sessionID == "" {
+			t.Skip("no session")
+		}
+		resp := get(t, client, base+"/api/sessions/"+sessionID+"/insights")
+		assertStatus(t, resp, 200)
+	})
+
+	t.Run("openapi-spec", func(t *testing.T) {
+		resp := get(t, client, base+"/openapi.yaml")
+		assertStatus(t, resp, 200)
+	})
+
+	t.Run("api-docs", func(t *testing.T) {
+		resp := get(t, client, base+"/api/docs")
+		assertStatus(t, resp, 200)
+	})
+
+	t.Run("agent-status", func(t *testing.T) {
+		resp := get(t, client, base+"/api/agent/status")
+		assertStatus(t, resp, 200)
+	})
+
+	t.Run("logs", func(t *testing.T) {
+		resp := get(t, client, base+"/api/logs")
+		assertStatus(t, resp, 200)
+	})
+
+	t.Run("ws-ticket", func(t *testing.T) {
+		resp := post(t, client, base+"/api/ws-ticket", map[string]any{})
+		assertStatus(t, resp, 200)
+		body := readJSON(t, resp)
+		if body["ticket"] == nil {
+			t.Error("should return ticket")
+		}
+	})
+
+	t.Run("plugin-tools", func(t *testing.T) {
+		resp := get(t, client, base+"/api/plugins/tools")
+		assertStatus(t, resp, 200)
+	})
+
+	t.Run("timeseries", func(t *testing.T) {
+		resp := get(t, client, base+"/api/stats/timeseries")
+		assertStatus(t, resp, 200)
+	})
+
+	t.Run("transactions", func(t *testing.T) {
+		resp := get(t, client, base+"/api/stats/transactions")
+		assertStatus(t, resp, 200)
+	})
+
+	t.Run("capacity", func(t *testing.T) {
+		resp := get(t, client, base+"/api/stats/capacity")
+		assertStatus(t, resp, 200)
+	})
+
+	t.Run("model-selections", func(t *testing.T) {
+		resp := get(t, client, base+"/api/models/selections")
+		assertStatus(t, resp, 200)
+	})
+
 	// Print summary.
 	t.Log("")
 	t.Log("=== SMOKE TEST SUMMARY ===")
@@ -511,6 +693,9 @@ func TestLiveSmokeTest(t *testing.T) {
 	t.Log("  [x] Subagents, Roster, Workspace")
 	t.Log("  [x] MCP tool registry + ExportToMcp")
 	t.Log("  [x] Circuit breaker status")
+	t.Log("  [x] Throttle, Delegations, Themes, Traces")
+	t.Log("  [x] MCP connections, Plugins, Memory analytics")
+	t.Log("  [x] Escalation stats")
 }
 
 // --- helpers ---

@@ -14,7 +14,9 @@ import (
 	"goboticus/internal/core"
 	"goboticus/internal/db"
 	"goboticus/internal/llm"
+	"goboticus/internal/mcp"
 	"goboticus/internal/pipeline"
+	"goboticus/internal/plugin"
 )
 
 // AppState holds all shared state for the API server.
@@ -25,6 +27,8 @@ type AppState struct {
 	Config    *core.Config
 	EventBus  *EventBus
 	Approvals routes.ApprovalService
+	MCP       *mcp.ConnectionManager
+	Plugins   *plugin.Registry
 }
 
 // ServerConfig controls the HTTP server.
@@ -117,6 +121,7 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 		r.Get("/api/memory/semantic", routes.GetSemanticMemory(state.Store))
 		r.Get("/api/memory/semantic/categories", routes.GetSemanticCategories(state.Store))
 		r.Get("/api/memory/search", routes.SearchMemory(state.Store))
+		r.Get("/api/stats/memory-analytics", routes.GetMemoryAnalytics(state.Store))
 
 		// Cron.
 		r.Get("/api/cron/jobs", routes.ListCronJobs(state.Store))
@@ -137,20 +142,27 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 		r.Post("/api/skills/catalog/activate", routes.ActivateSkillFromCatalog())
 
 		// Plugins.
+		r.Get("/api/plugins", routes.ListPlugins(state.Plugins))
+		r.Get("/api/plugins/tools", routes.ListPluginTools(state.Plugins))
+		r.Post("/api/plugins/{name}/enable", routes.EnablePlugin(state.Plugins))
+		r.Post("/api/plugins/{name}/disable", routes.DisablePlugin(state.Plugins))
 		r.Post("/api/plugins/catalog/install", routes.InstallPlugin())
 
 		// Stats.
 		r.Get("/api/stats/costs", routes.GetCosts(state.Store))
 		r.Get("/api/stats/cache", routes.GetCacheStats(state.Store))
 		r.Get("/api/stats/transactions", routes.GetTransactions(state.Store))
-		r.Get("/api/stats/capacity", routes.GetCapacity(state.Store))
+		r.Get("/api/stats/capacity", routes.GetCapacity(state.LLM))
 		r.Get("/api/stats/efficiency", routes.GetEfficiency(state.Store))
 		r.Get("/api/stats/timeseries", routes.GetTimeseries(state.Store))
+		r.Get("/api/stats/escalation", routes.GetEscalationStats(state.LLM))
+		r.Get("/api/stats/throttle", routes.GetThrottleStats(state.Store))
+		r.Get("/api/delegations", routes.ListDelegations(state.Store))
 
 		// Models.
 		r.Get("/api/models/available", routes.GetAvailableModels(state.LLM))
 		r.Get("/api/models/selections", routes.GetModelSelections(state.Store))
-		r.Get("/api/models/routing-diagnostics", routes.GetRoutingDiagnostics(state.Store))
+		r.Get("/api/models/routing-diagnostics", routes.GetRoutingDiagnostics(state.Config))
 
 		// Recommendations.
 		r.Get("/api/recommendations", routes.GetRecommendations(state.Store))
@@ -167,10 +179,10 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 		r.Get("/api/config/capabilities", routes.GetCapabilities())
 
 		// Wallet.
-		r.Get("/api/wallet/balance", routes.GetWalletBalance())
-		r.Get("/api/wallet/address", routes.GetWalletAddress())
-		r.Get("/api/services/swaps", routes.GetSwaps())
-		r.Get("/api/services/tax-payouts", routes.GetTaxPayouts())
+		r.Get("/api/wallet/balance", routes.GetWalletBalance(state.Store))
+		r.Get("/api/wallet/address", routes.GetWalletAddress(state.Store))
+		r.Get("/api/services/swaps", routes.GetSwaps(state.Store))
+		r.Get("/api/services/tax-payouts", routes.GetTaxPayouts(state.Store))
 
 		// Roster (agents page).
 		r.Get("/api/roster", routes.GetRoster(state.Store))
@@ -182,6 +194,21 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 		// Provider key management.
 		r.Put("/api/providers/{provider}/key", routes.SetProviderKey(state.Store))
 		r.Delete("/api/providers/{provider}/key", routes.DeleteProviderKey(state.Store))
+
+		// Traces.
+		r.Get("/api/traces", routes.ListTraces(state.Store))
+		r.Get("/api/traces/{turn_id}", routes.GetTrace(state.Store))
+
+		// Themes.
+		r.Get("/api/themes/catalog", routes.GetThemeCatalog())
+		r.Get("/api/themes/active", routes.GetActiveTheme(state.Store))
+		r.Put("/api/themes/active", routes.SetActiveTheme(state.Store))
+
+		// MCP.
+		r.Get("/api/mcp/connections", routes.ListMCPConnections(state.MCP))
+		r.Get("/api/mcp/tools", routes.ListMCPTools(state.MCP))
+		r.Post("/api/mcp/connect", routes.ConnectMCPServer(state.MCP))
+		r.Post("/api/mcp/disconnect/{name}", routes.DisconnectMCPServer(state.MCP))
 
 		// Logs.
 		r.Get("/api/logs", routes.GetLogs())

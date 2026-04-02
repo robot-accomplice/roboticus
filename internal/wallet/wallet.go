@@ -23,6 +23,16 @@ import (
 
 var rpcRequestID atomic.Int64
 
+// Wallet constants.
+const (
+	DefaultChainID = 8453 // Base L2
+
+	// Scrypt key derivation parameters for wallet encryption.
+	ScryptN = 262144
+	ScryptR = 8
+	ScryptP = 1
+)
+
 // WalletConfig holds wallet configuration.
 type WalletConfig struct {
 	Path       string `mapstructure:"path"`     // file path for encrypted key
@@ -41,7 +51,7 @@ type Wallet struct {
 // NewWallet creates or loads a wallet.
 func NewWallet(cfg WalletConfig) (*Wallet, error) {
 	if cfg.ChainID == 0 {
-		cfg.ChainID = 8453
+		cfg.ChainID = DefaultChainID
 	}
 	if cfg.Passphrase == "" {
 		cfg.Passphrase = os.Getenv("GOBOTICUS_WALLET_PASSPHRASE")
@@ -217,7 +227,7 @@ func deriveKeyFromPassphrase(passphrase string, salt []byte) ([]byte, error) {
 	// scrypt with N=262144, r=8, p=1 — designed for low-entropy passphrases.
 	// Provides ~100ms key derivation on modern hardware, making brute force
 	// infeasible compared to the previous HKDF which was near-instant.
-	return scrypt.Key([]byte(passphrase), salt, 262144, 8, 1, 32)
+	return scrypt.Key([]byte(passphrase), salt, ScryptN, ScryptR, ScryptP, 32)
 }
 
 // GetBalance queries the native balance via JSON-RPC.

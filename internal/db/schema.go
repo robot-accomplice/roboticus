@@ -421,6 +421,7 @@ CREATE INDEX IF NOT EXISTS idx_embeddings_source ON embeddings(source_table, sou
 
 CREATE TABLE IF NOT EXISTS sub_agents (
     id TEXT PRIMARY KEY,
+    agent_id TEXT NOT NULL DEFAULT '',
     name TEXT NOT NULL UNIQUE,
     display_name TEXT,
     model TEXT NOT NULL DEFAULT '',
@@ -430,6 +431,10 @@ CREATE TABLE IF NOT EXISTS sub_agents (
     skills_json TEXT,
     enabled INTEGER NOT NULL DEFAULT 1,
     session_count INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'registered',
+    error_message TEXT NOT NULL DEFAULT '',
+    started_at TEXT,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -563,6 +568,87 @@ CREATE TABLE IF NOT EXISTS hygiene_log (
     avg_skill_priority             REAL NOT NULL DEFAULT 0.0
 );
 CREATE INDEX IF NOT EXISTS idx_hygiene_log_sweep ON hygiene_log(sweep_at DESC);
+
+CREATE TABLE IF NOT EXISTS pipeline_traces (
+    id TEXT PRIMARY KEY,
+    turn_id TEXT NOT NULL REFERENCES turns(id),
+    session_id TEXT NOT NULL DEFAULT '',
+    channel TEXT NOT NULL DEFAULT 'api',
+    total_ms INTEGER NOT NULL DEFAULT 0,
+    stages_json TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_pipeline_traces_turn ON pipeline_traces(turn_id);
+CREATE INDEX IF NOT EXISTS idx_pipeline_traces_created ON pipeline_traces(created_at);
+CREATE INDEX IF NOT EXISTS idx_pipeline_traces_session ON pipeline_traces(session_id);
+
+CREATE TABLE IF NOT EXISTS react_traces (
+    id TEXT PRIMARY KEY,
+    pipeline_trace_id TEXT NOT NULL REFERENCES pipeline_traces(id),
+    react_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_react_traces_pipeline ON react_traces(pipeline_trace_id);
+
+CREATE TABLE IF NOT EXISTS heartbeat_task_results (
+    id TEXT PRIMARY KEY,
+    task_name TEXT NOT NULL,
+    success INTEGER NOT NULL DEFAULT 1,
+    message TEXT,
+    metrics_json TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_heartbeat_results_task ON heartbeat_task_results(task_name, created_at);
+
+CREATE TABLE IF NOT EXISTS delegation_outcomes (
+    id TEXT PRIMARY KEY,
+    turn_id TEXT NOT NULL REFERENCES turns(id),
+    session_id TEXT NOT NULL REFERENCES sessions(id),
+    task_description TEXT NOT NULL,
+    subtask_count INTEGER NOT NULL DEFAULT 0,
+    pattern TEXT NOT NULL DEFAULT 'none',
+    assigned_agents_json TEXT NOT NULL DEFAULT '[]',
+    duration_ms INTEGER NOT NULL DEFAULT 0,
+    success INTEGER NOT NULL DEFAULT 0,
+    quality_score REAL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_delegation_turn ON delegation_outcomes(turn_id);
+CREATE INDEX IF NOT EXISTS idx_delegation_session ON delegation_outcomes(session_id);
+
+CREATE TABLE IF NOT EXISTS agent_tasks (
+    id TEXT PRIMARY KEY,
+    phase TEXT NOT NULL DEFAULT 'pending',
+    parent_id TEXT,
+    goal TEXT NOT NULL DEFAULT '',
+    current_step INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_agent_tasks_phase ON agent_tasks(phase);
+CREATE INDEX IF NOT EXISTS idx_agent_tasks_parent ON agent_tasks(parent_id);
+
+CREATE TABLE IF NOT EXISTS task_steps (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id TEXT NOT NULL REFERENCES agent_tasks(id),
+    description TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'pending',
+    output TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_task_steps_task ON task_steps(task_id);
+
+CREATE TABLE IF NOT EXISTS agent_delegation_outcomes (
+    id TEXT PRIMARY KEY,
+    parent_task_id TEXT,
+    subagent_id TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'pending',
+    result_summary TEXT NOT NULL DEFAULT '',
+    error_message TEXT NOT NULL DEFAULT '',
+    duration_ms INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_agent_delegation_parent ON agent_delegation_outcomes(parent_task_id);
 `
 
 // initSchema creates the base schema and seeds the version if this is a fresh database.

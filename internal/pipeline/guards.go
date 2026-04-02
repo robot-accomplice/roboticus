@@ -36,6 +36,9 @@ type ApplyResult struct {
 	Violations     []string
 }
 
+// Len returns the number of guards in the chain.
+func (gc *GuardChain) Len() int { return len(gc.guards) }
+
 // Apply runs all guards on the content. Returns the final result.
 func (gc *GuardChain) Apply(content string) string {
 	result := gc.ApplyFull(content)
@@ -210,13 +213,45 @@ func (g *RepetitionGuard) Check(content string) GuardResult {
 	return GuardResult{Passed: true, Content: content}
 }
 
-// DefaultGuardChain returns the standard full guard chain.
+// DefaultGuardChain returns the standard guard chain (backward compat).
 func DefaultGuardChain() *GuardChain {
+	return FullGuardChain()
+}
+
+// FullGuardChain returns all 17 guards for standard inference.
+func FullGuardChain() *GuardChain {
 	return NewGuardChain(
+		// Core guards.
 		&EmptyResponseGuard{},
 		NewContentClassificationGuard(),
 		NewRepetitionGuard(),
 		NewSystemPromptLeakGuard(),
 		NewInternalMarkerGuard(),
+		// Behavioral guards.
+		&SubagentClaimGuard{},
+		&TaskDeferralGuard{},
+		&InternalJargonGuard{},
+		&DeclaredActionGuard{},
+		// Quality guards.
+		&LowValueParrotingGuard{},
+		&NonRepetitionGuardV2{},
+		&OutputContractGuard{},
+		&UserEchoGuard{},
+		// Truthfulness guards.
+		&ModelIdentityTruthGuard{},
+		&CurrentEventsTruthGuard{},
+		&ExecutionTruthGuard{},
+		&PersonalityIntegrityGuard{},
+	)
+}
+
+// StreamGuardChain returns a lightweight chain for SSE streaming.
+func StreamGuardChain() *GuardChain {
+	return NewGuardChain(
+		&EmptyResponseGuard{},
+		&SubagentClaimGuard{},
+		&InternalJargonGuard{},
+		&PersonalityIntegrityGuard{},
+		&NonRepetitionGuardV2{},
 	)
 }

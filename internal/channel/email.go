@@ -28,6 +28,13 @@ type EmailConfig struct {
 	PollInterval   int      `mapstructure:"poll_interval"` // seconds, default 30
 }
 
+// Email protocol defaults.
+const (
+	DefaultSMTPPort        = 587
+	DefaultIMAPPort        = 993
+	DefaultPollIntervalSec = 30
+)
+
 // EmailAdapter implements Adapter for email (SMTP send, IMAP receive).
 type EmailAdapter struct {
 	cfg           EmailConfig
@@ -39,13 +46,13 @@ type EmailAdapter struct {
 // NewEmailAdapter creates an email channel adapter.
 func NewEmailAdapter(cfg EmailConfig) *EmailAdapter {
 	if cfg.SMTPPort == 0 {
-		cfg.SMTPPort = 587
+		cfg.SMTPPort = DefaultSMTPPort
 	}
 	if cfg.IMAPPort == 0 {
-		cfg.IMAPPort = 993
+		cfg.IMAPPort = DefaultIMAPPort
 	}
 	if cfg.PollInterval == 0 {
-		cfg.PollInterval = 30
+		cfg.PollInterval = DefaultPollIntervalSec
 	}
 	if len(cfg.AllowedSenders) == 0 {
 		cfg.DenyOnEmpty = true
