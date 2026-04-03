@@ -73,7 +73,7 @@ func TestService_Complete_Fallback(t *testing.T) {
 	failMock := &mockHTTP{statusCode: 500, body: "error"}
 	successMock := &mockHTTP{
 		statusCode: 200,
-		body: `{"id":"fb","model":"fallback","choices":[{"message":{"content":"fallback response"},"finish_reason":"stop"}],"usage":{}}`,
+		body:       `{"id":"fb","model":"fallback","choices":[{"message":{"content":"fallback response"},"finish_reason":"stop"}],"usage":{}}`,
 	}
 
 	failClient, _ := NewClientWithHTTP(&Provider{

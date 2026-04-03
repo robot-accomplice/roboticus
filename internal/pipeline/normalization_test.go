@@ -25,7 +25,7 @@ func TestDetectNormalization_MalformedToolCall(t *testing.T) {
 		want  NormalizationPattern
 	}{
 		{"Action: search\nAction Input: {\"query\": \"test\"", PatternMalformedToolCall}, // missing close brace
-		{"tool_call without any json", PatternMalformedToolCall},                        // no braces at all
+		{"tool_call without any json", PatternMalformedToolCall},                         // no braces at all
 	}
 	for _, tt := range tests {
 		got := DetectNormalizationIssue(tt.input)

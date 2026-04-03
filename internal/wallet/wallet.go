@@ -144,8 +144,8 @@ func (w *Wallet) generate() error {
 func (w *Wallet) fromBytes(keyBytes []byte) error {
 	// Construct ECDSA private key on secp256k1 curve.
 	privKey := new(ecdsa.PrivateKey)
-	privKey.D = new(big.Int).SetBytes(keyBytes)                                              //nolint:staticcheck // TODO: migrate to modern crypto API
-	privKey.PublicKey.Curve = secp256k1Curve()                                                 //nolint:staticcheck // TODO: migrate to modern crypto API
+	privKey.D = new(big.Int).SetBytes(keyBytes)                                                 //nolint:staticcheck // TODO: migrate to modern crypto API
+	privKey.PublicKey.Curve = secp256k1Curve()                                                  //nolint:staticcheck // TODO: migrate to modern crypto API
 	privKey.PublicKey.X, privKey.PublicKey.Y = privKey.PublicKey.Curve.ScalarBaseMult(keyBytes) //nolint:staticcheck // TODO: migrate to modern crypto API
 
 	w.privateKey = privKey

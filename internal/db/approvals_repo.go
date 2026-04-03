@@ -7,15 +7,15 @@ import (
 
 // ApprovalRow represents a row in the approval_requests table.
 type ApprovalRow struct {
-	ID         string
-	ToolName   string
-	ToolInput  string
-	SessionID  string
-	Status     string // "pending", "approved", "denied", "timed_out"
-	DecidedBy  string
-	DecidedAt  string
-	TimeoutAt  string
-	CreatedAt  string
+	ID        string
+	ToolName  string
+	ToolInput string
+	SessionID string
+	Status    string // "pending", "approved", "denied", "timed_out"
+	DecidedBy string
+	DecidedAt string
+	TimeoutAt string
+	CreatedAt string
 }
 
 // ApprovalsRepository handles tool-call approval queue persistence.

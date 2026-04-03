@@ -571,7 +571,7 @@ CREATE INDEX IF NOT EXISTS idx_hygiene_log_sweep ON hygiene_log(sweep_at DESC);
 
 CREATE TABLE IF NOT EXISTS pipeline_traces (
     id TEXT PRIMARY KEY,
-    turn_id TEXT NOT NULL REFERENCES turns(id),
+    turn_id TEXT NOT NULL,
     session_id TEXT NOT NULL DEFAULT '',
     channel TEXT NOT NULL DEFAULT 'api',
     total_ms INTEGER NOT NULL DEFAULT 0,

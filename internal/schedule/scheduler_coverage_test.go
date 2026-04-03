@@ -8,7 +8,7 @@ import (
 func TestDurableScheduler_CalculateNextRun(t *testing.T) {
 	s := NewDurableScheduler()
 	job := &CronJob{
-		Kind: ScheduleCron,
+		Kind:       ScheduleCron,
 		Expression: "0 9 * * *",
 	}
 	now := time.Date(2026, 3, 31, 8, 0, 0, 0, time.UTC)
@@ -24,7 +24,7 @@ func TestDurableScheduler_CalculateNextRun(t *testing.T) {
 func TestDurableScheduler_CalculateNextRun_AlreadyPassed(t *testing.T) {
 	s := NewDurableScheduler()
 	job := &CronJob{
-		Kind: ScheduleCron,
+		Kind:       ScheduleCron,
 		Expression: "0 9 * * *",
 	}
 	now := time.Date(2026, 3, 31, 10, 0, 0, 0, time.UTC)
@@ -73,9 +73,9 @@ func TestDurableScheduler_IsDue_Cron(t *testing.T) {
 	s := NewDurableScheduler()
 	now := time.Date(2026, 3, 31, 9, 0, 0, 0, time.UTC)
 	job := &CronJob{
-		Kind: ScheduleCron,
+		Kind:       ScheduleCron,
 		Expression: "0 9 * * *",
-		Enabled:      true,
+		Enabled:    true,
 	}
 	if !s.IsDue(job, now) {
 		t.Error("cron job should be due at 9:00")

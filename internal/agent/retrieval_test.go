@@ -137,4 +137,3 @@ func TestRetrieve_ActiveMemoryWrapper(t *testing.T) {
 		t.Errorf("result should start with [Active Memory], got prefix: %q", result[:min(30, len(result))])
 	}
 }
-

@@ -57,9 +57,9 @@ type RevenueOpportunityFilter struct {
 
 // StrategyAggregate summarizes opportunities grouped by strategy.
 type StrategyAggregate struct {
-	Strategy              string
-	Count                 int
-	TotalExpectedRevenue  float64
+	Strategy             string
+	Count                int
+	TotalExpectedRevenue float64
 }
 
 // StatusCount summarizes opportunity counts by status.

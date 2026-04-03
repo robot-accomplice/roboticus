@@ -33,8 +33,8 @@ func (p NormalizationPattern) String() string {
 const MaxNormalizationRetries = 2
 
 var (
-	emptyActionRe   = regexp.MustCompile(`(?i)Action\s*:\s*$`)
-	narratedToolRe  = regexp.MustCompile(`(?i)(I would use|I'll run|let me use the|I should call|I need to invoke)\s+\w+`)
+	emptyActionRe  = regexp.MustCompile(`(?i)Action\s*:\s*$`)
+	narratedToolRe = regexp.MustCompile(`(?i)(I would use|I'll run|let me use the|I should call|I need to invoke)\s+\w+`)
 )
 
 // DetectNormalizationIssue checks if a response has a malformed tool pattern.

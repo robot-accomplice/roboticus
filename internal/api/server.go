@@ -61,6 +61,7 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 	r.Use(chimw.Recoverer)
 	r.Use(chimw.Timeout(cfg.WriteTimeout))
 	r.Use(SecurityHeaders)
+	r.Use(CORSMiddleware(state.Config.CORS.AllowedOrigins, state.Config.CORS.MaxAgeSeconds))
 	r.Use(BodyLimit(1 << 20)) // 1MB
 	r.Use(RateLimitMiddleware(
 		state.Config.RateLimit.Enabled,

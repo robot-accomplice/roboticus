@@ -8,7 +8,7 @@ import (
 
 func TestSecp256k1_GeneratorOnCurve(t *testing.T) {
 	curve := secp256k1Curve()
-	params := curve.Params() //nolint:staticcheck // TODO: migrate to modern crypto API
+	params := curve.Params()                    //nolint:staticcheck // TODO: migrate to modern crypto API
 	if !curve.IsOnCurve(params.Gx, params.Gy) { //nolint:staticcheck // TODO: migrate to modern crypto API
 		t.Fatal("generator point is not on curve")
 	}
@@ -29,7 +29,7 @@ func TestSecp256k1_ScalarBaseMult_KnownVector(t *testing.T) {
 	// Private key = 1 should give the generator point.
 	k := big.NewInt(1).Bytes()
 	x, y := curve.ScalarBaseMult(k) //nolint:staticcheck // TODO: migrate to modern crypto API
-	params := curve.Params()         //nolint:staticcheck // TODO: migrate to modern crypto API
+	params := curve.Params()        //nolint:staticcheck // TODO: migrate to modern crypto API
 	if x.Cmp(params.Gx) != 0 || y.Cmp(params.Gy) != 0 {
 		t.Fatal("k=1 should produce generator point")
 	}
@@ -37,8 +37,8 @@ func TestSecp256k1_ScalarBaseMult_KnownVector(t *testing.T) {
 
 func TestSecp256k1_ScalarMult_Doubling(t *testing.T) {
 	curve := secp256k1Curve()
-	params := curve.Params()                              //nolint:staticcheck // TODO: migrate to modern crypto API
-	x1, y1 := curve.ScalarBaseMult(big.NewInt(2).Bytes()) //nolint:staticcheck // TODO: migrate to modern crypto API
+	params := curve.Params()                                        //nolint:staticcheck // TODO: migrate to modern crypto API
+	x1, y1 := curve.ScalarBaseMult(big.NewInt(2).Bytes())           //nolint:staticcheck // TODO: migrate to modern crypto API
 	x2, y2 := curve.Add(params.Gx, params.Gy, params.Gx, params.Gy) //nolint:staticcheck // TODO: migrate to modern crypto API
 	if x1.Cmp(x2) != 0 || y1.Cmp(y2) != 0 {
 		t.Fatal("2*G != G+G")
@@ -52,8 +52,8 @@ func TestSecp256k1_AddCommutativity(t *testing.T) {
 	curve := secp256k1Curve()
 	px, py := curve.ScalarBaseMult(big.NewInt(2).Bytes()) //nolint:staticcheck // TODO: migrate to modern crypto API
 	qx, qy := curve.ScalarBaseMult(big.NewInt(3).Bytes()) //nolint:staticcheck // TODO: migrate to modern crypto API
-	r1x, r1y := curve.Add(px, py, qx, qy) //nolint:staticcheck // TODO: migrate to modern crypto API
-	r2x, r2y := curve.Add(qx, qy, px, py) //nolint:staticcheck // TODO: migrate to modern crypto API
+	r1x, r1y := curve.Add(px, py, qx, qy)                 //nolint:staticcheck // TODO: migrate to modern crypto API
+	r2x, r2y := curve.Add(qx, qy, px, py)                 //nolint:staticcheck // TODO: migrate to modern crypto API
 	if r1x.Cmp(r2x) != 0 || r1y.Cmp(r2y) != 0 {
 		t.Fatal("point addition is not commutative")
 	}

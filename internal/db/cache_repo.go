@@ -7,12 +7,12 @@ import (
 
 // CacheRow represents a row in the semantic_cache table.
 type CacheRow struct {
-	ID        string
+	ID         string
 	PromptHash string
-	Response  string
-	Model     string
-	HitCount  int
-	CreatedAt string
+	Response   string
+	Model      string
+	HitCount   int
+	CreatedAt  string
 }
 
 // CacheRepository handles semantic-cache persistence.

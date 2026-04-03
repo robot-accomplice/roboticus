@@ -43,7 +43,7 @@ type ServiceConfig struct {
 	Cache           CacheConfig
 	Breaker         CircuitBreakerConfig
 	Router          RouterConfig
-	ConfidenceFloor float64              // minimum confidence to accept local response (0 = use default)
+	ConfidenceFloor float64                // minimum confidence to accept local response (0 = use default)
 	BGWorker        *core.BackgroundWorker // shared worker pool for async tasks
 }
 
@@ -221,6 +221,16 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 func (s *Service) Stream(ctx context.Context, req *Request) (<-chan StreamChunk, <-chan error) {
 	req.Stream = true
 
+	// Cache check: if we have a cached response, emit it as a single chunk.
+	if cached := s.cache.Get(ctx, req); cached != nil {
+		chunks := make(chan StreamChunk, 1)
+		errs := make(chan error)
+		chunks <- StreamChunk{Delta: cached.Content, FinishReason: "stop"}
+		close(chunks)
+		close(errs)
+		return chunks, errs
+	}
+
 	// Route if needed.
 	if req.Model == "" {
 		target := s.router.Select(req)
@@ -248,9 +258,9 @@ func (s *Service) Stream(ctx context.Context, req *Request) (<-chan StreamChunk,
 
 		chunks, errs := client.Stream(ctx, req)
 
-		// Wrap to track circuit breaker state from stream results.
-		// wrapStreamBreaker owns the original errs channel; a new outErrs is returned to the caller.
+		// Wrap to track circuit breaker state and cache the full response.
 		outChunks, outErrs := s.wrapStreamBreaker(ctx, chunks, errs, cb, providerName)
+		outChunks = s.wrapStreamCache(ctx, outChunks, req)
 		return outChunks, outErrs
 	}
 
@@ -261,6 +271,27 @@ func (s *Service) Stream(ctx context.Context, req *Request) (<-chan StreamChunk,
 	errs <- core.NewError(core.ErrLLM, "no providers available for streaming")
 	close(errs)
 	return chunks, errs
+}
+
+// wrapStreamCache accumulates streamed chunks and caches the full response.
+func (s *Service) wrapStreamCache(ctx context.Context, in <-chan StreamChunk, req *Request) <-chan StreamChunk {
+	out := make(chan StreamChunk, 32)
+	go func() {
+		defer close(out)
+		var full strings.Builder
+		for chunk := range core.OrDone(ctx.Done(), in) {
+			full.WriteString(chunk.Delta)
+			select {
+			case out <- chunk:
+			case <-ctx.Done():
+				return
+			}
+		}
+		if content := full.String(); content != "" {
+			s.cache.Put(ctx, req, &Response{Content: content})
+		}
+	}()
+	return out
 }
 
 // wrapStreamBreaker wraps a stream to record circuit breaker state.

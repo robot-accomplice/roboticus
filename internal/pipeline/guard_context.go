@@ -45,8 +45,8 @@ type ToolResultEntry struct {
 
 // DelegationProvenance tracks whether subagent delegation steps completed.
 type DelegationProvenance struct {
-	SubagentTaskStarted   bool
-	SubagentTaskCompleted bool
+	SubagentTaskStarted    bool
+	SubagentTaskCompleted  bool
 	SubagentResultAttached bool
 }
 

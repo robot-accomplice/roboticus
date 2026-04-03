@@ -590,8 +590,19 @@ func (d *Daemon) run() {
 		instanceID, _ := os.Hostname()
 		worker := schedule.NewCronWorker(d.store, instanceID, 60*time.Second,
 			schedule.CronExecutorFunc(func(ctx context.Context, job *schedule.CronJob) error {
-				log.Info().Str("job", job.Name).Msg("cron job executing")
-				return nil
+				log.Info().Str("job", job.Name).Str("agent", job.AgentID).Msg("cron job executing")
+				input := pipeline.Input{
+					Content: job.PayloadJSON,
+					AgentID: job.AgentID,
+				}
+				if input.Content == "" {
+					input.Content = fmt.Sprintf("Execute scheduled job: %s", job.Name)
+				}
+				_, err := pipeline.RunPipeline(ctx, d.pipe, pipeline.PresetCron(), input)
+				if err != nil {
+					log.Error().Err(err).Str("job", job.Name).Msg("cron job pipeline failed")
+				}
+				return err
 			}))
 		worker.Run(ctx)
 	}()
@@ -694,7 +705,10 @@ func (d *Daemon) runChannelListener(ctx context.Context) {
 		case <-ticker.C:
 			messages := d.router.PollAll(ctx)
 			for _, msg := range messages {
-				go d.handleInbound(ctx, msg)
+				m := msg
+				d.bgWorker.Submit("inbound:"+m.Platform, func(bgCtx context.Context) {
+					d.handleInbound(bgCtx, m)
+				})
 			}
 		}
 	}

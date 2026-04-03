@@ -77,9 +77,9 @@ func (v *DKIMVerifier) Verify(rawHeaders string) DKIMResult {
 }
 
 type dkimSignature struct {
-	domain           string
-	selector         string
-	signatureB64     string
+	domain            string
+	selector          string
+	signatureB64      string
 	canonicalizedData string
 }
 
@@ -116,9 +116,9 @@ func extractDKIMSignature(rawHeaders string) *dkimSignature {
 	}
 
 	return &dkimSignature{
-		domain:           domain,
-		selector:         selector,
-		signatureB64:     sigB64,
+		domain:            domain,
+		selector:          selector,
+		signatureB64:      sigB64,
 		canonicalizedData: rawHeaders, // simplified: full headers as canonical data
 	}
 }

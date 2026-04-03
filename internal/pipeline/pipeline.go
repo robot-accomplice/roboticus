@@ -196,8 +196,8 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 		if result := p.skills.TryMatch(ctx, session, content); result != nil {
 			tr.Annotate("matched", true)
 			tr.EndSpan("ok")
-			p.storeTrace(ctx, tr, msgID, cfg.ChannelLabel)
-			return result, nil
+			p.storeTrace(ctx, tr, session.ID, msgID, cfg.ChannelLabel)
+			return p.guardOutcome(cfg, result), nil
 		}
 	}
 	tr.EndSpan("skipped")
@@ -208,8 +208,8 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 		if result := p.tryShortcut(ctx, session, content); result != nil {
 			tr.Annotate("matched", true)
 			tr.EndSpan("ok")
-			p.storeTrace(ctx, tr, msgID, cfg.ChannelLabel)
-			return result, nil
+			p.storeTrace(ctx, tr, session.ID, msgID, cfg.ChannelLabel)
+			return p.guardOutcome(cfg, result), nil
 		}
 	}
 	tr.EndSpan("skipped")
@@ -228,26 +228,35 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 	}
 	if err != nil {
 		tr.EndSpan("error")
-		p.storeTrace(ctx, tr, msgID, cfg.ChannelLabel)
+		p.storeTrace(ctx, tr, session.ID, msgID, cfg.ChannelLabel)
 		return nil, err
 	}
 	tr.EndSpan("ok")
 
-	p.storeTrace(ctx, tr, msgID, cfg.ChannelLabel)
+	p.storeTrace(ctx, tr, session.ID, msgID, cfg.ChannelLabel)
 	return outcome, nil
 }
 
+// guardOutcome applies the guard chain to an outcome if guards are configured.
+// This ensures skill, shortcut, and all other early-return paths are filtered.
+func (p *Pipeline) guardOutcome(cfg Config, outcome *Outcome) *Outcome {
+	if p.guards != nil && cfg.GuardSet != GuardSetNone && outcome != nil {
+		outcome.Content = p.guards.Apply(outcome.Content)
+	}
+	return outcome
+}
+
 // storeTrace persists a pipeline trace to the database (best-effort).
-func (p *Pipeline) storeTrace(ctx context.Context, tr *TraceRecorder, turnID, channel string) {
+func (p *Pipeline) storeTrace(ctx context.Context, tr *TraceRecorder, sessionID, msgID, channel string) {
 	if p.store == nil {
 		return
 	}
-	trace := tr.Finish(turnID, channel)
+	trace := tr.Finish(msgID, channel)
 	_, err := p.store.ExecContext(ctx,
-		`INSERT INTO pipeline_traces (id, turn_id, channel, total_ms, stages_json)
-		 VALUES (?, ?, ?, ?, ?)`,
-		db.NewID(), trace.TurnID, trace.Channel, trace.TotalMs, trace.StagesJSON())
+		`INSERT INTO pipeline_traces (id, turn_id, session_id, channel, total_ms, stages_json)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		db.NewID(), trace.TurnID, sessionID, trace.Channel, trace.TotalMs, trace.StagesJSON())
 	if err != nil {
-		log.Debug().Err(err).Msg("failed to store pipeline trace")
+		log.Warn().Err(err).Msg("failed to store pipeline trace")
 	}
 }

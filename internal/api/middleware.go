@@ -2,6 +2,7 @@ package api
 
 import (
 	"crypto/subtle"
+	"fmt"
 	"net"
 	"net/http"
 	"strings"
@@ -9,6 +10,52 @@ import (
 
 	"github.com/rs/zerolog/log"
 )
+
+// CORSMiddleware handles cross-origin requests. If allowedOrigins is empty,
+// the middleware permits same-origin requests only (no Access-Control headers).
+func CORSMiddleware(allowedOrigins []string, maxAge int) func(http.Handler) http.Handler {
+	allowed := make(map[string]bool, len(allowedOrigins))
+	allowAll := false
+	for _, o := range allowedOrigins {
+		if o == "*" {
+			allowAll = true
+		}
+		allowed[o] = true
+	}
+	if maxAge <= 0 {
+		maxAge = 3600
+	}
+	maxAgeStr := fmt.Sprintf("%d", maxAge)
+
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			origin := r.Header.Get("Origin")
+			if origin == "" {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			if !allowAll && !allowed[origin] {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
+			w.Header().Set("Vary", "Origin")
+
+			if r.Method == http.MethodOptions {
+				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, x-api-key, Authorization")
+				w.Header().Set("Access-Control-Max-Age", maxAgeStr)
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+
+			next.ServeHTTP(w, r)
+		})
+	}
+}
 
 // APIKeyAuth is middleware that validates the API key from x-api-key header
 // or Authorization: Bearer token. Empty apiKey means loopback-only access.
@@ -118,4 +165,3 @@ func (rw *responseWriter) Flush() {
 func (rw *responseWriter) Unwrap() http.ResponseWriter {
 	return rw.ResponseWriter
 }
-

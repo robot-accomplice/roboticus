@@ -34,4 +34,4 @@ func NewSandbox(cfg SandboxConfig) Sandbox {
 type noopSandbox struct{}
 
 func (s *noopSandbox) Apply(_ *exec.Cmd) error { return nil }
-func (s *noopSandbox) Available() bool          { return false }
+func (s *noopSandbox) Available() bool         { return false }

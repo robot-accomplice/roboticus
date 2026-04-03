@@ -218,4 +218,3 @@ func TestPipeline_StoresUserMessage(t *testing.T) {
 		t.Error("user message should have been stored")
 	}
 }
-

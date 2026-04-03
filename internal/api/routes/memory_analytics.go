@@ -97,13 +97,13 @@ func GetMemoryAnalytics(store *db.Store) http.HandlerFunc {
 		_ = row.Scan(&relationshipCount)
 
 		writeJSON(w, http.StatusOK, map[string]any{
-			"period_hours":          hours,
-			"total_turns":           totalTurns,
-			"retrieval_hits":        turnsWithMemory,
-			"hit_rate":              hitRate,
+			"period_hours":           hours,
+			"total_turns":            totalTurns,
+			"retrieval_hits":         turnsWithMemory,
+			"hit_rate":               hitRate,
 			"avg_budget_utilization": avgUtilization,
-			"memory_roi":            memoryROI,
-			"tier_distribution":     tierDist,
+			"memory_roi":             memoryROI,
+			"tier_distribution":      tierDist,
 			"entry_counts": map[string]int64{
 				"working":      workingCount,
 				"episodic":     episodicCount,

@@ -11,10 +11,10 @@ import (
 )
 
 const (
-	jobObjectLimitKillOnJobClose  = 0x00002000
-	jobObjectLimitActiveProcess   = 0x00000008
-	jobObjectLimitProcessMemory   = 0x00000100
-	defaultMaxActiveProcesses     = 8
+	jobObjectLimitKillOnJobClose = 0x00002000
+	jobObjectLimitActiveProcess  = 0x00000008
+	jobObjectLimitProcessMemory  = 0x00000100
+	defaultMaxActiveProcesses    = 8
 )
 
 // windowsSandbox confines child processes using Windows Job Objects.

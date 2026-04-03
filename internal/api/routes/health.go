@@ -14,7 +14,6 @@ import (
 	"goboticus/internal/llm"
 )
 
-
 // Health returns the health check endpoint handler.
 func Health(store *db.Store, llmSvc *llm.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

@@ -20,8 +20,8 @@ type ThemeManifest struct {
 }
 
 var (
-	catalogMu        sync.RWMutex
-	installedThemes  = make(map[string]bool)
+	catalogMu       sync.RWMutex
+	installedThemes = make(map[string]bool)
 )
 
 var builtinThemes = []ThemeManifest{

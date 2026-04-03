@@ -14,7 +14,6 @@ func TestPlanner_Conversation(t *testing.T) {
 	}
 }
 
-
 func TestPlanner_BreakerOpen(t *testing.T) {
 	p := NewActionPlanner(true)
 	state := &TaskOperatingState{
@@ -42,8 +41,8 @@ func TestPlanner_ExplicitWorkflowWithRoster(t *testing.T) {
 func TestPlanner_RecallGap(t *testing.T) {
 	p := NewActionPlanner(true)
 	state := &TaskOperatingState{
-		Classification:   ClassTask,
-		MemoryConfidence: MemoryConfidence{RecallGap: true, AvgSimilarity: 0.3},
+		Classification:    ClassTask,
+		MemoryConfidence:  MemoryConfidence{RecallGap: true, AvgSimilarity: 0.3},
 		RuntimeConstraint: RuntimeConstraints{RemainingBudget: 10000},
 	}
 	plan := p.Plan(state)

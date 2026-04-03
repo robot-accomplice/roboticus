@@ -77,11 +77,11 @@ func GetThrottleStats(store *db.Store) http.HandlerFunc {
 		_ = row.Scan(&slowdownCount, &quarantineCount)
 
 		writeJSON(w, http.StatusOK, map[string]any{
-			"period_hours":      hours,
-			"total_events":      totalEvents,
-			"by_signal_type":    byType,
-			"top_actors":        topActors,
-			"active_slowdowns":  slowdownCount,
+			"period_hours":       hours,
+			"total_events":       totalEvents,
+			"by_signal_type":     byType,
+			"top_actors":         topActors,
+			"active_slowdowns":   slowdownCount,
 			"active_quarantines": quarantineCount,
 		})
 	}

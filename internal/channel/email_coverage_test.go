@@ -6,10 +6,10 @@ import (
 
 func TestNewEmailAdapter(t *testing.T) {
 	cfg := EmailConfig{
-		SMTPHost:     "smtp.example.com",
-		IMAPHost:     "imap.example.com",
-		FromAddress:  "bot@example.com",
-		Password:     "secret",
+		SMTPHost:    "smtp.example.com",
+		IMAPHost:    "imap.example.com",
+		FromAddress: "bot@example.com",
+		Password:    "secret",
 	}
 	adapter := NewEmailAdapter(cfg)
 	if adapter == nil {

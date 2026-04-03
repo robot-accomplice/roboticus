@@ -461,7 +461,9 @@ func TestLiveSmokeTest(t *testing.T) {
 		if err != nil {
 			t.Fatalf("seed cron job: %v", err)
 		}
-		defer func() { _, _ = store.ExecContext(context.Background(), `DELETE FROM cron_jobs WHERE id = 'lease-test'`) }()
+		defer func() {
+			_, _ = store.ExecContext(context.Background(), `DELETE FROM cron_jobs WHERE id = 'lease-test'`)
+		}()
 
 		// Acquire lease — should succeed on the inline columns.
 		res, err := store.ExecContext(context.Background(),

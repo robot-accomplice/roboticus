@@ -4,7 +4,7 @@ package llm
 type CompressionStrategy int
 
 const (
-	StrategyTruncate        CompressionStrategy = iota // Drop oldest messages
+	StrategyTruncate         CompressionStrategy = iota // Drop oldest messages
 	StrategyDropLowRelevance                            // Drop least relevant
 )
 

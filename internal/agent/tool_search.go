@@ -18,9 +18,9 @@ type RankedTool struct {
 // ToolSearchConfig controls tool ranking and pruning behavior.
 type ToolSearchConfig struct {
 	TopK              int      `json:"top_k" mapstructure:"top_k"`                             // max tools to return (default 15)
-	TokenBudget       int      `json:"token_budget" mapstructure:"token_budget"`                // max token cost (default 4000)
-	MCPLatencyPenalty float64  `json:"mcp_latency_penalty" mapstructure:"mcp_latency_penalty"`  // score penalty for MCP tools (default 0.05)
-	AlwaysInclude     []string `json:"always_include" mapstructure:"always_include"`            // tools always included
+	TokenBudget       int      `json:"token_budget" mapstructure:"token_budget"`               // max token cost (default 4000)
+	MCPLatencyPenalty float64  `json:"mcp_latency_penalty" mapstructure:"mcp_latency_penalty"` // score penalty for MCP tools (default 0.05)
+	AlwaysInclude     []string `json:"always_include" mapstructure:"always_include"`           // tools always included
 }
 
 // DefaultToolSearchConfig returns sensible defaults.
@@ -45,11 +45,11 @@ type ToolSearchEngine struct {
 
 // ToolSearchStats reports search metrics for observability.
 type ToolSearchStats struct {
-	CandidatesConsidered int             `json:"candidates_considered"`
-	CandidatesSelected   int             `json:"candidates_selected"`
-	CandidatesPruned     int             `json:"candidates_pruned"`
-	TokenSavings         int             `json:"token_savings"`
-	TopScores            []RankedTool    `json:"top_scores"`
+	CandidatesConsidered int          `json:"candidates_considered"`
+	CandidatesSelected   int          `json:"candidates_selected"`
+	CandidatesPruned     int          `json:"candidates_pruned"`
+	TokenSavings         int          `json:"token_savings"`
+	TopScores            []RankedTool `json:"top_scores"`
 }
 
 // NewToolSearchEngine creates a tool search engine with the given config.

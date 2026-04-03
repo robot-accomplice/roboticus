@@ -210,7 +210,7 @@ func (p *Pipeline) tryShortcut(_ context.Context, session *Session, content stri
 	if lower == "help" || lower == "/help" {
 		return &Outcome{
 			SessionID: session.ID,
-			Content: fmt.Sprintf("%s can help with:\n- General conversation and reasoning\n- File operations and code tasks\n- Web search and information retrieval\n- Scheduling and reminders\n- Financial operations\n\nJust describe what you need.", session.AgentName),
+			Content:   fmt.Sprintf("%s can help with:\n- General conversation and reasoning\n- File operations and code tasks\n- Web search and information retrieval\n- Scheduling and reminders\n- Financial operations\n\nJust describe what you need.", session.AgentName),
 		}
 	}
 

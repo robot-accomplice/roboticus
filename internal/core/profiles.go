@@ -13,7 +13,7 @@ import (
 type ProfileEntry struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
-	Path        string `json:"path"`      // relative to base dir; empty = root
+	Path        string `json:"path"` // relative to base dir; empty = root
 	Active      bool   `json:"active"`
 	InstalledAt string `json:"installed_at,omitempty"`
 	Version     string `json:"version,omitempty"`

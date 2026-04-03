@@ -16,30 +16,37 @@ var bundledProvidersTOML string
 
 // Config is the top-level application configuration, loaded from TOML.
 type Config struct {
-	Agent     AgentConfig               `json:"agent" mapstructure:"agent"`
-	Server    ServerConfig              `json:"server" mapstructure:"server"`
-	Database  DatabaseConfig            `json:"database" mapstructure:"database"`
-	Models    ModelsConfig              `json:"models" mapstructure:"models"`
-	Providers map[string]ProviderConfig `json:"providers" mapstructure:"providers"`
-	Memory    MemoryConfig              `json:"memory" mapstructure:"memory"`
-	Cache     CacheConfig               `json:"cache" mapstructure:"cache"`
-	Treasury  TreasuryConfig            `json:"treasury" mapstructure:"treasury"`
-	Channels  ChannelsConfig            `json:"channels" mapstructure:"channels"`
-	Security  SecurityConfig            `json:"security" mapstructure:"security"`
-	Skills    SkillsConfig              `json:"skills" mapstructure:"skills"`
-	Session   SessionConfig             `json:"session" mapstructure:"session"`
-	Wallet    WalletConfig              `json:"wallet" mapstructure:"wallet"`
-	Plugins   PluginsConfig             `json:"plugins" mapstructure:"plugins"`
-	Approvals ApprovalsConfig           `json:"approvals" mapstructure:"approvals"`
-	Abuse     AbuseConfig               `json:"abuse" mapstructure:"abuse"`
-	RateLimit RateLimitConfig           `json:"rate_limit" mapstructure:"rate_limit"`
-	MCP       MCPConfig                 `json:"mcp" mapstructure:"mcp"`
-	Matrix    MatrixChannelConfig       `json:"matrix" mapstructure:"matrix"`
-	Sandbox   SandboxCfg                `json:"sandbox" mapstructure:"sandbox"`
-	Classifier ClassifierConfig         `json:"classifier" mapstructure:"classifier"`
-	Planner   PlannerConfig             `json:"planner" mapstructure:"planner"`
-	Themes    ThemesConfig              `json:"themes" mapstructure:"themes"`
-	DKIM      DKIMConfig                `json:"dkim" mapstructure:"dkim"`
+	Agent      AgentConfig               `json:"agent" mapstructure:"agent"`
+	Server     ServerConfig              `json:"server" mapstructure:"server"`
+	Database   DatabaseConfig            `json:"database" mapstructure:"database"`
+	Models     ModelsConfig              `json:"models" mapstructure:"models"`
+	Providers  map[string]ProviderConfig `json:"providers" mapstructure:"providers"`
+	Memory     MemoryConfig              `json:"memory" mapstructure:"memory"`
+	Cache      CacheConfig               `json:"cache" mapstructure:"cache"`
+	Treasury   TreasuryConfig            `json:"treasury" mapstructure:"treasury"`
+	Channels   ChannelsConfig            `json:"channels" mapstructure:"channels"`
+	Security   SecurityConfig            `json:"security" mapstructure:"security"`
+	Skills     SkillsConfig              `json:"skills" mapstructure:"skills"`
+	Session    SessionConfig             `json:"session" mapstructure:"session"`
+	Wallet     WalletConfig              `json:"wallet" mapstructure:"wallet"`
+	Plugins    PluginsConfig             `json:"plugins" mapstructure:"plugins"`
+	Approvals  ApprovalsConfig           `json:"approvals" mapstructure:"approvals"`
+	Abuse      AbuseConfig               `json:"abuse" mapstructure:"abuse"`
+	RateLimit  RateLimitConfig           `json:"rate_limit" mapstructure:"rate_limit"`
+	MCP        MCPConfig                 `json:"mcp" mapstructure:"mcp"`
+	Matrix     MatrixChannelConfig       `json:"matrix" mapstructure:"matrix"`
+	Sandbox    SandboxCfg                `json:"sandbox" mapstructure:"sandbox"`
+	Classifier ClassifierConfig          `json:"classifier" mapstructure:"classifier"`
+	Planner    PlannerConfig             `json:"planner" mapstructure:"planner"`
+	Themes     ThemesConfig              `json:"themes" mapstructure:"themes"`
+	DKIM       DKIMConfig                `json:"dkim" mapstructure:"dkim"`
+	CORS       CORSConfig                `json:"cors" mapstructure:"cors"`
+}
+
+// CORSConfig holds cross-origin request settings.
+type CORSConfig struct {
+	AllowedOrigins []string `json:"allowed_origins" mapstructure:"allowed_origins"`
+	MaxAgeSeconds  int      `json:"max_age_seconds" mapstructure:"max_age_seconds"`
 }
 
 // MatrixChannelConfig holds Matrix homeserver connection settings.
@@ -68,8 +75,8 @@ type ClassifierConfig struct {
 
 // PlannerConfig holds action planner settings.
 type PlannerConfig struct {
-	Enabled                  bool `json:"enabled" mapstructure:"enabled"`
-	MaxNormalizationRetries  int  `json:"max_normalization_retries" mapstructure:"max_normalization_retries"`
+	Enabled                 bool `json:"enabled" mapstructure:"enabled"`
+	MaxNormalizationRetries int  `json:"max_normalization_retries" mapstructure:"max_normalization_retries"`
 }
 
 // ThemesConfig holds theme marketplace settings.
@@ -317,6 +324,9 @@ func DefaultConfig() Config {
 		},
 		Skills: SkillsConfig{
 			WatchMode: true,
+		},
+		CORS: CORSConfig{
+			MaxAgeSeconds: 3600,
 		},
 	}
 }

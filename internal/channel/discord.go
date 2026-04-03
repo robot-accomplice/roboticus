@@ -243,7 +243,6 @@ func (d *DiscordAdapter) gatewaySession(ctx context.Context, _ string) error {
 	}
 }
 
-
 func (d *DiscordAdapter) isGuildAllowed(guildID string) bool {
 	if len(d.cfg.AllowedGuildIDs) == 0 {
 		return !d.cfg.DenyOnEmpty

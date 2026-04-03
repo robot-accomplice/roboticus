@@ -17,13 +17,13 @@ import (
 
 // MatrixConfig holds Matrix homeserver connection settings.
 type MatrixConfig struct {
-	HomeserverURL string `json:"homeserver_url" mapstructure:"homeserver_url"`
-	AccessToken   string `json:"access_token" mapstructure:"access_token"`
-	DeviceID      string `json:"device_id" mapstructure:"device_id"`
+	HomeserverURL string   `json:"homeserver_url" mapstructure:"homeserver_url"`
+	AccessToken   string   `json:"access_token" mapstructure:"access_token"`
+	DeviceID      string   `json:"device_id" mapstructure:"device_id"`
 	AllowedRooms  []string `json:"allowed_rooms" mapstructure:"allowed_rooms"`
-	AutoJoin      bool   `json:"auto_join" mapstructure:"auto_join"`
-	E2EEEnabled   bool   `json:"e2ee_enabled" mapstructure:"e2ee_enabled"`
-	SyncTimeoutMs int    `json:"sync_timeout_ms" mapstructure:"sync_timeout_ms"`
+	AutoJoin      bool     `json:"auto_join" mapstructure:"auto_join"`
+	E2EEEnabled   bool     `json:"e2ee_enabled" mapstructure:"e2ee_enabled"`
+	SyncTimeoutMs int      `json:"sync_timeout_ms" mapstructure:"sync_timeout_ms"`
 }
 
 const (

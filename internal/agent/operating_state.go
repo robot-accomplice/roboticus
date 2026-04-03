@@ -80,35 +80,35 @@ const (
 
 // MemoryConfidence summarizes retrieval system health.
 type MemoryConfidence struct {
-	AvgSimilarity    float64
+	AvgSimilarity     float64
 	BudgetUtilization float64
-	RetrievalCount   int
-	RecallGap        bool
+	RetrievalCount    int
+	RecallGap         bool
 }
 
 // RuntimeConstraints captures resource limits.
 type RuntimeConstraints struct {
-	RemainingBudget   int
-	BudgetPressured   bool // true if < 2000 tokens
-	BreakerOpen       bool
-	InferenceMode     string
+	RemainingBudget int
+	BudgetPressured bool // true if < 2000 tokens
+	BreakerOpen     bool
+	InferenceMode   string
 }
 
 // ToolFit summarizes tool availability.
 type ToolFit struct {
-	AvailableCount    int
+	AvailableCount     int
 	HighRelevanceCount int
-	TokenSavings      int
-	MCPAvailable      bool
+	TokenSavings       int
+	MCPAvailable       bool
 }
 
 // RosterFit summarizes subagent availability.
 type RosterFit struct {
-	TaskableCount     int
-	FitCount          int
-	FitNames          []string
-	ExplicitWorkflow  bool
-	NamedToolMatch    bool
+	TaskableCount    int
+	FitCount         int
+	FitNames         []string
+	ExplicitWorkflow bool
+	NamedToolMatch   bool
 }
 
 // SkillFit summarizes skill availability.
@@ -151,10 +151,10 @@ func SynthesizeState(input TaskStateInput) *TaskOperatingState {
 
 	// Memory confidence.
 	state.MemoryConfidence = MemoryConfidence{
-		AvgSimilarity:    input.RetrievalAvgSimilarity,
+		AvgSimilarity:     input.RetrievalAvgSimilarity,
 		BudgetUtilization: input.RetrievalBudgetUsed,
-		RetrievalCount:   input.RetrievalCount,
-		RecallGap:        input.RetrievalAvgSimilarity < 0.5 && input.RetrievalBudgetUsed < 0.8,
+		RetrievalCount:    input.RetrievalCount,
+		RecallGap:         input.RetrievalAvgSimilarity < 0.5 && input.RetrievalBudgetUsed < 0.8,
 	}
 
 	// Runtime constraints.
@@ -168,10 +168,10 @@ func SynthesizeState(input TaskStateInput) *TaskOperatingState {
 	// Tool fit.
 	highRel := min(input.ToolCandidatesSelected, max(input.ToolCandidatesConsidered/3, 1))
 	state.ToolFit = ToolFit{
-		AvailableCount:    input.ToolCandidatesConsidered,
+		AvailableCount:     input.ToolCandidatesConsidered,
 		HighRelevanceCount: highRel,
-		TokenSavings:      input.ToolTokenSavings,
-		MCPAvailable:      input.MCPToolsAvailable,
+		TokenSavings:       input.ToolTokenSavings,
+		MCPAvailable:       input.MCPToolsAvailable,
 	}
 
 	// Roster fit.

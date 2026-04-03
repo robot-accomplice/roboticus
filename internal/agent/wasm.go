@@ -36,7 +36,7 @@ func DefaultWasmConfig(name, path string) WasmPluginConfig {
 		Name:               name,
 		WasmPath:           path,
 		MemoryLimitBytes:   64 * 1024 * 1024, // 64 MB
-		ExecutionTimeoutMs: 30_000,            // 30 seconds
+		ExecutionTimeoutMs: 30_000,           // 30 seconds
 	}
 }
 

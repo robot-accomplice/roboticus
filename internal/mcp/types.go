@@ -7,8 +7,8 @@ type McpServerConfig struct {
 	Name      string            `json:"name" mapstructure:"name"`
 	Transport string            `json:"transport" mapstructure:"transport"` // "stdio" or "sse"
 	Command   string            `json:"command" mapstructure:"command"`     // for stdio
-	Args      []string          `json:"args" mapstructure:"args"`          // for stdio
-	URL       string            `json:"url" mapstructure:"url"`            // for sse
+	Args      []string          `json:"args" mapstructure:"args"`           // for stdio
+	URL       string            `json:"url" mapstructure:"url"`             // for sse
 	Env       map[string]string `json:"env" mapstructure:"env"`
 	Enabled   bool              `json:"enabled" mapstructure:"enabled"`
 }

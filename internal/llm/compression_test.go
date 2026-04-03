@@ -87,7 +87,7 @@ func TestPromptCompressor_DropLowRelevance(t *testing.T) {
 
 func TestEstimateMessageTokens(t *testing.T) {
 	msgs := []Message{
-		{Role: "user", Content: "abcd"},     // 4 chars = 1 token
+		{Role: "user", Content: "abcd"},          // 4 chars = 1 token
 		{Role: "assistant", Content: "abcdefgh"}, // 8 chars = 2 tokens
 	}
 	total := estimateMessageTokens(msgs)

@@ -64,7 +64,7 @@ func (h *BotCommandHandler) TryHandle(ctx context.Context, content string, sessi
 func cmdHelp(_ context.Context, _ string, s *Session) (*Outcome, error) {
 	return &Outcome{
 		SessionID: s.ID,
-		Content: fmt.Sprintf("%s can help with:\n- General conversation and reasoning\n- File operations and code tasks\n- Web search and information retrieval\n- Scheduling and reminders\n- Financial operations\n\nCommands: /help, /status, /tools, /skills, /memory", s.AgentName),
+		Content:   fmt.Sprintf("%s can help with:\n- General conversation and reasoning\n- File operations and code tasks\n- Web search and information retrieval\n- Scheduling and reminders\n- Financial operations\n\nCommands: /help, /status, /tools, /skills, /memory", s.AgentName),
 	}, nil
 }
 
