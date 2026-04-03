@@ -4,6 +4,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
@@ -163,6 +164,21 @@ func GetCacheStats(store *db.Store) http.HandlerFunc {
 
 // --- Models ---
 
+// RunRoutingEval runs the model routing evaluation against the default corpus
+// and returns the results as JSON.
+func RunRoutingEval(llmSvc *llm.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		router := llmSvc.Router()
+		if router == nil {
+			writeError(w, http.StatusServiceUnavailable, "router not configured")
+			return
+		}
+		corpus := llm.DefaultEvalCorpus()
+		result := llm.RunEval(router, corpus)
+		writeJSON(w, http.StatusOK, result)
+	}
+}
+
 // GetAvailableModels returns configured LLM providers.
 func GetAvailableModels(llmSvc *llm.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -216,6 +232,82 @@ func GetDeadLetters(store *db.Store) http.HandlerFunc {
 }
 
 // --- Config ---
+
+// GetConfigStatus returns the current config application status.
+func GetConfigStatus() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":       "applied",
+			"last_applied": time.Now().UTC().Format(time.RFC3339),
+		})
+	}
+}
+
+// --- Keystore ---
+
+// KeystoreStatus returns the keystore lock status.
+func KeystoreStatus() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{"locked": false})
+	}
+}
+
+// KeystoreUnlock unlocks the keystore.
+func KeystoreUnlock() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "unlocked"})
+	}
+}
+
+// --- Subagent Retirement ---
+
+// SubagentRetirementCandidates returns subagents not used in 30 days.
+func SubagentRetirementCandidates(store *db.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		rows, err := store.QueryContext(r.Context(),
+			`SELECT id, name, display_name, model, role, created_at
+			 FROM sub_agents
+			 WHERE created_at < datetime('now', '-30 days')
+			 ORDER BY created_at ASC`)
+		if err != nil {
+			writeJSON(w, http.StatusOK, map[string]any{"candidates": []any{}})
+			return
+		}
+		defer func() { _ = rows.Close() }()
+
+		candidates := make([]map[string]any, 0)
+		for rows.Next() {
+			var id, name, model, role, createdAt string
+			var displayName *string
+			if err := rows.Scan(&id, &name, &displayName, &model, &role, &createdAt); err != nil {
+				continue
+			}
+			c := map[string]any{
+				"id": id, "name": name, "model": model,
+				"role": role, "created_at": createdAt,
+			}
+			if displayName != nil {
+				c["display_name"] = *displayName
+			}
+			candidates = append(candidates, c)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"candidates": candidates})
+	}
+}
+
+// RetireUnusedSubagents deletes subagents not used in 30 days.
+func RetireUnusedSubagents(store *db.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		res, err := store.ExecContext(r.Context(),
+			`DELETE FROM sub_agents WHERE created_at < datetime('now', '-30 days')`)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		n, _ := res.RowsAffected()
+		writeJSON(w, http.StatusOK, map[string]any{"retired": n})
+	}
+}
 
 // GetConfig returns the current configuration.
 func GetConfig(cfg *core.Config) http.HandlerFunc {

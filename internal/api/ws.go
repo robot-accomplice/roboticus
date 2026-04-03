@@ -81,9 +81,12 @@ func HandleWebSocket(bus *EventBus, apiKey string) http.HandlerFunc {
 		sub := bus.Subscribe()
 		defer bus.Unsubscribe(sub)
 
-		// Ping ticker for keepalive.
+		// Ping tickers for keepalive: transport-level and application-level.
 		pingTicker := time.NewTicker(30 * time.Second)
 		defer pingTicker.Stop()
+
+		jsonPingTicker := time.NewTicker(30 * time.Second)
+		defer jsonPingTicker.Stop()
 
 		// Idle timeout.
 		idleTimeout := 90 * time.Second
@@ -129,6 +132,13 @@ func HandleWebSocket(bus *EventBus, apiKey string) http.HandlerFunc {
 				return
 			case <-pingTicker.C:
 				_ = conn.Ping(ctx) //nolint:staticcheck // TODO: migrate to github.com/coder/websocket
+			case <-jsonPingTicker.C:
+				// Application-level JSON ping so browser EventSource polyfills can detect liveness.
+				jsonPing, _ := json.Marshal(map[string]string{
+					"type":      "ping",
+					"timestamp": time.Now().UTC().Format(time.RFC3339),
+				})
+				_ = conn.Write(ctx, websocket.MessageText, jsonPing) //nolint:staticcheck // TODO: migrate to github.com/coder/websocket
 			case event := <-sub:
 				if err := conn.Write(ctx, websocket.MessageText, []byte(event)); err != nil { //nolint:staticcheck // TODO: migrate to github.com/coder/websocket
 					return

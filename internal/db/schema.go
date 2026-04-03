@@ -681,6 +681,65 @@ CREATE TABLE IF NOT EXISTS agent_delegation_outcomes (
 CREATE INDEX IF NOT EXISTS idx_agent_delegation_parent ON agent_delegation_outcomes(parent_task_id);
 `
 
+// optionalColumn describes a column that may be missing from older databases.
+type optionalColumn struct {
+	Table   string
+	Column  string
+	ColType string
+	Default string
+}
+
+// ensureOptionalColumns checks for columns that may be missing from older installs
+// and adds them if needed. Uses PRAGMA table_info to detect column existence.
+func (s *Store) ensureOptionalColumns() error {
+	columns := []optionalColumn{
+		{Table: "episodic_memory", Column: "memory_state", ColType: "TEXT", Default: "'active'"},
+		{Table: "semantic_memory", Column: "memory_state", ColType: "TEXT", Default: "'active'"},
+		{Table: "pipeline_traces", Column: "session_id", ColType: "TEXT", Default: "''"},
+	}
+
+	for _, col := range columns {
+		exists, err := s.columnExists(col.Table, col.Column)
+		if err != nil {
+			return core.WrapError(core.ErrDatabase, fmt.Sprintf("failed to check column %s.%s", col.Table, col.Column), err)
+		}
+		if exists {
+			continue
+		}
+		alter := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s NOT NULL DEFAULT %s",
+			col.Table, col.Column, col.ColType, col.Default)
+		if _, err := s.db.Exec(alter); err != nil {
+			return core.WrapError(core.ErrDatabase, fmt.Sprintf("failed to add column %s.%s", col.Table, col.Column), err)
+		}
+		log.Info().Str("table", col.Table).Str("column", col.Column).Msg("added optional column")
+	}
+	return nil
+}
+
+// columnExists returns true if the given column exists on the table.
+func (s *Store) columnExists(table, column string) (bool, error) {
+	rows, err := s.db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var cid int
+		var name, colType string
+		var notNull int
+		var dfltValue *string
+		var pk int
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &dfltValue, &pk); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
 // initSchema creates the base schema and seeds the version if this is a fresh database.
 func (s *Store) initSchema() error {
 	_, err := s.db.Exec(schemaDDL)

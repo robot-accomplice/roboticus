@@ -89,6 +89,20 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 		}
 	})
 
+	// Concurrency semaphore for heavy analysis routes.
+	analysisSem := make(chan struct{}, 3)
+	analysisLimit := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			select {
+			case analysisSem <- struct{}{}:
+				defer func() { <-analysisSem }()
+				next.ServeHTTP(w, r)
+			default:
+				http.Error(w, `{"error":"analysis capacity exceeded, try again later"}`, http.StatusServiceUnavailable)
+			}
+		})
+	}
+
 	// Authenticated routes.
 	r.Group(func(r chi.Router) {
 		r.Use(APIKeyAuth(cfg.APIKey))
@@ -105,6 +119,7 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 		// Sessions.
 		r.Get("/api/sessions", routes.ListSessions(state.Store))
 		r.Post("/api/sessions", routes.CreateSession(state.Store))
+		r.Post("/api/sessions/backfill-nicknames", routes.BackfillNicknames(state.Store))
 		r.Get("/api/sessions/{id}", routes.GetSession(state.Store))
 		r.Delete("/api/sessions/{id}", routes.DeleteSession(state.Store))
 		r.Get("/api/sessions/{id}/messages", routes.ListMessages(state.Store))
@@ -113,17 +128,18 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 		r.Get("/api/sessions/{id}/feedback", routes.GetSessionFeedback(state.Store))
 		r.Get("/api/sessions/{id}/insights", routes.GetSessionInsights(state.Store))
 		r.Post("/api/sessions/{id}/archive", routes.ArchiveSession(state.Store))
-		r.Post("/api/sessions/{id}/analyze", routes.AnalyzeSession(state.Store))
+		r.With(analysisLimit).Post("/api/sessions/{id}/analyze", routes.AnalyzeSession(state.Store))
 
 		// Turns.
 		r.Get("/api/turns/{id}", routes.GetTurn(state.Store))
 		r.Get("/api/turns/{id}/feedback", routes.GetTurnFeedback(state.Store))
 		r.Post("/api/turns/{id}/feedback", routes.PostTurnFeedback(state.Store))
+		r.Put("/api/turns/{id}/feedback", routes.PutTurnFeedback(state.Store))
 		r.Get("/api/turns/{id}/context", routes.GetTurnContext(state.Store))
 		r.Get("/api/turns/{id}/tools", routes.GetTurnTools(state.Store))
 		r.Get("/api/turns/{id}/tips", routes.GetTurnTips(state.Store))
 		r.Get("/api/turns/{id}/model-selection", routes.GetTurnModelSelection(state.Store))
-		r.Post("/api/turns/{id}/analyze", routes.AnalyzeTurn(state.Store))
+		r.With(analysisLimit).Post("/api/turns/{id}/analyze", routes.AnalyzeTurn(state.Store))
 
 		// Memory.
 		r.Get("/api/memory/working", routes.GetWorkingMemory(state.Store))
@@ -132,6 +148,7 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 		r.Get("/api/memory/semantic", routes.GetSemanticMemory(state.Store))
 		r.Get("/api/memory/semantic/categories", routes.GetSemanticCategories(state.Store))
 		r.Get("/api/memory/search", routes.SearchMemory(state.Store))
+		r.Post("/api/knowledge/ingest", routes.IngestKnowledge(state.Store))
 		r.Get("/api/stats/memory-analytics", routes.GetMemoryAnalytics(state.Store))
 		r.Get("/api/memory/health", routes.MemoryHealth(state.Store))
 
@@ -179,10 +196,11 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 		r.Get("/api/models/available", routes.GetAvailableModels(state.LLM))
 		r.Get("/api/models/selections", routes.GetModelSelections(state.Store))
 		r.Get("/api/models/routing-diagnostics", routes.GetRoutingDiagnostics(state.Config))
+		r.Post("/api/models/routing-eval", routes.RunRoutingEval(state.LLM))
 
 		// Recommendations.
 		r.Get("/api/recommendations", routes.GetRecommendations(state.Store))
-		r.Post("/api/recommendations/generate", routes.GenerateRecommendations(state.Store))
+		r.With(analysisLimit).Post("/api/recommendations/generate", routes.GenerateRecommendations(state.Store))
 
 		// Channels.
 		r.Get("/api/channels/status", routes.GetChannelsStatus(state.LLM))
@@ -194,6 +212,7 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 		r.Get("/api/config", routes.GetConfig(state.Config))
 		r.Put("/api/config", routes.UpdateConfig(state.Store))
 		r.Get("/api/config/capabilities", routes.GetCapabilities())
+		r.Get("/api/config/status", routes.GetConfigStatus())
 		r.Get("/api/config/raw", routes.GetConfigRaw())
 		r.Put("/api/config/raw", routes.UpdateConfigRaw())
 
@@ -215,16 +234,23 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 
 		// Revenue / Services.
 		r.Get("/api/services/catalog", routes.ListServiceCatalog(state.Store))
+		r.Post("/api/services/quote", routes.CreateServiceQuote(state.Store))
 		r.Get("/api/services/requests", routes.ListServiceRequests(state.Store))
 		r.Get("/api/services/requests/{id}", routes.GetServiceRequest(state.Store))
+		r.Post("/api/services/requests/{id}/payment/verify", routes.VerifyServicePayment(state.Store))
+		r.Post("/api/services/requests/{id}/fulfill", routes.FulfillServiceRequest(state.Store))
+		r.Post("/api/services/requests/{id}/fail", routes.FailServiceRequest(state.Store))
 		r.Get("/api/services/opportunities", routes.ListRevenueOpportunities(state.Store))
 		r.Post("/api/services/opportunities/intake", routes.IntakeRevenueOpportunity(state.Store))
+		r.Post("/api/services/opportunities/adapters/micro-bounty/intake", routes.IntakeMicroBounty(state.Store))
+		r.Post("/api/services/opportunities/adapters/oracle-feed/intake", routes.IntakeOracleFeed(state.Store))
 		r.Get("/api/services/opportunities/{id}", routes.GetRevenueOpportunity(state.Store))
 		r.Post("/api/services/opportunities/{id}/score", routes.TransitionOpportunity(state.Store, "scored"))
 		r.Post("/api/services/opportunities/{id}/qualify", routes.TransitionOpportunity(state.Store, "qualified"))
 		r.Post("/api/services/opportunities/{id}/plan", routes.TransitionOpportunity(state.Store, "planned"))
 		r.Post("/api/services/opportunities/{id}/fulfill", routes.TransitionOpportunity(state.Store, "fulfilled"))
 		r.Post("/api/services/opportunities/{id}/settle", routes.TransitionOpportunity(state.Store, "settled"))
+		r.Post("/api/services/opportunities/{id}/feedback", routes.RecordOpportunityFeedback(state.Store))
 
 		// Roster (agents page).
 		r.Get("/api/roster", routes.GetRoster(state.Store))
@@ -246,6 +272,9 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 		// Traces.
 		r.Get("/api/traces", routes.ListTraces(state.Store))
 		r.Get("/api/traces/{turn_id}", routes.GetTrace(state.Store))
+		r.Get("/api/traces/{turn_id}/react", routes.GetReactTrace(state.Store))
+		r.Get("/api/traces/{turn_id}/export", routes.ExportTrace(state.Store))
+		r.Get("/api/traces/{turn_id}/flow", routes.GetTraceFlow(state.Store))
 
 		// Themes.
 		r.Get("/api/themes/catalog", routes.GetThemeCatalog())
@@ -277,9 +306,31 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 		// Subagents.
 		r.Get("/api/subagents", routes.ListSubagents(state.Store))
 		r.Post("/api/subagents", routes.CreateSubagent(state.Store))
+		r.Get("/api/subagents/retirement-candidates", routes.SubagentRetirementCandidates(state.Store))
+		r.Post("/api/subagents/retire-unused", routes.RetireUnusedSubagents(state.Store))
 		r.Put("/api/subagents/{name}", routes.UpdateSubagent(state.Store))
 		r.Post("/api/subagents/{name}/toggle", routes.ToggleSubagent(state.Store))
 		r.Delete("/api/subagents/{name}", routes.DeleteSubagent(state.Store))
+
+		// Agents.
+		r.Get("/api/agents", routes.ListAgents(state.Store))
+		r.Post("/api/agents/{id}/start", routes.StartAgent(state.Store))
+		r.Post("/api/agents/{id}/stop", routes.StopAgent(state.Store))
+		r.Post("/api/a2a/hello", routes.A2AHello())
+
+		// Audit.
+		r.Get("/api/audit/policy/{turn_id}", routes.GetPolicyAudit(state.Store))
+		r.Get("/api/audit/tools/{turn_id}", routes.GetToolAudit(state.Store))
+
+		// Observability.
+		r.Get("/api/observability/traces", routes.ListObservabilityTraces(state.Store))
+		r.Get("/api/observability/traces/{id}/waterfall", routes.TraceWaterfall(state.Store))
+		r.Get("/api/observability/delegation/outcomes", routes.DelegationOutcomes(state.Store))
+		r.Get("/api/observability/delegation/stats", routes.DelegationStats(state.Store))
+
+		// Keystore.
+		r.Get("/api/keystore/status", routes.KeystoreStatus())
+		r.Post("/api/keystore/unlock", routes.KeystoreUnlock())
 
 		// Interview.
 		interviewMgr := routes.NewInterviewManager()

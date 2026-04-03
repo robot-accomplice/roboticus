@@ -18,6 +18,8 @@ func (c *Client) marshalRequest(req *Request) ([]byte, error) {
 		return c.marshalGoogle(req)
 	case FormatOllama:
 		return c.marshalOllama(req)
+	case FormatOpenAIResponses:
+		return c.marshalOpenAIResponses(req)
 	default:
 		return c.marshalOpenAI(req)
 	}
@@ -126,6 +128,8 @@ func (c *Client) unmarshalResponse(body io.Reader) (*Response, error) {
 		return c.unmarshalOllamaResponse(data)
 	case FormatGoogle:
 		return c.unmarshalGoogleResponse(data)
+	case FormatOpenAIResponses:
+		return c.unmarshalOpenAIResponsesResponse(data)
 	default:
 		return c.unmarshalOpenAIResponse(data)
 	}
@@ -312,6 +316,88 @@ func (c *Client) unmarshalAnthropicChunk(data []byte) (*StreamChunk, error) {
 		chunk.Usage = &Usage{OutputTokens: raw.Usage.OutputTokens}
 	}
 	return chunk, nil
+}
+
+// marshalOpenAIResponses formats a request for the OpenAI Responses API
+// (POST /v1/responses), which uses an `input` field instead of `messages`.
+func (c *Client) marshalOpenAIResponses(req *Request) ([]byte, error) {
+	// Convert messages to the Responses API input format.
+	var input []map[string]any
+	for _, m := range req.Messages {
+		item := map[string]any{
+			"role":    m.Role,
+			"content": m.Content,
+		}
+		input = append(input, item)
+	}
+
+	payload := map[string]any{
+		"model": req.Model,
+		"input": input,
+	}
+	if req.MaxTokens > 0 {
+		payload["max_output_tokens"] = req.MaxTokens
+	}
+	if req.Temperature != nil {
+		payload["temperature"] = *req.Temperature
+	}
+	if len(req.Tools) > 0 {
+		payload["tools"] = req.Tools
+	}
+	if req.Stream {
+		payload["stream"] = true
+	}
+	return json.Marshal(payload)
+}
+
+// unmarshalOpenAIResponsesResponse parses an OpenAI Responses API response.
+func (c *Client) unmarshalOpenAIResponsesResponse(data []byte) (*Response, error) {
+	var raw struct {
+		ID     string `json:"id"`
+		Model  string `json:"model"`
+		Status string `json:"status"`
+		Output []struct {
+			Type    string `json:"type"`
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content,omitempty"`
+		} `json:"output"`
+		Usage struct {
+			InputTokens  int `json:"input_tokens"`
+			OutputTokens int `json:"output_tokens"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, core.WrapError(core.ErrLLM, "failed to parse OpenAI Responses response", err)
+	}
+
+	var content string
+	for _, out := range raw.Output {
+		if out.Type == "message" {
+			for _, c := range out.Content {
+				if c.Type == "output_text" {
+					content += c.Text
+				}
+			}
+		}
+	}
+
+	finishReason := "stop"
+	if raw.Status == "incomplete" {
+		finishReason = "length"
+	}
+
+	return &Response{
+		ID:           raw.ID,
+		Model:        raw.Model,
+		Content:      content,
+		FinishReason: finishReason,
+		Usage: Usage{
+			InputTokens:  raw.Usage.InputTokens,
+			OutputTokens: raw.Usage.OutputTokens,
+		},
+	}, nil
 }
 
 // parseErrorResponse reads an error body and returns a categorized error.

@@ -205,6 +205,49 @@ func ArchiveSession(store *db.Store) http.HandlerFunc {
 	}
 }
 
+// BackfillNicknames generates nicknames for sessions that lack them.
+// It uses the first user message (truncated to 50 chars) as the nickname.
+func BackfillNicknames(store *db.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		rows, err := store.QueryContext(ctx,
+			`SELECT s.id, (
+				SELECT content FROM session_messages
+				WHERE session_id = s.id AND role = 'user'
+				ORDER BY created_at ASC LIMIT 1
+			) AS first_msg
+			FROM sessions s
+			WHERE s.nickname IS NULL OR s.nickname = ''`)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		defer func() { _ = rows.Close() }()
+
+		var updated int
+		for rows.Next() {
+			var id string
+			var firstMsg *string
+			if err := rows.Scan(&id, &firstMsg); err != nil {
+				continue
+			}
+			nick := "Untitled"
+			if firstMsg != nil && *firstMsg != "" {
+				nick = *firstMsg
+				if len(nick) > 50 {
+					nick = nick[:50]
+				}
+			}
+			_, err := store.ExecContext(ctx,
+				`UPDATE sessions SET nickname = ? WHERE id = ?`, nick, id)
+			if err == nil {
+				updated++
+			}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"updated": updated})
+	}
+}
+
 // AnalyzeSession returns basic analytics for a session.
 func AnalyzeSession(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

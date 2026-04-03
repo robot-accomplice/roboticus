@@ -1,6 +1,8 @@
 package api
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"net"
 	"net/http"
 	"sync"
@@ -13,8 +15,12 @@ type rateBucket struct {
 	windowStart time.Time
 }
 
-// RateLimitMiddleware returns chi-compatible middleware that enforces per-IP rate limits.
+// actorRequestsPerWindow is the default per-actor (API key) limit, higher than per-IP.
+const actorRequestsPerWindow = 5000
+
+// RateLimitMiddleware returns chi-compatible middleware that enforces per-IP and per-actor rate limits.
 // Uses a fixed-window algorithm: each IP gets RequestsPerWindow requests per WindowSeconds window.
+// If an x-api-key header is present, a separate per-actor bucket with a higher limit is used.
 func RateLimitMiddleware(enabled bool, requestsPerWindow, windowSeconds int) func(http.Handler) http.Handler {
 	cfg := struct {
 		Enabled           bool
@@ -30,7 +36,8 @@ func RateLimitMiddleware(enabled bool, requestsPerWindow, windowSeconds int) fun
 		window = 60 * time.Second
 	}
 
-	var buckets sync.Map // map[string]*rateBucket
+	var ipBuckets sync.Map    // map[string]*rateBucket — keyed by IP
+	var actorBuckets sync.Map // map[string]*rateBucket — keyed by hashed API key
 
 	// Background cleanup of stale buckets every 5 minutes.
 	go func() {
@@ -38,37 +45,36 @@ func RateLimitMiddleware(enabled bool, requestsPerWindow, windowSeconds int) fun
 		defer ticker.Stop()
 		for range ticker.C {
 			cutoff := time.Now().Add(-2 * window)
-			buckets.Range(func(key, value any) bool {
+			cleanup := func(key, value any) bool {
 				b := value.(*rateBucket)
 				b.mu.Lock()
 				if b.windowStart.Before(cutoff) {
-					buckets.Delete(key)
+					ipBuckets.Delete(key)
+					actorBuckets.Delete(key)
 				}
 				b.mu.Unlock()
 				return true
-			})
+			}
+			ipBuckets.Range(cleanup)
+			actorBuckets.Range(cleanup)
 		}
 	}()
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ip := extractIP(r)
-
-			val, _ := buckets.LoadOrStore(ip, &rateBucket{windowStart: time.Now()})
-			b := val.(*rateBucket)
-
-			b.mu.Lock()
-			now := time.Now()
-			if now.Sub(b.windowStart) >= window {
-				// New window.
-				b.count = 0
-				b.windowStart = now
+			// Check per-actor limit if API key is present.
+			if apiKey := r.Header.Get("x-api-key"); apiKey != "" {
+				actorID := hashAPIKey(apiKey)
+				if checkBucket(&actorBuckets, actorID, actorRequestsPerWindow, window) {
+					w.Header().Set("Retry-After", "60")
+					http.Error(w, `{"error":"rate limit exceeded (actor)"}`, http.StatusTooManyRequests)
+					return
+				}
 			}
-			b.count++
-			exceeded := b.count > cfg.RequestsPerWindow
-			b.mu.Unlock()
 
-			if exceeded {
+			// Check per-IP limit.
+			ip := extractIP(r)
+			if checkBucket(&ipBuckets, ip, cfg.RequestsPerWindow, window) {
 				w.Header().Set("Retry-After", "60")
 				http.Error(w, `{"error":"rate limit exceeded"}`, http.StatusTooManyRequests)
 				return
@@ -77,6 +83,29 @@ func RateLimitMiddleware(enabled bool, requestsPerWindow, windowSeconds int) fun
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// checkBucket increments the count for the given key and returns true if the limit is exceeded.
+func checkBucket(buckets *sync.Map, key string, limit int, window time.Duration) bool {
+	val, _ := buckets.LoadOrStore(key, &rateBucket{windowStart: time.Now()})
+	b := val.(*rateBucket)
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	now := time.Now()
+	if now.Sub(b.windowStart) >= window {
+		b.count = 0
+		b.windowStart = now
+	}
+	b.count++
+	return b.count > limit
+}
+
+// hashAPIKey produces a hex-encoded SHA-256 hash of the API key for use as a bucket key.
+func hashAPIKey(key string) string {
+	h := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(h[:])
 }
 
 // extractIP gets the client IP from X-Real-IP, X-Forwarded-For, or RemoteAddr.

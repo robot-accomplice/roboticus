@@ -2,6 +2,8 @@ package llm
 
 import (
 	"strings"
+	"sync"
+	"sync/atomic"
 	"unicode/utf8"
 )
 
@@ -22,6 +24,15 @@ type Router struct {
 	models     []RouteTarget
 	costAware  bool
 	localFirst bool
+	roundRobin bool
+
+	// roundRobinIdx is atomically incremented for round-robin selection.
+	roundRobinIdx uint64
+
+	// override, when set, bypasses all routing logic and returns the
+	// specified model directly. Protected by overrideMu.
+	override   string
+	overrideMu sync.RWMutex
 
 	// MetascoreSelector, when non-nil, is used instead of heuristic routing.
 	// Set via Router.EnableMetascoreRouting.
@@ -41,6 +52,7 @@ type RouteTarget struct {
 type RouterConfig struct {
 	CostAware  bool
 	LocalFirst bool
+	RoundRobin bool
 }
 
 // NewRouter creates a model router with the given targets.
@@ -49,7 +61,23 @@ func NewRouter(targets []RouteTarget, cfg RouterConfig) *Router {
 		models:     targets,
 		costAware:  cfg.CostAware,
 		localFirst: cfg.LocalFirst,
+		roundRobin: cfg.RoundRobin,
 	}
+}
+
+// SetOverride forces all subsequent Select calls to return the given model,
+// bypassing all routing logic.
+func (r *Router) SetOverride(model string) {
+	r.overrideMu.Lock()
+	r.override = model
+	r.overrideMu.Unlock()
+}
+
+// ClearOverride removes the model override, restoring normal routing.
+func (r *Router) ClearOverride() {
+	r.overrideMu.Lock()
+	r.override = ""
+	r.overrideMu.Unlock()
 }
 
 // EnableMetascoreRouting activates runtime-feedback-driven model selection.
@@ -64,6 +92,26 @@ func (r *Router) EnableMetascoreRouting(quality *QualityTracker, capacity *Capac
 func (r *Router) Select(req *Request) RouteTarget {
 	if len(r.models) == 0 {
 		return RouteTarget{Model: req.Model}
+	}
+
+	// Model override: bypass all routing logic.
+	r.overrideMu.RLock()
+	ov := r.override
+	r.overrideMu.RUnlock()
+	if ov != "" {
+		// Try to find a matching target for the override model name.
+		for _, m := range r.models {
+			if m.Model == ov {
+				return m
+			}
+		}
+		return RouteTarget{Model: ov}
+	}
+
+	// Round-robin: simple rotating selection across all models.
+	if r.roundRobin {
+		idx := atomic.AddUint64(&r.roundRobinIdx, 1)
+		return r.models[idx%uint64(len(r.models))]
 	}
 
 	// Metascore routing overrides heuristic selection when enabled.

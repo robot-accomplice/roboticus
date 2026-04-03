@@ -1,6 +1,7 @@
 package routes
 
 import (
+	"encoding/json"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -130,6 +131,35 @@ func GetSemanticMemory(store *db.Store) http.HandlerFunc {
 			entries = []map[string]any{}
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"entries": entries})
+	}
+}
+
+// IngestKnowledge inserts a knowledge entry into semantic memory.
+func IngestKnowledge(store *db.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Content  string `json:"content"`
+			Category string `json:"category"`
+			Key      string `json:"key"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		if req.Content == "" || req.Category == "" || req.Key == "" {
+			writeError(w, http.StatusBadRequest, "content, category, and key are required")
+			return
+		}
+		id := db.NewID()
+		_, err := store.ExecContext(r.Context(),
+			`INSERT INTO semantic_memory (id, category, key, value, confidence)
+			 VALUES (?, ?, ?, ?, 1.0)`,
+			id, req.Category, req.Key, req.Content)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]string{"id": id, "status": "ingested"})
 	}
 }
 

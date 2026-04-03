@@ -44,6 +44,38 @@ func GetTurnContext(store *db.Store) http.HandlerFunc {
 	}
 }
 
+// PutTurnFeedback updates an existing turn feedback row.
+func PutTurnFeedback(store *db.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		var req struct {
+			Grade   int    `json:"grade"`
+			Comment string `json:"comment"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		if req.Grade < 1 || req.Grade > 5 {
+			writeError(w, http.StatusBadRequest, "grade must be between 1 and 5")
+			return
+		}
+		res, err := store.ExecContext(r.Context(),
+			`UPDATE turn_feedback SET grade = ?, comment = ? WHERE turn_id = ?`,
+			req.Grade, req.Comment, id)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		n, _ := res.RowsAffected()
+		if n == 0 {
+			writeError(w, http.StatusNotFound, "feedback not found for this turn")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "updated", "turn_id": id})
+	}
+}
+
 // GetTurnTools returns tool calls for a turn from the tool_calls table.
 func GetTurnTools(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

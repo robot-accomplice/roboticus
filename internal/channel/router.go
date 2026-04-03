@@ -170,6 +170,17 @@ func (r *Router) Adapters() map[string]Adapter {
 	return result
 }
 
+// GetAdapter returns the adapter registered under the given platform name, or nil.
+func (r *Router) GetAdapter(platform string) Adapter {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	entry, ok := r.channels[platform]
+	if !ok {
+		return nil
+	}
+	return entry.adapter
+}
+
 // DeliveryQueue returns the underlying queue for inspection/admin.
 func (r *Router) DeliveryQueue() *DeliveryQueue {
 	return r.queue

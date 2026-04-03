@@ -55,3 +55,17 @@ const baseChainID = 8453
 
 // processStartTime records when the process started, used for uptime reporting.
 var processStartTime = time.Now()
+
+// htmlReplacer replaces characters that are special in HTML.
+var htmlReplacer = strings.NewReplacer(
+	"&", "&amp;",
+	"<", "&lt;",
+	">", "&gt;",
+	`"`, "&quot;",
+	"'", "&#39;",
+)
+
+// SanitizeHTML replaces <, >, &, ", and ' with their HTML entity equivalents.
+func SanitizeHTML(input string) string {
+	return htmlReplacer.Replace(input)
+}

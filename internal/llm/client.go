@@ -256,6 +256,7 @@ func (c *Client) readSSE(ctx context.Context, body io.Reader, chunks chan<- Stre
 }
 
 // chatURL returns the full URL for the chat completions endpoint.
+// When AuthMode is "query", the API key is appended as a query parameter.
 func (c *Client) chatURL() string {
 	path := c.provider.ChatPath
 	if path == "" {
@@ -266,18 +267,32 @@ func (c *Client) chatURL() string {
 			path = "/v1/models/"
 		case FormatOllama:
 			path = "/api/chat"
+		case FormatOpenAIResponses:
+			path = "/v1/responses"
 		default:
 			path = "/v1/chat/completions"
 		}
 	}
-	return strings.TrimRight(c.provider.URL, "/") + path
+	url := strings.TrimRight(c.provider.URL, "/") + path
+
+	// Query-parameter authentication: append API key to URL.
+	if c.provider.AuthMode == "query" && c.apiKey != "" {
+		if strings.Contains(url, "?") {
+			url += "&api_key=" + c.apiKey
+		} else {
+			url += "?api_key=" + c.apiKey
+		}
+	}
+
+	return url
 }
 
 // setHeaders adds authentication and content-type headers.
+// When AuthMode is "query", authentication is handled in chatURL instead.
 func (c *Client) setHeaders(req *http.Request) {
 	req.Header.Set("Content-Type", "application/json")
 
-	if c.apiKey != "" {
+	if c.apiKey != "" && c.provider.AuthMode != "query" {
 		authHeader := c.provider.AuthHeader
 		if authHeader == "" {
 			switch c.provider.Format {

@@ -49,6 +49,11 @@ func Open(dbPath string) (*Store, error) {
 		return nil, err
 	}
 
+	if err := s.ensureOptionalColumns(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+
 	log.Info().Str("path", dbPath).Msg("database opened")
 	return s, nil
 }
@@ -89,6 +94,43 @@ func (s *Store) QueryRowContext(ctx context.Context, query string, args ...any) 
 // Ping verifies the database connection is alive.
 func (s *Store) Ping() error {
 	return s.db.Ping()
+}
+
+// TruncateAllData deletes all rows from every data table, preserving schema_version.
+func (s *Store) TruncateAllData() error {
+	tables := []string{
+		"session_messages", "turns", "tool_calls", "policy_decisions",
+		"working_memory", "episodic_memory", "semantic_memory",
+		"procedural_memory", "relationship_memory",
+		"tasks", "cron_runs", "cron_jobs",
+		"transactions", "service_requests", "revenue_opportunities", "revenue_feedback",
+		"inference_costs", "semantic_cache",
+		"identity", "os_personality_history", "metric_snapshots",
+		"discovered_agents", "skills", "delivery_queue",
+		"approval_requests", "plugins", "embeddings", "sub_agents",
+		"context_checkpoints", "hippocampus", "turn_feedback",
+		"context_snapshots", "model_selection_events", "shadow_routing_predictions",
+		"abuse_events", "learned_skills", "memory_index", "consolidation_log",
+		"hygiene_log", "pipeline_traces", "react_traces",
+		"heartbeat_task_results", "delegation_outcomes",
+		"agent_tasks", "task_steps", "agent_delegation_outcomes",
+		"sessions",
+	}
+
+	return s.InTx(context.Background(), func(tx *sql.Tx) error {
+		// Rebuild FTS index.
+		if _, err := tx.Exec("DELETE FROM memory_fts"); err != nil {
+			// FTS table may not exist in all configurations; ignore.
+			_ = err
+		}
+
+		for _, t := range tables {
+			if _, err := tx.Exec("DELETE FROM " + t); err != nil {
+				return core.WrapError(core.ErrDatabase, fmt.Sprintf("failed to truncate %s", t), err)
+			}
+		}
+		return nil
+	})
 }
 
 // InTx executes fn within a transaction. If fn returns an error, the

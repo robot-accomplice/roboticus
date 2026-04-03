@@ -3,6 +3,7 @@ package channel
 import (
 	"context"
 	"time"
+	"unicode/utf8"
 )
 
 // Adapter is the interface every channel implementation must satisfy.
@@ -46,6 +47,37 @@ type MediaAttachment struct {
 
 // MediaType classifies attachment content.
 type MediaType string
+
+const maxPlatformBytes = 64
+
+// SanitizePlatform strips control characters (runes < 32 except newline) from s
+// and truncates the result to 64 bytes, respecting UTF-8 boundaries.
+func SanitizePlatform(s string) string {
+	buf := make([]rune, 0, len(s))
+	for _, r := range s {
+		if r < 32 && r != '\n' {
+			continue
+		}
+		buf = append(buf, r)
+	}
+	out := string(buf)
+	if len(out) > maxPlatformBytes {
+		// Truncate to maxPlatformBytes without splitting a multi-byte rune.
+		out = out[:maxPlatformBytes]
+		for !utf8.ValidString(out) {
+			out = out[:len(out)-1]
+		}
+	}
+	return out
+}
+
+// SanitizeInbound sanitizes the Platform field of an inbound message.
+// Adapters should call this before returning messages to the pipeline.
+func SanitizeInbound(msg *InboundMessage) {
+	if msg != nil {
+		msg.Platform = SanitizePlatform(msg.Platform)
+	}
+}
 
 const (
 	MediaImage    MediaType = "image"

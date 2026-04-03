@@ -452,6 +452,11 @@ func (s *Service) ForceOpenBreaker(providerName string) error {
 	return nil
 }
 
+// Router returns the service's model router for external use (e.g., routing eval).
+func (s *Service) Router() *Router {
+	return s.router
+}
+
 // Status returns the health of all providers (for /api/health).
 // providers is write-once (set only in NewService), so concurrent reads are safe.
 func (s *Service) Status() []ProviderStatus {

@@ -29,8 +29,10 @@ type Cache struct {
 }
 
 type cacheEntry struct {
-	Response  *Response
-	CreatedAt time.Time
+	Response      *Response
+	CreatedAt     time.Time
+	InvolvedTools bool // true when the originating request had tools
+	Hits          uint64
 }
 
 // CacheConfig controls cache behavior.
@@ -67,7 +69,15 @@ func (c *Cache) Get(ctx context.Context, req *Request) *Response {
 	c.mu.RLock()
 	if entry, ok := c.mem[hash]; ok {
 		c.mu.RUnlock()
-		if time.Since(entry.CreatedAt) < c.ttl {
+		// Tool-aware TTL: requests involving tools get TTL/4.
+		effectiveTTL := c.ttl
+		if entry.InvolvedTools {
+			effectiveTTL = c.ttl / 4
+		}
+		if time.Since(entry.CreatedAt) < effectiveTTL {
+			c.mu.Lock()
+			entry.Hits++
+			c.mu.Unlock()
 			log.Debug().Str("hash", hash[:12]).Msg("cache hit (L1)")
 			return entry.Response
 		}
@@ -117,7 +127,8 @@ func (c *Cache) Get(ctx context.Context, req *Request) *Response {
 func (c *Cache) Put(ctx context.Context, req *Request, resp *Response) {
 	hash := hashRequest(req)
 	now := time.Now()
-	c.put(hash, resp, now)
+	involvedTools := len(req.Tools) > 0
+	c.putWithTools(hash, resp, now, involvedTools)
 
 	// Persist to L2.
 	if c.store == nil {
@@ -141,19 +152,37 @@ func (c *Cache) Put(ctx context.Context, req *Request, resp *Response) {
 	)
 }
 
-// put adds an entry to L1 with LRU eviction.
+// put adds an entry to L1 with LFU eviction (no tools flag).
 func (c *Cache) put(hash string, resp *Response, created time.Time) {
+	c.putWithTools(hash, resp, created, false)
+}
+
+// putWithTools adds an entry to L1 with LFU eviction.
+func (c *Cache) putWithTools(hash string, resp *Response, created time.Time, involvedTools bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	c.mem[hash] = &cacheEntry{Response: resp, CreatedAt: created}
+	c.mem[hash] = &cacheEntry{
+		Response:      resp,
+		CreatedAt:     created,
+		InvolvedTools: involvedTools,
+		Hits:          0,
+	}
 	c.order = append(c.order, hash)
 
-	// Evict oldest if over capacity.
+	// Evict entry with lowest hits (LFU) if over capacity.
 	for len(c.mem) > c.maxSize && len(c.order) > 0 {
-		oldest := c.order[0]
-		c.order = c.order[1:]
-		delete(c.mem, oldest)
+		lfuIdx := 0
+		lfuHits := ^uint64(0) // max uint64
+		for i, h := range c.order {
+			if e, ok := c.mem[h]; ok && e.Hits < lfuHits {
+				lfuHits = e.Hits
+				lfuIdx = i
+			}
+		}
+		evictHash := c.order[lfuIdx]
+		c.order = append(c.order[:lfuIdx], c.order[lfuIdx+1:]...)
+		delete(c.mem, evictHash)
 	}
 }
 

@@ -605,7 +605,91 @@ func (d *Daemon) run() {
 		worker.Run(ctx)
 	}()
 
+	// Signal poll loop.
+	if d.cfg.Channels.SignalAccount != "" {
+		d.wg.Add(1)
+		go func() {
+			defer d.wg.Done()
+			d.runSignalPoller(ctx)
+		}()
+	}
+
+	// Email poll loop.
+	if d.cfg.Channels.EmailFromAddress != "" {
+		d.wg.Add(1)
+		go func() {
+			defer d.wg.Done()
+			d.runEmailPoller(ctx)
+		}()
+	}
+
 	log.Info().Msg("all subsystems started")
+}
+
+// runSignalPoller polls the Signal adapter for inbound messages in a loop.
+func (d *Daemon) runSignalPoller(ctx context.Context) {
+	log.Info().Msg("signal poller started")
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	signalAdapter := d.router.GetAdapter("signal")
+	if signalAdapter == nil {
+		log.Warn().Msg("signal adapter not registered, poller exiting")
+		return
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			msg, err := signalAdapter.Recv(ctx)
+			if err != nil {
+				log.Warn().Err(err).Msg("signal recv error")
+				continue
+			}
+			if msg == nil {
+				continue
+			}
+			m := *msg
+			d.bgWorker.Submit("inbound:signal", func(bgCtx context.Context) {
+				d.handleInbound(bgCtx, m)
+			})
+		}
+	}
+}
+
+// runEmailPoller polls the Email adapter for inbound messages via IMAP in a loop.
+func (d *Daemon) runEmailPoller(ctx context.Context) {
+	log.Info().Msg("email poller started")
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	emailAdapter := d.router.GetAdapter("email")
+	if emailAdapter == nil {
+		log.Warn().Msg("email adapter not registered, poller exiting")
+		return
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			msg, err := emailAdapter.Recv(ctx)
+			if err != nil {
+				log.Warn().Err(err).Msg("email recv error")
+				continue
+			}
+			if msg == nil {
+				continue
+			}
+			m := *msg
+			d.bgWorker.Submit("inbound:email", func(bgCtx context.Context) {
+				d.handleInbound(bgCtx, m)
+			})
+		}
+	}
 }
 
 // RunInteractive runs the daemon in the foreground (not as a service).

@@ -78,7 +78,45 @@ func truncateStr(s string, n int) string {
 	return s
 }
 
+var sessionsExportCmd = &cobra.Command{
+	Use:   "export [id]",
+	Short: "Export session messages as JSON or Markdown",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		format, _ := cmd.Flags().GetString("format")
+		sessionID := args[0]
+
+		msgs, err := apiGet("/api/sessions/" + sessionID + "/messages")
+		if err != nil {
+			return err
+		}
+
+		if format == "markdown" {
+			return exportMarkdown(sessionID, msgs)
+		}
+		printJSON(msgs)
+		return nil
+	},
+}
+
+func exportMarkdown(sessionID string, data map[string]any) error {
+	fmt.Printf("# Session %s\n\n", sessionID)
+	messages, ok := data["messages"].([]any)
+	if !ok {
+		fmt.Println("No messages.")
+		return nil
+	}
+	for _, m := range messages {
+		mm, _ := m.(map[string]any)
+		role, _ := mm["role"].(string)
+		content := fmt.Sprintf("%v", mm["content"])
+		fmt.Printf("## %s\n\n%s\n\n", role, content)
+	}
+	return nil
+}
+
 func init() {
-	sessionsCmd.AddCommand(sessionsListCmd, sessionsShowCmd, sessionsDeleteCmd)
+	sessionsExportCmd.Flags().String("format", "json", "output format (json/markdown)")
+	sessionsCmd.AddCommand(sessionsListCmd, sessionsShowCmd, sessionsDeleteCmd, sessionsExportCmd)
 	rootCmd.AddCommand(sessionsCmd)
 }

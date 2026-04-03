@@ -2,6 +2,7 @@ package channel
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -193,6 +194,108 @@ func (m *MediaService) Download(ctx context.Context, rawURL string) (*Downloaded
 		Data:        data,
 		ContentType: contentType,
 		Filename:    filename,
+		SizeBytes:   int64(len(data)),
+	}, nil
+}
+
+const whatsAppGraphBaseURL = "https://graph.facebook.com/v18.0"
+
+// DownloadWhatsAppMedia performs the WhatsApp Cloud API 2-step media download:
+// Step 1: GET the media metadata to obtain the download URL.
+// Step 2: GET the download URL to fetch the binary content.
+// SSRF validation is applied to the returned download URL, and size limits are enforced.
+func (m *MediaService) DownloadWhatsAppMedia(ctx context.Context, mediaID, accessToken string) (*DownloadedMedia, error) {
+	if mediaID == "" {
+		return nil, fmt.Errorf("whatsapp media: empty media ID")
+	}
+	if accessToken == "" {
+		return nil, fmt.Errorf("whatsapp media: empty access token")
+	}
+
+	// Step 1: Get media metadata to find download URL.
+	metaURL := whatsAppGraphBaseURL + "/" + mediaID
+	metaReq, err := http.NewRequestWithContext(ctx, http.MethodGet, metaURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("whatsapp media meta request: %w", err)
+	}
+	metaReq.Header.Set("Authorization", "Bearer "+accessToken)
+
+	metaResp, err := m.httpClient.Do(metaReq)
+	if err != nil {
+		return nil, fmt.Errorf("whatsapp media meta fetch: %w", err)
+	}
+	defer func() { _ = metaResp.Body.Close() }()
+
+	if metaResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(metaResp.Body)
+		return nil, fmt.Errorf("whatsapp media meta %d: %s", metaResp.StatusCode, string(body))
+	}
+
+	var meta struct {
+		URL      string `json:"url"`
+		MimeType string `json:"mime_type"`
+		FileSize int64  `json:"file_size"`
+	}
+	if err := json.NewDecoder(metaResp.Body).Decode(&meta); err != nil {
+		return nil, fmt.Errorf("whatsapp media meta decode: %w", err)
+	}
+
+	if meta.URL == "" {
+		return nil, fmt.Errorf("whatsapp media: no download URL in metadata")
+	}
+
+	// SSRF validation on the returned download URL.
+	validate := ValidateRemoteURL
+	if m.validateURL != nil {
+		validate = m.validateURL
+	}
+	if err := validate(meta.URL); err != nil {
+		return nil, fmt.Errorf("whatsapp media URL validation failed: %w", err)
+	}
+
+	// Check declared size against limit.
+	if meta.FileSize > 0 && meta.FileSize > m.maxFileSize {
+		return nil, fmt.Errorf("whatsapp media too large: declared %d exceeds limit %d", meta.FileSize, m.maxFileSize)
+	}
+
+	// Step 2: Download the binary content.
+	dlReq, err := http.NewRequestWithContext(ctx, http.MethodGet, meta.URL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("whatsapp media download request: %w", err)
+	}
+	dlReq.Header.Set("Authorization", "Bearer "+accessToken)
+
+	dlResp, err := m.httpClient.Do(dlReq)
+	if err != nil {
+		return nil, fmt.Errorf("whatsapp media download: %w", err)
+	}
+	defer func() { _ = dlResp.Body.Close() }()
+
+	if dlResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(dlResp.Body)
+		return nil, fmt.Errorf("whatsapp media download %d: %s", dlResp.StatusCode, string(body))
+	}
+
+	data, err := io.ReadAll(io.LimitReader(dlResp.Body, m.maxFileSize+1))
+	if err != nil {
+		return nil, fmt.Errorf("whatsapp media read body: %w", err)
+	}
+	if int64(len(data)) > m.maxFileSize {
+		return nil, fmt.Errorf("whatsapp media too large: body exceeds limit %d", m.maxFileSize)
+	}
+
+	contentType := meta.MimeType
+	if contentType == "" {
+		contentType = dlResp.Header.Get("Content-Type")
+	}
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+
+	return &DownloadedMedia{
+		Data:        data,
+		ContentType: contentType,
+		Filename:    SanitizeFilename(mediaID),
 		SizeBytes:   int64(len(data)),
 	}, nil
 }

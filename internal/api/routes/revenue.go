@@ -229,6 +229,130 @@ func TransitionServiceRequest(store *db.Store, targetStatus string) http.Handler
 	}
 }
 
+// CreateServiceQuote inserts a service request with status "quoted".
+func CreateServiceQuote(store *db.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ServiceID   string  `json:"service_id"`
+			RequesterID string  `json:"requester_id"`
+			AmountUSD   float64 `json:"amount_usd"`
+			Description string  `json:"description"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		id := db.NewID()
+		_, err := store.ExecContext(r.Context(),
+			`INSERT INTO service_requests (id, service_id, requester_id, status, amount_usd, description)
+			 VALUES (?, ?, ?, 'quoted', ?, ?)`,
+			id, req.ServiceID, req.RequesterID, req.AmountUSD, req.Description)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]string{"id": id, "status": "quoted"})
+	}
+}
+
+// VerifyServicePayment transitions a service request to "payment_verified".
+func VerifyServicePayment(store *db.Store) http.HandlerFunc {
+	return TransitionServiceRequest(store, "payment_verified")
+}
+
+// FulfillServiceRequest transitions a service request to "fulfilled".
+func FulfillServiceRequest(store *db.Store) http.HandlerFunc {
+	return TransitionServiceRequest(store, "fulfilled")
+}
+
+// FailServiceRequest transitions a service request to "failed".
+func FailServiceRequest(store *db.Store) http.HandlerFunc {
+	return TransitionServiceRequest(store, "failed")
+}
+
+// RecordOpportunityFeedback records feedback for a revenue opportunity.
+func RecordOpportunityFeedback(store *db.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		oppID := chi.URLParam(r, "id")
+		var req struct {
+			Strategy string  `json:"strategy"`
+			Grade    float64 `json:"grade"`
+			Source   string  `json:"source"`
+			Comment  string  `json:"comment"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		if req.Strategy == "" {
+			req.Strategy = "unknown"
+		}
+		if req.Source == "" {
+			req.Source = "api"
+		}
+		id := db.NewID()
+		_, err := store.ExecContext(r.Context(),
+			`INSERT INTO revenue_feedback (id, opportunity_id, strategy, grade, source, comment)
+			 VALUES (?, ?, ?, ?, ?, ?)`,
+			id, oppID, req.Strategy, req.Grade, req.Source, req.Comment)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]string{"id": id, "opportunity_id": oppID})
+	}
+}
+
+// IntakeMicroBounty creates a revenue opportunity with strategy "micro-bounty".
+func IntakeMicroBounty(store *db.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Source string  `json:"source"`
+			Score  float64 `json:"score"`
+			Value  float64 `json:"estimated_value_usd"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		id := db.NewID()
+		_, err := store.ExecContext(r.Context(),
+			`INSERT INTO revenue_opportunities (id, strategy, source, status, score, estimated_value_usd)
+			 VALUES (?, 'micro-bounty', ?, 'intake', ?, ?)`,
+			id, req.Source, req.Score, req.Value)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]string{"id": id, "strategy": "micro-bounty", "status": "intake"})
+	}
+}
+
+// IntakeOracleFeed creates a revenue opportunity with strategy "oracle-feed".
+func IntakeOracleFeed(store *db.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Source string  `json:"source"`
+			Score  float64 `json:"score"`
+			Value  float64 `json:"estimated_value_usd"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		id := db.NewID()
+		_, err := store.ExecContext(r.Context(),
+			`INSERT INTO revenue_opportunities (id, strategy, source, status, score, estimated_value_usd)
+			 VALUES (?, 'oracle-feed', ?, 'intake', ?, ?)`,
+			id, req.Source, req.Score, req.Value)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]string{"id": id, "strategy": "oracle-feed", "status": "intake"})
+	}
+}
+
 // queryResult matches *sql.Rows for testability.
 type queryResult interface {
 	Next() bool

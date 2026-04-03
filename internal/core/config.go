@@ -41,6 +41,8 @@ type Config struct {
 	Themes     ThemesConfig              `json:"themes" mapstructure:"themes"`
 	DKIM       DKIMConfig                `json:"dkim" mapstructure:"dkim"`
 	CORS       CORSConfig                `json:"cors" mapstructure:"cors"`
+	Revenue    RevenueConfig             `json:"revenue" mapstructure:"revenue"`
+	Heartbeat  HeartbeatConfig           `json:"heartbeat" mapstructure:"heartbeat"`
 }
 
 // CORSConfig holds cross-origin request settings.
@@ -239,6 +241,7 @@ type ChannelsConfig struct {
 	DiscordTokenEnv  string `json:"discord_token_env" mapstructure:"discord_token_env"`
 	SignalAccount    string `json:"signal_account" mapstructure:"signal_account"`
 	SignalDaemonURL  string `json:"signal_daemon_url" mapstructure:"signal_daemon_url"`
+	EmailFromAddress string `json:"email_from_address" mapstructure:"email_from_address"`
 }
 
 // SecurityConfig holds filesystem and sandbox settings.
@@ -249,6 +252,19 @@ type SecurityConfig struct {
 	ProtectedPaths       []string `json:"protected_paths" mapstructure:"protected_paths"`
 	InterpreterAllow     []string `json:"interpreter_allow" mapstructure:"interpreter_allow"`
 	ScriptAllowedPaths   []string `json:"script_allowed_paths" mapstructure:"script_allowed_paths"`
+	ThreatCautionCeiling string   `json:"threat_caution_ceiling,omitempty" mapstructure:"threat_caution_ceiling"`
+}
+
+// RevenueConfig holds revenue settlement settings.
+type RevenueConfig struct {
+	Enabled           bool    `json:"enabled" mapstructure:"enabled"`
+	TaxRate           float64 `json:"tax_rate" mapstructure:"tax_rate"`
+	DestinationWallet string  `json:"destination_wallet" mapstructure:"destination_wallet"`
+}
+
+// HeartbeatConfig holds heartbeat timing settings.
+type HeartbeatConfig struct {
+	IntervalSeconds int `json:"interval_seconds" mapstructure:"interval_seconds"`
 }
 
 // SkillsConfig holds skill discovery settings.
@@ -554,6 +570,52 @@ func (c *Config) Validate() error {
 	if r.MaxFallbackAttempts > 0 && r.MaxFallbackAttempts < 1 {
 		return fmt.Errorf("%w: models.routing.max_fallback_attempts must be >= 1", ErrConfig)
 	}
+	if r.EstimatedOutputTokens > 0 && r.EstimatedOutputTokens < 1 {
+		return fmt.Errorf("%w: models.routing.estimated_output_tokens must be >= 1 if set", ErrConfig)
+	}
+
+	// Security: threat_caution_ceiling must be below Creator authority if set.
+	if c.Security.ThreatCautionCeiling != "" {
+		validCeilings := map[string]int{
+			"Safe":      0,
+			"Caution":   1,
+			"Dangerous": 2,
+			"External":  3,
+			"Creator":   4,
+		}
+		level, ok := validCeilings[c.Security.ThreatCautionCeiling]
+		if !ok {
+			return fmt.Errorf("%w: security.threat_caution_ceiling must be one of Safe, Caution, Dangerous, External, Creator; got %q",
+				ErrConfig, c.Security.ThreatCautionCeiling)
+		}
+		if level >= validCeilings["Creator"] {
+			return fmt.Errorf("%w: security.threat_caution_ceiling must be below Creator authority", ErrConfig)
+		}
+		_ = level
+	}
+
+	// Heartbeat interval.
+	if c.Heartbeat.IntervalSeconds > 0 && c.Heartbeat.IntervalSeconds < 30 {
+		return fmt.Errorf("%w: heartbeat.interval_seconds must be >= 30 if set, got %d", ErrConfig, c.Heartbeat.IntervalSeconds)
+	}
+
+	// Revenue config.
+	if c.Revenue.Enabled {
+		if c.Revenue.TaxRate < 0 || c.Revenue.TaxRate > 1 {
+			return fmt.Errorf("%w: revenue.tax_rate must be in [0,1], got %f", ErrConfig, c.Revenue.TaxRate)
+		}
+		if c.Revenue.DestinationWallet == "" {
+			return fmt.Errorf("%w: revenue.destination_wallet is required when revenue is enabled", ErrConfig)
+		}
+	}
+
+	// Channel phone number format warnings (E.164).
+	warnE164 := func(field, value string) {
+		if value != "" && !strings.HasPrefix(value, "+") {
+			fmt.Fprintf(os.Stderr, "warning: %s should be in E.164 format (e.g., +1234567890), got %q\n", field, value)
+		}
+	}
+	warnE164("channels.signal_account", c.Channels.SignalAccount)
 
 	return nil
 }
