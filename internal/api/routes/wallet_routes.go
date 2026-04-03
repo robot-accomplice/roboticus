@@ -3,6 +3,8 @@ package routes
 import (
 	"net/http"
 
+	"github.com/rs/zerolog/log"
+
 	"goboticus/internal/db"
 )
 
@@ -14,7 +16,11 @@ func GetWalletBalance(store *db.Store) http.HandlerFunc {
 		row := store.QueryRowContext(r.Context(),
 			`SELECT COALESCE(SUM(CASE WHEN tx_type = 'credit' THEN amount ELSE -amount END), 0)
 			 FROM transactions`)
-		_ = row.Scan(&balance)
+		if err := row.Scan(&balance); err != nil {
+			log.Warn().Err(err).Msg("wallet balance scan failed")
+			writeError(w, http.StatusInternalServerError, "failed to query wallet balance")
+			return
+		}
 
 		writeJSON(w, http.StatusOK, map[string]any{
 			"balance":  balance,
@@ -31,7 +37,9 @@ func GetWalletAddress(store *db.Store) http.HandlerFunc {
 		var address string
 		row := store.QueryRowContext(r.Context(),
 			`SELECT value FROM identity WHERE key = 'wallet_address'`)
-		_ = row.Scan(&address)
+		if err := row.Scan(&address); err != nil {
+			log.Warn().Err(err).Msg("wallet address scan failed")
+		}
 
 		writeJSON(w, http.StatusOK, map[string]any{
 			"address":  address,

@@ -1,10 +1,13 @@
 package routes
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -162,6 +165,74 @@ func DeleteSubagent(store *db.Store) http.HandlerFunc {
 	}
 }
 
+// applyConfigPatch loads the config from disk, merges the patch via JSON round-trip,
+// validates the result, and writes valid TOML back to disk. It also persists an
+// audit trail entry. This is the shared implementation used by both UpdateConfig
+// and ConfigApply.
+func applyConfigPatch(ctx context.Context, store *db.Store, patch map[string]any) (string, error) {
+	path := core.ConfigFilePath()
+
+	// Load the existing config from disk (falls back to defaults if absent).
+	merged, err := core.LoadConfigFromFile(path)
+	if err != nil {
+		return path, fmt.Errorf("failed to load config: %w", err)
+	}
+
+	// Apply the patch: marshal the current config to JSON, overlay the patch
+	// keys, then unmarshal back into the Config struct. This ensures only
+	// known fields are accepted and types are enforced.
+	base, err := json.Marshal(merged)
+	if err != nil {
+		return path, fmt.Errorf("failed to marshal config: %w", err)
+	}
+
+	var baseMap map[string]any
+	if err := json.Unmarshal(base, &baseMap); err != nil {
+		return path, fmt.Errorf("failed to parse config: %w", err)
+	}
+
+	for k, v := range patch {
+		baseMap[k] = v
+	}
+
+	patchedJSON, err := json.Marshal(baseMap)
+	if err != nil {
+		return path, fmt.Errorf("failed to marshal patched config: %w", err)
+	}
+
+	if err := json.Unmarshal(patchedJSON, &merged); err != nil {
+		return path, fmt.Errorf("patch produced invalid config: %w", err)
+	}
+
+	// Validate the merged config.
+	if err := merged.Validate(); err != nil {
+		return path, fmt.Errorf("validation failed: %w", err)
+	}
+
+	// Persist patch to identity table for audit trail.
+	auditJSON, _ := json.Marshal(patch)
+	if _, err := store.ExecContext(ctx,
+		`INSERT INTO identity (key, value) VALUES ('config_patch:latest', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+		string(auditJSON)); err != nil {
+		log.Warn().Err(err).Msg("failed to persist config audit trail")
+	}
+
+	// Write the validated config as TOML.
+	tomlBytes, err := core.MarshalTOML(&merged)
+	if err != nil {
+		return path, fmt.Errorf("failed to marshal TOML: %w", err)
+	}
+
+	if err := os.MkdirAll(core.ConfigDir(), 0o755); err != nil {
+		return path, fmt.Errorf("failed to create config dir: %w", err)
+	}
+	if err := os.WriteFile(path, tomlBytes, 0o644); err != nil {
+		return path, fmt.Errorf("failed to write config file: %w", err)
+	}
+
+	return path, nil
+}
+
 // UpdateConfig applies a JSON config patch by loading the existing TOML config,
 // merging the patch via JSON round-trip into the Config struct, validating the
 // result, and writing valid TOML back to disk.
@@ -177,70 +248,15 @@ func UpdateConfig(cfg *core.Config, store *db.Store) http.HandlerFunc {
 			return
 		}
 
-		path := core.ConfigFilePath()
-
-		// Load the existing config from disk (falls back to defaults if absent).
-		merged, err := core.LoadConfigFromFile(path)
+		path, err := applyConfigPatch(r.Context(), store, patch)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to load config: "+err.Error())
-			return
-		}
-
-		// Apply the patch: marshal the current config to JSON, overlay the patch
-		// keys, then unmarshal back into the Config struct. This ensures only
-		// known fields are accepted and types are enforced.
-		base, err := json.Marshal(merged)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to marshal config: "+err.Error())
-			return
-		}
-
-		var baseMap map[string]any
-		if err := json.Unmarshal(base, &baseMap); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to parse config: "+err.Error())
-			return
-		}
-
-		for k, v := range patch {
-			baseMap[k] = v
-		}
-
-		patchedJSON, err := json.Marshal(baseMap)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to marshal patched config: "+err.Error())
-			return
-		}
-
-		if err := json.Unmarshal(patchedJSON, &merged); err != nil {
-			writeError(w, http.StatusBadRequest, "patch produced invalid config: "+err.Error())
-			return
-		}
-
-		// Validate the merged config.
-		if err := merged.Validate(); err != nil {
-			writeError(w, http.StatusBadRequest, "validation failed: "+err.Error())
-			return
-		}
-
-		// Persist patch to identity table for audit trail.
-		auditJSON, _ := json.Marshal(patch)
-		_, _ = store.ExecContext(r.Context(),
-			`INSERT INTO identity (key, value) VALUES ('config_patch:latest', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-			string(auditJSON))
-
-		// Write the validated config as TOML.
-		tomlBytes, err := core.MarshalTOML(&merged)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to marshal TOML: "+err.Error())
-			return
-		}
-
-		if err := os.MkdirAll(core.ConfigDir(), 0o755); err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		if err := os.WriteFile(path, tomlBytes, 0o644); err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			// Distinguish validation errors (client's fault) from internal errors.
+			errMsg := err.Error()
+			if strings.HasPrefix(errMsg, "validation failed:") || strings.HasPrefix(errMsg, "patch produced invalid config:") {
+				writeError(w, http.StatusBadRequest, errMsg)
+			} else {
+				writeError(w, http.StatusInternalServerError, errMsg)
+			}
 			return
 		}
 

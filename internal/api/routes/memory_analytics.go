@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/rs/zerolog/log"
+
 	"goboticus/internal/db"
 )
 
@@ -22,7 +24,9 @@ func GetMemoryAnalytics(store *db.Store) http.HandlerFunc {
 			        SUM(CASE WHEN COALESCE(memory_tokens, 0) > 0 THEN 1 ELSE 0 END)
 			 FROM context_snapshots
 			 WHERE created_at >= datetime('now', ? || ' hours')`, offset)
-		_ = row.Scan(&totalTurns, &turnsWithMemory)
+		if err := row.Scan(&totalTurns, &turnsWithMemory); err != nil {
+			log.Warn().Err(err).Str("metric", "total_turns").Msg("scan failed")
+		}
 
 		// Hit rate.
 		var hitRate float64
@@ -40,7 +44,9 @@ func GetMemoryAnalytics(store *db.Store) http.HandlerFunc {
 			 FROM context_snapshots
 			 WHERE created_at >= datetime('now', ? || ' hours')
 			   AND token_budget > 0`, offset)
-		_ = row.Scan(&avgUtilization)
+		if err := row.Scan(&avgUtilization); err != nil {
+			log.Warn().Err(err).Str("metric", "avg_utilization").Msg("scan failed")
+		}
 
 		// Complexity distribution.
 		complexityRows, err := store.QueryContext(ctx,
@@ -68,7 +74,9 @@ func GetMemoryAnalytics(store *db.Store) http.HandlerFunc {
 			 JOIN context_snapshots cs ON cs.turn_id = tf.turn_id
 			 WHERE cs.created_at >= datetime('now', ? || ' hours')
 			   AND COALESCE(cs.memory_tokens, 0) > 0`, offset)
-		_ = row.Scan(&avgGradeWithMem)
+		if err := row.Scan(&avgGradeWithMem); err != nil {
+			log.Warn().Err(err).Str("metric", "avg_grade_with_mem").Msg("scan failed")
+		}
 
 		row = store.QueryRowContext(ctx,
 			`SELECT COALESCE(AVG(tf.grade), 0)
@@ -76,7 +84,9 @@ func GetMemoryAnalytics(store *db.Store) http.HandlerFunc {
 			 JOIN context_snapshots cs ON cs.turn_id = tf.turn_id
 			 WHERE cs.created_at >= datetime('now', ? || ' hours')
 			   AND COALESCE(cs.memory_tokens, 0) = 0`, offset)
-		_ = row.Scan(&avgGradeWithoutMem)
+		if err := row.Scan(&avgGradeWithoutMem); err != nil {
+			log.Warn().Err(err).Str("metric", "avg_grade_without_mem").Msg("scan failed")
+		}
 
 		memoryROI := 0.0
 		if avgGradeWithoutMem > 0 {
@@ -86,15 +96,25 @@ func GetMemoryAnalytics(store *db.Store) http.HandlerFunc {
 		// Memory entry counts per tier.
 		var workingCount, episodicCount, semanticCount, proceduralCount, relationshipCount int64
 		row = store.QueryRowContext(ctx, `SELECT COUNT(*) FROM working_memory`)
-		_ = row.Scan(&workingCount)
+		if err := row.Scan(&workingCount); err != nil {
+			log.Warn().Err(err).Str("metric", "working_count").Msg("scan failed")
+		}
 		row = store.QueryRowContext(ctx, `SELECT COUNT(*) FROM episodic_memory`)
-		_ = row.Scan(&episodicCount)
+		if err := row.Scan(&episodicCount); err != nil {
+			log.Warn().Err(err).Str("metric", "episodic_count").Msg("scan failed")
+		}
 		row = store.QueryRowContext(ctx, `SELECT COUNT(*) FROM semantic_memory`)
-		_ = row.Scan(&semanticCount)
+		if err := row.Scan(&semanticCount); err != nil {
+			log.Warn().Err(err).Str("metric", "semantic_count").Msg("scan failed")
+		}
 		row = store.QueryRowContext(ctx, `SELECT COUNT(*) FROM procedural_memory`)
-		_ = row.Scan(&proceduralCount)
+		if err := row.Scan(&proceduralCount); err != nil {
+			log.Warn().Err(err).Str("metric", "procedural_count").Msg("scan failed")
+		}
 		row = store.QueryRowContext(ctx, `SELECT COUNT(*) FROM relationship_memory`)
-		_ = row.Scan(&relationshipCount)
+		if err := row.Scan(&relationshipCount); err != nil {
+			log.Warn().Err(err).Str("metric", "relationship_count").Msg("scan failed")
+		}
 
 		writeJSON(w, http.StatusOK, map[string]any{
 			"period_hours":           hours,

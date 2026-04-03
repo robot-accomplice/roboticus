@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/rs/zerolog/log"
+
 	"goboticus/internal/core"
 	"goboticus/internal/db"
 	"goboticus/internal/llm"
@@ -80,7 +82,9 @@ func GetEfficiency(store *db.Store) http.HandlerFunc {
 			 WHERE created_at >= datetime('now', ? || ' hours')`, strconv.Itoa(-hours))
 		var totalTokens, count, cachedCount int64
 		var totalCost, avgLatency float64
-		_ = row.Scan(&totalTokens, &totalCost, &avgLatency, &count, &cachedCount)
+		if err := row.Scan(&totalTokens, &totalCost, &avgLatency, &count, &cachedCount); err != nil {
+			log.Warn().Err(err).Str("metric", "efficiency").Msg("scan failed")
+		}
 
 		cacheRate := 0.0
 		if count > 0 {

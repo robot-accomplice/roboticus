@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/rs/zerolog/log"
 
 	"goboticus/internal/db"
 	"goboticus/internal/pipeline"
@@ -267,13 +268,17 @@ func AnalyzeSession(store *db.Store) http.HandlerFunc {
 		var msgCount int64
 		row = store.QueryRowContext(ctx,
 			`SELECT COUNT(*) FROM session_messages WHERE session_id = ?`, id)
-		_ = row.Scan(&msgCount)
+		if err := row.Scan(&msgCount); err != nil {
+			log.Warn().Err(err).Str("metric", "msg_count").Msg("scan failed")
+		}
 
 		// Turn count (user messages = turns).
 		var turnCount int64
 		row = store.QueryRowContext(ctx,
 			`SELECT COUNT(*) FROM session_messages WHERE session_id = ? AND role = 'user'`, id)
-		_ = row.Scan(&turnCount)
+		if err := row.Scan(&turnCount); err != nil {
+			log.Warn().Err(err).Str("metric", "turn_count").Msg("scan failed")
+		}
 
 		// Duration in seconds.
 		var durationSec float64

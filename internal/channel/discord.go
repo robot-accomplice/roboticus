@@ -203,9 +203,9 @@ func (d *DiscordAdapter) getGatewayURL(ctx context.Context) (string, error) {
 func (d *DiscordAdapter) runGateway(ctx context.Context, wsURL string) error {
 	log.Info().Str("url", wsURL).Msg("discord: connecting to gateway")
 
-	// Use nhooyr.io/websocket for connection.
+	// Use github.com/coder/websocket for connection.
 	// For now, implement the gateway protocol framework with net/http polling fallback.
-	// Real WebSocket will be wired when nhooyr.io/websocket is available in the build.
+	// Real WebSocket will be wired when github.com/coder/websocket is available in the build.
 
 	// Gateway loop: reconnect on disconnect.
 	for {
@@ -228,7 +228,7 @@ func (d *DiscordAdapter) runGateway(ctx context.Context, wsURL string) error {
 
 func (d *DiscordAdapter) gatewaySession(ctx context.Context, _ string) error {
 	// Gateway session placeholder — processes MESSAGE_CREATE events via REST polling fallback.
-	// Full WebSocket implementation requires nhooyr.io/websocket integration.
+	// Full WebSocket implementation requires github.com/coder/websocket integration.
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 

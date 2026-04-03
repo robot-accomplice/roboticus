@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/rs/zerolog/log"
 
 	"goboticus/internal/core"
 	"goboticus/internal/db"
@@ -405,17 +406,25 @@ func AuditSkills(store *db.Store) http.HandlerFunc {
 
 		var activeCount, disabledCount, totalCount int64
 		row := store.QueryRowContext(ctx, `SELECT COUNT(*) FROM skills WHERE enabled = 1`)
-		_ = row.Scan(&activeCount)
+		if err := row.Scan(&activeCount); err != nil {
+			log.Warn().Err(err).Str("metric", "active_skills").Msg("scan failed")
+		}
 
 		row = store.QueryRowContext(ctx, `SELECT COUNT(*) FROM skills WHERE enabled = 0`)
-		_ = row.Scan(&disabledCount)
+		if err := row.Scan(&disabledCount); err != nil {
+			log.Warn().Err(err).Str("metric", "disabled_skills").Msg("scan failed")
+		}
 
 		row = store.QueryRowContext(ctx, `SELECT COUNT(*) FROM skills`)
-		_ = row.Scan(&totalCount)
+		if err := row.Scan(&totalCount); err != nil {
+			log.Warn().Err(err).Str("metric", "total_skills").Msg("scan failed")
+		}
 
 		var lastReload *string
 		row = store.QueryRowContext(ctx, `SELECT MAX(created_at) FROM skills`)
-		_ = row.Scan(&lastReload)
+		if err := row.Scan(&lastReload); err != nil {
+			log.Warn().Err(err).Str("metric", "last_reload").Msg("scan failed")
+		}
 
 		result := map[string]any{
 			"total_count":    totalCount,

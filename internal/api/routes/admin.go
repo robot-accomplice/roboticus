@@ -71,7 +71,9 @@ func PostTurnFeedback(store *db.Store) http.HandlerFunc {
 		if req.SessionID == "" {
 			// Try to look up the session from the turn.
 			row := store.QueryRowContext(r.Context(), `SELECT session_id FROM turns WHERE id = ?`, id)
-			_ = row.Scan(&req.SessionID)
+			if err := row.Scan(&req.SessionID); err != nil {
+				log.Warn().Err(err).Str("turn_id", id).Msg("failed to look up session for turn feedback")
+			}
 		}
 		feedbackID := db.NewID()
 		_, err := store.ExecContext(r.Context(),
@@ -404,21 +406,31 @@ func MemoryHealth(store *db.Store) http.HandlerFunc {
 
 		var workingCount, workingStale int64
 		row := store.QueryRowContext(ctx, `SELECT COUNT(*) FROM working_memory`)
-		_ = row.Scan(&workingCount)
+		if err := row.Scan(&workingCount); err != nil {
+			log.Warn().Err(err).Str("metric", "working_count").Msg("scan failed")
+		}
 		row = store.QueryRowContext(ctx,
 			`SELECT COUNT(*) FROM working_memory WHERE created_at < datetime('now', '-24 hours')`)
-		_ = row.Scan(&workingStale)
+		if err := row.Scan(&workingStale); err != nil {
+			log.Warn().Err(err).Str("metric", "working_stale").Msg("scan failed")
+		}
 
 		var episodicCount, episodicStale int64
 		row = store.QueryRowContext(ctx, `SELECT COUNT(*) FROM episodic_memory`)
-		_ = row.Scan(&episodicCount)
+		if err := row.Scan(&episodicCount); err != nil {
+			log.Warn().Err(err).Str("metric", "episodic_count").Msg("scan failed")
+		}
 		row = store.QueryRowContext(ctx,
 			`SELECT COUNT(*) FROM episodic_memory WHERE created_at < datetime('now', '-7 days')`)
-		_ = row.Scan(&episodicStale)
+		if err := row.Scan(&episodicStale); err != nil {
+			log.Warn().Err(err).Str("metric", "episodic_stale").Msg("scan failed")
+		}
 
 		var semanticCount int64
 		row = store.QueryRowContext(ctx, `SELECT COUNT(*) FROM semantic_memory`)
-		_ = row.Scan(&semanticCount)
+		if err := row.Scan(&semanticCount); err != nil {
+			log.Warn().Err(err).Str("metric", "semantic_count").Msg("scan failed")
+		}
 
 		writeJSON(w, http.StatusOK, map[string]any{
 			"working": map[string]any{

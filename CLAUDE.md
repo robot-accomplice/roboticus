@@ -40,7 +40,7 @@ go vet ./...                # Lint
 - Environment overrides use `GOBOTICUS_` prefix (e.g., `GOBOTICUS_SERVER_PORT=8080`).
 
 ### Go Module Dependencies
-- `nhooyr.io/websocket` — already in go.mod, used for WebSocket (EventBus + CDP sessions)
+- `github.com/coder/websocket` — already in go.mod, used for WebSocket (EventBus + CDP sessions)
 - `github.com/charmbracelet/bubbletea` — TUI framework (added for `goboticus tui`)
 - `github.com/charmbracelet/lipgloss` — TUI styling
 

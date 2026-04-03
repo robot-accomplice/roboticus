@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/rs/zerolog/log"
 
 	"goboticus/internal/db"
 )
@@ -205,7 +206,9 @@ func AnalyzeTurn(store *db.Store) http.HandlerFunc {
 		var toolCount int64
 		row = store.QueryRowContext(r.Context(),
 			`SELECT COUNT(*) FROM tool_calls WHERE turn_id = ?`, turnID)
-		_ = row.Scan(&toolCount)
+		if err := row.Scan(&toolCount); err != nil {
+			log.Warn().Err(err).Str("metric", "tool_count").Msg("scan failed")
+		}
 
 		writeJSON(w, http.StatusOK, map[string]any{
 			"analysis": map[string]any{

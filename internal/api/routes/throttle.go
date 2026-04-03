@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/rs/zerolog/log"
+
 	"goboticus/internal/db"
 )
 
@@ -19,7 +21,9 @@ func GetThrottleStats(store *db.Store) http.HandlerFunc {
 			`SELECT COUNT(*) FROM abuse_events
 			 WHERE created_at >= datetime('now', ? || ' hours')`,
 			intToNegStr(hours))
-		_ = row.Scan(&totalEvents)
+		if err := row.Scan(&totalEvents); err != nil {
+			log.Warn().Err(err).Str("metric", "total_events").Msg("scan failed")
+		}
 
 		// Events by signal type.
 		typeRows, err := store.QueryContext(ctx,
@@ -74,7 +78,9 @@ func GetThrottleStats(store *db.Store) http.HandlerFunc {
 			   SUM(CASE WHEN action_taken = 'quarantine' THEN 1 ELSE 0 END)
 			 FROM abuse_events
 			 WHERE created_at >= datetime('now', '-5 minutes')`)
-		_ = row.Scan(&slowdownCount, &quarantineCount)
+		if err := row.Scan(&slowdownCount, &quarantineCount); err != nil {
+			log.Warn().Err(err).Str("metric", "active_penalties").Msg("scan failed")
+		}
 
 		writeJSON(w, http.StatusOK, map[string]any{
 			"period_hours":       hours,

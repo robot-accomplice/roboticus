@@ -5,6 +5,7 @@ go 1.26.1
 require (
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
+	github.com/coder/websocket v1.8.14
 	github.com/go-chi/chi/v5 v5.2.5
 	github.com/google/uuid v1.6.0
 	github.com/kardianos/service v1.2.4
@@ -18,7 +19,6 @@ require (
 	golang.org/x/text v0.35.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.47.0
-	nhooyr.io/websocket v1.8.17
 )
 
 require (

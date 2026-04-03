@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"nhooyr.io/websocket" //nolint:staticcheck // TODO: migrate to github.com/coder/websocket
+	"github.com/coder/websocket"
 )
 
 // CdpTarget represents a CDP debugging target.
@@ -30,7 +30,7 @@ type cdpResult struct {
 
 // CdpSession wraps a WebSocket connection to a CDP target.
 type CdpSession struct {
-	conn      *websocket.Conn //nolint:staticcheck // TODO: migrate to modern API
+	conn      *websocket.Conn
 	commandID atomic.Int64
 	mu        sync.Mutex
 	pending   map[int64]chan cdpResult
@@ -59,11 +59,11 @@ type cdpError struct {
 
 // ConnectCdp connects to a CDP target's WebSocket URL.
 func ConnectCdp(ctx context.Context, wsURL string, timeout time.Duration) (*CdpSession, error) {
-	conn, _, err := websocket.Dial(ctx, wsURL, nil) //nolint:staticcheck // TODO: migrate to github.com/coder/websocket
+	conn, _, err := websocket.Dial(ctx, wsURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("cdp connect: %w", err)
 	}
-	conn.SetReadLimit(10 * 1024 * 1024) //nolint:staticcheck // TODO: migrate to github.com/coder/websocket
+	conn.SetReadLimit(10 * 1024 * 1024)
 
 	readCtx, cancel := context.WithCancel(ctx)
 	s := &CdpSession{
@@ -80,7 +80,7 @@ func ConnectCdp(ctx context.Context, wsURL string, timeout time.Duration) (*CdpS
 // Close shuts down the CDP session.
 func (s *CdpSession) Close() {
 	s.cancel()
-	_ = s.conn.Close(websocket.StatusNormalClosure, "done") //nolint:staticcheck // TODO: migrate to github.com/coder/websocket
+	_ = s.conn.Close(websocket.StatusNormalClosure, "done")
 }
 
 // SendCommand sends a CDP method call and waits for the response.
@@ -102,7 +102,7 @@ func (s *CdpSession) SendCommand(ctx context.Context, method string, params any)
 	cmd := cdpCommand{ID: id, Method: method, Params: params}
 	data, _ := json.Marshal(cmd)
 
-	if err := s.conn.Write(ctx, websocket.MessageText, data); err != nil { //nolint:staticcheck // TODO: migrate to github.com/coder/websocket
+	if err := s.conn.Write(ctx, websocket.MessageText, data); err != nil {
 		return nil, fmt.Errorf("cdp send: %w", err)
 	}
 
@@ -127,7 +127,7 @@ func (s *CdpSession) readLoop(ctx context.Context) {
 		default:
 		}
 
-		_, data, err := s.conn.Read(ctx) //nolint:staticcheck // TODO: migrate to github.com/coder/websocket
+		_, data, err := s.conn.Read(ctx)
 		if err != nil {
 			return
 		}

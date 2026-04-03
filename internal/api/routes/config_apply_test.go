@@ -24,7 +24,7 @@ func TestConfigApply_ValidSection(t *testing.T) {
 			handler.ServeHTTP(rec, req)
 
 			if rec.Code != http.StatusOK {
-				t.Fatalf("status = %d, want 200", rec.Code)
+				t.Fatalf("status = %d, want 200; body = %s", rec.Code, rec.Body.String())
 			}
 			resp := jsonBody(t, rec)
 			if resp["applied"] != true {
