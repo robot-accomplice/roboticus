@@ -220,6 +220,11 @@ func (b *Browser) IsRunning() bool {
 	return b.running
 }
 
+// CDPPort returns the configured CDP port.
+func (b *Browser) CDPPort() int {
+	return b.cfg.CDPPort
+}
+
 // Execute performs a browser action via CDP.
 func (b *Browser) Execute(ctx context.Context, action *BrowserAction) ActionResult {
 	b.mu.Lock()

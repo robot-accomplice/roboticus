@@ -1,6 +1,8 @@
 package llm
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -86,5 +88,56 @@ func TestLogisticRouter_TrainEmptyDataset(t *testing.T) {
 	after := lr.Route(QueryFeatures{CharCount: 100})
 	if before != after {
 		t.Errorf("empty training should not change weights: before=%f after=%f", before, after)
+	}
+}
+
+func TestLogisticRouter_SaveLoad(t *testing.T) {
+	lr := DefaultLogisticRouter()
+	lr.Train([]RoutingExample{
+		{Features: QueryFeatures{CharCount: 5000, HasCode: true}, Outcome: 1.0},
+	}, 50, 0.1)
+
+	path := filepath.Join(t.TempDir(), "model.json")
+	if err := lr.Save(path); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("saved file missing: %v", err)
+	}
+
+	loaded, err := LoadLogisticRouter(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	feat := QueryFeatures{CharCount: 3000, MessageCount: 5, HasCode: true}
+	if lr.Route(feat) != loaded.Route(feat) {
+		t.Errorf("loaded model diverges: %f vs %f", lr.Route(feat), loaded.Route(feat))
+	}
+}
+
+func TestPreferenceCollector_Basic(t *testing.T) {
+	pc := NewPreferenceCollector(100)
+	pc.Record(QueryFeatures{CharCount: 100}, "gpt-4", 0.8)
+	pc.Record(QueryFeatures{CharCount: 200}, "claude", 0.9)
+
+	if pc.Len() != 2 {
+		t.Errorf("len = %d, want 2", pc.Len())
+	}
+
+	examples := pc.AsTrainingSet()
+	if len(examples) != 2 || examples[0].Outcome != 0.8 {
+		t.Errorf("unexpected training set: %+v", examples)
+	}
+}
+
+func TestPreferenceCollector_Overflow(t *testing.T) {
+	pc := NewPreferenceCollector(10)
+	for i := 0; i < 15; i++ {
+		pc.Record(QueryFeatures{CharCount: i * 100}, "model", float64(i)/15)
+	}
+	if pc.Len() > 10 {
+		t.Errorf("overflow not handled: len = %d", pc.Len())
 	}
 }

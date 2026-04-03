@@ -129,6 +129,121 @@ func TestCircuitBreaker_SlidingWindow(t *testing.T) {
 	}
 }
 
+func TestCircuitBreaker_ForceOpenBlocksAllRequests(t *testing.T) {
+	cb := NewCircuitBreaker(DefaultCircuitBreakerConfig())
+	if !cb.Allow() {
+		t.Fatal("closed breaker should allow requests")
+	}
+
+	cb.ForceOpen()
+
+	if cb.Allow() {
+		t.Error("force-opened breaker must block all requests")
+	}
+	if cb.State() != CircuitOpen {
+		t.Errorf("force-opened breaker state should be Open, got %v", cb.State())
+	}
+	if !cb.IsForcedOpen() {
+		t.Error("IsForcedOpen should return true")
+	}
+}
+
+func TestCircuitBreaker_ForceOpenNotClearedByCooldown(t *testing.T) {
+	cfg := CircuitBreakerConfig{
+		Threshold:      2,
+		Window:         10 * time.Second,
+		Cooldown:       10 * time.Millisecond,
+		MaxCooldown:    1 * time.Second,
+		HalfOpenProbes: 1,
+	}
+	cb := NewCircuitBreaker(cfg)
+	cb.ForceOpen()
+
+	// Wait well past the cooldown.
+	time.Sleep(30 * time.Millisecond)
+
+	if cb.Allow() {
+		t.Error("force-opened breaker must NOT auto-recover via cooldown")
+	}
+	if cb.State() != CircuitOpen {
+		t.Error("force-opened breaker should remain Open after cooldown")
+	}
+}
+
+func TestCircuitBreaker_ForceOpenClearedByReset(t *testing.T) {
+	cb := NewCircuitBreaker(DefaultCircuitBreakerConfig())
+	cb.ForceOpen()
+
+	if cb.Allow() {
+		t.Fatal("force-opened breaker must block")
+	}
+
+	cb.Reset()
+
+	if !cb.Allow() {
+		t.Error("breaker should allow requests after Reset")
+	}
+	if cb.IsForcedOpen() {
+		t.Error("IsForcedOpen should be false after Reset")
+	}
+	if cb.State() != CircuitClosed {
+		t.Error("state should be Closed after Reset")
+	}
+}
+
+func TestCircuitBreaker_CapacityPressureReducesThroughput(t *testing.T) {
+	cb := NewCircuitBreaker(DefaultCircuitBreakerConfig())
+	cb.SetCapacityPressure(true)
+
+	if !cb.HasCapacityPressure() {
+		t.Fatal("HasCapacityPressure should return true")
+	}
+
+	// Effective state should be half-open under pressure.
+	if cb.State() != CircuitHalfOpen {
+		t.Errorf("closed breaker under pressure should report HalfOpen, got %v", cb.State())
+	}
+
+	// Allow should permit roughly 1 in 4 requests.
+	allowed := 0
+	const total = 20
+	for range total {
+		if cb.Allow() {
+			allowed++
+		}
+	}
+	expected := total / 4
+	if allowed != expected {
+		t.Errorf("expected %d allowed out of %d under pressure, got %d", expected, total, allowed)
+	}
+}
+
+func TestCircuitBreaker_ClearCapacityPressureRestoresThroughput(t *testing.T) {
+	cb := NewCircuitBreaker(DefaultCircuitBreakerConfig())
+	cb.SetCapacityPressure(true)
+
+	// Drain a few requests under pressure.
+	for range 8 {
+		cb.Allow()
+	}
+
+	cb.SetCapacityPressure(false)
+
+	if cb.HasCapacityPressure() {
+		t.Error("HasCapacityPressure should be false after clearing")
+	}
+	if cb.State() != CircuitClosed {
+		t.Errorf("state should be Closed after clearing pressure, got %v", cb.State())
+	}
+
+	// All requests should be allowed now.
+	for i := range 10 {
+		if !cb.Allow() {
+			t.Errorf("request %d should be allowed after clearing pressure", i)
+		}
+	}
+}
+
 func TestBreakerRegistry(t *testing.T) {
 	reg := NewBreakerRegistry(DefaultCircuitBreakerConfig())
 

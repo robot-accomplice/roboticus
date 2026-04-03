@@ -16,12 +16,16 @@ const (
 )
 
 // Router selects the best model for a given request based on complexity
-// heuristics. Unlike the Rust version's separate heuristic + ML backends,
-// we start with a clean heuristic router and add ML scoring as a layer later.
+// heuristics. When MetascoreSelector is set, it overrides the heuristic
+// path with a runtime-feedback-driven selection.
 type Router struct {
 	models     []RouteTarget
 	costAware  bool
 	localFirst bool
+
+	// MetascoreSelector, when non-nil, is used instead of heuristic routing.
+	// Set via Router.EnableMetascoreRouting.
+	MetascoreSelector func(targets []RouteTarget) *ModelProfile
 }
 
 // RouteTarget pairs a model name with its provider and tier.
@@ -48,10 +52,25 @@ func NewRouter(targets []RouteTarget, cfg RouterConfig) *Router {
 	}
 }
 
+// EnableMetascoreRouting activates runtime-feedback-driven model selection.
+func (r *Router) EnableMetascoreRouting(quality *QualityTracker, capacity *CapacityTracker, breakers *BreakerRegistry) {
+	r.MetascoreSelector = func(targets []RouteTarget) *ModelProfile {
+		profiles := BuildModelProfiles(targets, quality, capacity, breakers)
+		return SelectByMetascore(profiles, breakers)
+	}
+}
+
 // Select picks the best model for a request based on message complexity.
 func (r *Router) Select(req *Request) RouteTarget {
 	if len(r.models) == 0 {
 		return RouteTarget{Model: req.Model}
+	}
+
+	// Metascore routing overrides heuristic selection when enabled.
+	if r.MetascoreSelector != nil {
+		if p := r.MetascoreSelector(r.models); p != nil {
+			return RouteTarget{Model: p.Model, Provider: p.Provider}
+		}
 	}
 
 	complexity := estimateComplexity(req)

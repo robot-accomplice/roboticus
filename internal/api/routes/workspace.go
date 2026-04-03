@@ -14,7 +14,7 @@ import (
 // GetWorkspaceState returns live runtime state for the workspace page.
 func GetWorkspaceState(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		dbStats := store.DB().Stats()
+		dbStats := store.Stats()
 		var sessionCount int64
 		row := store.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM sessions WHERE status = 'active'`)
 		_ = row.Scan(&sessionCount)

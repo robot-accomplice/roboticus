@@ -21,7 +21,7 @@ func TestPlanner_BreakerOpen(t *testing.T) {
 		RuntimeConstraint: RuntimeConstraints{BreakerOpen: true},
 	}
 	plan := p.Plan(state)
-	if plan.Selected != ActionReturnBlocker {
+	if plan.Selected != TaskActionReturnBlocker {
 		t.Errorf("breaker open should select ReturnBlocker, got %s", plan.Selected)
 	}
 }
@@ -67,7 +67,7 @@ func TestPlanner_ProtocolIssues(t *testing.T) {
 	plan := p.Plan(state)
 	found := false
 	for _, c := range plan.Candidates {
-		if c.Action == ActionNormalizationRetry {
+		if c.Action == TaskActionNormalizationRetry {
 			found = true
 			if c.Confidence < 0.7 {
 				t.Errorf("normalization retry confidence too low: %f", c.Confidence)

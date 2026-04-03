@@ -17,6 +17,7 @@ import (
 	"goboticus/internal/core"
 	"goboticus/internal/llm"
 	"goboticus/internal/pipeline"
+	"goboticus/internal/session"
 	"goboticus/testutil"
 )
 
@@ -24,7 +25,7 @@ import (
 // Returns a canned response to avoid LLM confidence escalation issues with mock providers.
 type smokeExecutor struct{}
 
-func (s *smokeExecutor) RunLoop(_ context.Context, session *pipeline.Session) (string, int, error) {
+func (s *smokeExecutor) RunLoop(_ context.Context, session *session.Session) (string, int, error) {
 	content := "Hello from Goboticus!"
 	session.AddAssistantMessage(content, nil)
 	return content, 1, nil

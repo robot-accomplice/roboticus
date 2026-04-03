@@ -27,12 +27,14 @@ type Service struct {
 	breakers   *BreakerRegistry
 	cache      *Cache
 	dedup      *Dedup
+	transforms *TransformPipeline
 	primary    string   // primary model name
 	fallbacks  []string // fallback model names
 	store      *db.Store
 	bgWorker   *core.BackgroundWorker
 	Confidence *ConfidenceEvaluator
 	Escalation *EscalationTracker
+	quality    *QualityTracker
 }
 
 // ServiceConfig holds configuration for the LLM service.
@@ -114,12 +116,14 @@ func NewService(cfg ServiceConfig, store *db.Store) (*Service, error) {
 		breakers:   NewBreakerRegistry(cfg.Breaker),
 		cache:      NewCache(cfg.Cache, store),
 		dedup:      NewDedup(2000), // 2s dedup window
+		transforms: DefaultTransformPipeline(),
 		primary:    cfg.Primary,
 		fallbacks:  cfg.Fallbacks,
 		store:      store,
 		bgWorker:   bgw,
 		Confidence: NewConfidenceEvaluator(floor),
 		Escalation: NewEscalationTracker(),
+		quality:    NewQualityTracker(100),
 	}, nil
 }
 
@@ -198,8 +202,18 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 			s.Escalation.RecordCloudDirect()
 		}
 
+		// Apply response transforms (strip <think> blocks, injection markers, etc.).
+		if s.transforms != nil {
+			resp.Content = s.transforms.Apply(resp.Content)
+		}
+
 		// Cache the successful response.
 		s.cache.Put(ctx, req, resp)
+
+		// Record quality observation for model routing feedback.
+		if s.quality != nil {
+			s.quality.Record(resp.Model, qualityFromResponse(resp))
+		}
 
 		// Record cost asynchronously via tracked worker pool.
 		pName := providerName

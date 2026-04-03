@@ -10,12 +10,14 @@ import (
 type PlannedAction int
 
 const (
-	ActionInfer     PlannedAction = iota // Standard LLM inference
-	ActionDelegate                       // Spawn/resume subagent
-	ActionSkillExec                      // Direct skill execution
-	ActionRetrieve                       // Memory-only retrieval (no LLM)
-	ActionEscalate                       // Escalate to higher-tier model
-	ActionWait                           // Await async result
+	ActionInfer              PlannedAction = iota // Standard LLM inference
+	ActionDelegate                                // Spawn/resume subagent
+	ActionSkillExec                               // Direct skill execution
+	ActionRetrieve                                // Memory-only retrieval (no LLM)
+	ActionEscalate                                // Escalate to higher-tier model
+	ActionWait                                    // Await async result
+	ActionNormRetry   // Correct malformed tool call
+	ActionSurfaceBlock // Surface a genuine blocker
 )
 
 func (a PlannedAction) String() string {
@@ -32,6 +34,10 @@ func (a PlannedAction) String() string {
 		return "escalate"
 	case ActionWait:
 		return "wait"
+	case ActionNormRetry:
+		return "normalization_retry"
+	case ActionSurfaceBlock:
+		return "return_blocker"
 	default:
 		return "unknown"
 	}
@@ -50,17 +56,30 @@ type ActionPlan struct {
 //
 // Priority order (first match wins):
 //  1. Pending approval -> Wait
-//  2. Pending delegation -> Delegate
-//  3. Matched skill -> SkillExec
-//  4. Memory-only query -> Retrieve
-//  5. Low confidence + can escalate -> Escalate
-//  6. Default -> Infer
-func PlanNextAction(state *OperatingState, input string, history []llm.Message) ActionPlan {
+//  2. Normalization retry streak -> NormalizationRetry
+//  3. Pending delegation -> Delegate
+//  4. Matched skill -> SkillExec
+//  5. Memory-only query -> Retrieve
+//  6. Low confidence + can escalate -> Escalate
+//  7. Structural repetition -> ReturnBlocker
+//  8. Engagement declining -> Escalate (change approach)
+//  9. Default -> Infer
+func PlanNextAction(state *OperatingState, input string, _ []llm.Message) ActionPlan {
 	if state.PendingApproval {
 		return ActionPlan{
 			Action:     ActionWait,
 			Reason:     "awaiting human approval for gated tool call",
 			Confidence: 1.0,
+		}
+	}
+
+	// Detect repeated tool-call parse failures and inject a corrective retry.
+	if state.NormalizationRetryStreak >= 2 {
+		return ActionPlan{
+			Action:     ActionNormRetry,
+			Reason:     "consecutive tool-call parse failures, injecting corrective prompt",
+			Confidence: 0.95,
+			Context:    map[string]any{"retry_streak": state.NormalizationRetryStreak},
 		}
 	}
 
@@ -94,6 +113,25 @@ func PlanNextAction(state *OperatingState, input string, history []llm.Message) 
 			Action:     ActionEscalate,
 			Reason:     "low confidence, escalating to higher-tier model",
 			Confidence: 0.6,
+		}
+	}
+
+	// Detect agent producing identical response structures repeatedly.
+	if state.StructuralRepetition {
+		return ActionPlan{
+			Action:     ActionSurfaceBlock,
+			Reason:     "structural repetition detected, surfacing blocker to user",
+			Confidence: 0.8,
+		}
+	}
+
+	// Detect user disengagement — short, declining messages suggest the agent
+	// is not being helpful. Escalate to change approach.
+	if state.EngagementDeclining && state.CanEscalate {
+		return ActionPlan{
+			Action:     ActionEscalate,
+			Reason:     "engagement declining, escalating to higher-tier model",
+			Confidence: 0.65,
 		}
 	}
 

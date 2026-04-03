@@ -7,6 +7,8 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"goboticus/internal/agent/memory"
+	"goboticus/internal/agent/policy"
 	"goboticus/internal/core"
 	"goboticus/internal/llm"
 )
@@ -91,9 +93,9 @@ type Loop struct {
 	// Dependencies injected at construction.
 	llm       llm.Completer
 	tools     *ToolRegistry
-	policy    *PolicyEngine
+	policy    *policy.Engine
 	injection *InjectionDetector
-	memory    *MemoryManager
+	memory    *memory.Manager
 	context   *ContextBuilder
 }
 
@@ -101,9 +103,9 @@ type Loop struct {
 type LoopDeps struct {
 	LLM       llm.Completer
 	Tools     *ToolRegistry
-	Policy    *PolicyEngine
+	Policy    *policy.Engine
 	Injection *InjectionDetector
-	Memory    *MemoryManager
+	Memory    *memory.Manager
 	Context   *ContextBuilder
 }
 
@@ -251,7 +253,7 @@ func (l *Loop) act(ctx context.Context, session *Session) (Action, error) {
 
 		// Policy check.
 		if l.policy != nil {
-			decision := l.policy.EvaluateWithTools(&ToolCallRequest{
+			decision := l.policy.EvaluateWithTools(&policy.ToolCallRequest{
 				ToolName:  tc.Function.Name,
 				Arguments: tc.Function.Arguments,
 				Authority: session.Authority,

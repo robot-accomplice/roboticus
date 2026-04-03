@@ -5,108 +5,120 @@ import (
 	"testing"
 )
 
-func TestSemanticClassifier_NilEmbedder(t *testing.T) {
-	corpus := []ClassifierExample{
-		{Text: "hello", Intent: "greeting", Vector: []float32{1, 0, 0}},
-	}
-	sc := NewSemanticClassifier(nil, corpus)
-	intent, conf, err := sc.Classify(context.Background(), "hi there")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if intent != "unknown" {
-		t.Errorf("expected 'unknown', got %q", intent)
-	}
-	if conf != 0.0 {
-		t.Errorf("expected 0 confidence, got %f", conf)
-	}
-}
+func makeTestCorpus() []ClassifierExample {
+	ec := NewEmbeddingClient(nil) // n-gram fallback
+	ctx := context.Background()
+	greetVec, _ := ec.EmbedSingle(ctx, "hello how are you")
+	helpVec, _ := ec.EmbedSingle(ctx, "I need help with a problem")
+	byeVec, _ := ec.EmbedSingle(ctx, "goodbye see you later")
 
-func TestSemanticClassifier_EmptyCorpus(t *testing.T) {
-	ec := NewEmbeddingClient(nil) // fallback n-gram
-	sc := NewSemanticClassifier(ec, nil)
-	intent, conf, err := sc.Classify(context.Background(), "hello")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if intent != "unknown" {
-		t.Errorf("expected 'unknown', got %q", intent)
-	}
-	if conf != 0.0 {
-		t.Errorf("expected 0 confidence, got %f", conf)
-	}
-}
-
-func TestSemanticClassifier_Classification(t *testing.T) {
-	ec := NewEmbeddingClient(nil) // uses n-gram fallback
-
-	// Pre-compute vectors for the corpus using the same embedder.
-	greetVec, _ := ec.EmbedSingle(context.Background(), "hello how are you")
-	helpVec, _ := ec.EmbedSingle(context.Background(), "I need help with a problem")
-
-	corpus := []ClassifierExample{
+	return []ClassifierExample{
 		{Text: "hello how are you", Intent: "greeting", Vector: greetVec},
-		{Text: "I need help with a problem", Intent: "help_request", Vector: helpVec},
-	}
-
-	sc := NewSemanticClassifier(ec, corpus)
-
-	// Query similar to greeting.
-	intent, conf, err := sc.Classify(context.Background(), "hi there how are you doing")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if intent == "" {
-		t.Error("expected non-empty intent")
-	}
-	if conf <= 0 {
-		t.Errorf("expected positive confidence, got %f", conf)
+		{Text: "hi there friend", Intent: "greeting", Vector: func() []float32 { v, _ := ec.EmbedSingle(ctx, "hi there friend"); return v }()},
+		{Text: "I need help with a problem", Intent: "support", Vector: helpVec},
+		{Text: "goodbye see you later", Intent: "farewell", Vector: byeVec},
 	}
 }
 
-func TestSemanticClassifier_MismatchedVectors(t *testing.T) {
-	ec := NewEmbeddingClient(nil) // n-gram returns ngramDim (128) vectors
-
-	// Corpus with wrong-dimension vector.
-	corpus := []ClassifierExample{
-		{Text: "hello", Intent: "greeting", Vector: []float32{1, 0}}, // only 2 dims, won't match 128
-	}
-
-	sc := NewSemanticClassifier(ec, corpus)
-	// CosineSimilarity returns 0 for mismatched lengths, so bestSim stays 0
-	// but bestIntent should still be set to "greeting" since it's the only one checked.
-	intent, conf, err := sc.Classify(context.Background(), "hello")
+func TestClassify_BestMatch(t *testing.T) {
+	sc := NewSemanticClassifier(nil, makeTestCorpus())
+	sc.WithAbstainPolicy(AbstainPolicy{MinScore: 0.0, MinGap: 0.0}) // don't abstain
+	intent, score, err := sc.Classify(context.Background(), "hello how are you doing")
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	// With mismatched dimensions, cosine similarity returns 0,
-	// so bestSim never exceeds 0 and bestIntent remains "".
-	if conf != 0.0 {
-		t.Errorf("expected 0.0 confidence for mismatched vectors, got %f", conf)
-	}
-	_ = intent // may be empty or "greeting" depending on sim > 0 check
-}
-
-func TestSemanticClassifier_BestMatch(t *testing.T) {
-	ec := NewEmbeddingClient(nil)
-
-	// Pre-compute vectors.
-	greetVec, _ := ec.EmbedSingle(context.Background(), "hello world")
-	helpVec, _ := ec.EmbedSingle(context.Background(), "please assist me")
-
-	corpus := []ClassifierExample{
-		{Text: "hello world", Intent: "greeting", Vector: greetVec},
-		{Text: "please assist me", Intent: "help", Vector: helpVec},
-	}
-
-	sc := NewSemanticClassifier(ec, corpus)
-
-	// Query closer to "greeting".
-	intent, _, err := sc.Classify(context.Background(), "hello world foo")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatal(err)
 	}
 	if intent != "greeting" {
-		t.Errorf("expected 'greeting', got %q", intent)
+		t.Errorf("got %q, want greeting", intent)
+	}
+	if score <= 0 {
+		t.Errorf("expected positive score, got %f", score)
+	}
+}
+
+func TestClassify_EmptyCorpus(t *testing.T) {
+	sc := NewSemanticClassifier(nil, nil)
+	intent, score, err := sc.Classify(context.Background(), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if intent != "unknown" || score != 0.0 {
+		t.Errorf("got (%q, %f), want (unknown, 0.0)", intent, score)
+	}
+}
+
+func TestAbstainPolicy_LowScore(t *testing.T) {
+	sc := NewSemanticClassifier(nil, makeTestCorpus())
+	sc.WithAbstainPolicy(AbstainPolicy{MinScore: 0.99, MinGap: 0.0})
+	intent, _, err := sc.Classify(context.Background(), "random unrelated text xyz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if intent != "abstain" {
+		t.Errorf("expected abstain, got %q", intent)
+	}
+}
+
+func TestAbstainPolicy_SmallGap(t *testing.T) {
+	// With very similar categories, the gap should be small.
+	sc := NewSemanticClassifier(nil, makeTestCorpus())
+	sc.WithAbstainPolicy(AbstainPolicy{MinScore: 0.0, MinGap: 1.0}) // unreasonable gap
+	intent, _, err := sc.Classify(context.Background(), "something")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if intent != "abstain" {
+		t.Errorf("expected abstain due to small gap, got %q", intent)
+	}
+}
+
+func TestCentroidComputation(t *testing.T) {
+	vecs := [][]float32{
+		{1.0, 0.0},
+		{0.0, 1.0},
+	}
+	c := centroidOf(vecs)
+	if len(c) != 2 {
+		t.Fatalf("centroid dims = %d, want 2", len(c))
+	}
+	if c[0] != 0.5 || c[1] != 0.5 {
+		t.Errorf("centroid = %v, want [0.5, 0.5]", c)
+	}
+}
+
+func TestClassifyAll_Sorted(t *testing.T) {
+	sc := NewSemanticClassifier(nil, makeTestCorpus())
+	results, err := sc.ClassifyAll(context.Background(), "hello")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected results")
+	}
+	for i := 1; i < len(results); i++ {
+		if results[i].Score > results[i-1].Score {
+			t.Errorf("results not sorted: [%d].Score=%f > [%d].Score=%f",
+				i, results[i].Score, i-1, results[i-1].Score)
+		}
+	}
+	for _, r := range results {
+		if r.Trust != TrustNGram {
+			t.Errorf("expected TrustNGram, got %d", r.Trust)
+		}
+	}
+}
+
+func TestNgramEmbed(t *testing.T) {
+	vec := ngramEmbed("hello world", 64)
+	if len(vec) != 64 {
+		t.Fatalf("dims = %d, want 64", len(vec))
+	}
+	nonZero := 0
+	for _, v := range vec {
+		if v != 0 {
+			nonZero++
+		}
+	}
+	if nonZero == 0 {
+		t.Error("expected non-zero entries in n-gram embedding")
 	}
 }

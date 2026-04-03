@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"goboticus/internal/agent/policy"
 	"goboticus/internal/llm"
 	"goboticus/testutil"
 )
@@ -40,7 +41,7 @@ func TestLoop_Run_SimpleResponse(t *testing.T) {
 	loop := NewLoop(DefaultLoopConfig(), LoopDeps{
 		LLM:     llmSvc,
 		Tools:   NewToolRegistry(),
-		Policy:  NewPolicyEngine(PolicyConfig{MaxTransferCents: 1000, RateLimitPerMinute: 30}),
+		Policy:  policy.NewEngine(policy.Config{MaxTransferCents: 1000, RateLimitPerMinute: 30}),
 		Context: ctxBuilder,
 	})
 

@@ -15,8 +15,8 @@ const (
 	ActionComposeSkill
 	ActionComposeSubagent
 	ActionDelegateToSpecialist
-	ActionReturnBlocker
-	ActionNormalizationRetry
+	TaskActionReturnBlocker
+	TaskActionNormalizationRetry
 )
 
 func (a TaskPlannedAction) String() string {
@@ -33,9 +33,9 @@ func (a TaskPlannedAction) String() string {
 		return "compose_subagent"
 	case ActionDelegateToSpecialist:
 		return "delegate_to_specialist"
-	case ActionReturnBlocker:
+	case TaskActionReturnBlocker:
 		return "return_blocker"
-	case ActionNormalizationRetry:
+	case TaskActionNormalizationRetry:
 		return "normalization_retry"
 	default:
 		return "unknown"
@@ -89,7 +89,7 @@ func (p *ActionPlanner) Plan(state *TaskOperatingState) TaskActionPlan {
 	// Rule 2: Provider breaker open → ReturnBlocker.
 	if state.RuntimeConstraint.BreakerOpen {
 		candidates = append(candidates, TaskActionCandidate{
-			Action: ActionReturnBlocker, Confidence: 0.8,
+			Action: TaskActionReturnBlocker, Confidence: 0.8,
 			Rationale: "provider circuit breaker is open",
 		})
 	}
@@ -149,7 +149,7 @@ func (p *ActionPlanner) Plan(state *TaskOperatingState) TaskActionPlan {
 			conf = 0.85
 		}
 		candidates = append(candidates, TaskActionCandidate{
-			Action: ActionNormalizationRetry, Confidence: conf,
+			Action: TaskActionNormalizationRetry, Confidence: conf,
 			Rationale: fmt.Sprintf("protocol issues detected, retry streak: %d", state.Behavioral.NormRetryStreak),
 		})
 	}

@@ -58,9 +58,17 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
-// DB returns the underlying *sql.DB for use in queries.
+// DB returns the underlying *sql.DB. Prefer ExecContext/QueryContext/InTx
+// over this method — direct access bypasses connection management intent.
+//
+// Deprecated: use the typed query methods or InTx instead.
 func (s *Store) DB() *sql.DB {
 	return s.db
+}
+
+// Stats returns database connection pool statistics.
+func (s *Store) Stats() sql.DBStats {
+	return s.db.Stats()
 }
 
 // ExecContext executes a query without returning rows.

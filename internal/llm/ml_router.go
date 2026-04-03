@@ -1,6 +1,11 @@
 package llm
 
-import "math"
+import (
+	"encoding/json"
+	"math"
+	"os"
+	"sync"
+)
 
 // QueryFeatures describes a query for model routing.
 type QueryFeatures struct {
@@ -88,4 +93,89 @@ func (lr *LogisticRouter) Train(dataset []RoutingExample, epochs int, learningRa
 
 func sigmoid(x float64) float64 {
 	return 1.0 / (1.0 + math.Exp(-x))
+}
+
+// logisticModel is the JSON-serializable model parameters.
+type logisticModel struct {
+	Weights []float64 `json:"weights"`
+	Bias    float64   `json:"bias"`
+}
+
+// Save writes the model weights to a JSON file.
+func (lr *LogisticRouter) Save(path string) error {
+	data, err := json.Marshal(logisticModel{Weights: lr.weights, Bias: lr.bias})
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0600)
+}
+
+// LoadLogisticRouter loads a model from a JSON file.
+func LoadLogisticRouter(path string) (*LogisticRouter, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var m logisticModel
+	if err := json.Unmarshal(data, &m); err != nil {
+		return nil, err
+	}
+	return &LogisticRouter{weights: m.Weights, bias: m.Bias}, nil
+}
+
+// PreferenceRecord stores a routing observation for training data collection.
+type PreferenceRecord struct {
+	Features    QueryFeatures `json:"features"`
+	ChosenModel string        `json:"chosen_model"`
+	Outcome     float64       `json:"outcome"` // 0=bad, 1=good
+}
+
+// PreferenceCollector accumulates routing observations for offline training.
+type PreferenceCollector struct {
+	mu      sync.Mutex
+	records []PreferenceRecord
+	maxSize int
+}
+
+// NewPreferenceCollector creates a collector with a bounded buffer.
+func NewPreferenceCollector(maxSize int) *PreferenceCollector {
+	if maxSize <= 0 {
+		maxSize = 10000
+	}
+	return &PreferenceCollector{maxSize: maxSize}
+}
+
+// Record adds a routing observation.
+func (pc *PreferenceCollector) Record(features QueryFeatures, model string, outcome float64) {
+	pc.mu.Lock()
+	defer pc.mu.Unlock()
+	if len(pc.records) >= pc.maxSize {
+		// Drop oldest 10%.
+		drop := pc.maxSize / 10
+		copy(pc.records, pc.records[drop:])
+		pc.records = pc.records[:len(pc.records)-drop]
+	}
+	pc.records = append(pc.records, PreferenceRecord{
+		Features:    features,
+		ChosenModel: model,
+		Outcome:     outcome,
+	})
+}
+
+// AsTrainingSet converts collected preferences to RoutingExamples.
+func (pc *PreferenceCollector) AsTrainingSet() []RoutingExample {
+	pc.mu.Lock()
+	defer pc.mu.Unlock()
+	examples := make([]RoutingExample, len(pc.records))
+	for i, r := range pc.records {
+		examples[i] = RoutingExample{Features: r.Features, Outcome: r.Outcome}
+	}
+	return examples
+}
+
+// Len returns the number of collected records.
+func (pc *PreferenceCollector) Len() int {
+	pc.mu.Lock()
+	defer pc.mu.Unlock()
+	return len(pc.records)
 }

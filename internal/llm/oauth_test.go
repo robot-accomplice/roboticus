@@ -3,9 +3,12 @@ package llm
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
+
+func futureTime() time.Time { return time.Now().Add(1 * time.Hour) }
 
 // mockRefresher is a test double for TokenRefresher.
 type mockRefresher struct {
@@ -140,5 +143,70 @@ func TestOAuthToken_IsExpired(t *testing.T) {
 	nearExpiry := &OAuthToken{ExpiresAt: time.Now().Add(10 * time.Second)}
 	if !nearExpiry.IsExpired() {
 		t.Error("token within 30s buffer should be considered expired")
+	}
+}
+
+func TestGenerateCodeVerifier(t *testing.T) {
+	v, err := GenerateCodeVerifier()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(v) < 43 {
+		t.Errorf("verifier too short: %d chars", len(v))
+	}
+	v2, _ := GenerateCodeVerifier()
+	if v == v2 {
+		t.Error("verifiers should not be equal")
+	}
+}
+
+func TestComputeCodeChallenge(t *testing.T) {
+	ch := ComputeCodeChallenge("test_verifier")
+	if ch == "" {
+		t.Error("empty challenge")
+	}
+	if strings.ContainsAny(ch, "+/=") {
+		t.Errorf("non-URL-safe chars in challenge: %s", ch)
+	}
+	if ComputeCodeChallenge("test_verifier") != ch {
+		t.Error("challenge should be deterministic")
+	}
+}
+
+func TestBuildAuthorizationURL(t *testing.T) {
+	u := BuildAuthorizationURL(
+		"https://auth.example.com/authorize",
+		"client123",
+		"http://localhost:8080/callback",
+		"challenge_value",
+		[]string{"openid", "profile"},
+	)
+	for _, want := range []string{"response_type=code", "client_id=client123", "code_challenge=challenge_value", "code_challenge_method=S256"} {
+		if !strings.Contains(u, want) {
+			t.Errorf("URL missing %q: %s", want, u)
+		}
+	}
+}
+
+func TestTokenManager_Status(t *testing.T) {
+	tm := NewTokenManager(nil)
+	s := tm.Status("openai")
+	if s.HasToken {
+		t.Error("should not have token")
+	}
+
+	tm.SetToken("openai", &OAuthToken{AccessToken: "tok", ExpiresAt: futureTime()})
+	s = tm.Status("openai")
+	if !s.HasToken || s.Expired {
+		t.Error("should have valid token")
+	}
+}
+
+func TestTokenManager_AllStatuses(t *testing.T) {
+	tm := NewTokenManager(nil)
+	tm.SetToken("a", &OAuthToken{AccessToken: "x", ExpiresAt: futureTime()})
+	tm.SetToken("b", &OAuthToken{AccessToken: "y", ExpiresAt: futureTime()})
+	if len(tm.AllStatuses()) != 2 {
+		t.Errorf("got %d statuses, want 2", len(tm.AllStatuses()))
 	}
 }

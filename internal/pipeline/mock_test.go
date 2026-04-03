@@ -6,6 +6,7 @@ import (
 	"goboticus/internal/core"
 	"goboticus/internal/llm"
 	"goboticus/internal/pipeline"
+	"goboticus/internal/session"
 )
 
 var (
@@ -52,10 +53,10 @@ func (m *mockMemoryRetriever) Retrieve(ctx context.Context, sessionID, query str
 
 // mockSkillMatcher is a test double for pipeline.SkillMatcher.
 type mockSkillMatcher struct {
-	TryMatchFunc func(ctx context.Context, session *pipeline.Session, content string) *pipeline.Outcome
+	TryMatchFunc func(ctx context.Context, session *session.Session, content string) *pipeline.Outcome
 }
 
-func (m *mockSkillMatcher) TryMatch(ctx context.Context, session *pipeline.Session, content string) *pipeline.Outcome {
+func (m *mockSkillMatcher) TryMatch(ctx context.Context, session *session.Session, content string) *pipeline.Outcome {
 	if m.TryMatchFunc != nil {
 		return m.TryMatchFunc(ctx, session, content)
 	}
@@ -64,10 +65,10 @@ func (m *mockSkillMatcher) TryMatch(ctx context.Context, session *pipeline.Sessi
 
 // mockToolExecutor is a test double for pipeline.ToolExecutor.
 type mockToolExecutor struct {
-	RunLoopFunc func(ctx context.Context, session *pipeline.Session) (string, int, error)
+	RunLoopFunc func(ctx context.Context, session *session.Session) (string, int, error)
 }
 
-func (m *mockToolExecutor) RunLoop(ctx context.Context, session *pipeline.Session) (string, int, error) {
+func (m *mockToolExecutor) RunLoop(ctx context.Context, session *session.Session) (string, int, error) {
 	if m.RunLoopFunc != nil {
 		return m.RunLoopFunc(ctx, session)
 	}
@@ -76,10 +77,10 @@ func (m *mockToolExecutor) RunLoop(ctx context.Context, session *pipeline.Sessio
 
 // mockIngestor is a test double for pipeline.Ingestor.
 type mockIngestor struct {
-	IngestTurnFunc func(ctx context.Context, session *pipeline.Session)
+	IngestTurnFunc func(ctx context.Context, session *session.Session)
 }
 
-func (m *mockIngestor) IngestTurn(ctx context.Context, session *pipeline.Session) {
+func (m *mockIngestor) IngestTurn(ctx context.Context, session *session.Session) {
 	if m.IngestTurnFunc != nil {
 		m.IngestTurnFunc(ctx, session)
 	}
@@ -87,10 +88,10 @@ func (m *mockIngestor) IngestTurn(ctx context.Context, session *pipeline.Session
 
 // mockNicknameRefiner is a test double for pipeline.NicknameRefiner.
 type mockNicknameRefiner struct {
-	RefineFunc func(ctx context.Context, session *pipeline.Session)
+	RefineFunc func(ctx context.Context, session *session.Session)
 }
 
-func (m *mockNicknameRefiner) Refine(ctx context.Context, session *pipeline.Session) {
+func (m *mockNicknameRefiner) Refine(ctx context.Context, session *session.Session) {
 	if m.RefineFunc != nil {
 		m.RefineFunc(ctx, session)
 	}
@@ -98,10 +99,10 @@ func (m *mockNicknameRefiner) Refine(ctx context.Context, session *pipeline.Sess
 
 // mockStreamPreparer is a test double for pipeline.StreamPreparer.
 type mockStreamPreparer struct {
-	PrepareStreamFunc func(ctx context.Context, session *pipeline.Session) (*llm.Request, error)
+	PrepareStreamFunc func(ctx context.Context, session *session.Session) (*llm.Request, error)
 }
 
-func (m *mockStreamPreparer) PrepareStream(ctx context.Context, session *pipeline.Session) (*llm.Request, error) {
+func (m *mockStreamPreparer) PrepareStream(ctx context.Context, session *session.Session) (*llm.Request, error) {
 	if m.PrepareStreamFunc != nil {
 		return m.PrepareStreamFunc(ctx, session)
 	}

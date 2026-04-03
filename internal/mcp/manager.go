@@ -38,8 +38,13 @@ func (m *ConnectionManager) Connect(ctx context.Context, cfg McpServerConfig) er
 	switch cfg.Transport {
 	case "stdio":
 		conn, err = ConnectStdio(ctx, cfg.Name, cfg.Command, cfg.Args, cfg.Env)
+	case "sse":
+		if cfg.URL == "" {
+			return fmt.Errorf("mcp: SSE transport requires a URL")
+		}
+		conn, err = ConnectSSE(ctx, cfg.Name, cfg.URL)
 	default:
-		return fmt.Errorf("mcp: unsupported transport %q (supported: stdio)", cfg.Transport)
+		return fmt.Errorf("mcp: unsupported transport %q (supported: stdio, sse)", cfg.Transport)
 	}
 
 	if err != nil {

@@ -42,15 +42,20 @@ func DefaultCircuitBreakerConfig() CircuitBreakerConfig {
 //   - Proper sliding window (time-windowed ring, not gap-based reset)
 //   - Sticky credit-tripped state for 402 errors (never auto-recovers)
 //   - Exponential backoff only on re-trips, not first trip
+//   - Operator force-open kill-switch (only cleared by explicit Reset)
+//   - Capacity pressure soft half-open (reduces throughput to 1-in-4)
 type CircuitBreaker struct {
-	mu            sync.Mutex
-	config        CircuitBreakerConfig
-	state         CircuitState
-	failures      []time.Time // ring of failure timestamps
-	lastTripped   time.Time
-	cooldown      time.Duration // current cooldown (grows with exponential backoff)
-	halfOpenUsed  int
-	creditTripped bool // sticky: 402 payment error, requires manual reset
+	mu               sync.Mutex
+	config           CircuitBreakerConfig
+	state            CircuitState
+	failures         []time.Time // ring of failure timestamps
+	lastTripped      time.Time
+	cooldown         time.Duration // current cooldown (grows with exponential backoff)
+	halfOpenUsed     int
+	creditTripped    bool // sticky: 402 payment error, requires manual reset
+	forcedOpen       bool // operator kill-switch, only cleared by Reset
+	capacityPressure bool // capacity tracker reports sustained-hot
+	pressureCounter  uint64
 }
 
 // NewCircuitBreaker creates a breaker with the given config.
@@ -68,6 +73,11 @@ func (cb *CircuitBreaker) Allow() bool {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
 
+	// Operator kill-switch: never auto-recover.
+	if cb.forcedOpen {
+		return false
+	}
+
 	// Credit-tripped circuits never auto-recover.
 	if cb.creditTripped {
 		return false
@@ -75,6 +85,11 @@ func (cb *CircuitBreaker) Allow() bool {
 
 	switch cb.state {
 	case CircuitClosed:
+		// Capacity pressure: allow only 1 in 4 requests.
+		if cb.capacityPressure {
+			cb.pressureCounter++
+			return cb.pressureCounter%4 == 1
+		}
 		return true
 	case CircuitOpen:
 		if time.Since(cb.lastTripped) >= cb.cooldown {
@@ -154,20 +169,48 @@ func (cb *CircuitBreaker) RecordCreditError() {
 	cb.lastTripped = time.Now()
 }
 
-// Reset manually clears all state, including credit-tripped.
+// ForceOpen is an operator kill-switch that puts the breaker into Open state.
+// Unlike normal open, this is only cleared by an explicit Reset call.
+func (cb *CircuitBreaker) ForceOpen() {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	cb.forcedOpen = true
+	cb.state = CircuitOpen
+}
+
+// SetCapacityPressure enables or disables capacity-pressure mode. When hot is
+// true and the breaker is closed, Allow permits only 1 in 4 requests to
+// preemptively reduce traffic on a sustained-hot provider.
+func (cb *CircuitBreaker) SetCapacityPressure(hot bool) {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	cb.capacityPressure = hot
+	if !hot {
+		cb.pressureCounter = 0
+	}
+}
+
+// Reset manually clears all state, including credit-tripped and force-open.
 func (cb *CircuitBreaker) Reset() {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
 	cb.state = CircuitClosed
 	cb.failures = cb.failures[:0]
 	cb.creditTripped = false
+	cb.forcedOpen = false
+	cb.capacityPressure = false
+	cb.pressureCounter = 0
 	cb.cooldown = cb.config.Cooldown
 }
 
-// State returns the current circuit state (for observability).
+// State returns the effective circuit state for observability. A closed breaker
+// under capacity pressure reports as half-open since throughput is reduced.
 func (cb *CircuitBreaker) State() CircuitState {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
+	if cb.state == CircuitClosed && cb.capacityPressure {
+		return CircuitHalfOpen
+	}
 	return cb.state
 }
 
@@ -176,6 +219,20 @@ func (cb *CircuitBreaker) IsCreditTripped() bool {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
 	return cb.creditTripped
+}
+
+// IsForcedOpen returns true if the breaker was force-opened by an operator.
+func (cb *CircuitBreaker) IsForcedOpen() bool {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	return cb.forcedOpen
+}
+
+// HasCapacityPressure returns true if capacity-pressure mode is active.
+func (cb *CircuitBreaker) HasCapacityPressure() bool {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	return cb.capacityPressure
 }
 
 // BreakerRegistry manages per-provider circuit breakers.

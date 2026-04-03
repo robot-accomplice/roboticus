@@ -4,6 +4,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"goboticus/internal/agent/memory"
 )
 
 // IntentResult represents a classified intent with confidence.
@@ -47,9 +49,9 @@ func NewIntentClassifier(cfg IntentClassifierConfig) *IntentClassifier {
 	for label, exemplars := range builtinExemplarBank {
 		vecs := make([][]float32, len(exemplars))
 		for i, ex := range exemplars {
-			vecs[i] = NgramEmbedding(strings.ToLower(ex), dims)
+			vecs[i] = memory.NgramEmbedding(strings.ToLower(ex), dims)
 		}
-		ic.centroids[label] = CentroidOf(vecs)
+		ic.centroids[label] = memory.CentroidOf(vecs)
 	}
 
 	return ic
@@ -65,11 +67,11 @@ func (ic *IntentClassifier) Classify(text string) []IntentResult {
 	ic.mu.RLock()
 	defer ic.mu.RUnlock()
 
-	inputVec := NgramEmbedding(strings.ToLower(text), ic.dims)
+	inputVec := memory.NgramEmbedding(strings.ToLower(text), ic.dims)
 	var results []IntentResult
 
 	for label, centroid := range ic.centroids {
-		score := CosineSimilarity(inputVec, centroid)
+		score := memory.CosineSimilarity(inputVec, centroid)
 		if score >= ic.threshold {
 			results = append(results, IntentResult{Label: label, Confidence: score})
 		}

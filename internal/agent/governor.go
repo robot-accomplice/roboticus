@@ -27,52 +27,52 @@ func (d GovernorDecision) String() string {
 	}
 }
 
-// GovernorConfig sets limits for the governor.
-type GovernorConfig struct {
+// RateLimiterConfig sets limits for the rate limiter.
+type RateLimiterConfig struct {
 	MaxTurnsPerSession  int
 	MaxTokensPerSession int
 	MaxCostPerSession   float64
 	CooldownAfterError  time.Duration
 }
 
-// Governor enforces rate-limiting and cost-control for inference.
-type Governor struct {
-	cfg       GovernorConfig
+// RateLimiter enforces rate-limiting and cost-control for inference.
+type RateLimiter struct {
+	cfg       RateLimiterConfig
 	mu        sync.Mutex
 	lastError time.Time
 }
 
-// NewGovernor creates a governor with the given config.
-func NewGovernor(cfg GovernorConfig) *Governor {
-	return &Governor{cfg: cfg}
+// NewRateLimiter creates a rate limiter with the given config.
+func NewRateLimiter(cfg RateLimiterConfig) *RateLimiter {
+	return &RateLimiter{cfg: cfg}
 }
 
 // Check evaluates whether the next inference should proceed.
-func (g *Governor) Check(turnsSoFar int, tokensSoFar int, costSoFar float64) GovernorDecision {
+func (r *RateLimiter) Check(turnsSoFar int, tokensSoFar int, costSoFar float64) GovernorDecision {
 	// Zero config = no limits.
-	if g.cfg.MaxTurnsPerSession == 0 && g.cfg.MaxTokensPerSession == 0 && g.cfg.MaxCostPerSession == 0 {
+	if r.cfg.MaxTurnsPerSession == 0 && r.cfg.MaxTokensPerSession == 0 && r.cfg.MaxCostPerSession == 0 {
 		return GovernorAllow
 	}
 
 	// Hard deny: any limit exceeded.
-	if g.cfg.MaxTurnsPerSession > 0 && turnsSoFar > g.cfg.MaxTurnsPerSession {
+	if r.cfg.MaxTurnsPerSession > 0 && turnsSoFar > r.cfg.MaxTurnsPerSession {
 		return GovernorDeny
 	}
-	if g.cfg.MaxTokensPerSession > 0 && tokensSoFar > g.cfg.MaxTokensPerSession {
+	if r.cfg.MaxTokensPerSession > 0 && tokensSoFar > r.cfg.MaxTokensPerSession {
 		return GovernorDeny
 	}
-	if g.cfg.MaxCostPerSession > 0 && costSoFar > g.cfg.MaxCostPerSession {
+	if r.cfg.MaxCostPerSession > 0 && costSoFar > r.cfg.MaxCostPerSession {
 		return GovernorDeny
 	}
 
 	// Soft throttle: approaching 80% of any limit.
-	if g.cfg.MaxTurnsPerSession > 0 && float64(turnsSoFar) >= float64(g.cfg.MaxTurnsPerSession)*0.8 {
+	if r.cfg.MaxTurnsPerSession > 0 && float64(turnsSoFar) >= float64(r.cfg.MaxTurnsPerSession)*0.8 {
 		return GovernorThrottle
 	}
-	if g.cfg.MaxTokensPerSession > 0 && float64(tokensSoFar) >= float64(g.cfg.MaxTokensPerSession)*0.8 {
+	if r.cfg.MaxTokensPerSession > 0 && float64(tokensSoFar) >= float64(r.cfg.MaxTokensPerSession)*0.8 {
 		return GovernorThrottle
 	}
-	if g.cfg.MaxCostPerSession > 0 && costSoFar >= g.cfg.MaxCostPerSession*0.8 {
+	if r.cfg.MaxCostPerSession > 0 && costSoFar >= r.cfg.MaxCostPerSession*0.8 {
 		return GovernorThrottle
 	}
 
@@ -80,18 +80,18 @@ func (g *Governor) Check(turnsSoFar int, tokensSoFar int, costSoFar float64) Gov
 }
 
 // RecordError records that an error occurred, triggering cooldown.
-func (g *Governor) RecordError() {
-	g.mu.Lock()
-	g.lastError = time.Now()
-	g.mu.Unlock()
+func (r *RateLimiter) RecordError() {
+	r.mu.Lock()
+	r.lastError = time.Now()
+	r.mu.Unlock()
 }
 
-// InCooldown returns true if the governor is in error cooldown.
-func (g *Governor) InCooldown() bool {
-	if g.cfg.CooldownAfterError == 0 {
+// InCooldown returns true if the rate limiter is in error cooldown.
+func (r *RateLimiter) InCooldown() bool {
+	if r.cfg.CooldownAfterError == 0 {
 		return false
 	}
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	return time.Since(g.lastError) < g.cfg.CooldownAfterError
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return time.Since(r.lastError) < r.cfg.CooldownAfterError
 }

@@ -12,6 +12,9 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"goboticus/internal/agent"
+	"goboticus/internal/agent/memory"
+	"goboticus/internal/agent/policy"
+	"goboticus/internal/agent/skills"
 	"goboticus/internal/api"
 	"goboticus/internal/api/routes"
 	"goboticus/internal/channel"
@@ -21,55 +24,13 @@ import (
 	"goboticus/internal/mcp"
 	"goboticus/internal/pipeline"
 	"goboticus/internal/schedule"
+	"goboticus/internal/session"
 )
 
 // ---------------------------------------------------------------------------
 // Adapter types: bridge concrete agent types to pipeline interfaces.
 // These are private wiring glue — not reusable outside the composition root.
 // ---------------------------------------------------------------------------
-
-// pipelineToAgentSession converts a pipeline.Session to an agent.Session,
-// copying identity fields and replaying the message history.
-func pipelineToAgentSession(ps *pipeline.Session) *agent.Session {
-	as := agent.NewSession(ps.ID, ps.AgentID, ps.AgentName)
-	as.Authority = ps.Authority
-	as.Workspace = ps.Workspace
-	as.AllowedPaths = ps.AllowedPaths
-	as.Channel = ps.Channel
-
-	for _, m := range ps.Messages() {
-		switch m.Role {
-		case "user":
-			as.AddUserMessage(m.Content)
-		case "assistant":
-			as.AddAssistantMessage(m.Content, m.ToolCalls)
-		case "system":
-			as.AddSystemMessage(m.Content)
-		case "tool":
-			as.AddToolResult(m.ToolCallID, m.Name, m.Content, false)
-		}
-	}
-	return as
-}
-
-// syncAgentToPipeline copies new messages from agent session back to pipeline session.
-func syncAgentToPipeline(as *agent.Session, ps *pipeline.Session) {
-	existingCount := ps.MessageCount()
-	agentMsgs := as.Messages()
-	for i := existingCount; i < len(agentMsgs); i++ {
-		m := agentMsgs[i]
-		switch m.Role {
-		case "user":
-			ps.AddUserMessage(m.Content)
-		case "assistant":
-			ps.AddAssistantMessage(m.Content, m.ToolCalls)
-		case "system":
-			ps.AddSystemMessage(m.Content)
-		case "tool":
-			ps.AddToolResult(m.ToolCallID, m.Name, m.Content, false)
-		}
-	}
-}
 
 // injectionAdapter wraps *agent.InjectionDetector → pipeline.InjectionChecker.
 type injectionAdapter struct {
@@ -84,71 +45,67 @@ func (a *injectionAdapter) Sanitize(text string) string {
 	return a.det.Sanitize(text)
 }
 
-// retrieverAdapter wraps *agent.MemoryRetriever → pipeline.MemoryRetriever.
+// retrieverAdapter wraps *memory.Retriever → pipeline.MemoryRetriever.
 type retrieverAdapter struct {
-	r *agent.MemoryRetriever
+	r *memory.Retriever
 }
 
 func (a *retrieverAdapter) Retrieve(ctx context.Context, sessionID, query string, budget int) string {
 	return a.r.Retrieve(ctx, sessionID, query, budget)
 }
 
-// ingestorAdapter wraps *agent.MemoryManager → pipeline.Ingestor.
+// ingestorAdapter wraps *memory.Manager → pipeline.Ingestor.
 type ingestorAdapter struct {
-	m *agent.MemoryManager
+	m *memory.Manager
 }
 
-func (a *ingestorAdapter) IngestTurn(ctx context.Context, session *pipeline.Session) {
-	as := pipelineToAgentSession(session)
-	a.m.IngestTurn(ctx, as)
+func (a *ingestorAdapter) IngestTurn(ctx context.Context, session *session.Session) {
+	a.m.IngestTurn(ctx, session)
+}
+
+// buildAgentContext assembles a ContextBuilder with system prompt, tool defs,
+// and memory retrieval. Shared by executorAdapter and streamAdapter.
+func buildAgentContext(ctx context.Context, sess *session.Session, tools *agent.ToolRegistry, retriever *memory.Retriever, promptCfg agent.PromptConfig) *agent.ContextBuilder {
+	ctxBuilder := agent.NewContextBuilder(agent.DefaultContextConfig())
+
+	cfg := promptCfg
+	cfg.AgentName = sess.AgentName
+	ctxBuilder.SetSystemPrompt(agent.BuildSystemPrompt(cfg))
+
+	if tools != nil {
+		ctxBuilder.SetTools(tools.ToolDefs())
+	}
+
+	if retriever != nil {
+		msgs := sess.Messages()
+		for i := len(msgs) - 1; i >= 0; i-- {
+			if msgs[i].Role == "user" {
+				mem := retriever.Retrieve(ctx, sess.ID, msgs[i].Content, 2048)
+				if mem != "" {
+					ctxBuilder.SetMemory(mem)
+				}
+				break
+			}
+		}
+	}
+
+	return ctxBuilder
 }
 
 // executorAdapter wraps the full agent loop deps → pipeline.ToolExecutor.
 type executorAdapter struct {
 	llmSvc       *llm.Service
 	tools        *agent.ToolRegistry
-	policy       *agent.PolicyEngine
+	policy       *policy.Engine
 	injection    *agent.InjectionDetector
-	memMgr       *agent.MemoryManager
-	retriever    *agent.MemoryRetriever
+	memMgr       *memory.Manager
+	retriever    *memory.Retriever
 	promptConfig agent.PromptConfig
 }
 
-func (a *executorAdapter) RunLoop(ctx context.Context, session *pipeline.Session) (string, int, error) {
-	as := pipelineToAgentSession(session)
+func (a *executorAdapter) RunLoop(ctx context.Context, sess *session.Session) (string, int, error) {
+	ctxBuilder := buildAgentContext(ctx, sess, a.tools, a.retriever, a.promptConfig)
 
-	// Build context: system prompt + memory retrieval.
-	ctxBuilder := agent.NewContextBuilder(agent.DefaultContextConfig())
-
-	cfg := a.promptConfig
-	cfg.AgentName = as.AgentName
-	prompt := agent.BuildSystemPrompt(cfg)
-	ctxBuilder.SetSystemPrompt(prompt)
-
-	// Set tool definitions.
-	if a.tools != nil {
-		ctxBuilder.SetTools(a.tools.ToolDefs())
-	}
-
-	// Run retrieval if available.
-	if a.retriever != nil {
-		lastUserMsg := ""
-		msgs := as.Messages()
-		for i := len(msgs) - 1; i >= 0; i-- {
-			if msgs[i].Role == "user" {
-				lastUserMsg = msgs[i].Content
-				break
-			}
-		}
-		if lastUserMsg != "" {
-			mem := a.retriever.Retrieve(ctx, as.ID, lastUserMsg, 2048)
-			if mem != "" {
-				ctxBuilder.SetMemory(mem)
-			}
-		}
-	}
-
-	// Create loop and run.
 	loop := agent.NewLoop(agent.DefaultLoopConfig(), agent.LoopDeps{
 		LLM:       a.llmSvc,
 		Tools:     a.tools,
@@ -158,13 +115,8 @@ func (a *executorAdapter) RunLoop(ctx context.Context, session *pipeline.Session
 		Context:   ctxBuilder,
 	})
 
-	content, err := loop.Run(ctx, as)
-	turns := loop.TurnCount()
-
-	// Sync new messages back to the pipeline session.
-	syncAgentToPipeline(as, session)
-
-	return content, turns, err
+	content, err := loop.Run(ctx, sess)
+	return content, loop.TurnCount(), err
 }
 
 // nicknameAdapter wraps *llm.Service + *db.Store → pipeline.NicknameRefiner.
@@ -173,7 +125,7 @@ type nicknameAdapter struct {
 	store *db.Store
 }
 
-func (a *nicknameAdapter) Refine(ctx context.Context, session *pipeline.Session) {
+func (a *nicknameAdapter) Refine(ctx context.Context, session *session.Session) {
 	// Find first user message to use as basis for title generation.
 	var firstUserMsg string
 	for _, m := range session.Messages() {
@@ -220,25 +172,25 @@ func (a *nicknameAdapter) Refine(ctx context.Context, session *pipeline.Session)
 	}
 }
 
-// skillAdapter bridges agent.SkillMatcher → pipeline.SkillMatcher.
+// skillAdapter bridges skills.Matcher → pipeline.SkillMatcher.
 type skillAdapter struct {
-	matcher *agent.SkillMatcher
+	matcher *skills.Matcher
 }
 
-func (a *skillAdapter) TryMatch(_ context.Context, session *pipeline.Session, content string) *pipeline.Outcome {
+func (a *skillAdapter) TryMatch(_ context.Context, session *session.Session, content string) *pipeline.Outcome {
 	skill := a.matcher.Match(content)
 	if skill == nil {
 		return nil
 	}
 
 	switch skill.Type {
-	case agent.SkillInstruction:
+	case skills.Instruction:
 		// Instruction skills return their body directly as the response.
 		return &pipeline.Outcome{
 			SessionID: session.ID,
 			Content:   skill.Body,
 		}
-	case agent.SkillStructured:
+	case skills.Structured:
 		// Structured skills require tool chain execution — not yet supported.
 		// Fall through to normal inference.
 		log.Debug().Str("skill", skill.Name()).Msg("structured skill matched but tool chain execution not yet implemented")
@@ -251,43 +203,13 @@ func (a *skillAdapter) TryMatch(_ context.Context, session *pipeline.Session, co
 type streamAdapter struct {
 	llmSvc       *llm.Service
 	tools        *agent.ToolRegistry
-	retriever    *agent.MemoryRetriever
+	retriever    *memory.Retriever
 	promptConfig agent.PromptConfig
 }
 
-func (a *streamAdapter) PrepareStream(ctx context.Context, session *pipeline.Session) (*llm.Request, error) {
-	as := pipelineToAgentSession(session)
-
-	ctxBuilder := agent.NewContextBuilder(agent.DefaultContextConfig())
-
-	cfg := a.promptConfig
-	cfg.AgentName = as.AgentName
-	prompt := agent.BuildSystemPrompt(cfg)
-	ctxBuilder.SetSystemPrompt(prompt)
-
-	if a.tools != nil {
-		ctxBuilder.SetTools(a.tools.ToolDefs())
-	}
-
-	// Run retrieval if available.
-	if a.retriever != nil {
-		lastUserMsg := ""
-		msgs := as.Messages()
-		for i := len(msgs) - 1; i >= 0; i-- {
-			if msgs[i].Role == "user" {
-				lastUserMsg = msgs[i].Content
-				break
-			}
-		}
-		if lastUserMsg != "" {
-			mem := a.retriever.Retrieve(ctx, as.ID, lastUserMsg, 2048)
-			if mem != "" {
-				ctxBuilder.SetMemory(mem)
-			}
-		}
-	}
-
-	req := ctxBuilder.BuildRequest(as)
+func (a *streamAdapter) PrepareStream(ctx context.Context, sess *session.Session) (*llm.Request, error) {
+	ctxBuilder := buildAgentContext(ctx, sess, a.tools, a.retriever, a.promptConfig)
+	req := ctxBuilder.BuildRequest(sess)
 	req.Stream = true
 	return req, nil
 }
@@ -360,13 +282,13 @@ func New(cfg *core.Config) (*Daemon, error) {
 
 	injection := agent.NewInjectionDetector()
 	tools := agent.NewToolRegistry()
-	policyEngine := agent.NewPolicyEngine(agent.PolicyConfig{
+	policyEngine := policy.NewEngine(policy.Config{
 		MaxTransferCents:   int64(cfg.Treasury.PerPaymentCap * 100),
 		RateLimitPerMinute: 30,
 	})
-	memMgr := agent.NewMemoryManager(agent.MemoryConfig{
+	memMgr := memory.NewManager(memory.Config{
 		TotalTokenBudget: 2048,
-		Budgets: agent.MemoryTierBudget{
+		Budgets: memory.TierBudget{
 			Working:      cfg.Memory.WorkingBudget / 100.0,
 			Episodic:     cfg.Memory.EpisodicBudget / 100.0,
 			Semantic:     cfg.Memory.SemanticBudget / 100.0,
@@ -374,7 +296,7 @@ func New(cfg *core.Config) (*Daemon, error) {
 			Relationship: cfg.Memory.RelationshipBudget / 100.0,
 		},
 	}, store)
-	retriever := agent.NewMemoryRetriever(agent.DefaultRetrievalConfig(), agent.MemoryTierBudget{
+	retriever := memory.NewRetriever(memory.DefaultRetrievalConfig(), memory.TierBudget{
 		Working:      cfg.Memory.WorkingBudget / 100.0,
 		Episodic:     cfg.Memory.EpisodicBudget / 100.0,
 		Semantic:     cfg.Memory.SemanticBudget / 100.0,
@@ -384,13 +306,13 @@ func New(cfg *core.Config) (*Daemon, error) {
 	guards := pipeline.DefaultGuardChain()
 
 	// Load skills from configured directory.
-	skillLoader := agent.NewSkillLoader()
-	var loadedSkills []*agent.LoadedSkill
+	skillLoader := skills.NewLoader()
+	var loadedSkills []*skills.Skill
 	if cfg.Skills.Directory != "" {
 		loadedSkills = skillLoader.LoadFromDir(cfg.Skills.Directory)
 		log.Info().Int("count", len(loadedSkills)).Str("dir", cfg.Skills.Directory).Msg("loaded skills")
 	}
-	skillMatcher := agent.NewSkillMatcher(loadedSkills)
+	skillMatcher := skills.NewMatcher(loadedSkills)
 
 	// Load personality files from workspace.
 	osCfg, err := core.LoadOsConfig(cfg.Agent.Workspace, "OS.toml")
@@ -459,7 +381,7 @@ func New(cfg *core.Config) (*Daemon, error) {
 		log.Warn().Err(err).Msg("hippocampus sync failed")
 	}
 
-	approvalMgr := agent.NewApprovalManager(agent.ApprovalsConfig{
+	approvalMgr := policy.NewApprovalManager(policy.ApprovalsConfig{
 		Enabled:        cfg.Approvals.Enabled,
 		GatedTools:     cfg.Approvals.GatedTools,
 		BlockedTools:   cfg.Approvals.BlockedTools,

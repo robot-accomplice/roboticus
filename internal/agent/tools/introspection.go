@@ -124,3 +124,83 @@ func (t *IntrospectionTool) memoryInfo() string {
 - Procedural: Tool usage statistics (success/failure rates)
 - Relationship: Entity interaction tracking (trust scores, frequency)`
 }
+
+// --- MemoryStatsTool ---
+
+// MemoryStatsTool returns counts from each memory tier table.
+type MemoryStatsTool struct{}
+
+func (t *MemoryStatsTool) Name() string        { return "get_memory_stats" }
+func (t *MemoryStatsTool) Description() string { return "Get row counts for each memory tier." }
+func (t *MemoryStatsTool) Risk() RiskLevel     { return RiskSafe }
+func (t *MemoryStatsTool) ParameterSchema() json.RawMessage {
+	return json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"session_id": {"type": "string", "description": "Optional session ID to scope working memory counts"}
+		}
+	}`)
+}
+
+func (t *MemoryStatsTool) Execute(ctx context.Context, params string, tctx *Context) (*Result, error) {
+	var args struct {
+		SessionID string `json:"session_id"`
+	}
+	_ = json.Unmarshal([]byte(params), &args)
+
+	if tctx.Store == nil {
+		return nil, fmt.Errorf("database store not available")
+	}
+
+	type tierCount struct {
+		Name  string `json:"tier"`
+		Count int    `json:"count"`
+	}
+
+	tiers := []struct {
+		name  string
+		query string
+	}{
+		{"working_memory", "SELECT COUNT(*) FROM working_memory"},
+		{"episodic_memory", "SELECT COUNT(*) FROM episodic_memory"},
+		{"semantic_memory", "SELECT COUNT(*) FROM semantic_memory"},
+		{"procedural_memory", "SELECT COUNT(*) FROM procedural_memory"},
+		{"relationship_memory", "SELECT COUNT(*) FROM relationship_memory"},
+	}
+
+	// If a session_id is provided, scope working_memory to that session.
+	sessionID := args.SessionID
+	if sessionID == "" {
+		sessionID = tctx.SessionID
+	}
+
+	var results []tierCount
+	for _, tier := range tiers {
+		var count int
+		query := tier.query
+		var scanArgs []any
+
+		if tier.name == "working_memory" && sessionID != "" {
+			query = "SELECT COUNT(*) FROM working_memory WHERE session_id = ?"
+			scanArgs = append(scanArgs, sessionID)
+		}
+
+		var err error
+		if len(scanArgs) > 0 {
+			err = tctx.Store.QueryRowContext(ctx, query, scanArgs...).Scan(&count)
+		} else {
+			err = tctx.Store.QueryRowContext(ctx, query).Scan(&count)
+		}
+		if err != nil {
+			// Table may not exist yet; treat as zero.
+			count = 0
+		}
+		results = append(results, tierCount{Name: tier.name, Count: count})
+	}
+
+	data, err := json.Marshal(results)
+	if err != nil {
+		return nil, fmt.Errorf("marshal stats: %w", err)
+	}
+	return &Result{Output: string(data)}, nil
+}

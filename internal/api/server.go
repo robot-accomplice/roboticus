@@ -11,6 +11,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"goboticus/internal/api/routes"
+	"goboticus/internal/browser"
 	"goboticus/internal/core"
 	"goboticus/internal/db"
 	"goboticus/internal/llm"
@@ -29,6 +30,7 @@ type AppState struct {
 	Approvals routes.ApprovalService
 	MCP       *mcp.ConnectionManager
 	Plugins   *plugin.Registry
+	Browser   *browser.Browser
 }
 
 // ServerConfig controls the HTTP server.
@@ -210,6 +212,14 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 		r.Get("/api/mcp/tools", routes.ListMCPTools(state.MCP))
 		r.Post("/api/mcp/connect", routes.ConnectMCPServer(state.MCP))
 		r.Post("/api/mcp/disconnect/{name}", routes.DisconnectMCPServer(state.MCP))
+
+		// Browser.
+		if state.Browser != nil {
+			r.Get("/api/browser/status", routes.BrowserStatus(state.Browser))
+			r.Post("/api/browser/start", routes.BrowserStart(state.Browser))
+			r.Post("/api/browser/stop", routes.BrowserStop(state.Browser))
+			r.Post("/api/browser/action", routes.BrowserAction(state.Browser))
+		}
 
 		// Logs.
 		r.Get("/api/logs", routes.GetLogs())

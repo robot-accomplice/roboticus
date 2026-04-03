@@ -14,6 +14,12 @@ type OperatingState struct {
 	Confidence float64
 	// CanEscalate indicates a higher-tier model is available for escalation.
 	CanEscalate bool
+	// NormalizationRetryStreak counts consecutive tool-call parse failures.
+	NormalizationRetryStreak int
+	// StructuralRepetition indicates the agent is producing identical responses.
+	StructuralRepetition bool
+	// EngagementDeclining indicates user messages are getting shorter.
+	EngagementDeclining bool
 }
 
 // TaskStateInput gathers raw signals from all subsystems for state synthesis.

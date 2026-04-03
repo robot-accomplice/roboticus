@@ -1,6 +1,9 @@
 package agent
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"regexp"
 	"strings"
 	"unicode"
@@ -188,6 +191,61 @@ func isZeroWidth(r rune) bool {
 		return true
 	}
 	return unicode.Is(unicode.Cf, r)
+}
+
+// boundaryRe matches [BOUNDARY:<64 hex chars>] markers in content.
+var boundaryRe = regexp.MustCompile(`\[BOUNDARY:([0-9a-f]{64})\]`)
+
+// VerifyBoundaries checks that all [BOUNDARY:hex] markers in content are valid
+// HMAC-SHA256 signatures over the section text preceding each marker.
+// Returns false if any boundary is invalid, indicating tampering or forgery.
+// Returns true if there are no boundaries (unsigned content) or all pass.
+func (d *InjectionDetector) VerifyBoundaries(content string, key []byte) bool {
+	matches := boundaryRe.FindAllStringIndex(content, -1)
+	if len(matches) == 0 {
+		return true // no boundaries to verify
+	}
+
+	// Walk through the content: each boundary marker signs the section text
+	// from the previous boundary (or start) up to the marker itself.
+	// Between boundary-terminated blocks there may be separator whitespace
+	// ("\n\n") that is not part of the signed section content.
+	prevEnd := 0
+	for _, loc := range matches {
+		markerStart := loc[0]
+		markerEnd := loc[1]
+
+		// Extract the section content preceding this marker, stripping any
+		// leading separator whitespace injected between boundary blocks.
+		section := content[prevEnd:markerStart]
+		if prevEnd > 0 {
+			section = strings.TrimLeft(section, "\n")
+		}
+
+		// Extract the claimed hex signature from the marker.
+		fullMarker := content[markerStart:markerEnd]
+		sub := boundaryRe.FindStringSubmatch(fullMarker)
+		if len(sub) < 2 {
+			return false
+		}
+		claimedHex := sub[1]
+		claimed, err := hex.DecodeString(claimedHex)
+		if err != nil {
+			return false
+		}
+
+		// Compute expected HMAC.
+		mac := hmac.New(sha256.New, key)
+		mac.Write([]byte(section))
+		expected := mac.Sum(nil)
+
+		if !hmac.Equal(claimed, expected) {
+			return false
+		}
+
+		prevEnd = markerEnd
+	}
+	return true
 }
 
 // foldHomoglyph maps Cyrillic and other look-alike characters to Latin equivalents.

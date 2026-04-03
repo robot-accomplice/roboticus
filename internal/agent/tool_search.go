@@ -4,6 +4,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"goboticus/internal/agent/memory"
 )
 
 // RankedTool is a tool scored by semantic relevance for the current query.
@@ -71,7 +73,7 @@ func NewToolSearchEngine(cfg ToolSearchConfig) *ToolSearchEngine {
 func (e *ToolSearchEngine) IndexTool(name, description, source string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.embeddings[name] = NgramEmbedding(strings.ToLower(description), e.dims)
+	e.embeddings[name] = memory.NgramEmbedding(strings.ToLower(description), e.dims)
 }
 
 // Search ranks all indexed tools against the query and returns the top-K
@@ -80,7 +82,7 @@ func (e *ToolSearchEngine) Search(query string, tools []ToolDescriptor) ([]Ranke
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
-	queryVec := NgramEmbedding(strings.ToLower(query), e.dims)
+	queryVec := memory.NgramEmbedding(strings.ToLower(query), e.dims)
 	stats := ToolSearchStats{CandidatesConsidered: len(tools)}
 
 	// Score all tools.
@@ -89,9 +91,9 @@ func (e *ToolSearchEngine) Search(query string, tools []ToolDescriptor) ([]Ranke
 	for _, t := range tools {
 		emb, ok := e.embeddings[t.Name]
 		if !ok {
-			emb = NgramEmbedding(strings.ToLower(t.Description), e.dims)
+			emb = memory.NgramEmbedding(strings.ToLower(t.Description), e.dims)
 		}
-		rawScore := CosineSimilarity(queryVec, emb)
+		rawScore := memory.CosineSimilarity(queryVec, emb)
 		penalty := 0.0
 		if t.Source == "mcp" {
 			penalty = e.config.MCPLatencyPenalty
