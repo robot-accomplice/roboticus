@@ -54,9 +54,9 @@ func TestTasksRepository_ListByPhase(t *testing.T) {
 	repo := NewTasksRepository(store)
 	ctx := context.Background()
 
-	repo.Create(ctx, TaskRow{ID: "t1", Phase: "pending", Goal: "a"})
-	repo.Create(ctx, TaskRow{ID: "t2", Phase: "executing", Goal: "b"})
-	repo.Create(ctx, TaskRow{ID: "t3", Phase: "pending", Goal: "c"})
+	_ = repo.Create(ctx, TaskRow{ID: "t1", Phase: "pending", Goal: "a"})
+	_ = repo.Create(ctx, TaskRow{ID: "t2", Phase: "executing", Goal: "b"})
+	_ = repo.Create(ctx, TaskRow{ID: "t3", Phase: "pending", Goal: "c"})
 
 	pending, err := repo.List(ctx, "pending")
 	if err != nil {

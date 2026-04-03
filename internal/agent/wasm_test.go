@@ -66,7 +66,7 @@ func TestWasmRuntime_ExecuteNotFound(t *testing.T) {
 
 func TestWasmRuntime_Unregister(t *testing.T) {
 	wr := NewWasmRuntime()
-	wr.Register(DefaultWasmConfig("test", "/tmp/test.wasm"))
+	_ = wr.Register(DefaultWasmConfig("test", "/tmp/test.wasm"))
 
 	if !wr.Unregister("test") {
 		t.Error("Unregister should return true")
@@ -81,8 +81,8 @@ func TestWasmRuntime_Unregister(t *testing.T) {
 
 func TestWasmRuntime_List(t *testing.T) {
 	wr := NewWasmRuntime()
-	wr.Register(DefaultWasmConfig("a", "/tmp/a.wasm"))
-	wr.Register(DefaultWasmConfig("b", "/tmp/b.wasm"))
+	_ = wr.Register(DefaultWasmConfig("a", "/tmp/a.wasm"))
+	_ = wr.Register(DefaultWasmConfig("b", "/tmp/b.wasm"))
 
 	names := wr.List()
 	if len(names) != 2 {
@@ -109,7 +109,7 @@ func TestWasmRuntime_AvailableSlots(t *testing.T) {
 
 func TestWasmRuntime_IsLoaded(t *testing.T) {
 	wr := NewWasmRuntime()
-	wr.Register(DefaultWasmConfig("test", "/tmp/test.wasm"))
+	_ = wr.Register(DefaultWasmConfig("test", "/tmp/test.wasm"))
 
 	if wr.IsLoaded("test") {
 		t.Error("should not be loaded before Load()")

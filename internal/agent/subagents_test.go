@@ -80,7 +80,7 @@ func TestSubagentManager_SlotExhaustion(t *testing.T) {
 	}
 
 	// Third start should fail (context with short timeout)
-	mgr.Register("sub-3", AgentInstanceConfig{Name: "w3"})
+	_ = mgr.Register("sub-3", AgentInstanceConfig{Name: "w3"})
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 

@@ -37,7 +37,7 @@ func (ts *TicketStore) Issue() string {
 	defer ts.mu.Unlock()
 
 	b := make([]byte, 16)
-	rand.Read(b)
+	_, _ = rand.Read(b)
 	token := "wst_" + hex.EncodeToString(b)
 	ts.tickets[token] = time.Now().Add(ts.ttl)
 	return token

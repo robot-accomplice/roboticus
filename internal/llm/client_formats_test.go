@@ -72,7 +72,7 @@ func TestMarshalOllama(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 	var raw map[string]any
-	json.Unmarshal(data, &raw)
+	_ = json.Unmarshal(data, &raw)
 	opts := raw["options"].(map[string]any)
 	if opts["temperature"].(float64) != 0.7 {
 		t.Errorf("temperature = %v", opts["temperature"])
@@ -91,7 +91,7 @@ func TestMarshalGoogle(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 	var raw map[string]any
-	json.Unmarshal(data, &raw)
+	_ = json.Unmarshal(data, &raw)
 	contents := raw["contents"].([]any)
 	if len(contents) != 2 {
 		t.Errorf("contents count = %d, want 2", len(contents))

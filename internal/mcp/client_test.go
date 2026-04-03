@@ -85,7 +85,7 @@ func TestServerStatus_JSON(t *testing.T) {
 	}
 	data, _ := json.Marshal(s)
 	var parsed ServerStatus
-	json.Unmarshal(data, &parsed)
+	_ = json.Unmarshal(data, &parsed)
 	if !parsed.Connected {
 		t.Error("should be connected")
 	}
