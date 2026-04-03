@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -175,9 +176,10 @@ func (a *nicknameAdapter) Refine(ctx context.Context, session *session.Session) 
 // skillAdapter bridges skills.Matcher → pipeline.SkillMatcher.
 type skillAdapter struct {
 	matcher *skills.Matcher
+	tools   *agent.ToolRegistry
 }
 
-func (a *skillAdapter) TryMatch(_ context.Context, session *session.Session, content string) *pipeline.Outcome {
+func (a *skillAdapter) TryMatch(ctx context.Context, session *session.Session, content string) *pipeline.Outcome {
 	skill := a.matcher.Match(content)
 	if skill == nil {
 		return nil
@@ -191,12 +193,86 @@ func (a *skillAdapter) TryMatch(_ context.Context, session *session.Session, con
 			Content:   skill.Body,
 		}
 	case skills.Structured:
-		// Structured skills require tool chain execution — not yet supported.
-		// Fall through to normal inference.
-		log.Debug().Str("skill", skill.Name()).Msg("structured skill matched but tool chain execution not yet implemented")
-		return nil
+		return a.executeToolChain(ctx, session, skill, content)
 	}
 	return nil
+}
+
+// executeToolChain runs each step in a structured skill's tool chain sequentially,
+// passing the previous step's output as context to the next step via a params
+// substitution variable. Returns nil to fall through to inference if the skill
+// has no tool chain or the tool registry is unavailable.
+func (a *skillAdapter) executeToolChain(ctx context.Context, sess *session.Session, skill *skills.Skill, userInput string) *pipeline.Outcome {
+	chain := skill.Manifest.ToolChain
+	if len(chain) == 0 || a.tools == nil {
+		log.Debug().Str("skill", skill.Name()).Msg("structured skill has no tool chain or no tool registry; falling through to inference")
+		return nil
+	}
+
+	tctx := &agent.ToolContext{
+		SessionID: sess.ID,
+		AgentName: sess.AgentName,
+	}
+
+	var lastOutput string
+	for i, step := range chain {
+		tool := a.tools.Get(step.ToolName)
+		if tool == nil {
+			log.Warn().Str("tool", step.ToolName).Int("step", i).Str("skill", skill.Name()).Msg("tool not found in registry; aborting skill chain")
+			return &pipeline.Outcome{
+				SessionID: sess.ID,
+				Content:   fmt.Sprintf("Skill %q failed: tool %q not found (step %d)", skill.Name(), step.ToolName, i+1),
+			}
+		}
+
+		// Build params JSON: merge default params with dynamic substitutions.
+		params := a.buildParams(step.Params, userInput, lastOutput)
+
+		result, err := tool.Execute(ctx, params, tctx)
+		if err != nil {
+			log.Warn().Err(err).Str("tool", step.ToolName).Int("step", i).Str("skill", skill.Name()).Msg("tool chain step failed")
+			return &pipeline.Outcome{
+				SessionID: sess.ID,
+				Content:   fmt.Sprintf("Skill %q failed at step %d (%s): %v", skill.Name(), i+1, step.ToolName, err),
+			}
+		}
+
+		if result != nil {
+			lastOutput = result.Output
+		}
+	}
+
+	if lastOutput == "" {
+		lastOutput = fmt.Sprintf("Skill %q completed successfully.", skill.Name())
+	}
+
+	return &pipeline.Outcome{
+		SessionID: sess.ID,
+		Content:   lastOutput,
+	}
+}
+
+// buildParams constructs a JSON params string for a tool invocation.
+// It substitutes {{input}} with the user's message and {{previous}} with the
+// output of the previous tool chain step.
+func (a *skillAdapter) buildParams(defaults map[string]string, userInput, previousOutput string) string {
+	if len(defaults) == 0 {
+		// No explicit params — pass the user input directly.
+		return userInput
+	}
+
+	resolved := make(map[string]string, len(defaults))
+	for k, v := range defaults {
+		v = strings.ReplaceAll(v, "{{input}}", userInput)
+		v = strings.ReplaceAll(v, "{{previous}}", previousOutput)
+		resolved[k] = v
+	}
+
+	data, err := json.Marshal(resolved)
+	if err != nil {
+		return userInput
+	}
+	return string(data)
 }
 
 // streamAdapter wraps agent context builder deps → pipeline.StreamPreparer.
@@ -353,7 +429,7 @@ func New(cfg *core.Config) (*Daemon, error) {
 		LLM:       llmSvc,
 		Injection: &injectionAdapter{det: injection},
 		Retriever: &retrieverAdapter{r: retriever},
-		Skills:    &skillAdapter{matcher: skillMatcher},
+		Skills:    &skillAdapter{matcher: skillMatcher, tools: tools},
 		Executor: &executorAdapter{
 			llmSvc:       llmSvc,
 			tools:        tools,

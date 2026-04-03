@@ -22,15 +22,16 @@ import (
 
 // AppState holds all shared state for the API server.
 type AppState struct {
-	Store     *db.Store
-	Pipeline  pipeline.Runner // connectors must depend on the interface, not *pipeline.Pipeline
-	LLM       *llm.Service
-	Config    *core.Config
-	EventBus  *EventBus
-	Approvals routes.ApprovalService
-	MCP       *mcp.ConnectionManager
-	Plugins   *plugin.Registry
-	Browser   *browser.Browser
+	Store      *db.Store
+	Pipeline   pipeline.Runner // connectors must depend on the interface, not *pipeline.Pipeline
+	LLM        *llm.Service
+	Config     *core.Config
+	EventBus   *EventBus
+	Approvals  routes.ApprovalService
+	MCP        *mcp.ConnectionManager
+	MCPGateway *mcp.Gateway // serves the agent's tools to external MCP clients
+	Plugins    *plugin.Registry
+	Browser    *browser.Browser
 }
 
 // ServerConfig controls the HTTP server.
@@ -81,6 +82,11 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 		r.Post("/api/webhooks/telegram", routes.WebhookTelegram(state.Pipeline))
 		r.Get("/api/webhooks/whatsapp", routes.WebhookWhatsAppVerify(state.Config.Channels.WhatsAppTokenEnv))
 		r.Post("/api/webhooks/whatsapp", routes.WebhookWhatsApp(state.Pipeline))
+
+		// MCP gateway — external MCP clients authenticate via their own mechanism.
+		if state.MCPGateway != nil {
+			r.Handle("/mcp", state.MCPGateway)
+		}
 	})
 
 	// Authenticated routes.
@@ -195,7 +201,17 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 		r.Get("/api/wallet/balance", routes.GetWalletBalance(state.Store))
 		r.Get("/api/wallet/address", routes.GetWalletAddress(state.Store))
 		r.Get("/api/services/swaps", routes.GetSwaps(state.Store))
+		r.Post("/api/services/swaps/{id}/start", routes.TransitionServiceRequest(state.Store, "started"))
+		r.Post("/api/services/swaps/{id}/submit", routes.TransitionServiceRequest(state.Store, "submitted"))
+		r.Post("/api/services/swaps/{id}/reconcile", routes.TransitionServiceRequest(state.Store, "reconciled"))
+		r.Post("/api/services/swaps/{id}/confirm", routes.TransitionServiceRequest(state.Store, "confirmed"))
+		r.Post("/api/services/swaps/{id}/fail", routes.TransitionServiceRequest(state.Store, "failed"))
 		r.Get("/api/services/tax-payouts", routes.GetTaxPayouts(state.Store))
+		r.Post("/api/services/tax-payouts/{id}/start", routes.TransitionServiceRequest(state.Store, "started"))
+		r.Post("/api/services/tax-payouts/{id}/submit", routes.TransitionServiceRequest(state.Store, "submitted"))
+		r.Post("/api/services/tax-payouts/{id}/reconcile", routes.TransitionServiceRequest(state.Store, "reconciled"))
+		r.Post("/api/services/tax-payouts/{id}/confirm", routes.TransitionServiceRequest(state.Store, "confirmed"))
+		r.Post("/api/services/tax-payouts/{id}/fail", routes.TransitionServiceRequest(state.Store, "failed"))
 
 		// Revenue / Services.
 		r.Get("/api/services/catalog", routes.ListServiceCatalog(state.Store))
@@ -216,6 +232,12 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 
 		// Workspace.
 		r.Get("/api/workspace/state", routes.GetWorkspaceState(state.Store))
+
+		// Runtime discovery.
+		r.Get("/api/runtime/surfaces", routes.GetRuntimeSurfaces())
+		r.Get("/api/runtime/discovery", routes.GetRuntimeDiscovery(state.Store))
+		r.Post("/api/runtime/discovery", routes.RegisterDiscoveredAgent(state.Store))
+		r.Get("/api/runtime/devices", routes.GetRuntimeDevices())
 
 		// Provider key management.
 		r.Put("/api/providers/{provider}/key", routes.SetProviderKey(state.Store))

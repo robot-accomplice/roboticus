@@ -6,6 +6,7 @@ import (
 	"crypto/cipher"
 	"crypto/ecdsa"
 	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"golang.org/x/crypto/scrypt"
+	"golang.org/x/crypto/sha3"
 
 	"github.com/rs/zerolog/log"
 )
@@ -373,21 +375,156 @@ func (w *Wallet) EthCall(to string, data string) (string, error) {
 	return hexVal, nil
 }
 
-// SendTransaction builds, signs (placeholder), and broadcasts a transaction.
-// Full EIP-1559 signing requires go-ethereum; this provides the calldata interface.
+// TxParams holds optional EIP-1559 transaction parameters.
+// Nil/zero values cause defaults to be used.
+type TxParams struct {
+	Nonce                *uint64  // nil = fetch from chain; use NonceVal() helper
+	MaxPriorityFeePerGas *big.Int // nil = 1 gwei
+	MaxFeePerGas         *big.Int // nil = 30 gwei
+	GasLimit             uint64   // 0 = 21000 (ETH) or 100000 (contract call)
+}
+
+// NonceVal returns a TxParams-compatible nonce pointer.
+func NonceVal(n uint64) *uint64 { return &n }
+
+// SendTransaction builds, signs, and broadcasts an EIP-1559 transaction.
 func (w *Wallet) SendTransaction(to string, value *big.Int, data []byte) (string, error) {
+	return w.SendTransactionWithParams(to, value, data, TxParams{})
+}
+
+// SendTransactionWithParams builds, signs, and broadcasts an EIP-1559 transaction
+// with explicit gas parameters.
+func (w *Wallet) SendTransactionWithParams(to string, value *big.Int, data []byte, params TxParams) (string, error) {
 	if w.cfg.RPCURL == "" {
 		return "", fmt.Errorf("wallet: no RPC URL")
 	}
-	// For a complete implementation, this would build an EIP-1559 tx, sign it with
-	// the private key, RLP-encode, and call eth_sendRawTransaction.
-	// For now, log the intent and return a placeholder.
+
+	raw, err := w.BuildSignedTx(to, value, data, params)
+	if err != nil {
+		return "", err
+	}
+
+	txHash, err := w.SendRawTransaction("0x" + hex.EncodeToString(raw))
+	if err != nil {
+		return "", fmt.Errorf("wallet: send failed: %w", err)
+	}
+
 	log.Info().
 		Str("to", to).
 		Str("value", value.String()).
 		Int("data_len", len(data)).
-		Msg("wallet: transaction prepared (signing requires go-ethereum)")
-	return fmt.Sprintf("0x_pending_%s_%x", to[:8], data[:4]), nil
+		Str("tx_hash", txHash).
+		Msg("wallet: EIP-1559 transaction sent")
+
+	return txHash, nil
+}
+
+// BuildSignedTx constructs and signs an EIP-1559 (type 2) transaction,
+// returning the raw bytes ready for eth_sendRawTransaction.
+func (w *Wallet) BuildSignedTx(to string, value *big.Int, data []byte, params TxParams) ([]byte, error) {
+	// Resolve defaults.
+	var nonce uint64
+	if params.Nonce != nil {
+		nonce = *params.Nonce
+	} else {
+		var err error
+		nonce, err = w.GetTransactionCount()
+		if err != nil {
+			return nil, fmt.Errorf("wallet: fetching nonce: %w", err)
+		}
+	}
+
+	maxPriorityFee := params.MaxPriorityFeePerGas
+	if maxPriorityFee == nil {
+		maxPriorityFee = big.NewInt(1_000_000_000) // 1 gwei
+	}
+
+	maxFee := params.MaxFeePerGas
+	if maxFee == nil {
+		maxFee = big.NewInt(30_000_000_000) // 30 gwei
+	}
+
+	gasLimit := params.GasLimit
+	if gasLimit == 0 {
+		if len(data) == 0 {
+			gasLimit = 21000 // plain ETH transfer
+		} else {
+			gasLimit = 100000 // contract call
+		}
+	}
+
+	chainID := big.NewInt(w.cfg.ChainID)
+
+	// Parse destination address.
+	toBytes, err := hexToBytes(to)
+	if err != nil {
+		return nil, fmt.Errorf("wallet: invalid to address: %w", err)
+	}
+
+	if value == nil {
+		value = new(big.Int)
+	}
+
+	// Build unsigned tx fields for signing:
+	// [chainId, nonce, maxPriorityFeePerGas, maxFeePerGas, gasLimit, to, value, data, accessList]
+	unsignedFields := []any{
+		chainID,
+		nonce,
+		maxPriorityFee,
+		maxFee,
+		gasLimit,
+		toBytes,
+		value,
+		data,
+		[]any{}, // empty access list
+	}
+
+	// RLP encode and prepend type byte for signing hash.
+	rlpUnsigned := rlpEncodeList(unsignedFields)
+	sigPayload := append([]byte{0x02}, rlpUnsigned...)
+
+	// Keccak256 hash.
+	h := sha3.NewLegacyKeccak256()
+	h.Write(sigPayload)
+	txHash := h.Sum(nil)
+
+	// Sign the hash.
+	sig, err := signDigest(w.privateKey, txHash)
+	if err != nil {
+		return nil, fmt.Errorf("wallet: signing failed: %w", err)
+	}
+
+	// sig is 65 bytes: r(32) || s(32) || v(1) where v = 27 or 28.
+	// EIP-1559 uses raw recovery ID: 0 or 1.
+	r := new(big.Int).SetBytes(sig[:32])
+	s := new(big.Int).SetBytes(sig[32:64])
+	v := uint64(sig[64] - 27) // convert from Ethereum v (27/28) to raw (0/1)
+
+	// Build signed tx fields:
+	// [chainId, nonce, maxPriorityFeePerGas, maxFeePerGas, gasLimit, to, value, data, accessList, v, r, s]
+	signedFields := []any{
+		chainID,
+		nonce,
+		maxPriorityFee,
+		maxFee,
+		gasLimit,
+		toBytes,
+		value,
+		data,
+		[]any{}, // empty access list
+		v,
+		r,
+		s,
+	}
+
+	rlpSigned := rlpEncodeList(signedFields)
+	return append([]byte{0x02}, rlpSigned...), nil
+}
+
+// hexToBytes converts a hex string (with optional 0x prefix) to bytes.
+func hexToBytes(s string) ([]byte, error) {
+	s = strings.TrimPrefix(s, "0x")
+	return hex.DecodeString(s)
 }
 
 // SendRawTransaction broadcasts a signed transaction.

@@ -24,15 +24,22 @@ type Trigger struct {
 	Keywords []string `yaml:"keywords" json:"keywords"`
 }
 
+// ToolChainStep defines a single tool invocation within a structured skill.
+type ToolChainStep struct {
+	ToolName string            `yaml:"tool" json:"tool"`
+	Params   map[string]string `yaml:"params" json:"params"`
+}
+
 // Manifest holds metadata for a structured skill (from TOML/YAML frontmatter).
 type Manifest struct {
-	Name        string       `yaml:"name" json:"name"`
-	Description string       `yaml:"description" json:"description"`
-	Version     string       `yaml:"version" json:"version"`
-	Author      string       `yaml:"author" json:"author"`
-	Triggers    Trigger `yaml:"triggers" json:"triggers"`
-	PairedTool  string       `yaml:"paired_tool" json:"paired_tool"`
-	Priority    int          `yaml:"priority" json:"priority"`
+	Name        string           `yaml:"name" json:"name"`
+	Description string           `yaml:"description" json:"description"`
+	Version     string           `yaml:"version" json:"version"`
+	Author      string           `yaml:"author" json:"author"`
+	Triggers    Trigger          `yaml:"triggers" json:"triggers"`
+	PairedTool  string           `yaml:"paired_tool" json:"paired_tool"`
+	Priority    int              `yaml:"priority" json:"priority"`
+	ToolChain   []ToolChainStep  `yaml:"tool_chain" json:"tool_chain"`
 }
 
 // Skill wraps a loaded skill with its hash for change detection.

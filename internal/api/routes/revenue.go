@@ -209,6 +209,26 @@ func GetServiceRequest(store *db.Store) http.HandlerFunc {
 	}
 }
 
+// TransitionServiceRequest moves a service request through its lifecycle.
+func TransitionServiceRequest(store *db.Store, targetStatus string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		result, err := store.ExecContext(r.Context(),
+			`UPDATE service_requests SET status = ?, updated_at = datetime('now') WHERE id = ?`,
+			targetStatus, id)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		affected, _ := result.RowsAffected()
+		if affected == 0 {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "service request not found"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"id": id, "status": targetStatus})
+	}
+}
+
 // queryResult matches *sql.Rows for testability.
 type queryResult interface {
 	Next() bool
