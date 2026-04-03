@@ -9,6 +9,13 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/pelletier/go-toml/v2"
+)
+
+var (
+	tomlUnmarshal = toml.Unmarshal
+	tomlMarshal   = toml.Marshal
 )
 
 //go:embed bundled_providers.toml
@@ -618,6 +625,28 @@ func (c *Config) Validate() error {
 	warnE164("channels.signal_account", c.Channels.SignalAccount)
 
 	return nil
+}
+
+// LoadConfigFromFile reads and parses a TOML config file into a Config struct.
+// It starts with DefaultConfig and overlays values from the file.
+func LoadConfigFromFile(path string) (Config, error) {
+	cfg := DefaultConfig()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return cfg, nil
+		}
+		return cfg, fmt.Errorf("read config: %w", err)
+	}
+	if err := tomlUnmarshal(data, &cfg); err != nil {
+		return cfg, fmt.Errorf("parse config %s: %w", path, err)
+	}
+	return cfg, nil
+}
+
+// MarshalTOML serialises a Config as TOML bytes.
+func MarshalTOML(cfg *Config) ([]byte, error) {
+	return tomlMarshal(cfg)
 }
 
 // expandTilde replaces a leading ~ with the user's home directory.

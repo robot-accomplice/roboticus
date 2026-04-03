@@ -22,12 +22,18 @@ type CdpTarget struct {
 	WebSocketDebuggerURL string `json:"webSocketDebuggerUrl"`
 }
 
+// cdpResult carries either a successful result or a CDP protocol error.
+type cdpResult struct {
+	Result json.RawMessage
+	Err    error
+}
+
 // CdpSession wraps a WebSocket connection to a CDP target.
 type CdpSession struct {
 	conn      *websocket.Conn //nolint:staticcheck // TODO: migrate to modern API
 	commandID atomic.Int64
 	mu        sync.Mutex
-	pending   map[int64]chan json.RawMessage
+	pending   map[int64]chan cdpResult
 	timeout   time.Duration
 	cancel    context.CancelFunc
 }
@@ -62,7 +68,7 @@ func ConnectCdp(ctx context.Context, wsURL string, timeout time.Duration) (*CdpS
 	readCtx, cancel := context.WithCancel(ctx)
 	s := &CdpSession{
 		conn:    conn,
-		pending: make(map[int64]chan json.RawMessage),
+		pending: make(map[int64]chan cdpResult),
 		timeout: timeout,
 		cancel:  cancel,
 	}
@@ -78,9 +84,10 @@ func (s *CdpSession) Close() {
 }
 
 // SendCommand sends a CDP method call and waits for the response.
+// Returns a protocol-level error if Chrome returns a CDP error frame.
 func (s *CdpSession) SendCommand(ctx context.Context, method string, params any) (json.RawMessage, error) {
 	id := s.commandID.Add(1)
-	ch := make(chan json.RawMessage, 1)
+	ch := make(chan cdpResult, 1)
 
 	s.mu.Lock()
 	s.pending[id] = ch
@@ -100,8 +107,11 @@ func (s *CdpSession) SendCommand(ctx context.Context, method string, params any)
 	}
 
 	select {
-	case result := <-ch:
-		return result, nil
+	case res := <-ch:
+		if res.Err != nil {
+			return nil, res.Err
+		}
+		return res.Result, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	case <-time.After(s.timeout):
@@ -133,9 +143,9 @@ func (s *CdpSession) readLoop(ctx context.Context) {
 			s.mu.Unlock()
 			if ok {
 				if resp.Error != nil {
-					ch <- json.RawMessage(fmt.Sprintf(`{"error":"%s"}`, resp.Error.Message))
+					ch <- cdpResult{Err: fmt.Errorf("cdp: %s (%d)", resp.Error.Message, resp.Error.Code)}
 				} else {
-					ch <- resp.Result
+					ch <- cdpResult{Result: resp.Result}
 				}
 			}
 		}

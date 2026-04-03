@@ -262,20 +262,22 @@ func GetConfigStatus() http.HandlerFunc {
 
 // --- Keystore ---
 
-// KeystoreStatus returns whether any provider keys are stored in the identity table.
-func KeystoreStatus(store *db.Store) http.HandlerFunc {
+// KeystoreStatus returns whether any provider keys are stored in the encrypted keystore.
+func KeystoreStatus(ks *core.Keystore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var count int64
-		row := store.QueryRowContext(r.Context(),
-			`SELECT COUNT(*) FROM identity WHERE key LIKE 'provider_key:%'`)
-		if err := row.Scan(&count); err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+		if ks == nil {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"status":      "unavailable",
+				"backend":     "encrypted",
+				"stored_keys": 0,
+			})
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
-			"status":       "unlocked",
-			"backend":      "sqlite",
-			"stored_keys":  count,
+			"status":      "unlocked",
+			"backend":     "encrypted",
+			"stored_keys": ks.Count(),
+			"keys":        ks.List(),
 		})
 	}
 }

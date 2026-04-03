@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/rs/zerolog/log"
 
 	"goboticus/internal/core"
 	"goboticus/internal/db"
@@ -19,7 +20,9 @@ func GetWorkspaceState(store *db.Store) http.HandlerFunc {
 		dbStats := store.Stats()
 		var sessionCount int64
 		row := store.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM sessions WHERE status = 'active'`)
-		_ = row.Scan(&sessionCount)
+		if err := row.Scan(&sessionCount); err != nil {
+			log.Warn().Err(err).Msg("failed to query active session count")
+		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"uptime":          time.Since(processStartTime).Seconds(),
 			"goroutines":      runtime.NumGoroutine(),
@@ -159,10 +162,10 @@ func DeleteSubagent(store *db.Store) http.HandlerFunc {
 	}
 }
 
-// UpdateConfig applies a JSON config patch by merging it into the TOML config file.
-// The patch is a flat JSON object whose keys map to top-level TOML sections.
-// After writing, the caller should restart the daemon to pick up the changes.
-func UpdateConfig(store *db.Store) http.HandlerFunc {
+// UpdateConfig applies a JSON config patch by loading the existing TOML config,
+// merging the patch via JSON round-trip into the Config struct, validating the
+// result, and writing valid TOML back to disk.
+func UpdateConfig(cfg *core.Config, store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var patch map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
@@ -176,56 +179,75 @@ func UpdateConfig(store *db.Store) http.HandlerFunc {
 
 		path := core.ConfigFilePath()
 
-		// Read existing config file (may not exist yet).
-		existing, _ := os.ReadFile(path)
-
-		// Store each patch key-value in the identity table for persistence,
-		// and also append to the TOML file for the next restart.
-		patchJSON, err := json.Marshal(patch)
+		// Load the existing config from disk (falls back to defaults if absent).
+		merged, err := core.LoadConfigFromFile(path)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to marshal patch")
+			writeError(w, http.StatusInternalServerError, "failed to load config: "+err.Error())
+			return
+		}
+
+		// Apply the patch: marshal the current config to JSON, overlay the patch
+		// keys, then unmarshal back into the Config struct. This ensures only
+		// known fields are accepted and types are enforced.
+		base, err := json.Marshal(merged)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to marshal config: "+err.Error())
+			return
+		}
+
+		var baseMap map[string]any
+		if err := json.Unmarshal(base, &baseMap); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to parse config: "+err.Error())
+			return
+		}
+
+		for k, v := range patch {
+			baseMap[k] = v
+		}
+
+		patchedJSON, err := json.Marshal(baseMap)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to marshal patched config: "+err.Error())
+			return
+		}
+
+		if err := json.Unmarshal(patchedJSON, &merged); err != nil {
+			writeError(w, http.StatusBadRequest, "patch produced invalid config: "+err.Error())
+			return
+		}
+
+		// Validate the merged config.
+		if err := merged.Validate(); err != nil {
+			writeError(w, http.StatusBadRequest, "validation failed: "+err.Error())
 			return
 		}
 
 		// Persist patch to identity table for audit trail.
-		_, err = store.ExecContext(r.Context(),
+		auditJSON, _ := json.Marshal(patch)
+		_, _ = store.ExecContext(r.Context(),
 			`INSERT INTO identity (key, value) VALUES ('config_patch:latest', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-			string(patchJSON))
+			string(auditJSON))
+
+		// Write the validated config as TOML.
+		tomlBytes, err := core.MarshalTOML(&merged)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			writeError(w, http.StatusInternalServerError, "failed to marshal TOML: "+err.Error())
 			return
 		}
 
-		// Append the patch values as TOML lines to the config file.
-		var tomlLines []byte
-		if len(existing) > 0 {
-			tomlLines = append(existing, '\n')
-		}
-		tomlLines = append(tomlLines, []byte("# --- patched via API ---\n")...)
-		for k, v := range patch {
-			line, merr := json.Marshal(v)
-			if merr != nil {
-				continue
-			}
-			tomlLines = append(tomlLines, []byte(k+" = ")...)
-			tomlLines = append(tomlLines, line...)
-			tomlLines = append(tomlLines, '\n')
-		}
-
-		// Ensure directory exists.
 		if err := os.MkdirAll(core.ConfigDir(), 0o755); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		if err := os.WriteFile(path, tomlLines, 0o644); err != nil {
+		if err := os.WriteFile(path, tomlBytes, 0o644); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 
 		writeJSON(w, http.StatusOK, map[string]any{
-			"status":          "patched",
-			"keys":            len(patch),
-			"path":            path,
+			"status":           "patched",
+			"keys":             len(patch),
+			"path":             path,
 			"restart_required": true,
 		})
 	}
@@ -276,8 +298,8 @@ func TestChannel(cfg *core.Config) http.HandlerFunc {
 	}
 }
 
-// SetProviderKey stores a provider API key.
-func SetProviderKey(store *db.Store) http.HandlerFunc {
+// SetProviderKey stores a provider API key in the encrypted keystore.
+func SetProviderKey(ks *core.Keystore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		provider := chi.URLParam(r, "provider")
 		var req struct {
@@ -291,30 +313,36 @@ func SetProviderKey(store *db.Store) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "key is required")
 			return
 		}
-		_, err := store.ExecContext(r.Context(),
-			`INSERT INTO identity (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-			"provider_key:"+provider, req.Key)
-		if err != nil {
+		if ks == nil {
+			writeError(w, http.StatusServiceUnavailable, "keystore not initialized")
+			return
+		}
+		if err := ks.Set("provider_key:"+provider, req.Key); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if err := ks.Save(); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to persist keystore: "+err.Error())
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "saved", "provider": provider})
 	}
 }
 
-// DeleteProviderKey removes a provider API key.
-func DeleteProviderKey(store *db.Store) http.HandlerFunc {
+// DeleteProviderKey removes a provider API key from the encrypted keystore.
+func DeleteProviderKey(ks *core.Keystore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		provider := chi.URLParam(r, "provider")
-		result, err := store.ExecContext(r.Context(),
-			`DELETE FROM identity WHERE key = ?`, "provider_key:"+provider)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+		if ks == nil {
+			writeError(w, http.StatusServiceUnavailable, "keystore not initialized")
 			return
 		}
-		affected, _ := result.RowsAffected()
-		if affected == 0 {
+		if err := ks.Delete("provider_key:" + provider); err != nil {
 			writeError(w, http.StatusNotFound, "provider key not found")
+			return
+		}
+		if err := ks.Save(); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to persist keystore: "+err.Error())
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "removed", "provider": provider})

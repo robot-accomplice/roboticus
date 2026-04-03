@@ -27,6 +27,7 @@ type AppState struct {
 	Pipeline   pipeline.Runner // connectors must depend on the interface, not *pipeline.Pipeline
 	LLM        *llm.Service
 	Config     *core.Config
+	Keystore   *core.Keystore
 	EventBus   *EventBus
 	Approvals  routes.ApprovalService
 	MCP        *mcp.ConnectionManager
@@ -224,7 +225,7 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 
 		// Config.
 		r.Get("/api/config", routes.GetConfig(state.Config))
-		r.Put("/api/config", routes.UpdateConfig(state.Store))
+		r.Put("/api/config", routes.UpdateConfig(state.Config, state.Store))
 		r.Get("/api/config/capabilities", routes.GetCapabilities())
 		r.Get("/api/config/status", routes.GetConfigStatus())
 		r.Get("/api/config/raw", routes.GetConfigRaw())
@@ -280,8 +281,8 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 		r.Get("/api/runtime/devices", routes.GetRuntimeDevices())
 
 		// Provider key management.
-		r.Put("/api/providers/{provider}/key", routes.SetProviderKey(state.Store))
-		r.Delete("/api/providers/{provider}/key", routes.DeleteProviderKey(state.Store))
+		r.Put("/api/providers/{provider}/key", routes.SetProviderKey(state.Keystore))
+		r.Delete("/api/providers/{provider}/key", routes.DeleteProviderKey(state.Keystore))
 
 		// Traces.
 		r.Get("/api/traces", routes.ListTraces(state.Store))
@@ -343,7 +344,7 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 		r.Get("/api/observability/delegation/stats", routes.DelegationStats(state.Store))
 
 		// Keystore.
-		r.Get("/api/keystore/status", routes.KeystoreStatus(state.Store))
+		r.Get("/api/keystore/status", routes.KeystoreStatus(state.Keystore))
 		r.Post("/api/keystore/unlock", routes.KeystoreUnlock())
 
 		// Interview.

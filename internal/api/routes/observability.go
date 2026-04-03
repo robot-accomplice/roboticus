@@ -38,7 +38,10 @@ func ListObservabilityTraces(store *db.Store) http.HandlerFunc {
 
 		var total int64
 		row := store.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM pipeline_traces`)
-		_ = row.Scan(&total)
+		if err := row.Scan(&total); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 
 		writeJSON(w, http.StatusOK, map[string]any{
 			"traces": traces, "total": total, "limit": limit, "offset": offset,
@@ -123,12 +126,18 @@ func DelegationStats(store *db.Store) http.HandlerFunc {
 		row := store.QueryRowContext(ctx,
 			`SELECT COUNT(*), COALESCE(SUM(success), 0), COALESCE(AVG(duration_ms), 0)
 			 FROM delegation_outcomes`)
-		_ = row.Scan(&total, &successful, &avgDuration)
+		if err := row.Scan(&total, &successful, &avgDuration); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 
 		var avgQuality float64
 		row = store.QueryRowContext(ctx,
 			`SELECT COALESCE(AVG(quality_score), 0) FROM delegation_outcomes WHERE quality_score IS NOT NULL`)
-		_ = row.Scan(&avgQuality)
+		if err := row.Scan(&avgQuality); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 
 		var successRate float64
 		if total > 0 {

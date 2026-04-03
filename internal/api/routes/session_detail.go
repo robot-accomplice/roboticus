@@ -86,19 +86,28 @@ func GetSessionInsights(store *db.Store) http.HandlerFunc {
 		row := store.QueryRowContext(ctx,
 			`SELECT COUNT(*), COALESCE(SUM(tokens_in + tokens_out), 0), COALESCE(SUM(cost), 0)
 			 FROM turns WHERE session_id = ?`, sessionID)
-		_ = row.Scan(&turnCount, &totalTokens, &totalCost)
+		if err := row.Scan(&turnCount, &totalTokens, &totalCost); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 
 		var msgCount int64
 		row = store.QueryRowContext(ctx,
 			`SELECT COUNT(*) FROM session_messages WHERE session_id = ?`, sessionID)
-		_ = row.Scan(&msgCount)
+		if err := row.Scan(&msgCount); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 
 		var toolCallCount int64
 		row = store.QueryRowContext(ctx,
 			`SELECT COUNT(*) FROM tool_calls tc
 			 JOIN turns t ON t.id = tc.turn_id
 			 WHERE t.session_id = ?`, sessionID)
-		_ = row.Scan(&toolCallCount)
+		if err := row.Scan(&toolCallCount); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 
 		insights := map[string]any{
 			"turn_count":      turnCount,

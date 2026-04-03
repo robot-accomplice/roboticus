@@ -3,6 +3,7 @@ package routes
 import (
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -162,14 +163,18 @@ func TestTestChannel(t *testing.T) {
 }
 
 func TestSetProviderKey(t *testing.T) {
-	store := testutil.TempStore(t)
-	handler := SetProviderKey(store)
+	t.Setenv("GOBOTICUS_MASTER_KEY", "test-key-for-unit-tests")
+	ks, err := core.OpenKeystore(core.KeystoreConfig{Path: filepath.Join(t.TempDir(), "test.enc")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := SetProviderKey(ks)
 	req := httptest.NewRequest("PUT", "/api/providers/openai/key", strings.NewReader(`{"key":"sk-test"}`))
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
-		t.Errorf("status = %d", rec.Code)
+		t.Errorf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -179,8 +184,10 @@ func TestUpdateConfig(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
 
-	handler := UpdateConfig(store)
-	req := httptest.NewRequest("PUT", "/api/config", strings.NewReader(`{"key":"value"}`))
+	cfg := core.DefaultConfig()
+	handler := UpdateConfig(&cfg, store)
+	// Patch a valid field so validation passes.
+	req := httptest.NewRequest("PUT", "/api/config", strings.NewReader(`{"server":{"port":9090,"bind":"localhost","cron_max_concurrency":4}}`))
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -195,7 +202,8 @@ func TestUpdateConfig(t *testing.T) {
 
 func TestUpdateConfig_InvalidJSON(t *testing.T) {
 	store := testutil.TempStore(t)
-	handler := UpdateConfig(store)
+	cfg := core.DefaultConfig()
+	handler := UpdateConfig(&cfg, store)
 	req := httptest.NewRequest("PUT", "/api/config", strings.NewReader(`not json`))
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
