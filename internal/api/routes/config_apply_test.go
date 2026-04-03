@@ -7,11 +7,13 @@ import (
 	"testing"
 
 	"goboticus/internal/core"
+	"goboticus/testutil"
 )
 
 func TestConfigApply_ValidSection(t *testing.T) {
 	cfg := core.DefaultConfig()
-	handler := ConfigApply(&cfg)
+	store := testutil.TempStore(t)
+	handler := ConfigApply(&cfg, store)
 
 	sections := []string{"agent", "server", "models", "memory", "cache", "skills", "channels", "wallet"}
 	for _, section := range sections {
@@ -37,7 +39,8 @@ func TestConfigApply_ValidSection(t *testing.T) {
 
 func TestConfigApply_UnknownSection(t *testing.T) {
 	cfg := core.DefaultConfig()
-	handler := ConfigApply(&cfg)
+	store := testutil.TempStore(t)
+	handler := ConfigApply(&cfg, store)
 
 	body := strings.NewReader(`{"section":"unknown_section","values":{}}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/config/apply", body)
@@ -58,7 +61,8 @@ func TestConfigApply_UnknownSection(t *testing.T) {
 
 func TestConfigApply_EmptySection(t *testing.T) {
 	cfg := core.DefaultConfig()
-	handler := ConfigApply(&cfg)
+	store := testutil.TempStore(t)
+	handler := ConfigApply(&cfg, store)
 
 	body := strings.NewReader(`{"section":"","values":{}}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/config/apply", body)
@@ -72,7 +76,8 @@ func TestConfigApply_EmptySection(t *testing.T) {
 
 func TestConfigApply_InvalidJSON(t *testing.T) {
 	cfg := core.DefaultConfig()
-	handler := ConfigApply(&cfg)
+	store := testutil.TempStore(t)
+	handler := ConfigApply(&cfg, store)
 
 	body := strings.NewReader(`not valid json`)
 	req := httptest.NewRequest(http.MethodPost, "/api/config/apply", body)
@@ -86,7 +91,8 @@ func TestConfigApply_InvalidJSON(t *testing.T) {
 
 func TestConfigApply_MethodNotAllowed(t *testing.T) {
 	cfg := core.DefaultConfig()
-	handler := ConfigApply(&cfg)
+	store := testutil.TempStore(t)
+	handler := ConfigApply(&cfg, store)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/config/apply", nil)
 	rec := httptest.NewRecorder()

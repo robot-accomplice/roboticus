@@ -179,11 +179,17 @@ func (b *Browser) Start() error {
 		sess, sessErr := ConnectCdp(context.Background(), target.WebSocketDebuggerURL, timeout)
 		if sessErr == nil {
 			b.session = sess
-			// Enable required domains.
+			// Enable required domains (non-fatal; some may be optional).
 			ctx := context.Background()
-			_, _ = sess.SendCommand(ctx, "Page.enable", nil)
-			_, _ = sess.SendCommand(ctx, "Runtime.enable", nil)
-			_, _ = sess.SendCommand(ctx, "Network.enable", nil)
+			if _, err := sess.SendCommand(ctx, "Page.enable", nil); err != nil {
+				log.Warn().Err(err).Msg("browser: failed to enable Page domain")
+			}
+			if _, err := sess.SendCommand(ctx, "Runtime.enable", nil); err != nil {
+				log.Warn().Err(err).Msg("browser: failed to enable Runtime domain")
+			}
+			if _, err := sess.SendCommand(ctx, "Network.enable", nil); err != nil {
+				log.Warn().Err(err).Msg("browser: failed to enable Network domain")
+			}
 		}
 	}
 

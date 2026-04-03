@@ -90,8 +90,11 @@ func SetActiveTheme(store *db.Store) http.HandlerFunc {
 			return
 		}
 
-		_, _ = store.ExecContext(r.Context(),
-			`INSERT OR REPLACE INTO identity (key, value) VALUES ('active_theme', ?)`, req.ThemeID)
+		if _, err := store.ExecContext(r.Context(),
+			`INSERT OR REPLACE INTO identity (key, value) VALUES ('active_theme', ?)`, req.ThemeID); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "theme_id": req.ThemeID})
 	}
 }

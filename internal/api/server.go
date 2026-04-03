@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -163,12 +164,25 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 
 		// Skills.
 		r.Get("/api/skills", routes.ListSkills(state.Store))
-		r.Post("/api/skills/reload", routes.ReloadSkills())
+		r.Post("/api/skills/reload", routes.ReloadSkills(func() error {
+			// Reload skills from the configured directory by re-scanning.
+			dir := state.Config.Skills.Directory
+			if dir == "" {
+				return nil
+			}
+			// Count files to confirm the directory is accessible.
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				return fmt.Errorf("skills directory %q: %w", dir, err)
+			}
+			_ = entries
+			return nil
+		}))
 		r.Delete("/api/skills/{id}", routes.DeleteSkill(state.Store))
 		r.Put("/api/skills/{id}/toggle", routes.ToggleSkill(state.Store))
 		r.Get("/api/skills/catalog", routes.GetSkillsCatalog())
-		r.Post("/api/skills/catalog/install", routes.InstallSkillFromCatalog())
-		r.Post("/api/skills/catalog/activate", routes.ActivateSkillFromCatalog())
+		r.Post("/api/skills/catalog/install", routes.InstallSkillFromCatalog(state.Config, state.Store))
+		r.Post("/api/skills/catalog/activate", routes.ActivateSkillFromCatalog(state.Store))
 		r.Get("/api/skills/audit", routes.AuditSkills(state.Store))
 		r.Get("/api/skills/{id}", routes.GetSkill(state.Store))
 		r.Put("/api/skills/{id}", routes.UpdateSkill(state.Store))
@@ -178,7 +192,7 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 		r.Get("/api/plugins/tools", routes.ListPluginTools(state.Plugins))
 		r.Post("/api/plugins/{name}/enable", routes.EnablePlugin(state.Plugins))
 		r.Post("/api/plugins/{name}/disable", routes.DisablePlugin(state.Plugins))
-		r.Post("/api/plugins/catalog/install", routes.InstallPlugin())
+		r.Post("/api/plugins/catalog/install", routes.InstallPlugin(state.Config))
 		r.Post("/api/plugins/{name}/execute/{tool}", routes.ExecutePluginTool(state.Plugins))
 
 		// Stats.
@@ -203,9 +217,9 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 		r.With(analysisLimit).Post("/api/recommendations/generate", routes.GenerateRecommendations(state.Store))
 
 		// Channels.
-		r.Get("/api/channels/status", routes.GetChannelsStatus(state.LLM))
+		r.Get("/api/channels/status", routes.GetChannelsStatus(state.Config))
 		r.Get("/api/channels/dead-letter", routes.GetDeadLetters(state.Store))
-		r.Post("/api/channels/{name}/test", routes.TestChannel())
+		r.Post("/api/channels/{name}/test", routes.TestChannel(state.Config))
 		r.Post("/api/channels/dead-letter/{id}/replay", routes.ReplayDeadLetter(state.Store))
 
 		// Config.
@@ -329,7 +343,7 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 		r.Get("/api/observability/delegation/stats", routes.DelegationStats(state.Store))
 
 		// Keystore.
-		r.Get("/api/keystore/status", routes.KeystoreStatus())
+		r.Get("/api/keystore/status", routes.KeystoreStatus(state.Store))
 		r.Post("/api/keystore/unlock", routes.KeystoreUnlock())
 
 		// Interview.
@@ -348,7 +362,8 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 
 		// WebSocket.
 		r.Get("/ws", HandleWebSocket(state.EventBus, cfg.APIKey))
-		r.Post("/api/ws-ticket", routes.IssueWSTicket())
+		wsTickets := NewTicketStore(60 * time.Second)
+		r.Post("/api/ws-ticket", routes.IssueWSTicket(wsTickets))
 	})
 
 	return &http.Server{

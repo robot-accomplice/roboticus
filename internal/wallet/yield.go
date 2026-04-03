@@ -21,25 +21,17 @@ type YieldConfig struct {
 	ATokenAddress       string  `mapstructure:"atoken_address"`
 }
 
-// Aave V3 IPool function selectors.
+// Aave V3 IPool function selectors (pre-computed byte literals).
 var (
 	// supply(address asset, uint256 amount, address onBehalfOf, uint16 referralCode)
-	aaveSupplySelector = mustDecodeHex("617ba037")
+	aaveSupplySelector = []byte{0x61, 0x7b, 0xa0, 0x37}
 	// withdraw(address asset, uint256 amount, address to)
-	aaveWithdrawSelector = mustDecodeHex("69328dec")
+	aaveWithdrawSelector = []byte{0x69, 0x32, 0x8d, 0xec}
 	// approve(address spender, uint256 amount)
-	erc20ApproveSelector = mustDecodeHex("095ea7b3")
+	erc20ApproveSelector = []byte{0x09, 0x5e, 0xa7, 0xb3}
 	// balanceOf(address account)
-	erc20BalanceOfSelector = mustDecodeHex("70a08231")
+	erc20BalanceOfSelector = []byte{0x70, 0xa0, 0x82, 0x31}
 )
-
-func mustDecodeHex(s string) []byte {
-	b, err := hex.DecodeString(s)
-	if err != nil {
-		panic(err)
-	}
-	return b
-}
 
 // YieldEngine manages automated yield strategies (Aave V3 on Base).
 type YieldEngine struct {

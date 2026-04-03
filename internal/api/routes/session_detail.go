@@ -3,9 +3,12 @@ package routes
 import (
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 
 	"github.com/go-chi/chi/v5"
 
+	"goboticus/internal/core"
 	"goboticus/internal/db"
 )
 
@@ -123,7 +126,10 @@ func DeleteSession(store *db.Store) http.HandlerFunc {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		_, _ = store.ExecContext(r.Context(), `DELETE FROM sessions WHERE id = ?`, sessionID)
+		if _, err = store.ExecContext(r.Context(), `DELETE FROM sessions WHERE id = ?`, sessionID); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 	}
 }
@@ -156,7 +162,16 @@ func GetSemanticCategories(store *db.Store) http.HandlerFunc {
 func DeleteSkill(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		skillID := chi.URLParam(r, "id")
-		_, _ = store.ExecContext(r.Context(), `DELETE FROM skills WHERE id = ?`, skillID)
+		result, err := store.ExecContext(r.Context(), `DELETE FROM skills WHERE id = ?`, skillID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		affected, _ := result.RowsAffected()
+		if affected == 0 {
+			writeError(w, http.StatusNotFound, "skill not found")
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 	}
 }
@@ -165,8 +180,17 @@ func DeleteSkill(store *db.Store) http.HandlerFunc {
 func ToggleSkill(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		skillID := chi.URLParam(r, "id")
-		_, _ = store.ExecContext(r.Context(),
+		result, err := store.ExecContext(r.Context(),
 			`UPDATE skills SET enabled = CASE WHEN enabled = 1 THEN 0 ELSE 1 END WHERE id = ?`, skillID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		affected, _ := result.RowsAffected()
+		if affected == 0 {
+			writeError(w, http.StatusNotFound, "skill not found")
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "toggled"})
 	}
 }
@@ -178,24 +202,124 @@ func GetSkillsCatalog() http.HandlerFunc {
 	}
 }
 
-// InstallSkillFromCatalog installs a skill from the catalog.
-func InstallSkillFromCatalog() http.HandlerFunc {
+// InstallSkillFromCatalog installs a skill by writing its content to the skills directory.
+// Accepts {"name": "skill_name", "content": "skill body markdown"}.
+func InstallSkillFromCatalog(cfg *core.Config, store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeError(w, http.StatusNotImplemented, "skill catalog installation not yet implemented")
+		var req struct {
+			Name    string `json:"name"`
+			Content string `json:"content"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		if req.Name == "" || req.Content == "" {
+			writeError(w, http.StatusBadRequest, "name and content are required")
+			return
+		}
+
+		skillsDir := cfg.Skills.Directory
+		if skillsDir == "" {
+			skillsDir = filepath.Join(core.ConfigDir(), "skills")
+		}
+		if err := os.MkdirAll(skillsDir, 0o755); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to create skills directory: "+err.Error())
+			return
+		}
+
+		path := filepath.Join(skillsDir, req.Name+".md")
+		if err := os.WriteFile(path, []byte(req.Content), 0o644); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to write skill file: "+err.Error())
+			return
+		}
+
+		// Also register in the database.
+		id := db.NewID()
+		_, _ = store.ExecContext(r.Context(),
+			`INSERT INTO skills (id, name, kind, source_path, content_hash, enabled, version, risk_level)
+			 VALUES (?, ?, 'instruction', ?, '', 1, '1.0.0', 'Safe')
+			 ON CONFLICT(name) DO UPDATE SET source_path = excluded.source_path`,
+			id, req.Name, path)
+
+		writeJSON(w, http.StatusCreated, map[string]string{
+			"status": "installed",
+			"name":   req.Name,
+			"path":   path,
+		})
 	}
 }
 
-// ActivateSkillFromCatalog activates a catalog skill.
-func ActivateSkillFromCatalog() http.HandlerFunc {
+// ActivateSkillFromCatalog activates a skill by enabling it in the database.
+// Accepts {"name": "skill_name"}.
+func ActivateSkillFromCatalog(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeError(w, http.StatusNotImplemented, "skill catalog activation not yet implemented")
+		var req struct {
+			Name string `json:"name"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		if req.Name == "" {
+			writeError(w, http.StatusBadRequest, "name is required")
+			return
+		}
+
+		result, err := store.ExecContext(r.Context(),
+			`UPDATE skills SET enabled = 1 WHERE name = ?`, req.Name)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		affected, _ := result.RowsAffected()
+		if affected == 0 {
+			writeError(w, http.StatusNotFound, "skill not found: "+req.Name)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "activated", "name": req.Name})
 	}
 }
 
-// InstallPlugin installs a plugin.
-func InstallPlugin() http.HandlerFunc {
+// InstallPlugin installs a plugin by writing its content to the plugins directory.
+// Accepts {"name": "plugin_name", "content": "plugin script content"}.
+func InstallPlugin(cfg *core.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeError(w, http.StatusNotImplemented, "plugin installation not yet implemented")
+		var req struct {
+			Name    string `json:"name"`
+			Content string `json:"content"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		if req.Name == "" || req.Content == "" {
+			writeError(w, http.StatusBadRequest, "name and content are required")
+			return
+		}
+
+		pluginsDir := cfg.Plugins.Dir
+		if pluginsDir == "" {
+			pluginsDir = filepath.Join(core.ConfigDir(), "plugins")
+		}
+
+		pluginDir := filepath.Join(pluginsDir, req.Name)
+		if err := os.MkdirAll(pluginDir, 0o755); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to create plugin directory: "+err.Error())
+			return
+		}
+
+		path := filepath.Join(pluginDir, "main.lua")
+		if err := os.WriteFile(path, []byte(req.Content), 0o644); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to write plugin file: "+err.Error())
+			return
+		}
+
+		writeJSON(w, http.StatusCreated, map[string]string{
+			"status": "installed",
+			"name":   req.Name,
+			"path":   path,
+		})
 	}
 }
 
@@ -241,16 +365,25 @@ func UpdateSkill(store *db.Store) http.HandlerFunc {
 
 		// Build dynamic update.
 		if req.Description != nil {
-			_, _ = store.ExecContext(r.Context(),
-				`UPDATE skills SET description = ? WHERE id = ?`, *req.Description, skillID)
+			if _, err := store.ExecContext(r.Context(),
+				`UPDATE skills SET description = ? WHERE id = ?`, *req.Description, skillID); err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
 		}
 		if req.RiskLevel != nil {
-			_, _ = store.ExecContext(r.Context(),
-				`UPDATE skills SET risk_level = ? WHERE id = ?`, *req.RiskLevel, skillID)
+			if _, err := store.ExecContext(r.Context(),
+				`UPDATE skills SET risk_level = ? WHERE id = ?`, *req.RiskLevel, skillID); err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
 		}
 		if req.Version != nil {
-			_, _ = store.ExecContext(r.Context(),
-				`UPDATE skills SET version = ? WHERE id = ?`, *req.Version, skillID)
+			if _, err := store.ExecContext(r.Context(),
+				`UPDATE skills SET version = ? WHERE id = ?`, *req.Version, skillID); err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "updated", "id": skillID})
 	}

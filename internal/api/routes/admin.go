@@ -3,6 +3,7 @@ package routes
 import (
 	"crypto/subtle"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -121,10 +122,14 @@ func ListSkills(store *db.Store) http.HandlerFunc {
 	}
 }
 
-// ReloadSkills reloads all skills from disk.
-func ReloadSkills() http.HandlerFunc {
+// ReloadSkills reloads all skills from disk using the provided reload callback.
+func ReloadSkills(reload func() error) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeError(w, http.StatusNotImplemented, "skill reload not yet implemented")
+		if err := reload(); err != nil {
+			writeError(w, http.StatusInternalServerError, "reload failed: "+err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "reloaded"})
 	}
 }
 
@@ -157,7 +162,10 @@ func GetCacheStats(store *db.Store) http.HandlerFunc {
 		row := store.QueryRowContext(r.Context(),
 			`SELECT COUNT(*) FROM semantic_cache`)
 		var count int64
-		_ = row.Scan(&count)
+		if err := row.Scan(&count); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]any{"cached_entries": count})
 	}
 }
@@ -189,10 +197,18 @@ func GetAvailableModels(llmSvc *llm.Service) http.HandlerFunc {
 
 // --- Channels ---
 
-// GetChannelsStatus returns channel adapter health.
-func GetChannelsStatus(llmSvc *llm.Service) http.HandlerFunc {
+// GetChannelsStatus returns channel adapter configuration and enabled status.
+func GetChannelsStatus(cfg *core.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeError(w, http.StatusNotImplemented, "channel health checks not yet implemented")
+		channels := map[string]bool{
+			"telegram": cfg.Channels.TelegramTokenEnv != "",
+			"whatsapp": cfg.Channels.WhatsAppTokenEnv != "",
+			"discord":  cfg.Channels.DiscordTokenEnv != "",
+			"signal":   cfg.Channels.SignalDaemonURL != "",
+			"email":    cfg.Channels.EmailFromAddress != "",
+			"matrix":   cfg.Matrix.Enabled,
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"channels": channels})
 	}
 }
 
@@ -234,28 +250,40 @@ func GetDeadLetters(store *db.Store) http.HandlerFunc {
 // --- Config ---
 
 // GetConfigStatus returns the current config application status.
+// Reports the server start time as last_applied, since config is loaded at startup.
 func GetConfigStatus() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"status":       "applied",
-			"last_applied": time.Now().UTC().Format(time.RFC3339),
+			"last_applied": processStartTime.UTC().Format(time.RFC3339),
 		})
 	}
 }
 
 // --- Keystore ---
 
-// KeystoreStatus returns the keystore lock status.
-func KeystoreStatus() http.HandlerFunc {
+// KeystoreStatus returns whether any provider keys are stored in the identity table.
+func KeystoreStatus(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"locked": false})
+		var count int64
+		row := store.QueryRowContext(r.Context(),
+			`SELECT COUNT(*) FROM identity WHERE key LIKE 'provider_key:%'`)
+		if err := row.Scan(&count); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":       "unlocked",
+			"backend":      "sqlite",
+			"stored_keys":  count,
+		})
 	}
 }
 
-// KeystoreUnlock unlocks the keystore.
+// KeystoreUnlock is a no-op success since the SQLite-backed keystore has no lock mechanism.
 func KeystoreUnlock() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "unlocked"})
+		writeJSON(w, http.StatusOK, map[string]string{"status": "unlocked", "backend": "sqlite"})
 	}
 }
 
@@ -304,7 +332,11 @@ func RetireUnusedSubagents(store *db.Store) http.HandlerFunc {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		n, _ := res.RowsAffected()
+		n, err2 := res.RowsAffected()
+		if err2 != nil {
+			writeError(w, http.StatusInternalServerError, err2.Error())
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]any{"retired": n})
 	}
 }
@@ -478,11 +510,15 @@ func CreateSubagent(store *db.Store) http.HandlerFunc {
 		}
 		skillsJSON, _ := json.Marshal(req.Capabilities)
 		id := db.NewID()
-		_, _ = store.ExecContext(r.Context(),
+		_, err := store.ExecContext(r.Context(),
 			`INSERT INTO sub_agents (id, name, model, skills_json, enabled)
 			 VALUES (?, ?, ?, ?, 1)`,
 			id, req.Name, req.Model, string(skillsJSON),
 		)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 		writeJSON(w, http.StatusCreated, map[string]string{"id": id})
 	}
 }
@@ -510,12 +546,60 @@ func IssueWSTicket(issuer ...TicketIssuer) http.HandlerFunc {
 // --- Webhooks ---
 
 // WebhookTelegram handles inbound Telegram webhook messages.
-// Returns 200 to prevent retry storms from Telegram servers, but logs a warning
-// that the adapter is not yet wired. Will be implemented in Phase 2 (channel adapters).
+// Parses the Telegram update format, extracts the message, and dispatches through the pipeline.
 func WebhookTelegram(p pipeline.Runner) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		log.Warn().Str("path", r.URL.Path).Msg("Telegram webhook received but adapter not wired — message dropped")
-		writeJSON(w, http.StatusOK, map[string]string{"status": "dropped", "reason": "adapter not configured"})
+		var update struct {
+			Message *struct {
+				Text string `json:"text"`
+				From *struct {
+					ID       int64  `json:"id"`
+					Username string `json:"username"`
+				} `json:"from"`
+				Chat *struct {
+					ID int64 `json:"id"`
+				} `json:"chat"`
+			} `json:"message"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&update); err != nil {
+			log.Warn().Err(err).Msg("telegram webhook: invalid JSON body")
+			writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+			return
+		}
+		if update.Message == nil || update.Message.Text == "" {
+			// Non-text update (sticker, photo, etc.) — acknowledge without processing.
+			writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "note": "non-text update ignored"})
+			return
+		}
+
+		senderID := ""
+		if update.Message.From != nil {
+			senderID = fmt.Sprintf("%d", update.Message.From.ID)
+		}
+		chatID := ""
+		if update.Message.Chat != nil {
+			chatID = fmt.Sprintf("%d", update.Message.Chat.ID)
+		}
+
+		input := pipeline.Input{
+			Content:  update.Message.Text,
+			Platform: "telegram",
+			SenderID: senderID,
+			ChatID:   chatID,
+		}
+
+		outcome, err := pipeline.RunPipeline(r.Context(), p, pipeline.PresetChannel("telegram"), input)
+		if err != nil {
+			log.Error().Err(err).Str("platform", "telegram").Msg("pipeline error on webhook")
+			writeJSON(w, http.StatusOK, map[string]string{"status": "error", "detail": err.Error()})
+			return
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":     "processed",
+			"session_id": outcome.SessionID,
+			"response":   outcome.Content,
+		})
 	}
 }
 
@@ -542,12 +626,64 @@ func WebhookWhatsAppVerify(verifyToken string) http.HandlerFunc {
 	}
 }
 
-// WebhookWhatsApp handles inbound WhatsApp messages.
-// Returns 200 to prevent retry storms from Meta servers, but logs a warning
-// that the adapter is not yet wired. Will be implemented in Phase 2 (channel adapters).
+// WebhookWhatsApp handles inbound WhatsApp messages from the Meta webhook API.
+// Parses the Cloud API webhook format and dispatches messages through the pipeline.
 func WebhookWhatsApp(p pipeline.Runner) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		log.Warn().Str("path", r.URL.Path).Msg("WhatsApp webhook received but adapter not wired — message dropped")
-		writeJSON(w, http.StatusOK, map[string]string{"status": "dropped", "reason": "adapter not configured"})
+		var payload struct {
+			Entry []struct {
+				Changes []struct {
+					Value struct {
+						Messages []struct {
+							From string `json:"from"`
+							Text *struct {
+								Body string `json:"body"`
+							} `json:"text"`
+							Type string `json:"type"`
+						} `json:"messages"`
+						Metadata struct {
+							PhoneNumberID string `json:"phone_number_id"`
+						} `json:"metadata"`
+					} `json:"value"`
+				} `json:"changes"`
+			} `json:"entry"`
+		}
+
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			log.Warn().Err(err).Msg("whatsapp webhook: invalid JSON body")
+			writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+			return
+		}
+
+		// Walk the nested structure to find text messages.
+		processed := 0
+		for _, entry := range payload.Entry {
+			for _, change := range entry.Changes {
+				for _, msg := range change.Value.Messages {
+					if msg.Type != "text" || msg.Text == nil || msg.Text.Body == "" {
+						continue
+					}
+
+					input := pipeline.Input{
+						Content:  msg.Text.Body,
+						Platform: "whatsapp",
+						SenderID: msg.From,
+						ChatID:   change.Value.Metadata.PhoneNumberID,
+					}
+
+					_, err := pipeline.RunPipeline(r.Context(), p, pipeline.PresetChannel("whatsapp"), input)
+					if err != nil {
+						log.Error().Err(err).Str("platform", "whatsapp").Str("from", msg.From).Msg("pipeline error on webhook")
+					} else {
+						processed++
+					}
+				}
+			}
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":    "ok",
+			"processed": processed,
+		})
 	}
 }

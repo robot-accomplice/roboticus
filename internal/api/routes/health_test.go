@@ -6,6 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
+
+	"goboticus/internal/core"
 	"goboticus/testutil"
 )
 
@@ -76,13 +79,20 @@ func TestGetCapabilities(t *testing.T) {
 }
 
 func TestReloadSkills(t *testing.T) {
-	handler := ReloadSkills()
+	called := false
+	handler := ReloadSkills(func() error {
+		called = true
+		return nil
+	})
 	req := httptest.NewRequest("POST", "/api/skills/reload", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusNotImplemented {
-		t.Errorf("status = %d, want 501", rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", rec.Code)
+	}
+	if !called {
+		t.Error("reload callback was not called")
 	}
 }
 
@@ -127,20 +137,34 @@ func TestGetSkillsCatalog(t *testing.T) {
 }
 
 func TestTestChannel(t *testing.T) {
-	handler := TestChannel()
+	cfg := core.DefaultConfig()
+	cfg.Channels.TelegramTokenEnv = "TELEGRAM_TOKEN"
+	handler := TestChannel(&cfg)
+
+	// Use chi router to set URL param.
+	r := chi.NewRouter()
+	r.Post("/api/channels/{name}/test", handler)
+
 	req := httptest.NewRequest("POST", "/api/channels/telegram/test", nil)
 	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
+	r.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusNotImplemented {
-		t.Errorf("status = %d, want 501", rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", rec.Code)
+	}
+	body := jsonBody(t, rec)
+	if body["platform"] != "telegram" {
+		t.Errorf("platform = %v, want telegram", body["platform"])
+	}
+	if body["configured"] != true {
+		t.Errorf("configured = %v, want true", body["configured"])
 	}
 }
 
 func TestSetProviderKey(t *testing.T) {
 	store := testutil.TempStore(t)
 	handler := SetProviderKey(store)
-	req := httptest.NewRequest("PUT", "/api/providers/openai/key", nil)
+	req := httptest.NewRequest("PUT", "/api/providers/openai/key", strings.NewReader(`{"key":"sk-test"}`))
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -151,13 +175,21 @@ func TestSetProviderKey(t *testing.T) {
 
 func TestUpdateConfig(t *testing.T) {
 	store := testutil.TempStore(t)
+	// Use a temp dir for config file to avoid writing to real home dir.
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+
 	handler := UpdateConfig(store)
 	req := httptest.NewRequest("PUT", "/api/config", strings.NewReader(`{"key":"value"}`))
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
-		t.Errorf("status = %d", rec.Code)
+		t.Errorf("status = %d, want 200, body = %s", rec.Code, rec.Body.String())
+	}
+	body := jsonBody(t, rec)
+	if body["status"] != "patched" {
+		t.Errorf("status = %v, want patched", body["status"])
 	}
 }
 

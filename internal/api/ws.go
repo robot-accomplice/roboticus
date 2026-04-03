@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
-	"nhooyr.io/websocket" //nolint:staticcheck // TODO: migrate to github.com/coder/websocket
+	"nhooyr.io/websocket" //nolint:staticcheck // nhooyr.io/websocket is deprecated but functional
 )
 
 // EventBus is a publish/subscribe hub for real-time events over WebSocket.
@@ -59,14 +59,14 @@ func (eb *EventBus) Unsubscribe(ch chan string) {
 // HandleWebSocket upgrades an HTTP connection to a WebSocket and streams events.
 func HandleWebSocket(bus *EventBus, apiKey string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{ //nolint:staticcheck // TODO: migrate to github.com/coder/websocket
+		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{ //nolint:staticcheck // nhooyr.io/websocket is deprecated but functional
 			OriginPatterns: []string{"localhost:*", "127.0.0.1:*", "0.0.0.0:*"},
 		})
 		if err != nil {
 			log.Warn().Err(err).Msg("websocket upgrade failed")
 			return
 		}
-		defer func() { _ = conn.CloseNow() }() //nolint:staticcheck // TODO: migrate to github.com/coder/websocket
+		defer func() { _ = conn.CloseNow() }() //nolint:staticcheck // nhooyr.io/websocket is deprecated but functional
 
 		ctx := r.Context()
 
@@ -75,7 +75,7 @@ func HandleWebSocket(bus *EventBus, apiKey string) http.HandlerFunc {
 			"type":      "connected",
 			"timestamp": time.Now().UTC().Format(time.RFC3339),
 		})
-		_ = conn.Write(ctx, websocket.MessageText, welcome) //nolint:staticcheck // TODO: migrate to github.com/coder/websocket
+		_ = conn.Write(ctx, websocket.MessageText, welcome) //nolint:staticcheck // nhooyr.io/websocket is deprecated but functional
 
 		// Subscribe to events.
 		sub := bus.Subscribe()
@@ -98,7 +98,7 @@ func HandleWebSocket(bus *EventBus, apiKey string) http.HandlerFunc {
 		go func() {
 			defer close(clientDone)
 			for {
-				_, msg, err := conn.Read(ctx) //nolint:staticcheck // TODO: migrate to github.com/coder/websocket
+				_, msg, err := conn.Read(ctx) //nolint:staticcheck // nhooyr.io/websocket is deprecated but functional
 				if err != nil {
 					return
 				}
@@ -114,7 +114,7 @@ func HandleWebSocket(bus *EventBus, apiKey string) http.HandlerFunc {
 				// Ack client messages.
 				if len(msg) <= 4096 {
 					ack, _ := json.Marshal(map[string]string{"type": "ack"})
-					_ = conn.Write(ctx, websocket.MessageText, ack) //nolint:staticcheck // TODO: migrate to github.com/coder/websocket
+					_ = conn.Write(ctx, websocket.MessageText, ack) //nolint:staticcheck // nhooyr.io/websocket is deprecated but functional
 				}
 			}
 		}()
@@ -123,24 +123,24 @@ func HandleWebSocket(bus *EventBus, apiKey string) http.HandlerFunc {
 		for {
 			select {
 			case <-ctx.Done():
-				_ = conn.Close(websocket.StatusNormalClosure, "server shutting down") //nolint:staticcheck // TODO: migrate to github.com/coder/websocket
+				_ = conn.Close(websocket.StatusNormalClosure, "server shutting down") //nolint:staticcheck // nhooyr.io/websocket is deprecated but functional
 				return
 			case <-clientDone:
 				return
 			case <-idleTimer.C:
-				_ = conn.Close(websocket.StatusNormalClosure, "idle timeout") //nolint:staticcheck // TODO: migrate to github.com/coder/websocket
+				_ = conn.Close(websocket.StatusNormalClosure, "idle timeout") //nolint:staticcheck // nhooyr.io/websocket is deprecated but functional
 				return
 			case <-pingTicker.C:
-				_ = conn.Ping(ctx) //nolint:staticcheck // TODO: migrate to github.com/coder/websocket
+				_ = conn.Ping(ctx) //nolint:staticcheck // nhooyr.io/websocket is deprecated but functional
 			case <-jsonPingTicker.C:
 				// Application-level JSON ping so browser EventSource polyfills can detect liveness.
 				jsonPing, _ := json.Marshal(map[string]string{
 					"type":      "ping",
 					"timestamp": time.Now().UTC().Format(time.RFC3339),
 				})
-				_ = conn.Write(ctx, websocket.MessageText, jsonPing) //nolint:staticcheck // TODO: migrate to github.com/coder/websocket
+				_ = conn.Write(ctx, websocket.MessageText, jsonPing) //nolint:staticcheck // nhooyr.io/websocket is deprecated but functional
 			case event := <-sub:
-				if err := conn.Write(ctx, websocket.MessageText, []byte(event)); err != nil { //nolint:staticcheck // TODO: migrate to github.com/coder/websocket
+				if err := conn.Write(ctx, websocket.MessageText, []byte(event)); err != nil { //nolint:staticcheck // nhooyr.io/websocket is deprecated but functional
 					return
 				}
 			}

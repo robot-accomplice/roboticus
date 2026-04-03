@@ -2,18 +2,17 @@ package wallet
 
 import "testing"
 
-func TestMustDecodeHex(t *testing.T) {
-	// Valid hex.
-	result := mustDecodeHex("48656c6c6f")
-	if string(result) != "Hello" {
-		t.Errorf("decoded = %q", string(result))
+func TestAaveSupplySelector(t *testing.T) {
+	want := []byte{0x61, 0x7b, 0xa0, 0x37}
+	if string(aaveSupplySelector) != string(want) {
+		t.Fatalf("selector = %x, want %x", aaveSupplySelector, want)
 	}
 }
 
-func TestMustDecodeHex_Empty(t *testing.T) {
-	result := mustDecodeHex("")
-	if len(result) != 0 {
-		t.Errorf("empty hex should decode to empty, got %d bytes", len(result))
+func TestERC20BalanceOfSelector(t *testing.T) {
+	want := []byte{0x70, 0xa0, 0x82, 0x31}
+	if string(erc20BalanceOfSelector) != string(want) {
+		t.Fatalf("selector = %x, want %x", erc20BalanceOfSelector, want)
 	}
 }
 

@@ -354,8 +354,8 @@ func TestLiveSmokeTest(t *testing.T) {
 	// --- 15. Channels ---
 	t.Run("channels-status", func(t *testing.T) {
 		resp := get(t, client, base+"/api/channels/status")
-		assertStatus(t, resp, 501) // not yet implemented
-		t.Log("PASS: channels status (501 — not yet implemented)")
+		assertStatus(t, resp, 200)
+		t.Log("PASS: channels status")
 	})
 	t.Run("dead-letters", func(t *testing.T) {
 		resp := get(t, client, base+"/api/channels/dead-letter")
@@ -648,8 +648,8 @@ func TestLiveSmokeTest(t *testing.T) {
 
 	t.Run("ws-ticket", func(t *testing.T) {
 		resp := post(t, client, base+"/api/ws-ticket", map[string]any{})
-		assertStatus(t, resp, 501) // ticket store not wired in smoke test daemon
-		t.Log("PASS: ws-ticket (501 — ticket store not wired)")
+		assertStatus(t, resp, 200)
+		t.Log("PASS: ws-ticket")
 	})
 
 	t.Run("plugin-tools", func(t *testing.T) {

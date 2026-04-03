@@ -113,7 +113,7 @@ func (w *Wallet) generateAndSave() error {
 		return err
 	}
 
-	keyBytes := w.privateKey.D.Bytes() //nolint:staticcheck // TODO: migrate to modern crypto API
+	keyBytes := w.privateKey.D.Bytes() //nolint:staticcheck // deprecated elliptic.Curve API; functional for secp256k1
 	var data []byte
 
 	if w.cfg.Passphrase != "" {
@@ -146,9 +146,9 @@ func (w *Wallet) generate() error {
 func (w *Wallet) fromBytes(keyBytes []byte) error {
 	// Construct ECDSA private key on secp256k1 curve.
 	privKey := new(ecdsa.PrivateKey)
-	privKey.D = new(big.Int).SetBytes(keyBytes)                                                 //nolint:staticcheck // TODO: migrate to modern crypto API
-	privKey.PublicKey.Curve = secp256k1Curve()                                                  //nolint:staticcheck // TODO: migrate to modern crypto API
-	privKey.PublicKey.X, privKey.PublicKey.Y = privKey.PublicKey.Curve.ScalarBaseMult(keyBytes) //nolint:staticcheck // TODO: migrate to modern crypto API
+	privKey.D = new(big.Int).SetBytes(keyBytes)                                                 //nolint:staticcheck // deprecated elliptic.Curve API; functional for secp256k1
+	privKey.PublicKey.Curve = secp256k1Curve()                                                  //nolint:staticcheck // deprecated elliptic.Curve API; functional for secp256k1
+	privKey.PublicKey.X, privKey.PublicKey.Y = privKey.PublicKey.Curve.ScalarBaseMult(keyBytes) //nolint:staticcheck // deprecated elliptic.Curve API; functional for secp256k1
 
 	w.privateKey = privKey
 	w.address = pubKeyToAddress(&privKey.PublicKey)
