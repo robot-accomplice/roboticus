@@ -11,6 +11,10 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// oPath is O_PATH (0x200000), needed for Landlock path-beneath rules.
+// Not exported by Go's syscall package; defined in Linux kernel since 2.6.39.
+const oPath = 0x200000
+
 // Landlock syscall numbers (ABI v1, kernel 5.13+).
 const (
 	sysLandlockCreateRuleset = 444
@@ -150,7 +154,7 @@ func ApplyLandlock(workspace string, allowedPaths []string) error {
 }
 
 func addPathRule(rulesetFd int, path string, access uint64) error {
-	fd, err := syscall.Open(path, syscall.O_PATH|syscall.O_CLOEXEC, 0)
+	fd, err := syscall.Open(path, oPath|syscall.O_CLOEXEC, 0)
 	if err != nil {
 		return fmt.Errorf("open %s: %w", path, err)
 	}
