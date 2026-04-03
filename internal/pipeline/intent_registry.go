@@ -46,7 +46,7 @@ func (ir *IntentRegistry) AddClassifier(c IntentClassifier) {
 
 // Classify returns the highest-confidence intent across all classifiers.
 func (ir *IntentRegistry) Classify(content string) (Intent, float64) {
-	var bestIntent Intent = IntentChat
+	bestIntent := IntentChat
 	var bestConf float64
 
 	for _, c := range ir.classifiers {

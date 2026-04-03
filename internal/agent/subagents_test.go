@@ -26,7 +26,7 @@ func TestSubagentManager_RegisterAndList(t *testing.T) {
 
 func TestSubagentManager_DuplicateRegister(t *testing.T) {
 	mgr := NewSubagentManager(4, nil)
-	mgr.Register("sub-1", AgentInstanceConfig{Name: "worker"})
+	_ = mgr.Register("sub-1", AgentInstanceConfig{Name: "worker"})
 
 	err := mgr.Register("sub-1", AgentInstanceConfig{Name: "duplicate"})
 	if err == nil {
@@ -36,7 +36,7 @@ func TestSubagentManager_DuplicateRegister(t *testing.T) {
 
 func TestSubagentManager_Lifecycle(t *testing.T) {
 	mgr := NewSubagentManager(4, nil)
-	mgr.Register("sub-1", AgentInstanceConfig{Name: "worker"})
+	_ = mgr.Register("sub-1", AgentInstanceConfig{Name: "worker"})
 
 	if err := mgr.Start("sub-1"); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -70,10 +70,10 @@ func TestSubagentManager_SlotExhaustion(t *testing.T) {
 	mgr := NewSubagentManager(2, nil) // only 2 slots
 
 	// Fill both slots
-	mgr.Register("sub-1", AgentInstanceConfig{Name: "w1"})
-	mgr.Register("sub-2", AgentInstanceConfig{Name: "w2"})
-	mgr.Start("sub-1")
-	mgr.Start("sub-2")
+	_ = mgr.Register("sub-1", AgentInstanceConfig{Name: "w1"})
+	_ = mgr.Register("sub-2", AgentInstanceConfig{Name: "w2"})
+	_ = mgr.Start("sub-1")
+	_ = mgr.Start("sub-2")
 
 	if mgr.RunningCount() != 2 {
 		t.Fatalf("running = %d, want 2", mgr.RunningCount())
@@ -99,9 +99,9 @@ func TestSubagentManager_ConcurrentAccess(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			name := fmt.Sprintf("sub-%d", id)
-			mgr.Register(name, AgentInstanceConfig{Name: name})
-			mgr.Start(name)
-			mgr.Stop(name)
+			_ = mgr.Register(name, AgentInstanceConfig{Name: name})
+			_ = mgr.Start(name)
+			_ = mgr.Stop(name)
 			mgr.Unregister(name)
 		}(i)
 	}
@@ -127,8 +127,8 @@ func TestSubagentManager_Allowlist(t *testing.T) {
 
 func TestSubagentManager_MarkError(t *testing.T) {
 	mgr := NewSubagentManager(4, nil)
-	mgr.Register("sub-1", AgentInstanceConfig{Name: "worker"})
-	mgr.Start("sub-1")
+	_ = mgr.Register("sub-1", AgentInstanceConfig{Name: "worker"})
+	_ = mgr.Start("sub-1")
 
 	mgr.MarkError("sub-1", "connection lost")
 

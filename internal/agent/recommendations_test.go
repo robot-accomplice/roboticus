@@ -98,7 +98,7 @@ func TestRecommendationEngine_EmptyInput(t *testing.T) {
 	re := NewRecommendationEngine(0.5)
 	recs := re.Suggest("", nil, nil)
 	if recs == nil {
-		// nil is fine for empty input with no matches
+		_ = recs
 	}
 	// Should not panic and should return empty or nil
 	_ = recs

@@ -72,9 +72,10 @@ func TestSpeculativeExecutor_TimeoutHandling(t *testing.T) {
 	// slow branch should have an error (context cancelled/timeout)
 	var slowResult, fastResult *BranchResult
 	for i := range results {
-		if results[i].Name == "slow-branch" {
+		switch results[i].Name {
+		case "slow-branch":
 			slowResult = &results[i]
-		} else if results[i].Name == "fast-branch" {
+		case "fast-branch":
 			fastResult = &results[i]
 		}
 	}

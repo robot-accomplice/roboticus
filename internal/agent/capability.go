@@ -70,7 +70,7 @@ func (cr *CapabilityRegistry) DiscoverForPrompt(budget int) string {
 	var b strings.Builder
 
 	total := len(cr.tools) + len(cr.skills) + len(cr.plugins) + len(cr.mcp)
-	b.WriteString(fmt.Sprintf("You have %d capabilities available:\n", total))
+	fmt.Fprintf(&b, "You have %d capabilities available:\n", total)
 
 	remaining := budget * 4 // chars (4 chars/token heuristic)
 	remaining -= b.Len()
@@ -83,10 +83,10 @@ func (cr *CapabilityRegistry) DiscoverForPrompt(budget int) string {
 		b.WriteString(header)
 		remaining -= len(header)
 
-		for _, c := range caps {
+		for i, c := range caps {
 			line := fmt.Sprintf("- %s: %s\n", c.Name, c.Description)
 			if remaining-len(line) < 0 {
-				b.WriteString(fmt.Sprintf("- ... and %d more\n", len(caps)-len(caps)))
+				fmt.Fprintf(&b, "- ... and %d more\n", len(caps)-i)
 				break
 			}
 			b.WriteString(line)

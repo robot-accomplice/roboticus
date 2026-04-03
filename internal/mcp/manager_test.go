@@ -1,6 +1,9 @@
 package mcp
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 func TestConnectionManager_Statuses_Empty(t *testing.T) {
 	mgr := NewConnectionManager()
@@ -33,7 +36,7 @@ func TestConnectionManager_CloseAll_Empty(t *testing.T) {
 
 func TestConnectionManager_Connect_UnsupportedTransport(t *testing.T) {
 	mgr := NewConnectionManager()
-	err := mgr.Connect(nil, McpServerConfig{
+	err := mgr.Connect(context.TODO(), McpServerConfig{
 		Name:      "test",
 		Transport: "invalid",
 	})

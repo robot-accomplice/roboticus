@@ -8,6 +8,16 @@ import (
 	"goboticus/internal/pipeline"
 )
 
+var (
+	_ pipeline.InjectionChecker = (*mockInjectionChecker)(nil)
+	_ pipeline.MemoryRetriever  = (*mockMemoryRetriever)(nil)
+	_ pipeline.SkillMatcher     = (*mockSkillMatcher)(nil)
+	_ pipeline.ToolExecutor     = (*mockToolExecutor)(nil)
+	_ pipeline.Ingestor         = (*mockIngestor)(nil)
+	_ pipeline.NicknameRefiner  = (*mockNicknameRefiner)(nil)
+	_ pipeline.StreamPreparer   = (*mockStreamPreparer)(nil)
+)
+
 // mockInjectionChecker is a test double for pipeline.InjectionChecker.
 type mockInjectionChecker struct {
 	CheckInputFunc func(string) core.ThreatScore

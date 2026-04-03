@@ -53,7 +53,7 @@ func TestApplyFullWithContext_NilContext(t *testing.T) {
 	result := chain.ApplyFullWithContext("Let me delegate this.", nil)
 	// With nil context, contextual guard falls back to basic Check which passes.
 	if !result.RetryRequested {
-		// SubagentClaimGuard.Check() returns Passed:true, so no retry.
+		_ = result
 	}
 }
 

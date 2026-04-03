@@ -24,13 +24,13 @@ var profileListCmd = &cobra.Command{
 		profiles := reg.List()
 
 		tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(tw, "NAME\tACTIVE\tSOURCE\tDESCRIPTION")
+		_, _ = fmt.Fprintln(tw, "NAME\tACTIVE\tSOURCE\tDESCRIPTION")
 		for _, p := range profiles {
 			active := ""
 			if p.Active {
 				active = "*"
 			}
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", p.Name, active, p.Source, p.Description)
+			_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", p.Name, active, p.Source, p.Description)
 		}
 		return tw.Flush()
 	},

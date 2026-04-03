@@ -36,9 +36,9 @@ func TestTasksRepository_Subtasks(t *testing.T) {
 	repo := NewTasksRepository(store)
 	ctx := context.Background()
 
-	repo.Create(ctx, TaskRow{ID: "parent", Phase: "executing", Goal: "parent"})
-	repo.Create(ctx, TaskRow{ID: "child1", Phase: "pending", ParentID: "parent", Goal: "child 1"})
-	repo.Create(ctx, TaskRow{ID: "child2", Phase: "pending", ParentID: "parent", Goal: "child 2"})
+	_ = repo.Create(ctx, TaskRow{ID: "parent", Phase: "executing", Goal: "parent"})
+	_ = repo.Create(ctx, TaskRow{ID: "child1", Phase: "pending", ParentID: "parent", Goal: "child 1"})
+	_ = repo.Create(ctx, TaskRow{ID: "child2", Phase: "pending", ParentID: "parent", Goal: "child 2"})
 
 	subs, err := repo.ListSubtasks(ctx, "parent")
 	if err != nil {

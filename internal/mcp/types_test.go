@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 )
@@ -74,7 +75,7 @@ func TestToolCallResult_Fields(t *testing.T) {
 
 func TestConnectionManager_CallTool_NoServer(t *testing.T) {
 	mgr := NewConnectionManager()
-	_, err := mgr.CallTool(nil, "nonexistent", "tool", nil)
+	_, err := mgr.CallTool(context.TODO(), "nonexistent", "tool", nil)
 	if err == nil {
 		t.Error("should error for missing server")
 	}

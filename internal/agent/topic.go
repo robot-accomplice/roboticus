@@ -33,8 +33,8 @@ func DetectTopic(messages []string) TopicResult {
 		TopicResearch:  countKeywords(combined, []string{"research", "analyze", "compare", "study", "data", "report", "survey", "findings"}),
 	}
 
-	var primary TopicCategory = TopicGeneral
-	var secondary TopicCategory = TopicGeneral
+	primary := TopicGeneral
+	secondary := TopicGeneral
 	bestScore := 0
 	secondScore := 0
 	for cat, score := range scores {

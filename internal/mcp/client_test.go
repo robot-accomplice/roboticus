@@ -17,7 +17,7 @@ func TestJsonRPCRequest_Marshal(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 	var parsed map[string]any
-	json.Unmarshal(data, &parsed)
+	_ = json.Unmarshal(data, &parsed)
 	if parsed["jsonrpc"] != "2.0" {
 		t.Errorf("jsonrpc = %v", parsed["jsonrpc"])
 	}
@@ -46,7 +46,7 @@ func TestJsonRPCResponse_Unmarshal(t *testing.T) {
 func TestJsonRPCResponse_Error(t *testing.T) {
 	data := `{"jsonrpc":"2.0","id":1,"error":{"code":-32600,"message":"Invalid Request"}}`
 	var resp jsonRPCResponse
-	json.Unmarshal([]byte(data), &resp)
+	_ = json.Unmarshal([]byte(data), &resp)
 	if resp.Error == nil {
 		t.Fatal("should have error")
 	}
@@ -69,7 +69,7 @@ func TestToolDescriptor_JSON(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 	var parsed ToolDescriptor
-	json.Unmarshal(data, &parsed)
+	_ = json.Unmarshal(data, &parsed)
 	if parsed.Name != "read_file" {
 		t.Errorf("name = %s", parsed.Name)
 	}

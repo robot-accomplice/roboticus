@@ -20,7 +20,7 @@ func TestWasmRuntime_Register(t *testing.T) {
 func TestWasmRuntime_DuplicateRegister(t *testing.T) {
 	wr := NewWasmRuntime()
 	cfg := DefaultWasmConfig("test", "/tmp/test.wasm")
-	wr.Register(cfg)
+	_ = wr.Register(cfg)
 
 	err := wr.Register(cfg)
 	if err == nil {
@@ -38,7 +38,7 @@ func TestWasmRuntime_EmptyName(t *testing.T) {
 
 func TestWasmRuntime_LoadNonexistent(t *testing.T) {
 	wr := NewWasmRuntime()
-	wr.Register(DefaultWasmConfig("test", "/nonexistent/path.wasm"))
+	_ = wr.Register(DefaultWasmConfig("test", "/nonexistent/path.wasm"))
 
 	err := wr.Load("test")
 	if err == nil {
@@ -48,7 +48,7 @@ func TestWasmRuntime_LoadNonexistent(t *testing.T) {
 
 func TestWasmRuntime_ExecuteNotLoaded(t *testing.T) {
 	wr := NewWasmRuntime()
-	wr.Register(DefaultWasmConfig("test", "/tmp/test.wasm"))
+	_ = wr.Register(DefaultWasmConfig("test", "/tmp/test.wasm"))
 
 	_, err := wr.Execute(context.Background(), "test", nil)
 	if err == nil {

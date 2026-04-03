@@ -34,7 +34,7 @@ func TestDelegationRepository_UpdateOutcome(t *testing.T) {
 	repo := NewDelegationRepository(store)
 	ctx := context.Background()
 
-	repo.Save(ctx, DelegationRow{ID: "d1", ParentTaskID: "task1", SubagentID: "a1", Status: "pending"})
+	_ = repo.Save(ctx, DelegationRow{ID: "d1", ParentTaskID: "task1", SubagentID: "a1", Status: "pending"})
 
 	if err := repo.UpdateOutcome(ctx, "d1", "complete", "success", "", 1500); err != nil {
 		t.Fatalf("UpdateOutcome: %v", err)

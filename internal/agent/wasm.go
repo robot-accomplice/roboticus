@@ -148,7 +148,7 @@ func (wr *WasmRuntime) Execute(ctx context.Context, name string, input map[strin
 	}
 
 	rt := wazero.NewRuntimeWithConfig(execCtx, rtConfig)
-	defer rt.Close(execCtx)
+	defer func() { _ = rt.Close(execCtx) }()
 
 	// Instantiate WASI for basic I/O.
 	wasi_snapshot_preview1.MustInstantiate(execCtx, rt)

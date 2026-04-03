@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -38,7 +37,6 @@ type MatrixAdapter struct {
 	client    core.HTTPDoer
 	userID    string
 	syncToken string
-	mu        sync.Mutex
 	inbound   chan InboundMessage
 }
 

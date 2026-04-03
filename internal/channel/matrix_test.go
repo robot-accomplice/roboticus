@@ -18,8 +18,8 @@ func TestMatrixAdapter_PlatformName(t *testing.T) {
 func TestMatrixAdapter_Send(t *testing.T) {
 	var sentBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewDecoder(r.Body).Decode(&sentBody)
-		json.NewEncoder(w).Encode(map[string]string{"event_id": "$test"})
+		_ = json.NewDecoder(r.Body).Decode(&sentBody)
+		_ = json.NewEncoder(w).Encode(map[string]string{"event_id": "$test"})
 	}))
 	defer server.Close()
 
@@ -49,7 +49,7 @@ func TestMatrixAdapter_Send(t *testing.T) {
 func TestMatrixAdapter_Whoami(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/_matrix/client/v3/account/whoami" {
-			json.NewEncoder(w).Encode(map[string]string{"user_id": "@bot:example.com"})
+			_ = json.NewEncoder(w).Encode(map[string]string{"user_id": "@bot:example.com"})
 			return
 		}
 		http.NotFound(w, r)
@@ -91,7 +91,7 @@ func TestMatrixAdapter_SyncOnce(t *testing.T) {
 				},
 			},
 		}
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 

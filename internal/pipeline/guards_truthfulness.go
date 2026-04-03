@@ -106,7 +106,7 @@ func (g *ExecutionTruthGuard) CheckWithContext(content string, ctx *GuardContext
 				var summary strings.Builder
 				summary.WriteString("Here are the results from the tools I executed:\n\n")
 				for _, tr := range ctx.ToolResults {
-					summary.WriteString(fmt.Sprintf("**%s**: %s\n", tr.ToolName, truncate(tr.Output, 500)))
+					fmt.Fprintf(&summary, "**%s**: %s\n", tr.ToolName, truncate(tr.Output, 500))
 				}
 				return GuardResult{Passed: false, Content: summary.String()}
 			}

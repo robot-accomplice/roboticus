@@ -117,7 +117,7 @@ func ApplyLandlock(workspace string, allowedPaths []string) error {
 		return fmt.Errorf("landlock: create_ruleset: %v", errno)
 	}
 	rulesetFd := int(fd)
-	defer syscall.Close(rulesetFd)
+	defer func() { _ = syscall.Close(rulesetFd) }()
 
 	// Step 3: Add rules.
 	// Root: read-only.
@@ -158,7 +158,7 @@ func addPathRule(rulesetFd int, path string, access uint64) error {
 	if err != nil {
 		return fmt.Errorf("open %s: %w", path, err)
 	}
-	defer syscall.Close(fd)
+	defer func() { _ = syscall.Close(fd) }()
 
 	rule := landlockPathBeneathAttr{
 		allowedAccess: access,
