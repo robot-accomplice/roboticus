@@ -106,6 +106,8 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 		r.Get("/api/sessions/{id}/turns", routes.ListSessionTurns(state.Store))
 		r.Get("/api/sessions/{id}/feedback", routes.GetSessionFeedback(state.Store))
 		r.Get("/api/sessions/{id}/insights", routes.GetSessionInsights(state.Store))
+		r.Post("/api/sessions/{id}/archive", routes.ArchiveSession(state.Store))
+		r.Post("/api/sessions/{id}/analyze", routes.AnalyzeSession(state.Store))
 
 		// Turns.
 		r.Get("/api/turns/{id}", routes.GetTurn(state.Store))
@@ -125,6 +127,7 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 		r.Get("/api/memory/semantic/categories", routes.GetSemanticCategories(state.Store))
 		r.Get("/api/memory/search", routes.SearchMemory(state.Store))
 		r.Get("/api/stats/memory-analytics", routes.GetMemoryAnalytics(state.Store))
+		r.Get("/api/memory/health", routes.MemoryHealth(state.Store))
 
 		// Cron.
 		r.Get("/api/cron/jobs", routes.ListCronJobs(state.Store))
@@ -143,6 +146,9 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 		r.Get("/api/skills/catalog", routes.GetSkillsCatalog())
 		r.Post("/api/skills/catalog/install", routes.InstallSkillFromCatalog())
 		r.Post("/api/skills/catalog/activate", routes.ActivateSkillFromCatalog())
+		r.Get("/api/skills/audit", routes.AuditSkills(state.Store))
+		r.Get("/api/skills/{id}", routes.GetSkill(state.Store))
+		r.Put("/api/skills/{id}", routes.UpdateSkill(state.Store))
 
 		// Plugins.
 		r.Get("/api/plugins", routes.ListPlugins(state.Plugins))
@@ -150,6 +156,7 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 		r.Post("/api/plugins/{name}/enable", routes.EnablePlugin(state.Plugins))
 		r.Post("/api/plugins/{name}/disable", routes.DisablePlugin(state.Plugins))
 		r.Post("/api/plugins/catalog/install", routes.InstallPlugin())
+		r.Post("/api/plugins/{name}/execute/{tool}", routes.ExecutePluginTool(state.Plugins))
 
 		// Stats.
 		r.Get("/api/stats/costs", routes.GetCosts(state.Store))
@@ -175,17 +182,33 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 		r.Get("/api/channels/status", routes.GetChannelsStatus(state.LLM))
 		r.Get("/api/channels/dead-letter", routes.GetDeadLetters(state.Store))
 		r.Post("/api/channels/{name}/test", routes.TestChannel())
+		r.Post("/api/channels/dead-letter/{id}/replay", routes.ReplayDeadLetter(state.Store))
 
 		// Config.
 		r.Get("/api/config", routes.GetConfig(state.Config))
 		r.Put("/api/config", routes.UpdateConfig(state.Store))
 		r.Get("/api/config/capabilities", routes.GetCapabilities())
+		r.Get("/api/config/raw", routes.GetConfigRaw())
+		r.Put("/api/config/raw", routes.UpdateConfigRaw())
 
 		// Wallet.
 		r.Get("/api/wallet/balance", routes.GetWalletBalance(state.Store))
 		r.Get("/api/wallet/address", routes.GetWalletAddress(state.Store))
 		r.Get("/api/services/swaps", routes.GetSwaps(state.Store))
 		r.Get("/api/services/tax-payouts", routes.GetTaxPayouts(state.Store))
+
+		// Revenue / Services.
+		r.Get("/api/services/catalog", routes.ListServiceCatalog(state.Store))
+		r.Get("/api/services/requests", routes.ListServiceRequests(state.Store))
+		r.Get("/api/services/requests/{id}", routes.GetServiceRequest(state.Store))
+		r.Get("/api/services/opportunities", routes.ListRevenueOpportunities(state.Store))
+		r.Post("/api/services/opportunities/intake", routes.IntakeRevenueOpportunity(state.Store))
+		r.Get("/api/services/opportunities/{id}", routes.GetRevenueOpportunity(state.Store))
+		r.Post("/api/services/opportunities/{id}/score", routes.TransitionOpportunity(state.Store, "scored"))
+		r.Post("/api/services/opportunities/{id}/qualify", routes.TransitionOpportunity(state.Store, "qualified"))
+		r.Post("/api/services/opportunities/{id}/plan", routes.TransitionOpportunity(state.Store, "planned"))
+		r.Post("/api/services/opportunities/{id}/fulfill", routes.TransitionOpportunity(state.Store, "fulfilled"))
+		r.Post("/api/services/opportunities/{id}/settle", routes.TransitionOpportunity(state.Store, "settled"))
 
 		// Roster (agents page).
 		r.Get("/api/roster", routes.GetRoster(state.Store))
@@ -227,6 +250,7 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 		// Circuit breaker admin.
 		r.Get("/api/breaker/status", routes.BreakerStatus(state.LLM))
 		r.Post("/api/breaker/reset/{provider}", routes.BreakerReset(state.LLM))
+		r.Post("/api/breaker/open/{provider}", routes.BreakerForceOpen(state.LLM))
 
 		// Subagents.
 		r.Get("/api/subagents", routes.ListSubagents(state.Store))

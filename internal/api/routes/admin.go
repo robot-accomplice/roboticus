@@ -258,6 +258,79 @@ func BreakerReset(llmSvc *llm.Service) http.HandlerFunc {
 	}
 }
 
+// BreakerForceOpen force-opens a provider's circuit breaker.
+// Unlike normal open, this is only cleared by an explicit Reset call.
+func BreakerForceOpen(llmSvc *llm.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		provider := chi.URLParam(r, "provider")
+		if err := llmSvc.ForceOpenBreaker(provider); err != nil {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "force_opened", "provider": provider})
+	}
+}
+
+// MemoryHealth returns per-tier counts and stale/active breakdowns.
+func MemoryHealth(store *db.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+
+		var workingCount, workingStale int64
+		row := store.QueryRowContext(ctx, `SELECT COUNT(*) FROM working_memory`)
+		_ = row.Scan(&workingCount)
+		row = store.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM working_memory WHERE created_at < datetime('now', '-24 hours')`)
+		_ = row.Scan(&workingStale)
+
+		var episodicCount, episodicStale int64
+		row = store.QueryRowContext(ctx, `SELECT COUNT(*) FROM episodic_memory`)
+		_ = row.Scan(&episodicCount)
+		row = store.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM episodic_memory WHERE created_at < datetime('now', '-7 days')`)
+		_ = row.Scan(&episodicStale)
+
+		var semanticCount int64
+		row = store.QueryRowContext(ctx, `SELECT COUNT(*) FROM semantic_memory`)
+		_ = row.Scan(&semanticCount)
+
+		writeJSON(w, http.StatusOK, map[string]any{
+			"working": map[string]any{
+				"total":  workingCount,
+				"active": workingCount - workingStale,
+				"stale":  workingStale,
+			},
+			"episodic": map[string]any{
+				"total":  episodicCount,
+				"active": episodicCount - episodicStale,
+				"stale":  episodicStale,
+			},
+			"semantic": map[string]any{
+				"total": semanticCount,
+			},
+		})
+	}
+}
+
+// ReplayDeadLetter replays a dead letter queue entry by resetting its status for retry.
+func ReplayDeadLetter(store *db.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		res, err := store.ExecContext(r.Context(),
+			`UPDATE delivery_queue SET status = 'pending', last_error = NULL WHERE id = ? AND status = 'dead_letter'`, id)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		n, _ := res.RowsAffected()
+		if n == 0 {
+			writeError(w, http.StatusNotFound, "dead letter entry not found or already replayed")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "replayed", "id": id})
+	}
+}
+
 // --- Subagents ---
 
 // ListSubagents returns registered subagents.

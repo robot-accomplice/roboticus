@@ -2,6 +2,7 @@ package wallet
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -79,6 +80,82 @@ func TestHandle402_WithWallet(t *testing.T) {
 	}
 	if header == "" {
 		t.Error("header should not be empty")
+	}
+}
+
+func TestHandlePayment_Success(t *testing.T) {
+	w, err := NewWallet(WalletConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(PaymentRequirements{
+		Amount:    0.50,
+		Recipient: "0x1234567890abcdef1234567890abcdef12345678",
+		ChainID:   8453,
+	})
+	h := NewX402HandlerWithWallet(w)
+	header, err := h.HandlePayment(body)
+	if err != nil {
+		t.Fatalf("HandlePayment: %v", err)
+	}
+	if header == "" {
+		t.Error("expected non-empty payment header")
+	}
+}
+
+func TestHandlePayment_ExceedsMaxAmount(t *testing.T) {
+	w, err := NewWallet(WalletConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(PaymentRequirements{
+		Amount:    5.00, // exceeds $1.00 limit
+		Recipient: "0x1234567890abcdef1234567890abcdef12345678",
+		ChainID:   8453,
+	})
+	h := NewX402HandlerWithWallet(w)
+	_, err = h.HandlePayment(body)
+	if err == nil {
+		t.Fatal("expected error for amount exceeding safety limit")
+	}
+	if !strings.Contains(err.Error(), "safety limit") {
+		t.Errorf("error = %q, want safety limit message", err)
+	}
+}
+
+func TestHandlePayment_NoWallet(t *testing.T) {
+	body, _ := json.Marshal(PaymentRequirements{
+		Amount:    0.10,
+		Recipient: "0x1234567890abcdef1234567890abcdef12345678",
+		ChainID:   8453,
+	})
+	h := NewX402Handler() // no wallet
+	_, err := h.HandlePayment(body)
+	if err == nil {
+		t.Fatal("expected error when no wallet configured")
+	}
+	if !strings.Contains(err.Error(), "no wallet") {
+		t.Errorf("error = %q, want 'no wallet' message", err)
+	}
+}
+
+func TestHandlePayment_ExactMaxAmount(t *testing.T) {
+	w, err := NewWallet(WalletConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(PaymentRequirements{
+		Amount:    1.00, // exactly at limit -- should succeed
+		Recipient: "0x1234567890abcdef1234567890abcdef12345678",
+		ChainID:   8453,
+	})
+	h := NewX402HandlerWithWallet(w)
+	header, err := h.HandlePayment(body)
+	if err != nil {
+		t.Fatalf("HandlePayment at exact limit: %v", err)
+	}
+	if header == "" {
+		t.Error("expected non-empty payment header")
 	}
 }
 

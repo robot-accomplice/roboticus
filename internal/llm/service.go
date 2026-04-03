@@ -442,6 +442,16 @@ func (s *Service) ResetBreaker(providerName string) error {
 	return nil
 }
 
+// ForceOpenBreaker force-opens the circuit breaker for a named provider.
+// Unlike normal open, this is only cleared by an explicit Reset call.
+func (s *Service) ForceOpenBreaker(providerName string) error {
+	if _, ok := s.providers[providerName]; !ok {
+		return fmt.Errorf("unknown provider: %s", providerName)
+	}
+	s.breakers.Get(providerName).ForceOpen()
+	return nil
+}
+
 // Status returns the health of all providers (for /api/health).
 // providers is write-once (set only in NewService), so concurrent reads are safe.
 func (s *Service) Status() []ProviderStatus {

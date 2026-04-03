@@ -29,12 +29,46 @@ type PaymentRequirements struct {
 	Deadline  int64   `json:"deadline,omitempty"` // unix timestamp
 }
 
+// MaxPaymentAmount is the safety rail for automatic micropayments. Any payment
+// request exceeding this amount (in token units, e.g. USD) is rejected.
+const MaxPaymentAmount = 1.00
+
 // X402Handler manages the x402 payment protocol (EIP-3009 transferWithAuthorization).
-type X402Handler struct{}
+type X402Handler struct {
+	wallet *Wallet
+}
 
 // NewX402Handler creates an x402 payment handler.
 func NewX402Handler() *X402Handler {
 	return &X402Handler{}
+}
+
+// NewX402HandlerWithWallet creates an x402 payment handler bound to a wallet,
+// enabling it to satisfy the PaymentHandler interface for automatic 402 retry.
+func NewX402HandlerWithWallet(w *Wallet) *X402Handler {
+	return &X402Handler{wallet: w}
+}
+
+// HandlePayment satisfies the llm.PaymentHandler interface. It parses payment
+// requirements from a 402 response body, validates the amount against the
+// safety rail (max $1.00), signs the EIP-3009 authorization, and returns the
+// X-Payment header value.
+func (h *X402Handler) HandlePayment(body []byte) (string, error) {
+	reqs, err := h.ParsePaymentRequirements(body)
+	if err != nil {
+		return "", err
+	}
+
+	// Safety rail: reject payments exceeding the maximum allowed amount.
+	if reqs.Amount > MaxPaymentAmount {
+		return "", fmt.Errorf("x402: payment amount $%.2f exceeds safety limit $%.2f", reqs.Amount, MaxPaymentAmount)
+	}
+
+	if h.wallet == nil {
+		return "", fmt.Errorf("x402: no wallet configured for payment handler")
+	}
+
+	return h.Handle402(body, h.wallet)
 }
 
 // ParsePaymentRequirements extracts payment requirements from a 402 response body.

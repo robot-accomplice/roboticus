@@ -2,7 +2,9 @@ package routes
 
 import (
 	"encoding/json"
+	"math"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -181,5 +183,70 @@ func PostMessage(p pipeline.Runner) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusOK, outcome)
+	}
+}
+
+// ArchiveSession sets a session's status to "archived".
+func ArchiveSession(store *db.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		res, err := store.ExecContext(r.Context(),
+			`UPDATE sessions SET status = 'archived' WHERE id = ?`, id)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		n, _ := res.RowsAffected()
+		if n == 0 {
+			writeError(w, http.StatusNotFound, "session not found")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "archived", "id": id})
+	}
+}
+
+// AnalyzeSession returns basic analytics for a session.
+func AnalyzeSession(store *db.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		ctx := r.Context()
+
+		// Verify session exists and get timestamps.
+		var createdAt, updatedAt string
+		row := store.QueryRowContext(ctx,
+			`SELECT created_at, updated_at FROM sessions WHERE id = ?`, id)
+		if err := row.Scan(&createdAt, &updatedAt); err != nil {
+			writeError(w, http.StatusNotFound, "session not found")
+			return
+		}
+
+		// Message count.
+		var msgCount int64
+		row = store.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM session_messages WHERE session_id = ?`, id)
+		_ = row.Scan(&msgCount)
+
+		// Turn count (user messages = turns).
+		var turnCount int64
+		row = store.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM session_messages WHERE session_id = ? AND role = 'user'`, id)
+		_ = row.Scan(&turnCount)
+
+		// Duration in seconds.
+		var durationSec float64
+		t0, err0 := time.Parse(time.RFC3339, createdAt)
+		t1, err1 := time.Parse(time.RFC3339, updatedAt)
+		if err0 == nil && err1 == nil {
+			durationSec = math.Round(t1.Sub(t0).Seconds())
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{
+			"session_id":    id,
+			"message_count": msgCount,
+			"turn_count":    turnCount,
+			"duration_sec":  durationSec,
+			"created_at":    createdAt,
+			"updated_at":    updatedAt,
+		})
 	}
 }

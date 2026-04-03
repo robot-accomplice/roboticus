@@ -16,12 +16,21 @@ import (
 	"goboticus/internal/core"
 )
 
+// PaymentHandler handles x402 micropayment negotiation when an LLM provider
+// returns HTTP 402. Implementations parse the payment requirements from the
+// response body, validate them (including safety rails), sign the payment,
+// and return the value for the X-Payment header.
+type PaymentHandler interface {
+	HandlePayment(body []byte) (paymentHeader string, err error)
+}
+
 // Client is a single-provider HTTP client that speaks the provider's native
 // format. It implements Completer.
 type Client struct {
-	provider   *Provider
-	httpClient core.HTTPDoer
-	apiKey     string
+	provider       *Provider
+	httpClient     core.HTTPDoer
+	apiKey         string
+	paymentHandler PaymentHandler
 }
 
 // NewClient creates a Client for the given provider. It resolves the API key
@@ -64,6 +73,12 @@ func NewClientWithHTTP(p *Provider, httpClient core.HTTPDoer) (*Client, error) {
 	}, nil
 }
 
+// SetPaymentHandler configures an x402 micropayment handler. When set, HTTP 402
+// responses from providers trigger automatic payment negotiation and retry.
+func (c *Client) SetPaymentHandler(h PaymentHandler) {
+	c.paymentHandler = h
+}
+
 // Complete sends a non-streaming request and returns the full response.
 func (c *Client) Complete(ctx context.Context, req *Request) (*Response, error) {
 	req.Stream = false
@@ -84,6 +99,29 @@ func (c *Client) Complete(ctx context.Context, req *Request) (*Response, error) 
 		return nil, core.WrapError(core.ErrNetwork, "request failed", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+
+	// x402 micropayment: if provider returns 402 and we have a handler, attempt
+	// to pay and retry exactly once.
+	if resp.StatusCode == http.StatusPaymentRequired && c.paymentHandler != nil {
+		paymentHeader, payErr := c.handle402(resp)
+		if payErr != nil {
+			return nil, payErr
+		}
+
+		// Retry the same request with the X-Payment header.
+		retryReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+		if err != nil {
+			return nil, core.WrapError(core.ErrNetwork, "failed to create payment retry request", err)
+		}
+		c.setHeaders(retryReq)
+		retryReq.Header.Set("X-Payment", paymentHeader)
+
+		resp, err = c.httpClient.Do(retryReq)
+		if err != nil {
+			return nil, core.WrapError(core.ErrNetwork, "payment retry request failed", err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, c.parseErrorResponse(resp)
@@ -108,7 +146,8 @@ func (c *Client) Stream(ctx context.Context, req *Request) (<-chan StreamChunk, 
 			return
 		}
 
-		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.chatURL(), bytes.NewReader(body))
+		url := c.chatURL()
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 		if err != nil {
 			errs <- core.WrapError(core.ErrNetwork, "failed to create request", err)
 			return
@@ -122,6 +161,31 @@ func (c *Client) Stream(ctx context.Context, req *Request) (<-chan StreamChunk, 
 		}
 		defer func() { _ = resp.Body.Close() }()
 
+		// x402 micropayment: if provider returns 402 and we have a handler,
+		// attempt to pay and retry exactly once.
+		if resp.StatusCode == http.StatusPaymentRequired && c.paymentHandler != nil {
+			paymentHeader, payErr := c.handle402(resp)
+			if payErr != nil {
+				errs <- payErr
+				return
+			}
+
+			retryReq, retryErr := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+			if retryErr != nil {
+				errs <- core.WrapError(core.ErrNetwork, "failed to create payment retry request", retryErr)
+				return
+			}
+			c.setHeaders(retryReq)
+			retryReq.Header.Set("X-Payment", paymentHeader)
+
+			resp, err = c.httpClient.Do(retryReq)
+			if err != nil {
+				errs <- core.WrapError(core.ErrNetwork, "payment retry stream failed", err)
+				return
+			}
+			defer func() { _ = resp.Body.Close() }()
+		}
+
 		if resp.StatusCode != http.StatusOK {
 			errs <- c.parseErrorResponse(resp)
 			return
@@ -131,6 +195,23 @@ func (c *Client) Stream(ctx context.Context, req *Request) (<-chan StreamChunk, 
 	}()
 
 	return chunks, errs
+}
+
+// handle402 reads the 402 response body and delegates to the payment handler.
+// It returns the X-Payment header value on success.
+func (c *Client) handle402(resp *http.Response) (string, error) {
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", core.WrapError(core.ErrNetwork, "failed to read 402 body", err)
+	}
+
+	log.Info().Str("provider", c.provider.Name).Msg("received 402, attempting x402 payment")
+
+	paymentHeader, err := c.paymentHandler.HandlePayment(respBody)
+	if err != nil {
+		return "", core.WrapError(core.ErrWallet, "x402 payment failed", err)
+	}
+	return paymentHeader, nil
 }
 
 // readSSE parses an SSE stream into StreamChunks.

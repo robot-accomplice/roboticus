@@ -1,6 +1,7 @@
 package routes
 
 import (
+	"encoding/json"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -195,5 +196,94 @@ func ActivateSkillFromCatalog() http.HandlerFunc {
 func InstallPlugin() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotImplemented, "plugin installation not yet implemented")
+	}
+}
+
+// GetSkill returns a single skill by ID.
+func GetSkill(store *db.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		skillID := chi.URLParam(r, "id")
+		row := store.QueryRowContext(r.Context(),
+			`SELECT id, name, kind, description, enabled, version, risk_level, created_at
+			 FROM skills WHERE id = ?`, skillID)
+
+		var id, name, kind, riskLevel, createdAt, version string
+		var description *string
+		var enabled bool
+		if err := row.Scan(&id, &name, &kind, &description, &enabled, &version, &riskLevel, &createdAt); err != nil {
+			writeError(w, http.StatusNotFound, "skill not found")
+			return
+		}
+		s := map[string]any{
+			"id": id, "name": name, "kind": kind, "enabled": enabled,
+			"version": version, "risk_level": riskLevel, "created_at": createdAt,
+		}
+		if description != nil {
+			s["description"] = *description
+		}
+		writeJSON(w, http.StatusOK, s)
+	}
+}
+
+// UpdateSkill updates a skill's content and/or priority.
+func UpdateSkill(store *db.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		skillID := chi.URLParam(r, "id")
+		var req struct {
+			Description *string `json:"description"`
+			RiskLevel   *string `json:"risk_level"`
+			Version     *string `json:"version"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+
+		// Build dynamic update.
+		if req.Description != nil {
+			_, _ = store.ExecContext(r.Context(),
+				`UPDATE skills SET description = ? WHERE id = ?`, *req.Description, skillID)
+		}
+		if req.RiskLevel != nil {
+			_, _ = store.ExecContext(r.Context(),
+				`UPDATE skills SET risk_level = ? WHERE id = ?`, *req.RiskLevel, skillID)
+		}
+		if req.Version != nil {
+			_, _ = store.ExecContext(r.Context(),
+				`UPDATE skills SET version = ? WHERE id = ?`, *req.Version, skillID)
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "updated", "id": skillID})
+	}
+}
+
+// AuditSkills returns skill health summary.
+func AuditSkills(store *db.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+
+		var activeCount, disabledCount, totalCount int64
+		row := store.QueryRowContext(ctx, `SELECT COUNT(*) FROM skills WHERE enabled = 1`)
+		_ = row.Scan(&activeCount)
+
+		row = store.QueryRowContext(ctx, `SELECT COUNT(*) FROM skills WHERE enabled = 0`)
+		_ = row.Scan(&disabledCount)
+
+		row = store.QueryRowContext(ctx, `SELECT COUNT(*) FROM skills`)
+		_ = row.Scan(&totalCount)
+
+		var lastReload *string
+		row = store.QueryRowContext(ctx, `SELECT MAX(created_at) FROM skills`)
+		_ = row.Scan(&lastReload)
+
+		result := map[string]any{
+			"total_count":    totalCount,
+			"active_count":   activeCount,
+			"disabled_count": disabledCount,
+			"learned_count":  totalCount - activeCount - disabledCount,
+		}
+		if lastReload != nil {
+			result["last_reload"] = *lastReload
+		}
+		writeJSON(w, http.StatusOK, result)
 	}
 }

@@ -38,6 +38,7 @@ type MatrixAdapter struct {
 	userID    string
 	syncToken string
 	inbound   chan InboundMessage
+	Crypto    *MatrixCrypto
 }
 
 // NewMatrixAdapter creates a Matrix channel adapter.
@@ -66,6 +67,12 @@ func NewMatrixAdapterWithHTTP(cfg MatrixConfig, httpClient core.HTTPDoer) (*Matr
 		cfg:     cfg,
 		client:  httpClient,
 		inbound: make(chan InboundMessage, 64),
+	}
+
+	// Initialize E2EE crypto layer if enabled.
+	if cfg.E2EEEnabled {
+		adapter.Crypto = NewMatrixCrypto()
+		log.Info().Msg("Matrix E2EE crypto initialized")
 	}
 
 	// Resolve own user ID.
@@ -97,16 +104,31 @@ func (m *MatrixAdapter) Recv(ctx context.Context) (*InboundMessage, error) {
 func (m *MatrixAdapter) Send(ctx context.Context, msg OutboundMessage) error {
 	roomID := msg.RecipientID
 	txnID := fmt.Sprintf("goboticus-%d", time.Now().UnixNano())
-	url := fmt.Sprintf("%s%s/rooms/%s/send/m.room.message/%s",
-		m.cfg.HomeserverURL, matrixAPIPrefix, roomID, txnID)
 
-	body := map[string]string{
-		"msgtype": "m.text",
-		"body":    msg.Content,
+	var body any
+	eventType := "m.room.message"
+
+	if m.Crypto != nil {
+		// Encrypt the message using the Megolm session.
+		encrypted, err := m.Crypto.EncryptMessage(roomID, msg.Content)
+		if err != nil {
+			return fmt.Errorf("matrix: encrypt message: %w", err)
+		}
+		body = encrypted
+		eventType = "m.room.encrypted"
+	} else {
+		body = map[string]string{
+			"msgtype": "m.text",
+			"body":    msg.Content,
+		}
 	}
+
+	sendURL := fmt.Sprintf("%s%s/rooms/%s/send/%s/%s",
+		m.cfg.HomeserverURL, matrixAPIPrefix, roomID, eventType, txnID)
+
 	data, _ := json.Marshal(body)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, bytes.NewReader(data))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, sendURL, bytes.NewReader(data))
 	if err != nil {
 		return fmt.Errorf("matrix: create send request: %w", err)
 	}
@@ -173,10 +195,30 @@ func (m *MatrixAdapter) syncOnce(ctx context.Context) error {
 			continue
 		}
 		for _, event := range room.Timeline.Events {
-			if event.Type != "m.room.message" || event.Sender == m.userID {
+			if event.Sender == m.userID {
 				continue
 			}
-			content := event.Content.Body
+
+			var content string
+			switch event.Type {
+			case "m.room.message":
+				content = event.Content.Body
+			case "m.room.encrypted":
+				if m.Crypto != nil {
+					decrypted, err := m.Crypto.DecryptEvent(roomID, event.Content.Raw)
+					if err != nil {
+						log.Warn().Err(err).Str("room_id", roomID).Msg("Matrix: failed to decrypt event")
+						continue
+					}
+					content = decrypted
+				} else {
+					log.Warn().Str("room_id", roomID).Msg("Matrix: received encrypted event but E2EE not enabled")
+					continue
+				}
+			default:
+				continue
+			}
+
 			if content == "" {
 				continue
 			}
@@ -236,14 +278,29 @@ func (m *MatrixAdapter) setAuth(req *http.Request) {
 }
 
 type matrixEvent struct {
-	Type           string `json:"type"`
-	EventID        string `json:"event_id"`
-	Sender         string `json:"sender"`
-	OriginServerTS int64  `json:"origin_server_ts"`
-	Content        struct {
-		MsgType string `json:"msgtype"`
-		Body    string `json:"body"`
-	} `json:"content"`
+	Type           string             `json:"type"`
+	EventID        string             `json:"event_id"`
+	Sender         string             `json:"sender"`
+	OriginServerTS int64              `json:"origin_server_ts"`
+	Content        matrixEventContent `json:"content"`
+}
+
+type matrixEventContent struct {
+	MsgType string            `json:"msgtype"`
+	Body    string            `json:"body"`
+	Raw     map[string]any    `json:"-"` // populated by custom unmarshal
+}
+
+// UnmarshalJSON implements custom unmarshalling to capture the raw content map
+// alongside the typed fields.
+func (c *matrixEventContent) UnmarshalJSON(data []byte) error {
+	// First unmarshal into raw map.
+	if err := json.Unmarshal(data, &c.Raw); err != nil {
+		return err
+	}
+	// Then unmarshal typed fields.
+	type plain matrixEventContent
+	return json.Unmarshal(data, (*plain)(c))
 }
 
 func contains(slice []string, s string) bool {
