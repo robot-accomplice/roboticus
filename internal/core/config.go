@@ -50,6 +50,29 @@ type Config struct {
 	CORS       CORSConfig                `json:"cors" mapstructure:"cors"`
 	Revenue    RevenueConfig             `json:"revenue" mapstructure:"revenue"`
 	Heartbeat  HeartbeatConfig           `json:"heartbeat" mapstructure:"heartbeat"`
+
+	// New roboticus-compatible sections.
+	CircuitBreaker            CircuitBreakerConfig `json:"circuit_breaker" mapstructure:"circuit_breaker"`
+	SelfFunding               SelfFundingConfig    `json:"self_funding" mapstructure:"self_funding"`
+	Yield                     YieldConfig          `json:"yield" mapstructure:"yield"`
+	A2A                       A2AConfig            `json:"a2a" mapstructure:"a2a"`
+	Context                   ContextConfig        `json:"context" mapstructure:"context"`
+	Browser                   BrowserConfig        `json:"browser" mapstructure:"browser"`
+	Daemon                    DaemonConfig         `json:"daemon" mapstructure:"daemon"`
+	Update                    UpdateConfig         `json:"update" mapstructure:"update"`
+	TierAdapt                 TierAdaptConfig      `json:"tier_adapt" mapstructure:"tier_adapt"`
+	Personality               PersonalityConfig    `json:"personality" mapstructure:"personality"`
+	Digest                    DigestConfig         `json:"digest" mapstructure:"digest"`
+	Learning                  LearningConfig       `json:"learning" mapstructure:"learning"`
+	Multimodal                MultimodalConfig     `json:"multimodal" mapstructure:"multimodal"`
+	Knowledge                 KnowledgeConfig      `json:"knowledge" mapstructure:"knowledge"`
+	Workspace                 WorkspaceCfg         `json:"workspace" mapstructure:"workspace"`
+	Devices                   DeviceConfig         `json:"devices" mapstructure:"devices"`
+	Discovery                 DiscoveryConfig      `json:"discovery" mapstructure:"discovery"`
+	Obsidian                  ObsidianConfig       `json:"obsidian" mapstructure:"obsidian"`
+	Backups                   BackupsConfig        `json:"backups" mapstructure:"backups"`
+	ContextBudget             ContextBudgetConfig  `json:"context_budget" mapstructure:"context_budget"`
+	DisabledBundledProviders  []string             `json:"disabled_bundled_providers" mapstructure:"disabled_bundled_providers"`
 }
 
 // CORSConfig holds cross-origin request settings.
@@ -140,19 +163,26 @@ type RateLimitConfig struct {
 
 // AgentConfig holds agent identity and workspace settings.
 type AgentConfig struct {
-	Name                        string `json:"name" mapstructure:"name"`
-	ID                          string `json:"id" mapstructure:"id"`
-	Workspace                   string `json:"workspace" mapstructure:"workspace"`
-	AutonomyMaxReactTurns       int    `json:"autonomy_max_react_turns" mapstructure:"autonomy_max_react_turns"`
-	AutonomyMaxTurnDurationSecs int    `json:"autonomy_max_turn_duration_seconds" mapstructure:"autonomy_max_turn_duration_seconds"`
+	Name                        string  `json:"name" mapstructure:"name"`
+	ID                          string  `json:"id" mapstructure:"id"`
+	Workspace                   string  `json:"workspace" mapstructure:"workspace"`
+	AutonomyMaxReactTurns       int     `json:"autonomy_max_react_turns" mapstructure:"autonomy_max_react_turns"`
+	AutonomyMaxTurnDurationSecs int     `json:"autonomy_max_turn_duration_seconds" mapstructure:"autonomy_max_turn_duration_seconds"`
+	LogLevel                    string  `json:"log_level" mapstructure:"log_level"`
+	DelegationEnabled           bool    `json:"delegation_enabled" mapstructure:"delegation_enabled"`
+	DelegationMinComplexity     float64 `json:"delegation_min_complexity" mapstructure:"delegation_min_complexity"`
+	CompositionPolicy           string  `json:"composition_policy" mapstructure:"composition_policy"`
 }
 
 // ServerConfig holds HTTP server settings.
 type ServerConfig struct {
-	Port               int    `json:"port" mapstructure:"port"`
-	Bind               string `json:"bind" mapstructure:"bind"`
-	LogDir             string `json:"log_dir" mapstructure:"log_dir"`
-	CronMaxConcurrency int    `json:"cron_max_concurrency" mapstructure:"cron_max_concurrency"`
+	Port               int      `json:"port" mapstructure:"port"`
+	Bind               string   `json:"bind" mapstructure:"bind"`
+	LogDir             string   `json:"log_dir" mapstructure:"log_dir"`
+	CronMaxConcurrency int      `json:"cron_max_concurrency" mapstructure:"cron_max_concurrency"`
+	APIKey             string   `json:"api_key" mapstructure:"api_key"`
+	LogMaxDays         int      `json:"log_max_days" mapstructure:"log_max_days"`
+	TrustedProxyCIDRs  []string `json:"trusted_proxy_cidrs" mapstructure:"trusted_proxy_cidrs"`
 }
 
 // DatabaseConfig holds SQLite connection settings.
@@ -162,9 +192,11 @@ type DatabaseConfig struct {
 
 // ModelsConfig holds LLM provider and model settings.
 type ModelsConfig struct {
-	Primary  string        `json:"primary" mapstructure:"primary"`
-	Fallback []string      `json:"fallback" mapstructure:"fallback"`
-	Routing  RoutingConfig `json:"routing" mapstructure:"routing"`
+	Primary         string                   `json:"primary" mapstructure:"primary"`
+	Fallback        []string                 `json:"fallback,omitempty" toml:"fallbacks" mapstructure:"fallbacks"`
+	Routing         RoutingConfig            `json:"routing" mapstructure:"routing"`
+	ModelOverrides  map[string]ModelOverride  `json:"model_overrides,omitempty" mapstructure:"model_overrides"`
+	StreamByDefault bool                     `json:"stream_by_default" mapstructure:"stream_by_default"`
 }
 
 // RoutingConfig holds model routing parameters.
@@ -182,6 +214,7 @@ type RoutingConfig struct {
 	PerProviderTimeoutSecs int      `json:"per_provider_timeout_seconds" mapstructure:"per_provider_timeout_seconds"`
 	MaxTotalInferenceSecs  int      `json:"max_total_inference_seconds" mapstructure:"max_total_inference_seconds"`
 	MaxFallbackAttempts    int      `json:"max_fallback_attempts" mapstructure:"max_fallback_attempts"`
+	LocalFirst             bool     `json:"local_first" mapstructure:"local_first"`
 }
 
 // ProviderConfig describes a single LLM provider endpoint.
@@ -201,26 +234,40 @@ type ProviderConfig struct {
 	ExtraHeaders        map[string]string `json:"extra_headers,omitempty" mapstructure:"extra_headers"`
 	TPMLimit            uint64            `json:"tpm_limit,omitempty" mapstructure:"tpm_limit"`
 	RPMLimit            uint64            `json:"rpm_limit,omitempty" mapstructure:"rpm_limit"`
+	AuthMode            string            `json:"auth_mode,omitempty" mapstructure:"auth_mode"`
+	OAuthClientID       string            `json:"oauth_client_id,omitempty" mapstructure:"oauth_client_id"`
+	OAuthRedirectURI    string            `json:"oauth_redirect_uri,omitempty" mapstructure:"oauth_redirect_uri"`
+	APIKeyRef           string            `json:"api_key_ref,omitempty" mapstructure:"api_key_ref"`
 }
 
 // SessionConfig holds session scoping and timeout settings.
 type SessionConfig struct {
-	ScopeMode string `json:"scope_mode" mapstructure:"scope_mode"`
+	ScopeMode  string `json:"scope_mode" mapstructure:"scope_mode"`
+	TTLSeconds int    `json:"ttl_seconds" mapstructure:"ttl_seconds"`
 }
 
 // MemoryConfig holds memory budget settings as percentages (must sum to 100).
+// WorkingBudgetPct is an alias for WorkingBudget for roboticus compatibility.
 type MemoryConfig struct {
 	WorkingBudget      float64 `json:"working_budget" mapstructure:"working_budget"`
+	WorkingBudgetPct   float64 `json:"working_budget_pct,omitempty" mapstructure:"working_budget_pct"`
 	EpisodicBudget     float64 `json:"episodic_budget" mapstructure:"episodic_budget"`
 	SemanticBudget     float64 `json:"semantic_budget" mapstructure:"semantic_budget"`
 	ProceduralBudget   float64 `json:"procedural_budget" mapstructure:"procedural_budget"`
 	RelationshipBudget float64 `json:"relationship_budget" mapstructure:"relationship_budget"`
+	EmbeddingProvider  string  `json:"embedding_provider,omitempty" mapstructure:"embedding_provider"`
+	EmbeddingModel     string  `json:"embedding_model,omitempty" mapstructure:"embedding_model"`
+	HybridWeight       float64 `json:"hybrid_weight" mapstructure:"hybrid_weight"`
+	AnnIndex           bool    `json:"ann_index" mapstructure:"ann_index"`
+	DecayHalfLifeDays  float64 `json:"decay_half_life_days" mapstructure:"decay_half_life_days"`
 }
 
 // CacheConfig holds semantic cache settings.
 type CacheConfig struct {
+	Enabled             bool    `json:"enabled" mapstructure:"enabled"`
 	TTLSeconds          int     `json:"ttl_seconds" mapstructure:"ttl_seconds"`
 	SimilarityThreshold float64 `json:"similarity_threshold" mapstructure:"similarity_threshold"`
+	MaxEntries          int     `json:"max_entries" mapstructure:"max_entries"`
 }
 
 // TreasuryConfig holds financial policy limits.
@@ -233,12 +280,17 @@ type TreasuryConfig struct {
 
 // WalletConfig holds crypto wallet settings.
 type WalletConfig struct {
-	Path string `json:"path" mapstructure:"path"`
+	Path    string `json:"path" mapstructure:"path"`
+	ChainID uint64 `json:"chain_id" mapstructure:"chain_id"`
+	RPCURL  string `json:"rpc_url" mapstructure:"rpc_url"`
 }
 
 // PluginsConfig holds plugin discovery settings.
 type PluginsConfig struct {
-	Dir string `json:"dir" mapstructure:"dir"`
+	Dir               string   `json:"dir" mapstructure:"dir"`
+	Allow             []string `json:"allow,omitempty" mapstructure:"allow"`
+	Deny              []string `json:"deny,omitempty" mapstructure:"deny"`
+	StrictPermissions bool     `json:"strict_permissions" mapstructure:"strict_permissions"`
 }
 
 // ChannelsConfig holds channel adapter token references.
@@ -280,6 +332,158 @@ type SkillsConfig struct {
 	WatchMode bool   `json:"watch_mode" mapstructure:"watch_mode"`
 }
 
+// CircuitBreakerConfig holds circuit breaker settings.
+type CircuitBreakerConfig struct {
+	Threshold         int `json:"threshold" mapstructure:"threshold"`
+	WindowSeconds     int `json:"window_seconds" mapstructure:"window_seconds"`
+	CooldownSeconds   int `json:"cooldown_seconds" mapstructure:"cooldown_seconds"`
+	MaxCooldownSeconds int `json:"max_cooldown_seconds" mapstructure:"max_cooldown_seconds"`
+}
+
+// SelfFundingTaxConfig holds self-funding tax settings.
+type SelfFundingTaxConfig struct {
+	Enabled           bool    `json:"enabled" mapstructure:"enabled"`
+	Rate              float64 `json:"rate" mapstructure:"rate"`
+	DestinationWallet string  `json:"destination_wallet" mapstructure:"destination_wallet"`
+}
+
+// SelfFundingConfig holds self-funding settings.
+type SelfFundingConfig struct {
+	Tax SelfFundingTaxConfig `json:"tax" mapstructure:"tax"`
+}
+
+// YieldConfig holds DeFi yield settings.
+type YieldConfig struct {
+	Enabled             bool    `json:"enabled" mapstructure:"enabled"`
+	Protocol            string  `json:"protocol" mapstructure:"protocol"`
+	Chain               string  `json:"chain" mapstructure:"chain"`
+	MinDeposit          float64 `json:"min_deposit" mapstructure:"min_deposit"`
+	WithdrawalThreshold float64 `json:"withdrawal_threshold" mapstructure:"withdrawal_threshold"`
+	ChainRPCURL         string  `json:"chain_rpc_url" mapstructure:"chain_rpc_url"`
+	PoolAddress         string  `json:"pool_address" mapstructure:"pool_address"`
+	USDCAddress         string  `json:"usdc_address" mapstructure:"usdc_address"`
+	ATokenAddress       string  `json:"atoken_address" mapstructure:"atoken_address"`
+}
+
+// A2AConfig holds agent-to-agent protocol settings.
+type A2AConfig struct {
+	Enabled                bool   `json:"enabled" mapstructure:"enabled"`
+	MaxMessageSize         int    `json:"max_message_size" mapstructure:"max_message_size"`
+	RateLimitPerPeer       int    `json:"rate_limit_per_peer" mapstructure:"rate_limit_per_peer"`
+	SessionTimeoutSeconds  int    `json:"session_timeout_seconds" mapstructure:"session_timeout_seconds"`
+	RequireOnChainIdentity bool   `json:"require_on_chain_identity" mapstructure:"require_on_chain_identity"`
+	NonceTTLSeconds        int    `json:"nonce_ttl_seconds" mapstructure:"nonce_ttl_seconds"`
+}
+
+// ContextConfig holds context window management settings.
+type ContextConfig struct {
+	MaxTokens              int     `json:"max_tokens" mapstructure:"max_tokens"`
+	SoftTrimRatio          float64 `json:"soft_trim_ratio" mapstructure:"soft_trim_ratio"`
+	HardClearRatio         float64 `json:"hard_clear_ratio" mapstructure:"hard_clear_ratio"`
+	PreserveRecent         int     `json:"preserve_recent" mapstructure:"preserve_recent"`
+	CheckpointEnabled      bool    `json:"checkpoint_enabled" mapstructure:"checkpoint_enabled"`
+	CheckpointIntervalTurns int    `json:"checkpoint_interval_turns" mapstructure:"checkpoint_interval_turns"`
+}
+
+// BrowserConfig holds headless browser / CDP settings.
+type BrowserConfig struct {
+	CDPPort        int `json:"cdp_port" mapstructure:"cdp_port"`
+	TimeoutSeconds int `json:"timeout_seconds" mapstructure:"timeout_seconds"`
+}
+
+// DaemonConfig holds background daemon settings.
+type DaemonConfig struct {
+	AutoRestart bool   `json:"auto_restart" mapstructure:"auto_restart"`
+	PIDFile     string `json:"pid_file" mapstructure:"pid_file"`
+}
+
+// UpdateConfig holds auto-update settings.
+type UpdateConfig struct {
+	Enabled            bool `json:"enabled" mapstructure:"enabled"`
+	CheckIntervalHours int  `json:"check_interval_hours" mapstructure:"check_interval_hours"`
+}
+
+// TierAdaptConfig holds adaptive tier settings.
+type TierAdaptConfig struct {
+	Enabled bool `json:"enabled" mapstructure:"enabled"`
+}
+
+// PersonalityConfig holds personality file paths.
+type PersonalityConfig struct {
+	OSPath       string `json:"os_path" mapstructure:"os_path"`
+	FirmwarePath string `json:"firmware_path" mapstructure:"firmware_path"`
+	OperatorPath string `json:"operator_path" mapstructure:"operator_path"`
+}
+
+// DigestConfig holds conversation digest settings.
+type DigestConfig struct {
+	Enabled  bool `json:"enabled" mapstructure:"enabled"`
+	MinTurns int  `json:"min_turns" mapstructure:"min_turns"`
+}
+
+// LearningConfig holds pattern learning settings.
+type LearningConfig struct {
+	Enabled            bool `json:"enabled" mapstructure:"enabled"`
+	MinSequenceLength  int  `json:"min_sequence_length" mapstructure:"min_sequence_length"`
+}
+
+// MultimodalConfig holds multimodal input settings.
+type MultimodalConfig struct {
+	VisionEnabled bool `json:"vision_enabled" mapstructure:"vision_enabled"`
+	AudioEnabled  bool `json:"audio_enabled" mapstructure:"audio_enabled"`
+}
+
+// KnowledgeConfig holds knowledge base settings.
+type KnowledgeConfig struct {
+	SourcesDir string `json:"sources_dir" mapstructure:"sources_dir"`
+	Enabled    bool   `json:"enabled" mapstructure:"enabled"`
+}
+
+// WorkspaceCfg holds workspace indexing settings (distinct from SandboxCfg).
+type WorkspaceCfg struct {
+	IndexingEnabled bool `json:"indexing_enabled" mapstructure:"indexing_enabled"`
+}
+
+// DeviceConfig holds device pairing settings.
+type DeviceConfig struct {
+	PairingEnabled bool `json:"pairing_enabled" mapstructure:"pairing_enabled"`
+}
+
+// DiscoveryConfig holds network discovery settings.
+type DiscoveryConfig struct {
+	MDNSEnabled bool `json:"mdns_enabled" mapstructure:"mdns_enabled"`
+}
+
+// ObsidianConfig holds Obsidian vault integration settings.
+type ObsidianConfig struct {
+	VaultPath string `json:"vault_path" mapstructure:"vault_path"`
+	Enabled   bool   `json:"enabled" mapstructure:"enabled"`
+}
+
+// BackupsConfig holds backup settings.
+type BackupsConfig struct {
+	Enabled       bool `json:"enabled" mapstructure:"enabled"`
+	RetentionDays int  `json:"retention_days" mapstructure:"retention_days"`
+}
+
+// ContextBudgetConfig holds per-layer context budget settings.
+type ContextBudgetConfig struct {
+	L0                int     `json:"l0" mapstructure:"l0"`
+	L1                int     `json:"l1" mapstructure:"l1"`
+	L2                int     `json:"l2" mapstructure:"l2"`
+	L3                int     `json:"l3" mapstructure:"l3"`
+	ChannelMinimum    string  `json:"channel_minimum" mapstructure:"channel_minimum"`
+	SoulMaxContextPct float64 `json:"soul_max_context_pct" mapstructure:"soul_max_context_pct"`
+}
+
+// ModelOverride holds per-model override settings.
+type ModelOverride struct {
+	MaxTokens          int     `json:"max_tokens,omitempty" mapstructure:"max_tokens"`
+	Temperature        float64 `json:"temperature,omitempty" mapstructure:"temperature"`
+	TopP               float64 `json:"top_p,omitempty" mapstructure:"top_p"`
+	Provider           string  `json:"provider,omitempty" mapstructure:"provider"`
+}
+
 // DefaultConfig returns a Config with sensible defaults.
 func DefaultConfig() Config {
 	home := homeDir()
@@ -288,15 +492,21 @@ func DefaultConfig() Config {
 	return Config{
 		Agent: AgentConfig{
 			Name:                        "goboticus",
+			ID:                          "goboticus-default",
 			Workspace:                   filepath.Join(dataDir, "workspace"),
 			AutonomyMaxReactTurns:       25,
 			AutonomyMaxTurnDurationSecs: 120,
+			LogLevel:                    "info",
+			DelegationEnabled:           true,
+			DelegationMinComplexity:     0.35,
+			CompositionPolicy:           "propose",
 		},
 		Server: ServerConfig{
 			Port:               DefaultServerPort,
 			Bind:               DefaultServerBind,
 			LogDir:             filepath.Join(dataDir, "logs"),
-			CronMaxConcurrency: 4,
+			CronMaxConcurrency: 8,
+			LogMaxDays:         7,
 		},
 		Database: DatabaseConfig{
 			Path: filepath.Join(dataDir, "goboticus.db"),
@@ -307,12 +517,13 @@ func DefaultConfig() Config {
 				Mode:                   "primary",
 				ConfidenceThreshold:    0.9,
 				EstimatedOutputTokens:  512,
-				AccuracyFloor:          0.7,
+				AccuracyFloor:          0.0,
 				AccuracyMinObs:         10,
-				CostAware:              true,
+				CostAware:              false,
 				PerProviderTimeoutSecs: 30,
-				MaxTotalInferenceSecs:  90,
-				MaxFallbackAttempts:    3,
+				MaxTotalInferenceSecs:  120,
+				MaxFallbackAttempts:    6,
+				LocalFirst:             true,
 			},
 		},
 		Providers: make(map[string]ProviderConfig),
@@ -322,24 +533,32 @@ func DefaultConfig() Config {
 			SemanticBudget:     15,
 			ProceduralBudget:   10,
 			RelationshipBudget: 10,
+			HybridWeight:       0.5,
+			DecayHalfLifeDays:  7.0,
 		},
 		Cache: CacheConfig{
+			Enabled:             true,
 			TTLSeconds:          3600,
 			SimilarityThreshold: 0.85,
+			MaxEntries:          10000,
 		},
 		Treasury: TreasuryConfig{
 			DailyCap:      5.0,
-			PerPaymentCap: 1.0,
+			PerPaymentCap: 100.0,
 			TransferLimit: 1.0,
 		},
 		Session: SessionConfig{
-			ScopeMode: "agent",
+			ScopeMode:  "peer",
+			TTLSeconds: 86400,
 		},
 		Wallet: WalletConfig{
-			Path: filepath.Join(dataDir, "wallet.enc"),
+			Path:    filepath.Join(dataDir, "wallet.enc"),
+			ChainID: 8453,
+			RPCURL:  "https://mainnet.base.org",
 		},
 		Plugins: PluginsConfig{
-			Dir: filepath.Join(dataDir, "plugins"),
+			Dir:               filepath.Join(dataDir, "plugins"),
+			StrictPermissions: true,
 		},
 		Security: SecurityConfig{
 			WorkspaceOnly:        true,
@@ -350,6 +569,97 @@ func DefaultConfig() Config {
 		},
 		CORS: CORSConfig{
 			MaxAgeSeconds: 3600,
+		},
+		Approvals: ApprovalsConfig{
+			TimeoutSeconds: 300,
+		},
+		CircuitBreaker: CircuitBreakerConfig{
+			Threshold:          3,
+			WindowSeconds:      60,
+			CooldownSeconds:    60,
+			MaxCooldownSeconds: 900,
+		},
+		SelfFunding: SelfFundingConfig{
+			Tax: SelfFundingTaxConfig{
+				Enabled: false,
+				Rate:    0.0,
+			},
+		},
+		Yield: YieldConfig{
+			Enabled:             false,
+			Protocol:            "aave",
+			Chain:               "base",
+			MinDeposit:          50.0,
+			WithdrawalThreshold: 30.0,
+		},
+		A2A: A2AConfig{
+			Enabled:                true,
+			MaxMessageSize:         65536,
+			RateLimitPerPeer:       10,
+			SessionTimeoutSeconds:  3600,
+			RequireOnChainIdentity: true,
+			NonceTTLSeconds:        7200,
+		},
+		Context: ContextConfig{
+			MaxTokens:               128000,
+			SoftTrimRatio:           0.8,
+			HardClearRatio:          0.95,
+			PreserveRecent:          10,
+			CheckpointEnabled:       false,
+			CheckpointIntervalTurns: 10,
+		},
+		Browser: BrowserConfig{
+			CDPPort:        9222,
+			TimeoutSeconds: 30,
+		},
+		Daemon: DaemonConfig{
+			AutoRestart: false,
+		},
+		Update: UpdateConfig{
+			Enabled:            true,
+			CheckIntervalHours: 24,
+		},
+		TierAdapt: TierAdaptConfig{
+			Enabled: false,
+		},
+		Digest: DigestConfig{
+			Enabled:  true,
+			MinTurns: 3,
+		},
+		Learning: LearningConfig{
+			Enabled:           true,
+			MinSequenceLength: 3,
+		},
+		Multimodal: MultimodalConfig{
+			VisionEnabled: false,
+			AudioEnabled:  false,
+		},
+		Knowledge: KnowledgeConfig{
+			Enabled: false,
+		},
+		Workspace: WorkspaceCfg{
+			IndexingEnabled: false,
+		},
+		Devices: DeviceConfig{
+			PairingEnabled: false,
+		},
+		Discovery: DiscoveryConfig{
+			MDNSEnabled: false,
+		},
+		Obsidian: ObsidianConfig{
+			Enabled: false,
+		},
+		Backups: BackupsConfig{
+			Enabled:       false,
+			RetentionDays: 30,
+		},
+		ContextBudget: ContextBudgetConfig{
+			L0:                8000,
+			L1:                8000,
+			L2:                16000,
+			L3:                32000,
+			ChannelMinimum:    "L1",
+			SoulMaxContextPct: 0.4,
 		},
 	}
 }
@@ -372,6 +682,12 @@ func (c *Config) NormalizePaths() {
 	c.Skills.Directory = expandTilde(c.Skills.Directory)
 	c.Wallet.Path = expandTilde(c.Wallet.Path)
 	c.Plugins.Dir = expandTilde(c.Plugins.Dir)
+	c.Personality.OSPath = expandTilde(c.Personality.OSPath)
+	c.Personality.FirmwarePath = expandTilde(c.Personality.FirmwarePath)
+	c.Personality.OperatorPath = expandTilde(c.Personality.OperatorPath)
+	c.Knowledge.SourcesDir = expandTilde(c.Knowledge.SourcesDir)
+	c.Obsidian.VaultPath = expandTilde(c.Obsidian.VaultPath)
+	c.Daemon.PIDFile = expandTilde(c.Daemon.PIDFile)
 
 	for i, p := range c.Security.AllowedPaths {
 		c.Security.AllowedPaths[i] = expandTilde(p)
@@ -419,7 +735,8 @@ func parseBundledProviders() map[string]ProviderConfig {
 	// The bundled file is simple enough for a lightweight parse.
 	result := make(map[string]ProviderConfig)
 
-	var current string
+	var current string     // e.g. "ollama"
+	var extraTarget string // non-empty when inside [providers.<name>.extra_headers]
 	var cfg ProviderConfig
 	for _, line := range strings.Split(bundledProvidersTOML, "\n") {
 		line = strings.TrimSpace(line)
@@ -427,13 +744,26 @@ func parseBundledProviders() map[string]ProviderConfig {
 			continue
 		}
 		if strings.HasPrefix(line, "[providers.") {
+			// Flush the previous provider.
 			if current != "" {
 				result[current] = cfg
 			}
-			name := strings.TrimPrefix(line, "[providers.")
-			name = strings.TrimSuffix(name, "]")
-			current = name
-			cfg = ProviderConfig{}
+			inner := strings.TrimPrefix(line, "[providers.")
+			inner = strings.TrimSuffix(inner, "]")
+			// Check for sub-table like "anthropic.extra_headers".
+			if strings.HasSuffix(inner, ".extra_headers") {
+				provName := strings.TrimSuffix(inner, ".extra_headers")
+				extraTarget = provName
+				// Retrieve the already-stored provider to attach headers.
+				if prev, ok := result[provName]; ok {
+					current = provName
+					cfg = prev
+				}
+			} else {
+				extraTarget = ""
+				current = inner
+				cfg = ProviderConfig{}
+			}
 			continue
 		}
 		if current == "" {
@@ -446,6 +776,16 @@ func parseBundledProviders() map[string]ProviderConfig {
 		key := strings.TrimSpace(parts[0])
 		val := strings.TrimSpace(parts[1])
 		val = strings.Trim(val, "\"")
+
+		// If we are inside an extra_headers sub-table, store as header.
+		if extraTarget != "" {
+			if cfg.ExtraHeaders == nil {
+				cfg.ExtraHeaders = make(map[string]string)
+			}
+			cfg.ExtraHeaders[key] = val
+			continue
+		}
+
 		switch key {
 		case "url":
 			cfg.URL = val
@@ -453,6 +793,8 @@ func parseBundledProviders() map[string]ProviderConfig {
 			cfg.Tier = val
 		case "format":
 			cfg.Format = val
+		case "chat_path":
+			cfg.ChatPath = val
 		case "api_key_env":
 			cfg.APIKeyEnv = val
 		case "is_local":
@@ -465,6 +807,10 @@ func parseBundledProviders() map[string]ProviderConfig {
 			cfg.EmbeddingModel = val
 		case "embedding_dimensions":
 			_, _ = fmt.Sscanf(val, "%d", &cfg.EmbeddingDimensions)
+		case "cost_per_input_token":
+			_, _ = fmt.Sscanf(val, "%f", &cfg.CostPerInputToken)
+		case "cost_per_output_token":
+			_, _ = fmt.Sscanf(val, "%f", &cfg.CostPerOutputToken)
 		}
 	}
 	if current != "" {
@@ -497,6 +843,12 @@ func (c *Config) Validate() error {
 	}
 
 	// Agent constraints.
+	if c.Agent.ID == "" {
+		return fmt.Errorf("%w: agent.id is required", ErrConfig)
+	}
+	if c.Agent.Name == "" {
+		return fmt.Errorf("%w: agent.name is required", ErrConfig)
+	}
 	if c.Agent.AutonomyMaxReactTurns == 0 {
 		return fmt.Errorf("%w: agent.autonomy_max_react_turns must be > 0", ErrConfig)
 	}
@@ -540,10 +892,10 @@ func (c *Config) Validate() error {
 	// Routing constraints.
 	r := c.Models.Routing
 	switch r.Mode {
-	case "primary", "metascore", "":
+	case "primary", "fallback", "auto", "routed", "metascore", "":
 		// valid
 	default:
-		return fmt.Errorf("%w: models.routing.mode must be 'primary' or 'metascore', got %q", ErrConfig, r.Mode)
+		return fmt.Errorf("%w: models.routing.mode must be one of 'primary', 'fallback', 'auto', 'routed', 'metascore', got %q", ErrConfig, r.Mode)
 	}
 	if r.ConfidenceThreshold < 0 || r.ConfidenceThreshold > 1 {
 		return fmt.Errorf("%w: models.routing.confidence_threshold must be [0,1]", ErrConfig)
@@ -568,8 +920,11 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("%w: canary_model %q must not appear in blocked_models", ErrConfig, bm)
 		}
 	}
-	if r.PerProviderTimeoutSecs > 0 && r.PerProviderTimeoutSecs < 5 {
-		return fmt.Errorf("%w: models.routing.per_provider_timeout_seconds must be >= 5", ErrConfig)
+	if r.PerProviderTimeoutSecs < 5 {
+		return fmt.Errorf("%w: models.routing.per_provider_timeout_seconds must be >= 5, got %d", ErrConfig, r.PerProviderTimeoutSecs)
+	}
+	if r.AccuracyMinObs != 0 && r.AccuracyMinObs <= 0 {
+		return fmt.Errorf("%w: models.routing.accuracy_min_obs must be > 0 when set", ErrConfig)
 	}
 	if r.MaxTotalInferenceSecs > 0 && r.MaxTotalInferenceSecs < r.PerProviderTimeoutSecs {
 		return fmt.Errorf("%w: models.routing.max_total_inference_seconds must be >= per_provider_timeout_seconds", ErrConfig)
@@ -640,6 +995,10 @@ func LoadConfigFromFile(path string) (Config, error) {
 	}
 	if err := tomlUnmarshal(data, &cfg); err != nil {
 		return cfg, fmt.Errorf("parse config %s: %w", path, err)
+	}
+	// Resolve roboticus alias: working_budget_pct overrides working_budget when set.
+	if cfg.Memory.WorkingBudgetPct != 0 {
+		cfg.Memory.WorkingBudget = cfg.Memory.WorkingBudgetPct
 	}
 	return cfg, nil
 }

@@ -16,7 +16,7 @@ var migrationsFS embed.FS
 
 // embeddedSchemaVersion matches the Rust EMBEDDED_SCHEMA_VERSION.
 // The base schema incorporates all migrations through this version.
-const embeddedSchemaVersion = 23
+const embeddedSchemaVersion = 29
 
 // schemaDDL is the full initial schema (ported from schema.rs SCHEMA_SQL).
 const schemaDDL = `
@@ -35,7 +35,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     metadata TEXT,
-    cross_channel_consent INTEGER NOT NULL DEFAULT 0
+    cross_channel_consent INTEGER NOT NULL DEFAULT 0,
+    non_interactive INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_scope ON sessions(agent_id, scope_key, status);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_active_scope_unique ON sessions(agent_id, scope_key) WHERE status = 'active';
@@ -48,6 +49,7 @@ CREATE TABLE IF NOT EXISTS session_messages (
     role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'system', 'tool')),
     content TEXT NOT NULL,
     usage_json TEXT,
+    topic_tag TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_session_messages_session ON session_messages(session_id, created_at);
@@ -108,6 +110,7 @@ CREATE TABLE IF NOT EXISTS episodic_memory (
     classification TEXT NOT NULL,
     content TEXT NOT NULL,
     importance INTEGER NOT NULL DEFAULT 5,
+    owner_id TEXT,
     memory_state TEXT NOT NULL DEFAULT 'active',
     state_reason TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -143,7 +146,7 @@ CREATE TABLE IF NOT EXISTS relationship_memory (
     entity_name TEXT,
     trust_score REAL NOT NULL DEFAULT 0.5,
     interaction_summary TEXT,
-    interaction_count INTEGER NOT NULL DEFAULT 0,
+    interaction_count INTEGER NOT NULL DEFAULT 1,
     last_interaction TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -364,6 +367,8 @@ CREATE TABLE IF NOT EXISTS skills (
     script_path TEXT,
     risk_level TEXT NOT NULL DEFAULT 'Caution' CHECK(risk_level IN ('Safe', 'Caution', 'Dangerous', 'Forbidden')),
     enabled INTEGER NOT NULL DEFAULT 1,
+    usage_count INTEGER NOT NULL DEFAULT 0,
+    last_used_at TEXT,
     last_loaded_at TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     version TEXT NOT NULL DEFAULT '0.0.0',
@@ -393,6 +398,7 @@ CREATE TABLE IF NOT EXISTS approval_requests (
     tool_name TEXT NOT NULL,
     tool_input TEXT NOT NULL,
     session_id TEXT,
+    turn_id TEXT,
     status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'approved', 'denied', 'timed_out')),
     decided_by TEXT,
     decided_at TEXT,
@@ -435,6 +441,7 @@ CREATE TABLE IF NOT EXISTS sub_agents (
     skills_json TEXT,
     enabled INTEGER NOT NULL DEFAULT 1,
     session_count INTEGER NOT NULL DEFAULT 0,
+    last_used_at TEXT,
     status TEXT NOT NULL DEFAULT 'registered',
     error_message TEXT NOT NULL DEFAULT '',
     started_at TEXT,
@@ -460,6 +467,8 @@ CREATE TABLE IF NOT EXISTS hippocampus (
     columns_json TEXT NOT NULL,
     created_by TEXT NOT NULL DEFAULT 'system',
     agent_owned INTEGER NOT NULL DEFAULT 0,
+    access_level TEXT NOT NULL DEFAULT 'internal',
+    row_count INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -564,10 +573,10 @@ CREATE TABLE IF NOT EXISTS memory_index (
     source_table TEXT NOT NULL,
     source_id TEXT NOT NULL,
     summary TEXT NOT NULL DEFAULT '',
-    category TEXT NOT NULL DEFAULT '',
-    confidence REAL NOT NULL DEFAULT 0.5,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    UNIQUE(source_table, source_id)
+    category TEXT DEFAULT '',
+    confidence REAL NOT NULL DEFAULT 1.0,
+    last_verified TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_memory_index_source ON memory_index(source_table, source_id);
 
@@ -606,6 +615,8 @@ CREATE TABLE IF NOT EXISTS pipeline_traces (
     channel TEXT NOT NULL DEFAULT 'api',
     total_ms INTEGER NOT NULL DEFAULT 0,
     stages_json TEXT NOT NULL DEFAULT '[]',
+    react_trace_json TEXT,
+    inference_params_json TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_pipeline_traces_turn ON pipeline_traces(turn_id);
@@ -679,6 +690,56 @@ CREATE TABLE IF NOT EXISTS agent_delegation_outcomes (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_agent_delegation_parent ON agent_delegation_outcomes(parent_task_id);
+
+CREATE TABLE IF NOT EXISTS treasury_state (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    usdc_balance REAL NOT NULL DEFAULT 0.0,
+    native_balance REAL NOT NULL DEFAULT 0.0,
+    atoken_balance REAL NOT NULL DEFAULT 0.0,
+    survival_tier TEXT NOT NULL DEFAULT 'Normal',
+    last_deposit_at TEXT,
+    last_withdrawal_at TEXT,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS session_model_performance (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id),
+    model TEXT NOT NULL,
+    turn_count INTEGER NOT NULL DEFAULT 0,
+    avg_tokens_out REAL NOT NULL DEFAULT 0,
+    avg_latency_ms REAL NOT NULL DEFAULT 0,
+    avg_quality REAL NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_session_model_perf_session ON session_model_performance(session_id);
+
+CREATE TABLE IF NOT EXISTS consent_requests (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id),
+    consent_type TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'granted', 'denied')),
+    granted_by TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    resolved_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_consent_requests_session ON consent_requests(session_id, status);
+
+CREATE TABLE IF NOT EXISTS installed_themes (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    source TEXT NOT NULL DEFAULT 'catalog',
+    version TEXT NOT NULL DEFAULT '1.0.0',
+    active INTEGER NOT NULL DEFAULT 0,
+    content TEXT NOT NULL,
+    installed_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+CREATE INDEX IF NOT EXISTS idx_cron_jobs_enabled ON cron_jobs(enabled, next_run_at);
+CREATE INDEX IF NOT EXISTS idx_transactions_created ON transactions(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_inference_costs_turn ON inference_costs(turn_id);
+CREATE INDEX IF NOT EXISTS idx_memory_index_confidence ON memory_index(confidence DESC);
 `
 
 // optionalColumn describes a column that may be missing from older databases.
@@ -689,13 +750,25 @@ type optionalColumn struct {
 	Default string
 }
 
+// optionalNullableColumn describes a nullable column that may be missing from older databases.
+type optionalNullableColumn struct {
+	Table   string
+	Column  string
+	ColType string
+}
+
 // ensureOptionalColumns checks for columns that may be missing from older installs
 // and adds them if needed. Uses PRAGMA table_info to detect column existence.
 func (s *Store) ensureOptionalColumns() error {
+	// Columns with NOT NULL DEFAULT constraints.
 	columns := []optionalColumn{
 		{Table: "episodic_memory", Column: "memory_state", ColType: "TEXT", Default: "'active'"},
 		{Table: "semantic_memory", Column: "memory_state", ColType: "TEXT", Default: "'active'"},
 		{Table: "pipeline_traces", Column: "session_id", ColType: "TEXT", Default: "''"},
+		{Table: "sessions", Column: "non_interactive", ColType: "INTEGER", Default: "0"},
+		{Table: "skills", Column: "usage_count", ColType: "INTEGER", Default: "0"},
+		{Table: "hippocampus", Column: "access_level", ColType: "TEXT", Default: "'internal'"},
+		{Table: "hippocampus", Column: "row_count", ColType: "INTEGER", Default: "0"},
 	}
 
 	for _, col := range columns {
@@ -713,6 +786,35 @@ func (s *Store) ensureOptionalColumns() error {
 		}
 		log.Info().Str("table", col.Table).Str("column", col.Column).Msg("added optional column")
 	}
+
+	// Nullable columns (no NOT NULL constraint).
+	nullableColumns := []optionalNullableColumn{
+		{Table: "session_messages", Column: "topic_tag", ColType: "TEXT"},
+		{Table: "episodic_memory", Column: "owner_id", ColType: "TEXT"},
+		{Table: "skills", Column: "last_used_at", ColType: "TEXT"},
+		{Table: "approval_requests", Column: "turn_id", ColType: "TEXT"},
+		{Table: "sub_agents", Column: "last_used_at", ColType: "TEXT"},
+		{Table: "pipeline_traces", Column: "react_trace_json", ColType: "TEXT"},
+		{Table: "pipeline_traces", Column: "inference_params_json", ColType: "TEXT"},
+		{Table: "memory_index", Column: "last_verified", ColType: "TEXT"},
+	}
+
+	for _, col := range nullableColumns {
+		exists, err := s.columnExists(col.Table, col.Column)
+		if err != nil {
+			return core.WrapError(core.ErrDatabase, fmt.Sprintf("failed to check column %s.%s", col.Table, col.Column), err)
+		}
+		if exists {
+			continue
+		}
+		alter := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s",
+			col.Table, col.Column, col.ColType)
+		if _, err := s.db.Exec(alter); err != nil {
+			return core.WrapError(core.ErrDatabase, fmt.Sprintf("failed to add column %s.%s", col.Table, col.Column), err)
+		}
+		log.Info().Str("table", col.Table).Str("column", col.Column).Msg("added optional column")
+	}
+
 	return nil
 }
 
