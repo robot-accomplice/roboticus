@@ -18,9 +18,9 @@ type Provider struct {
 	CostPerInputTok  float64           `json:"cost_per_input_token,omitempty"`
 	CostPerOutputTok float64           `json:"cost_per_output_token,omitempty"`
 	AuthHeader       string            `json:"auth_header,omitempty"`
-	AuthMode         string            `json:"auth_mode,omitempty"`          // "bearer" (default), "query", "oauth"
-	APIKeyRef        string            `json:"api_key_ref,omitempty"`        // reference to keystore secret name
-	OAuthClientID    string            `json:"oauth_client_id,omitempty"`    // for OAuth-based providers
+	AuthMode         string            `json:"auth_mode,omitempty"`       // "bearer" (default), "query", "oauth"
+	APIKeyRef        string            `json:"api_key_ref,omitempty"`     // reference to keystore secret name
+	OAuthClientID    string            `json:"oauth_client_id,omitempty"` // for OAuth-based providers
 	ExtraHeaders     map[string]string `json:"extra_headers,omitempty"`
 	TPMLimit         uint64            `json:"tpm_limit,omitempty"`
 	RPMLimit         uint64            `json:"rpm_limit,omitempty"`

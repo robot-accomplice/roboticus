@@ -50,7 +50,7 @@ type Context struct {
 	Workspace    string
 	AllowedPaths []string
 	Channel      string
-	Store        *db.Store              // database access; may be nil in tests
+	Store        *db.Store          // database access; may be nil in tests
 	FS           FileSystem         // file operations; nil defaults to OSFileSystem
 	Runner       core.ProcessRunner // subprocess execution; nil defaults to OSProcessRunner
 }

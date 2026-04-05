@@ -36,7 +36,7 @@ Connectors do exactly three things:
 
 1. **Parse** — Extract `Content`, channel context, and authentication metadata
    from the channel-specific request format.
-2. **Call** — Invoke `pipeline.Run()` with a `PipelineConfig` preset and a
+2. **Call** — Invoke `pipeline.RunPipeline()` with a `PipelineConfig` preset and a
    `ChannelContext` struct.
 3. **Format** — Transform the `PipelineOutcome` into the channel-specific
    response format (JSON, SSE stream, Telegram message, etc.).
@@ -50,6 +50,20 @@ logic belongs in the factory.
 Ask: "If I deleted this connector and wrote a new one for a hypothetical
 channel, would the new channel get all the same behavior?" If the answer is
 no, business logic has leaked into the connector.
+
+### Off-pipeline exemptions
+
+The only currently approved off-pipeline API flow is `/api/interview`.
+
+- `/api/interview/start`
+- `/api/interview/turn`
+- `/api/interview/finish`
+
+These routes implement a bounded configuration interview workflow rather than
+agent inference. They may maintain local interview state and format interview
+responses directly, but they must not become a second agent runtime. If the
+interview flow ever needs LLM inference, memory, delegation, or tool execution,
+that behavior must move behind `pipeline.RunPipeline()`.
 
 ---
 

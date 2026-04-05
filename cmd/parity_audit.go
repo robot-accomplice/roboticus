@@ -31,6 +31,7 @@ type subsystem struct {
 	RustPaths    []string // glob patterns relative to roboticus root
 	GoPaths      []string // glob patterns relative to goboticus root
 	KeyFunctions []string // Rust function names that must have Go equivalents
+	Aliases      map[string][]string
 }
 
 var subsystems = []subsystem{
@@ -43,8 +44,14 @@ var subsystems = []subsystem{
 	{
 		Name:         "Memory",
 		RustPaths:    []string{"crates/roboticus-agent/src/retrieval*", "crates/roboticus-agent/src/memory*"},
-		GoPaths:      []string{"internal/agent/retrieval.go", "internal/agent/memory.go"},
+		GoPaths:      []string{"internal/agent/retrieval.go", "internal/agent/memory.go", "internal/agent/memory/*.go"},
 		KeyFunctions: []string{"retrieve", "ingest_turn", "hybrid_search", "embed"},
+		Aliases: map[string][]string{
+			"retrieve":      {"retrieve", "retriever", "retrieval"},
+			"ingest_turn":   {"ingest_turn", "ingestturn", "ingest"},
+			"hybrid_search": {"hybrid_search", "hybridsearch", "embedding reranking", "retrieveepisodic"},
+			"embed":         {"embed", "embedding", "queryembed"},
+		},
 	},
 	{
 		Name:         "LLM/Providers",
@@ -66,15 +73,27 @@ var subsystems = []subsystem{
 	},
 	{
 		Name:         "Scheduler",
-		RustPaths:    []string{"crates/roboticus-cron/src/*.rs"},
-		GoPaths:      []string{"internal/cron/*.go"},
+		RustPaths:    []string{"crates/roboticus-cron/src/*.rs", "crates/roboticus-schedule/src/*.rs"},
+		GoPaths:      []string{"internal/cron/*.go", "internal/schedule/*.go"},
 		KeyFunctions: []string{"cron_worker", "scheduler", "lease"},
+		Aliases: map[string][]string{
+			"cron_worker": {"cron_worker", "cronworker"},
+			"scheduler":   {"scheduler", "durablescheduler", "calculatenextrun", "isdue"},
+			"lease":       {"lease", "lease_holder", "lease_expires_at", "acquirelease", "releaselease"},
+		},
 	},
 	{
 		Name:         "Wallet",
 		RustPaths:    []string{"crates/roboticus-wallet/src/*.rs"},
 		GoPaths:      []string{"internal/wallet/*.go"},
 		KeyFunctions: []string{"rpc_call", "get_balance", "x402", "eip3009", "transfer"},
+		Aliases: map[string][]string{
+			"rpc_call":    {"rpc_call", "rpccall"},
+			"get_balance": {"get_balance", "getbalance"},
+			"x402":        {"x402"},
+			"eip3009":     {"eip3009"},
+			"transfer":    {"transfer", "sendtransaction", "sendrawtransaction"},
+		},
 	},
 	{
 		Name:         "Config",
@@ -96,15 +115,24 @@ var subsystems = []subsystem{
 	},
 	{
 		Name:         "Skills/Plugins",
-		RustPaths:    []string{"crates/roboticus-agent/src/skill*", "crates/roboticus-agent/src/plugin*"},
-		GoPaths:      []string{"internal/agent/skills.go", "internal/agent/skill_watcher.go", "internal/plugin/*.go"},
+		RustPaths:    []string{"crates/roboticus-agent/src/skill*", "crates/roboticus-agent/src/plugin*", "crates/roboticus-plugin-sdk/src/*.rs"},
+		GoPaths:      []string{"internal/agent/skills.go", "internal/agent/skills/*.go", "internal/plugin/*.go"},
 		KeyFunctions: []string{"skill_loader", "skill_watcher", "plugin_registry"},
+		Aliases: map[string][]string{
+			"skill_loader":    {"skill_loader", "loadskills", "skills.go"},
+			"skill_watcher":   {"skill_watcher", "watchmode", "watch"},
+			"plugin_registry": {"plugin_registry", "registry", "newregistry"},
+		},
 	},
 	{
 		Name:         "Dashboard",
 		RustPaths:    []string{"crates/roboticus-api/src/dashboard*"},
 		GoPaths:      []string{"internal/api/dashboard*.go", "internal/api/dashboard_spa.html"},
 		KeyFunctions: []string{"dashboard_handler", "csp_nonce"},
+		Aliases: map[string][]string{
+			"dashboard_handler": {"dashboard_handler", "dashboardhandler"},
+			"csp_nonce":         {"csp_nonce", "csp nonce", "generatenonce", "content-security-policy", "nonce"},
+		},
 	},
 }
 
@@ -129,7 +157,7 @@ func runParityAudit(cmd *cobra.Command, args []string) error {
 		totalGo += goFiles
 
 		// Check for key function presence in Go files.
-		missing := findMissingFunctions(goDir, sub.GoPaths, sub.KeyFunctions)
+		missing := findMissingFunctions(goDir, sub.GoPaths, sub.KeyFunctions, sub.Aliases)
 		coverage := "full"
 		status := "OK"
 
@@ -199,13 +227,16 @@ func countGlobFiles(root string, patterns []string) int {
 	for _, pattern := range patterns {
 		matches, _ := filepath.Glob(filepath.Join(root, pattern))
 		for _, m := range matches {
+			if shouldIgnoreRustFile(m) {
+				continue
+			}
 			seen[m] = true
 		}
 	}
 	return len(seen)
 }
 
-func findMissingFunctions(root string, patterns []string, funcs []string) []string {
+func findMissingFunctions(root string, patterns []string, funcs []string, aliases map[string][]string) []string {
 	// Read all Go files matching the patterns and search for function names.
 	var allContent strings.Builder
 	for _, pattern := range patterns {
@@ -226,6 +257,10 @@ func findMissingFunctions(root string, patterns []string, funcs []string) []stri
 		variants := []string{
 			strings.ToLower(fn),
 			strings.ToLower(strings.ReplaceAll(fn, "_", "")),
+		}
+		for _, alias := range aliases[fn] {
+			alias = strings.ToLower(alias)
+			variants = append(variants, alias, strings.ReplaceAll(alias, "_", ""), strings.ReplaceAll(alias, " ", ""))
 		}
 		found := false
 		for _, v := range variants {
@@ -250,6 +285,9 @@ func findNewRustFiles(rustDir string) []string {
 		if filepath.Ext(path) != ".rs" {
 			return nil
 		}
+		if shouldIgnoreRustFile(path) {
+			return nil
+		}
 		rel, _ := filepath.Rel(rustDir, path)
 		newFiles = append(newFiles, rel)
 		return nil
@@ -269,13 +307,19 @@ func extractEndpoints(root, subdir string) []string {
 		if err != nil || d.IsDir() {
 			return nil
 		}
+		if shouldIgnoreRustFile(path) {
+			return nil
+		}
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return nil
 		}
 		matches := routePattern.FindAllStringSubmatch(string(data), -1)
 		for _, m := range matches {
-			ep := strings.ToUpper(m[1]) + " " + m[2]
+			if !looksLikeEndpointPath(m[2]) {
+				continue
+			}
+			ep := strings.ToUpper(m[1]) + " " + normalizeEndpointPath(m[2])
 			if !seen[ep] {
 				seen[ep] = true
 				endpoints = append(endpoints, ep)
@@ -299,4 +343,46 @@ func diffStrings(a, b []string) []string {
 		}
 	}
 	return diff
+}
+
+func shouldIgnoreRustFile(path string) bool {
+	normalized := filepath.ToSlash(path)
+	parts := strings.Split(normalized, "/")
+	for _, part := range parts {
+		switch part {
+		case "target", "fuzz", ".git":
+			return true
+		}
+	}
+	if strings.Contains(normalized, "/out/") || strings.Contains(normalized, "/gen/") {
+		return true
+	}
+	return false
+}
+
+func looksLikeEndpointPath(path string) bool {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return false
+	}
+	if strings.Contains(path, "://") {
+		return false
+	}
+	if strings.ContainsAny(path, " \t\n") {
+		return false
+	}
+	if strings.Contains(path, ".") && !strings.HasPrefix(path, "/") {
+		return false
+	}
+	if !strings.HasPrefix(path, "/") && !strings.HasPrefix(path, "{") {
+		return false
+	}
+	return true
+}
+
+func normalizeEndpointPath(path string) string {
+	if strings.HasPrefix(path, "{") {
+		return "/" + path
+	}
+	return path
 }

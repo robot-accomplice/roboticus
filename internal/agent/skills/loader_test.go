@@ -168,3 +168,22 @@ func TestLoader_HashChangesOnContent(t *testing.T) {
 		t.Error("hash should change when content changes")
 	}
 }
+
+func TestNewSkillLoader_LoadSkills(t *testing.T) {
+	dir := t.TempDir()
+	content := "---\nname: parity-skill\n---\nBody"
+	_ = os.WriteFile(filepath.Join(dir, "skill.md"), []byte(content), 0644)
+
+	loader := NewSkillLoader()
+	if loader == nil {
+		t.Fatal("expected loader")
+	}
+
+	skills := LoadSkills(dir)
+	if len(skills) != 1 {
+		t.Fatalf("expected 1 skill, got %d", len(skills))
+	}
+	if skills[0].Name() != "parity-skill" {
+		t.Fatalf("name = %q, want parity-skill", skills[0].Name())
+	}
+}

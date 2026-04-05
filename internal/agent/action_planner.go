@@ -10,14 +10,14 @@ import (
 type PlannedAction int
 
 const (
-	ActionInfer              PlannedAction = iota // Standard LLM inference
-	ActionDelegate                                // Spawn/resume subagent
-	ActionSkillExec                               // Direct skill execution
-	ActionRetrieve                                // Memory-only retrieval (no LLM)
-	ActionEscalate                                // Escalate to higher-tier model
-	ActionWait                                    // Await async result
-	ActionNormRetry   // Correct malformed tool call
-	ActionSurfaceBlock // Surface a genuine blocker
+	ActionInfer        PlannedAction = iota // Standard LLM inference
+	ActionDelegate                          // Spawn/resume subagent
+	ActionSkillExec                         // Direct skill execution
+	ActionRetrieve                          // Memory-only retrieval (no LLM)
+	ActionEscalate                          // Escalate to higher-tier model
+	ActionWait                              // Await async result
+	ActionNormRetry                         // Correct malformed tool call
+	ActionSurfaceBlock                      // Surface a genuine blocker
 )
 
 func (a PlannedAction) String() string {

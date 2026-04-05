@@ -7,24 +7,24 @@ import (
 
 // QueryFeatures holds the feature vector for a routing decision.
 type QueryFeatures struct {
-	TokenCount    int     `json:"token_count"`
-	Complexity    float64 `json:"complexity"`
-	HasToolCalls  bool    `json:"has_tool_calls"`
-	SessionDepth  int     `json:"session_depth"`
-	Channel       string  `json:"channel"`
+	TokenCount   int     `json:"token_count"`
+	Complexity   float64 `json:"complexity"`
+	HasToolCalls bool    `json:"has_tool_calls"`
+	SessionDepth int     `json:"session_depth"`
+	Channel      string  `json:"channel"`
 }
 
 // RoutingExample is a stored routing prediction for ML training.
 type RoutingExample struct {
-	ID                   string        `json:"id"`
-	TurnID               string        `json:"turn_id"`
-	ProductionModel      string        `json:"production_model"`
-	ShadowModel          *string       `json:"shadow_model,omitempty"`
-	ProductionComplexity *float64      `json:"production_complexity,omitempty"`
-	ShadowComplexity     *float64      `json:"shadow_complexity,omitempty"`
-	Agreed               bool          `json:"agreed"`
-	DetailJSON           *string       `json:"detail_json,omitempty"`
-	CreatedAt            string        `json:"created_at"`
+	ID                   string   `json:"id"`
+	TurnID               string   `json:"turn_id"`
+	ProductionModel      string   `json:"production_model"`
+	ShadowModel          *string  `json:"shadow_model,omitempty"`
+	ProductionComplexity *float64 `json:"production_complexity,omitempty"`
+	ShadowComplexity     *float64 `json:"shadow_complexity,omitempty"`
+	Agreed               bool     `json:"agreed"`
+	DetailJSON           *string  `json:"detail_json,omitempty"`
+	CreatedAt            string   `json:"created_at"`
 }
 
 // RoutingDatasetRepo handles routing prediction data.
@@ -89,4 +89,3 @@ func (r *RoutingDatasetRepo) ListRoutingExamples(ctx context.Context, limit int)
 	}
 	return results, rows.Err()
 }
-

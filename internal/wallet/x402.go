@@ -108,7 +108,7 @@ func (h *X402Handler) Handle402(body []byte, w *Wallet) (string, error) {
 	amountWei := new(big.Int)
 	amountWei.SetInt64(int64(reqs.Amount * 1e6))
 
-	// Generate a random nonce for the authorization.
+	// Generate a nonce for the transferWithAuthorization payload.
 	nonce := make([]byte, 32)
 	if reqs.Nonce != "" {
 		decoded, _ := hex.DecodeString(reqs.Nonce)
@@ -117,32 +117,19 @@ func (h *X402Handler) Handle402(body []byte, w *Wallet) (string, error) {
 		}
 	}
 
-	// EIP-712 domain separator for the token contract.
-	domainSep := eip712DomainSeparator(reqs.Token, reqs.ChainID)
+	auth := EIP3009Authorization{
+		Token:       reqs.Token,
+		From:        w.address,
+		To:          reqs.Recipient,
+		Value:       amountWei,
+		ValidAfter:  0,
+		ValidBefore: deadline,
+		Nonce:       nonce,
+		ChainID:     reqs.ChainID,
+	}
 
-	// EIP-3009 TransferWithAuthorization type hash.
-	typeHash := keccak256([]byte("TransferWithAuthorization(address from,address to,uint256 value,uint256 validAfter,uint256 validBefore,bytes32 nonce)"))
-
-	// Encode the struct hash.
-	from := addressToBytes32(w.address)
-	to := addressToBytes32(reqs.Recipient)
-	value := uint256ToBytes32(amountWei)
-	validAfter := uint256ToBytes32(big.NewInt(0))
-	validBefore := uint256ToBytes32(big.NewInt(deadline))
-
-	structData := append(typeHash, from...)
-	structData = append(structData, to...)
-	structData = append(structData, value...)
-	structData = append(structData, validAfter...)
-	structData = append(structData, validBefore...)
-	structData = append(structData, nonce...)
-	structHash := keccak256(structData)
-
-	// EIP-712 final digest: \x19\x01 + domainSep + structHash.
-	digest := keccak256(append([]byte{0x19, 0x01}, append(domainSep, structHash...)...))
-
-	// Sign with the wallet's private key.
-	sig, err := signDigest(w.privateKey, digest)
+	// Sign the EIP-3009 authorization with the wallet's private key.
+	sig, err := w.SignEIP3009TransferWithAuthorization(auth)
 	if err != nil {
 		return "", fmt.Errorf("x402: signing failed: %w", err)
 	}

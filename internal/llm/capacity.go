@@ -42,11 +42,11 @@ type providerWindow struct {
 
 // CapacityTracker tracks tokens-per-minute and requests-per-minute per provider.
 type CapacityTracker struct {
-	mu             sync.RWMutex
-	providers      map[string]*providerWindow
-	defaultTPM     int
-	defaultRPM     int
-	nowFunc        func() time.Time // for testing
+	mu         sync.RWMutex
+	providers  map[string]*providerWindow
+	defaultTPM int
+	defaultRPM int
+	nowFunc    func() time.Time // for testing
 }
 
 // NewCapacityTracker creates a tracker with fallback TPM and RPM limits for

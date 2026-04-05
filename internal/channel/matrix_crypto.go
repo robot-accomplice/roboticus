@@ -97,7 +97,7 @@ func (mc *MatrixCrypto) DeviceKeysJSON() map[string]any {
 		},
 		"keys": map[string]string{
 			"curve25519:DEVICE": base64.RawStdEncoding.EncodeToString(mc.Curve25519Public),
-			"ed25519:DEVICE":   base64.RawStdEncoding.EncodeToString(mc.Ed25519Public),
+			"ed25519:DEVICE":    base64.RawStdEncoding.EncodeToString(mc.Ed25519Public),
 		},
 	}
 }
@@ -212,10 +212,10 @@ func (mc *MatrixCrypto) EncryptMessage(roomID, plaintext string) (map[string]any
 	}
 
 	return map[string]any{
-		"algorithm":  "m.megolm.v1.aes-sha2",
-		"sender_key": base64.RawStdEncoding.EncodeToString(mc.Curve25519Public),
-		"session_id": sessionID,
-		"ciphertext": base64.StdEncoding.EncodeToString(ciphertextBytes),
+		"algorithm":     "m.megolm.v1.aes-sha2",
+		"sender_key":    base64.RawStdEncoding.EncodeToString(mc.Curve25519Public),
+		"session_id":    sessionID,
+		"ciphertext":    base64.StdEncoding.EncodeToString(ciphertextBytes),
 		"message_index": msgIndex,
 	}, nil
 }

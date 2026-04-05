@@ -16,7 +16,7 @@ type Type int
 
 const (
 	Structured  Type = iota // TOML manifest with schema
-	Instruction                  // Markdown with YAML frontmatter
+	Instruction             // Markdown with YAML frontmatter
 )
 
 // Trigger defines when a skill should auto-activate.
@@ -32,14 +32,14 @@ type ToolChainStep struct {
 
 // Manifest holds metadata for a structured skill (from TOML/YAML frontmatter).
 type Manifest struct {
-	Name        string           `yaml:"name" json:"name"`
-	Description string           `yaml:"description" json:"description"`
-	Version     string           `yaml:"version" json:"version"`
-	Author      string           `yaml:"author" json:"author"`
-	Triggers    Trigger          `yaml:"triggers" json:"triggers"`
-	PairedTool  string           `yaml:"paired_tool" json:"paired_tool"`
-	Priority    int              `yaml:"priority" json:"priority"`
-	ToolChain   []ToolChainStep  `yaml:"tool_chain" json:"tool_chain"`
+	Name        string          `yaml:"name" json:"name"`
+	Description string          `yaml:"description" json:"description"`
+	Version     string          `yaml:"version" json:"version"`
+	Author      string          `yaml:"author" json:"author"`
+	Triggers    Trigger         `yaml:"triggers" json:"triggers"`
+	PairedTool  string          `yaml:"paired_tool" json:"paired_tool"`
+	Priority    int             `yaml:"priority" json:"priority"`
+	ToolChain   []ToolChainStep `yaml:"tool_chain" json:"tool_chain"`
 }
 
 // Skill wraps a loaded skill with its hash for change detection.

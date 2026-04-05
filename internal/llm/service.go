@@ -147,7 +147,7 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 	// Route: select model if not explicitly set.
 	if req.Model == "" {
 		target := s.router.Select(req)
-		req.Model = target.Model
+		req.Model = modelSpecForTarget(target)
 	}
 
 	// Parse "provider/model" format: "ollama/qwen3.5:35b-a3b" → provider="ollama", model="qwen3.5:35b-a3b".
@@ -248,7 +248,7 @@ func (s *Service) Stream(ctx context.Context, req *Request) (<-chan StreamChunk,
 	// Route if needed.
 	if req.Model == "" {
 		target := s.router.Select(req)
-		req.Model = target.Model
+		req.Model = modelSpecForTarget(target)
 	}
 
 	// Parse "provider/model" format.
@@ -422,6 +422,16 @@ func contains(slice []string, s string) bool {
 		}
 	}
 	return false
+}
+
+func modelSpecForTarget(target RouteTarget) string {
+	if target.Provider != "" && target.Model != "" && !strings.Contains(target.Model, "/") {
+		return target.Provider + "/" + target.Model
+	}
+	if target.Model != "" {
+		return target.Model
+	}
+	return target.Provider
 }
 
 // ProviderStatus reports the health of each configured provider.

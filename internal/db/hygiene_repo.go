@@ -8,17 +8,17 @@ import (
 
 // HygieneSweepRow represents a row in hygiene_log.
 type HygieneSweepRow struct {
-	ID                          string
-	SweepAt                     string
-	StaleProceduralDays         int
-	DeadSkillPriorityThreshold  int
-	ProcTotal                   int
-	ProcStale                   int
-	ProcPruned                  int
-	SkillsTotal                 int
-	SkillsDead                  int
-	SkillsPruned                int
-	AvgSkillPriority            float64
+	ID                         string
+	SweepAt                    string
+	StaleProceduralDays        int
+	DeadSkillPriorityThreshold int
+	ProcTotal                  int
+	ProcStale                  int
+	ProcPruned                 int
+	SkillsTotal                int
+	SkillsDead                 int
+	SkillsPruned               int
+	AvgSkillPriority           float64
 }
 
 // HygieneRepository handles hygiene sweep log persistence.

@@ -286,9 +286,9 @@ type matrixEvent struct {
 }
 
 type matrixEventContent struct {
-	MsgType string            `json:"msgtype"`
-	Body    string            `json:"body"`
-	Raw     map[string]any    `json:"-"` // populated by custom unmarshal
+	MsgType string         `json:"msgtype"`
+	Body    string         `json:"body"`
+	Raw     map[string]any `json:"-"` // populated by custom unmarshal
 }
 
 // UnmarshalJSON implements custom unmarshalling to capture the raw content map

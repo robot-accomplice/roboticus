@@ -53,10 +53,10 @@ type gatewayRequest struct {
 
 // gatewayResponse is a JSON-RPC 2.0 response sent by the gateway.
 type gatewayResponse struct {
-	JSONRPC string        `json:"jsonrpc"`
+	JSONRPC string          `json:"jsonrpc"`
 	ID      json.RawMessage `json:"id"`
-	Result  any           `json:"result,omitempty"`
-	Error   *jsonRPCError `json:"error,omitempty"`
+	Result  any             `json:"result,omitempty"`
+	Error   *jsonRPCError   `json:"error,omitempty"`
 }
 
 // ServeHTTP implements http.Handler for the MCP gateway.

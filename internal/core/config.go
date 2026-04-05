@@ -52,27 +52,27 @@ type Config struct {
 	Heartbeat  HeartbeatConfig           `json:"heartbeat" mapstructure:"heartbeat"`
 
 	// New roboticus-compatible sections.
-	CircuitBreaker            CircuitBreakerConfig `json:"circuit_breaker" mapstructure:"circuit_breaker"`
-	SelfFunding               SelfFundingConfig    `json:"self_funding" mapstructure:"self_funding"`
-	Yield                     YieldConfig          `json:"yield" mapstructure:"yield"`
-	A2A                       A2AConfig            `json:"a2a" mapstructure:"a2a"`
-	Context                   ContextConfig        `json:"context" mapstructure:"context"`
-	Browser                   BrowserConfig        `json:"browser" mapstructure:"browser"`
-	Daemon                    DaemonConfig         `json:"daemon" mapstructure:"daemon"`
-	Update                    UpdateConfig         `json:"update" mapstructure:"update"`
-	TierAdapt                 TierAdaptConfig      `json:"tier_adapt" mapstructure:"tier_adapt"`
-	Personality               PersonalityConfig    `json:"personality" mapstructure:"personality"`
-	Digest                    DigestConfig         `json:"digest" mapstructure:"digest"`
-	Learning                  LearningConfig       `json:"learning" mapstructure:"learning"`
-	Multimodal                MultimodalConfig     `json:"multimodal" mapstructure:"multimodal"`
-	Knowledge                 KnowledgeConfig      `json:"knowledge" mapstructure:"knowledge"`
-	Workspace                 WorkspaceCfg         `json:"workspace" mapstructure:"workspace"`
-	Devices                   DeviceConfig         `json:"devices" mapstructure:"devices"`
-	Discovery                 DiscoveryConfig      `json:"discovery" mapstructure:"discovery"`
-	Obsidian                  ObsidianConfig       `json:"obsidian" mapstructure:"obsidian"`
-	Backups                   BackupsConfig        `json:"backups" mapstructure:"backups"`
-	ContextBudget             ContextBudgetConfig  `json:"context_budget" mapstructure:"context_budget"`
-	DisabledBundledProviders  []string             `json:"disabled_bundled_providers" mapstructure:"disabled_bundled_providers"`
+	CircuitBreaker           CircuitBreakerConfig `json:"circuit_breaker" mapstructure:"circuit_breaker"`
+	SelfFunding              SelfFundingConfig    `json:"self_funding" mapstructure:"self_funding"`
+	Yield                    YieldConfig          `json:"yield" mapstructure:"yield"`
+	A2A                      A2AConfig            `json:"a2a" mapstructure:"a2a"`
+	Context                  ContextConfig        `json:"context" mapstructure:"context"`
+	Browser                  BrowserConfig        `json:"browser" mapstructure:"browser"`
+	Daemon                   DaemonConfig         `json:"daemon" mapstructure:"daemon"`
+	Update                   UpdateConfig         `json:"update" mapstructure:"update"`
+	TierAdapt                TierAdaptConfig      `json:"tier_adapt" mapstructure:"tier_adapt"`
+	Personality              PersonalityConfig    `json:"personality" mapstructure:"personality"`
+	Digest                   DigestConfig         `json:"digest" mapstructure:"digest"`
+	Learning                 LearningConfig       `json:"learning" mapstructure:"learning"`
+	Multimodal               MultimodalConfig     `json:"multimodal" mapstructure:"multimodal"`
+	Knowledge                KnowledgeConfig      `json:"knowledge" mapstructure:"knowledge"`
+	Workspace                WorkspaceCfg         `json:"workspace" mapstructure:"workspace"`
+	Devices                  DeviceConfig         `json:"devices" mapstructure:"devices"`
+	Discovery                DiscoveryConfig      `json:"discovery" mapstructure:"discovery"`
+	Obsidian                 ObsidianConfig       `json:"obsidian" mapstructure:"obsidian"`
+	Backups                  BackupsConfig        `json:"backups" mapstructure:"backups"`
+	ContextBudget            ContextBudgetConfig  `json:"context_budget" mapstructure:"context_budget"`
+	DisabledBundledProviders []string             `json:"disabled_bundled_providers" mapstructure:"disabled_bundled_providers"`
 }
 
 // CORSConfig holds cross-origin request settings.
@@ -195,7 +195,7 @@ type ModelsConfig struct {
 	Primary         string                   `json:"primary" mapstructure:"primary"`
 	Fallback        []string                 `json:"fallback,omitempty" toml:"fallbacks" mapstructure:"fallbacks"`
 	Routing         RoutingConfig            `json:"routing" mapstructure:"routing"`
-	ModelOverrides  map[string]ModelOverride  `json:"model_overrides,omitempty" mapstructure:"model_overrides"`
+	ModelOverrides  map[string]ModelOverride `json:"model_overrides,omitempty" mapstructure:"model_overrides"`
 	StreamByDefault bool                     `json:"stream_by_default" mapstructure:"stream_by_default"`
 }
 
@@ -334,9 +334,9 @@ type SkillsConfig struct {
 
 // CircuitBreakerConfig holds circuit breaker settings.
 type CircuitBreakerConfig struct {
-	Threshold         int `json:"threshold" mapstructure:"threshold"`
-	WindowSeconds     int `json:"window_seconds" mapstructure:"window_seconds"`
-	CooldownSeconds   int `json:"cooldown_seconds" mapstructure:"cooldown_seconds"`
+	Threshold          int `json:"threshold" mapstructure:"threshold"`
+	WindowSeconds      int `json:"window_seconds" mapstructure:"window_seconds"`
+	CooldownSeconds    int `json:"cooldown_seconds" mapstructure:"cooldown_seconds"`
 	MaxCooldownSeconds int `json:"max_cooldown_seconds" mapstructure:"max_cooldown_seconds"`
 }
 
@@ -367,22 +367,22 @@ type YieldConfig struct {
 
 // A2AConfig holds agent-to-agent protocol settings.
 type A2AConfig struct {
-	Enabled                bool   `json:"enabled" mapstructure:"enabled"`
-	MaxMessageSize         int    `json:"max_message_size" mapstructure:"max_message_size"`
-	RateLimitPerPeer       int    `json:"rate_limit_per_peer" mapstructure:"rate_limit_per_peer"`
-	SessionTimeoutSeconds  int    `json:"session_timeout_seconds" mapstructure:"session_timeout_seconds"`
-	RequireOnChainIdentity bool   `json:"require_on_chain_identity" mapstructure:"require_on_chain_identity"`
-	NonceTTLSeconds        int    `json:"nonce_ttl_seconds" mapstructure:"nonce_ttl_seconds"`
+	Enabled                bool `json:"enabled" mapstructure:"enabled"`
+	MaxMessageSize         int  `json:"max_message_size" mapstructure:"max_message_size"`
+	RateLimitPerPeer       int  `json:"rate_limit_per_peer" mapstructure:"rate_limit_per_peer"`
+	SessionTimeoutSeconds  int  `json:"session_timeout_seconds" mapstructure:"session_timeout_seconds"`
+	RequireOnChainIdentity bool `json:"require_on_chain_identity" mapstructure:"require_on_chain_identity"`
+	NonceTTLSeconds        int  `json:"nonce_ttl_seconds" mapstructure:"nonce_ttl_seconds"`
 }
 
 // ContextConfig holds context window management settings.
 type ContextConfig struct {
-	MaxTokens              int     `json:"max_tokens" mapstructure:"max_tokens"`
-	SoftTrimRatio          float64 `json:"soft_trim_ratio" mapstructure:"soft_trim_ratio"`
-	HardClearRatio         float64 `json:"hard_clear_ratio" mapstructure:"hard_clear_ratio"`
-	PreserveRecent         int     `json:"preserve_recent" mapstructure:"preserve_recent"`
-	CheckpointEnabled      bool    `json:"checkpoint_enabled" mapstructure:"checkpoint_enabled"`
-	CheckpointIntervalTurns int    `json:"checkpoint_interval_turns" mapstructure:"checkpoint_interval_turns"`
+	MaxTokens               int     `json:"max_tokens" mapstructure:"max_tokens"`
+	SoftTrimRatio           float64 `json:"soft_trim_ratio" mapstructure:"soft_trim_ratio"`
+	HardClearRatio          float64 `json:"hard_clear_ratio" mapstructure:"hard_clear_ratio"`
+	PreserveRecent          int     `json:"preserve_recent" mapstructure:"preserve_recent"`
+	CheckpointEnabled       bool    `json:"checkpoint_enabled" mapstructure:"checkpoint_enabled"`
+	CheckpointIntervalTurns int     `json:"checkpoint_interval_turns" mapstructure:"checkpoint_interval_turns"`
 }
 
 // BrowserConfig holds headless browser / CDP settings.
@@ -423,8 +423,8 @@ type DigestConfig struct {
 
 // LearningConfig holds pattern learning settings.
 type LearningConfig struct {
-	Enabled            bool `json:"enabled" mapstructure:"enabled"`
-	MinSequenceLength  int  `json:"min_sequence_length" mapstructure:"min_sequence_length"`
+	Enabled           bool `json:"enabled" mapstructure:"enabled"`
+	MinSequenceLength int  `json:"min_sequence_length" mapstructure:"min_sequence_length"`
 }
 
 // MultimodalConfig holds multimodal input settings.
@@ -478,10 +478,10 @@ type ContextBudgetConfig struct {
 
 // ModelOverride holds per-model override settings.
 type ModelOverride struct {
-	MaxTokens          int     `json:"max_tokens,omitempty" mapstructure:"max_tokens"`
-	Temperature        float64 `json:"temperature,omitempty" mapstructure:"temperature"`
-	TopP               float64 `json:"top_p,omitempty" mapstructure:"top_p"`
-	Provider           string  `json:"provider,omitempty" mapstructure:"provider"`
+	MaxTokens   int     `json:"max_tokens,omitempty" mapstructure:"max_tokens"`
+	Temperature float64 `json:"temperature,omitempty" mapstructure:"temperature"`
+	TopP        float64 `json:"top_p,omitempty" mapstructure:"top_p"`
+	Provider    string  `json:"provider,omitempty" mapstructure:"provider"`
 }
 
 // DefaultConfig returns a Config with sensible defaults.

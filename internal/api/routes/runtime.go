@@ -45,11 +45,11 @@ func GetRuntimeDiscovery(store *db.Store) http.HandlerFunc {
 				continue
 			}
 			agent := map[string]any{
-				"id":            id,
-				"did":           did,
-				"endpoint_url":  endpoint,
-				"trust_score":   trustScore,
-				"created_at":    createdAt,
+				"id":           id,
+				"did":          did,
+				"endpoint_url": endpoint,
+				"trust_score":  trustScore,
+				"created_at":   createdAt,
 			}
 			if capabilities != nil {
 				agent["capabilities"] = *capabilities

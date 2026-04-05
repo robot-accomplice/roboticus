@@ -145,11 +145,11 @@ func DelegationStats(store *db.Store) http.HandlerFunc {
 		}
 
 		writeJSON(w, http.StatusOK, map[string]any{
-			"total":            total,
-			"successful":       successful,
-			"success_rate":     successRate,
-			"avg_duration_ms":  avgDuration,
-			"avg_quality":      avgQuality,
+			"total":           total,
+			"successful":      successful,
+			"success_rate":    successRate,
+			"avg_duration_ms": avgDuration,
+			"avg_quality":     avgQuality,
 		})
 	}
 }

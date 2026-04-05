@@ -22,9 +22,9 @@ const (
 
 // MediaService downloads remote media with SSRF protection.
 type MediaService struct {
-	maxFileSize   int64
-	httpClient    *http.Client
-	validateURL   func(string) error // override for testing; nil means use ValidateRemoteURL
+	maxFileSize int64
+	httpClient  *http.Client
+	validateURL func(string) error // override for testing; nil means use ValidateRemoteURL
 }
 
 // DownloadedMedia holds a fetched file's bytes and metadata.

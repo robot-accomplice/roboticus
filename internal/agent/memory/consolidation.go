@@ -110,13 +110,13 @@ func jaccardSimilarity(a, b string) float64 {
 
 // ConsolidationReport holds per-phase counts from a consolidation run.
 type ConsolidationReport struct {
-	Indexed          int
-	Deduped          int
-	Promoted         int
+	Indexed           int
+	Deduped           int
+	Promoted          int
 	ConfidenceDecayed int
 	ImportanceDecayed int
-	Pruned           int
-	Orphaned         int
+	Pruned            int
+	Orphaned          int
 }
 
 // ConsolidationPipeline runs a 7-phase memory consolidation pipeline.
@@ -250,11 +250,11 @@ func (p *ConsolidationPipeline) indexRows(ctx context.Context, store *db.Store, 
 func (p *ConsolidationPipeline) phaseCrossTierDedup(ctx context.Context, store *db.Store) int {
 	// Collect active entries from episodic and semantic (the two content-rich tiers).
 	type memEntry struct {
-		id          string
-		table       string
-		content     string
-		importance  float64
-		confidence  float64
+		id         string
+		table      string
+		content    string
+		importance float64
+		confidence float64
 	}
 
 	var entries []memEntry
