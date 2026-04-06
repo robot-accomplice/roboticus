@@ -18,7 +18,7 @@ func GetWalletBalance(store *db.Store) http.HandlerFunc {
 		if err != nil {
 			// Table may not exist yet — return empty.
 			writeJSON(w, http.StatusOK, map[string]any{
-				"balance":  "0.00",
+				"balance":  0.0,
 				"currency": "USDC",
 				"network":  "Base",
 				"chain_id": baseChainID,

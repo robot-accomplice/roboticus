@@ -69,7 +69,7 @@ func TestGetTaxPayouts_Empty(t *testing.T) {
 
 func TestGetRoster(t *testing.T) {
 	store := testutil.TempStore(t)
-	handler := GetRoster(store)
+	handler := GetRoster(store, testConfig())
 	req := httptest.NewRequest("GET", "/api/roster", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -97,19 +97,25 @@ func TestGetSwaps_QueryFailureReturnsServerError(t *testing.T) {
 	}
 }
 
-func TestGetRoster_QueryFailureReturnsServerError(t *testing.T) {
+func TestGetRoster_QueryFailureReturnsPrimaryOnly(t *testing.T) {
 	store := testutil.TempStore(t)
 	if _, err := store.ExecContext(bgCtx, `DROP TABLE sub_agents`); err != nil {
 		t.Fatalf("drop sub_agents: %v", err)
 	}
 
-	handler := GetRoster(store)
+	handler := GetRoster(store, testConfig())
 	req := httptest.NewRequest("GET", "/api/roster", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 500", rec.Code)
+	// Should still return 200 with just the primary agent.
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	body := jsonBody(t, rec)
+	agents := body["roster"].([]any)
+	if len(agents) != 1 {
+		t.Fatalf("expected 1 agent (primary), got %d", len(agents))
 	}
 }
 

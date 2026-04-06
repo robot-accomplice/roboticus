@@ -222,9 +222,38 @@ func ToggleSkill(store *db.Store) http.HandlerFunc {
 }
 
 // GetSkillsCatalog returns available skills from the catalog.
-func GetSkillsCatalog() http.HandlerFunc {
+func GetSkillsCatalog(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"items": make([]any, 0)})
+		rows, err := store.QueryContext(r.Context(),
+			`SELECT id, name, kind, description, version, risk_level, enabled, created_at
+			 FROM skills ORDER BY name`)
+		if err != nil {
+			writeJSON(w, http.StatusOK, map[string]any{"items": make([]any, 0)})
+			return
+		}
+		defer func() { _ = rows.Close() }()
+
+		items := make([]map[string]any, 0)
+		for rows.Next() {
+			var id, name, kind, description, version, riskLevel, createdAt string
+			var enabled bool
+			if err := rows.Scan(&id, &name, &kind, &description, &version, &riskLevel, &enabled, &createdAt); err != nil {
+				continue
+			}
+			items = append(items, map[string]any{
+				"id":          id,
+				"name":        name,
+				"kind":        kind,
+				"description": description,
+				"version":     version,
+				"risk_level":  riskLevel,
+				"enabled":     enabled,
+				"installed":   true,
+				"source":      "registry",
+				"created_at":  createdAt,
+			})
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"items": items})
 	}
 }
 

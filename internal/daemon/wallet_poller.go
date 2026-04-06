@@ -30,10 +30,13 @@ func startWalletPoller(ctx context.Context, cfg *core.Config, store *db.Store) {
 		return
 	}
 
+	// Use machine-derived passphrase (same as keystore) — no separate env var needed.
+	passphrase := core.MachinePassphrase()
 	w, err := wallet.NewWallet(wallet.WalletConfig{
-		Path:    cfg.Wallet.Path,
-		ChainID: int64(cfg.Wallet.ChainID),
-		RPCURL:  cfg.Wallet.RPCURL,
+		Path:       cfg.Wallet.Path,
+		ChainID:    int64(cfg.Wallet.ChainID),
+		RPCURL:     cfg.Wallet.RPCURL,
+		Passphrase: passphrase,
 	})
 	if err != nil {
 		log.Warn().Err(err).Msg("wallet balance poller: failed to load wallet, polling disabled")

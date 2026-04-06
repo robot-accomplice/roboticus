@@ -126,7 +126,8 @@ func TestIssueWSTicket_NoIssuer(t *testing.T) {
 }
 
 func TestGetSkillsCatalog(t *testing.T) {
-	handler := GetSkillsCatalog()
+	store := testutil.TempStore(t)
+	handler := GetSkillsCatalog(store)
 	req := httptest.NewRequest("GET", "/api/skills/catalog", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)

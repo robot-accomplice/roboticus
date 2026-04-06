@@ -198,7 +198,7 @@ func TestRegisterDiscoveredAgent_InvalidJSON(t *testing.T) {
 
 func TestGetRoster_DefaultAgent(t *testing.T) {
 	store := testutil.TempStore(t)
-	handler := GetRoster(store)
+	handler := GetRoster(store, testConfig())
 	req := httptest.NewRequest("GET", "/api/roster", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -208,15 +208,13 @@ func TestGetRoster_DefaultAgent(t *testing.T) {
 	}
 	body := jsonBody(t, rec)
 	agents := body["roster"].([]any)
+	// Primary agent is always first, even with no subagents.
 	if len(agents) != 1 {
-		t.Fatalf("expected 1 default agent, got %d", len(agents))
+		t.Fatalf("expected 1 agent (primary), got %d", len(agents))
 	}
 	first := agents[0].(map[string]any)
-	if first["name"] != "default" {
-		t.Errorf("name = %v, want default", first["name"])
-	}
-	if first["role"] != "primary" {
-		t.Errorf("role = %v, want primary", first["role"])
+	if first["role"] != "orchestrator" {
+		t.Errorf("role = %v, want orchestrator", first["role"])
 	}
 }
 
@@ -227,15 +225,16 @@ func TestGetRoster_WithSeededAgents(t *testing.T) {
 	_, _ = store.ExecContext(bgCtx,
 		`INSERT INTO sub_agents (id, name, model, enabled, role) VALUES ('sa2', 'coder', 'claude-3', 0, 'specialist')`)
 
-	handler := GetRoster(store)
+	handler := GetRoster(store, testConfig())
 	req := httptest.NewRequest("GET", "/api/roster", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
 	body := jsonBody(t, rec)
 	agents := body["roster"].([]any)
-	if len(agents) != 2 {
-		t.Fatalf("expected 2 agents, got %d", len(agents))
+	// 1 primary + 2 seeded subagents.
+	if len(agents) != 3 {
+		t.Fatalf("expected 3 agents, got %d", len(agents))
 	}
 }
 

@@ -67,34 +67,44 @@ func GetWorkspaceState(store *db.Store) http.HandlerFunc {
 	}
 }
 
-// GetRoster returns the agent roster from the sub_agents table.
-func GetRoster(store *db.Store) http.HandlerFunc {
+// GetRoster returns the agent roster: primary/orchestrator agent first, then subagents.
+func GetRoster(store *db.Store, cfg *core.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// Primary agent is always first in the roster.
+		primaryName := cfg.Agent.Name
+		if primaryName == "" {
+			primaryName = "roboticus"
+		}
+		primaryModel := cfg.Models.Primary
+		if primaryModel == "" {
+			primaryModel = "auto"
+		}
+		agents := []map[string]any{
+			{
+				"name":    strings.ToLower(primaryName),
+				"display_name": primaryName,
+				"model":   primaryModel,
+				"enabled": true,
+				"role":    "orchestrator",
+			},
+		}
+
 		rows, err := store.QueryContext(r.Context(),
 			`SELECT name, model, enabled, role FROM sub_agents ORDER BY name`)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to query roster")
-			return
-		}
-		defer func() { _ = rows.Close() }()
-
-		agents := make([]map[string]any, 0)
-		for rows.Next() {
-			var name, model, role string
-			var enabled bool
-			if err := rows.Scan(&name, &model, &enabled, &role); err != nil {
-				writeError(w, http.StatusInternalServerError, "failed to read roster row")
-				return
+		if err == nil {
+			defer func() { _ = rows.Close() }()
+			for rows.Next() {
+				var name, model, role string
+				var enabled bool
+				if err := rows.Scan(&name, &model, &enabled, &role); err != nil {
+					continue
+				}
+				agents = append(agents, map[string]any{
+					"name": name, "model": model, "enabled": enabled, "role": role,
+				})
 			}
-			agents = append(agents, map[string]any{
-				"name": name, "model": model, "enabled": enabled, "role": role,
-			})
 		}
-		if len(agents) == 0 {
-			agents = append(agents, map[string]any{
-				"name": "default", "model": "", "enabled": true, "role": "primary",
-			})
-		}
+
 		writeJSON(w, http.StatusOK, map[string]any{"roster": agents})
 	}
 }

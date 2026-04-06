@@ -8,10 +8,16 @@ import (
 	"strings"
 	"testing"
 
+	"roboticus/internal/core"
 	"roboticus/testutil"
 )
 
 var bgCtx = context.Background()
+
+func testConfig() *core.Config {
+	c := core.DefaultConfig()
+	return &c
+}
 
 func jsonBody(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
 	t.Helper()
@@ -346,10 +352,15 @@ func TestListTraces_QueryFailureReturnsServerError(t *testing.T) {
 
 func TestGetWalletBalance(t *testing.T) {
 	store := testutil.TempStore(t)
+	// Create the wallet_balances table (migration 030).
 	_, _ = store.ExecContext(bgCtx,
-		`INSERT INTO transactions (id, tx_type, amount, currency, created_at) VALUES ('t1', 'credit', 100.0, 'USDC', datetime('now'))`)
+		`CREATE TABLE IF NOT EXISTS wallet_balances (
+			symbol TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '', balance REAL NOT NULL DEFAULT 0.0,
+			contract TEXT NOT NULL DEFAULT '', decimals INTEGER NOT NULL DEFAULT 18,
+			is_native INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL DEFAULT (datetime('now')))`)
 	_, _ = store.ExecContext(bgCtx,
-		`INSERT INTO transactions (id, tx_type, amount, currency, created_at) VALUES ('t2', 'debit', 25.0, 'USDC', datetime('now'))`)
+		`INSERT INTO wallet_balances (symbol, name, balance, contract, decimals, is_native)
+		 VALUES ('USDC', 'USD Coin', 75.0, '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', 6, 0)`)
 
 	handler := GetWalletBalance(store)
 	req := httptest.NewRequest("GET", "/api/wallet/balance", nil)
@@ -360,6 +371,24 @@ func TestGetWalletBalance(t *testing.T) {
 	balance := body["balance"].(float64)
 	if balance != 75.0 {
 		t.Errorf("balance = %v, want 75.0", balance)
+	}
+	tokens := body["tokens"].([]any)
+	if len(tokens) != 1 {
+		t.Errorf("tokens count = %d, want 1", len(tokens))
+	}
+}
+
+func TestGetWalletBalance_Empty(t *testing.T) {
+	store := testutil.TempStore(t)
+
+	handler := GetWalletBalance(store)
+	req := httptest.NewRequest("GET", "/api/wallet/balance", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	body := jsonBody(t, rec)
+	if body["currency"] != "USDC" {
+		t.Errorf("currency = %v", body["currency"])
 	}
 }
 

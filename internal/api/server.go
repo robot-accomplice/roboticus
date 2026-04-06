@@ -185,7 +185,7 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 		}))
 		r.Delete("/api/skills/{id}", routes.DeleteSkill(state.Store))
 		r.Put("/api/skills/{id}/toggle", routes.ToggleSkill(state.Store))
-		r.Get("/api/skills/catalog", routes.GetSkillsCatalog())
+		r.Get("/api/skills/catalog", routes.GetSkillsCatalog(state.Store))
 		r.Post("/api/skills/catalog/install", routes.InstallSkillFromCatalog(state.Config, state.Store))
 		r.Post("/api/skills/catalog/activate", routes.ActivateSkillFromCatalog(state.Store))
 		r.Get("/api/skills/audit", routes.AuditSkills(state.Store))
@@ -272,7 +272,7 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 		r.Post("/api/services/opportunities/{id}/feedback", routes.RecordOpportunityFeedback(state.Store))
 
 		// Roster (agents page).
-		r.Get("/api/roster", routes.GetRoster(state.Store))
+		r.Get("/api/roster", routes.GetRoster(state.Store, state.Config))
 		r.Put("/api/roster/{agent}/model", routes.UpdateRosterModel(state.Store))
 
 		// Workspace.
