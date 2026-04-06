@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -72,6 +73,7 @@ func TestSanitizeInbound_NilSafe(t *testing.T) {
 
 type fakeAdapter struct {
 	sendErr  error
+	mu       sync.Mutex
 	sent     []OutboundMessage
 	platform string
 }
@@ -81,8 +83,17 @@ func (f *fakeAdapter) Recv(ctx context.Context) (*InboundMessage, error) {
 	return nil, nil
 }
 func (f *fakeAdapter) Send(ctx context.Context, msg OutboundMessage) error {
+	f.mu.Lock()
 	f.sent = append(f.sent, msg)
+	f.mu.Unlock()
 	return f.sendErr
+}
+func (f *fakeAdapter) sentMessages() []OutboundMessage {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	cp := make([]OutboundMessage, len(f.sent))
+	copy(cp, f.sent)
+	return cp
 }
 
 func TestDeliveryQueue_MarkDelivered(t *testing.T) {
@@ -116,11 +127,12 @@ func TestDeliveryWorker_DrainSuccess(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	cancel()
 
-	if len(adapter.sent) == 0 {
+	msgs := adapter.sentMessages()
+	if len(msgs) == 0 {
 		t.Fatal("worker should have sent the message")
 	}
-	if adapter.sent[0].Content != "hello" {
-		t.Errorf("content = %q", adapter.sent[0].Content)
+	if msgs[0].Content != "hello" {
+		t.Errorf("content = %q", msgs[0].Content)
 	}
 }
 
