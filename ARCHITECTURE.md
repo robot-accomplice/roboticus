@@ -134,20 +134,30 @@ not a convenience feature, and must never be bypassed or made implicit.
 
 ## 5. Dependency DAG
 
+Primary import flow (see **Supplementary: Go package import graph** in `docs/diagrams.md` — that graph is not a C4 diagram; C4 Code views there use a UML-style class sketch):
+
 ```
 cmd/ ──> daemon/ ──> api/ ──> pipeline/ ──> agent/ ──> llm/ ──> core/
                        │          │            │          │        ^
                        │          │            │          └────────┘
                        │          │            ├──> db/ ──> core/
                        │          │            │
+                       │          │            ├──> session/ ──> llm/ , core/
+                       │          │            │
                        │          │            └──> channel/ ──> core/
                        │          │
                        │          ├──> schedule/ ──> db/
                        │          │
-                       │          └──> wallet/ ──> core/
+                       │          ├──> mcp/ ──> core/
+                       │          │
+                       │          └──> plugin/ ──> core/
                        │
                        └──> browser/ ──> core/
+
+daemon/ ──> agent/ , channel/ , schedule/ , session/ , mcp/   (composition root wires subsystems)
 ```
+
+_Note: `internal/wallet/` is a standalone library (on-chain helpers); it is not yet imported by daemon or api. HTTP `/api/wallet/*` routes read wallet-related fields via `db/` today._
 
 **Rule: No circular imports.** `core` has zero internal deps. `db` depends
 only on `core`. Everything else forms a DAG.

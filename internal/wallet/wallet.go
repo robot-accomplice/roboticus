@@ -40,7 +40,7 @@ type WalletConfig struct {
 	Path       string `mapstructure:"path"`     // file path for encrypted key
 	ChainID    int64  `mapstructure:"chain_id"` // default 8453 (Base)
 	RPCURL     string `mapstructure:"rpc_url"`  // EVM JSON-RPC endpoint
-	Passphrase string `mapstructure:"-"`        // from env: GOBOTICUS_WALLET_PASSPHRASE
+	Passphrase string `mapstructure:"-"`        // from env: ROBOTICUS_WALLET_PASSPHRASE
 }
 
 // Wallet manages an Ethereum-compatible HD wallet.
@@ -56,7 +56,7 @@ func NewWallet(cfg WalletConfig) (*Wallet, error) {
 		cfg.ChainID = DefaultChainID
 	}
 	if cfg.Passphrase == "" {
-		cfg.Passphrase = os.Getenv("GOBOTICUS_WALLET_PASSPHRASE")
+		cfg.Passphrase = os.Getenv("ROBOTICUS_WALLET_PASSPHRASE")
 	}
 
 	w := &Wallet{cfg: cfg}
@@ -101,9 +101,9 @@ func (w *Wallet) loadOrGenerate() error {
 	}
 
 	// Plaintext wallet keys are rejected for security.
-	// Set GOBOTICUS_WALLET_PASSPHRASE to encrypt the wallet.
+	// Set ROBOTICUS_WALLET_PASSPHRASE to encrypt the wallet.
 	if w.cfg.Passphrase == "" {
-		return fmt.Errorf("wallet: passphrase required to load wallet (set GOBOTICUS_WALLET_PASSPHRASE)")
+		return fmt.Errorf("wallet: passphrase required to load wallet (set ROBOTICUS_WALLET_PASSPHRASE)")
 	}
 	return fmt.Errorf("wallet: cannot decrypt key (wrong passphrase?)")
 }
@@ -123,7 +123,7 @@ func (w *Wallet) generateAndSave() error {
 			return fmt.Errorf("wallet encrypt: %w", err)
 		}
 	} else {
-		return fmt.Errorf("wallet: passphrase required to save wallet (set GOBOTICUS_WALLET_PASSPHRASE)")
+		return fmt.Errorf("wallet: passphrase required to save wallet (set ROBOTICUS_WALLET_PASSPHRASE)")
 	}
 
 	if err := os.WriteFile(w.cfg.Path, data, 0600); err != nil {

@@ -1,6 +1,6 @@
 # Configuration Reference
 
-Roboticus loads configuration from `~/.roboticus/roboticus.toml` on startup. All settings can be overridden via environment variables with the `GOBOTICUS_` prefix (e.g., `GOBOTICUS_SERVER_PORT=8080`).
+Roboticus loads configuration from `~/.roboticus/roboticus.toml` on startup. All settings can be overridden via environment variables with the `ROBOTICUS_` prefix (e.g., `ROBOTICUS_SERVER_PORT=8080`).
 
 ## Configuration File Location
 
@@ -228,7 +228,7 @@ relationship_budget = 10.0
 |-------|------|---------|-------------|
 | `path` | string | `~/.roboticus/wallet.enc` | Path to the encrypted wallet file. |
 
-The wallet requires a passphrase set via `GOBOTICUS_WALLET_PASSPHRASE` environment variable. Plaintext wallet storage is rejected.
+The wallet requires a passphrase set via `ROBOTICUS_WALLET_PASSPHRASE` environment variable. Plaintext wallet storage is rejected.
 
 ---
 

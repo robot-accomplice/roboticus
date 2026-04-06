@@ -40,7 +40,7 @@ func (s *windowsSandbox) Apply(cmd *exec.Cmd) error {
 	_ = origStart // prevent unused warning
 
 	// Store config for post-start assignment.
-	cmd.Env = append(cmd.Env, fmt.Sprintf("GOBOTICUS_SANDBOX_MAX_MEM=%d", s.cfg.MaxMemoryBytes))
+	cmd.Env = append(cmd.Env, fmt.Sprintf("ROBOTICUS_SANDBOX_MAX_MEM=%d", s.cfg.MaxMemoryBytes))
 
 	return nil
 }

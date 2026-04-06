@@ -36,7 +36,7 @@ type Keystore struct {
 // KeystoreConfig holds keystore initialization options.
 type KeystoreConfig struct {
 	Path       string // Path to the encrypted keystore file.
-	Passphrase string // Master passphrase (or from GOBOTICUS_MASTER_KEY env).
+	Passphrase string // Master passphrase (or from ROBOTICUS_MASTER_KEY env).
 }
 
 // OpenKeystore opens or creates an encrypted keystore.
@@ -45,7 +45,7 @@ type KeystoreConfig struct {
 func OpenKeystore(cfg KeystoreConfig) (*Keystore, error) {
 	passphrase := cfg.Passphrase
 	if passphrase == "" {
-		passphrase = os.Getenv("GOBOTICUS_MASTER_KEY")
+		passphrase = os.Getenv("ROBOTICUS_MASTER_KEY")
 	}
 	if passphrase == "" {
 		// No master key — create a read-only keystore that only checks env vars.
@@ -145,7 +145,7 @@ func (ks *Keystore) Save() error {
 	defer ks.mu.RUnlock()
 
 	if ks.masterKey == nil {
-		return fmt.Errorf("keystore: no master key configured (set GOBOTICUS_MASTER_KEY)")
+		return fmt.Errorf("keystore: no master key configured (set ROBOTICUS_MASTER_KEY)")
 	}
 	if ks.path == "" {
 		return fmt.Errorf("keystore: no path configured")

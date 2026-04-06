@@ -46,10 +46,10 @@ func TestKeystore_SetGetDelete(t *testing.T) {
 func TestKeystore_EnvFallback(t *testing.T) {
 	ks, _ := OpenKeystore(KeystoreConfig{})
 
-	_ = os.Setenv("TEST_GOBOTICUS_KEY", "from-env")
-	defer func() { _ = os.Unsetenv("TEST_GOBOTICUS_KEY") }()
+	_ = os.Setenv("TEST_ROBOTICUS_KEY", "from-env")
+	defer func() { _ = os.Unsetenv("TEST_ROBOTICUS_KEY") }()
 
-	val, err := ks.Get("TEST_GOBOTICUS_KEY")
+	val, err := ks.Get("TEST_ROBOTICUS_KEY")
 	if err != nil {
 		t.Fatal(err)
 	}

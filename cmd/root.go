@@ -51,7 +51,7 @@ func initConfig() {
 		viper.SetConfigType("toml")
 	}
 
-	viper.SetEnvPrefix("GOBOTICUS")
+	viper.SetEnvPrefix("ROBOTICUS")
 	viper.AutomaticEnv()
 
 	if err := viper.ReadInConfig(); err != nil {

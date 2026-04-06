@@ -311,6 +311,75 @@ func TestGateway_ToolsListEmpty(t *testing.T) {
 	}
 }
 
+func TestGateway_InvalidJSONRPCVersion(t *testing.T) {
+	gw := testGateway()
+	body := `{"jsonrpc":"1.0","id":1,"method":"initialize","params":{}}`
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	gw.ServeHTTP(w, req)
+
+	var resp gatewayResponse
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp.Error == nil {
+		t.Fatal("expected error for invalid jsonrpc version")
+	}
+	if resp.Error.Code != -32600 {
+		t.Errorf("error code = %d, want -32600", resp.Error.Code)
+	}
+}
+
+func TestGateway_ToolsCall_InvalidParams(t *testing.T) {
+	gw := testGateway()
+	// Send tools/call with params that cannot be unmarshalled into the expected struct.
+	w := postJSONRPC(t, gw, "tools/call", "not an object", 20)
+
+	var resp gatewayResponse
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp.Error == nil {
+		t.Fatal("expected error for invalid params")
+	}
+	if resp.Error.Code != -32602 {
+		t.Errorf("error code = %d, want -32602", resp.Error.Code)
+	}
+}
+
+func TestGateway_ToolsCall_ErrorResult(t *testing.T) {
+	// Create a gateway where the tool returns IsError=true.
+	gw := NewGateway(
+		func() []GatewayToolDescriptor {
+			return []GatewayToolDescriptor{{Name: "fail_tool", Description: "Always fails"}}
+		},
+		func(_ context.Context, name string, _ json.RawMessage) (*ToolCallResult, error) {
+			return &ToolCallResult{Content: "something went wrong", IsError: true}, nil
+		},
+	)
+	w := postJSONRPC(t, gw, "tools/call", map[string]any{
+		"name":      "fail_tool",
+		"arguments": map[string]string{},
+	}, 21)
+
+	var resp gatewayResponse
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp.Error != nil {
+		t.Fatalf("unexpected RPC error: %s", resp.Error.Message)
+	}
+	resultBytes, _ := json.Marshal(resp.Result)
+	var result struct {
+		IsError bool `json:"isError"`
+		Content []struct {
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	_ = json.Unmarshal(resultBytes, &result)
+	if !result.IsError {
+		t.Error("expected isError=true")
+	}
+	if len(result.Content) == 0 || result.Content[0].Text != "something went wrong" {
+		t.Errorf("unexpected content: %+v", result.Content)
+	}
+}
+
 func TestGateway_ConcurrentRequests(t *testing.T) {
 	gw := testGateway()
 	srv := httptest.NewServer(gw)

@@ -163,7 +163,7 @@ func TestTestChannel(t *testing.T) {
 }
 
 func TestSetProviderKey(t *testing.T) {
-	t.Setenv("GOBOTICUS_MASTER_KEY", "test-key-for-unit-tests")
+	t.Setenv("ROBOTICUS_MASTER_KEY", "test-key-for-unit-tests")
 	ks, err := core.OpenKeystore(core.KeystoreConfig{Path: filepath.Join(t.TempDir(), "test.enc")})
 	if err != nil {
 		t.Fatal(err)

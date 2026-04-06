@@ -87,8 +87,8 @@ func (s *linuxSandbox) Apply(cmd *exec.Cmd) error {
 	// The actual Landlock setup runs in the child before exec.
 	origEnv := cmd.Env
 	cmd.Env = append(origEnv,
-		"GOBOTICUS_SANDBOX=landlock",
-		fmt.Sprintf("GOBOTICUS_SANDBOX_WORKSPACE=%s", workspace),
+		"ROBOTICUS_SANDBOX=landlock",
+		fmt.Sprintf("ROBOTICUS_SANDBOX_WORKSPACE=%s", workspace),
 	)
 
 	log.Debug().

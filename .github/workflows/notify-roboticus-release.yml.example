@@ -1,6 +1,6 @@
 # Place this file in robot-accomplice/roboticus/.github/workflows/notify-goboticus.yml
 #
-# Requires a PAT with repo scope stored as GOBOTICUS_DISPATCH_TOKEN secret
+# Requires a PAT with repo scope stored as ROBOTICUS_DISPATCH_TOKEN secret
 # in the roboticus repo settings.
 
 name: Notify Goboticus of Release
@@ -19,7 +19,7 @@ jobs:
       - name: Trigger goboticus parity audit
         uses: peter-evans/repository-dispatch@v3
         with:
-          token: ${{ secrets.GOBOTICUS_DISPATCH_TOKEN }}
+          token: ${{ secrets.ROBOTICUS_DISPATCH_TOKEN }}
           repository: robot-accomplice/goboticus
           event-type: roboticus-release
           client-payload: |

@@ -97,7 +97,7 @@ func (sp *ScriptPlugin) ExecuteTool(ctx context.Context, toolName string, input 
 
 	// Build environment: inherit OS env + plugin env + input.
 	env := os.Environ()
-	env = append(env, fmt.Sprintf("GOBOTICUS_INPUT=%s", string(input)))
+	env = append(env, fmt.Sprintf("ROBOTICUS_INPUT=%s", string(input)))
 	for k, v := range sp.env {
 		env = append(env, k+"="+v)
 	}

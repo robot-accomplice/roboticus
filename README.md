@@ -161,7 +161,7 @@ Open `http://localhost:18789` for the dashboard.
 
 ## Configuration
 
-Roboticus loads configuration from `~/.roboticus/roboticus.toml` with environment variable overrides (prefix `GOBOTICUS_`).
+Roboticus loads configuration from `~/.roboticus/roboticus.toml` with environment variable overrides (prefix `ROBOTICUS_`).
 
 ```toml
 [agent]

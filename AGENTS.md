@@ -37,7 +37,7 @@ go vet ./...                # Lint
 
 ### Config Changes
 - New config sections must be added to `internal/core/config.go` in the `Config` struct AND given defaults in `DefaultConfig()`.
-- Environment overrides use `GOBOTICUS_` prefix (e.g., `GOBOTICUS_SERVER_PORT=8080`).
+- Environment overrides use `ROBOTICUS_` prefix (e.g., `ROBOTICUS_SERVER_PORT=8080`).
 
 ### Go Module Dependencies
 - `nhooyr.io/websocket` — already in go.mod, used for WebSocket (EventBus + CDP sessions)
