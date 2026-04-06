@@ -149,6 +149,7 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 		r.Get("/api/memory/episodic", routes.GetEpisodicMemory(state.Store))
 		r.Get("/api/memory/semantic", routes.GetSemanticMemory(state.Store))
 		r.Get("/api/memory/semantic/categories", routes.GetSemanticCategories(state.Store))
+		r.Get("/api/memory/semantic/{category}", routes.GetSemanticMemoryByCategory(state.Store))
 		r.Get("/api/memory/search", routes.SearchMemory(state.Store))
 		r.Post("/api/memory/consolidate", routes.TriggerConsolidation(state.Store))
 		r.Post("/api/memory/reindex", routes.TriggerReindex(state.Store))
@@ -294,6 +295,8 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 		r.Post("/api/runtime/devices/{id}/verify", routes.VerifyPairedDevice(state.Store))
 		r.Delete("/api/runtime/devices/{id}", routes.UnpairDevice(state.Store))
 		r.Get("/api/runtime/mcp", routes.GetMCPRuntime(state.Config, state.MCP))
+		r.Post("/api/runtime/mcp/clients/{name}/discover", routes.DiscoverMCPTools(state.MCP))
+		r.Post("/api/runtime/mcp/clients/{name}/disconnect", routes.DisconnectMCPClient(state.MCP))
 
 		// Provider key management.
 		r.Put("/api/providers/{provider}/key", routes.SetProviderKey(state.Keystore))
@@ -305,6 +308,7 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 		r.Get("/api/traces/{turn_id}", routes.GetTrace(state.Store))
 		r.Get("/api/traces/{turn_id}/react", routes.GetReactTrace(state.Store))
 		r.Get("/api/traces/{turn_id}/export", routes.ExportTrace(state.Store))
+		r.Post("/api/traces/{turn_id}/replay", routes.ReplayTrace(state.Store))
 		r.Get("/api/traces/{turn_id}/flow", routes.GetTraceFlow(state.Store))
 
 		// Themes.

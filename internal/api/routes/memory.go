@@ -140,6 +140,41 @@ func GetSemanticMemory(store *db.Store) http.HandlerFunc {
 	}
 }
 
+// GetSemanticMemoryByCategory returns semantic memory filtered by category.
+func GetSemanticMemoryByCategory(store *db.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		category := chi.URLParam(r, "category")
+		limit := parseIntParam(r, "limit", 100)
+		rows, err := store.QueryContext(r.Context(),
+			`SELECT id, category, key, value, confidence
+			 FROM semantic_memory WHERE category = ? ORDER BY confidence DESC LIMIT ?`,
+			category, limit)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to query semantic memory by category")
+			return
+		}
+		defer func() { _ = rows.Close() }()
+
+		var entries []map[string]any
+		for rows.Next() {
+			var id, cat, key, value string
+			var confidence float64
+			if err := rows.Scan(&id, &cat, &key, &value, &confidence); err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to read semantic memory row")
+				return
+			}
+			entries = append(entries, map[string]any{
+				"id": id, "category": cat, "key": key, "value": value,
+				"confidence": confidence,
+			})
+		}
+		if entries == nil {
+			entries = []map[string]any{}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"entries": entries})
+	}
+}
+
 // IngestKnowledge inserts a knowledge entry into semantic memory.
 func IngestKnowledge(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

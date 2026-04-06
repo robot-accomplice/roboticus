@@ -15,7 +15,7 @@ func ListObservabilityTraces(store *db.Store) http.HandlerFunc {
 		limit := parseIntParam(r, "limit", 50)
 		offset := parseIntParam(r, "offset", 0)
 		rows, err := store.QueryContext(r.Context(),
-			`SELECT id, turn_id, session_id, channel, total_ms, created_at
+			`SELECT id, turn_id, session_id, channel, total_ms, stages_json, created_at
 			 FROM pipeline_traces ORDER BY created_at DESC LIMIT ? OFFSET ?`, limit, offset)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to query observability traces")
@@ -25,15 +25,19 @@ func ListObservabilityTraces(store *db.Store) http.HandlerFunc {
 
 		traces := make([]map[string]any, 0)
 		for rows.Next() {
-			var id, turnID, sessionID, channel, createdAt string
+			var id, turnID, sessionID, channel, stagesJSON, createdAt string
 			var totalMs int64
-			if err := rows.Scan(&id, &turnID, &sessionID, &channel, &totalMs, &createdAt); err != nil {
+			if err := rows.Scan(&id, &turnID, &sessionID, &channel, &totalMs, &stagesJSON, &createdAt); err != nil {
 				writeError(w, http.StatusInternalServerError, "failed to read observability trace row")
 				return
 			}
+			var stages any
+			if json.Unmarshal([]byte(stagesJSON), &stages) != nil {
+				stages = []any{}
+			}
 			traces = append(traces, map[string]any{
 				"id": id, "turn_id": turnID, "session_id": sessionID,
-				"channel": channel, "total_ms": totalMs, "created_at": createdAt,
+				"channel": channel, "total_ms": totalMs, "stages": stages, "created_at": createdAt,
 			})
 		}
 

@@ -49,11 +49,14 @@ func init() {
 	_ = viper.BindPFlag("server.bind", rootCmd.PersistentFlags().Lookup("bind"))
 	_ = viper.BindPFlag("gateway.url", rootCmd.PersistentFlags().Lookup("url"))
 	_ = viper.BindPFlag("profile", rootCmd.PersistentFlags().Lookup("profile"))
+	_ = viper.BindEnv("config", "ROBOTICUS_CONFIG")
 }
 
 func initConfig() {
 	if cfgFile != "" {
 		viper.SetConfigFile(cfgFile)
+	} else if envCfg := os.Getenv("ROBOTICUS_CONFIG"); envCfg != "" {
+		viper.SetConfigFile(envCfg)
 	} else {
 		configDir := core.ConfigDir()
 		viper.AddConfigPath(configDir)

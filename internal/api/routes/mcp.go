@@ -70,6 +70,54 @@ func DisconnectMCPServer(mgr *mcp.ConnectionManager) http.HandlerFunc {
 	}
 }
 
+// DiscoverMCPTools triggers tool discovery on a connected MCP client by name.
+func DiscoverMCPTools(mgr *mcp.ConnectionManager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if mgr == nil {
+			writeError(w, http.StatusServiceUnavailable, "MCP not configured")
+			return
+		}
+		name := chi.URLParam(r, "name")
+		conn, ok := mgr.Connection(name)
+		if !ok {
+			writeError(w, http.StatusNotFound, fmt.Sprintf("MCP client %q not connected", name))
+			return
+		}
+		if err := conn.RefreshTools(r.Context()); err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Sprintf("tool discovery failed: %v", err))
+			return
+		}
+		tools := make([]map[string]any, 0, len(conn.Tools))
+		for _, t := range conn.Tools {
+			tools = append(tools, map[string]any{
+				"name":        t.Name,
+				"description": t.Description,
+			})
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"name":       name,
+			"tools":      tools,
+			"tool_count": len(tools),
+		})
+	}
+}
+
+// DisconnectMCPClient disconnects a specific MCP client by name (runtime path).
+func DisconnectMCPClient(mgr *mcp.ConnectionManager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if mgr == nil {
+			writeError(w, http.StatusServiceUnavailable, "MCP not configured")
+			return
+		}
+		name := chi.URLParam(r, "name")
+		if err := mgr.Disconnect(name); err != nil {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "disconnected", "name": name})
+	}
+}
+
 // GetMCPRuntime summarizes configured and active MCP runtime state.
 func GetMCPRuntime(cfg *core.Config, mgr *mcp.ConnectionManager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

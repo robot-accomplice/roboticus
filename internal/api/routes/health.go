@@ -35,6 +35,17 @@ func Health(store *db.Store, llmSvc *llm.Service, cfg ...*core.Config) http.Hand
 			agentName = cfg[0].Agent.Name
 		}
 
+		models := map[string]any{
+			"primary":   "",
+			"fallbacks": []string{},
+		}
+		if len(cfg) > 0 && cfg[0] != nil {
+			models["primary"] = cfg[0].Models.Primary
+			if cfg[0].Models.Fallback != nil {
+				models["fallbacks"] = cfg[0].Models.Fallback
+			}
+		}
+
 		resp := map[string]any{
 			"status":         "ok",
 			"uptime":         time.Since(processStartTime).String(),
@@ -43,6 +54,7 @@ func Health(store *db.Store, llmSvc *llm.Service, cfg ...*core.Config) http.Hand
 			"agent":          agentName,
 			"go":             runtime.Version(),
 			"providers":      providers,
+			"models":         models,
 		}
 
 		writeJSON(w, http.StatusOK, resp)

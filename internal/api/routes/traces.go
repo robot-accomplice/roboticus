@@ -200,6 +200,37 @@ func ExportTrace(store *db.Store) http.HandlerFunc {
 	}
 }
 
+// ReplayTrace returns a replay preview for a given trace turn.
+func ReplayTrace(store *db.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		turnID := chi.URLParam(r, "turn_id")
+		row := store.QueryRowContext(r.Context(),
+			`SELECT id, turn_id, channel, total_ms, stages_json, created_at
+			 FROM pipeline_traces WHERE turn_id = ? LIMIT 1`, turnID)
+		var id, tid, channel, stagesJSON, createdAt string
+		var totalMs int64
+		err := row.Scan(&id, &tid, &channel, &totalMs, &stagesJSON, &createdAt)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "trace not found")
+			return
+		}
+
+		var stages any
+		if json.Unmarshal([]byte(stagesJSON), &stages) != nil {
+			stages = []any{}
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{
+			"turn_id":  tid,
+			"replayed": true,
+			"trace": map[string]any{
+				"id": id, "turn_id": tid, "channel": channel,
+				"total_ms": totalMs, "stages": stages, "created_at": createdAt,
+			},
+		})
+	}
+}
+
 // GetTraceFlow returns trace stages with timing diagram data.
 func GetTraceFlow(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

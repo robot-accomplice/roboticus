@@ -1,13 +1,17 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+
+	"roboticus/internal/core"
 )
 
 var securityCmd = &cobra.Command{
@@ -136,6 +140,41 @@ var securityAuditCmd = &cobra.Command{
 			fmt.Println("  [OK]   Approval workflow is enabled")
 		} else {
 			fmt.Println("  [INFO] Approval workflow is disabled")
+		}
+
+		// Check: wallet file encryption.
+		walletPath := cfg.Wallet.Path
+		if walletPath == "" {
+			walletPath = filepath.Join(core.ConfigDir(), "wallet.json")
+		}
+		if walletData, readErr := os.ReadFile(walletPath); readErr == nil {
+			// If the file parses as plain JSON, it is not encrypted.
+			var parsed map[string]any
+			if json.Unmarshal(walletData, &parsed) == nil {
+				fmt.Printf("  [WARN] Wallet file %s appears to be plaintext JSON (not encrypted)\n", walletPath)
+				issues++
+			} else {
+				fmt.Printf("  [OK]   Wallet file %s appears encrypted\n", walletPath)
+			}
+		} else if !os.IsNotExist(readErr) {
+			fmt.Printf("  [INFO] Could not read wallet file %s: %v\n", walletPath, readErr)
+		}
+
+		// Check: bind address + API key combination.
+		if (bind == "0.0.0.0" || bind == "::") && !hasAPIKey {
+			fmt.Println("  [WARN] Service exposed on all interfaces without API key authentication")
+			issues++
+		}
+
+		// Check: DKIM configuration.
+		if cfg.DKIM.Enabled {
+			fmt.Println("  [OK]   DKIM verification is enabled")
+			if !cfg.DKIM.RequireValid {
+				fmt.Println("  [WARN] DKIM is enabled but does not require valid signatures")
+				issues++
+			}
+		} else {
+			fmt.Println("  [INFO] DKIM verification is disabled")
 		}
 
 		fmt.Printf("\n%d issue(s) found.\n", issues)

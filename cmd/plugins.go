@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"os"
@@ -207,7 +208,17 @@ var pluginsPackCmd = &cobra.Command{
 			return fmt.Errorf("failed to pack directory: %w", err)
 		}
 
+		// Compute SHA-256 hash of the archive.
+		if _, seekErr := f.Seek(0, 0); seekErr != nil {
+			return fmt.Errorf("failed to seek archive for hashing: %w", seekErr)
+		}
+		h := sha256.New()
+		if _, copyErr := io.Copy(h, f); copyErr != nil {
+			return fmt.Errorf("failed to hash archive: %w", copyErr)
+		}
+
 		fmt.Printf("Packed plugin to %s\n", outName)
+		fmt.Printf("SHA-256: %x\n", h.Sum(nil))
 		return nil
 	},
 }

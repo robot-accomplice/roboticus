@@ -217,6 +217,11 @@ func (c *Connection) listTools(ctx context.Context) error {
 	return nil
 }
 
+// RefreshTools re-discovers tools from the connected MCP server.
+func (c *Connection) RefreshTools(ctx context.Context) error {
+	return c.listTools(ctx)
+}
+
 // CallTool invokes a tool on the connected MCP server.
 func (c *Connection) CallTool(ctx context.Context, name string, input json.RawMessage) (*ToolCallResult, error) {
 	result, err := c.call(ctx, "tools/call", map[string]any{
