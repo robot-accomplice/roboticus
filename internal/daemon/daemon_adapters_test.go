@@ -337,7 +337,7 @@ func TestNicknameAdapter_Refine_Success(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"choices": []map[string]any{
 				{"message": map[string]string{"content": "Test Title"}},
 			},
@@ -383,14 +383,14 @@ func TestNicknameAdapter_Refine_LongMessage(t *testing.T) {
 	var receivedSnippet string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
-		json.NewDecoder(r.Body).Decode(&body)
+		_ = json.NewDecoder(r.Body).Decode(&body)
 		msgs, _ := body["messages"].([]any)
 		if len(msgs) >= 2 {
 			lastMsg, _ := msgs[len(msgs)-1].(map[string]any)
 			receivedSnippet, _ = lastMsg["content"].(string)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"choices": []map[string]any{
 				{"message": map[string]string{"content": "Short Title"}},
 			},
@@ -421,7 +421,7 @@ func TestNicknameAdapter_Refine_EmptyResponse(t *testing.T) {
 	store := testutil.TempStore(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"choices": []map[string]any{
 				{"message": map[string]string{"content": ""}},
 			},
@@ -503,7 +503,7 @@ func TestDaemon_Router(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
-	defer d.Stop(nil)
+	defer func() { _ = d.Stop(nil) }()
 
 	r := d.Router()
 	if r == nil {
@@ -556,7 +556,7 @@ func TestDaemon_NewWithCustomPort(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
-	defer d.Stop(nil)
+	defer func() { _ = d.Stop(nil) }()
 
 	if d.cfg.Server.Port != 18888 {
 		t.Errorf("port = %d", d.cfg.Server.Port)
@@ -670,7 +670,7 @@ func TestStreamAdapter_PrepareStream(t *testing.T) {
 	store := testutil.TempStore(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintln(w, `{"choices":[{"message":{"content":"hi"}}]}`)
+		_, _ = fmt.Fprintln(w, `{"choices":[{"message":{"content":"hi"}}]}`)
 	}))
 	defer srv.Close()
 
@@ -915,7 +915,7 @@ func TestNew_WithProviders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
-	defer d.Stop(nil)
+	defer func() { _ = d.Stop(nil) }()
 
 	if d.llm == nil {
 		t.Error("llm should be initialized")

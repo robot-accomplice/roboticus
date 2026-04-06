@@ -1340,7 +1340,7 @@ func TestLoadConfigFromFile_Unreadable(t *testing.T) {
 	if err := os.Chmod(path, 0000); err != nil {
 		t.Skip("cannot change file permissions on this OS")
 	}
-	defer os.Chmod(path, 0644)
+	defer func() { _ = os.Chmod(path, 0644) }()
 
 	_, err := LoadConfigFromFile(path)
 	if err == nil {

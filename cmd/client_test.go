@@ -117,7 +117,7 @@ func TestAPIPost_Success(t *testing.T) {
 			t.Errorf("expected application/json content-type, got %s", ct)
 		}
 		var body map[string]any
-		json.NewDecoder(r.Body).Decode(&body)
+		_ = json.NewDecoder(r.Body).Decode(&body)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{"id": "123", "received": body})
 	}))

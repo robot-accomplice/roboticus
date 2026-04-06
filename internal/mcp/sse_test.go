@@ -41,7 +41,7 @@ func TestSSETransport_SendAndReceive(t *testing.T) {
 
 			// Send a response for the initialize call.
 			data := `{"jsonrpc":"2.0","id":0,"result":{"status":"ok"}}`
-			fmt.Fprintf(w, "data: %s\n\n", data)
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
 			flusher.Flush()
 
 			// Keep alive until client disconnects.
@@ -191,8 +191,8 @@ func TestSSETransport_ListenSSE_SkipsNonDataLines(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 
 		// Send various SSE lines: comments, event names, empty data, and [DONE].
-		fmt.Fprintf(w, ": this is a comment\n")
-		fmt.Fprintf(w, "event: ping\n")
+		_, _ = fmt.Fprintf(w, ": this is a comment\n")
+		_, _ = fmt.Fprintf(w, "event: ping\n")
 		fmt.Fprintf(w, "data: \n")       // empty data, should be skipped
 		fmt.Fprintf(w, "data: [DONE]\n") // [DONE] sentinel, should be skipped
 		fmt.Fprintf(w, "data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":\"ok\"}\n\n")
@@ -337,7 +337,7 @@ func TestConnectSSE_Integration(t *testing.T) {
 			// We need to push to the SSE stream. Since the transport reads from GET,
 			// we respond directly on POST and let SSETransport handle it.
 			w.Header().Set("Content-Type", "application/json")
-			w.Write(respBytes)
+			_, _ = w.Write(respBytes)
 
 		case http.MethodGet:
 			flusher, ok := w.(http.Flusher)

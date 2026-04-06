@@ -173,9 +173,9 @@ func TestRegistry_ScanDirectory_FindsManifests(t *testing.T) {
 	// Create two plugin directories with manifests.
 	for _, name := range []string{"alpha", "beta"} {
 		dir := filepath.Join(base, name)
-		os.MkdirAll(dir, 0o755)
+		_ = os.MkdirAll(dir, 0o755)
 		content := fmt.Sprintf("name = %q\nversion = \"0.1.0\"\ndescription = \"test %s\"", name, name)
-		os.WriteFile(filepath.Join(dir, "manifest.toml"), []byte(content), 0o644)
+		_ = os.WriteFile(filepath.Join(dir, "manifest.toml"), []byte(content), 0o644)
 	}
 
 	reg := NewRegistry(nil, nil, PermissionPolicy{})
@@ -196,8 +196,8 @@ func TestRegistry_ScanDirectory_FindsManifests(t *testing.T) {
 func TestRegistry_ScanDirectory_YAMLManifest(t *testing.T) {
 	base := t.TempDir()
 	dir := filepath.Join(base, "yamlplugin")
-	os.MkdirAll(dir, 0o755)
-	os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte("name: yamlplugin\nversion: 1.0.0\n"), 0o644)
+	_ = os.MkdirAll(dir, 0o755)
+	_ = os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte("name: yamlplugin\nversion: 1.0.0\n"), 0o644)
 
 	reg := NewRegistry(nil, nil, PermissionPolicy{})
 	n, err := reg.ScanDirectory(base)
@@ -212,9 +212,9 @@ func TestRegistry_ScanDirectory_YAMLManifest(t *testing.T) {
 func TestRegistry_ScanDirectory_SkipsInvalidManifest(t *testing.T) {
 	base := t.TempDir()
 	dir := filepath.Join(base, "invalid")
-	os.MkdirAll(dir, 0o755)
+	_ = os.MkdirAll(dir, 0o755)
 	// Manifest with no name field.
-	os.WriteFile(filepath.Join(dir, "manifest.toml"), []byte("version = \"1.0.0\"\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "manifest.toml"), []byte("version = \"1.0.0\"\n"), 0o644)
 
 	reg := NewRegistry(nil, nil, PermissionPolicy{})
 	n, _ := reg.ScanDirectory(base)
@@ -763,7 +763,7 @@ func TestPackPlugin_Success(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer zr.Close()
+	defer func() { _ = zr.Close() }()
 
 	names := make(map[string]bool)
 	for _, f := range zr.File {
@@ -779,9 +779,9 @@ func TestPackPlugin_Success(t *testing.T) {
 
 func TestPackPlugin_SubDirectories(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte("name: subdir-test\nversion: 1.0.0"), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte("name: subdir-test\nversion: 1.0.0"), 0o644)
 	subDir := filepath.Join(dir, "lib")
-	os.MkdirAll(subDir, 0o755)
+	_ = os.MkdirAll(subDir, 0o755)
 	os.WriteFile(filepath.Join(subDir, "helper.py"), []byte("def help(): pass"), 0o644)
 
 	output := filepath.Join(t.TempDir(), "plugin.zip")
@@ -790,7 +790,7 @@ func TestPackPlugin_SubDirectories(t *testing.T) {
 	}
 
 	zr, _ := zip.OpenReader(output)
-	defer zr.Close()
+	defer func() { _ = zr.Close() }()
 
 	foundHelper := false
 	for _, f := range zr.File {
@@ -842,9 +842,9 @@ func TestUnpackPlugin_NoManifestInArchive(t *testing.T) {
 	f, _ := os.Create(archivePath)
 	zw := zip.NewWriter(f)
 	w, _ := zw.Create("readme.txt")
-	w.Write([]byte("no manifest here"))
-	zw.Close()
-	f.Close()
+	_, _ = w.Write([]byte("no manifest here"))
+	_ = zw.Close()
+	_ = f.Close()
 
 	err := UnpackPlugin(archivePath, t.TempDir())
 	if err == nil {
@@ -863,14 +863,14 @@ func TestUnpackPlugin_ZipSlipPrevention(t *testing.T) {
 
 	// Add a manifest so it passes the manifest check.
 	w, _ := zw.Create("manifest.toml")
-	w.Write([]byte("name = \"evil\"\nversion = \"1\""))
+	_, _ = w.Write([]byte("name = \"evil\"\nversion = \"1\""))
 
 	// Add a file with path traversal.
 	w, _ = zw.Create("../../../etc/evil.txt")
-	w.Write([]byte("gotcha"))
+	_, _ = w.Write([]byte("gotcha"))
 
-	zw.Close()
-	f.Close()
+	_ = zw.Close()
+	_ = f.Close()
 
 	destDir := filepath.Join(t.TempDir(), "dest")
 	err := UnpackPlugin(archivePath, destDir)

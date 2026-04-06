@@ -83,7 +83,7 @@ func TestNewServer_HealthEndpointPublic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /api/health: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("/api/health status = %d, want 200", resp.StatusCode)
 	}
@@ -93,7 +93,7 @@ func TestNewServer_HealthEndpointPublic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /health: %v", err)
 	}
-	defer resp2.Body.Close()
+	defer func() { _ = resp2.Body.Close() }()
 	if resp2.StatusCode != http.StatusOK {
 		t.Errorf("/health status = %d, want 200", resp2.StatusCode)
 	}
@@ -114,7 +114,7 @@ func TestNewServer_AuthenticatedEndpointRequiresKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /api/sessions: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Errorf("unauthenticated /api/sessions status = %d, want 401", resp.StatusCode)
 	}
@@ -126,7 +126,7 @@ func TestNewServer_AuthenticatedEndpointRequiresKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("authenticated GET /api/sessions: %v", err)
 	}
-	defer resp2.Body.Close()
+	defer func() { _ = resp2.Body.Close() }()
 	if resp2.StatusCode != http.StatusOK {
 		t.Errorf("authenticated /api/sessions status = %d, want 200", resp2.StatusCode)
 	}
@@ -146,7 +146,7 @@ func TestNewServer_OpenAPIEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /openapi.yaml: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("status = %d, want 200", resp.StatusCode)
 	}

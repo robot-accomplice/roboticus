@@ -879,10 +879,10 @@ func TestAbuseTracker_EvictOldest(t *testing.T) {
 	ctx := context.Background()
 
 	// Fill to capacity.
-	tracker.RecordSignal(ctx, AbuseSignal{ActorID: "actor1", SignalType: SignalRateBurst, Severity: 0.3})
-	tracker.RecordSignal(ctx, AbuseSignal{ActorID: "actor2", SignalType: SignalRateBurst, Severity: 0.3})
+	_, _ = tracker.RecordSignal(ctx, AbuseSignal{ActorID: "actor1", SignalType: SignalRateBurst, Severity: 0.3})
+	_, _ = tracker.RecordSignal(ctx, AbuseSignal{ActorID: "actor2", SignalType: SignalRateBurst, Severity: 0.3})
 	// Adding a third should trigger eviction of the oldest.
-	tracker.RecordSignal(ctx, AbuseSignal{ActorID: "actor3", SignalType: SignalRateBurst, Severity: 0.3})
+	_, _ = tracker.RecordSignal(ctx, AbuseSignal{ActorID: "actor3", SignalType: SignalRateBurst, Severity: 0.3})
 
 	// actor3 should still be tracked.
 	score3 := tracker.GetActorScore("actor3")

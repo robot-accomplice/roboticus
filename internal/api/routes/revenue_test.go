@@ -1,7 +1,6 @@
 package routes
 
 import (
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,16 +10,6 @@ import (
 
 	"roboticus/testutil"
 )
-
-// jsonBodyArray decodes a JSON array response body.
-func jsonBodyArray(t *testing.T, rec *httptest.ResponseRecorder) []any {
-	t.Helper()
-	var body []any
-	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
-		t.Fatalf("failed to decode JSON array: %v", err)
-	}
-	return body
-}
 
 // chiRouter returns a chi router that dispatches to the handler with the given method and pattern.
 func chiRouter(method, pattern string, handler http.HandlerFunc) *chi.Mux {

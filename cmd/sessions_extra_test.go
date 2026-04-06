@@ -92,8 +92,8 @@ func TestSessionsExportCmd_Markdown_WithMockServer(t *testing.T) {
 	defer cleanup()
 
 	// Set the format flag to markdown.
-	sessionsExportCmd.Flags().Set("format", "markdown")
-	defer sessionsExportCmd.Flags().Set("format", "json") // restore
+	_ = sessionsExportCmd.Flags().Set("format", "markdown")
+	defer func() { _ = sessionsExportCmd.Flags().Set("format", "json") }() // restore
 
 	err := sessionsExportCmd.RunE(sessionsExportCmd, []string{"s789"})
 	if err != nil {

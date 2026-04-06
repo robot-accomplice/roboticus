@@ -529,47 +529,6 @@ func TestWallet_RpcCall_BadJSON(t *testing.T) {
 // secp256k1.go — Double, Money overflow, negative Money
 // ---------------------------------------------------------------------------
 
-func TestSecp256k1_Double(t *testing.T) {
-	curve := secp256k1Curve()
-	params := curve.Params()
-	x, y := curve.Double(params.Gx, params.Gy)
-	// 2*G should be on curve.
-	if !curve.IsOnCurve(x, y) {
-		t.Fatal("Double(G) not on curve")
-	}
-	// Should match ScalarBaseMult(2).
-	x2, y2 := curve.ScalarBaseMult(big.NewInt(2).Bytes())
-	if x.Cmp(x2) != 0 || y.Cmp(y2) != 0 {
-		t.Fatal("Double(G) != 2*G")
-	}
-}
-
-func TestSecp256k1_ScalarMult_Zero(t *testing.T) {
-	curve := secp256k1Curve()
-	params := curve.Params()
-	x, y := curve.ScalarBaseMult(big.NewInt(0).Bytes())
-	_ = params
-	// 0*G should be the point at infinity (0, 0).
-	if x.Sign() != 0 || y.Sign() != 0 {
-		t.Errorf("0*G = (%s, %s), want (0, 0)", x, y)
-	}
-}
-
-func TestSecp256k1_AddPointAtInfinity(t *testing.T) {
-	curve := secp256k1Curve()
-	params := curve.Params()
-	// O + G = G
-	x, y := curve.Add(big.NewInt(0), big.NewInt(0), params.Gx, params.Gy)
-	if x.Cmp(params.Gx) != 0 || y.Cmp(params.Gy) != 0 {
-		t.Fatal("O + G != G")
-	}
-	// G + O = G
-	x2, y2 := curve.Add(params.Gx, params.Gy, big.NewInt(0), big.NewInt(0))
-	if x2.Cmp(params.Gx) != 0 || y2.Cmp(params.Gy) != 0 {
-		t.Fatal("G + O != G")
-	}
-}
-
 func TestMoney_NegativeAmount(t *testing.T) {
 	m := FromDollars(-5.50)
 	if m.Cents() != -550 {

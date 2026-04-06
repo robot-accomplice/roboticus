@@ -127,7 +127,7 @@ func TestFindNewRustFiles_EmptyDir(t *testing.T) {
 func TestFindNewRustFiles_NoCratesDir(t *testing.T) {
 	root := t.TempDir()
 	files := findNewRustFiles(root)
-	if files != nil && len(files) != 0 {
+	if len(files) != 0 {
 		t.Errorf("findNewRustFiles with no crates dir = %v, want empty", files)
 	}
 }
