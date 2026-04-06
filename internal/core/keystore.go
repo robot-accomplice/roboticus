@@ -238,6 +238,14 @@ func (ks *Keystore) Save() error {
 	return nil
 }
 
+// IsUnlocked returns true if the keystore was opened with a passphrase
+// and can decrypt/encrypt secrets. Matches Rust's is_unlocked() behavior.
+func (ks *Keystore) IsUnlocked() bool {
+	ks.mu.RLock()
+	defer ks.mu.RUnlock()
+	return ks.passphrase != ""
+}
+
 // HasUnsavedChanges returns true if there are changes not yet persisted.
 func (ks *Keystore) HasUnsavedChanges() bool {
 	ks.mu.RLock()

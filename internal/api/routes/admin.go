@@ -304,7 +304,7 @@ func GetConfigStatus() http.HandlerFunc {
 // KeystoreStatus returns whether any provider keys are stored in the encrypted keystore.
 func KeystoreStatus(ks *core.Keystore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		unlocked := ks != nil && ks.Count() >= 0 && ks.List() != nil
+		unlocked := ks != nil && ks.IsUnlocked()
 		resp := map[string]any{
 			"unlocked": unlocked,
 			"path":     filepath.Join(core.ConfigDir(), "keystore.enc"),
