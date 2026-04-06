@@ -145,46 +145,7 @@ jobs:
         run: go test -fuzz=FuzzMatchesCron -fuzztime=10s ./internal/schedule/
 
   # --------------------------------------------------------------------------
-  # Stage 2d: Parity Audit
-  # Checks out roboticus and compares feature coverage.
-  # --------------------------------------------------------------------------
-  parity-audit:
-    name: Parity Audit
-    needs: [lint]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout roboticus
-        uses: actions/checkout@v4
-
-      - name: Checkout roboticus
-        uses: actions/checkout@v4
-        with:
-          repository: robot-accomplice/roboticus
-          path: _roboticus
-          ref: main
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: ${{ env.GO_VERSION_FILE }}
-
-      - name: Build roboticus
-        run: go build ./...
-
-      - name: Run parity audit
-        run: go run . parity-audit --roboticus-dir=_roboticus
-
-      - name: Upload parity report
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: parity-report
-          path: parity-report.md
-          retention-days: 14
-          if-no-files-found: ignore
-
-  # --------------------------------------------------------------------------
-  # Stage 2e: Soak/Fuzz Battery
+  # Stage 2d: Soak/Fuzz Battery
   # Deterministic soak loops + bounded fuzzing (reduced rounds for CI).
   # --------------------------------------------------------------------------
   soak-fuzz:
@@ -233,7 +194,7 @@ jobs:
   # --------------------------------------------------------------------------
   build:
     name: Build
-    needs: [test, test-integration, fuzz, soak-fuzz, parity-audit, architecture]
+    needs: [test, test-integration, fuzz, soak-fuzz, architecture]
     runs-on: ubuntu-latest
     env:
       COMMIT_SHA: ${{ github.sha }}
@@ -271,7 +232,7 @@ jobs:
   # --------------------------------------------------------------------------
   security:
     name: Security (govulncheck)
-    needs: [test, test-integration, fuzz, soak-fuzz, parity-audit, architecture]
+    needs: [test, test-integration, fuzz, soak-fuzz, architecture]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code

@@ -45,8 +45,7 @@ var migrateImportCmd = &cobra.Command{
 	Short: "Import data from a Legacy workspace",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("data migration from Legacy workspace — not yet implemented")
-		return nil
+		return fmt.Errorf("data migration from Legacy workspace is not yet available in the Go implementation")
 	},
 }
 
@@ -55,8 +54,7 @@ var migrateExportCmd = &cobra.Command{
 	Short: "Export data to Legacy format",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("data export to Legacy format — not yet implemented")
-		return nil
+		return fmt.Errorf("data export to Legacy format is not yet available in the Go implementation")
 	},
 }
 

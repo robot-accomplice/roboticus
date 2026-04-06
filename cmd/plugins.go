@@ -124,8 +124,7 @@ var pluginsSearchCmd = &cobra.Command{
 	Short: "Search the plugin catalog",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("catalog search not yet available")
-		return nil
+		return fmt.Errorf("plugin catalog search requires a remote registry (not yet available)")
 	},
 }
 

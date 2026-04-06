@@ -184,8 +184,7 @@ var keystoreRekeyCmd = &cobra.Command{
 	Use:   "rekey",
 	Short: "Re-encrypt the keystore with a new master key",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("not yet implemented")
-		return nil
+		return fmt.Errorf("keystore rekey requires server-side passphrase rotation support (not yet available)")
 	},
 }
 
