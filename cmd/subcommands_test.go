@@ -427,7 +427,7 @@ func TestNormalizeVersion(t *testing.T) {
 func TestDownloadFile_Success(t *testing.T) {
 	expected := "hello binary content"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(expected))
+		_, _ = w.Write([]byte(expected))
 	}))
 	defer server.Close()
 
@@ -483,7 +483,7 @@ func TestAdminBreakerResetCmd_RequiresArg(t *testing.T) {
 func TestAdminStatsCmd_WithMockServer(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"data": "test"})
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": "test"})
 	}))
 	defer server.Close()
 

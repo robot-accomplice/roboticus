@@ -23,7 +23,7 @@ func TestCronCreateCmd_WithMockServer(t *testing.T) {
 			t.Errorf("unexpected schedule: %v", body["schedule_expr"])
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"id": "cron-42"})
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": "cron-42"})
 	}))
 	defer cleanup()
 
@@ -60,7 +60,7 @@ func TestCronRunCmd_WithMockServer(t *testing.T) {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"status": "triggered"})
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": "triggered"})
 	}))
 	defer cleanup()
 
@@ -88,7 +88,7 @@ func TestCronListCmd_WithDisabledJob(t *testing.T) {
 func TestCronListCmd_ServerError(t *testing.T) {
 	cleanup := setupMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]any{"error": "db locked"})
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": "db locked"})
 	}))
 	defer cleanup()
 

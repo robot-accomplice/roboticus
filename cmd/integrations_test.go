@@ -15,7 +15,7 @@ func TestIntegrationsTestCmd_WithMockServer(t *testing.T) {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"delivered": true})
+		_ = json.NewEncoder(w).Encode(map[string]any{"delivered": true})
 	}))
 	defer cleanup()
 
@@ -28,7 +28,7 @@ func TestIntegrationsTestCmd_WithMockServer(t *testing.T) {
 func TestIntegrationsTestCmd_Failure(t *testing.T) {
 	cleanup := setupMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]any{"error": "channel not configured"})
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": "channel not configured"})
 	}))
 	defer cleanup()
 

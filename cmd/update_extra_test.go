@@ -32,7 +32,7 @@ func TestCheckForUpdate_NonOKStatus(t *testing.T) {
 func TestCheckForUpdate_EmptyTagName(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"tag_name":"","html_url":"https://example.com"}`))
+		_, _ = w.Write([]byte(`{"tag_name":"","html_url":"https://example.com"}`))
 	}))
 	defer server.Close()
 
@@ -54,7 +54,7 @@ func TestCheckForUpdate_EmptyTagName(t *testing.T) {
 func TestCheckForUpdate_InvalidJSON(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`not valid json`))
+		_, _ = w.Write([]byte(`not valid json`))
 	}))
 	defer server.Close()
 
@@ -76,7 +76,7 @@ func TestCheckForUpdate_InvalidJSON(t *testing.T) {
 func TestCheckForUpdate_UpToDate(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"tag_name":"v1.0.0","html_url":"https://example.com"}`))
+		_, _ = w.Write([]byte(`{"tag_name":"v1.0.0","html_url":"https://example.com"}`))
 	}))
 	defer server.Close()
 
@@ -101,7 +101,7 @@ func TestCheckForUpdate_UpToDate(t *testing.T) {
 func TestCheckForUpdate_NoHTMLURL(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"tag_name":"v2.0.0"}`))
+		_, _ = w.Write([]byte(`{"tag_name":"v2.0.0"}`))
 	}))
 	defer server.Close()
 

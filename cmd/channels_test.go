@@ -15,7 +15,7 @@ func TestChannelsTestCmd_WithMockServer(t *testing.T) {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"sent": true})
+		_ = json.NewEncoder(w).Encode(map[string]any{"sent": true})
 	}))
 	defer cleanup()
 
@@ -65,7 +65,7 @@ func TestChannelsDeadLetterCmd_NonArrayEntries(t *testing.T) {
 func TestChannelsTestCmd_ServerError(t *testing.T) {
 	cleanup := setupMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)
-		json.NewEncoder(w).Encode(map[string]any{"error": "channel unavailable"})
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": "channel unavailable"})
 	}))
 	defer cleanup()
 

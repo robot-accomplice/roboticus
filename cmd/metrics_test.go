@@ -9,7 +9,7 @@ import (
 func TestMetricsCostsCmd_ServerError(t *testing.T) {
 	cleanup := setupMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]any{"error": "db error"})
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": "db error"})
 	}))
 	defer cleanup()
 
@@ -22,7 +22,7 @@ func TestMetricsCostsCmd_ServerError(t *testing.T) {
 func TestMetricsCacheCmd_ServerError(t *testing.T) {
 	cleanup := setupMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]any{"error": "cache error"})
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": "cache error"})
 	}))
 	defer cleanup()
 
@@ -35,7 +35,7 @@ func TestMetricsCacheCmd_ServerError(t *testing.T) {
 func TestMetricsCapacityCmd_ServerError(t *testing.T) {
 	cleanup := setupMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]any{"error": "capacity error"})
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": "capacity error"})
 	}))
 	defer cleanup()
 

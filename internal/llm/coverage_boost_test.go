@@ -854,7 +854,7 @@ func TestClient_Complete_402_Payment(t *testing.T) {
 		callCount++
 		if callCount == 1 {
 			w.WriteHeader(402)
-			fmt.Fprint(w, `{"payment_required": true}`)
+			_, _ = fmt.Fprint(w, `{"payment_required": true}`)
 			return
 		}
 		// Second call should have X-Payment header.
@@ -862,7 +862,7 @@ func TestClient_Complete_402_Payment(t *testing.T) {
 			t.Errorf("missing X-Payment header on retry")
 		}
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"id":"paid","model":"m","choices":[{"message":{"content":"paid response"},"finish_reason":"stop"}],"usage":{}}`)
+		_, _ = fmt.Fprint(w, `{"id":"paid","model":"m","choices":[{"message":{"content":"paid response"},"finish_reason":"stop"}],"usage":{}}`)
 	}))
 	defer ts.Close()
 
@@ -902,7 +902,7 @@ func TestClient_Complete_402_NoHandler(t *testing.T) {
 func TestClient_Complete_402_PaymentFails(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(402)
-		fmt.Fprint(w, `{}`)
+		_, _ = fmt.Fprint(w, `{}`)
 	}))
 	defer ts.Close()
 
@@ -1095,7 +1095,7 @@ func TestClient_Stream_402_Payment(t *testing.T) {
 		callCount++
 		if callCount == 1 {
 			w.WriteHeader(402)
-			fmt.Fprint(w, `{"payment_required": true}`)
+			_, _ = fmt.Fprint(w, `{"payment_required": true}`)
 			return
 		}
 		if r.Header.Get("X-Payment") != "stream-paid" {
@@ -1103,8 +1103,8 @@ func TestClient_Stream_402_Payment(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(200)
-		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"paid-stream\"}}]}\n\n")
-		fmt.Fprint(w, "data: [DONE]\n\n")
+		_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"paid-stream\"}}]}\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 	}))
 	defer ts.Close()
 

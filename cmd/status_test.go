@@ -11,7 +11,7 @@ func TestStatusCmd_WithMockServer(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/api/health":
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"status": "ok",
 				"uptime": "2h30m",
 				"go":     "go1.22",
@@ -21,12 +21,12 @@ func TestStatusCmd_WithMockServer(t *testing.T) {
 				},
 			})
 		case "/api/agent/status":
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"status": "running",
 			})
 		default:
 			w.WriteHeader(http.StatusNotFound)
-			json.NewEncoder(w).Encode(map[string]any{"error": "not found"})
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": "not found"})
 		}
 	}))
 	defer cleanup()
@@ -40,7 +40,7 @@ func TestStatusCmd_WithMockServer(t *testing.T) {
 func TestStatusCmd_HealthFailure(t *testing.T) {
 	cleanup := setupMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]any{"error": "database locked"})
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": "database locked"})
 	}))
 	defer cleanup()
 
@@ -55,16 +55,16 @@ func TestStatusCmd_NoProviders(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/api/health":
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"status": "ok",
 				"uptime": "1m",
 				"go":     "go1.22",
 			})
 		case "/api/agent/status":
-			json.NewEncoder(w).Encode(map[string]any{"status": "idle"})
+			_ = json.NewEncoder(w).Encode(map[string]any{"status": "idle"})
 		default:
 			w.WriteHeader(http.StatusNotFound)
-			json.NewEncoder(w).Encode(map[string]any{"error": "not found"})
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": "not found"})
 		}
 	}))
 	defer cleanup()
@@ -80,7 +80,7 @@ func TestStatusCmd_AgentStatusUnavailable(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/api/health":
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"status": "ok",
 				"uptime": "5s",
 				"go":     "go1.22",
@@ -88,7 +88,7 @@ func TestStatusCmd_AgentStatusUnavailable(t *testing.T) {
 		default:
 			// Agent status 404 - should not cause an error.
 			w.WriteHeader(http.StatusNotFound)
-			json.NewEncoder(w).Encode(map[string]any{"error": "not found"})
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": "not found"})
 		}
 	}))
 	defer cleanup()

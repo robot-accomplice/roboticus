@@ -15,7 +15,7 @@ func TestCircuitResetCmd_WithMockServer(t *testing.T) {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"reset": true, "provider": "anthropic"})
+		_ = json.NewEncoder(w).Encode(map[string]any{"reset": true, "provider": "anthropic"})
 	}))
 	defer cleanup()
 
@@ -40,7 +40,7 @@ func TestCircuitStatusCmd_NonArrayBreakers(t *testing.T) {
 func TestCircuitResetCmd_ServerError(t *testing.T) {
 	cleanup := setupMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]any{"error": "unknown provider"})
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": "unknown provider"})
 	}))
 	defer cleanup()
 
@@ -53,7 +53,7 @@ func TestCircuitResetCmd_ServerError(t *testing.T) {
 func TestCircuitStatusCmd_ServerError(t *testing.T) {
 	cleanup := setupMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
-		json.NewEncoder(w).Encode(map[string]any{"error": "service down"})
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": "service down"})
 	}))
 	defer cleanup()
 

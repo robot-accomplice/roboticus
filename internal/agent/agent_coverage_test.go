@@ -322,21 +322,21 @@ func TestObsidianVault_ScanAndQuery(t *testing.T) {
 	dir := t.TempDir()
 
 	// Create test notes.
-	os.WriteFile(filepath.Join(dir, "Note A.md"), []byte(`---
+	_ = os.WriteFile(filepath.Join(dir, "Note A.md"), []byte(`---
 title: Note Alpha
 tags: project
 ---
 # Note Alpha
 Content of note A with #todo tag and link to [[Note B]].
 `), 0o644)
-	os.WriteFile(filepath.Join(dir, "Note B.md"), []byte(`# Note B
+	_ = os.WriteFile(filepath.Join(dir, "Note B.md"), []byte(`# Note B
 Content of note B with [[Note A]] backlink.
 `), 0o644)
-	os.WriteFile(filepath.Join(dir, "ignore.txt"), []byte("not a note"), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "ignore.txt"), []byte("not a note"), 0o644)
 
 	// Create a hidden dir that should be skipped.
 	_ = os.MkdirAll(filepath.Join(dir, ".obsidian"), 0o755)
-	os.WriteFile(filepath.Join(dir, ".obsidian", "config.md"), []byte("# Config"), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, ".obsidian", "config.md"), []byte("# Config"), 0o644)
 
 	vault := NewObsidianVault(ObsidianConfig{VaultPath: dir})
 	if vault.Root() != dir {
@@ -420,9 +420,9 @@ func TestObsidianVault_EmptyRoot(t *testing.T) {
 
 func TestObsidianVault_IgnoreDirs(t *testing.T) {
 	dir := t.TempDir()
-	os.MkdirAll(filepath.Join(dir, "templates"), 0o755)
-	os.WriteFile(filepath.Join(dir, "templates", "template.md"), []byte("# Template"), 0o644)
-	os.WriteFile(filepath.Join(dir, "real.md"), []byte("# Real Note"), 0o644)
+	_ = os.MkdirAll(filepath.Join(dir, "templates"), 0o755)
+	_ = os.WriteFile(filepath.Join(dir, "templates", "template.md"), []byte("# Template"), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "real.md"), []byte("# Real Note"), 0o644)
 
 	vault := NewObsidianVault(ObsidianConfig{
 		VaultPath:  dir,
@@ -815,7 +815,7 @@ agent_name = "TestAgent"
 recommended_model = "gpt-4"
 `
 	manifestPath := filepath.Join(dir, "manifest.toml")
-	os.WriteFile(manifestPath, []byte(manifestContent), 0o644)
+	_ = os.WriteFile(manifestPath, []byte(manifestContent), 0o644)
 
 	am := NewAppManager(t.TempDir())
 	app, err := am.Install(manifestPath)
@@ -848,7 +848,7 @@ func TestAppManager_InstallBadFile(t *testing.T) {
 	// Invalid TOML.
 	dir := t.TempDir()
 	badPath := filepath.Join(dir, "bad.toml")
-	os.WriteFile(badPath, []byte("not valid toml [[["), 0o644)
+	_ = os.WriteFile(badPath, []byte("not valid toml [[["), 0o644)
 	_, err = am.Install(badPath)
 	if err == nil {
 		t.Error("should error on bad TOML")
@@ -856,7 +856,7 @@ func TestAppManager_InstallBadFile(t *testing.T) {
 
 	// Missing package name.
 	emptyPath := filepath.Join(dir, "empty.toml")
-	os.WriteFile(emptyPath, []byte("[package]\nversion = \"1.0\""), 0o644)
+	_ = os.WriteFile(emptyPath, []byte("[package]\nversion = \"1.0\""), 0o644)
 	_, err = am.Install(emptyPath)
 	if err == nil {
 		t.Error("should error on missing package name")

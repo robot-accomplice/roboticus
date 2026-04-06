@@ -238,7 +238,7 @@ func TestNewServer_AnalysisLimitConcurrency(t *testing.T) {
 	if err != nil {
 		t.Fatalf("POST /api/sessions/nonexistent/analyze: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	// We just want to confirm the route exists; error response is fine.
 	if resp.StatusCode == http.StatusMethodNotAllowed {
 		t.Error("route should exist")
@@ -261,7 +261,7 @@ func TestNewServer_CORSHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OPTIONS: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "http://example.com" {
 		t.Errorf("ACAO = %q, want http://example.com", got)
@@ -281,7 +281,7 @@ func TestNewServer_SecurityHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if got := resp.Header.Get("X-Frame-Options"); got != "DENY" {
 		t.Errorf("X-Frame-Options = %q, want DENY", got)
@@ -307,7 +307,7 @@ func TestNewServer_ConfigEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		t.Errorf("status = %d, body = %s", resp.StatusCode, body)
@@ -342,7 +342,7 @@ func TestNewServer_StatsEndpoints(t *testing.T) {
 			t.Errorf("GET %s: %v", ep, err)
 			continue
 		}
-		resp.Body.Close()
+		func() { _ = resp.Body.Close() }()
 		// Just verify the route exists (not 404/405).
 		if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed {
 			t.Errorf("GET %s: status = %d, route should exist", ep, resp.StatusCode)
@@ -376,7 +376,7 @@ func TestNewServer_MemoryEndpoints(t *testing.T) {
 			t.Errorf("GET %s: %v", ep, err)
 			continue
 		}
-		resp.Body.Close()
+		func() { _ = resp.Body.Close() }()
 		if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed {
 			t.Errorf("GET %s: route not found (status %d)", ep, resp.StatusCode)
 		}
@@ -400,7 +400,7 @@ func TestNewServer_WebSocketRouteExists(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /ws: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	// Should not be 404 (route exists), but will fail because it's not a WS upgrade.
 	if resp.StatusCode == http.StatusNotFound {
 		t.Error("/ws route should exist")
@@ -426,7 +426,7 @@ func TestNewServer_RateLimitWired(t *testing.T) {
 		if err != nil {
 			t.Fatalf("request %d: %v", i, err)
 		}
-		resp.Body.Close()
+		func() { _ = resp.Body.Close() }()
 		lastStatus = resp.StatusCode
 	}
 	if lastStatus != http.StatusTooManyRequests {
@@ -450,7 +450,7 @@ func TestNewServer_SkillsEndpoints(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	func() { _ = resp.Body.Close() }()
 	if resp.StatusCode == http.StatusNotFound {
 		t.Error("/api/skills route should exist")
 	}
@@ -472,7 +472,7 @@ func TestNewServer_TracesEndpoints(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound {
 		t.Error("/api/traces route should exist")
 	}
@@ -494,7 +494,7 @@ func TestNewServer_CronEndpoints(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound {
 		t.Error("/api/cron/jobs route should exist")
 	}
@@ -518,7 +518,7 @@ func TestNewServer_NoApprovals(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound && resp.StatusCode != http.StatusMethodNotAllowed {
 		t.Errorf("/api/approvals with nil service should be 404/405, got %d", resp.StatusCode)
 	}
@@ -542,7 +542,7 @@ func TestNewServer_NoBrowser(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound && resp.StatusCode != http.StatusMethodNotAllowed {
 		t.Errorf("/api/browser/status with nil browser should be 404/405, got %d", resp.StatusCode)
 	}
@@ -567,7 +567,7 @@ func TestNewServer_BodyLimitWired(t *testing.T) {
 	if err != nil {
 		t.Fatalf("POST: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	// The request should fail somehow due to body limit.
 	// It may be 400, 413, or 500 depending on how the handler reads the body.
 	if resp.StatusCode == http.StatusOK {
@@ -591,7 +591,7 @@ func TestNewServer_PrefixedAndUnprefixedHealth(t *testing.T) {
 			t.Fatalf("GET %s: %v", path, err)
 		}
 		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 
 		var result map[string]any
 		if err := json.Unmarshal(body, &result); err != nil {

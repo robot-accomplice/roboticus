@@ -236,7 +236,7 @@ func TestSSETransport_Receive_ConnectionClosed(t *testing.T) {
 		flusher := w.(http.Flusher)
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, "data: {\"id\":1}\n\n")
+		_, _ = fmt.Fprintf(w, "data: {\"id\":1}\n\n")
 		flusher.Flush()
 		// Server closes connection immediately.
 	}))
@@ -426,7 +426,7 @@ func TestConnectSSE_Integration(t *testing.T) {
 				for {
 					select {
 					case msg := <-responseCh:
-						fmt.Fprintf(w, "data: %s\n\n", string(msg))
+						_, _ = fmt.Fprintf(w, "data: %s\n\n", string(msg))
 						flusher.Flush()
 					case <-r.Context().Done():
 						return
@@ -489,7 +489,7 @@ func TestConnectSSE_InitializeFailure(t *testing.T) {
 			for {
 				select {
 				case msg := <-responseCh:
-					fmt.Fprintf(w, "data: %s\n\n", string(msg))
+					_, _ = fmt.Fprintf(w, "data: %s\n\n", string(msg))
 					flusher.Flush()
 				case <-r.Context().Done():
 					return

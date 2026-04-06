@@ -41,7 +41,7 @@ func TestPluginsListCmd_FallbackToSkills(t *testing.T) {
 func TestPluginsListCmd_BothEndpointsFail(t *testing.T) {
 	cleanup := setupMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]any{"error": "server error"})
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": "server error"})
 	}))
 	defer cleanup()
 

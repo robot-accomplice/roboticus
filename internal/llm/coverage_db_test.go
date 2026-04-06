@@ -250,7 +250,7 @@ func TestService_Complete_WithStore(t *testing.T) {
 func TestEmbeddingClient_Embed_OpenAI_FullDispatch(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"data": [{"embedding": [0.1, 0.2]}]}`)
+		_, _ = fmt.Fprint(w, `{"data": [{"embedding": [0.1, 0.2]}]}`)
 	}))
 	defer ts.Close()
 
@@ -276,7 +276,7 @@ func TestEmbeddingClient_Embed_OpenAI_FullDispatch(t *testing.T) {
 func TestEmbeddingClient_Embed_Ollama_FullDispatch(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"data": [{"embedding": [0.3, 0.4]}]}`)
+		_, _ = fmt.Fprint(w, `{"data": [{"embedding": [0.3, 0.4]}]}`)
 	}))
 	defer ts.Close()
 
@@ -302,7 +302,7 @@ func TestEmbeddingClient_Embed_Ollama_FullDispatch(t *testing.T) {
 func TestEmbeddingClient_Embed_Google_FullDispatch(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"embeddings": [{"values": [0.5, 0.6]}]}`)
+		_, _ = fmt.Fprint(w, `{"embeddings": [{"values": [0.5, 0.6]}]}`)
 	}))
 	defer ts.Close()
 
@@ -328,7 +328,7 @@ func TestEmbeddingClient_Embed_Google_FullDispatch(t *testing.T) {
 func TestEmbeddingClient_Embed_DefaultFormat(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"data": [{"embedding": [0.7]}]}`)
+		_, _ = fmt.Fprint(w, `{"data": [{"embedding": [0.7]}]}`)
 	}))
 	defer ts.Close()
 
@@ -366,7 +366,7 @@ func TestClassifier_EmbedText_WithEmbedder(t *testing.T) {
 		data, _ := json.Marshal(map[string]any{
 			"data": []map[string]any{{"embedding": vec}},
 		})
-		w.Write(data)
+		_, _ = w.Write(data)
 	}))
 	defer ts.Close()
 
@@ -495,7 +495,7 @@ func TestUnmarshalOpenAIResponsesResponse_InvalidJSON(t *testing.T) {
 func TestService_Stream_ProviderError_BreakerTrips(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(500)
-		fmt.Fprint(w, "internal error")
+		_, _ = fmt.Fprint(w, "internal error")
 	}))
 	defer ts.Close()
 
@@ -544,7 +544,7 @@ func TestEmbeddingClient_EmbedSingle_EmptyResult(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		// Return empty data array.
-		fmt.Fprint(w, `{"data": []}`)
+		_, _ = fmt.Fprint(w, `{"data": []}`)
 	}))
 	defer ts.Close()
 

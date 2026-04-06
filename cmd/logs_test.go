@@ -16,7 +16,7 @@ func TestLogsCmd_WithMockServer(t *testing.T) {
 			t.Errorf("expected default lines=50 in URL, got %s", r.URL.String())
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"entries": []any{
 				"2026-04-06T12:00:00Z INFO  server started",
 				"2026-04-06T12:01:00Z DEBUG request received",
@@ -62,7 +62,7 @@ func TestLogsCmd_NonArrayEntries(t *testing.T) {
 func TestLogsCmd_ServerError(t *testing.T) {
 	cleanup := setupMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
-		json.NewEncoder(w).Encode(map[string]any{"error": "shutting down"})
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": "shutting down"})
 	}))
 	defer cleanup()
 

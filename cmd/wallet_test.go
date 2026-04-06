@@ -9,7 +9,7 @@ import (
 func TestWalletBalanceCmd_ServerError(t *testing.T) {
 	cleanup := setupMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]any{"error": "wallet unavailable"})
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": "wallet unavailable"})
 	}))
 	defer cleanup()
 
@@ -22,7 +22,7 @@ func TestWalletBalanceCmd_ServerError(t *testing.T) {
 func TestWalletAddressCmd_ServerError(t *testing.T) {
 	cleanup := setupMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]any{"error": "no wallet configured"})
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": "no wallet configured"})
 	}))
 	defer cleanup()
 

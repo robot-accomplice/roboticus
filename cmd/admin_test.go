@@ -32,7 +32,7 @@ func TestAdminStatsCmd_PartialFailure(t *testing.T) {
 		// Let the second endpoint fail with a non-JSON response on a closed connection.
 		if r.URL.Path == "/api/stats/cache" {
 			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte(`{"error":"cache unavailable"}`))
+			_, _ = w.Write([]byte(`{"error":"cache unavailable"}`))
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")

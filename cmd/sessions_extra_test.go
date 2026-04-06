@@ -12,11 +12,11 @@ func TestSessionsShowCmd_WithMockServer(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case r.URL.Path == "/api/sessions/s123" && !strings.HasSuffix(r.URL.Path, "/messages"):
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"id": "s123", "agent_id": "default", "scope_key": "test",
 			})
 		case strings.HasSuffix(r.URL.Path, "/messages"):
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"messages": []any{
 					map[string]any{"role": "user", "content": "Hello"},
 					map[string]any{"role": "assistant", "content": strings.Repeat("x", 200)},
@@ -24,7 +24,7 @@ func TestSessionsShowCmd_WithMockServer(t *testing.T) {
 			})
 		default:
 			w.WriteHeader(http.StatusNotFound)
-			json.NewEncoder(w).Encode(map[string]any{"error": "not found"})
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": "not found"})
 		}
 	}))
 	defer cleanup()
@@ -56,7 +56,7 @@ func TestSessionsDeleteCmd_WithMockServer(t *testing.T) {
 func TestSessionsDeleteCmd_NotFound(t *testing.T) {
 	cleanup := setupMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
-		w.Write([]byte("session not found"))
+		_, _ = w.Write([]byte("session not found"))
 	}))
 	defer cleanup()
 
@@ -120,7 +120,7 @@ func TestSessionsListCmd_WithMultipleSessions(t *testing.T) {
 func TestSessionsShowCmd_ServerError(t *testing.T) {
 	cleanup := setupMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]any{"error": "database error"})
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": "database error"})
 	}))
 	defer cleanup()
 
@@ -133,7 +133,7 @@ func TestSessionsShowCmd_ServerError(t *testing.T) {
 func TestSessionsExportCmd_ServerError(t *testing.T) {
 	cleanup := setupMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(map[string]any{"error": "session not found"})
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": "session not found"})
 	}))
 	defer cleanup()
 

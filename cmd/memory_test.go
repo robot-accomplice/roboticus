@@ -12,20 +12,20 @@ func TestMemoryStatsCmd_WithMockServer(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/working"):
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"entries": []any{"a", "b", "c"},
 			})
 		case strings.HasSuffix(r.URL.Path, "/episodic"):
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"memories": []any{"d", "e"},
 			})
 		case strings.HasSuffix(r.URL.Path, "/semantic"):
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"other_key": "no entries",
 			})
 		default:
 			w.WriteHeader(http.StatusNotFound)
-			json.NewEncoder(w).Encode(map[string]any{"error": "not found"})
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": "not found"})
 		}
 	}))
 	defer cleanup()
@@ -39,7 +39,7 @@ func TestMemoryStatsCmd_WithMockServer(t *testing.T) {
 func TestMemoryStatsCmd_AllFailing(t *testing.T) {
 	cleanup := setupMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]any{"error": "down"})
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": "down"})
 	}))
 	defer cleanup()
 
@@ -53,7 +53,7 @@ func TestMemoryStatsCmd_AllFailing(t *testing.T) {
 func TestMemorySearchCmd_ServerError(t *testing.T) {
 	cleanup := setupMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]any{"error": "search failed"})
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": "search failed"})
 	}))
 	defer cleanup()
 
@@ -69,7 +69,7 @@ func TestMemorySearchCmd_SimpleQuery(t *testing.T) {
 			t.Errorf("expected query param q=robotics in URL, got %s", r.URL.String())
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"results": []any{
+		_ = json.NewEncoder(w).Encode(map[string]any{"results": []any{
 			map[string]any{"content": "robotics fact", "score": 0.9},
 		}})
 	}))

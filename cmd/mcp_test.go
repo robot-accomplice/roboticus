@@ -20,7 +20,7 @@ func TestMCPConnectCmd_WithMockServer(t *testing.T) {
 			t.Errorf("unexpected name: %v", body["name"])
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"connected": true, "tools": 3})
+		_ = json.NewEncoder(w).Encode(map[string]any{"connected": true, "tools": 3})
 	}))
 	defer cleanup()
 
@@ -39,7 +39,7 @@ func TestMCPDisconnectCmd_WithMockServer(t *testing.T) {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"disconnected": true})
+		_ = json.NewEncoder(w).Encode(map[string]any{"disconnected": true})
 	}))
 	defer cleanup()
 
@@ -52,7 +52,7 @@ func TestMCPDisconnectCmd_WithMockServer(t *testing.T) {
 func TestMCPConnectCmd_ServerError(t *testing.T) {
 	cleanup := setupMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]any{"error": "invalid server name"})
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": "invalid server name"})
 	}))
 	defer cleanup()
 

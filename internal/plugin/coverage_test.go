@@ -264,7 +264,7 @@ func TestRegistry_ScanDirectory_IgnoresNonManifestFiles(t *testing.T) {
 func TestFileHash(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.txt")
-	os.WriteFile(path, []byte("hello world"), 0o644)
+	_ = os.WriteFile(path, []byte("hello world"), 0o644)
 
 	hash1, err := FileHash(path)
 	if err != nil {
@@ -284,7 +284,7 @@ func TestFileHash(t *testing.T) {
 	}
 
 	// Different content = different hash.
-	os.WriteFile(path, []byte("changed"), 0o644)
+	_ = os.WriteFile(path, []byte("changed"), 0o644)
 	hash3, _ := FileHash(path)
 	if hash1 == hash3 {
 		t.Error("different content should produce different hash")
@@ -300,8 +300,8 @@ func TestFileHash_NotFound(t *testing.T) {
 
 func TestDirHash(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("aaa"), 0o644)
-	os.WriteFile(filepath.Join(dir, "b.txt"), []byte("bbb"), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "a.txt"), []byte("aaa"), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "b.txt"), []byte("bbb"), 0o644)
 
 	hash1, err := DirHash(dir)
 	if err != nil {
@@ -312,7 +312,7 @@ func TestDirHash(t *testing.T) {
 	}
 
 	// Modify a file and hash changes.
-	os.WriteFile(filepath.Join(dir, "b.txt"), []byte("changed"), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "b.txt"), []byte("changed"), 0o644)
 	hash2, _ := DirHash(dir)
 	if hash1 == hash2 {
 		t.Error("directory hash should change when file content changes")
@@ -332,7 +332,7 @@ func TestScriptPlugin_ExecuteTool_Success(t *testing.T) {
 	dir := t.TempDir()
 	// Create a script file so discoverScripts finds it.
 	scriptPath := filepath.Join(dir, "greet.sh")
-	os.WriteFile(scriptPath, []byte("#!/bin/sh\necho hello"), 0o755)
+	_ = os.WriteFile(scriptPath, []byte("#!/bin/sh\necho hello"), 0o755)
 
 	manifest := Manifest{
 		Name:    "mock-plugin",
@@ -358,7 +358,7 @@ func TestScriptPlugin_ExecuteTool_Success(t *testing.T) {
 func TestScriptPlugin_ExecuteTool_ScriptError(t *testing.T) {
 	dir := t.TempDir()
 	scriptPath := filepath.Join(dir, "fail.sh")
-	os.WriteFile(scriptPath, []byte("#!/bin/sh\nexit 1"), 0o755)
+	_ = os.WriteFile(scriptPath, []byte("#!/bin/sh\nexit 1"), 0o755)
 
 	manifest := Manifest{
 		Name:    "fail-plugin",
@@ -390,7 +390,7 @@ func TestScriptPlugin_ExecuteTool_ScriptError(t *testing.T) {
 
 func TestScriptPlugin_ExecuteTool_LargeOutputTruncated(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "big.sh"), []byte("#!/bin/sh"), 0o755)
+	_ = os.WriteFile(filepath.Join(dir, "big.sh"), []byte("#!/bin/sh"), 0o755)
 
 	manifest := Manifest{
 		Name:    "big-plugin",
@@ -508,7 +508,7 @@ func TestScriptPlugin_Shutdown(t *testing.T) {
 
 func TestScriptPlugin_Hash(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "script.sh"), []byte("#!/bin/sh\necho hi"), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "script.sh"), []byte("#!/bin/sh\necho hi"), 0o644)
 
 	sp := NewScriptPlugin(Manifest{Name: "h", Version: "1.0.0"}, dir)
 	hash, err := sp.Hash()
@@ -583,11 +583,11 @@ func TestScriptPlugin_DiscoverScripts_Extensions(t *testing.T) {
 	dir := t.TempDir()
 
 	// Create script files with different extensions.
-	os.WriteFile(filepath.Join(dir, "bash-tool.sh"), []byte("#!/bin/sh"), 0o755)
-	os.WriteFile(filepath.Join(dir, "python-tool.py"), []byte("#!/usr/bin/env python3"), 0o755)
-	os.WriteFile(filepath.Join(dir, "ruby-tool.rb"), []byte("#!/usr/bin/env ruby"), 0o755)
-	os.WriteFile(filepath.Join(dir, "node-tool.js"), []byte("#!/usr/bin/env node"), 0o755)
-	os.WriteFile(filepath.Join(dir, "noext-tool"), []byte("#!/bin/sh"), 0o755)
+	_ = os.WriteFile(filepath.Join(dir, "bash-tool.sh"), []byte("#!/bin/sh"), 0o755)
+	_ = os.WriteFile(filepath.Join(dir, "python-tool.py"), []byte("#!/usr/bin/env python3"), 0o755)
+	_ = os.WriteFile(filepath.Join(dir, "ruby-tool.rb"), []byte("#!/usr/bin/env ruby"), 0o755)
+	_ = os.WriteFile(filepath.Join(dir, "node-tool.js"), []byte("#!/usr/bin/env node"), 0o755)
+	_ = os.WriteFile(filepath.Join(dir, "noext-tool"), []byte("#!/bin/sh"), 0o755)
 
 	manifest := Manifest{
 		Name:    "multi-ext",
@@ -629,7 +629,7 @@ func TestScriptPlugin_DiscoverScripts_Extensions(t *testing.T) {
 
 func TestScriptPlugin_ExecuteTool_WithEnv(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "envtool.sh"), []byte("#!/bin/sh"), 0o755)
+	_ = os.WriteFile(filepath.Join(dir, "envtool.sh"), []byte("#!/bin/sh"), 0o755)
 
 	manifest := Manifest{
 		Name:    "env-exec",
@@ -749,8 +749,8 @@ func TestPackPlugin_NoManifest(t *testing.T) {
 
 func TestPackPlugin_Success(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "manifest.toml"), []byte("name = \"pack-test\"\nversion = \"1.0.0\""), 0o644)
-	os.WriteFile(filepath.Join(dir, "script.sh"), []byte("#!/bin/sh\necho hi"), 0o755)
+	_ = os.WriteFile(filepath.Join(dir, "manifest.toml"), []byte("name = \"pack-test\"\nversion = \"1.0.0\""), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "script.sh"), []byte("#!/bin/sh\necho hi"), 0o755)
 
 	output := filepath.Join(t.TempDir(), "plugin.zip")
 	err := PackPlugin(dir, output)
@@ -782,7 +782,7 @@ func TestPackPlugin_SubDirectories(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte("name: subdir-test\nversion: 1.0.0"), 0o644)
 	subDir := filepath.Join(dir, "lib")
 	_ = os.MkdirAll(subDir, 0o755)
-	os.WriteFile(filepath.Join(subDir, "helper.py"), []byte("def help(): pass"), 0o644)
+	_ = os.WriteFile(filepath.Join(subDir, "helper.py"), []byte("def help(): pass"), 0o644)
 
 	output := filepath.Join(t.TempDir(), "plugin.zip")
 	if err := PackPlugin(dir, output); err != nil {
@@ -806,8 +806,8 @@ func TestPackPlugin_SubDirectories(t *testing.T) {
 func TestUnpackPlugin_Success(t *testing.T) {
 	// First create a valid archive.
 	srcDir := t.TempDir()
-	os.WriteFile(filepath.Join(srcDir, "manifest.toml"), []byte("name = \"unpack\"\nversion = \"1\""), 0o644)
-	os.WriteFile(filepath.Join(srcDir, "run.sh"), []byte("#!/bin/sh"), 0o755)
+	_ = os.WriteFile(filepath.Join(srcDir, "manifest.toml"), []byte("name = \"unpack\"\nversion = \"1\""), 0o644)
+	_ = os.WriteFile(filepath.Join(srcDir, "run.sh"), []byte("#!/bin/sh"), 0o755)
 
 	archivePath := filepath.Join(t.TempDir(), "plugin.zip")
 	if err := PackPlugin(srcDir, archivePath); err != nil {
@@ -884,7 +884,7 @@ func TestUnpackPlugin_ZipSlipPrevention(t *testing.T) {
 
 func TestUnpackPlugin_InvalidZip(t *testing.T) {
 	archivePath := filepath.Join(t.TempDir(), "notazip.zip")
-	os.WriteFile(archivePath, []byte("this is not a zip file"), 0o644)
+	_ = os.WriteFile(archivePath, []byte("this is not a zip file"), 0o644)
 
 	err := UnpackPlugin(archivePath, t.TempDir())
 	if err == nil {
@@ -909,7 +909,7 @@ func TestHasManifest(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := t.TempDir()
-			os.WriteFile(filepath.Join(dir, tt.filename), []byte("name = \"test\""), 0o644)
+			_ = os.WriteFile(filepath.Join(dir, tt.filename), []byte("name = \"test\""), 0o644)
 			if got := hasManifest(dir); got != tt.want {
 				t.Errorf("hasManifest(%s) = %v, want %v", tt.filename, got, tt.want)
 			}
@@ -921,7 +921,7 @@ func TestHasManifest(t *testing.T) {
 
 func TestPackPlugin_BadOutputPath(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "manifest.toml"), []byte("name = \"test\"\nversion = \"1\""), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "manifest.toml"), []byte("name = \"test\"\nversion = \"1\""), 0o644)
 
 	err := PackPlugin(dir, "/nonexistent/path/output.zip")
 	if err == nil {
@@ -934,8 +934,8 @@ func TestPackPlugin_BadOutputPath(t *testing.T) {
 func TestPackUnpackScan_RoundTrip(t *testing.T) {
 	// Create a plugin dir with manifest and script.
 	srcDir := t.TempDir()
-	os.WriteFile(filepath.Join(srcDir, "manifest.toml"), []byte("name = \"roundtrip\"\nversion = \"2.0.0\"\ndescription = \"round trip test\""), 0o644)
-	os.WriteFile(filepath.Join(srcDir, "greet.sh"), []byte("#!/bin/sh\necho hello"), 0o755)
+	_ = os.WriteFile(filepath.Join(srcDir, "manifest.toml"), []byte("name = \"roundtrip\"\nversion = \"2.0.0\"\ndescription = \"round trip test\""), 0o644)
+	_ = os.WriteFile(filepath.Join(srcDir, "greet.sh"), []byte("#!/bin/sh\necho hello"), 0o755)
 
 	// Pack it.
 	archivePath := filepath.Join(t.TempDir(), "rt.zip")

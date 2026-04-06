@@ -47,7 +47,7 @@ func TestAPIGet_Success(t *testing.T) {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
 	}))
 	defer server.Close()
 
@@ -69,7 +69,7 @@ func TestAPIGet_Success(t *testing.T) {
 func TestAPIGet_ErrorResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]any{"error": "bad request"})
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": "bad request"})
 	}))
 	defer server.Close()
 
@@ -89,7 +89,7 @@ func TestAPIGet_ErrorResponse(t *testing.T) {
 
 func TestAPIGet_InvalidJSON(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("not json"))
+		_, _ = w.Write([]byte("not json"))
 	}))
 	defer server.Close()
 
@@ -119,7 +119,7 @@ func TestAPIPost_Success(t *testing.T) {
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"id": "123", "received": body})
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": "123", "received": body})
 	}))
 	defer server.Close()
 
@@ -140,7 +140,7 @@ func TestAPIPost_Success(t *testing.T) {
 func TestAPIPost_ErrorResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]any{"error": "server error"})
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": "server error"})
 	}))
 	defer server.Close()
 
@@ -181,7 +181,7 @@ func TestAPIDelete_Success(t *testing.T) {
 func TestAPIDelete_ErrorResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
-		w.Write([]byte("not found"))
+		_, _ = w.Write([]byte("not found"))
 	}))
 	defer server.Close()
 
