@@ -182,10 +182,10 @@ func TestHygieneRepository_RecordAndList(t *testing.T) {
 		ProcTotal:                  100,
 		ProcStale:                  5,
 		ProcPruned:                 3,
-		SkillsTotal:               50,
-		SkillsDead:                2,
-		SkillsPruned:              1,
-		AvgSkillPriority:          45.5,
+		SkillsTotal:                50,
+		SkillsDead:                 2,
+		SkillsPruned:               1,
+		AvgSkillPriority:           45.5,
 	}
 
 	err := repo.RecordSweep(ctx, row)

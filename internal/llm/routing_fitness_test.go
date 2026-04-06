@@ -487,10 +487,10 @@ func TestBuildModelProfiles_CostNormalization(t *testing.T) {
 
 func TestBuildModelProfiles_Confidence(t *testing.T) {
 	tests := []struct {
-		name       string
-		obs        int
-		wantConf   float64
-		tolerance  float64
+		name      string
+		obs       int
+		wantConf  float64
+		tolerance float64
 	}{
 		{name: "0 observations", obs: 0, wantConf: 0.0, tolerance: 0.01},
 		{name: "5 observations", obs: 5, wantConf: 0.5, tolerance: 0.01},

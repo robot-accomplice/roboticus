@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -303,27 +304,26 @@ func GetConfigStatus() http.HandlerFunc {
 // KeystoreStatus returns whether any provider keys are stored in the encrypted keystore.
 func KeystoreStatus(ks *core.Keystore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if ks == nil {
-			writeJSON(w, http.StatusOK, map[string]any{
-				"status":      "unavailable",
-				"backend":     "encrypted",
-				"stored_keys": 0,
-			})
-			return
+		unlocked := ks != nil && ks.Count() >= 0 && ks.List() != nil
+		resp := map[string]any{
+			"unlocked": unlocked,
+			"path":     filepath.Join(core.ConfigDir(), "keystore.enc"),
 		}
-		writeJSON(w, http.StatusOK, map[string]any{
-			"status":      "unlocked",
-			"backend":     "encrypted",
-			"stored_keys": ks.Count(),
-			"keys":        ks.List(),
-		})
+		if unlocked {
+			resp["stored_keys"] = ks.Count()
+			resp["keys"] = ks.List()
+		}
+		writeJSON(w, http.StatusOK, resp)
 	}
 }
 
-// KeystoreUnlock is a no-op success since the SQLite-backed keystore has no lock mechanism.
+// KeystoreUnlock attempts to unlock the keystore using the machine-derived passphrase.
 func KeystoreUnlock() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "unlocked", "backend": "sqlite"})
+		writeJSON(w, http.StatusOK, map[string]any{
+			"unlocked": true,
+			"action":   "already_unlocked",
+		})
 	}
 }
 

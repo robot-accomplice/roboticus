@@ -828,10 +828,10 @@ func TestExecuteToolChain_EmptyChain(t *testing.T) {
 // failTool is a test tool that always returns an error.
 type failTool struct{}
 
-func (f *failTool) Name() string                                       { return "fail" }
-func (f *failTool) Description() string                                { return "always fails" }
-func (f *failTool) Risk() tools.RiskLevel                              { return tools.RiskSafe }
-func (f *failTool) ParameterSchema() json.RawMessage                   { return json.RawMessage(`{}`) }
+func (f *failTool) Name() string                     { return "fail" }
+func (f *failTool) Description() string              { return "always fails" }
+func (f *failTool) Risk() tools.RiskLevel            { return tools.RiskSafe }
+func (f *failTool) ParameterSchema() json.RawMessage { return json.RawMessage(`{}`) }
 func (f *failTool) Execute(_ context.Context, _ string, _ *tools.Context) (*tools.Result, error) {
 	return nil, fmt.Errorf("intentional failure")
 }
@@ -864,10 +864,10 @@ func TestExecuteToolChain_ToolError(t *testing.T) {
 // nilResultTool returns nil result (no output).
 type nilResultTool struct{}
 
-func (n *nilResultTool) Name() string                                       { return "noop" }
-func (n *nilResultTool) Description() string                                { return "no-op" }
-func (n *nilResultTool) Risk() tools.RiskLevel                              { return tools.RiskSafe }
-func (n *nilResultTool) ParameterSchema() json.RawMessage                   { return json.RawMessage(`{}`) }
+func (n *nilResultTool) Name() string                     { return "noop" }
+func (n *nilResultTool) Description() string              { return "no-op" }
+func (n *nilResultTool) Risk() tools.RiskLevel            { return tools.RiskSafe }
+func (n *nilResultTool) ParameterSchema() json.RawMessage { return json.RawMessage(`{}`) }
 func (n *nilResultTool) Execute(_ context.Context, _ string, _ *tools.Context) (*tools.Result, error) {
 	return nil, nil
 }

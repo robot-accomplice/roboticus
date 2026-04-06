@@ -11,9 +11,9 @@ import (
 func TestCost_NonNegative(t *testing.T) {
 	// "Cost estimation always returns non-negative values."
 	cases := []struct {
-		name   string
-		usage  Usage
-		rate   Provider
+		name  string
+		usage Usage
+		rate  Provider
 	}{
 		{"zero_tokens", Usage{0, 0}, Provider{CostPerInputTok: 0.001, CostPerOutputTok: 0.002}},
 		{"normal", Usage{100, 50}, Provider{CostPerInputTok: 0.001, CostPerOutputTok: 0.002}},

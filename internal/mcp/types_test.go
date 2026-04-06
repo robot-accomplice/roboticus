@@ -71,4 +71,3 @@ func TestToolCallResult_Fields(t *testing.T) {
 		t.Errorf("content = %s", r.Content)
 	}
 }
-

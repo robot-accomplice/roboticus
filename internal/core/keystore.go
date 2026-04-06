@@ -18,7 +18,8 @@ import (
 )
 
 // File format (matches Rust roboticus):
-//   salt(16 bytes) || nonce(12 bytes) || AES-256-GCM ciphertext
+//
+//	salt(16 bytes) || nonce(12 bytes) || AES-256-GCM ciphertext
 //
 // KDF: Argon2id with m=65536, t=3, p=1, output=32 bytes.
 const (

@@ -393,9 +393,9 @@ func TestScriptPlugin_ExecuteTool_LargeOutputTruncated(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "big.sh"), []byte("#!/bin/sh"), 0o755)
 
 	manifest := Manifest{
-		Name:  "big-plugin",
+		Name:    "big-plugin",
 		Version: "1.0.0",
-		Tools: []ManifestTool{{Name: "big", Description: "big output"}},
+		Tools:   []ManifestTool{{Name: "big", Description: "big output"}},
 	}
 
 	// Create output larger than 10MB.

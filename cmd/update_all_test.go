@@ -140,7 +140,7 @@ func TestPerformUpdate_ChecksumMismatch(t *testing.T) {
 func setupFakeReleaseServer(t *testing.T, binary, checksums []byte) map[string][]byte {
 	t.Helper()
 	return map[string][]byte{
-		binaryName():    binary,
+		binaryName():     binary,
 		"SHA256SUMS.txt": checksums,
 	}
 }
