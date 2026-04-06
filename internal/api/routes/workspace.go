@@ -66,7 +66,7 @@ func GetRoster(store *db.Store) http.HandlerFunc {
 				"name": "default", "model": "", "enabled": true, "role": "primary",
 			})
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"agents": agents})
+		writeJSON(w, http.StatusOK, map[string]any{"roster": agents})
 	}
 }
 

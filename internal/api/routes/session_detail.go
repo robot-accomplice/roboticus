@@ -210,7 +210,7 @@ func ToggleSkill(store *db.Store) http.HandlerFunc {
 // GetSkillsCatalog returns available skills from the catalog.
 func GetSkillsCatalog() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"skills": make([]any, 0)})
+		writeJSON(w, http.StatusOK, map[string]any{"items": make([]any, 0)})
 	}
 }
 

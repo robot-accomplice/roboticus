@@ -111,16 +111,23 @@ func GetEfficiency(store *db.Store) http.HandlerFunc {
 				return
 			}
 			avgOut := 0.0
+			costPerTurn := 0.0
 			if cnt > 0 {
 				avgOut = float64(tokOut) / float64(cnt)
+				costPerTurn = cost / float64(cnt)
 			}
 			models = append(models, map[string]any{
-				"model": model, "requests": cnt, "cost": cost,
+				"model": model, "requests": cnt,
 				"tokens_in": tokIn, "tokens_out": tokOut,
 				"total_turns":       cnt,
 				"cache_hit_rate":    0.0,
 				"avg_output_tokens": avgOut,
 				"avg_output_density": 0.0,
+				"cost": map[string]any{
+					"total":              cost,
+					"effective_per_turn": costPerTurn,
+					"cache_savings":      0.0,
+				},
 			})
 		}
 
