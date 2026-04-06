@@ -14,31 +14,47 @@ import (
 	"strings"
 	"sync"
 
-	"golang.org/x/crypto/scrypt"
+	"golang.org/x/crypto/argon2"
+)
+
+// File format (matches Rust roboticus):
+//   salt(16 bytes) || nonce(12 bytes) || AES-256-GCM ciphertext
+//
+// KDF: Argon2id with m=65536, t=3, p=1, output=32 bytes.
+const (
+	saltLen  = 16
+	nonceLen = 12
 )
 
 // Keystore provides encrypted storage for API keys, tokens, and other secrets.
-// It stores an AES-256-GCM encrypted JSON file on disk, with scrypt key derivation
-// from a master passphrase.
+// The file format is byte-compatible with the Rust roboticus keystore:
+// Argon2id key derivation + AES-256-GCM encryption with a random salt
+// stored in the file header.
 //
 // Usage:
 //
-//	ks, err := OpenKeystore("~/.roboticus/keystore.enc", masterKey)
+//	ks, err := OpenKeystore(KeystoreConfig{Path: "~/.roboticus/keystore.enc"})
 //	apiKey, err := ks.Get("openai_api_key")
 //	ks.Set("anthropic_api_key", "sk-ant-...")
 //	ks.Save()
 type Keystore struct {
-	mu        sync.RWMutex
-	path      string
-	masterKey []byte // derived from passphrase via scrypt
-	secrets   map[string]string
-	dirty     bool
+	mu         sync.RWMutex
+	path       string
+	passphrase string // kept for re-encryption on Save with fresh salt
+	secrets    map[string]string
+	dirty      bool
 }
 
 // KeystoreConfig holds keystore initialization options.
 type KeystoreConfig struct {
 	Path       string // Path to the encrypted keystore file.
 	Passphrase string // Master passphrase (or from ROBOTICUS_MASTER_KEY env).
+}
+
+// deriveKey uses Argon2id to derive a 32-byte key from a passphrase and salt.
+// Parameters match Rust roboticus: m=65536 KiB, t=3 iterations, p=1 thread.
+func deriveKey(passphrase string, salt []byte) []byte {
+	return argon2.IDKey([]byte(passphrase), salt, 3, 65536, 1, 32)
 }
 
 // OpenKeystore opens or creates an encrypted keystore.
@@ -58,18 +74,10 @@ func OpenKeystore(cfg KeystoreConfig) (*Keystore, error) {
 	}
 
 	ks := &Keystore{
-		path:    cfg.Path,
-		secrets: make(map[string]string),
+		path:       cfg.Path,
+		passphrase: passphrase,
+		secrets:    make(map[string]string),
 	}
-
-	// Derive encryption key from passphrase.
-	// Use a fixed salt derived from the path for determinism.
-	salt := []byte("roboticus-keystore:" + filepath.Base(cfg.Path))
-	key, err := scrypt.Key([]byte(passphrase), salt, 32768, 8, 1, 32)
-	if err != nil {
-		return nil, fmt.Errorf("keystore: key derivation failed: %w", err)
-	}
-	ks.masterKey = key
 
 	// Try loading existing file.
 	if data, err := os.ReadFile(cfg.Path); err == nil && len(data) > 0 {
@@ -191,11 +199,12 @@ func (ks *Keystore) List() []string {
 }
 
 // Save encrypts and writes the keystore to disk.
+// Each Save generates a fresh random salt (matching Rust behavior).
 func (ks *Keystore) Save() error {
 	ks.mu.RLock()
 	defer ks.mu.RUnlock()
 
-	if ks.masterKey == nil {
+	if ks.passphrase == "" {
 		return fmt.Errorf("keystore: no master key configured (set ROBOTICUS_MASTER_KEY)")
 	}
 	if ks.path == "" {
@@ -208,7 +217,7 @@ func (ks *Keystore) Save() error {
 		return fmt.Errorf("keystore: marshal failed: %w", err)
 	}
 
-	// Encrypt with AES-256-GCM.
+	// Encrypt with fresh salt + AES-256-GCM.
 	ciphertext, err := ks.encrypt(plaintext)
 	if err != nil {
 		return err
@@ -242,8 +251,18 @@ func (ks *Keystore) Count() int {
 	return len(ks.secrets)
 }
 
+// encrypt produces: salt(16) || nonce(12) || AES-256-GCM(ciphertext + tag).
+// This matches the Rust roboticus keystore file format exactly.
 func (ks *Keystore) encrypt(plaintext []byte) ([]byte, error) {
-	block, err := aes.NewCipher(ks.masterKey)
+	// Fresh random salt each save.
+	salt := make([]byte, saltLen)
+	if _, err := io.ReadFull(rand.Reader, salt); err != nil {
+		return nil, fmt.Errorf("keystore: salt generation: %w", err)
+	}
+
+	key := deriveKey(ks.passphrase, salt)
+
+	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, fmt.Errorf("keystore: cipher init: %w", err)
 	}
@@ -253,17 +272,34 @@ func (ks *Keystore) encrypt(plaintext []byte) ([]byte, error) {
 		return nil, fmt.Errorf("keystore: GCM init: %w", err)
 	}
 
-	nonce := make([]byte, gcm.NonceSize())
+	nonce := make([]byte, nonceLen)
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		return nil, fmt.Errorf("keystore: nonce generation: %w", err)
 	}
 
-	// Format: nonce || ciphertext (with auth tag).
-	return gcm.Seal(nonce, nonce, plaintext, nil), nil
+	ct := gcm.Seal(nil, nonce, plaintext, nil)
+
+	// Format: salt || nonce || ciphertext.
+	out := make([]byte, 0, saltLen+nonceLen+len(ct))
+	out = append(out, salt...)
+	out = append(out, nonce...)
+	out = append(out, ct...)
+	return out, nil
 }
 
+// decrypt parses: salt(16) || nonce(12) || AES-256-GCM ciphertext.
 func (ks *Keystore) decrypt(data []byte) error {
-	block, err := aes.NewCipher(ks.masterKey)
+	if len(data) < saltLen+nonceLen+1 {
+		return fmt.Errorf("ciphertext too short")
+	}
+
+	salt := data[:saltLen]
+	nonce := data[saltLen : saltLen+nonceLen]
+	ciphertext := data[saltLen+nonceLen:]
+
+	key := deriveKey(ks.passphrase, salt)
+
+	block, err := aes.NewCipher(key)
 	if err != nil {
 		return err
 	}
@@ -273,12 +309,6 @@ func (ks *Keystore) decrypt(data []byte) error {
 		return err
 	}
 
-	nonceSize := gcm.NonceSize()
-	if len(data) < nonceSize {
-		return fmt.Errorf("ciphertext too short")
-	}
-
-	nonce, ciphertext := data[:nonceSize], data[nonceSize:]
 	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
 	if err != nil {
 		return err
