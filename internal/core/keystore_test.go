@@ -157,3 +157,47 @@ func TestKeystore_GetOrEmpty(t *testing.T) {
 		t.Errorf("got %q, want val", got)
 	}
 }
+
+func TestKeystore_Rekey(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "keystore.enc")
+
+	ks, err := OpenKeystore(KeystoreConfig{Path: path, Passphrase: "old-pass"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ks.Set("secret", "value"); err != nil {
+		t.Fatal(err)
+	}
+	if err := ks.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if err := ks.Rekey("new-pass"); err != nil {
+		t.Fatalf("Rekey: %v", err)
+	}
+
+	if _, err := OpenKeystore(KeystoreConfig{Path: path, Passphrase: "old-pass"}); err == nil {
+		t.Fatal("expected old passphrase to fail after rekey")
+	}
+	ks2, err := OpenKeystore(KeystoreConfig{Path: path, Passphrase: "new-pass"})
+	if err != nil {
+		t.Fatalf("open with new passphrase: %v", err)
+	}
+	got, err := ks2.Get("secret")
+	if err != nil {
+		t.Fatalf("Get after rekey: %v", err)
+	}
+	if got != "value" {
+		t.Fatalf("secret after rekey = %q", got)
+	}
+}
+
+func TestKeystore_RekeyRejectsEmptyPassphrase(t *testing.T) {
+	ks, err := OpenKeystore(KeystoreConfig{Passphrase: "old-pass"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ks.Rekey(""); err == nil {
+		t.Fatal("expected error for empty passphrase")
+	}
+}

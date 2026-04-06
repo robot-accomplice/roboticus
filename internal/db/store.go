@@ -106,14 +106,14 @@ func (s *Store) TruncateAllData() error {
 		"transactions", "service_requests", "revenue_opportunities", "revenue_feedback",
 		"inference_costs", "semantic_cache",
 		"identity", "os_personality_history", "metric_snapshots",
-		"discovered_agents", "skills", "delivery_queue",
+		"discovered_agents", "paired_devices", "skills", "delivery_queue",
 		"approval_requests", "plugins", "embeddings", "sub_agents",
 		"context_checkpoints", "hippocampus", "turn_feedback",
 		"context_snapshots", "model_selection_events", "shadow_routing_predictions",
 		"abuse_events", "learned_skills", "memory_index", "consolidation_log",
 		"hygiene_log", "pipeline_traces", "react_traces",
 		"heartbeat_task_results", "delegation_outcomes",
-		"agent_tasks", "task_steps", "agent_delegation_outcomes",
+		"agent_tasks", "task_steps", "task_events", "agent_delegation_outcomes",
 		"sessions",
 	}
 

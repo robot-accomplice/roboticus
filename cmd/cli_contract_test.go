@@ -18,7 +18,7 @@ func commandMap(cmd *cobra.Command) map[string]*cobra.Command {
 // TestCLI_GlobalFlags verifies all global persistent flags exist on rootCmd.
 func TestCLI_GlobalFlags(t *testing.T) {
 	flags := []struct {
-		name     string
+		name      string
 		shorthand string
 	}{
 		{"config", "c"},
@@ -72,8 +72,8 @@ func TestCLI_TopLevelCommands(t *testing.T) {
 // TestCLI_Aliases verifies command aliases are correctly registered.
 func TestCLI_Aliases(t *testing.T) {
 	tests := []struct {
-		cmdName  string
-		aliases  []string
+		cmdName string
+		aliases []string
 	}{
 		{"serve", []string{"start", "run"}},
 		{"setup", []string{"onboard"}},
@@ -123,9 +123,9 @@ func TestCLI_SubcommandSets(t *testing.T) {
 		{"profile", profileCmd, []string{"list", "create", "switch", "delete"}},
 		{"metrics", metricsCmd, []string{"costs", "cache", "capacity"}},
 		{"skills", skillsCmd, []string{"list", "reload", "catalog"}},
-		{"plugins", pluginsCmd, []string{"list"}},
+		{"plugins", pluginsCmd, []string{"list", "info", "install", "uninstall", "enable", "disable", "search", "pack"}},
 		{"integrations", integrationsCmd, []string{"list", "test", "health"}},
-		{"keystore", keystoreCmd, []string{"status", "list"}},
+		{"keystore", keystoreCmd, []string{"status", "list", "set", "get", "remove", "import", "rekey"}},
 		{"wallet", walletCmd, []string{"balance", "address"}},
 		{"service", serviceCmd, []string{"install", "uninstall", "start", "stop", "restart", "status"}},
 		{"daemon", daemonCmd, []string{"install", "uninstall", "start", "stop", "restart", "status"}},

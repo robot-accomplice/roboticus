@@ -3,10 +3,12 @@ package cmd
 import (
 	"archive/tar"
 	"compress/gzip"
+	"context"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -124,7 +126,32 @@ var pluginsSearchCmd = &cobra.Command{
 	Short: "Search the plugin catalog",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return fmt.Errorf("plugin catalog search requires a remote registry (not yet available)")
+		registryURL := resolveRegistryURL(effectiveConfigPath())
+		manifest, err := fetchRegistryManifest(context.Background(), registryURL)
+		if err != nil {
+			return fmt.Errorf("failed to fetch plugin catalog: %w", err)
+		}
+		if manifest.Packs.Plugins == nil {
+			return fmt.Errorf("plugin catalog is not available in the registry")
+		}
+
+		query := strings.ToLower(strings.TrimSpace(args[0]))
+		var results []pluginCatalogEntry
+		for _, entry := range manifest.Packs.Plugins.Catalog {
+			if query == "" ||
+				strings.Contains(strings.ToLower(entry.Name), query) ||
+				strings.Contains(strings.ToLower(entry.Description), query) ||
+				strings.Contains(strings.ToLower(entry.Author), query) {
+				results = append(results, entry)
+			}
+		}
+
+		if len(results) == 0 {
+			fmt.Printf("No plugins found matching %q.\n", args[0])
+			return nil
+		}
+		printJSON(map[string]any{"plugins": results})
+		return nil
 	},
 }
 

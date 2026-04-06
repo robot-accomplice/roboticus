@@ -331,9 +331,21 @@ func TestKeystoreCmd_SubcommandRegistration(t *testing.T) {
 	for _, sub := range keystoreCmd.Commands() {
 		subcommands[sub.Name()] = true
 	}
-	for _, name := range []string{"status", "list"} {
+	for _, name := range []string{"status", "list", "set", "get", "remove", "import", "rekey"} {
 		if !subcommands[name] {
 			t.Errorf("keystore command missing subcommand %q", name)
+		}
+	}
+}
+
+func TestPluginsCmd_SubcommandRegistration(t *testing.T) {
+	subcommands := make(map[string]bool)
+	for _, sub := range pluginsCmd.Commands() {
+		subcommands[sub.Name()] = true
+	}
+	for _, name := range []string{"list", "info", "install", "uninstall", "enable", "disable", "search", "pack"} {
+		if !subcommands[name] {
+			t.Errorf("plugins command missing subcommand %q", name)
 		}
 	}
 }

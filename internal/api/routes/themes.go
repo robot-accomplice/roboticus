@@ -1,6 +1,7 @@
 package routes
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"sync"
@@ -37,6 +38,13 @@ var builtinThemes = []ThemeManifest{
 		Variables: map[string]string{"--bg": "#2e3440", "--surface": "#3b4252", "--accent": "#88c0d0", "--text": "#d8dee9"}, Source: "builtin"},
 }
 
+var catalogThemes = []ThemeManifest{
+	{ID: "dracula", Name: "Dracula", Description: "Beloved dark theme with purple and pink highlights", Author: "roboticus", Swatch: "#bd93f9",
+		Variables: map[string]string{"--bg": "#282a36", "--surface": "#2d303e", "--accent": "#bd93f9", "--text": "#f8f8f2"}, Source: "catalog"},
+	{ID: "tokyo-night", Name: "Tokyo Night", Description: "Neon-soaked night palette with cool blues", Author: "roboticus", Swatch: "#7aa2f7",
+		Variables: map[string]string{"--bg": "#1a1b26", "--surface": "#24283b", "--accent": "#7aa2f7", "--text": "#c0caf5"}, Source: "catalog"},
+}
+
 // GetThemesList returns themes as a flat array (used by the dashboard's /api/themes endpoint).
 func GetThemesList() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -45,20 +53,104 @@ func GetThemesList() http.HandlerFunc {
 }
 
 // GetThemeCatalog returns all available themes.
-func GetThemeCatalog() http.HandlerFunc {
+func installedThemeIDs(store *db.Store) map[string]bool {
+	installed := make(map[string]bool)
+	if store == nil {
+		return installed
+	}
+	rows, err := store.QueryContext(context.Background(), `SELECT id FROM installed_themes`)
+	if err != nil {
+		return installed
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var id string
+		if rows.Scan(&id) == nil {
+			installed[id] = true
+		}
+	}
+	return installed
+}
+
+func findThemeByID(store *db.Store, id string) (ThemeManifest, bool) {
+	for _, t := range builtinThemes {
+		if t.ID == id {
+			return t, true
+		}
+	}
+	installed := installedThemeIDs(store)
+	for _, t := range catalogThemes {
+		if t.ID == id && installed[id] {
+			return t, true
+		}
+	}
+	return ThemeManifest{}, false
+}
+
+func GetThemeCatalog(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		catalogMu.RLock()
 		defer catalogMu.RUnlock()
 
-		themes := make([]map[string]any, 0, len(builtinThemes))
+		installed := installedThemeIDs(store)
+		themes := make([]map[string]any, 0, len(builtinThemes)+len(catalogThemes))
 		for _, t := range builtinThemes {
 			themes = append(themes, map[string]any{
 				"id": t.ID, "name": t.Name, "description": t.Description,
 				"author": t.Author, "swatch": t.Swatch, "source": t.Source,
-				"installed": installedThemes[t.ID] || t.Source == "builtin",
+				"installed": installedThemes[t.ID] || t.Source == "builtin" || installed[t.ID],
+			})
+		}
+		for _, t := range catalogThemes {
+			themes = append(themes, map[string]any{
+				"id": t.ID, "name": t.Name, "description": t.Description,
+				"author": t.Author, "swatch": t.Swatch, "source": t.Source,
+				"installed": installedThemes[t.ID] || installed[t.ID],
 			})
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"themes": themes})
+	}
+}
+
+// InstallCatalogTheme installs a catalog theme by ID.
+func InstallCatalogTheme(store *db.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID string `json:"id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
+		if req.ID == "" {
+			writeError(w, http.StatusBadRequest, "id required")
+			return
+		}
+		var theme ThemeManifest
+		found := false
+		for _, t := range catalogThemes {
+			if t.ID == req.ID {
+				theme = t
+				found = true
+				break
+			}
+		}
+		if !found {
+			writeError(w, http.StatusNotFound, "theme not found in catalog")
+			return
+		}
+		content, err := json.Marshal(theme)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to encode theme")
+			return
+		}
+		if _, err := store.ExecContext(r.Context(),
+			`INSERT OR REPLACE INTO installed_themes (id, name, source, version, active, content) VALUES (?, ?, 'catalog', '1.0.0', 0, ?)`,
+			req.ID, theme.Name, string(content)); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "theme": theme})
 	}
 }
 
@@ -72,11 +164,9 @@ func GetActiveTheme(store *db.Store) http.HandlerFunc {
 			themeID = "default"
 		}
 
-		for _, t := range builtinThemes {
-			if t.ID == themeID {
-				writeJSON(w, http.StatusOK, t)
-				return
-			}
+		if t, ok := findThemeByID(store, themeID); ok {
+			writeJSON(w, http.StatusOK, t)
+			return
 		}
 		writeJSON(w, http.StatusOK, builtinThemes[0])
 	}
@@ -96,14 +186,7 @@ func SetActiveTheme(store *db.Store) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "theme_id required")
 			return
 		}
-		valid := false
-		for _, theme := range builtinThemes {
-			if theme.ID == req.ThemeID {
-				valid = true
-				break
-			}
-		}
-		if !valid {
+		if _, ok := findThemeByID(store, req.ThemeID); !ok {
 			writeError(w, http.StatusBadRequest, "unknown theme_id")
 			return
 		}

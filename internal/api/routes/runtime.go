@@ -3,7 +3,9 @@ package routes
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
 
 	"roboticus/internal/db"
@@ -117,9 +119,148 @@ func RegisterDiscoveredAgent(store *db.Store) http.HandlerFunc {
 	}
 }
 
-// GetRuntimeDevices lists paired devices (currently returns empty list).
-func GetRuntimeDevices() http.HandlerFunc {
+// VerifyDiscoveredAgent marks a discovered agent as verified.
+func VerifyDiscoveredAgent(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"devices": []any{}})
+		id := chi.URLParam(r, "id")
+		res, err := store.ExecContext(r.Context(),
+			`UPDATE discovered_agents
+			 SET last_verified_at = datetime('now')
+			 WHERE id = ?`,
+			id)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to verify discovered agent")
+			return
+		}
+		affected, _ := res.RowsAffected()
+		if affected == 0 {
+			writeError(w, http.StatusNotFound, "discovered agent not found")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": id})
+	}
+}
+
+// GetRuntimeDevices lists paired devices.
+func GetRuntimeDevices(store *db.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		rows, err := store.QueryContext(r.Context(),
+			`SELECT id, device_name, state, paired_at, verified_at, last_seen
+			 FROM paired_devices ORDER BY paired_at DESC`)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to query paired devices")
+			return
+		}
+		defer func() { _ = rows.Close() }()
+
+		devices := make([]map[string]any, 0)
+		for rows.Next() {
+			var id, deviceName, state, pairedAt, lastSeen string
+			var verifiedAt *string
+			if err := rows.Scan(&id, &deviceName, &state, &pairedAt, &verifiedAt, &lastSeen); err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to read paired device row")
+				return
+			}
+			device := map[string]any{
+				"id":          id,
+				"device_id":   id,
+				"device_name": deviceName,
+				"state":       state,
+				"paired_at":   pairedAt,
+				"last_seen":   lastSeen,
+			}
+			if verifiedAt != nil {
+				device["verified_at"] = *verifiedAt
+			}
+			devices = append(devices, device)
+		}
+		if devices == nil {
+			devices = []map[string]any{}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"identity": map[string]any{
+				"device_id": "goboticus-local-device",
+			},
+			"devices": devices,
+		})
+	}
+}
+
+// PairRuntimeDevice registers a device in pending state.
+func PairRuntimeDevice(store *db.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			DeviceID     string `json:"device_id"`
+			PublicKeyHex string `json:"public_key_hex"`
+			DeviceName   string `json:"device_name"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		body.DeviceID = strings.TrimSpace(body.DeviceID)
+		body.DeviceName = strings.TrimSpace(body.DeviceName)
+		body.PublicKeyHex = strings.TrimSpace(body.PublicKeyHex)
+		if body.DeviceID == "" || body.PublicKeyHex == "" || body.DeviceName == "" {
+			writeError(w, http.StatusBadRequest, "device_id, public_key_hex, and device_name are required")
+			return
+		}
+		_, err := store.ExecContext(r.Context(),
+			`INSERT INTO paired_devices (id, public_key_hex, device_name, state, paired_at, last_seen)
+			 VALUES (?, ?, ?, 'pending', datetime('now'), datetime('now'))
+			 ON CONFLICT(id) DO UPDATE SET
+			   public_key_hex = excluded.public_key_hex,
+			   device_name = excluded.device_name,
+			   state = 'pending',
+			   verified_at = NULL,
+			   last_seen = datetime('now')`,
+			body.DeviceID, body.PublicKeyHex, body.DeviceName)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to pair device")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "device_id": body.DeviceID})
+	}
+}
+
+// VerifyPairedDevice marks a device as verified.
+func VerifyPairedDevice(store *db.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		res, err := store.ExecContext(r.Context(),
+			`UPDATE paired_devices
+			 SET state = 'verified',
+			     verified_at = datetime('now'),
+			     last_seen = datetime('now')
+			 WHERE id = ?`,
+			id)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to verify paired device")
+			return
+		}
+		affected, _ := res.RowsAffected()
+		if affected == 0 {
+			writeError(w, http.StatusBadRequest, "paired device not found")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "device_id": id})
+	}
+}
+
+// UnpairDevice removes a paired device.
+func UnpairDevice(store *db.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		res, err := store.ExecContext(r.Context(), `DELETE FROM paired_devices WHERE id = ?`, id)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to unpair device")
+			return
+		}
+		affected, _ := res.RowsAffected()
+		if affected == 0 {
+			writeError(w, http.StatusNotFound, "paired device not found")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "device_id": id})
 	}
 }

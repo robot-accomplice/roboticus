@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -350,6 +351,183 @@ func TestNewServer_StatsEndpoints(t *testing.T) {
 	}
 }
 
+func TestNewServer_ModelAdminEndpoints(t *testing.T) {
+	store := testutil.TempStore(t)
+	state := minimalAppState(t, store)
+	cfg := DefaultServerConfig()
+	cfg.APIKey = "key"
+
+	srv := NewServer(cfg, state)
+	ts := httptest.NewServer(srv.Handler)
+	defer ts.Close()
+
+	getEndpoints := []string{
+		"/api/models/selections",
+		"/api/models/routing-diagnostics",
+		"/api/models/routing-dataset",
+	}
+
+	for _, ep := range getEndpoints {
+		req, _ := http.NewRequest(http.MethodGet, ts.URL+ep, nil)
+		req.Header.Set("x-api-key", "key")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Errorf("GET %s: %v", ep, err)
+			continue
+		}
+		func() { _ = resp.Body.Close() }()
+		if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed {
+			t.Errorf("GET %s: route not found (status %d)", ep, resp.StatusCode)
+		}
+	}
+
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/api/models/reset", nil)
+	req.Header.Set("x-api-key", "key")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /api/models/reset: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed {
+		t.Fatalf("POST /api/models/reset: route not found (status %d)", resp.StatusCode)
+	}
+}
+
+func TestNewServer_MCPEndpoints(t *testing.T) {
+	store := testutil.TempStore(t)
+	state := minimalAppState(t, store)
+	state.Config.MCP.Servers = []core.MCPServerEntry{
+		{Name: "demo-server", Transport: "stdio", Command: "cat", Enabled: true},
+	}
+	cfg := DefaultServerConfig()
+	cfg.APIKey = "key"
+
+	srv := NewServer(cfg, state)
+	ts := httptest.NewServer(srv.Handler)
+	defer ts.Close()
+
+	getEndpoints := []string{
+		"/api/runtime/mcp",
+		"/api/mcp/servers",
+		"/api/mcp/servers/demo-server",
+		"/api/mcp/connections",
+		"/api/mcp/tools",
+	}
+
+	for _, ep := range getEndpoints {
+		req, _ := http.NewRequest(http.MethodGet, ts.URL+ep, nil)
+		req.Header.Set("x-api-key", "key")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Errorf("GET %s: %v", ep, err)
+			continue
+		}
+		func() { _ = resp.Body.Close() }()
+		if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed {
+			t.Errorf("GET %s: route not found (status %d)", ep, resp.StatusCode)
+		}
+	}
+
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/api/mcp/servers/demo-server/test", nil)
+	req.Header.Set("x-api-key", "key")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /api/mcp/servers/demo-server/test: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed {
+		t.Fatalf("POST /api/mcp/servers/demo-server/test: route not found (status %d)", resp.StatusCode)
+	}
+}
+
+func TestNewServer_RuntimeDeviceEndpoints(t *testing.T) {
+	store := testutil.TempStore(t)
+	if _, err := store.ExecContext(context.Background(),
+		`INSERT INTO discovered_agents (id, did, agent_card_json, endpoint_url)
+		 VALUES ('test-agent', 'did:example:test', '{}', 'https://agent.example.com')`); err != nil {
+		t.Fatalf("seed discovered_agents: %v", err)
+	}
+	state := minimalAppState(t, store)
+	cfg := DefaultServerConfig()
+	cfg.APIKey = "key"
+
+	srv := NewServer(cfg, state)
+	ts := httptest.NewServer(srv.Handler)
+	defer ts.Close()
+
+	getEndpoints := []string{
+		"/api/runtime/discovery",
+		"/api/runtime/devices",
+	}
+	for _, ep := range getEndpoints {
+		req, _ := http.NewRequest(http.MethodGet, ts.URL+ep, nil)
+		req.Header.Set("x-api-key", "key")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Errorf("GET %s: %v", ep, err)
+			continue
+		}
+		func() { _ = resp.Body.Close() }()
+		if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed {
+			t.Errorf("GET %s: route not found (status %d)", ep, resp.StatusCode)
+		}
+	}
+
+	postReqs := []struct {
+		method string
+		path   string
+		body   string
+	}{
+		{http.MethodPost, "/api/runtime/discovery/test-agent/verify", ""},
+		{http.MethodPost, "/api/runtime/devices/pair", `{"device_id":"dev-1","public_key_hex":"abcd1234","device_name":"Phone"}`},
+		{http.MethodPost, "/api/runtime/devices/dev-1/verify", ""},
+		{http.MethodDelete, "/api/runtime/devices/dev-1", ""},
+	}
+
+	for _, tc := range postReqs {
+		req, _ := http.NewRequest(tc.method, ts.URL+tc.path, strings.NewReader(tc.body))
+		req.Header.Set("x-api-key", "key")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Errorf("%s %s: %v", tc.method, tc.path, err)
+			continue
+		}
+		func() { _ = resp.Body.Close() }()
+		if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed {
+			t.Errorf("%s %s: route not found (status %d)", tc.method, tc.path, resp.StatusCode)
+		}
+	}
+}
+
+func TestNewServer_WorkspaceTaskEndpoints(t *testing.T) {
+	store := testutil.TempStore(t)
+	state := minimalAppState(t, store)
+	cfg := DefaultServerConfig()
+	cfg.APIKey = "key"
+
+	srv := NewServer(cfg, state)
+	ts := httptest.NewServer(srv.Handler)
+	defer ts.Close()
+
+	endpoints := []string{
+		"/api/workspace/tasks",
+		"/api/admin/task-events",
+	}
+	for _, ep := range endpoints {
+		req, _ := http.NewRequest(http.MethodGet, ts.URL+ep, nil)
+		req.Header.Set("x-api-key", "key")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Errorf("GET %s: %v", ep, err)
+			continue
+		}
+		func() { _ = resp.Body.Close() }()
+		if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed {
+			t.Errorf("GET %s: route not found (status %d)", ep, resp.StatusCode)
+		}
+	}
+}
+
 func TestNewServer_MemoryEndpoints(t *testing.T) {
 	store := testutil.TempStore(t)
 	state := minimalAppState(t, store)
@@ -366,6 +544,7 @@ func TestNewServer_MemoryEndpoints(t *testing.T) {
 		"/api/memory/semantic",
 		"/api/memory/semantic/categories",
 		"/api/memory/health",
+		"/api/memory/search?q=test",
 	}
 
 	for _, ep := range endpoints {
@@ -379,6 +558,25 @@ func TestNewServer_MemoryEndpoints(t *testing.T) {
 		func() { _ = resp.Body.Close() }()
 		if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed {
 			t.Errorf("GET %s: route not found (status %d)", ep, resp.StatusCode)
+		}
+	}
+
+	postEndpoints := []string{
+		"/api/memory/consolidate",
+		"/api/memory/reindex",
+	}
+
+	for _, ep := range postEndpoints {
+		req, _ := http.NewRequest(http.MethodPost, ts.URL+ep, nil)
+		req.Header.Set("x-api-key", "key")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Errorf("POST %s: %v", ep, err)
+			continue
+		}
+		func() { _ = resp.Body.Close() }()
+		if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed {
+			t.Errorf("POST %s: route not found (status %d)", ep, resp.StatusCode)
 		}
 	}
 }

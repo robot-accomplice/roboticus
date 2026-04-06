@@ -40,7 +40,8 @@ func TestGetRuntimeSurfaces(t *testing.T) {
 }
 
 func TestGetRuntimeDevices(t *testing.T) {
-	handler := GetRuntimeDevices()
+	store := testutil.TempStore(t)
+	handler := GetRuntimeDevices(store)
 	req := httptest.NewRequest("GET", "/api/runtime/devices", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -159,6 +160,27 @@ func TestRegisterDiscoveredAgent_DefaultTrustScore(t *testing.T) {
 	}
 }
 
+func TestVerifyDiscoveredAgent(t *testing.T) {
+	store := testutil.TempStore(t)
+	_, err := store.ExecContext(bgCtx,
+		`INSERT INTO discovered_agents (id, did, agent_card_json, endpoint_url)
+		 VALUES ('da-verify', 'did:example:verify', '{}', 'https://agent.example.com')`)
+	if err != nil {
+		t.Fatalf("seed discovered_agents: %v", err)
+	}
+
+	router := chi.NewRouter()
+	router.Post("/api/runtime/discovery/{id}/verify", VerifyDiscoveredAgent(store))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/runtime/discovery/da-verify/verify", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+}
+
 func TestRegisterDiscoveredAgent_MissingRequired(t *testing.T) {
 	store := testutil.TempStore(t)
 	handler := RegisterDiscoveredAgent(store)
@@ -191,6 +213,57 @@ func TestRegisterDiscoveredAgent_InvalidJSON(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestRuntimeDeviceLifecycle(t *testing.T) {
+	store := testutil.TempStore(t)
+	router := chi.NewRouter()
+	router.Get("/api/runtime/devices", GetRuntimeDevices(store))
+	router.Post("/api/runtime/devices/pair", PairRuntimeDevice(store))
+	router.Post("/api/runtime/devices/{id}/verify", VerifyPairedDevice(store))
+	router.Delete("/api/runtime/devices/{id}", UnpairDevice(store))
+
+	pairReq := httptest.NewRequest(http.MethodPost, "/api/runtime/devices/pair",
+		strings.NewReader(`{"device_id":"device-1","public_key_hex":"abcd1234","device_name":"Phone"}`))
+	pairRec := httptest.NewRecorder()
+	router.ServeHTTP(pairRec, pairReq)
+	if pairRec.Code != http.StatusOK {
+		t.Fatalf("pair status = %d, want 200", pairRec.Code)
+	}
+
+	listRec := httptest.NewRecorder()
+	router.ServeHTTP(listRec, httptest.NewRequest(http.MethodGet, "/api/runtime/devices", nil))
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("list status = %d, want 200", listRec.Code)
+	}
+	body := jsonBody(t, listRec)
+	devices := body["devices"].([]any)
+	if len(devices) != 1 {
+		t.Fatalf("devices len = %d, want 1", len(devices))
+	}
+	if devices[0].(map[string]any)["state"] != "pending" {
+		t.Fatalf("initial state = %v, want pending", devices[0].(map[string]any)["state"])
+	}
+
+	verifyRec := httptest.NewRecorder()
+	router.ServeHTTP(verifyRec, httptest.NewRequest(http.MethodPost, "/api/runtime/devices/device-1/verify", nil))
+	if verifyRec.Code != http.StatusOK {
+		t.Fatalf("verify status = %d, want 200", verifyRec.Code)
+	}
+
+	listRec = httptest.NewRecorder()
+	router.ServeHTTP(listRec, httptest.NewRequest(http.MethodGet, "/api/runtime/devices", nil))
+	body = jsonBody(t, listRec)
+	devices = body["devices"].([]any)
+	if devices[0].(map[string]any)["state"] != "verified" {
+		t.Fatalf("verified state = %v, want verified", devices[0].(map[string]any)["state"])
+	}
+
+	deleteRec := httptest.NewRecorder()
+	router.ServeHTTP(deleteRec, httptest.NewRequest(http.MethodDelete, "/api/runtime/devices/device-1", nil))
+	if deleteRec.Code != http.StatusOK {
+		t.Fatalf("delete status = %d, want 200", deleteRec.Code)
 	}
 }
 

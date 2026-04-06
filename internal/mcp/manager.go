@@ -118,6 +118,21 @@ func (m *ConnectionManager) CallTool(ctx context.Context, serverName, toolName s
 	return conn.CallTool(ctx, toolName, input)
 }
 
+// Connection returns a snapshot of a named connection if present.
+func (m *ConnectionManager) Connection(name string) (*Connection, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	conn, ok := m.connections[name]
+	if !ok {
+		return nil, false
+	}
+
+	copyConn := *conn
+	copyConn.Tools = append([]ToolDescriptor(nil), conn.Tools...)
+	return &copyConn, true
+}
+
 // CloseAll disconnects all servers.
 func (m *ConnectionManager) CloseAll() {
 	m.mu.Lock()

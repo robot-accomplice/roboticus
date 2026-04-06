@@ -62,3 +62,55 @@ func TestRoutingDatasetRepo_SaveAndListRoutingExamples(t *testing.T) {
 		t.Fatalf("agreed count = %d, want 1", agreed)
 	}
 }
+
+func TestRoutingDatasetRepo_ExtractAndSummarizeRoutingDataset(t *testing.T) {
+	store := testTempStore(t)
+	repo := NewRoutingDatasetRepo(store)
+	ctx := context.Background()
+
+	_, err := store.ExecContext(ctx,
+		`INSERT INTO model_selection_events
+		 (id, turn_id, session_id, agent_id, channel, selected_model, strategy, primary_model, user_excerpt, candidates_json, schema_version, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+		"mse-1", "turn-1", "session-1", "agent-1", "api", "cloud-model", "metascore", "cloud-model", "sensitive excerpt", "[]", 2)
+	if err != nil {
+		t.Fatalf("seed model_selection_events: %v", err)
+	}
+	_, err = store.ExecContext(ctx,
+		`INSERT INTO inference_costs
+		 (id, turn_id, model, provider, cost, tokens_in, tokens_out, cached, latency_ms, quality_score, escalation, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+		"cost-1", "turn-1", "cloud-model", "openai", 0.03, 100, 200, 1, 250, 0.88, 1)
+	if err != nil {
+		t.Fatalf("seed inference_costs: %v", err)
+	}
+
+	rows, err := repo.ExtractRoutingDataset(ctx, DatasetFilter{Limit: 10})
+	if err != nil {
+		t.Fatalf("ExtractRoutingDataset: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("row count = %d, want 1", len(rows))
+	}
+	row := rows[0]
+	if row.SelectedModel != "cloud-model" {
+		t.Fatalf("selected_model = %q, want cloud-model", row.SelectedModel)
+	}
+	if !row.AnyCached || !row.AnyEscalation {
+		t.Fatalf("expected cached and escalation flags to be true: %+v", row)
+	}
+	if row.TotalTokensOut != 200 {
+		t.Fatalf("total_tokens_out = %d, want 200", row.TotalTokensOut)
+	}
+
+	summary, err := repo.SummarizeRoutingDataset(ctx, DatasetFilter{Limit: 10})
+	if err != nil {
+		t.Fatalf("SummarizeRoutingDataset: %v", err)
+	}
+	if summary.TotalRows != 1 {
+		t.Fatalf("summary total_rows = %d, want 1", summary.TotalRows)
+	}
+	if summary.DistinctModels != 1 || summary.DistinctStrategies != 1 {
+		t.Fatalf("unexpected summary: %+v", summary)
+	}
+}

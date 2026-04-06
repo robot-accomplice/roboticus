@@ -260,6 +260,27 @@ func (ks *Keystore) Count() int {
 	return len(ks.secrets)
 }
 
+// Rekey re-encrypts the keystore with a new passphrase and persists it.
+func (ks *Keystore) Rekey(newPassphrase string) error {
+	if strings.TrimSpace(newPassphrase) == "" {
+		return fmt.Errorf("keystore: new passphrase cannot be empty")
+	}
+
+	ks.mu.Lock()
+	oldPassphrase := ks.passphrase
+	ks.passphrase = newPassphrase
+	ks.dirty = true
+	ks.mu.Unlock()
+
+	if err := ks.Save(); err != nil {
+		ks.mu.Lock()
+		ks.passphrase = oldPassphrase
+		ks.mu.Unlock()
+		return err
+	}
+	return nil
+}
+
 // encrypt produces: salt(16) || nonce(12) || AES-256-GCM(ciphertext + tag).
 // This matches the Rust roboticus keystore file format exactly.
 func (ks *Keystore) encrypt(plaintext []byte) ([]byte, error) {

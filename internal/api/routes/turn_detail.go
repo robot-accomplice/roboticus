@@ -3,12 +3,13 @@ package routes
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/rs/zerolog/log"
 
 	"roboticus/internal/db"
+	"roboticus/internal/pipeline"
 )
 
 // GetTurnContext returns context window analysis for a turn from context_snapshots.
@@ -213,38 +214,80 @@ func GetTurnModelSelection(store *db.Store) http.HandlerFunc {
 func AnalyzeTurn(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		turnID := chi.URLParam(r, "id")
+		ctx := r.Context()
 
-		// Gather turn data for analysis.
-		row := store.QueryRowContext(r.Context(),
-			`SELECT model, COALESCE(tokens_in, 0), COALESCE(tokens_out, 0), COALESCE(cost, 0)
+		// Gather turn data.
+		row := store.QueryRowContext(ctx,
+			`SELECT model, COALESCE(tokens_in, 0), COALESCE(tokens_out, 0), COALESCE(cost, 0), COALESCE(cached, 0)
 			 FROM turns WHERE id = ?`, turnID)
 		var model string
 		var tokIn, tokOut int64
 		var cost float64
-		if err := row.Scan(&model, &tokIn, &tokOut, &cost); err != nil {
+		var cached int
+		if err := row.Scan(&model, &tokIn, &tokOut, &cost, &cached); err != nil {
 			writeJSON(w, http.StatusOK, map[string]any{
-				"analysis": "No turn data available for analysis.",
+				"turn_id":         turnID,
+				"status":          "complete",
+				"heuristic_tips":  []any{},
+				"analysis":        "No turn data available for analysis.",
 			})
 			return
 		}
 
-		// Count tool calls.
-		var toolCount int64
-		row = store.QueryRowContext(r.Context(),
-			`SELECT COUNT(*) FROM tool_calls WHERE turn_id = ?`, turnID)
-		if err := row.Scan(&toolCount); err != nil {
-			log.Warn().Err(err).Str("metric", "tool_count").Msg("scan failed")
+		// Count tool calls and failures.
+		var toolCount, toolFails int64
+		_ = store.QueryRowContext(ctx,
+			`SELECT COUNT(*), COALESCE(SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END), 0) FROM tool_calls WHERE turn_id = ?`, turnID).
+			Scan(&toolCount, &toolFails)
+
+		// Load context snapshot if available.
+		var tokenBudget, sysTok, memTok, histTok, histDepth int64
+		var complexLevel string
+		snapRow := store.QueryRowContext(ctx,
+			`SELECT COALESCE(max_tokens, 0), COALESCE(system_tokens, 0), COALESCE(memory_tokens, 0),
+			        COALESCE(history_tokens, 0), COALESCE(history_depth, 0), COALESCE(complexity_level, '')
+			 FROM context_snapshots WHERE turn_id = ?`, turnID)
+		_ = snapRow.Scan(&tokenBudget, &sysTok, &memTok, &histTok, &histDepth, &complexLevel)
+
+		// Build TurnData and run analyzer.
+		td := &pipeline.TurnData{
+			TurnID:             turnID,
+			TokenBudget:        tokenBudget,
+			SystemPromptTokens: sysTok,
+			MemoryTokens:       memTok,
+			HistoryTokens:      histTok,
+			HistoryDepth:       histDepth,
+			ComplexityLevel:    complexLevel,
+			Model:              model,
+			Cost:               cost,
+			TokensIn:           tokIn,
+			TokensOut:          tokOut,
+			ToolCallCount:      toolCount,
+			ToolFailureCount:   toolFails,
+			Cached:             cached == 1,
 		}
 
+		analyzer := pipeline.NewContextAnalyzer()
+		tips := analyzer.AnalyzeTurn(td)
+
+		// Build summary from tips.
+		var critCount, warnCount int
+		for _, tip := range tips {
+			switch tip.Severity {
+			case "critical":
+				critCount++
+			case "warning":
+				warnCount++
+			}
+		}
+
+		summary := fmt.Sprintf("Analysis complete: %d critical, %d warnings, %d info findings across 12 heuristic rules.", critCount, warnCount, len(tips)-critCount-warnCount)
+
 		writeJSON(w, http.StatusOK, map[string]any{
-			"analysis": map[string]any{
-				"model":      model,
-				"tokens_in":  tokIn,
-				"tokens_out": tokOut,
-				"cost":       cost,
-				"tool_calls": toolCount,
-				"efficiency": float64(tokOut) / float64(max(tokIn, 1)),
-			},
+			"turn_id":        turnID,
+			"status":         "complete",
+			"heuristic_tips": tips,
+			"analysis":       summary,
 		})
 	}
 }

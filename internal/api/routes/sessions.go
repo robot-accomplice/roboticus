@@ -2,9 +2,8 @@ package routes
 
 import (
 	"encoding/json"
-	"math"
+	"fmt"
 	"net/http"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -257,48 +256,122 @@ func AnalyzeSession(store *db.Store) http.HandlerFunc {
 		id := chi.URLParam(r, "id")
 		ctx := r.Context()
 
-		// Verify session exists and get timestamps.
-		var createdAt, updatedAt string
+		// Verify session exists.
+		var createdAt string
 		row := store.QueryRowContext(ctx,
-			`SELECT created_at, updated_at FROM sessions WHERE id = ?`, id)
-		if err := row.Scan(&createdAt, &updatedAt); err != nil {
+			`SELECT created_at FROM sessions WHERE id = ?`, id)
+		if err := row.Scan(&createdAt); err != nil {
 			writeError(w, http.StatusNotFound, "session not found")
 			return
 		}
 
-		// Message count.
-		var msgCount int64
-		row = store.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM session_messages WHERE session_id = ?`, id)
-		if err := row.Scan(&msgCount); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to query session message count")
+		// Load all turns for this session.
+		turnRows, err := store.QueryContext(ctx,
+			`SELECT t.id, COALESCE(t.model, ''), COALESCE(t.tokens_in, 0), COALESCE(t.tokens_out, 0),
+			        COALESCE(t.cost, 0), COALESCE(t.cached, 0)
+			 FROM turns t WHERE t.session_id = ? ORDER BY t.created_at`, id)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to query turns")
 			return
 		}
+		defer func() { _ = turnRows.Close() }()
 
-		// Turn count (user messages = turns).
-		var turnCount int64
-		row = store.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM session_messages WHERE session_id = ? AND role = 'user'`, id)
-		if err := row.Scan(&turnCount); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to query session turn count")
-			return
+		var turns []pipeline.TurnData
+		for turnRows.Next() {
+			var turnID, model string
+			var tokIn, tokOut int64
+			var cost float64
+			var cached int
+			if err := turnRows.Scan(&turnID, &model, &tokIn, &tokOut, &cost, &cached); err != nil {
+				continue
+			}
+
+			td := pipeline.TurnData{
+				TurnID:   turnID,
+				Model:    model,
+				TokensIn: tokIn,
+				TokensOut: tokOut,
+				Cost:     cost,
+				Cached:   cached == 1,
+			}
+
+			// Load context snapshot for this turn.
+			snapRow := store.QueryRowContext(ctx,
+				`SELECT COALESCE(max_tokens, 0), COALESCE(system_tokens, 0), COALESCE(memory_tokens, 0),
+				        COALESCE(history_tokens, 0), COALESCE(history_depth, 0)
+				 FROM context_snapshots WHERE turn_id = ?`, turnID)
+			_ = snapRow.Scan(&td.TokenBudget, &td.SystemPromptTokens, &td.MemoryTokens, &td.HistoryTokens, &td.HistoryDepth)
+
+			// Count tool calls.
+			_ = store.QueryRowContext(ctx,
+				`SELECT COUNT(*), COALESCE(SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END), 0)
+				 FROM tool_calls WHERE turn_id = ?`, turnID).
+				Scan(&td.ToolCallCount, &td.ToolFailureCount)
+
+			turns = append(turns, td)
 		}
 
-		// Duration in seconds.
-		var durationSec float64
-		t0, err0 := time.Parse(time.RFC3339, createdAt)
-		t1, err1 := time.Parse(time.RFC3339, updatedAt)
-		if err0 == nil && err1 == nil {
-			durationSec = math.Round(t1.Sub(t0).Seconds())
+		// Load feedback grades.
+		gradeRows, err := store.QueryContext(ctx,
+			`SELECT turn_id, COALESCE(grade, 0) FROM turn_feedback WHERE session_id = ?`, id)
+		var grades []pipeline.SessionGrade
+		if err == nil {
+			defer func() { _ = gradeRows.Close() }()
+			for gradeRows.Next() {
+				var turnID string
+				var grade int
+				if gradeRows.Scan(&turnID, &grade) == nil {
+					grades = append(grades, pipeline.SessionGrade{TurnID: turnID, Grade: grade})
+				}
+			}
 		}
+
+		// Run session analysis.
+		sd := &pipeline.SessionData{
+			SessionID: id,
+			Turns:     turns,
+			Grades:    grades,
+		}
+		analyzer := pipeline.NewContextAnalyzer()
+		tips := analyzer.AnalyzeSession(sd)
+
+		// Also run per-turn tips for aggregation.
+		for i := range turns {
+			turnTips := analyzer.AnalyzeTurn(&turns[i])
+			tips = append(tips, turnTips...)
+		}
+
+		// Deduplicate by rule name, keeping highest severity.
+		seen := make(map[string]pipeline.Tip)
+		severityOrder := map[string]int{"critical": 3, "warning": 2, "info": 1}
+		for _, tip := range tips {
+			if existing, ok := seen[tip.RuleName]; !ok || severityOrder[tip.Severity] > severityOrder[existing.Severity] {
+				seen[tip.RuleName] = tip
+			}
+		}
+		var dedupedTips []pipeline.Tip
+		for _, tip := range seen {
+			dedupedTips = append(dedupedTips, tip)
+		}
+
+		var critCount, warnCount int
+		for _, tip := range dedupedTips {
+			switch tip.Severity {
+			case "critical":
+				critCount++
+			case "warning":
+				warnCount++
+			}
+		}
+
+		summary := fmt.Sprintf("Session analysis: %d turns, %d critical, %d warning, %d info findings.",
+			len(turns), critCount, warnCount, len(dedupedTips)-critCount-warnCount)
 
 		writeJSON(w, http.StatusOK, map[string]any{
-			"session_id":    id,
-			"message_count": msgCount,
-			"turn_count":    turnCount,
-			"duration_sec":  durationSec,
-			"created_at":    createdAt,
-			"updated_at":    updatedAt,
+			"session_id":       id,
+			"status":           "complete",
+			"heuristic_insights": dedupedTips,
+			"analysis":         summary,
 		})
 	}
 }

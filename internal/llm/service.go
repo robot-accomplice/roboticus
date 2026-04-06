@@ -287,6 +287,18 @@ func (s *Service) Stream(ctx context.Context, req *Request) (<-chan StreamChunk,
 	return chunks, errs
 }
 
+// ResetQualityScores clears metascore quality observations. When model is empty,
+// all observations are removed.
+func (s *Service) ResetQualityScores(model string) int {
+	if s == nil || s.quality == nil {
+		return 0
+	}
+	if strings.TrimSpace(model) == "" {
+		return s.quality.ClearAll()
+	}
+	return s.quality.ClearModel(model)
+}
+
 // wrapStreamCache accumulates streamed chunks and caches the full response.
 func (s *Service) wrapStreamCache(ctx context.Context, in <-chan StreamChunk, req *Request) <-chan StreamChunk {
 	out := make(chan StreamChunk, 32)

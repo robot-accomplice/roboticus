@@ -104,6 +104,33 @@ func (qt *QualityTracker) ObservationCount(model string) int {
 	return rb.count
 }
 
+// ClearModel removes all observations for a single model and returns the number removed.
+func (qt *QualityTracker) ClearModel(model string) int {
+	qt.mu.Lock()
+	defer qt.mu.Unlock()
+
+	rb, ok := qt.models[model]
+	if !ok {
+		return 0
+	}
+	count := rb.count
+	delete(qt.models, model)
+	return count
+}
+
+// ClearAll removes all observations and returns the number removed.
+func (qt *QualityTracker) ClearAll() int {
+	qt.mu.Lock()
+	defer qt.mu.Unlock()
+
+	total := 0
+	for _, rb := range qt.models {
+		total += rb.count
+	}
+	qt.models = make(map[string]*ringBuffer)
+	return total
+}
+
 // SeedFromHistory warms the tracker from recent turns stored in the database.
 // Quality heuristic: min(1.0, tokens_out / 100.0) for turns with tokens_out > 0.
 func (qt *QualityTracker) SeedFromHistory(ctx context.Context, store *db.Store) {

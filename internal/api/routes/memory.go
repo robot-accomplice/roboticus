@@ -3,10 +3,12 @@ package routes
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
 
 	"roboticus/internal/db"
+	"roboticus/internal/pipeline"
 )
 
 // GetWorkingMemory returns all working memory entries.
@@ -234,5 +236,41 @@ func SearchMemory(store *db.Store) http.HandlerFunc {
 			results = []map[string]any{}
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"results": results})
+	}
+}
+
+// TriggerConsolidation runs the memory consolidation pipeline on demand.
+func TriggerConsolidation(store *db.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		force, _ := strconv.ParseBool(r.URL.Query().Get("force"))
+		report := pipeline.RunMemoryConsolidation(r.Context(), store, force)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok": true,
+			"report": map[string]any{
+				"indexed":            report.Indexed,
+				"deduped":            report.Deduped,
+				"promoted":           report.Promoted,
+				"confidence_decayed": report.ConfidenceDecayed,
+				"importance_decayed": report.ImportanceDecayed,
+				"pruned":             report.Pruned,
+				"orphaned":           report.Orphaned,
+			},
+		})
+	}
+}
+
+// TriggerReindex rebuilds the ANN memory index from persisted embeddings.
+func TriggerReindex(store *db.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		report, err := pipeline.RebuildMemoryIndex(r.Context(), store)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to rebuild memory index")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":          true,
+			"built":       report.IndexBuilt,
+			"entry_count": report.EntryCount,
+		})
 	}
 }

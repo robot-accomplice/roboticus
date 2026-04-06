@@ -3,6 +3,7 @@ package routes
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -36,6 +37,71 @@ func ListTraces(store *db.Store) http.HandlerFunc {
 			})
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"traces": traces})
+	}
+}
+
+// SearchTraces searches traces by optional tool, guard, duration, and timestamp filters.
+func SearchTraces(store *db.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		limit := parseIntParam(r, "limit", 50)
+		if limit > 200 {
+			limit = 200
+		}
+		toolName := strings.TrimSpace(r.URL.Query().Get("tool_name"))
+		guardName := strings.TrimSpace(r.URL.Query().Get("guard_name"))
+		minDuration := parseIntParam(r, "min_duration_ms", 0)
+		since := strings.TrimSpace(r.URL.Query().Get("since"))
+
+		query := `SELECT turn_id, session_id, channel, total_ms, created_at, stages_json
+			FROM pipeline_traces WHERE 1=1`
+		args := make([]any, 0, 5)
+		if toolName != "" {
+			query += ` AND stages_json LIKE ?`
+			args = append(args, "%"+toolName+"%")
+		}
+		if guardName != "" {
+			query += ` AND (react_trace_json LIKE ? OR stages_json LIKE ?)`
+			args = append(args, "%"+guardName+"%", "%"+guardName+"%")
+		}
+		if minDuration > 0 {
+			query += ` AND total_ms >= ?`
+			args = append(args, minDuration)
+		}
+		if since != "" {
+			query += ` AND created_at >= ?`
+			args = append(args, since)
+		}
+		query += ` ORDER BY created_at DESC LIMIT ?`
+		args = append(args, limit)
+
+		rows, err := store.QueryContext(r.Context(), query, args...)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to query traces")
+			return
+		}
+		defer func() { _ = rows.Close() }()
+
+		results := make([]map[string]any, 0)
+		for rows.Next() {
+			var turnID, sessionID, channel, createdAt, stagesJSON string
+			var totalMs int64
+			if err := rows.Scan(&turnID, &sessionID, &channel, &totalMs, &createdAt, &stagesJSON); err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to read trace search row")
+				return
+			}
+			results = append(results, map[string]any{
+				"turn_id":     turnID,
+				"session_id":  sessionID,
+				"channel":     channel,
+				"total_ms":    totalMs,
+				"created_at":  createdAt,
+				"stages_json": stagesJSON,
+			})
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"results": results,
+			"count":   len(results),
+		})
 	}
 }
 

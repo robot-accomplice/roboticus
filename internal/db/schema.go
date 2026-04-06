@@ -353,6 +353,17 @@ CREATE TABLE IF NOT EXISTS discovered_agents (
 );
 CREATE INDEX IF NOT EXISTS idx_discovered_agents_did ON discovered_agents(did);
 
+CREATE TABLE IF NOT EXISTS paired_devices (
+    id TEXT PRIMARY KEY,
+    public_key_hex TEXT NOT NULL,
+    device_name TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'pending' CHECK(state IN ('pending', 'verified')),
+    paired_at TEXT NOT NULL DEFAULT (datetime('now')),
+    verified_at TEXT,
+    last_seen TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_paired_devices_state ON paired_devices(state, paired_at DESC);
+
 CREATE TABLE IF NOT EXISTS skills (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL UNIQUE,
@@ -677,6 +688,21 @@ CREATE TABLE IF NOT EXISTS task_steps (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_task_steps_task ON task_steps(task_id);
+
+CREATE TABLE IF NOT EXISTS task_events (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    parent_task_id TEXT,
+    assigned_to TEXT,
+    event_type TEXT NOT NULL,
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_task_events_task_id ON task_events(task_id);
+CREATE INDEX IF NOT EXISTS idx_task_events_parent ON task_events(parent_task_id);
+CREATE INDEX IF NOT EXISTS idx_task_events_assigned_to ON task_events(assigned_to);
+CREATE INDEX IF NOT EXISTS idx_task_events_created ON task_events(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_task_events_type ON task_events(event_type);
 
 CREATE TABLE IF NOT EXISTS agent_delegation_outcomes (
     id TEXT PRIMARY KEY,

@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"roboticus/internal/core"
 )
 
 var keystoreCmd = &cobra.Command{
@@ -184,7 +187,64 @@ var keystoreRekeyCmd = &cobra.Command{
 	Use:   "rekey",
 	Short: "Re-encrypt the keystore with a new master key",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return fmt.Errorf("keystore rekey requires server-side passphrase rotation support (not yet available)")
+		currentPass := strings.TrimSpace(os.Getenv("ROBOTICUS_MASTER_KEY"))
+		newPass := strings.TrimSpace(os.Getenv("ROBOTICUS_NEW_MASTER_KEY"))
+
+		if currentPass == "" {
+			fmt.Print("Current passphrase: ")
+			scanner := bufio.NewScanner(os.Stdin)
+			if scanner.Scan() {
+				currentPass = strings.TrimSpace(scanner.Text())
+			}
+			if err := scanner.Err(); err != nil {
+				return fmt.Errorf("failed to read current passphrase: %w", err)
+			}
+		}
+		if currentPass == "" {
+			return fmt.Errorf("current passphrase cannot be empty")
+		}
+
+		if newPass == "" {
+			fmt.Print("New passphrase: ")
+			scanner := bufio.NewScanner(os.Stdin)
+			if scanner.Scan() {
+				newPass = strings.TrimSpace(scanner.Text())
+			}
+			if err := scanner.Err(); err != nil {
+				return fmt.Errorf("failed to read new passphrase: %w", err)
+			}
+		}
+		if newPass == "" {
+			return fmt.Errorf("new passphrase cannot be empty")
+		}
+
+		confirmPass := strings.TrimSpace(os.Getenv("ROBOTICUS_NEW_MASTER_KEY_CONFIRM"))
+		if confirmPass == "" {
+			fmt.Print("Confirm new passphrase: ")
+			scanner := bufio.NewScanner(os.Stdin)
+			if scanner.Scan() {
+				confirmPass = strings.TrimSpace(scanner.Text())
+			}
+			if err := scanner.Err(); err != nil {
+				return fmt.Errorf("failed to confirm new passphrase: %w", err)
+			}
+		}
+		if newPass != confirmPass {
+			return fmt.Errorf("new passphrases do not match")
+		}
+
+		ks, err := core.OpenKeystore(core.KeystoreConfig{
+			Path:       filepath.Join(core.ConfigDir(), "keystore.enc"),
+			Passphrase: currentPass,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to open keystore: %w", err)
+		}
+		if err := ks.Rekey(newPass); err != nil {
+			return fmt.Errorf("failed to rekey keystore: %w", err)
+		}
+		fmt.Println("Keystore re-encrypted with new passphrase.")
+		return nil
 	},
 }
 

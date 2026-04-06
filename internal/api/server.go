@@ -150,6 +150,8 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 		r.Get("/api/memory/semantic", routes.GetSemanticMemory(state.Store))
 		r.Get("/api/memory/semantic/categories", routes.GetSemanticCategories(state.Store))
 		r.Get("/api/memory/search", routes.SearchMemory(state.Store))
+		r.Post("/api/memory/consolidate", routes.TriggerConsolidation(state.Store))
+		r.Post("/api/memory/reindex", routes.TriggerReindex(state.Store))
 		r.Post("/api/knowledge/ingest", routes.IngestKnowledge(state.Store))
 		r.Get("/api/stats/memory-analytics", routes.GetMemoryAnalytics(state.Store))
 		r.Get("/api/memory/health", routes.MemoryHealth(state.Store))
@@ -215,6 +217,8 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 		r.Get("/api/models/available", routes.GetAvailableModels(state.LLM))
 		r.Get("/api/models/selections", routes.GetModelSelections(state.Store))
 		r.Get("/api/models/routing-diagnostics", routes.GetRoutingDiagnostics(state.Config))
+		r.Get("/api/models/routing-dataset", routes.GetRoutingDataset(state.Store))
+		r.Post("/api/models/reset", routes.ResetModelScores(state.LLM))
 		r.Post("/api/models/routing-eval", routes.RunRoutingEval(state.LLM))
 
 		// Recommendations.
@@ -277,12 +281,19 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 
 		// Workspace.
 		r.Get("/api/workspace/state", routes.GetWorkspaceState(state.Store))
+		r.Get("/api/workspace/tasks", routes.ListWorkspaceTasks(state.Store))
+		r.Get("/api/admin/task-events", routes.GetTaskEvents(state.Store))
 
 		// Runtime discovery.
 		r.Get("/api/runtime/surfaces", routes.GetRuntimeSurfaces())
 		r.Get("/api/runtime/discovery", routes.GetRuntimeDiscovery(state.Store))
 		r.Post("/api/runtime/discovery", routes.RegisterDiscoveredAgent(state.Store))
-		r.Get("/api/runtime/devices", routes.GetRuntimeDevices())
+		r.Post("/api/runtime/discovery/{id}/verify", routes.VerifyDiscoveredAgent(state.Store))
+		r.Get("/api/runtime/devices", routes.GetRuntimeDevices(state.Store))
+		r.Post("/api/runtime/devices/pair", routes.PairRuntimeDevice(state.Store))
+		r.Post("/api/runtime/devices/{id}/verify", routes.VerifyPairedDevice(state.Store))
+		r.Delete("/api/runtime/devices/{id}", routes.UnpairDevice(state.Store))
+		r.Get("/api/runtime/mcp", routes.GetMCPRuntime(state.Config, state.MCP))
 
 		// Provider key management.
 		r.Put("/api/providers/{provider}/key", routes.SetProviderKey(state.Keystore))
@@ -290,6 +301,7 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 
 		// Traces.
 		r.Get("/api/traces", routes.ListTraces(state.Store))
+		r.Get("/api/traces/search", routes.SearchTraces(state.Store))
 		r.Get("/api/traces/{turn_id}", routes.GetTrace(state.Store))
 		r.Get("/api/traces/{turn_id}/react", routes.GetReactTrace(state.Store))
 		r.Get("/api/traces/{turn_id}/export", routes.ExportTrace(state.Store))
@@ -297,11 +309,15 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 
 		// Themes.
 		r.Get("/api/themes", routes.GetThemesList())
-		r.Get("/api/themes/catalog", routes.GetThemeCatalog())
+		r.Get("/api/themes/catalog", routes.GetThemeCatalog(state.Store))
+		r.Post("/api/themes/catalog/install", routes.InstallCatalogTheme(state.Store))
 		r.Get("/api/themes/active", routes.GetActiveTheme(state.Store))
 		r.Put("/api/themes/active", routes.SetActiveTheme(state.Store))
 
 		// MCP.
+		r.Get("/api/mcp/servers", routes.ListMCPServers(state.Config, state.MCP))
+		r.Get("/api/mcp/servers/{name}", routes.GetMCPServer(state.Config, state.MCP))
+		r.Post("/api/mcp/servers/{name}/test", routes.TestMCPServer(state.Config))
 		r.Get("/api/mcp/connections", routes.ListMCPConnections(state.MCP))
 		r.Get("/api/mcp/tools", routes.ListMCPTools(state.MCP))
 		r.Post("/api/mcp/connect", routes.ConnectMCPServer(state.MCP))

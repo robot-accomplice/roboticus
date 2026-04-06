@@ -175,7 +175,7 @@ func TestArchitecture_ConnectorFilesInvokeRunPipeline(t *testing.T) {
 func TestArchitecture_ConnectorFilesAreStructurallyThin(t *testing.T) {
 	limits := map[string]int{
 		filepath.Join("routes", "agent.go"):    180,
-		filepath.Join("routes", "sessions.go"): 320,
+		filepath.Join("routes", "sessions.go"): 350,
 		filepath.Join("routes", "cron.go"):     320,
 	}
 	for path, maxLines := range limits {

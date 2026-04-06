@@ -8,7 +8,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
+
 	"roboticus/internal/core"
+	"roboticus/internal/db"
 	"roboticus/testutil"
 )
 
@@ -219,15 +222,42 @@ func TestGetSemanticCategories(t *testing.T) {
 }
 
 func TestGetThemeCatalog(t *testing.T) {
-	handler := GetThemeCatalog()
+	store := testutil.TempStore(t)
+	handler := GetThemeCatalog(store)
 	req := httptest.NewRequest("GET", "/api/themes/catalog", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
 	body := jsonBody(t, rec)
 	themes := body["themes"].([]any)
-	if len(themes) != 5 {
-		t.Errorf("got %d themes, want 5", len(themes))
+	if len(themes) != 7 {
+		t.Errorf("got %d themes, want 7", len(themes))
+	}
+}
+
+func TestInstallCatalogThemeAndActivate(t *testing.T) {
+	store := testutil.TempStore(t)
+
+	installReq := httptest.NewRequest("POST", "/api/themes/catalog/install", strings.NewReader(`{"id":"dracula"}`))
+	installRec := httptest.NewRecorder()
+	InstallCatalogTheme(store).ServeHTTP(installRec, installReq)
+	if installRec.Code != http.StatusOK {
+		t.Fatalf("install status = %d", installRec.Code)
+	}
+
+	setReq := httptest.NewRequest("PUT", "/api/themes/active", strings.NewReader(`{"theme_id":"dracula"}`))
+	setRec := httptest.NewRecorder()
+	SetActiveTheme(store).ServeHTTP(setRec, setReq)
+	if setRec.Code != http.StatusOK {
+		t.Fatalf("set status = %d", setRec.Code)
+	}
+
+	getReq := httptest.NewRequest("GET", "/api/themes/active", nil)
+	getRec := httptest.NewRecorder()
+	GetActiveTheme(store).ServeHTTP(getRec, getReq)
+	body := jsonBody(t, getRec)
+	if body["id"] != "dracula" {
+		t.Errorf("active theme = %v, want dracula", body["id"])
 	}
 }
 
@@ -250,6 +280,32 @@ func TestGetSetActiveTheme(t *testing.T) {
 	body := jsonBody(t, getRec)
 	if body["id"] != "nord" {
 		t.Errorf("active theme = %v, want nord", body["id"])
+	}
+}
+
+func TestSearchTraces(t *testing.T) {
+	store := testutil.TempStore(t)
+	_, _ = store.ExecContext(bgCtx,
+		`INSERT INTO pipeline_traces (id, turn_id, session_id, channel, total_ms, stages_json, react_trace_json, created_at)
+		 VALUES ('pt1', 't1', 's1', 'api', 250, '[{"tool":"search_files"}]', '{"guard":"approval"}', datetime('now'))`)
+	_, _ = store.ExecContext(bgCtx,
+		`INSERT INTO pipeline_traces (id, turn_id, session_id, channel, total_ms, stages_json, react_trace_json, created_at)
+		 VALUES ('pt2', 't2', 's2', 'chat', 50, '[{"tool":"web_search"}]', '{"guard":"none"}', datetime('now'))`)
+
+	req := httptest.NewRequest("GET", "/api/traces/search?tool_name=search_files&guard_name=approval&min_duration_ms=100", nil)
+	rec := httptest.NewRecorder()
+	SearchTraces(store).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	body := jsonBody(t, rec)
+	if body["count"] != float64(1) {
+		t.Fatalf("count = %v, want 1", body["count"])
+	}
+	results := body["results"].([]any)
+	first := results[0].(map[string]any)
+	if first["turn_id"] != "t1" {
+		t.Errorf("turn_id = %v, want t1", first["turn_id"])
 	}
 }
 
@@ -389,6 +445,237 @@ func TestGetWalletBalance_Empty(t *testing.T) {
 	body := jsonBody(t, rec)
 	if body["currency"] != "USDC" {
 		t.Errorf("currency = %v", body["currency"])
+	}
+}
+
+func TestTriggerConsolidation(t *testing.T) {
+	store := testutil.TempStore(t)
+	_, err := store.ExecContext(bgCtx,
+		`INSERT INTO episodic_memory (id, content, importance, classification, memory_state)
+		 VALUES (?, ?, ?, ?, ?)`,
+		db.NewID(), "remember the launch checklist", 7, "fact", "active")
+	if err != nil {
+		t.Fatalf("seed episodic_memory: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/memory/consolidate?force=true", nil)
+	rec := httptest.NewRecorder()
+
+	TriggerConsolidation(store).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	body := jsonBody(t, rec)
+	if body["ok"] != true {
+		t.Fatal("expected ok=true")
+	}
+	report, ok := body["report"].(map[string]any)
+	if !ok {
+		t.Fatal("report is not an object")
+	}
+	if report["indexed"].(float64) == 0 {
+		t.Fatal("expected consolidation to index at least one memory entry")
+	}
+}
+
+func TestTriggerReindex(t *testing.T) {
+	store := testutil.TempStore(t)
+	if _, err := store.ExecContext(bgCtx, `ALTER TABLE embeddings ADD COLUMN embedding_json TEXT`); err != nil {
+		t.Fatalf("add embedding_json: %v", err)
+	}
+	embeddingJSON := `[0.12,0.34,0.56]`
+	_, err := store.ExecContext(bgCtx,
+		`INSERT INTO embeddings (id, source_table, source_id, content_preview, embedding_json, dimensions)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		db.NewID(), "semantic", db.NewID(), "launch playbook", embeddingJSON, 3)
+	if err != nil {
+		t.Fatalf("seed embeddings: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/memory/reindex", nil)
+	rec := httptest.NewRecorder()
+
+	TriggerReindex(store).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	body := jsonBody(t, rec)
+	if body["ok"] != true {
+		t.Fatal("expected ok=true")
+	}
+	if body["entry_count"].(float64) != 1 {
+		t.Fatalf("entry_count = %v, want 1", body["entry_count"])
+	}
+	if body["built"] != false {
+		t.Fatalf("built = %v, want false for a single entry", body["built"])
+	}
+}
+
+func TestGetRoutingDataset(t *testing.T) {
+	store := testutil.TempStore(t)
+	_, err := store.ExecContext(bgCtx,
+		`INSERT INTO model_selection_events
+		 (id, turn_id, session_id, agent_id, channel, selected_model, strategy, primary_model, complexity, user_excerpt, candidates_json, schema_version, created_at)
+		 VALUES ('mse1', 'turn-1', 'session-1', 'agent-1', 'api', 'cloud-model', 'metascore', 'cloud-model', '0.8', 'customer asks for deep analysis', '[]', 2, datetime('now'))`)
+	if err != nil {
+		t.Fatalf("seed model_selection_events: %v", err)
+	}
+	_, err = store.ExecContext(bgCtx,
+		`INSERT INTO inference_costs
+		 (id, turn_id, model, provider, cost, tokens_in, tokens_out, cached, latency_ms, quality_score, escalation, created_at)
+		 VALUES ('cost1', 'turn-1', 'cloud-model', 'openai', 0.07, 120, 240, 1, 320, 0.91, 1, datetime('now'))`)
+	if err != nil {
+		t.Fatalf("seed inference_costs: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/models/routing-dataset?limit=10", nil)
+	rec := httptest.NewRecorder()
+
+	GetRoutingDataset(store).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	body := jsonBody(t, rec)
+	rows := body["rows"].([]any)
+	if len(rows) != 1 {
+		t.Fatalf("rows len = %d, want 1", len(rows))
+	}
+	row := rows[0].(map[string]any)
+	if row["user_excerpt"] != "[redacted]" {
+		t.Fatalf("user_excerpt = %v, want redacted", row["user_excerpt"])
+	}
+	summary := body["summary"].(map[string]any)
+	if summary["total_rows"].(float64) != 1 {
+		t.Fatalf("summary.total_rows = %v, want 1", summary["total_rows"])
+	}
+}
+
+func TestGetRoutingDatasetTSVRequiresUserExcerptOptIn(t *testing.T) {
+	store := testutil.TempStore(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/models/routing-dataset?format=tsv", nil)
+	rec := httptest.NewRecorder()
+
+	GetRoutingDataset(store).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestGetMCPRuntimeAndServerCatalog(t *testing.T) {
+	cfg := testConfig()
+	cfg.MCP.Servers = []core.MCPServerEntry{
+		{Name: "catalog-server", Transport: "stdio", Command: "cat", Enabled: true},
+	}
+
+	runtimeReq := httptest.NewRequest(http.MethodGet, "/api/runtime/mcp", nil)
+	runtimeRec := httptest.NewRecorder()
+	GetMCPRuntime(cfg, nil).ServeHTTP(runtimeRec, runtimeReq)
+	if runtimeRec.Code != http.StatusOK {
+		t.Fatalf("runtime status = %d, want 200", runtimeRec.Code)
+	}
+	runtimeBody := jsonBody(t, runtimeRec)
+	if runtimeBody["configured_servers"].(float64) != 1 {
+		t.Fatalf("configured_servers = %v, want 1", runtimeBody["configured_servers"])
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/mcp/servers", nil)
+	listRec := httptest.NewRecorder()
+	ListMCPServers(cfg, nil).ServeHTTP(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("list status = %d, want 200", listRec.Code)
+	}
+	listBody := jsonBody(t, listRec)
+	servers := listBody["servers"].([]any)
+	if len(servers) != 1 {
+		t.Fatalf("server count = %d, want 1", len(servers))
+	}
+	server := servers[0].(map[string]any)
+	if server["name"] != "catalog-server" {
+		t.Fatalf("server name = %v, want catalog-server", server["name"])
+	}
+}
+
+func TestGetMCPServerAndTestEndpoint(t *testing.T) {
+	cfg := testConfig()
+	cfg.MCP.Servers = []core.MCPServerEntry{
+		{Name: "broken-stdio", Transport: "stdio", Command: "/definitely/missing-binary", Enabled: true},
+	}
+
+	router := chi.NewRouter()
+	router.Get("/api/mcp/servers/{name}", GetMCPServer(cfg, nil))
+	router.Post("/api/mcp/servers/{name}/test", TestMCPServer(cfg))
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/mcp/servers/broken-stdio", nil)
+	getRec := httptest.NewRecorder()
+	router.ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("get server status = %d, want 200", getRec.Code)
+	}
+
+	testReq := httptest.NewRequest(http.MethodPost, "/api/mcp/servers/broken-stdio/test", nil)
+	testRec := httptest.NewRecorder()
+	router.ServeHTTP(testRec, testReq)
+	if testRec.Code != http.StatusOK {
+		t.Fatalf("test server status = %d, want 200", testRec.Code)
+	}
+	testBody := jsonBody(t, testRec)
+	if testBody["ok"] != false {
+		t.Fatalf("ok = %v, want false for broken stdio server", testBody["ok"])
+	}
+}
+
+func TestListWorkspaceTasksAndTaskEvents(t *testing.T) {
+	store := testutil.TempStore(t)
+	_, err := store.ExecContext(bgCtx,
+		`INSERT INTO agent_tasks (id, phase, goal, created_at, updated_at)
+		 VALUES ('task-1', 'running', 'ship parity', datetime('now'), datetime('now'))`)
+	if err != nil {
+		t.Fatalf("seed agent_tasks: %v", err)
+	}
+	_, err = store.ExecContext(bgCtx,
+		`INSERT INTO agent_tasks (id, phase, parent_id, goal, created_at, updated_at)
+		 VALUES ('task-1-sub', 'pending', 'task-1', 'write tests', datetime('now'), datetime('now'))`)
+	if err != nil {
+		t.Fatalf("seed subtask: %v", err)
+	}
+	_, err = store.ExecContext(bgCtx,
+		`INSERT INTO task_events (id, task_id, parent_task_id, assigned_to, event_type, payload_json, created_at)
+		 VALUES ('evt-1', 'task-1', '', 'orchestrator', 'running', '{"step":"implement"}', datetime('now'))`)
+	if err != nil {
+		t.Fatalf("seed task_events: %v", err)
+	}
+
+	taskReq := httptest.NewRequest(http.MethodGet, "/api/workspace/tasks", nil)
+	taskRec := httptest.NewRecorder()
+	ListWorkspaceTasks(store).ServeHTTP(taskRec, taskReq)
+	if taskRec.Code != http.StatusOK {
+		t.Fatalf("task status = %d, want 200", taskRec.Code)
+	}
+	taskBody := jsonBody(t, taskRec)
+	tasks := taskBody["tasks"].([]any)
+	if len(tasks) != 2 {
+		t.Fatalf("tasks len = %d, want 2", len(tasks))
+	}
+
+	eventReq := httptest.NewRequest(http.MethodGet, "/api/admin/task-events?task_id=task-1", nil)
+	eventRec := httptest.NewRecorder()
+	GetTaskEvents(store).ServeHTTP(eventRec, eventReq)
+	if eventRec.Code != http.StatusOK {
+		t.Fatalf("event status = %d, want 200", eventRec.Code)
+	}
+	eventBody := jsonBody(t, eventRec)
+	events := eventBody["events"].([]any)
+	if len(events) != 1 {
+		t.Fatalf("events len = %d, want 1", len(events))
+	}
+	if events[0].(map[string]any)["event_type"] != "running" {
+		t.Fatalf("event_type = %v, want running", events[0].(map[string]any)["event_type"])
 	}
 }
 

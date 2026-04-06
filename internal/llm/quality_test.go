@@ -165,6 +165,51 @@ func TestQualityTracker_DefaultWindowSize(t *testing.T) {
 	}
 }
 
+func TestQualityTracker_ClearModelAndAll(t *testing.T) {
+	qt := NewQualityTracker(10)
+	qt.Record("local-model", 0.2)
+	qt.Record("local-model", 0.4)
+	qt.Record("cloud-model", 0.9)
+
+	if cleared := qt.ClearModel("local-model"); cleared != 2 {
+		t.Fatalf("ClearModel(local-model) = %d, want 2", cleared)
+	}
+	if got := qt.ObservationCount("local-model"); got != 0 {
+		t.Fatalf("ObservationCount(local-model) = %d, want 0", got)
+	}
+	if got := qt.ObservationCount("cloud-model"); got != 1 {
+		t.Fatalf("ObservationCount(cloud-model) = %d, want 1", got)
+	}
+
+	if cleared := qt.ClearAll(); cleared != 1 {
+		t.Fatalf("ClearAll() = %d, want 1", cleared)
+	}
+	if got := qt.ObservationCount("cloud-model"); got != 0 {
+		t.Fatalf("ObservationCount(cloud-model) = %d, want 0 after ClearAll", got)
+	}
+}
+
+func TestService_ResetQualityScores(t *testing.T) {
+	svc := &Service{quality: NewQualityTracker(10)}
+	svc.quality.Record("local-model", 0.2)
+	svc.quality.Record("local-model", 0.5)
+	svc.quality.Record("cloud-model", 0.9)
+
+	if cleared := svc.ResetQualityScores("local-model"); cleared != 2 {
+		t.Fatalf("ResetQualityScores(local-model) = %d, want 2", cleared)
+	}
+	if got := svc.quality.ObservationCount("local-model"); got != 0 {
+		t.Fatalf("local-model observations = %d, want 0", got)
+	}
+	if got := svc.quality.ObservationCount("cloud-model"); got != 1 {
+		t.Fatalf("cloud-model observations = %d, want 1", got)
+	}
+
+	if cleared := svc.ResetQualityScores(""); cleared != 1 {
+		t.Fatalf("ResetQualityScores(all) = %d, want 1", cleared)
+	}
+}
+
 func TestQualityFromResponse(t *testing.T) {
 	tests := []struct {
 		name string

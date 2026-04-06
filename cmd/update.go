@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pelletier/go-toml/v2"
 	"github.com/spf13/cobra"
 )
 
@@ -27,6 +28,9 @@ var (
 	updateCheckURL    = "https://api.github.com/repos/roboticus/roboticus/releases/latest"
 	updateHTTPClient  = &http.Client{Timeout: 30 * time.Second}
 	updateReleasesURL = "https://github.com/roboticus/roboticus/releases"
+	updateRegistryURL = "https://roboticus.ai/registry/manifest.json"
+	updateBinaryFunc  = performUpdate
+	updateMaintenance = runUpdateMaintenance
 )
 
 type latestRelease struct {
@@ -41,6 +45,77 @@ type releaseAsset struct {
 	Name               string `json:"name"`
 	BrowserDownloadURL string `json:"browser_download_url"`
 	Size               int64  `json:"size"`
+}
+
+type registryManifest struct {
+	Version string        `json:"version"`
+	Packs   registryPacks `json:"packs"`
+}
+
+type registryPacks struct {
+	Providers providerPack   `json:"providers"`
+	Skills    skillPack      `json:"skills"`
+	Plugins   *pluginCatalog `json:"plugins,omitempty"`
+}
+
+type providerPack struct {
+	SHA256 string `json:"sha256"`
+	Path   string `json:"path"`
+}
+
+type skillPack struct {
+	SHA256 string            `json:"sha256"`
+	Path   string            `json:"path"`
+	Files  map[string]string `json:"files"`
+}
+
+type pluginCatalog struct {
+	Catalog []pluginCatalogEntry `json:"catalog"`
+}
+
+type pluginCatalogEntry struct {
+	Name        string  `json:"name"`
+	Version     string  `json:"version"`
+	Description string  `json:"description"`
+	Author      string  `json:"author"`
+	SHA256      string  `json:"sha256"`
+	Path        string  `json:"path"`
+	MinVersion  *string `json:"min_version,omitempty"`
+	Tier        string  `json:"tier"`
+}
+
+type updateState struct {
+	BinaryVersion    string           `json:"binary_version"`
+	LastCheck        string           `json:"last_check"`
+	RegistryURL      string           `json:"registry_url"`
+	InstalledContent installedContent `json:"installed_content"`
+}
+
+type installedContent struct {
+	Providers *contentRecord `json:"providers,omitempty"`
+	Skills    *skillsRecord  `json:"skills,omitempty"`
+}
+
+type contentRecord struct {
+	Version     string `json:"version"`
+	SHA256      string `json:"sha256"`
+	InstalledAt string `json:"installed_at"`
+}
+
+type skillsRecord struct {
+	Version     string            `json:"version"`
+	Files       map[string]string `json:"files"`
+	InstalledAt string            `json:"installed_at"`
+}
+
+type rawUpdateConfig struct {
+	Update struct {
+		RegistryURL string `toml:"registry_url"`
+	} `toml:"update"`
+	ProvidersFile string `toml:"providers_file"`
+	Skills        struct {
+		Directory string `toml:"directory"`
+	} `toml:"skills"`
 }
 
 func normalizeVersion(v string) string {
@@ -89,6 +164,367 @@ func compareVersions(a, b string) int {
 		}
 	}
 	return 0
+}
+
+func roboticusHome() string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ".roboticus"
+	}
+	return filepath.Join(home, ".roboticus")
+}
+
+func nowRFC3339() string {
+	return time.Now().UTC().Format(time.RFC3339)
+}
+
+func updateStatePath() string {
+	return filepath.Join(roboticusHome(), "update_state.json")
+}
+
+func loadUpdateState() (updateState, error) {
+	path := updateStatePath()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return updateState{}, nil
+		}
+		return updateState{}, err
+	}
+	var state updateState
+	if err := json.Unmarshal(data, &state); err != nil {
+		return updateState{}, err
+	}
+	return state, nil
+}
+
+func saveUpdateState(state updateState) error {
+	path := updateStatePath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o600)
+}
+
+func effectiveConfigPath() string {
+	if cfgFile != "" {
+		return cfgFile
+	}
+	return filepath.Join(roboticusHome(), "roboticus.toml")
+}
+
+func loadRawUpdateConfig(path string) (rawUpdateConfig, error) {
+	var cfg rawUpdateConfig
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return cfg, nil
+		}
+		return cfg, err
+	}
+	if err := toml.Unmarshal(data, &cfg); err != nil {
+		return rawUpdateConfig{}, err
+	}
+	return cfg, nil
+}
+
+func resolveRegistryURL(configPath string) string {
+	if val := strings.TrimSpace(os.Getenv("ROBOTICUS_REGISTRY_URL")); val != "" {
+		return val
+	}
+	raw, err := loadRawUpdateConfig(configPath)
+	if err == nil && strings.TrimSpace(raw.Update.RegistryURL) != "" {
+		return strings.TrimSpace(raw.Update.RegistryURL)
+	}
+	return updateRegistryURL
+}
+
+func providersLocalPath(configPath string) string {
+	raw, err := loadRawUpdateConfig(configPath)
+	if err == nil && strings.TrimSpace(raw.ProvidersFile) != "" {
+		return strings.TrimSpace(raw.ProvidersFile)
+	}
+	return filepath.Join(roboticusHome(), "providers.toml")
+}
+
+func skillsLocalDir(configPath string) string {
+	raw, err := loadRawUpdateConfig(configPath)
+	if err == nil && strings.TrimSpace(raw.Skills.Directory) != "" {
+		return strings.TrimSpace(raw.Skills.Directory)
+	}
+	return filepath.Join(roboticusHome(), "skills")
+}
+
+func registryBaseURL(manifestURL string) string {
+	if idx := strings.LastIndex(manifestURL, "/"); idx >= 0 {
+		return manifestURL[:idx]
+	}
+	return manifestURL
+}
+
+func bytesSHA256(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
+func fetchRegistryManifest(ctx context.Context, manifestURL string) (registryManifest, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, manifestURL, nil)
+	if err != nil {
+		return registryManifest{}, err
+	}
+	resp, err := updateHTTPClient.Do(req)
+	if err != nil {
+		return registryManifest{}, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return registryManifest{}, fmt.Errorf("registry manifest returned %s", resp.Status)
+	}
+	var manifest registryManifest
+	if err := json.NewDecoder(resp.Body).Decode(&manifest); err != nil {
+		return registryManifest{}, err
+	}
+	if manifest.Version == "" {
+		return registryManifest{}, fmt.Errorf("registry manifest missing version")
+	}
+	return manifest, nil
+}
+
+func fetchText(ctx context.Context, url string) (string, error) {
+	path, err := downloadFile(ctx, url)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = os.Remove(path) }()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+func safeSkillPath(baseDir, name string) bool {
+	if strings.Contains(name, "..") || filepath.IsAbs(name) {
+		return false
+	}
+	cleanBase := filepath.Clean(baseDir)
+	full := filepath.Clean(filepath.Join(cleanBase, name))
+	return full == cleanBase || strings.HasPrefix(full, cleanBase+string(os.PathSeparator))
+}
+
+func applyProvidersUpdate(ctx context.Context, registryURL, configPath string) (bool, error) {
+	manifest, err := fetchRegistryManifest(ctx, registryURL)
+	if err != nil {
+		return false, err
+	}
+	remoteURL := registryBaseURL(registryURL) + "/" + strings.TrimPrefix(manifest.Packs.Providers.Path, "/")
+	content, err := fetchText(ctx, remoteURL)
+	if err != nil {
+		return false, err
+	}
+	hash := bytesSHA256([]byte(content))
+	if manifest.Packs.Providers.SHA256 != "" && !strings.EqualFold(hash, manifest.Packs.Providers.SHA256) {
+		return false, fmt.Errorf("provider pack checksum mismatch")
+	}
+
+	path := providersLocalPath(configPath)
+	if data, err := os.ReadFile(path); err == nil && bytesSHA256(data) == hash {
+		return false, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return false, err
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		return false, err
+	}
+
+	state, err := loadUpdateState()
+	if err != nil {
+		return false, err
+	}
+	state.LastCheck = nowRFC3339()
+	state.RegistryURL = registryURL
+	state.InstalledContent.Providers = &contentRecord{
+		Version:     manifest.Version,
+		SHA256:      hash,
+		InstalledAt: state.LastCheck,
+	}
+	return true, saveUpdateState(state)
+}
+
+func applySkillsUpdate(ctx context.Context, registryURL, configPath string) (bool, error) {
+	manifest, err := fetchRegistryManifest(ctx, registryURL)
+	if err != nil {
+		return false, err
+	}
+	dir := skillsLocalDir(configPath)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return false, err
+	}
+
+	state, err := loadUpdateState()
+	if err != nil {
+		return false, err
+	}
+	baseURL := registryBaseURL(registryURL)
+	fileHashes := map[string]string{}
+	if state.InstalledContent.Skills != nil {
+		for name, hash := range state.InstalledContent.Skills.Files {
+			fileHashes[name] = hash
+		}
+	}
+
+	changed := false
+	for name, expectedHash := range manifest.Packs.Skills.Files {
+		if !safeSkillPath(dir, name) {
+			return false, fmt.Errorf("unsafe skill path %q", name)
+		}
+		path := filepath.Join(dir, name)
+		if data, err := os.ReadFile(path); err == nil && strings.EqualFold(bytesSHA256(data), expectedHash) {
+			fileHashes[name] = expectedHash
+			continue
+		}
+
+		remoteURL := baseURL + "/" + strings.TrimPrefix(manifest.Packs.Skills.Path, "/") + name
+		content, err := fetchText(ctx, remoteURL)
+		if err != nil {
+			return false, err
+		}
+		hash := bytesSHA256([]byte(content))
+		if expectedHash != "" && !strings.EqualFold(hash, expectedHash) {
+			return false, fmt.Errorf("skill %s checksum mismatch", name)
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			return false, err
+		}
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			return false, err
+		}
+		fileHashes[name] = hash
+		changed = true
+	}
+
+	state.LastCheck = nowRFC3339()
+	state.RegistryURL = registryURL
+	state.InstalledContent.Skills = &skillsRecord{
+		Version:     manifest.Version,
+		Files:       fileHashes,
+		InstalledAt: state.LastCheck,
+	}
+	return changed, saveUpdateState(state)
+}
+
+func runUpdateAll(ctx context.Context, currentVersion string, yes bool) error {
+	fmt.Printf("roboticus %s (%s/%s)\n", currentVersion, runtime.GOOS, runtime.GOARCH)
+
+	rel, upToDate, err := checkForUpdate(ctx, currentVersion)
+	if err != nil {
+		return fmt.Errorf("failed to check for updates: %w", err)
+	}
+
+	configPath := effectiveConfigPath()
+	registryURL := resolveRegistryURL(configPath)
+	binaryChanged := false
+	if !upToDate || normalizeVersion(currentVersion) == "dev" {
+		if err := updateBinaryFunc(ctx, rel, yes); err != nil {
+			return err
+		}
+		binaryChanged = true
+	}
+
+	providersChanged, err := applyProvidersUpdate(ctx, registryURL, configPath)
+	if err != nil {
+		return fmt.Errorf("provider update failed: %w", err)
+	}
+	skillsChanged, err := applySkillsUpdate(ctx, registryURL, configPath)
+	if err != nil {
+		return fmt.Errorf("skills update failed: %w", err)
+	}
+
+	state, err := loadUpdateState()
+	if err != nil {
+		return err
+	}
+	state.LastCheck = nowRFC3339()
+	state.RegistryURL = registryURL
+	if binaryChanged {
+		state.BinaryVersion = normalizeVersion(rel.TagName)
+	}
+	if err := saveUpdateState(state); err != nil {
+		return err
+	}
+	if err := updateMaintenance(configPath); err != nil {
+		return fmt.Errorf("post-update maintenance failed: %w", err)
+	}
+
+	if !binaryChanged && !providersChanged && !skillsChanged {
+		fmt.Println("Already up to date.")
+	}
+	return nil
+}
+
+func runUpdateMaintenance(configPath string) error {
+	if err := applyRemovedLegacyConfigMigration(configPath); err != nil {
+		return err
+	}
+	if err := applySecurityConfigMigration(configPath); err != nil {
+		return err
+	}
+	return nil
+}
+
+func applyRemovedLegacyConfigMigration(configPath string) error {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
+	filtered := make([]string, 0, len(lines))
+	changed := false
+	for _, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "allowed_models") {
+			changed = true
+			continue
+		}
+		filtered = append(filtered, line)
+	}
+	if !changed {
+		return nil
+	}
+	return os.WriteFile(configPath, []byte(strings.Join(filtered, "\n")), 0o600)
+}
+
+func applySecurityConfigMigration(configPath string) error {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	content := strings.ReplaceAll(string(data), "\r\n", "\n")
+	if strings.Contains(content, "\n[security]\n") || strings.HasPrefix(content, "[security]\n") {
+		return nil
+	}
+
+	section := "\n" +
+		"# Security defaults added during update migration.\n" +
+		"[security]\n" +
+		"deny_on_empty_allowlist = true\n" +
+		"workspace_only = true\n" +
+		"threat_caution_ceiling = \"external\"\n"
+
+	if !strings.HasSuffix(content, "\n") {
+		content += "\n"
+	}
+	return os.WriteFile(configPath, []byte(content+section), 0o600)
 }
 
 func checkForUpdate(ctx context.Context, currentVersion string) (latestRelease, bool, error) {
@@ -365,20 +801,8 @@ var updateAllCmd = &cobra.Command{
 	Use:   "all",
 	Short: "Download and install the latest release",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Printf("roboticus %s (%s/%s)\n", version, runtime.GOOS, runtime.GOARCH)
-
-		rel, upToDate, err := checkForUpdate(cmd.Context(), version)
-		if err != nil {
-			return fmt.Errorf("failed to check for updates: %w", err)
-		}
-
-		if upToDate && normalizeVersion(version) != "dev" {
-			fmt.Println("Already up to date.")
-			return nil
-		}
-
 		yes, _ := cmd.Flags().GetBool("yes")
-		return performUpdate(cmd.Context(), rel, yes)
+		return runUpdateAll(cmd.Context(), version, yes)
 	},
 }
 
