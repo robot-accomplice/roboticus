@@ -1,7 +1,7 @@
 # ============================================================================
 # Roboticus CI Pipeline
 # ============================================================================
-# Multi-stage workflow: lint -> test/fuzz/integration/parity (parallel) -> build/security
+# Multi-stage workflow: lint -> test/fuzz/integration (parallel) -> build/security
 # Pure-Go project with modernc.org/sqlite (no CGO required).
 #
 # Triggers on push/PR to develop and master.
@@ -11,9 +11,9 @@ name: CI
 
 on:
   push:
-    branches: [develop, master]
+    branches: [develop, main]
   pull_request:
-    branches: [develop, master]
+    branches: [develop, main]
 
 # Cancel in-progress runs for the same branch/PR to save runner minutes.
 concurrency:
