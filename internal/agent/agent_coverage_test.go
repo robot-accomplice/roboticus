@@ -335,7 +335,7 @@ Content of note B with [[Note A]] backlink.
 	os.WriteFile(filepath.Join(dir, "ignore.txt"), []byte("not a note"), 0o644)
 
 	// Create a hidden dir that should be skipped.
-	os.MkdirAll(filepath.Join(dir, ".obsidian"), 0o755)
+	_ = os.MkdirAll(filepath.Join(dir, ".obsidian"), 0o755)
 	os.WriteFile(filepath.Join(dir, ".obsidian", "config.md"), []byte("# Config"), 0o644)
 
 	vault := NewObsidianVault(ObsidianConfig{VaultPath: dir})

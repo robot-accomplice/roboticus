@@ -19,7 +19,7 @@ import (
 // startWalletPoller periodically fetches on-chain balances and caches them in
 // the wallet_balances table. The poll interval is configurable via
 // wallet.balance_poll_seconds (default 60s, minimum 10s to respect RPC rate limits).
-func startWalletPoller(ctx context.Context, cfg *core.Config, store *db.Store) {
+func startWalletPoller(ctx context.Context, cfg *core.Config, store *db.Store, ks *core.Keystore) {
 	interval := cfg.Wallet.BalancePollSeconds
 	if interval <= 0 {
 		log.Info().Msg("wallet balance poller disabled (balance_poll_seconds=0)")
@@ -34,12 +34,51 @@ func startWalletPoller(ctx context.Context, cfg *core.Config, store *db.Store) {
 		return
 	}
 
-	// Derive passphrase matching Rust's Wallet::machine_passphrase():
-	// keccak256("roboticus-wallet-machine-key::{hostname}::{user}")
-	passphrase := os.Getenv("ROBOTICUS_WALLET_PASSPHRASE")
+	// Check for plaintext wallet and encrypt it on first run.
+	result, err := wallet.MigratePlaintextWallet(cfg.Wallet.Path)
+	if err != nil {
+		log.Error().Err(err).Msg("wallet migration failed")
+	}
+
+	// Resolve passphrase: migration result > keystore > env > machine-derived.
+	passphrase := ""
+	if result != nil && result.Migrated {
+		passphrase = result.Passphrase
+
+		// Store in keystore for future auto-unlock.
+		if ks != nil && ks.IsUnlocked() {
+			if err := ks.Set("wallet_passphrase", passphrase); err == nil {
+				_ = ks.Save()
+				log.Info().Msg("wallet passphrase stored in keystore")
+			}
+		}
+
+		// Display the passphrase exactly once.
+		fmt.Println()
+		fmt.Println("╔══════════════════════════════════════════════════════════════════════╗")
+		fmt.Println("║  WALLET ENCRYPTED — SAVE THIS PASSPHRASE (shown once only):        ║")
+		fmt.Printf("║  %s  ║\n", passphrase)
+		fmt.Printf("║  Address: %-56s  ║\n", result.Address)
+		fmt.Println("║                                                                      ║")
+		fmt.Println("║  The passphrase has been stored in the keystore for auto-unlock.     ║")
+		fmt.Println("║  You can also set ROBOTICUS_WALLET_PASSPHRASE as a backup.           ║")
+		fmt.Println("╚══════════════════════════════════════════════════════════════════════╝")
+		fmt.Println()
+	}
+
+	// If no migration happened, resolve passphrase from existing sources.
+	if passphrase == "" {
+		if ks != nil && ks.IsUnlocked() {
+			passphrase = ks.GetOrEmpty("wallet_passphrase")
+		}
+	}
+	if passphrase == "" {
+		passphrase = os.Getenv("ROBOTICUS_WALLET_PASSPHRASE")
+	}
 	if passphrase == "" {
 		passphrase = walletMachinePassphrase()
 	}
+
 	w, err := wallet.NewWallet(wallet.WalletConfig{
 		Path:       cfg.Wallet.Path,
 		ChainID:    int64(cfg.Wallet.ChainID),

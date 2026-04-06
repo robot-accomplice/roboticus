@@ -170,7 +170,7 @@ func TestNewServer_DocsEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /api/docs: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("status = %d, want 200", resp.StatusCode)
 	}
@@ -193,7 +193,7 @@ func TestNewServer_AgentCardEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /.well-known/agent.json: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("status = %d, want 200", resp.StatusCode)
 	}
@@ -215,7 +215,7 @@ func TestNewServer_DashboardEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /dashboard: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("status = %d, want 200", resp.StatusCode)
 	}

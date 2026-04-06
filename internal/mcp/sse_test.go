@@ -193,9 +193,9 @@ func TestSSETransport_ListenSSE_SkipsNonDataLines(t *testing.T) {
 		// Send various SSE lines: comments, event names, empty data, and [DONE].
 		_, _ = fmt.Fprintf(w, ": this is a comment\n")
 		_, _ = fmt.Fprintf(w, "event: ping\n")
-		fmt.Fprintf(w, "data: \n")       // empty data, should be skipped
-		fmt.Fprintf(w, "data: [DONE]\n") // [DONE] sentinel, should be skipped
-		fmt.Fprintf(w, "data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":\"ok\"}\n\n")
+		_, _ = fmt.Fprintf(w, "data: \n")       // empty data, should be skipped
+		_, _ = fmt.Fprintf(w, "data: [DONE]\n") // [DONE] sentinel, should be skipped
+		_, _ = fmt.Fprintf(w, "data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":\"ok\"}\n\n")
 		flusher.Flush()
 
 		<-r.Context().Done()

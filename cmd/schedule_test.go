@@ -15,7 +15,7 @@ func TestCronCreateCmd_WithMockServer(t *testing.T) {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
 		var body map[string]any
-		json.NewDecoder(r.Body).Decode(&body)
+		_ = json.NewDecoder(r.Body).Decode(&body)
 		if body["name"] != "daily-backup" {
 			t.Errorf("unexpected name: %v", body["name"])
 		}

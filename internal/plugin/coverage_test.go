@@ -226,8 +226,8 @@ func TestRegistry_ScanDirectory_SkipsInvalidManifest(t *testing.T) {
 func TestRegistry_ScanDirectory_SkipsDenied(t *testing.T) {
 	base := t.TempDir()
 	dir := filepath.Join(base, "blocked")
-	os.MkdirAll(dir, 0o755)
-	os.WriteFile(filepath.Join(dir, "manifest.toml"), []byte("name = \"blocked\"\nversion = \"1.0.0\"\n"), 0o644)
+	_ = os.MkdirAll(dir, 0o755)
+	_ = os.WriteFile(filepath.Join(dir, "manifest.toml"), []byte("name = \"blocked\"\nversion = \"1.0.0\"\n"), 0o644)
 
 	reg := NewRegistry(nil, []string{"blocked"}, PermissionPolicy{})
 	n, _ := reg.ScanDirectory(base)
@@ -246,8 +246,8 @@ func TestRegistry_ScanDirectory_NonexistentDir(t *testing.T) {
 
 func TestRegistry_ScanDirectory_IgnoresNonManifestFiles(t *testing.T) {
 	base := t.TempDir()
-	os.WriteFile(filepath.Join(base, "readme.txt"), []byte("hello"), 0o644)
-	os.WriteFile(filepath.Join(base, "config.json"), []byte("{}"), 0o644)
+	_ = os.WriteFile(filepath.Join(base, "readme.txt"), []byte("hello"), 0o644)
+	_ = os.WriteFile(filepath.Join(base, "config.json"), []byte("{}"), 0o644)
 
 	reg := NewRegistry(nil, nil, PermissionPolicy{})
 	n, err := reg.ScanDirectory(base)
@@ -970,8 +970,8 @@ func TestPackUnpackScan_RoundTrip(t *testing.T) {
 func TestRegistry_ScanDirectory_YMLManifest(t *testing.T) {
 	base := t.TempDir()
 	dir := filepath.Join(base, "ymlplugin")
-	os.MkdirAll(dir, 0o755)
-	os.WriteFile(filepath.Join(dir, "manifest.yml"), []byte("name: ymlplugin\nversion: 1.0.0\n"), 0o644)
+	_ = os.MkdirAll(dir, 0o755)
+	_ = os.WriteFile(filepath.Join(dir, "manifest.yml"), []byte("name: ymlplugin\nversion: 1.0.0\n"), 0o644)
 
 	reg := NewRegistry(nil, nil, PermissionPolicy{})
 	n, err := reg.ScanDirectory(base)

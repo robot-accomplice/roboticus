@@ -444,7 +444,7 @@ func TestNicknameAdapter_Refine_TooLongTitle(t *testing.T) {
 	store := testutil.TempStore(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"choices": []map[string]any{
 				{"message": map[string]string{"content": strings.Repeat("x", 100)}},
 			},
@@ -936,7 +936,7 @@ func TestNew_WithSkillsDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
-	defer d.Stop(nil)
+	defer func() { _ = d.Stop(nil) }()
 }
 
 // ---------------------------------------------------------------------------

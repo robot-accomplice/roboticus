@@ -15,7 +15,7 @@ func TestAdminBreakerResetCmd_WithMockServer(t *testing.T) {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"reset": true})
+		_ = json.NewEncoder(w).Encode(map[string]any{"reset": true})
 	}))
 	defer cleanup()
 
@@ -36,7 +36,7 @@ func TestAdminStatsCmd_PartialFailure(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"data": "ok"})
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": "ok"})
 	}))
 	defer cleanup()
 
