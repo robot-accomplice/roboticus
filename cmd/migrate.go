@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 
@@ -10,12 +11,13 @@ import (
 
 var migrateCmd = &cobra.Command{
 	Use:   "migrate",
-	Short: "Run database migrations",
-	RunE:  runMigrate,
+	Short: "Run migrations and data import/export",
 }
 
-func init() {
-	rootCmd.AddCommand(migrateCmd)
+var migrateDBCmd = &cobra.Command{
+	Use:   "db",
+	Short: "Run database schema migrations",
+	RunE:  runMigrate,
 }
 
 func runMigrate(cmd *cobra.Command, args []string) error {
@@ -36,4 +38,32 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 
 	log.Info().Str("path", cfg.Database.Path).Msg("migrations complete")
 	return nil
+}
+
+var migrateImportCmd = &cobra.Command{
+	Use:   "import <SOURCE>",
+	Short: "Import data from a Legacy workspace",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		fmt.Println("data migration from Legacy workspace — not yet implemented")
+		return nil
+	},
+}
+
+var migrateExportCmd = &cobra.Command{
+	Use:   "export <TARGET>",
+	Short: "Export data to Legacy format",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		fmt.Println("data export to Legacy format — not yet implemented")
+		return nil
+	},
+}
+
+func init() {
+	// Default behavior: running `migrate` without subcommand runs DB migrations.
+	migrateCmd.RunE = runMigrate
+
+	migrateCmd.AddCommand(migrateDBCmd, migrateImportCmd, migrateExportCmd)
+	rootCmd.AddCommand(migrateCmd)
 }

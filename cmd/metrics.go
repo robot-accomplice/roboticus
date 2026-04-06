@@ -48,7 +48,25 @@ var metricsCapacityCmd = &cobra.Command{
 	},
 }
 
+var metricsTransactionsCmd = &cobra.Command{
+	Use:   "transactions",
+	Short: "Show transaction metrics",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		hours, _ := cmd.Flags().GetString("hours")
+		if hours == "" {
+			hours = "24"
+		}
+		data, err := apiGet("/api/stats/transactions?hours=" + hours)
+		if err != nil {
+			return err
+		}
+		printJSON(data)
+		return nil
+	},
+}
+
 func init() {
-	metricsCmd.AddCommand(metricsCostsCmd, metricsCacheCmd, metricsCapacityCmd)
+	metricsTransactionsCmd.Flags().String("hours", "24", "number of hours to look back")
+	metricsCmd.AddCommand(metricsCostsCmd, metricsCacheCmd, metricsCapacityCmd, metricsTransactionsCmd)
 	rootCmd.AddCommand(metricsCmd)
 }

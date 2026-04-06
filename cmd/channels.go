@@ -74,7 +74,22 @@ var channelsDeadLetterCmd = &cobra.Command{
 	},
 }
 
+var channelsReplayCmd = &cobra.Command{
+	Use:   "replay [id]",
+	Short: "Replay a dead-letter queue entry",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		data, err := apiPost("/api/channels/dead-letter/"+args[0]+"/replay", nil)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Replayed dead-letter entry %s\n", args[0])
+		printJSON(data)
+		return nil
+	},
+}
+
 func init() {
-	channelsCmd.AddCommand(channelsListCmd, channelsTestCmd, channelsDeadLetterCmd)
+	channelsCmd.AddCommand(channelsListCmd, channelsTestCmd, channelsDeadLetterCmd, channelsReplayCmd)
 	rootCmd.AddCommand(channelsCmd)
 }

@@ -97,7 +97,45 @@ var cronHistoryCmd = &cobra.Command{
 	},
 }
 
+var scheduleCmd = &cobra.Command{
+	Use:   "schedule",
+	Short: "Manage scheduled jobs (alias for cron)",
+}
+
 func init() {
 	cronCmd.AddCommand(cronListCmd, cronCreateCmd, cronDeleteCmd, cronRunCmd, cronHistoryCmd)
 	rootCmd.AddCommand(cronCmd)
+
+	// Register schedule as an alias command with duplicated subcommands.
+	scheduleCmd.AddCommand(
+		&cobra.Command{
+			Use:   "list",
+			Short: "List all scheduled jobs",
+			RunE:  cronListCmd.RunE,
+		},
+		&cobra.Command{
+			Use:   "create [name] [cron-expr]",
+			Short: "Create a scheduled job",
+			Args:  cobra.ExactArgs(2),
+			RunE:  cronCreateCmd.RunE,
+		},
+		&cobra.Command{
+			Use:   "delete [id]",
+			Short: "Delete a scheduled job",
+			Args:  cobra.ExactArgs(1),
+			RunE:  cronDeleteCmd.RunE,
+		},
+		&cobra.Command{
+			Use:   "run [id]",
+			Short: "Trigger a scheduled job immediately",
+			Args:  cobra.ExactArgs(1),
+			RunE:  cronRunCmd.RunE,
+		},
+		&cobra.Command{
+			Use:   "history",
+			Short: "Show recent scheduled job run history",
+			RunE:  cronHistoryCmd.RunE,
+		},
+	)
+	rootCmd.AddCommand(scheduleCmd)
 }

@@ -12,8 +12,9 @@ import (
 )
 
 var mechanicCmd = &cobra.Command{
-	Use:   "mechanic",
-	Short: "Database diagnostics and repair",
+	Use:     "mechanic",
+	Aliases: []string{"doctor"},
+	Short:   "Database diagnostics and repair",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		repair, _ := cmd.Flags().GetBool("repair")
 

@@ -2,12 +2,25 @@ package cmd
 
 import (
 	"fmt"
+	"net"
+	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 )
 
 var securityCmd = &cobra.Command{
 	Use:   "security",
+	Short: "Security configuration and auditing",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		// Default to showing security config when run without subcommand.
+		return securityShowCmd.RunE(cmd, args)
+	},
+}
+
+var securityShowCmd = &cobra.Command{
+	Use:   "show",
 	Short: "Report security configuration",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := loadConfig()
@@ -50,6 +63,87 @@ var securityCmd = &cobra.Command{
 	},
 }
 
+var securityAuditCmd = &cobra.Command{
+	Use:   "audit",
+	Short: "Run security audit checks on configuration",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfg, err := loadConfig()
+		if err != nil {
+			return fmt.Errorf("failed to load config: %w", err)
+		}
+
+		issues := 0
+
+		fmt.Println("Security Audit:")
+		fmt.Println("===============")
+
+		// Check: API keys configured.
+		hasAPIKey := false
+		for _, p := range cfg.Providers {
+			if p.APIKeyEnv != "" {
+				if v := os.Getenv(p.APIKeyEnv); v != "" {
+					hasAPIKey = true
+				}
+			}
+		}
+		if !hasAPIKey {
+			fmt.Println("  [WARN] No provider API keys found in environment")
+			issues++
+		} else {
+			fmt.Println("  [OK]   Provider API keys present")
+		}
+
+		// Check: bind address.
+		bind := cfg.Server.Bind
+		if bind == "" {
+			bind = "127.0.0.1"
+		}
+		ip := net.ParseIP(bind)
+		if ip != nil && !ip.IsLoopback() && bind != "0.0.0.0" {
+			fmt.Printf("  [OK]   Bind address: %s\n", bind)
+		} else if bind == "0.0.0.0" || bind == "::" {
+			fmt.Printf("  [WARN] Bind address %s exposes service to all interfaces\n", bind)
+			issues++
+		} else {
+			fmt.Printf("  [OK]   Bind address: %s (loopback)\n", bind)
+		}
+
+		// Check: config file permissions.
+		configPath := viper.ConfigFileUsed()
+		if configPath == "" {
+			configPath = strings.Join([]string{os.Getenv("HOME"), ".roboticus", "roboticus.toml"}, "/")
+		}
+		if info, err := os.Stat(configPath); err == nil {
+			perm := info.Mode().Perm()
+			if perm&0o077 != 0 {
+				fmt.Printf("  [WARN] Config file %s has broad permissions: %o\n", configPath, perm)
+				issues++
+			} else {
+				fmt.Printf("  [OK]   Config file permissions: %o\n", perm)
+			}
+		}
+
+		// Check: sandbox enabled.
+		if cfg.Sandbox.Enabled {
+			fmt.Println("  [OK]   Sandbox is enabled")
+		} else {
+			fmt.Println("  [WARN] Sandbox is disabled")
+			issues++
+		}
+
+		// Check: approvals.
+		if cfg.Approvals.Enabled {
+			fmt.Println("  [OK]   Approval workflow is enabled")
+		} else {
+			fmt.Println("  [INFO] Approval workflow is disabled")
+		}
+
+		fmt.Printf("\n%d issue(s) found.\n", issues)
+		return nil
+	},
+}
+
 func init() {
+	securityCmd.AddCommand(securityShowCmd, securityAuditCmd)
 	rootCmd.AddCommand(securityCmd)
 }

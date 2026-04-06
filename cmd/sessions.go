@@ -115,8 +115,38 @@ func exportMarkdown(sessionID string, data map[string]any) error {
 	return nil
 }
 
+var sessionsCreateCmd = &cobra.Command{
+	Use:   "create [agent-id]",
+	Short: "Create a new session for an agent",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		data, err := apiPost("/api/sessions", map[string]any{
+			"agent_id": args[0],
+		})
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Session created: %v\n", data["id"])
+		return nil
+	},
+}
+
+var sessionsBackfillNicknamesCmd = &cobra.Command{
+	Use:   "backfill-nicknames",
+	Short: "Generate nicknames for sessions that lack them",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		data, err := apiPost("/api/sessions/backfill-nicknames", nil)
+		if err != nil {
+			return err
+		}
+		printJSON(data)
+		return nil
+	},
+}
+
 func init() {
 	sessionsExportCmd.Flags().String("format", "json", "output format (json/markdown)")
-	sessionsCmd.AddCommand(sessionsListCmd, sessionsShowCmd, sessionsDeleteCmd, sessionsExportCmd)
+	sessionsCmd.AddCommand(sessionsListCmd, sessionsShowCmd, sessionsDeleteCmd, sessionsExportCmd,
+		sessionsCreateCmd, sessionsBackfillNicknamesCmd)
 	rootCmd.AddCommand(sessionsCmd)
 }

@@ -46,7 +46,25 @@ var modelsDiagnosticsCmd = &cobra.Command{
 	},
 }
 
+var modelsScanCmd = &cobra.Command{
+	Use:   "scan [provider]",
+	Short: "Scan for available models with validation",
+	Args:  cobra.MaximumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		path := "/api/models/available?validation_level=scan"
+		if len(args) > 0 {
+			path += "&provider=" + args[0]
+		}
+		data, err := apiGet(path)
+		if err != nil {
+			return err
+		}
+		printJSON(data)
+		return nil
+	},
+}
+
 func init() {
-	modelsCmd.AddCommand(modelsListCmd, modelsDiagnosticsCmd)
+	modelsCmd.AddCommand(modelsListCmd, modelsDiagnosticsCmd, modelsScanCmd)
 	rootCmd.AddCommand(modelsCmd)
 }

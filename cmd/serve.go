@@ -10,8 +10,9 @@ import (
 )
 
 var serveCmd = &cobra.Command{
-	Use:   "serve",
-	Short: "Start the roboticus agent runtime",
+	Use:     "serve",
+	Aliases: []string{"start", "run"},
+	Short:   "Start the roboticus agent runtime",
 	Long: `Start the roboticus daemon in the foreground.
 
 On Linux this integrates with systemd, on macOS with launchd,

@@ -71,7 +71,93 @@ var mcpDisconnectCmd = &cobra.Command{
 	},
 }
 
+var mcpShowCmd = &cobra.Command{
+	Use:   "show <NAME>",
+	Short: "Show tools and details for an MCP server",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		name := args[0]
+		data, err := apiGet("/api/mcp/tools")
+		if err != nil {
+			return err
+		}
+
+		// Filter tools by server name.
+		if tools, ok := data["tools"].([]any); ok {
+			var matched []any
+			for _, t := range tools {
+				tm, _ := t.(map[string]any)
+				if tm["server"] == name || tm["server_name"] == name {
+					matched = append(matched, tm)
+				}
+			}
+			if len(matched) > 0 {
+				fmt.Printf("MCP server %q — %d tool(s):\n", name, len(matched))
+				printJSON(matched)
+				return nil
+			}
+		}
+
+		// If no tools matched, try showing the raw response filtered differently.
+		if servers, ok := data["servers"].([]any); ok {
+			for _, s := range servers {
+				sm, _ := s.(map[string]any)
+				if sm["name"] == name {
+					printJSON(sm)
+					return nil
+				}
+			}
+		}
+
+		fmt.Printf("MCP server %q not found or has no tools.\n", name)
+		return nil
+	},
+}
+
+var mcpTestCmd = &cobra.Command{
+	Use:   "test <NAME>",
+	Short: "Test connectivity to an MCP server",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		name := args[0]
+		fmt.Printf("Testing MCP server %q...\n", name)
+
+		// Step 1: Connect.
+		_, err := apiPost("/api/mcp/connect", map[string]any{
+			"name": name,
+		})
+		if err != nil {
+			fmt.Printf("  FAIL: connection failed: %v\n", err)
+			return nil
+		}
+		fmt.Println("  connected")
+
+		// Step 2: Check tools.
+		data, err := apiGet("/api/mcp/tools")
+		if err != nil {
+			fmt.Printf("  WARN: could not list tools: %v\n", err)
+		} else {
+			toolCount := 0
+			if tools, ok := data["tools"].([]any); ok {
+				for _, t := range tools {
+					tm, _ := t.(map[string]any)
+					if tm["server"] == name || tm["server_name"] == name {
+						toolCount++
+					}
+				}
+			}
+			fmt.Printf("  tools available: %d\n", toolCount)
+		}
+
+		// Step 3: Disconnect.
+		_, _ = apiPost("/api/mcp/disconnect/"+name, nil)
+		fmt.Println("  disconnected")
+		fmt.Printf("MCP server %q: OK\n", name)
+		return nil
+	},
+}
+
 func init() {
-	mcpCmd.AddCommand(mcpListCmd, mcpConnectCmd, mcpDisconnectCmd)
+	mcpCmd.AddCommand(mcpListCmd, mcpConnectCmd, mcpDisconnectCmd, mcpShowCmd, mcpTestCmd)
 	rootCmd.AddCommand(mcpCmd)
 }

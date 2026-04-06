@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -14,7 +15,15 @@ import (
 )
 
 // apiBaseURL returns the base URL for API calls.
+// It checks the --url flag / ROBOTICUS_URL env var first,
+// then falls back to localhost:{port}.
 func apiBaseURL() string {
+	if u := viper.GetString("gateway.url"); u != "" {
+		return strings.TrimRight(u, "/")
+	}
+	if u := os.Getenv("ROBOTICUS_URL"); u != "" {
+		return strings.TrimRight(u, "/")
+	}
 	port := viper.GetInt("server.port")
 	if port == 0 {
 		port = core.DefaultServerPort
@@ -75,6 +84,38 @@ func apiPost(path string, payload map[string]any) (map[string]any, error) {
 		if msg, ok := data["error"]; ok {
 			return nil, fmt.Errorf("API error: %v", msg)
 		}
+	}
+
+	return data, nil
+}
+
+// apiPut performs a PUT request with JSON body.
+func apiPut(path string, payload map[string]any) (map[string]any, error) {
+	client := &http.Client{Timeout: 10 * time.Second}
+	b, _ := json.Marshal(payload)
+	req, _ := http.NewRequest("PUT", apiBaseURL()+path, strings.NewReader(string(b)))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("connection failed (is roboticus running?): %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	var data map[string]any
+	if err := json.Unmarshal(body, &data); err != nil {
+		return nil, fmt.Errorf("invalid JSON response: %s", string(body))
+	}
+
+	if resp.StatusCode >= 400 {
+		if msg, ok := data["error"]; ok {
+			return nil, fmt.Errorf("API error: %v", msg)
+		}
+		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 
 	return data, nil

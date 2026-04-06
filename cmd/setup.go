@@ -13,8 +13,9 @@ import (
 )
 
 var setupCmd = &cobra.Command{
-	Use:   "setup",
-	Short: "Interactive onboarding wizard",
+	Use:     "setup",
+	Aliases: []string{"onboard"},
+	Short:   "Interactive onboarding wizard",
 	Long:  `Walks you through initial configuration: agent name, LLM provider, and API key.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		scanner := bufio.NewScanner(os.Stdin)

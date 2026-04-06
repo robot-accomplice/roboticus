@@ -33,12 +33,22 @@ func Execute() {
 func init() {
 	cobra.OnInitialize(initConfig, initLogger)
 
-	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default ~/.roboticus/roboticus.toml)")
+	rootCmd.PersistentFlags().StringVarP(&cfgFile, "config", "c", "", "config file (default ~/.roboticus/roboticus.toml)")
 	rootCmd.PersistentFlags().Int("port", core.DefaultServerPort, "server port")
 	rootCmd.PersistentFlags().String("bind", core.DefaultServerBind, "server bind address")
+	rootCmd.PersistentFlags().String("url", "", "gateway URL for management commands (env: ROBOTICUS_URL)")
+	rootCmd.PersistentFlags().String("profile", "", "profile name for state isolation (env: ROBOTICUS_PROFILE)")
+	rootCmd.PersistentFlags().String("color", "auto", "color output: auto, always, never")
+	rootCmd.PersistentFlags().String("theme", "crt-green", "color theme (env: ROBOTICUS_THEME)")
+	rootCmd.PersistentFlags().Bool("no-draw", false, "disable CRT typewriter draw effect")
+	rootCmd.PersistentFlags().Bool("nerdmode", false, "retro mode (env: ROBOTICUS_NERDMODE)")
+	rootCmd.PersistentFlags().Bool("quiet", false, "suppress informational output")
+	rootCmd.PersistentFlags().Bool("json", false, "output structured JSON")
 
 	_ = viper.BindPFlag("server.port", rootCmd.PersistentFlags().Lookup("port"))
 	_ = viper.BindPFlag("server.bind", rootCmd.PersistentFlags().Lookup("bind"))
+	_ = viper.BindPFlag("gateway.url", rootCmd.PersistentFlags().Lookup("url"))
+	_ = viper.BindPFlag("profile", rootCmd.PersistentFlags().Lookup("profile"))
 }
 
 func initConfig() {

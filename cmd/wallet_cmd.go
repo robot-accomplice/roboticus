@@ -35,7 +35,32 @@ var walletAddressCmd = &cobra.Command{
 	},
 }
 
+var walletShowCmd = &cobra.Command{
+	Use:   "show",
+	Short: "Show wallet balance and address",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		balance, err := apiGet("/api/wallet/balance")
+		if err != nil {
+			return err
+		}
+		address, err := apiGet("/api/wallet/address")
+		if err != nil {
+			return err
+		}
+		// Merge both maps.
+		merged := make(map[string]any)
+		for k, v := range balance {
+			merged[k] = v
+		}
+		for k, v := range address {
+			merged[k] = v
+		}
+		printJSON(merged)
+		return nil
+	},
+}
+
 func init() {
-	walletCmd.AddCommand(walletBalanceCmd, walletAddressCmd)
+	walletCmd.AddCommand(walletBalanceCmd, walletAddressCmd, walletShowCmd)
 	rootCmd.AddCommand(walletCmd)
 }
