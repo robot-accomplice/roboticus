@@ -29,10 +29,10 @@ current status, concrete file targets, and the next handoff step.
 | RB12 | done | plugins search | `cmd/plugins.go`, shared update-manifest plumbing | Implemented real registry-backed catalog search with regression coverage. |
 | RB13 | done | theme catalog install | `internal/api/routes/themes.go`, `internal/api/server.go` | Catalog install route and activation flow implemented with DB-backed installed theme state. |
 | RB14 | done | trace search | `internal/api/routes/traces.go`, `internal/api/server.go` | Search route implemented with Rust-style filters and regression coverage. |
-| RB15 | todo | API route-set parity test | `internal/api/` | |
-| RB16 | todo | CLI tree parity test | `cmd/` | |
-| RB17 | todo | placeholder guard tests | `cmd/`, `internal/api/routes/` | |
-| RB18 | todo | blocker-surface smoke coverage | `smoke_test.go`, focused integration tests | |
+| RB15 | done | API route-set parity test | `internal/api/route_parity_test.go` | Walks chi route tree and asserts all ~120 critical endpoints are registered. |
+| RB16 | done | CLI tree parity test | `cmd/cli_contract_test.go` | 6 contract tests covering global flags, top-level commands, aliases, subcommand sets, update/upgrade all, schedule/cron alias. |
+| RB17 | done | placeholder guard tests | `cmd/parity_placeholder_test.go`, `internal/api/routes/parity_placeholder_test.go` | AST-based scan rejects any string literal containing "not yet implemented" or "placeholder". |
+| RB18 | done | blocker-surface smoke coverage | `smoke_test.go` | Added 10 smoke subtests: keystore-status, workspace-tasks, task-events, runtime-devices, runtime-mcp, routing-dataset, traces-search, memory-consolidate, memory-reindex, mcp-servers. |
 
 ## Current Focus
 

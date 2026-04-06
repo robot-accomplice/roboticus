@@ -398,7 +398,59 @@ func TestLiveSmokeTest(t *testing.T) {
 		t.Log("PASS: recommendations")
 	})
 
-	// --- 21. RunPipeline wrapper (connector-factory compliance) ---
+	// --- 21. Blocker-surface parity endpoints ---
+	t.Run("keystore-status", func(t *testing.T) {
+		resp := get(t, client, base+"/api/keystore/status")
+		assertStatus(t, resp, 200)
+		t.Log("PASS: keystore status")
+	})
+	t.Run("workspace-tasks", func(t *testing.T) {
+		resp := get(t, client, base+"/api/workspace/tasks")
+		assertStatus(t, resp, 200)
+		t.Log("PASS: workspace tasks")
+	})
+	t.Run("task-events", func(t *testing.T) {
+		resp := get(t, client, base+"/api/admin/task-events")
+		assertStatus(t, resp, 200)
+		t.Log("PASS: task events")
+	})
+	t.Run("runtime-devices", func(t *testing.T) {
+		resp := get(t, client, base+"/api/runtime/devices")
+		assertStatus(t, resp, 200)
+		t.Log("PASS: runtime devices")
+	})
+	t.Run("runtime-mcp", func(t *testing.T) {
+		resp := get(t, client, base+"/api/runtime/mcp")
+		assertStatus(t, resp, 200)
+		t.Log("PASS: runtime MCP")
+	})
+	t.Run("routing-dataset", func(t *testing.T) {
+		resp := get(t, client, base+"/api/models/routing-dataset")
+		assertStatus(t, resp, 200)
+		t.Log("PASS: routing dataset")
+	})
+	t.Run("traces-search", func(t *testing.T) {
+		resp := get(t, client, base+"/api/traces/search")
+		assertStatus(t, resp, 200)
+		t.Log("PASS: traces search")
+	})
+	t.Run("memory-consolidate", func(t *testing.T) {
+		resp := post(t, client, base+"/api/memory/consolidate", nil)
+		assertStatus(t, resp, 200)
+		t.Log("PASS: memory consolidate")
+	})
+	t.Run("memory-reindex", func(t *testing.T) {
+		resp := post(t, client, base+"/api/memory/reindex", nil)
+		assertStatus(t, resp, 200)
+		t.Log("PASS: memory reindex")
+	})
+	t.Run("mcp-servers", func(t *testing.T) {
+		resp := get(t, client, base+"/api/mcp/servers")
+		assertStatus(t, resp, 200)
+		t.Log("PASS: MCP servers")
+	})
+
+	// --- 22. RunPipeline wrapper (connector-factory compliance) ---
 	t.Run("RunPipeline-wrapper", func(t *testing.T) {
 		// Verify RunPipeline calls through the Runner interface correctly.
 		input := pipeline.Input{
