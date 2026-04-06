@@ -211,8 +211,8 @@ func (ks *Keystore) Save() error {
 		return fmt.Errorf("keystore: no path configured")
 	}
 
-	// Serialize secrets to JSON.
-	plaintext, err := json.Marshal(ks.secrets)
+	// Serialize secrets to JSON in Rust-compatible format.
+	plaintext, err := json.Marshal(keystoreData{Entries: ks.secrets})
 	if err != nil {
 		return fmt.Errorf("keystore: marshal failed: %w", err)
 	}
@@ -287,6 +287,11 @@ func (ks *Keystore) encrypt(plaintext []byte) ([]byte, error) {
 	return out, nil
 }
 
+// keystoreData matches the Rust serialization wrapper: {"entries": {...}}.
+type keystoreData struct {
+	Entries map[string]string `json:"entries"`
+}
+
 // decrypt parses: salt(16) || nonce(12) || AES-256-GCM ciphertext.
 func (ks *Keystore) decrypt(data []byte) error {
 	if len(data) < saltLen+nonceLen+1 {
@@ -314,7 +319,17 @@ func (ks *Keystore) decrypt(data []byte) error {
 		return err
 	}
 
-	return json.Unmarshal(plaintext, &ks.secrets)
+	// Rust format: {"entries": {"key": "value"}}.
+	var wrapped keystoreData
+	if err := json.Unmarshal(plaintext, &wrapped); err != nil {
+		// Fallback: try flat map for keystores created by Go.
+		return json.Unmarshal(plaintext, &ks.secrets)
+	}
+	ks.secrets = wrapped.Entries
+	if ks.secrets == nil {
+		ks.secrets = make(map[string]string)
+	}
+	return nil
 }
 
 // ResolveSecret looks up a secret name in the keystore with env var fallback.
