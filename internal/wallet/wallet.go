@@ -6,6 +6,7 @@ import (
 	"crypto/cipher"
 	"crypto/ecdsa"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -17,7 +18,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"golang.org/x/crypto/scrypt"
+	"golang.org/x/crypto/argon2"
+	"golang.org/x/crypto/hkdf"
 	"golang.org/x/crypto/sha3"
 
 	"github.com/rs/zerolog/log"
@@ -28,11 +30,6 @@ var rpcRequestID atomic.Int64
 // Wallet constants.
 const (
 	DefaultChainID = 8453 // Base L2
-
-	// Scrypt key derivation parameters for wallet encryption.
-	ScryptN = 262144
-	ScryptR = 8
-	ScryptP = 1
 )
 
 // WalletConfig holds wallet configuration.
@@ -161,10 +158,7 @@ func (w *Wallet) encrypt(plaintext []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	key, err := deriveKeyFromPassphrase(w.cfg.Passphrase, salt)
-	if err != nil {
-		return nil, err
-	}
+	key := deriveKeyArgon2id(w.cfg.Passphrase, salt)
 
 	block, err := aes.NewCipher(key)
 	if err != nil {
@@ -174,14 +168,14 @@ func (w *Wallet) encrypt(plaintext []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	nonce := make([]byte, gcm.NonceSize())
+	nonce := make([]byte, 12)
 	if _, err := rand.Read(nonce); err != nil {
 		return nil, err
 	}
 
 	ciphertext := gcm.Seal(nil, nonce, plaintext, nil)
 
-	// Format: salt(16) || nonce(12) || ciphertext
+	// Format: salt(16) || nonce(12) || ciphertext (matches Rust)
 	result := make([]byte, 0, len(salt)+len(nonce)+len(ciphertext))
 	result = append(result, salt...)
 	result = append(result, nonce...)
@@ -190,46 +184,53 @@ func (w *Wallet) encrypt(plaintext []byte) ([]byte, error) {
 }
 
 func (w *Wallet) decrypt(data []byte) error {
-	if len(data) < 28 { // 16 salt + 12 nonce minimum
+	if len(data) < 28+16 { // 16 salt + 12 nonce + 16 GCM tag minimum
 		return fmt.Errorf("encrypted data too short")
 	}
 
 	salt := data[:16]
-	key, err := deriveKeyFromPassphrase(w.cfg.Passphrase, salt)
-	if err != nil {
-		return err
+	nonce := data[16:28]
+	ciphertext := data[28:]
+
+	// Try Argon2id first (current Rust format).
+	key := deriveKeyArgon2id(w.cfg.Passphrase, salt)
+	if plaintext, err := decryptAESGCM(key, nonce, ciphertext); err == nil {
+		return w.fromBytes(plaintext)
 	}
 
+	// Fallback: try HKDF (legacy Rust format).
+	legacyKey := deriveKeyHKDF(w.cfg.Passphrase, salt)
+	if plaintext, err := decryptAESGCM(legacyKey, nonce, ciphertext); err == nil {
+		log.Warn().Msg("wallet decrypted with legacy HKDF; consider re-saving to upgrade to Argon2id")
+		return w.fromBytes(plaintext)
+	}
+
+	return fmt.Errorf("wallet: cannot decrypt key (wrong passphrase?)")
+}
+
+func decryptAESGCM(key, nonce, ciphertext []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
-		return err
+		return nil, err
 	}
-
-	nonceSize := gcm.NonceSize()
-	if len(data) < 16+nonceSize {
-		return fmt.Errorf("encrypted data too short")
-	}
-
-	nonce := data[16 : 16+nonceSize]
-	ciphertext := data[16+nonceSize:]
-
-	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
-	if err != nil {
-		return err
-	}
-
-	return w.fromBytes(plaintext)
+	return gcm.Open(nil, nonce, ciphertext, nil)
 }
 
-func deriveKeyFromPassphrase(passphrase string, salt []byte) ([]byte, error) {
-	// scrypt with N=262144, r=8, p=1 — designed for low-entropy passphrases.
-	// Provides ~100ms key derivation on modern hardware, making brute force
-	// infeasible compared to the previous HKDF which was near-instant.
-	return scrypt.Key([]byte(passphrase), salt, ScryptN, ScryptR, ScryptP, 32)
+// deriveKeyArgon2id matches Rust's derive_key: Argon2id(m=65536, t=3, p=1) → 32 bytes.
+func deriveKeyArgon2id(passphrase string, salt []byte) []byte {
+	return argon2.IDKey([]byte(passphrase), salt, 3, 65536, 1, 32)
+}
+
+// deriveKeyHKDF matches Rust's derive_key_legacy_hkdf: HKDF-SHA256 with info "roboticus-wallet-encryption".
+func deriveKeyHKDF(passphrase string, salt []byte) []byte {
+	h := hkdf.New(sha256.New, []byte(passphrase), salt, []byte("roboticus-wallet-encryption"))
+	key := make([]byte, 32)
+	_, _ = io.ReadFull(h, key)
+	return key
 }
 
 // GetBalance queries the native balance via JSON-RPC.

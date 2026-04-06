@@ -2,10 +2,14 @@ package daemon
 
 import (
 	"context"
+	"encoding/hex"
+	"fmt"
 	"math/big"
+	"os"
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"golang.org/x/crypto/sha3"
 
 	"roboticus/internal/core"
 	"roboticus/internal/db"
@@ -30,8 +34,12 @@ func startWalletPoller(ctx context.Context, cfg *core.Config, store *db.Store) {
 		return
 	}
 
-	// Use machine-derived passphrase (same as keystore) — no separate env var needed.
-	passphrase := core.MachinePassphrase()
+	// Derive passphrase matching Rust's Wallet::machine_passphrase():
+	// keccak256("roboticus-wallet-machine-key::{hostname}::{user}")
+	passphrase := os.Getenv("ROBOTICUS_WALLET_PASSPHRASE")
+	if passphrase == "" {
+		passphrase = walletMachinePassphrase()
+	}
 	w, err := wallet.NewWallet(wallet.WalletConfig{
 		Path:       cfg.Wallet.Path,
 		ChainID:    int64(cfg.Wallet.ChainID),
@@ -94,6 +102,26 @@ func upsertBalance(ctx context.Context, store *db.Store, symbol, name string, ba
 	if err != nil {
 		log.Debug().Err(err).Str("symbol", symbol).Msg("wallet poller: failed to upsert balance")
 	}
+}
+
+// walletMachinePassphrase derives the wallet passphrase using the same algorithm
+// as Rust's Wallet::machine_passphrase(): keccak256("roboticus-wallet-machine-key::{hostname}::{user}").
+func walletMachinePassphrase() string {
+	hostname, err := os.Hostname()
+	if err != nil {
+		hostname = "unknown-host"
+	}
+	user := os.Getenv("USER")
+	if user == "" {
+		user = os.Getenv("USERNAME")
+	}
+	if user == "" {
+		user = "unknown-user"
+	}
+	input := fmt.Sprintf("roboticus-wallet-machine-key::%s::%s", hostname, user)
+	h := sha3.NewLegacyKeccak256()
+	h.Write([]byte(input))
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 func weiToEther(wei *big.Int) float64 {
