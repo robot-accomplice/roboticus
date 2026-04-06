@@ -16,7 +16,7 @@ func ListDelegations(store *db.Store) http.HandlerFunc {
 			        pattern, duration_ms, success, quality_score, created_at
 			 FROM delegation_outcomes ORDER BY created_at DESC LIMIT ?`, limit)
 		if err != nil {
-			writeJSON(w, http.StatusOK, map[string]any{"delegations": make([]any, 0)})
+			writeError(w, http.StatusInternalServerError, "failed to query delegations")
 			return
 		}
 		defer func() { _ = rows.Close() }()
@@ -29,7 +29,8 @@ func ListDelegations(store *db.Store) http.HandlerFunc {
 			var qualityScore *float64
 			if err := rows.Scan(&id, &sessionID, &turnID, &taskDesc, &agentsJSON,
 				&pattern, &durationMs, &success, &qualityScore, &createdAt); err != nil {
-				continue
+				writeError(w, http.StatusInternalServerError, "failed to read delegation row")
+				return
 			}
 			d := map[string]any{
 				"id": id, "session_id": sessionID, "turn_id": turnID,

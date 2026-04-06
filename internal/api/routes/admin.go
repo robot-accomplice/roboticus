@@ -2,6 +2,7 @@ package routes
 
 import (
 	"crypto/subtle"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -34,7 +35,8 @@ func GetTurn(store *db.Store) http.HandlerFunc {
 		for rows.Next() {
 			var mid, role, content, createdAt string
 			if err := rows.Scan(&mid, &role, &content, &createdAt); err != nil {
-				continue
+				writeError(w, http.StatusInternalServerError, "failed to read turn message row")
+				return
 			}
 			messages = append(messages, map[string]string{
 				"id": mid, "role": role, "content": content, "created_at": createdAt,
@@ -47,7 +49,39 @@ func GetTurn(store *db.Store) http.HandlerFunc {
 // GetTurnFeedback returns feedback for a turn.
 func GetTurnFeedback(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"feedback": nil})
+		id := chi.URLParam(r, "id")
+		row := store.QueryRowContext(r.Context(),
+			`SELECT id, turn_id, session_id, grade, source, comment, created_at
+			 FROM turn_feedback
+			 WHERE turn_id = ?
+			 ORDER BY created_at DESC
+			 LIMIT 1`, id)
+
+		var feedbackID, turnID, sessionID, source, createdAt string
+		var grade int
+		var comment *string
+		err := row.Scan(&feedbackID, &turnID, &sessionID, &grade, &source, &comment, &createdAt)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				writeJSON(w, http.StatusOK, map[string]any{"feedback": nil})
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "failed to query turn feedback")
+			return
+		}
+
+		feedback := map[string]any{
+			"id":         feedbackID,
+			"turn_id":    turnID,
+			"session_id": sessionID,
+			"grade":      grade,
+			"source":     source,
+			"created_at": createdAt,
+		}
+		if comment != nil {
+			feedback["comment"] = *comment
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"feedback": feedback})
 	}
 }
 
@@ -98,7 +132,7 @@ func ListSkills(store *db.Store) http.HandlerFunc {
 			`SELECT id, name, kind, description, enabled, version, risk_level, created_at
 			 FROM skills ORDER BY name`)
 		if err != nil {
-			writeJSON(w, http.StatusOK, map[string]any{"skills": []any{}})
+			writeError(w, http.StatusInternalServerError, "failed to query skills")
 			return
 		}
 		defer func() { _ = rows.Close() }()
@@ -109,7 +143,8 @@ func ListSkills(store *db.Store) http.HandlerFunc {
 			var description *string
 			var enabled bool
 			if err := rows.Scan(&id, &name, &kind, &description, &enabled, &version, &riskLevel, &createdAt); err != nil {
-				continue
+				writeError(w, http.StatusInternalServerError, "failed to read skill row")
+				return
 			}
 			s := map[string]any{
 				"id": id, "name": name, "kind": kind, "enabled": enabled,
@@ -146,7 +181,7 @@ func GetCosts(store *db.Store) http.HandlerFunc {
 		var totalCost float64
 		var tokensIn, tokensOut, count int64
 		if err := row.Scan(&totalCost, &tokensIn, &tokensOut, &count); err != nil {
-			writeJSON(w, http.StatusOK, map[string]any{"total_cost": 0, "requests": 0})
+			writeError(w, http.StatusInternalServerError, "failed to query cost statistics")
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -221,7 +256,7 @@ func GetDeadLetters(store *db.Store) http.HandlerFunc {
 			`SELECT id, channel, recipient_id, content, last_error, created_at
 			 FROM delivery_queue WHERE status = 'dead_letter' ORDER BY created_at DESC LIMIT 50`)
 		if err != nil {
-			writeJSON(w, http.StatusOK, map[string]any{"dead_letters": []any{}})
+			writeError(w, http.StatusInternalServerError, "failed to query dead letters")
 			return
 		}
 		defer func() { _ = rows.Close() }()
@@ -231,7 +266,8 @@ func GetDeadLetters(store *db.Store) http.HandlerFunc {
 			var id, channel, recipient, content, createdAt string
 			var errMsg *string
 			if err := rows.Scan(&id, &channel, &recipient, &content, &errMsg, &createdAt); err != nil {
-				continue
+				writeError(w, http.StatusInternalServerError, "failed to read dead letter row")
+				return
 			}
 			e := map[string]string{
 				"id": id, "channel": channel, "recipient": recipient,
@@ -302,7 +338,7 @@ func SubagentRetirementCandidates(store *db.Store) http.HandlerFunc {
 			 WHERE created_at < datetime('now', '-30 days')
 			 ORDER BY created_at ASC`)
 		if err != nil {
-			writeJSON(w, http.StatusOK, map[string]any{"candidates": []any{}})
+			writeError(w, http.StatusInternalServerError, "failed to query retirement candidates")
 			return
 		}
 		defer func() { _ = rows.Close() }()
@@ -312,7 +348,8 @@ func SubagentRetirementCandidates(store *db.Store) http.HandlerFunc {
 			var id, name, model, role, createdAt string
 			var displayName *string
 			if err := rows.Scan(&id, &name, &displayName, &model, &role, &createdAt); err != nil {
-				continue
+				writeError(w, http.StatusInternalServerError, "failed to read retirement candidate row")
+				return
 			}
 			c := map[string]any{
 				"id": id, "name": name, "model": model,
@@ -407,29 +444,34 @@ func MemoryHealth(store *db.Store) http.HandlerFunc {
 		var workingCount, workingStale int64
 		row := store.QueryRowContext(ctx, `SELECT COUNT(*) FROM working_memory`)
 		if err := row.Scan(&workingCount); err != nil {
-			log.Warn().Err(err).Str("metric", "working_count").Msg("scan failed")
+			writeError(w, http.StatusInternalServerError, "failed to query working memory health")
+			return
 		}
 		row = store.QueryRowContext(ctx,
 			`SELECT COUNT(*) FROM working_memory WHERE created_at < datetime('now', '-24 hours')`)
 		if err := row.Scan(&workingStale); err != nil {
-			log.Warn().Err(err).Str("metric", "working_stale").Msg("scan failed")
+			writeError(w, http.StatusInternalServerError, "failed to query working memory staleness")
+			return
 		}
 
 		var episodicCount, episodicStale int64
 		row = store.QueryRowContext(ctx, `SELECT COUNT(*) FROM episodic_memory`)
 		if err := row.Scan(&episodicCount); err != nil {
-			log.Warn().Err(err).Str("metric", "episodic_count").Msg("scan failed")
+			writeError(w, http.StatusInternalServerError, "failed to query episodic memory health")
+			return
 		}
 		row = store.QueryRowContext(ctx,
 			`SELECT COUNT(*) FROM episodic_memory WHERE created_at < datetime('now', '-7 days')`)
 		if err := row.Scan(&episodicStale); err != nil {
-			log.Warn().Err(err).Str("metric", "episodic_stale").Msg("scan failed")
+			writeError(w, http.StatusInternalServerError, "failed to query episodic memory staleness")
+			return
 		}
 
 		var semanticCount int64
 		row = store.QueryRowContext(ctx, `SELECT COUNT(*) FROM semantic_memory`)
 		if err := row.Scan(&semanticCount); err != nil {
-			log.Warn().Err(err).Str("metric", "semantic_count").Msg("scan failed")
+			writeError(w, http.StatusInternalServerError, "failed to query semantic memory health")
+			return
 		}
 
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -478,7 +520,7 @@ func ListSubagents(store *db.Store) http.HandlerFunc {
 			`SELECT id, name, display_name, model, role, description, enabled, created_at
 			 FROM sub_agents ORDER BY created_at DESC`)
 		if err != nil {
-			writeJSON(w, http.StatusOK, map[string]any{"subagents": []any{}})
+			writeError(w, http.StatusInternalServerError, "failed to query subagents")
 			return
 		}
 		defer func() { _ = rows.Close() }()
@@ -489,7 +531,8 @@ func ListSubagents(store *db.Store) http.HandlerFunc {
 			var displayName, description *string
 			var enabled bool
 			if err := rows.Scan(&id, &name, &displayName, &model, &role, &description, &enabled, &createdAt); err != nil {
-				continue
+				writeError(w, http.StatusInternalServerError, "failed to read subagent row")
+				return
 			}
 			a := map[string]any{
 				"id": id, "name": name, "model": model,

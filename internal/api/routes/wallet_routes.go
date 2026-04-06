@@ -1,9 +1,8 @@
 package routes
 
 import (
+	"database/sql"
 	"net/http"
-
-	"github.com/rs/zerolog/log"
 
 	"goboticus/internal/db"
 )
@@ -17,7 +16,6 @@ func GetWalletBalance(store *db.Store) http.HandlerFunc {
 			`SELECT COALESCE(SUM(CASE WHEN tx_type = 'credit' THEN amount ELSE -amount END), 0)
 			 FROM transactions`)
 		if err := row.Scan(&balance); err != nil {
-			log.Warn().Err(err).Msg("wallet balance scan failed")
 			writeError(w, http.StatusInternalServerError, "failed to query wallet balance")
 			return
 		}
@@ -38,7 +36,10 @@ func GetWalletAddress(store *db.Store) http.HandlerFunc {
 		row := store.QueryRowContext(r.Context(),
 			`SELECT value FROM identity WHERE key = 'wallet_address'`)
 		if err := row.Scan(&address); err != nil {
-			log.Warn().Err(err).Msg("wallet address scan failed")
+			if err != sql.ErrNoRows {
+				writeError(w, http.StatusInternalServerError, "failed to query wallet address")
+				return
+			}
 		}
 
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -57,7 +58,7 @@ func GetSwaps(store *db.Store) http.HandlerFunc {
 			 FROM service_requests WHERE service_id LIKE '%swap%'
 			 ORDER BY created_at DESC LIMIT 20`)
 		if err != nil {
-			writeJSON(w, http.StatusOK, map[string]any{"swap_tasks": make([]any, 0)})
+			writeError(w, http.StatusInternalServerError, "failed to query swap tasks")
 			return
 		}
 		defer func() { _ = rows.Close() }()
@@ -67,7 +68,8 @@ func GetSwaps(store *db.Store) http.HandlerFunc {
 			var id, serviceID, status, currency, createdAt string
 			var amount float64
 			if err := rows.Scan(&id, &serviceID, &status, &amount, &currency, &createdAt); err != nil {
-				continue
+				writeError(w, http.StatusInternalServerError, "failed to read swap task row")
+				return
 			}
 			tasks = append(tasks, map[string]any{
 				"id": id, "service_id": serviceID, "status": status,
@@ -86,7 +88,7 @@ func GetTaxPayouts(store *db.Store) http.HandlerFunc {
 			 FROM service_requests WHERE service_id LIKE '%tax%'
 			 ORDER BY created_at DESC LIMIT 20`)
 		if err != nil {
-			writeJSON(w, http.StatusOK, map[string]any{"tax_tasks": make([]any, 0)})
+			writeError(w, http.StatusInternalServerError, "failed to query tax tasks")
 			return
 		}
 		defer func() { _ = rows.Close() }()
@@ -96,7 +98,8 @@ func GetTaxPayouts(store *db.Store) http.HandlerFunc {
 			var id, serviceID, status, currency, createdAt string
 			var amount float64
 			if err := rows.Scan(&id, &serviceID, &status, &amount, &currency, &createdAt); err != nil {
-				continue
+				writeError(w, http.StatusInternalServerError, "failed to read tax task row")
+				return
 			}
 			tasks = append(tasks, map[string]any{
 				"id": id, "service_id": serviceID, "status": status,

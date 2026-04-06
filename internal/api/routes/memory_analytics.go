@@ -4,8 +4,6 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/rs/zerolog/log"
-
 	"goboticus/internal/db"
 )
 
@@ -21,11 +19,12 @@ func GetMemoryAnalytics(store *db.Store) http.HandlerFunc {
 		var totalTurns, turnsWithMemory int64
 		row := store.QueryRowContext(ctx,
 			`SELECT COUNT(*),
-			        SUM(CASE WHEN COALESCE(memory_tokens, 0) > 0 THEN 1 ELSE 0 END)
+			        COALESCE(SUM(CASE WHEN COALESCE(memory_tokens, 0) > 0 THEN 1 ELSE 0 END), 0)
 			 FROM context_snapshots
 			 WHERE created_at >= datetime('now', ? || ' hours')`, offset)
 		if err := row.Scan(&totalTurns, &turnsWithMemory); err != nil {
-			log.Warn().Err(err).Str("metric", "total_turns").Msg("scan failed")
+			writeError(w, http.StatusInternalServerError, "failed to query memory analytics totals")
+			return
 		}
 
 		// Hit rate.
@@ -45,7 +44,8 @@ func GetMemoryAnalytics(store *db.Store) http.HandlerFunc {
 			 WHERE created_at >= datetime('now', ? || ' hours')
 			   AND token_budget > 0`, offset)
 		if err := row.Scan(&avgUtilization); err != nil {
-			log.Warn().Err(err).Str("metric", "avg_utilization").Msg("scan failed")
+			writeError(w, http.StatusInternalServerError, "failed to query memory utilization")
+			return
 		}
 
 		// Complexity distribution.
@@ -55,15 +55,19 @@ func GetMemoryAnalytics(store *db.Store) http.HandlerFunc {
 			 WHERE created_at >= datetime('now', ? || ' hours')
 			 GROUP BY complexity_level ORDER BY complexity_level`, offset)
 		tierDist := make(map[string]int64)
-		if err == nil {
-			defer func() { _ = complexityRows.Close() }()
-			for complexityRows.Next() {
-				var level string
-				var cnt int64
-				if complexityRows.Scan(&level, &cnt) == nil {
-					tierDist[level] = cnt
-				}
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to query memory complexity distribution")
+			return
+		}
+		defer func() { _ = complexityRows.Close() }()
+		for complexityRows.Next() {
+			var level string
+			var cnt int64
+			if err := complexityRows.Scan(&level, &cnt); err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to read memory complexity row")
+				return
 			}
+			tierDist[level] = cnt
 		}
 
 		// Memory ROI: average grade for turns with vs without memory.
@@ -75,7 +79,8 @@ func GetMemoryAnalytics(store *db.Store) http.HandlerFunc {
 			 WHERE cs.created_at >= datetime('now', ? || ' hours')
 			   AND COALESCE(cs.memory_tokens, 0) > 0`, offset)
 		if err := row.Scan(&avgGradeWithMem); err != nil {
-			log.Warn().Err(err).Str("metric", "avg_grade_with_mem").Msg("scan failed")
+			writeError(w, http.StatusInternalServerError, "failed to query memory ROI with memory")
+			return
 		}
 
 		row = store.QueryRowContext(ctx,
@@ -85,7 +90,8 @@ func GetMemoryAnalytics(store *db.Store) http.HandlerFunc {
 			 WHERE cs.created_at >= datetime('now', ? || ' hours')
 			   AND COALESCE(cs.memory_tokens, 0) = 0`, offset)
 		if err := row.Scan(&avgGradeWithoutMem); err != nil {
-			log.Warn().Err(err).Str("metric", "avg_grade_without_mem").Msg("scan failed")
+			writeError(w, http.StatusInternalServerError, "failed to query memory ROI without memory")
+			return
 		}
 
 		memoryROI := 0.0
@@ -97,23 +103,28 @@ func GetMemoryAnalytics(store *db.Store) http.HandlerFunc {
 		var workingCount, episodicCount, semanticCount, proceduralCount, relationshipCount int64
 		row = store.QueryRowContext(ctx, `SELECT COUNT(*) FROM working_memory`)
 		if err := row.Scan(&workingCount); err != nil {
-			log.Warn().Err(err).Str("metric", "working_count").Msg("scan failed")
+			writeError(w, http.StatusInternalServerError, "failed to query working memory count")
+			return
 		}
 		row = store.QueryRowContext(ctx, `SELECT COUNT(*) FROM episodic_memory`)
 		if err := row.Scan(&episodicCount); err != nil {
-			log.Warn().Err(err).Str("metric", "episodic_count").Msg("scan failed")
+			writeError(w, http.StatusInternalServerError, "failed to query episodic memory count")
+			return
 		}
 		row = store.QueryRowContext(ctx, `SELECT COUNT(*) FROM semantic_memory`)
 		if err := row.Scan(&semanticCount); err != nil {
-			log.Warn().Err(err).Str("metric", "semantic_count").Msg("scan failed")
+			writeError(w, http.StatusInternalServerError, "failed to query semantic memory count")
+			return
 		}
 		row = store.QueryRowContext(ctx, `SELECT COUNT(*) FROM procedural_memory`)
 		if err := row.Scan(&proceduralCount); err != nil {
-			log.Warn().Err(err).Str("metric", "procedural_count").Msg("scan failed")
+			writeError(w, http.StatusInternalServerError, "failed to query procedural memory count")
+			return
 		}
 		row = store.QueryRowContext(ctx, `SELECT COUNT(*) FROM relationship_memory`)
 		if err := row.Scan(&relationshipCount); err != nil {
-			log.Warn().Err(err).Str("metric", "relationship_count").Msg("scan failed")
+			writeError(w, http.StatusInternalServerError, "failed to query relationship memory count")
+			return
 		}
 
 		writeJSON(w, http.StatusOK, map[string]any{

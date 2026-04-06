@@ -42,7 +42,8 @@ func GetRuntimeDiscovery(store *db.Store) http.HandlerFunc {
 			var capabilities, lastVerified *string
 			var trustScore float64
 			if err := rows.Scan(&id, &did, &cardJSON, &capabilities, &endpoint, &trustScore, &lastVerified, &createdAt); err != nil {
-				continue
+				writeError(w, http.StatusInternalServerError, "failed to read discovered agent row")
+				return
 			}
 			agent := map[string]any{
 				"id":           id,

@@ -82,3 +82,19 @@ func TestGetSessionInsights(t *testing.T) {
 		t.Error("should include turn_count")
 	}
 }
+
+func TestListSessions_QueryFailureReturnsServerError(t *testing.T) {
+	store := testutil.TempStore(t)
+	if _, err := store.ExecContext(bgCtx, `DROP TABLE sessions`); err != nil {
+		t.Fatalf("drop sessions: %v", err)
+	}
+
+	handler := ListSessions(store)
+	req := httptest.NewRequest("GET", "/api/sessions", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+}

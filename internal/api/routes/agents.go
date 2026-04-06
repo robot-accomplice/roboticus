@@ -15,7 +15,7 @@ func ListAgents(store *db.Store) http.HandlerFunc {
 			`SELECT id, name, display_name, model, role, description, enabled, created_at
 			 FROM sub_agents ORDER BY created_at DESC`)
 		if err != nil {
-			writeJSON(w, http.StatusOK, map[string]any{"agents": []any{}})
+			writeError(w, http.StatusInternalServerError, "failed to query agents")
 			return
 		}
 		defer func() { _ = rows.Close() }()
@@ -26,7 +26,8 @@ func ListAgents(store *db.Store) http.HandlerFunc {
 			var displayName, description *string
 			var enabled bool
 			if err := rows.Scan(&id, &name, &displayName, &model, &role, &description, &enabled, &createdAt); err != nil {
-				continue
+				writeError(w, http.StatusInternalServerError, "failed to read agent row")
+				return
 			}
 			a := map[string]any{
 				"id": id, "name": name, "model": model,

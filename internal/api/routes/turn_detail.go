@@ -1,6 +1,7 @@
 package routes
 
 import (
+	"database/sql"
 	"encoding/json"
 	"net/http"
 
@@ -23,10 +24,11 @@ func GetTurnContext(store *db.Store) http.HandlerFunc {
 		var sysTokens, memTokens, histTokens, histDepth *int64
 		err := row.Scan(&complexity, &budget, &sysTokens, &memTokens, &histTokens, &histDepth, &model)
 		if err != nil {
-			writeJSON(w, http.StatusOK, map[string]any{
-				"system_tokens": 0, "memory_tokens": 0, "history_tokens": 0,
-				"total_tokens": 0, "max_tokens": 128000,
-			})
+			if err == sql.ErrNoRows {
+				writeError(w, http.StatusNotFound, "turn context not found")
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "failed to query turn context")
 			return
 		}
 		st := derefInt64(sysTokens)
@@ -85,7 +87,7 @@ func GetTurnTools(store *db.Store) http.HandlerFunc {
 			`SELECT id, tool_name, input, output, status, duration_ms, skill_name, created_at
 			 FROM tool_calls WHERE turn_id = ? ORDER BY created_at`, turnID)
 		if err != nil {
-			writeJSON(w, http.StatusOK, map[string]any{"tool_calls": []any{}})
+			writeError(w, http.StatusInternalServerError, "failed to query turn tools")
 			return
 		}
 		defer func() { _ = rows.Close() }()
@@ -96,7 +98,8 @@ func GetTurnTools(store *db.Store) http.HandlerFunc {
 			var output, skillName *string
 			var durationMs *int64
 			if err := rows.Scan(&id, &toolName, &input, &output, &status, &durationMs, &skillName, &createdAt); err != nil {
-				continue
+				writeError(w, http.StatusInternalServerError, "failed to read turn tool row")
+				return
 			}
 			c := map[string]any{
 				"id": id, "tool_name": toolName, "input": input,
@@ -157,7 +160,11 @@ func GetTurnModelSelection(store *db.Store) http.HandlerFunc {
 		var override, complexity, candidatesJSON, attribution *string
 		err := row.Scan(&id, &model, &strategy, &primary, &override, &complexity, &candidatesJSON, &attribution, &createdAt)
 		if err != nil {
-			writeJSON(w, http.StatusOK, nil)
+			if err == sql.ErrNoRows {
+				writeError(w, http.StatusNotFound, "turn model selection not found")
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "failed to query turn model selection")
 			return
 		}
 		result := map[string]any{

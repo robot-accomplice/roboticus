@@ -17,7 +17,7 @@ func ListTraces(store *db.Store) http.HandlerFunc {
 			`SELECT id, turn_id, channel, total_ms, created_at
 			 FROM pipeline_traces ORDER BY created_at DESC LIMIT ?`, limit)
 		if err != nil {
-			writeJSON(w, http.StatusOK, map[string]any{"traces": []any{}})
+			writeError(w, http.StatusInternalServerError, "failed to query traces")
 			return
 		}
 		defer func() { _ = rows.Close() }()
@@ -27,7 +27,8 @@ func ListTraces(store *db.Store) http.HandlerFunc {
 			var id, turnID, channel, createdAt string
 			var totalMs int64
 			if err := rows.Scan(&id, &turnID, &channel, &totalMs, &createdAt); err != nil {
-				continue
+				writeError(w, http.StatusInternalServerError, "failed to read trace row")
+				return
 			}
 			traces = append(traces, map[string]any{
 				"id": id, "turn_id": turnID, "channel": channel,
@@ -78,7 +79,7 @@ func GetReactTrace(store *db.Store) http.HandlerFunc {
 		var id, pipelineTraceID, reactJSON, createdAt string
 		err := row.Scan(&id, &pipelineTraceID, &reactJSON, &createdAt)
 		if err != nil {
-			writeJSON(w, http.StatusOK, map[string]any{"react_trace": nil})
+			writeError(w, http.StatusNotFound, "react trace not found")
 			return
 		}
 

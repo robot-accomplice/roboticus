@@ -83,3 +83,19 @@ func TestSearchMemory(t *testing.T) {
 		t.Fatalf("status = %d", rec.Code)
 	}
 }
+
+func TestGetWorkingMemory_QueryFailureReturnsServerError(t *testing.T) {
+	store := testutil.TempStore(t)
+	if _, err := store.ExecContext(bgCtx, `DROP TABLE working_memory`); err != nil {
+		t.Fatalf("drop working_memory: %v", err)
+	}
+
+	handler := GetWorkingMemory(store)
+	req := httptest.NewRequest("GET", "/api/memory/working", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+}

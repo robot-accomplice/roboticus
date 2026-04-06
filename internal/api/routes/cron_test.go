@@ -64,3 +64,19 @@ func TestListCronRuns(t *testing.T) {
 		t.Errorf("got %d runs, want 1", len(runs))
 	}
 }
+
+func TestListCronJobs_QueryFailureReturnsServerError(t *testing.T) {
+	store := testutil.TempStore(t)
+	if _, err := store.ExecContext(bgCtx, `DROP TABLE cron_jobs`); err != nil {
+		t.Fatalf("drop cron_jobs: %v", err)
+	}
+
+	handler := ListCronJobs(store)
+	req := httptest.NewRequest("GET", "/api/cron/jobs", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+}

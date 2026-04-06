@@ -1,6 +1,7 @@
 package routes
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"testing"
 
@@ -77,6 +78,38 @@ func TestGetRoster(t *testing.T) {
 	agents := body["agents"].([]any)
 	if len(agents) < 1 {
 		t.Error("should have at least the default agent")
+	}
+}
+
+func TestGetSwaps_QueryFailureReturnsServerError(t *testing.T) {
+	store := testutil.TempStore(t)
+	if _, err := store.ExecContext(bgCtx, `DROP TABLE service_requests`); err != nil {
+		t.Fatalf("drop service_requests: %v", err)
+	}
+
+	handler := GetSwaps(store)
+	req := httptest.NewRequest("GET", "/api/services/swaps", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+}
+
+func TestGetRoster_QueryFailureReturnsServerError(t *testing.T) {
+	store := testutil.TempStore(t)
+	if _, err := store.ExecContext(bgCtx, `DROP TABLE sub_agents`); err != nil {
+		t.Fatalf("drop sub_agents: %v", err)
+	}
+
+	handler := GetRoster(store)
+	req := httptest.NewRequest("GET", "/api/roster", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
 	}
 }
 

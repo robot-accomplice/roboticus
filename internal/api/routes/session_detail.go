@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/rs/zerolog/log"
 
 	"goboticus/internal/core"
 	"goboticus/internal/db"
@@ -20,7 +19,7 @@ func ListSessionTurns(store *db.Store) http.HandlerFunc {
 		rows, err := store.QueryContext(r.Context(),
 			`SELECT id, role, content, created_at FROM session_messages WHERE session_id = ? ORDER BY created_at`, sessionID)
 		if err != nil {
-			writeJSON(w, http.StatusOK, map[string]any{"turns": make([]any, 0)})
+			writeError(w, http.StatusInternalServerError, "failed to query session turns")
 			return
 		}
 		defer func() { _ = rows.Close() }()
@@ -29,7 +28,8 @@ func ListSessionTurns(store *db.Store) http.HandlerFunc {
 		for rows.Next() {
 			var id, role, content, createdAt string
 			if err := rows.Scan(&id, &role, &content, &createdAt); err != nil {
-				continue
+				writeError(w, http.StatusInternalServerError, "failed to read session turn row")
+				return
 			}
 			turns = append(turns, map[string]any{
 				"id": id, "role": role, "content": content, "created_at": createdAt,
@@ -49,7 +49,7 @@ func GetSessionFeedback(store *db.Store) http.HandlerFunc {
 			 WHERE tf.session_id = ?
 			 ORDER BY tf.created_at DESC`, sessionID)
 		if err != nil {
-			writeJSON(w, http.StatusOK, map[string]any{"feedback": make([]any, 0)})
+			writeError(w, http.StatusInternalServerError, "failed to query session feedback")
 			return
 		}
 		defer func() { _ = rows.Close() }()
@@ -60,7 +60,8 @@ func GetSessionFeedback(store *db.Store) http.HandlerFunc {
 			var grade int
 			var comment *string
 			if err := rows.Scan(&id, &turnID, &grade, &source, &comment, &createdAt); err != nil {
-				continue
+				writeError(w, http.StatusInternalServerError, "failed to read session feedback row")
+				return
 			}
 			f := map[string]any{
 				"id": id, "turn_id": turnID, "grade": grade,
@@ -150,7 +151,7 @@ func GetSemanticCategories(store *db.Store) http.HandlerFunc {
 		rows, err := store.QueryContext(r.Context(),
 			`SELECT category, COUNT(*) as cnt FROM semantic_memory GROUP BY category ORDER BY cnt DESC`)
 		if err != nil {
-			writeJSON(w, http.StatusOK, map[string]any{"categories": make([]any, 0)})
+			writeError(w, http.StatusInternalServerError, "failed to query semantic categories")
 			return
 		}
 		defer func() { _ = rows.Close() }()
@@ -160,7 +161,8 @@ func GetSemanticCategories(store *db.Store) http.HandlerFunc {
 			var cat string
 			var cnt int64
 			if err := rows.Scan(&cat, &cnt); err != nil {
-				continue
+				writeError(w, http.StatusInternalServerError, "failed to read semantic category row")
+				return
 			}
 			cats = append(cats, map[string]any{"category": cat, "count": cnt})
 		}
@@ -407,23 +409,27 @@ func AuditSkills(store *db.Store) http.HandlerFunc {
 		var activeCount, disabledCount, totalCount int64
 		row := store.QueryRowContext(ctx, `SELECT COUNT(*) FROM skills WHERE enabled = 1`)
 		if err := row.Scan(&activeCount); err != nil {
-			log.Warn().Err(err).Str("metric", "active_skills").Msg("scan failed")
+			writeError(w, http.StatusInternalServerError, "failed to query active skills")
+			return
 		}
 
 		row = store.QueryRowContext(ctx, `SELECT COUNT(*) FROM skills WHERE enabled = 0`)
 		if err := row.Scan(&disabledCount); err != nil {
-			log.Warn().Err(err).Str("metric", "disabled_skills").Msg("scan failed")
+			writeError(w, http.StatusInternalServerError, "failed to query disabled skills")
+			return
 		}
 
 		row = store.QueryRowContext(ctx, `SELECT COUNT(*) FROM skills`)
 		if err := row.Scan(&totalCount); err != nil {
-			log.Warn().Err(err).Str("metric", "total_skills").Msg("scan failed")
+			writeError(w, http.StatusInternalServerError, "failed to query total skills")
+			return
 		}
 
 		var lastReload *string
 		row = store.QueryRowContext(ctx, `SELECT MAX(created_at) FROM skills`)
 		if err := row.Scan(&lastReload); err != nil {
-			log.Warn().Err(err).Str("metric", "last_reload").Msg("scan failed")
+			writeError(w, http.StatusInternalServerError, "failed to query skill audit reload time")
+			return
 		}
 
 		result := map[string]any{

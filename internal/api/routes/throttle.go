@@ -4,8 +4,6 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/rs/zerolog/log"
-
 	"goboticus/internal/db"
 )
 
@@ -22,7 +20,8 @@ func GetThrottleStats(store *db.Store) http.HandlerFunc {
 			 WHERE created_at >= datetime('now', ? || ' hours')`,
 			intToNegStr(hours))
 		if err := row.Scan(&totalEvents); err != nil {
-			log.Warn().Err(err).Str("metric", "total_events").Msg("scan failed")
+			writeError(w, http.StatusInternalServerError, "failed to query throttle totals")
+			return
 		}
 
 		// Events by signal type.
@@ -33,18 +32,22 @@ func GetThrottleStats(store *db.Store) http.HandlerFunc {
 			 GROUP BY signal_type ORDER BY COUNT(*) DESC`,
 			intToNegStr(hours))
 		byType := make([]map[string]any, 0)
-		if err == nil {
-			defer func() { _ = typeRows.Close() }()
-			for typeRows.Next() {
-				var sigType string
-				var cnt int64
-				var avgScore float64
-				if typeRows.Scan(&sigType, &cnt, &avgScore) == nil {
-					byType = append(byType, map[string]any{
-						"signal_type": sigType, "count": cnt, "avg_score": avgScore,
-					})
-				}
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to query throttle signal types")
+			return
+		}
+		defer func() { _ = typeRows.Close() }()
+		for typeRows.Next() {
+			var sigType string
+			var cnt int64
+			var avgScore float64
+			if err := typeRows.Scan(&sigType, &cnt, &avgScore); err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to read throttle signal row")
+				return
 			}
+			byType = append(byType, map[string]any{
+				"signal_type": sigType, "count": cnt, "avg_score": avgScore,
+			})
 		}
 
 		// Top offending actors.
@@ -55,31 +58,36 @@ func GetThrottleStats(store *db.Store) http.HandlerFunc {
 			 GROUP BY actor_id ORDER BY SUM(score) DESC LIMIT 10`,
 			intToNegStr(hours))
 		topActors := make([]map[string]any, 0)
-		if err == nil {
-			defer func() { _ = actorRows.Close() }()
-			for actorRows.Next() {
-				var actorID, action string
-				var cnt int64
-				var totalScore float64
-				if actorRows.Scan(&actorID, &cnt, &totalScore, &action) == nil {
-					topActors = append(topActors, map[string]any{
-						"actor_id": actorID, "event_count": cnt,
-						"total_score": totalScore, "last_action": action,
-					})
-				}
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to query throttle actors")
+			return
+		}
+		defer func() { _ = actorRows.Close() }()
+		for actorRows.Next() {
+			var actorID, action string
+			var cnt int64
+			var totalScore float64
+			if err := actorRows.Scan(&actorID, &cnt, &totalScore, &action); err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to read throttle actor row")
+				return
 			}
+			topActors = append(topActors, map[string]any{
+				"actor_id": actorID, "event_count": cnt,
+				"total_score": totalScore, "last_action": action,
+			})
 		}
 
 		// Active penalties.
 		var slowdownCount, quarantineCount int64
 		row = store.QueryRowContext(ctx,
 			`SELECT
-			   SUM(CASE WHEN action_taken = 'slowdown' THEN 1 ELSE 0 END),
-			   SUM(CASE WHEN action_taken = 'quarantine' THEN 1 ELSE 0 END)
+			   COALESCE(SUM(CASE WHEN action_taken = 'slowdown' THEN 1 ELSE 0 END), 0),
+			   COALESCE(SUM(CASE WHEN action_taken = 'quarantine' THEN 1 ELSE 0 END), 0)
 			 FROM abuse_events
 			 WHERE created_at >= datetime('now', '-5 minutes')`)
 		if err := row.Scan(&slowdownCount, &quarantineCount); err != nil {
-			log.Warn().Err(err).Str("metric", "active_penalties").Msg("scan failed")
+			writeError(w, http.StatusInternalServerError, "failed to query active throttle penalties")
+			return
 		}
 
 		writeJSON(w, http.StatusOK, map[string]any{

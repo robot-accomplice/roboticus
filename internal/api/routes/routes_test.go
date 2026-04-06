@@ -119,6 +119,59 @@ func TestGetTimeseries(t *testing.T) {
 	}
 }
 
+func TestGetRecommendations_ReturnsSignals(t *testing.T) {
+	store := testutil.TempStore(t)
+	_, _ = store.ExecContext(bgCtx,
+		`INSERT INTO inference_costs (id, model, provider, tokens_in, tokens_out, cost, cached, latency_ms, created_at)
+		 VALUES
+		 ('c1', 'gpt-4', 'openai', 3000, 2000, 0.05, 0, 2200, datetime('now')),
+		 ('c2', 'gpt-4', 'openai', 3200, 1800, 0.04, 0, 1800, datetime('now'))`)
+
+	handler := GetRecommendations(store)
+	req := httptest.NewRequest("GET", "/api/stats/recommendations?period=24h", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	body := jsonBody(t, rec)
+	recommendations, ok := body["recommendations"].([]any)
+	if !ok {
+		t.Fatal("recommendations is not an array")
+	}
+	if len(recommendations) == 0 {
+		t.Fatal("expected non-empty recommendations")
+	}
+}
+
+func TestGenerateRecommendations_DelegatesToAnalysis(t *testing.T) {
+	store := testutil.TempStore(t)
+	handler := GenerateRecommendations(store)
+	req := httptest.NewRequest("POST", "/api/stats/recommendations/generate", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	body := jsonBody(t, rec)
+	recommendations, ok := body["recommendations"].([]any)
+	if !ok {
+		t.Fatal("recommendations is not an array")
+	}
+	if len(recommendations) != 1 {
+		t.Fatalf("got %d recommendations, want 1", len(recommendations))
+	}
+	first, ok := recommendations[0].(map[string]any)
+	if !ok {
+		t.Fatal("first recommendation is not an object")
+	}
+	if first["type"] != "observability" {
+		t.Fatalf("first recommendation type = %v, want observability", first["type"])
+	}
+}
+
 func TestGetWorkspaceState(t *testing.T) {
 	store := testutil.TempStore(t)
 	handler := GetWorkspaceState(store)
@@ -191,6 +244,23 @@ func TestGetSetActiveTheme(t *testing.T) {
 	}
 }
 
+func TestSetActiveTheme_InvalidTheme(t *testing.T) {
+	store := testutil.TempStore(t)
+
+	req := httptest.NewRequest("PUT", "/api/themes/active",
+		strings.NewReader(`{"theme_id":"not-a-theme"}`))
+	rec := httptest.NewRecorder()
+	SetActiveTheme(store).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+	body := jsonBody(t, rec)
+	if body["detail"] != "unknown theme_id" {
+		t.Fatalf("detail = %v, want unknown theme_id", body["detail"])
+	}
+}
+
 func TestListDelegations(t *testing.T) {
 	store := testutil.TempStore(t)
 	// Seed parent rows for FK constraints.
@@ -252,6 +322,22 @@ func TestListTraces(t *testing.T) {
 	traces := body["traces"].([]any)
 	if len(traces) != 1 {
 		t.Errorf("got %d traces, want 1", len(traces))
+	}
+}
+
+func TestListTraces_QueryFailureReturnsServerError(t *testing.T) {
+	store := testutil.TempStore(t)
+	if _, err := store.ExecContext(bgCtx, `DROP TABLE pipeline_traces`); err != nil {
+		t.Fatalf("drop pipeline_traces: %v", err)
+	}
+
+	handler := ListTraces(store)
+	req := httptest.NewRequest("GET", "/api/traces", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
 	}
 }
 

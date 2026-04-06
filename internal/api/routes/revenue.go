@@ -17,7 +17,7 @@ func ListServiceCatalog(store *db.Store) http.HandlerFunc {
 			`SELECT DISTINCT service_id, description FROM service_requests
 			 GROUP BY service_id ORDER BY COUNT(*) DESC LIMIT 50`)
 		if err != nil {
-			writeJSON(w, http.StatusOK, []any{})
+			writeError(w, http.StatusInternalServerError, "failed to query service catalog")
 			return
 		}
 		defer func() { _ = rows.Close() }()
@@ -25,9 +25,11 @@ func ListServiceCatalog(store *db.Store) http.HandlerFunc {
 		var services []map[string]any
 		for rows.Next() {
 			var id, desc string
-			if rows.Scan(&id, &desc) == nil {
-				services = append(services, map[string]any{"service_id": id, "description": desc})
+			if err := rows.Scan(&id, &desc); err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to read service catalog row")
+				return
 			}
+			services = append(services, map[string]any{"service_id": id, "description": desc})
 		}
 		if services == nil {
 			services = []map[string]any{}
@@ -61,7 +63,7 @@ func ListRevenueOpportunities(store *db.Store) http.HandlerFunc {
 				 ORDER BY created_at DESC LIMIT ?`, limit)
 		}
 		if err != nil {
-			writeJSON(w, http.StatusOK, []any{})
+			writeError(w, http.StatusInternalServerError, "failed to query revenue opportunities")
 			return
 		}
 		defer func() { _ = rows.Close() }()
@@ -70,13 +72,15 @@ func ListRevenueOpportunities(store *db.Store) http.HandlerFunc {
 		for rows.Next() {
 			var id, strategy, source, st, planJSON, resultJSON, createdAt string
 			var score, value float64
-			if rows.Scan(&id, &strategy, &source, &st, &score, &value, &planJSON, &resultJSON, &createdAt) == nil {
-				opps = append(opps, map[string]any{
-					"id": id, "strategy": strategy, "source": source,
-					"status": st, "score": score, "estimated_value_usd": value,
-					"created_at": createdAt,
-				})
+			if err := rows.Scan(&id, &strategy, &source, &st, &score, &value, &planJSON, &resultJSON, &createdAt); err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to read revenue opportunity row")
+				return
 			}
+			opps = append(opps, map[string]any{
+				"id": id, "strategy": strategy, "source": source,
+				"status": st, "score": score, "estimated_value_usd": value,
+				"created_at": createdAt,
+			})
 		}
 		if opps == nil {
 			opps = []map[string]any{}
@@ -165,7 +169,7 @@ func ListServiceRequests(store *db.Store) http.HandlerFunc {
 			`SELECT id, service_id, requester_id, status, amount_usd, created_at
 			 FROM service_requests ORDER BY created_at DESC LIMIT 50`)
 		if err != nil {
-			writeJSON(w, http.StatusOK, []any{})
+			writeError(w, http.StatusInternalServerError, "failed to query service requests")
 			return
 		}
 		defer func() { _ = rows.Close() }()
@@ -174,12 +178,14 @@ func ListServiceRequests(store *db.Store) http.HandlerFunc {
 		for rows.Next() {
 			var id, svcID, requester, status, createdAt string
 			var amount float64
-			if rows.Scan(&id, &svcID, &requester, &status, &amount, &createdAt) == nil {
-				reqs = append(reqs, map[string]any{
-					"id": id, "service_id": svcID, "requester_id": requester,
-					"status": status, "amount_usd": amount, "created_at": createdAt,
-				})
+			if err := rows.Scan(&id, &svcID, &requester, &status, &amount, &createdAt); err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to read service request row")
+				return
 			}
+			reqs = append(reqs, map[string]any{
+				"id": id, "service_id": svcID, "requester_id": requester,
+				"status": status, "amount_usd": amount, "created_at": createdAt,
+			})
 		}
 		if reqs == nil {
 			reqs = []map[string]any{}

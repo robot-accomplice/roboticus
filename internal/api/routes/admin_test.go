@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
+
 	"goboticus/testutil"
 )
 
@@ -72,6 +74,31 @@ func TestPostTurnFeedback_InvalidGrade(t *testing.T) {
 	}
 }
 
+func TestGetTurnFeedback_ReturnsStoredFeedback(t *testing.T) {
+	store := testutil.TempStore(t)
+	_, _ = store.ExecContext(bgCtx, `INSERT INTO sessions (id, agent_id, scope_key) VALUES ('s1', 'a1', 'scope')`)
+	_, _ = store.ExecContext(bgCtx, `INSERT INTO turns (id, session_id) VALUES ('t1', 's1')`)
+	_, _ = store.ExecContext(bgCtx,
+		`INSERT INTO turn_feedback (id, turn_id, session_id, grade, source, comment) VALUES ('f1', 't1', 's1', 5, 'user', 'great')`)
+
+	handler := GetTurnFeedback(store)
+	req := httptest.NewRequest("GET", "/api/turns/t1/feedback", nil)
+	rec := httptest.NewRecorder()
+
+	r := chi.NewRouter()
+	r.Get("/api/turns/{id}/feedback", handler)
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	body := jsonBody(t, rec)
+	feedback := body["feedback"].(map[string]any)
+	if feedback["grade"].(float64) != 5 {
+		t.Fatalf("grade = %v, want 5", feedback["grade"])
+	}
+}
+
 func TestListSubagents(t *testing.T) {
 	store := testutil.TempStore(t)
 	_, _ = store.ExecContext(bgCtx,
@@ -122,5 +149,37 @@ func TestGetMemoryAnalytics(t *testing.T) {
 	body := jsonBody(t, rec)
 	if body["total_turns"].(float64) != 1 {
 		t.Errorf("total_turns = %v, want 1", body["total_turns"])
+	}
+}
+
+func TestListSkills_QueryFailureReturnsServerError(t *testing.T) {
+	store := testutil.TempStore(t)
+	if _, err := store.ExecContext(bgCtx, `DROP TABLE skills`); err != nil {
+		t.Fatalf("drop skills: %v", err)
+	}
+
+	handler := ListSkills(store)
+	req := httptest.NewRequest("GET", "/api/skills", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+}
+
+func TestGetDeadLetters_QueryFailureReturnsServerError(t *testing.T) {
+	store := testutil.TempStore(t)
+	if _, err := store.ExecContext(bgCtx, `DROP TABLE delivery_queue`); err != nil {
+		t.Fatalf("drop delivery_queue: %v", err)
+	}
+
+	handler := GetDeadLetters(store)
+	req := httptest.NewRequest("GET", "/api/channels/dead-letter", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
 	}
 }

@@ -44,12 +44,7 @@ func GetRoster(store *db.Store) http.HandlerFunc {
 		rows, err := store.QueryContext(r.Context(),
 			`SELECT name, model, enabled, role FROM sub_agents ORDER BY name`)
 		if err != nil {
-			// Fallback to default agent.
-			writeJSON(w, http.StatusOK, map[string]any{
-				"agents": []map[string]any{
-					{"name": "default", "model": "", "enabled": true, "role": "primary"},
-				},
-			})
+			writeError(w, http.StatusInternalServerError, "failed to query roster")
 			return
 		}
 		defer func() { _ = rows.Close() }()
@@ -59,7 +54,8 @@ func GetRoster(store *db.Store) http.HandlerFunc {
 			var name, model, role string
 			var enabled bool
 			if err := rows.Scan(&name, &model, &enabled, &role); err != nil {
-				continue
+				writeError(w, http.StatusInternalServerError, "failed to read roster row")
+				return
 			}
 			agents = append(agents, map[string]any{
 				"name": name, "model": model, "enabled": enabled, "role": role,
@@ -214,7 +210,7 @@ func applyConfigPatch(ctx context.Context, store *db.Store, patch map[string]any
 	if _, err := store.ExecContext(ctx,
 		`INSERT INTO identity (key, value) VALUES ('config_patch:latest', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
 		string(auditJSON)); err != nil {
-		log.Warn().Err(err).Msg("failed to persist config audit trail")
+		return path, fmt.Errorf("failed to persist config audit trail: %w", err)
 	}
 
 	// Write the validated config as TOML.

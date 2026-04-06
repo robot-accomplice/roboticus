@@ -16,7 +16,7 @@ func GetWorkingMemory(store *db.Store) http.HandlerFunc {
 			`SELECT id, session_id, entry_type, content, importance, created_at
 			 FROM working_memory ORDER BY created_at DESC LIMIT 100`)
 		if err != nil {
-			writeJSON(w, http.StatusOK, map[string]any{"entries": []any{}})
+			writeError(w, http.StatusInternalServerError, "failed to query working memory")
 			return
 		}
 		defer func() { _ = rows.Close() }()
@@ -26,7 +26,8 @@ func GetWorkingMemory(store *db.Store) http.HandlerFunc {
 			var id, sessionID, entryType, content, createdAt string
 			var importance int
 			if err := rows.Scan(&id, &sessionID, &entryType, &content, &importance, &createdAt); err != nil {
-				continue
+				writeError(w, http.StatusInternalServerError, "failed to read working memory row")
+				return
 			}
 			entries = append(entries, map[string]any{
 				"id": id, "session_id": sessionID, "entry_type": entryType,
@@ -48,7 +49,7 @@ func GetSessionWorkingMemory(store *db.Store) http.HandlerFunc {
 			`SELECT id, session_id, entry_type, content, importance, created_at
 			 FROM working_memory WHERE session_id = ? ORDER BY created_at DESC LIMIT 100`, sessionID)
 		if err != nil {
-			writeJSON(w, http.StatusOK, map[string]any{"entries": []any{}})
+			writeError(w, http.StatusInternalServerError, "failed to query session working memory")
 			return
 		}
 		defer func() { _ = rows.Close() }()
@@ -58,7 +59,8 @@ func GetSessionWorkingMemory(store *db.Store) http.HandlerFunc {
 			var id, sid, entryType, content, createdAt string
 			var importance int
 			if err := rows.Scan(&id, &sid, &entryType, &content, &importance, &createdAt); err != nil {
-				continue
+				writeError(w, http.StatusInternalServerError, "failed to read session working memory row")
+				return
 			}
 			entries = append(entries, map[string]any{
 				"id": id, "session_id": sid, "entry_type": entryType,
@@ -79,7 +81,7 @@ func GetEpisodicMemory(store *db.Store) http.HandlerFunc {
 			`SELECT id, classification, content, importance, created_at
 			 FROM episodic_memory ORDER BY created_at DESC LIMIT 100`)
 		if err != nil {
-			writeJSON(w, http.StatusOK, map[string]any{"entries": []any{}})
+			writeError(w, http.StatusInternalServerError, "failed to query episodic memory")
 			return
 		}
 		defer func() { _ = rows.Close() }()
@@ -89,7 +91,8 @@ func GetEpisodicMemory(store *db.Store) http.HandlerFunc {
 			var id, classification, content, createdAt string
 			var importance int
 			if err := rows.Scan(&id, &classification, &content, &importance, &createdAt); err != nil {
-				continue
+				writeError(w, http.StatusInternalServerError, "failed to read episodic memory row")
+				return
 			}
 			entries = append(entries, map[string]any{
 				"id": id, "classification": classification,
@@ -110,7 +113,7 @@ func GetSemanticMemory(store *db.Store) http.HandlerFunc {
 			`SELECT id, category, key, value, confidence, created_at
 			 FROM semantic_memory ORDER BY category, key LIMIT 200`)
 		if err != nil {
-			writeJSON(w, http.StatusOK, map[string]any{"entries": []any{}})
+			writeError(w, http.StatusInternalServerError, "failed to query semantic memory")
 			return
 		}
 		defer func() { _ = rows.Close() }()
@@ -120,7 +123,8 @@ func GetSemanticMemory(store *db.Store) http.HandlerFunc {
 			var id, category, key, value, createdAt string
 			var confidence float64
 			if err := rows.Scan(&id, &category, &key, &value, &confidence, &createdAt); err != nil {
-				continue
+				writeError(w, http.StatusInternalServerError, "failed to read semantic memory row")
+				return
 			}
 			entries = append(entries, map[string]any{
 				"id": id, "category": category, "key": key, "value": value,

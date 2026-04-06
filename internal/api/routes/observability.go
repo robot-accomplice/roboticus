@@ -18,7 +18,7 @@ func ListObservabilityTraces(store *db.Store) http.HandlerFunc {
 			`SELECT id, turn_id, session_id, channel, total_ms, created_at
 			 FROM pipeline_traces ORDER BY created_at DESC LIMIT ? OFFSET ?`, limit, offset)
 		if err != nil {
-			writeJSON(w, http.StatusOK, map[string]any{"traces": []any{}})
+			writeError(w, http.StatusInternalServerError, "failed to query observability traces")
 			return
 		}
 		defer func() { _ = rows.Close() }()
@@ -28,7 +28,8 @@ func ListObservabilityTraces(store *db.Store) http.HandlerFunc {
 			var id, turnID, sessionID, channel, createdAt string
 			var totalMs int64
 			if err := rows.Scan(&id, &turnID, &sessionID, &channel, &totalMs, &createdAt); err != nil {
-				continue
+				writeError(w, http.StatusInternalServerError, "failed to read observability trace row")
+				return
 			}
 			traces = append(traces, map[string]any{
 				"id": id, "turn_id": turnID, "session_id": sessionID,
@@ -86,7 +87,7 @@ func DelegationOutcomes(store *db.Store) http.HandlerFunc {
 			        pattern, duration_ms, success, quality_score, created_at
 			 FROM delegation_outcomes ORDER BY created_at DESC LIMIT ?`, limit)
 		if err != nil {
-			writeJSON(w, http.StatusOK, map[string]any{"outcomes": []any{}})
+			writeError(w, http.StatusInternalServerError, "failed to query delegation outcomes")
 			return
 		}
 		defer func() { _ = rows.Close() }()
@@ -99,7 +100,8 @@ func DelegationOutcomes(store *db.Store) http.HandlerFunc {
 			var qualityScore *float64
 			if err := rows.Scan(&id, &turnID, &sessionID, &taskDesc, &subtaskCount,
 				&pattern, &durationMs, &success, &qualityScore, &createdAt); err != nil {
-				continue
+				writeError(w, http.StatusInternalServerError, "failed to read delegation outcome row")
+				return
 			}
 			o := map[string]any{
 				"id": id, "turn_id": turnID, "session_id": sessionID,

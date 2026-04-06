@@ -212,3 +212,23 @@ func TestUpdateConfig_InvalidJSON(t *testing.T) {
 		t.Errorf("status = %d, want 400", rec.Code)
 	}
 }
+
+func TestUpdateConfig_AuditTrailFailureReturnsServerError(t *testing.T) {
+	store := testutil.TempStore(t)
+	if _, err := store.ExecContext(bgCtx, `DROP TABLE identity`); err != nil {
+		t.Fatalf("drop identity: %v", err)
+	}
+
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+
+	cfg := core.DefaultConfig()
+	handler := UpdateConfig(&cfg, store)
+	req := httptest.NewRequest("PUT", "/api/config", strings.NewReader(`{"server":{"port":9090,"bind":"localhost","cron_max_concurrency":4}}`))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500, body = %s", rec.Code, rec.Body.String())
+	}
+}

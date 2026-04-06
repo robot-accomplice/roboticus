@@ -16,7 +16,7 @@ func GetPolicyAudit(store *db.Store) http.HandlerFunc {
 			`SELECT id, turn_id, tool_name, decision, rule_name, reason, created_at
 			 FROM policy_decisions WHERE turn_id = ? ORDER BY created_at`, turnID)
 		if err != nil {
-			writeJSON(w, http.StatusOK, map[string]any{"decisions": []any{}})
+			writeError(w, http.StatusInternalServerError, "failed to query policy decisions")
 			return
 		}
 		defer func() { _ = rows.Close() }()
@@ -26,7 +26,8 @@ func GetPolicyAudit(store *db.Store) http.HandlerFunc {
 			var id, tid, toolName, decision, createdAt string
 			var ruleName, reason *string
 			if err := rows.Scan(&id, &tid, &toolName, &decision, &ruleName, &reason, &createdAt); err != nil {
-				continue
+				writeError(w, http.StatusInternalServerError, "failed to read policy decision row")
+				return
 			}
 			d := map[string]any{
 				"id": id, "turn_id": tid, "tool_name": toolName,
@@ -52,7 +53,7 @@ func GetToolAudit(store *db.Store) http.HandlerFunc {
 			`SELECT id, tool_name, input, output, status, duration_ms, created_at
 			 FROM tool_calls WHERE turn_id = ? ORDER BY created_at`, turnID)
 		if err != nil {
-			writeJSON(w, http.StatusOK, map[string]any{"tool_calls": []any{}})
+			writeError(w, http.StatusInternalServerError, "failed to query tool audit")
 			return
 		}
 		defer func() { _ = rows.Close() }()
@@ -63,7 +64,8 @@ func GetToolAudit(store *db.Store) http.HandlerFunc {
 			var output *string
 			var durationMs *int64
 			if err := rows.Scan(&id, &toolName, &input, &output, &status, &durationMs, &createdAt); err != nil {
-				continue
+				writeError(w, http.StatusInternalServerError, "failed to read tool audit row")
+				return
 			}
 			c := map[string]any{
 				"id": id, "tool_name": toolName, "input": input,

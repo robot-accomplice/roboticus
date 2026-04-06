@@ -19,7 +19,7 @@ func ListCronJobs(store *db.Store) http.HandlerFunc {
 			        schedule_every_ms, agent_id, payload_json, last_run_at, last_status, next_run_at
 			 FROM cron_jobs ORDER BY name`)
 		if err != nil {
-			writeJSON(w, http.StatusOK, map[string]any{"jobs": []any{}})
+			writeError(w, http.StatusInternalServerError, "failed to query cron jobs")
 			return
 		}
 		defer func() { _ = rows.Close() }()
@@ -32,7 +32,8 @@ func ListCronJobs(store *db.Store) http.HandlerFunc {
 			var enabled bool
 			if err := rows.Scan(&id, &name, &description, &enabled, &scheduleKind, &scheduleExpr,
 				&scheduleEveryMs, &agentID, &payloadJSON, &lastRunAt, &lastStatus, &nextRunAt); err != nil {
-				continue
+				writeError(w, http.StatusInternalServerError, "failed to read cron job row")
+				return
 			}
 			j := map[string]any{
 				"id":            id,
@@ -117,7 +118,7 @@ func ListCronRuns(store *db.Store) http.HandlerFunc {
 			`SELECT id, job_id, status, duration_ms, error, output_text, created_at
 			 FROM cron_runs ORDER BY created_at DESC LIMIT 50`)
 		if err != nil {
-			writeJSON(w, http.StatusOK, map[string]any{"runs": []any{}})
+			writeError(w, http.StatusInternalServerError, "failed to query cron runs")
 			return
 		}
 		defer func() { _ = rows.Close() }()
@@ -128,7 +129,8 @@ func ListCronRuns(store *db.Store) http.HandlerFunc {
 			var durationMs *int64
 			var errMsg, outputText *string
 			if err := rows.Scan(&id, &jobID, &status, &durationMs, &errMsg, &outputText, &createdAt); err != nil {
-				continue
+				writeError(w, http.StatusInternalServerError, "failed to read cron run row")
+				return
 			}
 			run := map[string]any{
 				"id":         id,

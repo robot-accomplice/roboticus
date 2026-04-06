@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/rs/zerolog/log"
 
 	"goboticus/internal/db"
 	"goboticus/internal/pipeline"
@@ -30,7 +29,8 @@ func ListSessions(store *db.Store) http.HandlerFunc {
 			var id, agentID, scopeKey, status, createdAt, updatedAt string
 			var nickname *string
 			if err := rows.Scan(&id, &agentID, &scopeKey, &status, &nickname, &createdAt, &updatedAt); err != nil {
-				continue
+				writeError(w, http.StatusInternalServerError, "failed to read session row")
+				return
 			}
 			s := map[string]any{
 				"id":         id,
@@ -137,7 +137,8 @@ func ListMessages(store *db.Store) http.HandlerFunc {
 		for rows.Next() {
 			var id, role, content, createdAt string
 			if err := rows.Scan(&id, &role, &content, &createdAt); err != nil {
-				continue
+				writeError(w, http.StatusInternalServerError, "failed to read session message row")
+				return
 			}
 			messages = append(messages, map[string]string{
 				"id":         id,
@@ -230,7 +231,8 @@ func BackfillNicknames(store *db.Store) http.HandlerFunc {
 			var id string
 			var firstMsg *string
 			if err := rows.Scan(&id, &firstMsg); err != nil {
-				continue
+				writeError(w, http.StatusInternalServerError, "failed to read nickname backfill row")
+				return
 			}
 			nick := "Untitled"
 			if firstMsg != nil && *firstMsg != "" {
@@ -269,7 +271,8 @@ func AnalyzeSession(store *db.Store) http.HandlerFunc {
 		row = store.QueryRowContext(ctx,
 			`SELECT COUNT(*) FROM session_messages WHERE session_id = ?`, id)
 		if err := row.Scan(&msgCount); err != nil {
-			log.Warn().Err(err).Str("metric", "msg_count").Msg("scan failed")
+			writeError(w, http.StatusInternalServerError, "failed to query session message count")
+			return
 		}
 
 		// Turn count (user messages = turns).
@@ -277,7 +280,8 @@ func AnalyzeSession(store *db.Store) http.HandlerFunc {
 		row = store.QueryRowContext(ctx,
 			`SELECT COUNT(*) FROM session_messages WHERE session_id = ? AND role = 'user'`, id)
 		if err := row.Scan(&turnCount); err != nil {
-			log.Warn().Err(err).Str("metric", "turn_count").Msg("scan failed")
+			writeError(w, http.StatusInternalServerError, "failed to query session turn count")
+			return
 		}
 
 		// Duration in seconds.

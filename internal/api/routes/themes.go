@@ -89,6 +89,17 @@ func SetActiveTheme(store *db.Store) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "theme_id required")
 			return
 		}
+		valid := false
+		for _, theme := range builtinThemes {
+			if theme.ID == req.ThemeID {
+				valid = true
+				break
+			}
+		}
+		if !valid {
+			writeError(w, http.StatusBadRequest, "unknown theme_id")
+			return
+		}
 
 		if _, err := store.ExecContext(r.Context(),
 			`INSERT OR REPLACE INTO identity (key, value) VALUES ('active_theme', ?)`, req.ThemeID); err != nil {
