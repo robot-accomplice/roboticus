@@ -1595,10 +1595,12 @@
       if (!isFinite(min)) min = 0;
       if (!isFinite(max)) max = 1;
       if (max < min) { var t = max; max = min; min = t; }
-      var range = max - min || 1; var padTop = 6, padBot = 4, usableH = H - padTop - padBot;
-      function toX(i) { return (i / (series.length - 1)) * W; }
+      var range = max - min; var padTop = 6, padBot = 4, usableH = H - padTop - padBot;
+      function toX(i) { return (i / Math.max(series.length - 1, 1)) * W; }
       function toY(v) {
-        var n = (v - min) / range;
+        var n;
+        if (range === 0) { n = (max === 0) ? 0 : 1; }
+        else { n = (v - min) / range; }
         if (n < 0) n = 0;
         if (n > 1) n = 1;
         return padTop + usableH - n * usableH;

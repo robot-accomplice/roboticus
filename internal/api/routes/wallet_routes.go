@@ -8,12 +8,16 @@ import (
 )
 
 // GetWalletBalance returns wallet balance from the transactions table.
+// Balance = inflows (credit, revenue_retained) - outflows (debit, expense, revenue_tax, revenue_tax_*).
 func GetWalletBalance(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Calculate balance from transaction history.
 		var balance float64
 		row := store.QueryRowContext(r.Context(),
-			`SELECT COALESCE(SUM(CASE WHEN tx_type = 'credit' THEN amount ELSE -amount END), 0)
+			`SELECT COALESCE(SUM(CASE
+				WHEN tx_type IN ('credit', 'revenue_retained') THEN amount
+				WHEN tx_type IN ('debit', 'expense', 'revenue_tax', 'revenue_tax_execution', 'revenue_tax_submission') THEN -amount
+				ELSE 0
+			 END), 0)
 			 FROM transactions`)
 		if err := row.Scan(&balance); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to query wallet balance")
