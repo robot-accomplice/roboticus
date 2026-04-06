@@ -296,6 +296,7 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 		r.Get("/api/traces/{turn_id}/flow", routes.GetTraceFlow(state.Store))
 
 		// Themes.
+		r.Get("/api/themes", routes.GetThemesList())
 		r.Get("/api/themes/catalog", routes.GetThemeCatalog())
 		r.Get("/api/themes/active", routes.GetActiveTheme(state.Store))
 		r.Put("/api/themes/active", routes.SetActiveTheme(state.Store))

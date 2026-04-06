@@ -37,6 +37,13 @@ var builtinThemes = []ThemeManifest{
 		Variables: map[string]string{"--bg": "#2e3440", "--surface": "#3b4252", "--accent": "#88c0d0", "--text": "#d8dee9"}, Source: "builtin"},
 }
 
+// GetThemesList returns themes as a flat array (used by the dashboard's /api/themes endpoint).
+func GetThemesList() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, builtinThemes)
+	}
+}
+
 // GetThemeCatalog returns all available themes.
 func GetThemeCatalog() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

@@ -110,9 +110,17 @@ func GetEfficiency(store *db.Store) http.HandlerFunc {
 				writeError(w, http.StatusInternalServerError, "failed to read efficiency breakdown row")
 				return
 			}
+			avgOut := 0.0
+			if cnt > 0 {
+				avgOut = float64(tokOut) / float64(cnt)
+			}
 			models = append(models, map[string]any{
 				"model": model, "requests": cnt, "cost": cost,
 				"tokens_in": tokIn, "tokens_out": tokOut,
+				"total_turns":       cnt,
+				"cache_hit_rate":    0.0,
+				"avg_output_tokens": avgOut,
+				"avg_output_density": 0.0,
 			})
 		}
 
