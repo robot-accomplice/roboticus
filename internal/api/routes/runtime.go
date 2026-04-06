@@ -179,7 +179,7 @@ func GetRuntimeDevices(store *db.Store) http.HandlerFunc {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"identity": map[string]any{
-				"device_id": "goboticus-local-device",
+				"device_id": "roboticus-local-device",
 			},
 			"devices": devices,
 		})

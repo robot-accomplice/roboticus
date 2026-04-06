@@ -23,12 +23,12 @@ func TestRootCmd_HasExpectedSubcommands(t *testing.T) {
 	expected := []string{
 		"serve", "check", "config", "init", "setup",
 		"sessions", "memory", "models", "cron", "channels",
-		"admin", "auth", "circuit", "integrations", "mcp",
+		"admin", "auth", "circuit", "mcp",
 		"logs", "metrics", "keystore", "security", "mechanic",
 		"defrag", "migrate", "reset", "update", "upgrade",
-		"version", "profile", "plugins", "skills", "apps",
+		"version", "profile", "plugins", "skills",
 		"wallet", "web", "tui", "completion", "ingest",
-		"service", "parity-audit",
+		"service",
 	}
 	for _, name := range expected {
 		if !subcommands[name] {
@@ -51,7 +51,7 @@ func TestAdminCmd_SubcommandRegistration(t *testing.T) {
 	for _, sub := range adminCmd.Commands() {
 		subcommands[sub.Name()] = true
 	}
-	expected := []string{"breaker", "breaker-reset", "roster", "models", "subagents", "channels", "dead-letters", "stats"}
+	expected := []string{"roster", "models", "subagents", "stats"}
 	for _, name := range expected {
 		if !subcommands[name] {
 			t.Errorf("admin command missing subcommand %q", name)
@@ -307,25 +307,6 @@ func TestSkillsCmd_SubcommandRegistration(t *testing.T) {
 	}
 }
 
-func TestIntegrationsCmd_SubcommandRegistration(t *testing.T) {
-	subcommands := make(map[string]bool)
-	for _, sub := range integrationsCmd.Commands() {
-		subcommands[sub.Name()] = true
-	}
-	for _, name := range []string{"list", "test", "health"} {
-		if !subcommands[name] {
-			t.Errorf("integrations command missing subcommand %q", name)
-		}
-	}
-}
-
-func TestIntegrationsTestCmd_RequiresArg(t *testing.T) {
-	err := integrationsTestCmd.Args(integrationsTestCmd, []string{})
-	if err == nil {
-		t.Error("expected error when no args provided to integrations test")
-	}
-}
-
 func TestKeystoreCmd_SubcommandRegistration(t *testing.T) {
 	subcommands := make(map[string]bool)
 	for _, sub := range keystoreCmd.Commands() {
@@ -480,14 +461,6 @@ func TestDownloadFile_ServerError(t *testing.T) {
 	_, err := downloadFile(context.Background(), server.URL+"/binary")
 	if err == nil {
 		t.Fatal("expected error for 500 response")
-	}
-}
-
-// TestAdminBreakerResetCmd_RequiresArg validates arg requirement.
-func TestAdminBreakerResetCmd_RequiresArg(t *testing.T) {
-	err := adminBreakerResetCmd.Args(adminBreakerResetCmd, []string{})
-	if err == nil {
-		t.Error("expected error when no args provided to admin breaker-reset")
 	}
 }
 

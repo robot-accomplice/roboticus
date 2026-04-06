@@ -58,8 +58,7 @@ func TestCLI_TopLevelCommands(t *testing.T) {
 		"plugins", "agents", "channels", "security", "keystore",
 		"migrate", "daemon", "web", "reset", "uninstall",
 		"completion", "cron", "profile", "tui", "ingest",
-		"defrag", "parity-audit", "admin", "integrations",
-		"apps", "upgrade",
+		"defrag", "admin", "upgrade",
 	}
 
 	for _, name := range expected {
@@ -109,7 +108,7 @@ func TestCLI_SubcommandSets(t *testing.T) {
 	}{
 		{"update", updateCmd, []string{"check", "all", "binary"}},
 		{"upgrade", upgradeCmd, []string{"all"}},
-		{"admin", adminCmd, []string{"breaker", "breaker-reset", "roster", "models", "subagents", "channels", "dead-letters", "stats"}},
+		{"admin", adminCmd, []string{"roster", "models", "subagents", "stats"}},
 		{"cron", cronCmd, []string{"list", "create", "delete", "run", "history"}},
 		{"schedule", scheduleCmd, []string{"list", "create", "delete", "run", "history"}},
 		{"sessions", sessionsCmd, []string{"list", "show", "delete", "export", "create"}},
@@ -124,7 +123,6 @@ func TestCLI_SubcommandSets(t *testing.T) {
 		{"metrics", metricsCmd, []string{"costs", "cache", "capacity"}},
 		{"skills", skillsCmd, []string{"list", "reload", "catalog"}},
 		{"plugins", pluginsCmd, []string{"list", "info", "install", "uninstall", "enable", "disable", "search", "pack"}},
-		{"integrations", integrationsCmd, []string{"list", "test", "health"}},
 		{"keystore", keystoreCmd, []string{"status", "list", "set", "get", "remove", "import", "rekey"}},
 		{"wallet", walletCmd, []string{"balance", "address"}},
 		{"service", serviceCmd, []string{"install", "uninstall", "start", "stop", "restart", "status"}},

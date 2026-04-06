@@ -6,25 +6,6 @@ import (
 	"testing"
 )
 
-func TestAdminBreakerResetCmd_WithMockServer(t *testing.T) {
-	cleanup := setupMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			t.Errorf("expected POST, got %s", r.Method)
-		}
-		if r.URL.Path != "/api/breaker/reset/openai" {
-			t.Errorf("unexpected path: %s", r.URL.Path)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"reset": true})
-	}))
-	defer cleanup()
-
-	err := adminBreakerResetCmd.RunE(adminBreakerResetCmd, []string{"openai"})
-	if err != nil {
-		t.Fatalf("admin breaker-reset: %v", err)
-	}
-}
-
 func TestAdminStatsCmd_PartialFailure(t *testing.T) {
 	callCount := 0
 	cleanup := setupMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

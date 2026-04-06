@@ -273,18 +273,6 @@ func TestMetricsCapacityCmd_WithMockServer(t *testing.T) {
 	}
 }
 
-func TestAdminBreakerCmd_WithMockServer(t *testing.T) {
-	cleanup := setupMockAPI(t, jsonHandler(map[string]any{
-		"breakers": []any{},
-	}))
-	defer cleanup()
-
-	err := adminBreakerCmd.RunE(adminBreakerCmd, nil)
-	if err != nil {
-		t.Fatalf("admin breaker: %v", err)
-	}
-}
-
 func TestAdminRosterCmd_WithMockServer(t *testing.T) {
 	cleanup := setupMockAPI(t, jsonHandler(map[string]any{
 		"agents": []any{},
@@ -318,30 +306,6 @@ func TestAdminSubagentsCmd_WithMockServer(t *testing.T) {
 	err := adminSubagentsCmd.RunE(adminSubagentsCmd, nil)
 	if err != nil {
 		t.Fatalf("admin subagents: %v", err)
-	}
-}
-
-func TestAdminChannelsCmd_WithMockServer(t *testing.T) {
-	cleanup := setupMockAPI(t, jsonHandler(map[string]any{
-		"channels": []any{},
-	}))
-	defer cleanup()
-
-	err := adminChannelsCmd.RunE(adminChannelsCmd, nil)
-	if err != nil {
-		t.Fatalf("admin channels: %v", err)
-	}
-}
-
-func TestAdminDeadLetterCmd_WithMockServer(t *testing.T) {
-	cleanup := setupMockAPI(t, jsonHandler(map[string]any{
-		"entries": []any{},
-	}))
-	defer cleanup()
-
-	err := adminDeadLetterCmd.RunE(adminDeadLetterCmd, nil)
-	if err != nil {
-		t.Fatalf("admin dead-letters: %v", err)
 	}
 }
 
@@ -414,33 +378,5 @@ func TestWalletAddressCmd_WithMockServer(t *testing.T) {
 	err := walletAddressCmd.RunE(walletAddressCmd, nil)
 	if err != nil {
 		t.Fatalf("wallet address: %v", err)
-	}
-}
-
-func TestIntegrationsListCmd_WithMockServer(t *testing.T) {
-	cleanup := setupMockAPI(t, jsonHandler(map[string]any{
-		"channels": []any{},
-	}))
-	defer cleanup()
-
-	err := integrationsListCmd.RunE(integrationsListCmd, nil)
-	if err != nil {
-		t.Fatalf("integrations list: %v", err)
-	}
-}
-
-func TestIntegrationsHealthCmd_WithMockServer(t *testing.T) {
-	cleanup := setupMockAPI(t, jsonHandler(map[string]any{
-		"channels": []any{
-			map[string]any{"name": "slack", "enabled": true, "status": "connected"},
-			map[string]any{"name": "discord", "enabled": false, "status": "disabled"},
-			map[string]any{"name": "telegram", "enabled": true, "status": "error"},
-		},
-	}))
-	defer cleanup()
-
-	err := integrationsHealthCmd.RunE(integrationsHealthCmd, nil)
-	if err != nil {
-		t.Fatalf("integrations health: %v", err)
 	}
 }

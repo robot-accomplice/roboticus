@@ -11,33 +11,6 @@ var adminCmd = &cobra.Command{
 	Short: "Administrative operations",
 }
 
-var adminBreakerCmd = &cobra.Command{
-	Use:   "breaker",
-	Short: "Show circuit breaker status for all providers",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		data, err := apiGet("/api/breaker/status")
-		if err != nil {
-			return err
-		}
-		printJSON(data)
-		return nil
-	},
-}
-
-var adminBreakerResetCmd = &cobra.Command{
-	Use:   "breaker-reset [provider]",
-	Short: "Reset a provider's circuit breaker",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		data, err := apiPost("/api/breaker/reset/"+args[0], nil)
-		if err != nil {
-			return err
-		}
-		printJSON(data)
-		return nil
-	},
-}
-
 var adminRosterCmd = &cobra.Command{
 	Use:   "roster",
 	Short: "List all agents in the roster",
@@ -77,32 +50,6 @@ var adminSubagentsCmd = &cobra.Command{
 	},
 }
 
-var adminChannelsCmd = &cobra.Command{
-	Use:   "channels",
-	Short: "Show channel adapter status",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		data, err := apiGet("/api/channels/status")
-		if err != nil {
-			return err
-		}
-		printJSON(data)
-		return nil
-	},
-}
-
-var adminDeadLetterCmd = &cobra.Command{
-	Use:   "dead-letters",
-	Short: "Show dead letter queue entries",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		data, err := apiGet("/api/channels/dead-letter")
-		if err != nil {
-			return err
-		}
-		printJSON(data)
-		return nil
-	},
-}
-
 var adminStatsCmd = &cobra.Command{
 	Use:   "stats",
 	Short: "Show cost, cache, and efficiency stats",
@@ -126,9 +73,7 @@ var adminStatsCmd = &cobra.Command{
 
 func init() {
 	adminCmd.AddCommand(
-		adminBreakerCmd, adminBreakerResetCmd,
-		adminRosterCmd, adminModelsCmd, adminSubagentsCmd,
-		adminChannelsCmd, adminDeadLetterCmd, adminStatsCmd,
+		adminRosterCmd, adminModelsCmd, adminSubagentsCmd, adminStatsCmd,
 	)
 	rootCmd.AddCommand(adminCmd)
 }
