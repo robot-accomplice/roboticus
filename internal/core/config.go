@@ -722,9 +722,27 @@ func (c *Config) MergeBundledProviders() {
 	if c.Providers == nil {
 		c.Providers = make(map[string]ProviderConfig)
 	}
-	for name, cfg := range bundled {
-		if _, exists := c.Providers[name]; !exists {
-			c.Providers[name] = cfg
+	for name, bcfg := range bundled {
+		if existing, exists := c.Providers[name]; !exists {
+			c.Providers[name] = bcfg
+		} else {
+			// Merge bundled defaults into user config for fields the user didn't set.
+			if existing.URL == "" {
+				existing.URL = bcfg.URL
+			}
+			if existing.Tier == "" {
+				existing.Tier = bcfg.Tier
+			}
+			if existing.Format == "" {
+				existing.Format = bcfg.Format
+			}
+			if existing.ChatPath == "" {
+				existing.ChatPath = bcfg.ChatPath
+			}
+			if !existing.IsLocal && bcfg.IsLocal {
+				existing.IsLocal = true
+			}
+			c.Providers[name] = existing
 		}
 	}
 }

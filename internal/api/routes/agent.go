@@ -8,6 +8,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"roboticus/internal/core"
 	"roboticus/internal/llm"
 	"roboticus/internal/pipeline"
 )
@@ -164,13 +165,25 @@ func AgentMessageStream(p pipeline.Runner, llmSvc *llm.Service) http.HandlerFunc
 	}
 }
 
-// AgentStatus returns agent diagnostics.
-func AgentStatus(llmSvc *llm.Service) http.HandlerFunc {
+// AgentStatus returns agent diagnostics matching the Rust response shape.
+func AgentStatus(llmSvc *llm.Service, cfg *core.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		providers := llmSvc.Status()
+		primary := cfg.Models.Primary
+		if primary == "" {
+			primary = "auto"
+		}
 		writeJSON(w, http.StatusOK, map[string]any{
-			"status":    "running",
-			"providers": providers,
+			"state":                  "running",
+			"name":                   cfg.Agent.Name,
+			"agent_name":             cfg.Agent.Name,
+			"agent_id":               cfg.Agent.ID,
+			"primary_model":          primary,
+			"active_model":           primary,
+			"primary_provider_state": "closed",
+			"cache_entries":          0,
+			"cache_hit_rate_pct":     0.0,
+			"providers":              providers,
 		})
 	}
 }

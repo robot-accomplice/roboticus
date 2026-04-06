@@ -67,6 +67,8 @@ func loadConfig() (core.Config, error) {
 	if err := viper.Unmarshal(&cfg); err != nil {
 		return cfg, fmt.Errorf("failed to parse config: %w", err)
 	}
+	cfg.MergeBundledProviders()
+	cfg.NormalizePaths()
 	if err := cfg.Validate(); err != nil {
 		return cfg, err
 	}

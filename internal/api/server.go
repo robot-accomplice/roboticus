@@ -116,7 +116,7 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 		// Agent inference.
 		r.Post("/api/agent/message", routes.AgentMessage(state.Pipeline))
 		r.Post("/api/agent/message/stream", routes.AgentMessageStream(state.Pipeline, state.LLM))
-		r.Get("/api/agent/status", routes.AgentStatus(state.LLM))
+		r.Get("/api/agent/status", routes.AgentStatus(state.LLM, state.Config))
 
 		// Sessions.
 		r.Get("/api/sessions", routes.ListSessions(state.Store))
@@ -222,13 +222,13 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 		r.With(analysisLimit).Post("/api/recommendations/generate", routes.GenerateRecommendations(state.Store))
 
 		// Channels.
-		r.Get("/api/channels/status", routes.GetChannelsStatus(state.Config))
+		r.Get("/api/channels/status", routes.GetChannelsStatus(state.Config, state.Keystore))
 		r.Get("/api/channels/dead-letter", routes.GetDeadLetters(state.Store))
 		r.Post("/api/channels/{name}/test", routes.TestChannel(state.Config))
 		r.Post("/api/channels/dead-letter/{id}/replay", routes.ReplayDeadLetter(state.Store))
 
 		// Config.
-		r.Get("/api/config", routes.GetConfig(state.Config))
+		r.Get("/api/config", routes.GetConfig(state.Config, state.Keystore))
 		r.Put("/api/config", routes.UpdateConfig(state.Config, state.Store))
 		r.Get("/api/config/capabilities", routes.GetCapabilities())
 		r.Get("/api/config/status", routes.GetConfigStatus())

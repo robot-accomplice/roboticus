@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -235,18 +236,51 @@ func GetAvailableModels(llmSvc *llm.Service) http.HandlerFunc {
 
 // --- Channels ---
 
-// GetChannelsStatus returns channel adapter configuration and enabled status.
-func GetChannelsStatus(cfg *core.Config) http.HandlerFunc {
+// GetChannelsStatus returns channel adapter status as an array matching the
+// Rust dashboard's expected shape: [{name, connected, last_error, ...}].
+func GetChannelsStatus(cfg *core.Config, ks *core.Keystore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		channels := map[string]bool{
-			"telegram": cfg.Channels.TelegramTokenEnv != "",
-			"whatsapp": cfg.Channels.WhatsAppTokenEnv != "",
-			"discord":  cfg.Channels.DiscordTokenEnv != "",
-			"signal":   cfg.Channels.SignalDaemonURL != "",
-			"email":    cfg.Channels.EmailFromAddress != "",
-			"matrix":   cfg.Matrix.Enabled,
+		hasKey := func(envName, keystoreName string) bool {
+			if envName != "" && os.Getenv(envName) != "" {
+				return true
+			}
+			if ks != nil && ks.IsUnlocked() && ks.GetOrEmpty(keystoreName) != "" {
+				return true
+			}
+			return false
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"channels": channels})
+
+		type channelStatus struct {
+			Name      string `json:"name"`
+			Connected bool   `json:"connected"`
+			LastError string `json:"last_error,omitempty"`
+		}
+
+		var channels []channelStatus
+
+		if hasKey(cfg.Channels.TelegramTokenEnv, "telegram_bot_token") {
+			channels = append(channels, channelStatus{Name: "telegram", Connected: true})
+		}
+		if hasKey(cfg.Channels.WhatsAppTokenEnv, "whatsapp_api_token") {
+			channels = append(channels, channelStatus{Name: "whatsapp", Connected: true})
+		}
+		if hasKey(cfg.Channels.DiscordTokenEnv, "discord_bot_token") {
+			channels = append(channels, channelStatus{Name: "discord", Connected: true})
+		}
+		if cfg.Channels.SignalDaemonURL != "" {
+			channels = append(channels, channelStatus{Name: "signal", Connected: true})
+		}
+		if cfg.Channels.EmailFromAddress != "" {
+			channels = append(channels, channelStatus{Name: "email", Connected: true})
+		}
+		if cfg.Matrix.Enabled {
+			channels = append(channels, channelStatus{Name: "matrix", Connected: true})
+		}
+
+		if channels == nil {
+			channels = []channelStatus{}
+		}
+		writeJSON(w, http.StatusOK, channels)
 	}
 }
 
@@ -382,11 +416,65 @@ func RetireUnusedSubagents(store *db.Store) http.HandlerFunc {
 	}
 }
 
-// GetConfig returns the current configuration.
-func GetConfig(cfg *core.Config) http.HandlerFunc {
+// GetConfig returns the current configuration, enriched with key status per provider.
+func GetConfig(cfg *core.Config, ks *core.Keystore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, cfg)
+		// Marshal to map so we can inject _key_status/_key_source per provider.
+		data, err := json.Marshal(cfg)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to marshal config")
+			return
+		}
+		var out map[string]any
+		if err := json.Unmarshal(data, &out); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to re-parse config")
+			return
+		}
+
+		// Enrich providers with key status using the in-memory config
+		// (JSON omitempty drops is_local=false, so we read from the struct).
+		if providers, ok := out["providers"].(map[string]any); ok {
+			for name, pRaw := range providers {
+				pMap, ok := pRaw.(map[string]any)
+				if !ok {
+					continue
+				}
+				// Look up is_local from the actual Config struct, not the JSON.
+				provCfg := cfg.Providers[name]
+				status, source := resolveKeyStatus(name, provCfg.IsLocal, provCfg.APIKeyEnv, ks)
+				pMap["_key_status"] = status
+				pMap["_key_source"] = source
+				pMap["is_local"] = provCfg.IsLocal
+			}
+		}
+
+		writeJSON(w, http.StatusOK, out)
 	}
+}
+
+// resolveKeyStatus determines the key status for a provider, matching the
+// Rust resolve_key_source cascade: local → keystore → env → missing.
+func resolveKeyStatus(providerName string, isLocal bool, apiKeyEnv string, ks *core.Keystore) (string, string) {
+	if isLocal {
+		return "not_required", "local"
+	}
+
+	// Check keystore by conventional name: {provider}_api_key.
+	if ks != nil && ks.IsUnlocked() {
+		conventional := providerName + "_api_key"
+		if val := ks.GetOrEmpty(conventional); val != "" {
+			return "configured", "keystore"
+		}
+	}
+
+	// Check environment variable.
+	if apiKeyEnv != "" {
+		if val := os.Getenv(apiKeyEnv); val != "" {
+			return "configured", "env"
+		}
+	}
+
+	return "missing", "none"
 }
 
 // GetCapabilities returns agent capabilities.
