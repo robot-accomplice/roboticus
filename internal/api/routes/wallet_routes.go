@@ -7,28 +7,57 @@ import (
 	"roboticus/internal/db"
 )
 
-// GetWalletBalance returns wallet balance from the transactions table.
-// Balance = inflows (credit, revenue_retained) - outflows (debit, expense, revenue_tax, revenue_tax_*).
+// GetWalletBalance returns cached on-chain wallet balances.
+// Balances are periodically refreshed by the daemon's wallet poller.
 func GetWalletBalance(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var balance float64
-		row := store.QueryRowContext(r.Context(),
-			`SELECT COALESCE(SUM(CASE
-				WHEN tx_type IN ('credit', 'revenue_retained') THEN amount
-				WHEN tx_type IN ('debit', 'expense', 'revenue_tax', 'revenue_tax_execution', 'revenue_tax_submission') THEN -amount
-				ELSE 0
-			 END), 0)
-			 FROM transactions`)
-		if err := row.Scan(&balance); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to query wallet balance")
+		// Read cached balances from wallet_balances table.
+		rows, err := store.QueryContext(r.Context(),
+			`SELECT symbol, name, balance, contract, decimals, is_native, updated_at
+			 FROM wallet_balances ORDER BY symbol`)
+		if err != nil {
+			// Table may not exist yet — return empty.
+			writeJSON(w, http.StatusOK, map[string]any{
+				"balance":  "0.00",
+				"currency": "USDC",
+				"network":  "Base",
+				"chain_id": baseChainID,
+				"tokens":   []any{},
+			})
 			return
+		}
+		defer func() { _ = rows.Close() }()
+
+		tokens := make([]map[string]any, 0)
+		usdcBalance := 0.0
+		for rows.Next() {
+			var symbol, name, contract, updatedAt string
+			var balance float64
+			var decimals int
+			var isNative bool
+			if err := rows.Scan(&symbol, &name, &balance, &contract, &decimals, &isNative, &updatedAt); err != nil {
+				continue
+			}
+			tokens = append(tokens, map[string]any{
+				"symbol":     symbol,
+				"name":       name,
+				"balance":    balance,
+				"contract":   contract,
+				"decimals":   decimals,
+				"is_native":  isNative,
+				"updated_at": updatedAt,
+			})
+			if symbol == "USDC" {
+				usdcBalance = balance
+			}
 		}
 
 		writeJSON(w, http.StatusOK, map[string]any{
-			"balance":  balance,
+			"balance":  usdcBalance,
 			"currency": "USDC",
 			"network":  "Base",
 			"chain_id": baseChainID,
+			"tokens":   tokens,
 		})
 	}
 }

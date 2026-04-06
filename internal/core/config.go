@@ -280,9 +280,10 @@ type TreasuryConfig struct {
 
 // WalletConfig holds crypto wallet settings.
 type WalletConfig struct {
-	Path    string `json:"path" mapstructure:"path"`
-	ChainID uint64 `json:"chain_id" mapstructure:"chain_id"`
-	RPCURL  string `json:"rpc_url" mapstructure:"rpc_url"`
+	Path               string `json:"path" mapstructure:"path"`
+	ChainID            uint64 `json:"chain_id" mapstructure:"chain_id"`
+	RPCURL             string `json:"rpc_url" mapstructure:"rpc_url"`
+	BalancePollSeconds int    `json:"balance_poll_seconds" mapstructure:"balance_poll_seconds"` // 0 = disabled, default 60
 }
 
 // PluginsConfig holds plugin discovery settings.
@@ -552,9 +553,10 @@ func DefaultConfig() Config {
 			TTLSeconds: 86400,
 		},
 		Wallet: WalletConfig{
-			Path:    filepath.Join(dataDir, "wallet.enc"),
-			ChainID: 8453,
-			RPCURL:  "https://mainnet.base.org",
+			Path:               filepath.Join(dataDir, "wallet.enc"),
+			ChainID:            8453,
+			RPCURL:             "https://mainnet.base.org",
+			BalancePollSeconds: 60,
 		},
 		Plugins: PluginsConfig{
 			Dir:               filepath.Join(dataDir, "plugins"),

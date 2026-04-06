@@ -630,6 +630,9 @@ func (d *Daemon) run() {
 		}()
 	}
 
+	// Start wallet balance poller.
+	startWalletPoller(ctx, d.cfg, d.store)
+
 	log.Info().Msg("all subsystems started")
 }
 
