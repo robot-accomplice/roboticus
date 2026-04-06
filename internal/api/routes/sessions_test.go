@@ -74,12 +74,12 @@ func TestGetSessionInsights(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	body := jsonBody(t, rec)
-	insights, ok := body["insights"].(map[string]any)
+	insights, ok := body["insights"].([]any)
 	if !ok {
-		t.Fatal("insights should be an object")
+		t.Fatal("insights should be an array")
 	}
-	if insights["turn_count"] == nil {
-		t.Error("should include turn_count")
+	if len(insights) == 0 {
+		t.Error("should include insight entries")
 	}
 }
 

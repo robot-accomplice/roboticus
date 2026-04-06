@@ -76,8 +76,8 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 
 	// Public routes (no auth).
 	r.Group(func(r chi.Router) {
-		r.Get("/api/health", routes.Health(state.Store, state.LLM))
-		r.Get("/health", routes.Health(state.Store, state.LLM))
+		r.Get("/api/health", routes.Health(state.Store, state.LLM, state.Config))
+		r.Get("/health", routes.Health(state.Store, state.LLM, state.Config))
 		r.Get("/.well-known/agent.json", routes.AgentCard())
 		r.Get("/openapi.yaml", OpenAPIHandler())
 		r.Get("/api/docs", DocsHandler())

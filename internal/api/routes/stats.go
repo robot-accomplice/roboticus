@@ -4,11 +4,78 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"roboticus/internal/core"
 	"roboticus/internal/db"
 	"roboticus/internal/llm"
 )
+
+// GetCosts returns per-request cost rows for the dashboard cost table and charts.
+func GetCosts(store *db.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		limit := parseIntParam(r, "limit", 500)
+		rows, err := store.QueryContext(r.Context(),
+			`SELECT id, model, provider, cost, tokens_in, tokens_out, created_at, cached, COALESCE(latency_ms, 0)
+			 FROM inference_costs ORDER BY created_at DESC LIMIT ?`, limit)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to query cost rows")
+			return
+		}
+		defer func() { _ = rows.Close() }()
+
+		costs := make([]map[string]any, 0)
+		for rows.Next() {
+			var id, model, provider, createdAt string
+			var cost float64
+			var tokensIn, tokensOut, cached, latencyMs int64
+			if err := rows.Scan(&id, &model, &provider, &cost, &tokensIn, &tokensOut, &createdAt, &cached, &latencyMs); err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to read cost row")
+				return
+			}
+			costs = append(costs, map[string]any{
+				"id":         id,
+				"model":      model,
+				"provider":   provider,
+				"cost":       cost,
+				"tokens_in":  tokensIn,
+				"tokens_out": tokensOut,
+				"created_at": createdAt,
+				"cached":     cached == 1,
+				"latency_ms": latencyMs,
+				"error":      nil,
+			})
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"costs": costs})
+	}
+}
+
+// GetCacheStats returns semantic cache statistics including hit_rate.
+func GetCacheStats(store *db.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		row := store.QueryRowContext(r.Context(),
+			`SELECT COUNT(*) FROM semantic_cache`)
+		var count int64
+		if err := row.Scan(&count); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+
+		// Compute hit_rate from inference_costs: ratio of cached requests to total.
+		hitRate := 0.0
+		costRow := store.QueryRowContext(r.Context(),
+			`SELECT COUNT(*), COALESCE(SUM(CASE WHEN cached = 1 THEN 1 ELSE 0 END), 0) FROM inference_costs`)
+		var total, cached int64
+		if err := costRow.Scan(&total, &cached); err == nil && total > 0 {
+			hitRate = float64(cached) / float64(total)
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{
+			"cached_entries": count,
+			"hit_rate":       hitRate,
+		})
+	}
+}
 
 // GetTransactions returns recent financial transactions.
 func GetTransactions(store *db.Store) http.HandlerFunc {
@@ -119,9 +186,9 @@ func GetEfficiency(store *db.Store) http.HandlerFunc {
 			models = append(models, map[string]any{
 				"model": model, "requests": cnt,
 				"tokens_in": tokIn, "tokens_out": tokOut,
-				"total_turns":       cnt,
-				"cache_hit_rate":    0.0,
-				"avg_output_tokens": avgOut,
+				"total_turns":        cnt,
+				"cache_hit_rate":     0.0,
+				"avg_output_tokens":  avgOut,
 				"avg_output_density": 0.0,
 				"cost": map[string]any{
 					"total":              cost,
@@ -131,6 +198,33 @@ func GetEfficiency(store *db.Store) http.HandlerFunc {
 			})
 		}
 
+		// Convert models array to object keyed by model name (JS expects Object.keys(models)).
+		modelsMap := make(map[string]any, len(models))
+		var mostExpensiveModel, mostEfficientModel string
+		var maxCost float64
+		var minCostPerTurn float64 = -1
+		for _, m := range models {
+			name := m["model"].(string)
+			modelsMap[name] = map[string]any{
+				"total_turns":        m["total_turns"],
+				"cache_hit_rate":     m["cache_hit_rate"],
+				"avg_output_tokens":  m["avg_output_tokens"],
+				"avg_output_density": m["avg_output_density"],
+				"cost":               m["cost"],
+			}
+			costObj := m["cost"].(map[string]any)
+			total := costObj["total"].(float64)
+			ept := costObj["effective_per_turn"].(float64)
+			if total > maxCost {
+				maxCost = total
+				mostExpensiveModel = name
+			}
+			if minCostPerTurn < 0 || ept < minCostPerTurn {
+				minCostPerTurn = ept
+				mostEfficientModel = name
+			}
+		}
+
 		writeJSON(w, http.StatusOK, map[string]any{
 			"period":         r.URL.Query().Get("period"),
 			"total_tokens":   totalTokens,
@@ -138,7 +232,13 @@ func GetEfficiency(store *db.Store) http.HandlerFunc {
 			"cache_hit_rate": cacheRate,
 			"avg_latency_ms": avgLatency,
 			"requests":       count,
-			"models":         models,
+			"models":         modelsMap,
+			"totals": map[string]any{
+				"total_turns":          count,
+				"total_cost":           totalCost,
+				"most_expensive_model": mostExpensiveModel,
+				"most_efficient_model": mostEfficientModel,
+			},
 		})
 	}
 }
@@ -266,9 +366,38 @@ func GetRecommendations(store *db.Store) http.HandlerFunc {
 			}
 		}
 
+		// Transform recommendations to match JS expected shape.
+		transformed := make([]map[string]any, 0, len(recommendations))
+		for _, rec := range recommendations {
+			priority := rec["priority"].(string)
+			// Capitalize priority: "high" -> "High", "medium" -> "Medium", "low" -> "Low"
+			if len(priority) > 0 {
+				priority = strings.ToUpper(priority[:1]) + priority[1:]
+			}
+			title := rec["message"].(string)
+			t := map[string]any{
+				"title":            title,
+				"category":         rec["type"],
+				"priority":         priority,
+				"explanation":      title,
+				"action":           "",
+				"estimated_impact": map[string]any{},
+			}
+			if v, ok := rec["value"]; ok {
+				t["value"] = v
+			}
+			transformed = append(transformed, t)
+		}
+
 		writeJSON(w, http.StatusOK, map[string]any{
-			"recommendations": recommendations,
+			"recommendations": transformed,
+			"count":           len(transformed),
 			"period":          r.URL.Query().Get("period"),
+			"profile": map[string]any{
+				"total_turns":    requests,
+				"total_cost":     totalCost,
+				"cache_hit_rate": cacheRate,
+			},
 		})
 	}
 }
@@ -311,12 +440,22 @@ func GetTimeseries(store *db.Store) http.HandlerFunc {
 			costs = append(costs, cost)
 			tokens = append(tokens, tokCount)
 		}
+		// Build empty placeholder arrays of the same length for fields we don't track yet.
+		n := len(buckets)
+		empty := make([]any, n)
+		for i := range empty {
+			empty[i] = 0
+		}
+
 		writeJSON(w, http.StatusOK, map[string]any{
+			"labels": buckets,
 			"series": map[string]any{
-				"buckets":  buckets,
-				"requests": requests,
-				"costs":    costs,
-				"tokens":   tokens,
+				"cost_per_hour":     costs,
+				"tokens_per_hour":   tokens,
+				"requests_per_hour": requests,
+				"latency_p50_ms":    empty,
+				"sessions_per_hour": empty,
+				"cron_success_rate": empty,
 			},
 		})
 	}

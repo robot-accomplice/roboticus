@@ -2,6 +2,7 @@ package routes
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -17,7 +18,12 @@ func ListSessionTurns(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessionID := chi.URLParam(r, "id")
 		rows, err := store.QueryContext(r.Context(),
-			`SELECT id, role, content, created_at FROM session_messages WHERE session_id = ? ORDER BY created_at`, sessionID)
+			`SELECT sm.id, sm.role, sm.content, sm.created_at,
+			        COALESCE(t.model, ''), COALESCE(t.cost, 0.0),
+			        COALESCE(t.tokens_in, 0), COALESCE(t.tokens_out, 0)
+			 FROM session_messages sm
+			 LEFT JOIN turns t ON t.id = sm.id AND t.session_id = sm.session_id
+			 WHERE sm.session_id = ? ORDER BY sm.created_at`, sessionID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to query session turns")
 			return
@@ -26,13 +32,16 @@ func ListSessionTurns(store *db.Store) http.HandlerFunc {
 
 		turns := make([]map[string]any, 0)
 		for rows.Next() {
-			var id, role, content, createdAt string
-			if err := rows.Scan(&id, &role, &content, &createdAt); err != nil {
+			var id, role, content, createdAt, model string
+			var cost float64
+			var tokensIn, tokensOut int64
+			if err := rows.Scan(&id, &role, &content, &createdAt, &model, &cost, &tokensIn, &tokensOut); err != nil {
 				writeError(w, http.StatusInternalServerError, "failed to read session turn row")
 				return
 			}
 			turns = append(turns, map[string]any{
 				"id": id, "role": role, "content": content, "created_at": createdAt,
+				"model": model, "cost": cost, "tokens_in": tokensIn, "tokens_out": tokensOut,
 			})
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"turns": turns})
@@ -111,20 +120,25 @@ func GetSessionInsights(store *db.Store) http.HandlerFunc {
 			return
 		}
 
-		insights := map[string]any{
-			"turn_count":      turnCount,
-			"message_count":   msgCount,
-			"total_tokens":    totalTokens,
-			"total_cost":      totalCost,
-			"tool_call_count": toolCallCount,
+		// JS expects insights as an array of { severity, message, suggestion } objects.
+		insightsArr := []map[string]any{
+			{"severity": "info", "message": fmt.Sprintf("turn_count: %d", turnCount), "suggestion": ""},
+			{"severity": "info", "message": fmt.Sprintf("message_count: %d", msgCount), "suggestion": ""},
+			{"severity": "info", "message": fmt.Sprintf("total_tokens: %d", totalTokens), "suggestion": ""},
+			{"severity": "info", "message": fmt.Sprintf("total_cost: %.6f", totalCost), "suggestion": ""},
+			{"severity": "info", "message": fmt.Sprintf("tool_call_count: %d", toolCallCount), "suggestion": ""},
 		}
 
 		if turnCount > 0 {
-			insights["avg_tokens_per_turn"] = totalTokens / turnCount
-			insights["avg_cost_per_turn"] = totalCost / float64(turnCount)
+			avgTokens := totalTokens / turnCount
+			avgCost := totalCost / float64(turnCount)
+			insightsArr = append(insightsArr,
+				map[string]any{"severity": "info", "message": fmt.Sprintf("avg_tokens_per_turn: %d", avgTokens), "suggestion": ""},
+				map[string]any{"severity": "info", "message": fmt.Sprintf("avg_cost_per_turn: %.6f", avgCost), "suggestion": ""},
+			)
 		}
 
-		writeJSON(w, http.StatusOK, map[string]any{"insights": insights})
+		writeJSON(w, http.StatusOK, map[string]any{"insights": insightsArr})
 	}
 }
 

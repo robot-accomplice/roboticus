@@ -110,12 +110,15 @@ func TestGetTimeseries(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	body := jsonBody(t, rec)
+	if body["labels"] == nil {
+		t.Error("labels should not be nil")
+	}
 	series, ok := body["series"].(map[string]any)
 	if !ok {
 		t.Fatal("series is not an object")
 	}
-	if series["buckets"] == nil {
-		t.Error("buckets should not be nil")
+	if series["cost_per_hour"] == nil {
+		t.Error("cost_per_hour should not be nil")
 	}
 }
 
@@ -167,8 +170,8 @@ func TestGenerateRecommendations_DelegatesToAnalysis(t *testing.T) {
 	if !ok {
 		t.Fatal("first recommendation is not an object")
 	}
-	if first["type"] != "observability" {
-		t.Fatalf("first recommendation type = %v, want observability", first["type"])
+	if first["category"] != "observability" {
+		t.Fatalf("first recommendation category = %v, want observability", first["category"])
 	}
 }
 

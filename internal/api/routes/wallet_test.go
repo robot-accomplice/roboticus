@@ -75,7 +75,7 @@ func TestGetRoster(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	body := jsonBody(t, rec)
-	agents := body["agents"].([]any)
+	agents := body["roster"].([]any)
 	if len(agents) < 1 {
 		t.Error("should have at least the default agent")
 	}

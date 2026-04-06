@@ -40,8 +40,16 @@ func TestGetCosts(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	body := jsonBody(t, rec)
-	if body["requests"].(float64) != 1 {
-		t.Errorf("requests = %v, want 1", body["requests"])
+	costs, ok := body["costs"].([]any)
+	if !ok {
+		t.Fatalf("costs field missing or not array")
+	}
+	if len(costs) != 1 {
+		t.Errorf("got %d cost rows, want 1", len(costs))
+	}
+	row := costs[0].(map[string]any)
+	if row["model"] != "gpt-4" {
+		t.Errorf("model = %v, want gpt-4", row["model"])
 	}
 }
 
@@ -110,7 +118,7 @@ func TestListSubagents(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	body := jsonBody(t, rec)
-	agents := body["subagents"].([]any)
+	agents := body["agents"].([]any)
 	if len(agents) != 1 {
 		t.Errorf("got %d subagents, want 1", len(agents))
 	}

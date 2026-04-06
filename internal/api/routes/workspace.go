@@ -26,6 +26,34 @@ func GetWorkspaceState(store *db.Store) http.HandlerFunc {
 		if err := row.Scan(&sessionCount); err != nil {
 			log.Warn().Err(err).Msg("failed to query active session count")
 		}
+
+		// Build agents array from sub_agents table for the fleet activity card.
+		agents := make([]map[string]any, 0)
+		agentRows, err := store.QueryContext(r.Context(),
+			`SELECT name, model, enabled FROM sub_agents ORDER BY name`)
+		if err == nil {
+			defer func() { _ = agentRows.Close() }()
+			for agentRows.Next() {
+				var name, model string
+				var enabled bool
+				if err := agentRows.Scan(&name, &model, &enabled); err != nil {
+					break
+				}
+				state := "stopped"
+				if enabled {
+					state = "running"
+				}
+				agents = append(agents, map[string]any{
+					"name":     name,
+					"model":    model,
+					"enabled":  enabled,
+					"state":    state,
+					"activity": "idle",
+					"color":    "",
+				})
+			}
+		}
+
 		writeJSON(w, http.StatusOK, map[string]any{
 			"uptime":          time.Since(processStartTime).Seconds(),
 			"goroutines":      runtime.NumGoroutine(),
@@ -34,6 +62,7 @@ func GetWorkspaceState(store *db.Store) http.HandlerFunc {
 			"db_in_use":       dbStats.InUse,
 			"db_idle":         dbStats.Idle,
 			"status":          "running",
+			"agents":          agents,
 		})
 	}
 }

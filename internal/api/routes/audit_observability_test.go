@@ -489,8 +489,8 @@ func TestDelegationStats_WithData(t *testing.T) {
 	}
 	body := jsonBody(t, rec)
 
-	if body["total"].(float64) != 2 {
-		t.Errorf("total = %v, want 2", body["total"])
+	if body["total_delegations"].(float64) != 2 {
+		t.Errorf("total_delegations = %v, want 2", body["total_delegations"])
 	}
 	if body["successful"].(float64) != 1 {
 		t.Errorf("successful = %v, want 1", body["successful"])
@@ -520,8 +520,8 @@ func TestDelegationStats_Empty(t *testing.T) {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
 	body := jsonBody(t, rec)
-	if body["total"].(float64) != 0 {
-		t.Errorf("total = %v, want 0", body["total"])
+	if body["total_delegations"].(float64) != 0 {
+		t.Errorf("total_delegations = %v, want 0", body["total_delegations"])
 	}
 	if body["success_rate"].(float64) != 0 {
 		t.Errorf("success_rate = %v, want 0 when no data", body["success_rate"])

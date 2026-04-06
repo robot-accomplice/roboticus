@@ -35,14 +35,17 @@ func GetTurnContext(store *db.Store) http.HandlerFunc {
 		mt := derefInt64(memTokens)
 		ht := derefInt64(histTokens)
 		writeJSON(w, http.StatusOK, map[string]any{
-			"system_tokens":    st,
-			"memory_tokens":    mt,
-			"history_tokens":   ht,
-			"total_tokens":     st + mt + ht,
-			"max_tokens":       budget,
-			"complexity_level": complexity,
-			"history_depth":    derefInt64(histDepth),
-			"model":            model,
+			"system_tokens":       st,
+			"system_prompt_tokens": st,
+			"memory_tokens":       mt,
+			"history_tokens":      ht,
+			"total_tokens":        st + mt + ht,
+			"max_tokens":          budget,
+			"token_budget":        budget,
+			"complexity_level":    complexity,
+			"history_depth":       derefInt64(histDepth),
+			"model":               model,
+			"snapshot":            true,
 		})
 	}
 }
@@ -120,6 +123,18 @@ func GetTurnTools(store *db.Store) http.HandlerFunc {
 	}
 }
 
+// tipSeverity maps a tip type to its severity level.
+func tipSeverity(tipType string) string {
+	switch tipType {
+	case "error":
+		return "error"
+	case "warning":
+		return "warning"
+	default:
+		return "info"
+	}
+}
+
 // GetTurnTips returns optimization tips for a turn based on inference data.
 func GetTurnTips(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -134,13 +149,17 @@ func GetTurnTips(store *db.Store) http.HandlerFunc {
 		var cost float64
 		if row.Scan(&tokIn, &tokOut, &cost) == nil {
 			if tokIn > 4000 {
+				msg := "High input tokens — consider trimming context window"
 				tips = append(tips, map[string]string{
-					"type": "optimization", "message": "High input tokens — consider trimming context window",
+					"type": "optimization", "message": msg,
+					"severity": tipSeverity("optimization"), "suggestion": msg,
 				})
 			}
 			if tokOut > 2000 {
+				msg := "High output tokens — consider setting max_tokens"
 				tips = append(tips, map[string]string{
-					"type": "optimization", "message": "High output tokens — consider setting max_tokens",
+					"type": "optimization", "message": msg,
+					"severity": tipSeverity("optimization"), "suggestion": msg,
 				})
 			}
 		}

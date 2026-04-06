@@ -84,7 +84,7 @@ func DelegationOutcomes(store *db.Store) http.HandlerFunc {
 		limit := parseIntParam(r, "limit", 50)
 		rows, err := store.QueryContext(r.Context(),
 			`SELECT id, turn_id, session_id, task_description, subtask_count,
-			        pattern, duration_ms, success, quality_score, created_at
+			        pattern, assigned_agents_json, duration_ms, success, quality_score, created_at
 			 FROM delegation_outcomes ORDER BY created_at DESC LIMIT ?`, limit)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to query delegation outcomes")
@@ -94,19 +94,20 @@ func DelegationOutcomes(store *db.Store) http.HandlerFunc {
 
 		outcomes := make([]map[string]any, 0)
 		for rows.Next() {
-			var id, turnID, sessionID, taskDesc, pattern, createdAt string
+			var id, turnID, sessionID, taskDesc, pattern, assignedAgentsJSON, createdAt string
 			var subtaskCount, durationMs int64
 			var success int
 			var qualityScore *float64
 			if err := rows.Scan(&id, &turnID, &sessionID, &taskDesc, &subtaskCount,
-				&pattern, &durationMs, &success, &qualityScore, &createdAt); err != nil {
+				&pattern, &assignedAgentsJSON, &durationMs, &success, &qualityScore, &createdAt); err != nil {
 				writeError(w, http.StatusInternalServerError, "failed to read delegation outcome row")
 				return
 			}
 			o := map[string]any{
 				"id": id, "turn_id": turnID, "session_id": sessionID,
 				"task_description": taskDesc, "subtask_count": subtaskCount,
-				"pattern": pattern, "duration_ms": durationMs,
+				"pattern": pattern, "assigned_agents_json": assignedAgentsJSON,
+				"duration_ms": durationMs, "retry_count": 0,
 				"success": success == 1, "created_at": createdAt,
 			}
 			if qualityScore != nil {
@@ -147,11 +148,11 @@ func DelegationStats(store *db.Store) http.HandlerFunc {
 		}
 
 		writeJSON(w, http.StatusOK, map[string]any{
-			"total":           total,
-			"successful":      successful,
-			"success_rate":    successRate,
-			"avg_duration_ms": avgDuration,
-			"avg_quality":     avgQuality,
+			"total_delegations": total,
+			"successful":        successful,
+			"success_rate":      successRate,
+			"avg_duration_ms":   avgDuration,
+			"avg_quality":       avgQuality,
 		})
 	}
 }

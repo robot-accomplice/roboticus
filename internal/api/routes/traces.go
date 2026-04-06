@@ -88,10 +88,17 @@ func GetReactTrace(store *db.Store) http.HandlerFunc {
 			parsed = map[string]any{}
 		}
 
+		// Ensure steps is an array for JS (data.steps || []).
+		steps := parsed
+		if _, ok := parsed.([]any); !ok {
+			steps = []any{}
+		}
+
 		writeJSON(w, http.StatusOK, map[string]any{
 			"id":                id,
 			"pipeline_trace_id": pipelineTraceID,
 			"react_trace":       parsed,
+			"steps":             steps,
 			"created_at":        createdAt,
 		})
 	}

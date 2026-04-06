@@ -10,12 +10,13 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"roboticus/internal/core"
 	"roboticus/internal/db"
 	"roboticus/internal/llm"
 )
 
 // Health returns the health check endpoint handler.
-func Health(store *db.Store, llmSvc *llm.Service) http.HandlerFunc {
+func Health(store *db.Store, llmSvc *llm.Service, cfg ...*core.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		providers := []map[string]any{}
 		if llmSvc != nil {
@@ -29,11 +30,19 @@ func Health(store *db.Store, llmSvc *llm.Service) http.HandlerFunc {
 			}
 		}
 
+		agentName := "roboticus"
+		if len(cfg) > 0 && cfg[0] != nil && cfg[0].Agent.Name != "" {
+			agentName = cfg[0].Agent.Name
+		}
+
 		resp := map[string]any{
-			"status":    "ok",
-			"uptime":    time.Since(processStartTime).String(),
-			"go":        runtime.Version(),
-			"providers": providers,
+			"status":         "ok",
+			"uptime":         time.Since(processStartTime).String(),
+			"uptime_seconds": time.Since(processStartTime).Seconds(),
+			"version":        "0.1.0",
+			"agent":          agentName,
+			"go":             runtime.Version(),
+			"providers":      providers,
 		}
 
 		writeJSON(w, http.StatusOK, resp)

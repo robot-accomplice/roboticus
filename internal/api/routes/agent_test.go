@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"roboticus/internal/core"
 	"roboticus/internal/llm"
 	"roboticus/testutil"
 )
@@ -15,7 +16,8 @@ func TestAgentStatus(t *testing.T) {
 	if err != nil {
 		t.Skipf("no LLM service: %v", err)
 	}
-	handler := AgentStatus(svc)
+	cfg := core.DefaultConfig()
+	handler := AgentStatus(svc, &cfg)
 	req := httptest.NewRequest("GET", "/api/agent/status", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)

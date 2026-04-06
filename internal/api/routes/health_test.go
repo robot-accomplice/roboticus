@@ -132,8 +132,8 @@ func TestGetSkillsCatalog(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	body := jsonBody(t, rec)
-	if _, ok := body["skills"]; !ok {
-		t.Error("missing skills key")
+	if _, ok := body["items"]; !ok {
+		t.Error("missing items key")
 	}
 }
 
