@@ -8,7 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
 
-	"goboticus/internal/db"
+	"roboticus/internal/db"
 )
 
 // GetTurnContext returns context window analysis for a turn from context_snapshots.

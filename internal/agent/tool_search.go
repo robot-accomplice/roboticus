@@ -5,7 +5,7 @@ import (
 	"strings"
 	"sync"
 
-	"goboticus/internal/agent/memory"
+	"roboticus/internal/agent/memory"
 )
 
 // RankedTool is a tool scored by semantic relevance for the current query.

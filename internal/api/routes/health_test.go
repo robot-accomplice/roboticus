@@ -9,8 +9,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"goboticus/internal/core"
-	"goboticus/testutil"
+	"roboticus/internal/core"
+	"roboticus/testutil"
 )
 
 func TestWriteError_ClientError(t *testing.T) {

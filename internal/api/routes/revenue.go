@@ -7,7 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"goboticus/internal/db"
+	"roboticus/internal/db"
 )
 
 // ListServiceCatalog returns available services.

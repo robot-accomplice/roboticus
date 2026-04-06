@@ -22,7 +22,7 @@ func DocsHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		_, _ = w.Write([]byte(`<!DOCTYPE html>
-<html><head><title>Goboticus API Docs</title>
+<html><head><title>Roboticus API Docs</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css">
 </head><body>
 <div id="swagger-ui"></div>

@@ -1,6 +1,6 @@
 package agent
 
-import "goboticus/internal/session"
+import "roboticus/internal/session"
 
 // Session is an alias for the shared session type.
 type Session = session.Session

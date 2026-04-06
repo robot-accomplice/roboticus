@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"github.com/rs/zerolog/log"
 
-	"goboticus/internal/core"
+	"roboticus/internal/core"
 
 	_ "modernc.org/sqlite"
 )

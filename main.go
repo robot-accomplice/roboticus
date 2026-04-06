@@ -1,6 +1,6 @@
 package main
 
-import "goboticus/cmd"
+import "roboticus/cmd"
 
 func main() {
 	cmd.Execute()

@@ -11,16 +11,16 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
-	"goboticus/internal/core"
+	"roboticus/internal/core"
 )
 
 var cfgFile string
 
-// rootCmd is the base command for goboticus.
+// rootCmd is the base command for roboticus.
 var rootCmd = &cobra.Command{
-	Use:   "goboticus",
-	Short: "Goboticus — autonomous agent runtime",
-	Long:  `Goboticus is an autonomous agent runtime with multi-channel chat, LLM orchestration, memory, and tool execution.`,
+	Use:   "roboticus",
+	Short: "Roboticus — autonomous agent runtime",
+	Long:  `Roboticus is an autonomous agent runtime with multi-channel chat, LLM orchestration, memory, and tool execution.`,
 }
 
 // Execute adds all child commands to the root command and sets flags.
@@ -33,7 +33,7 @@ func Execute() {
 func init() {
 	cobra.OnInitialize(initConfig, initLogger)
 
-	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default ~/.goboticus/goboticus.toml)")
+	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default ~/.roboticus/roboticus.toml)")
 	rootCmd.PersistentFlags().Int("port", core.DefaultServerPort, "server port")
 	rootCmd.PersistentFlags().String("bind", core.DefaultServerBind, "server bind address")
 
@@ -47,7 +47,7 @@ func initConfig() {
 	} else {
 		configDir := core.ConfigDir()
 		viper.AddConfigPath(configDir)
-		viper.SetConfigName("goboticus")
+		viper.SetConfigName("roboticus")
 		viper.SetConfigType("toml")
 	}
 

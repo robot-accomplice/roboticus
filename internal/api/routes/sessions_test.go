@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"goboticus/testutil"
+	"roboticus/testutil"
 )
 
 func TestListSessions(t *testing.T) {

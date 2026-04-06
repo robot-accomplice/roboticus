@@ -7,7 +7,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"goboticus/internal/core"
+	"roboticus/internal/core"
 )
 
 // ChannelStatus tracks the health of a channel adapter.

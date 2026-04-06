@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"goboticus/internal/agent/tools"
-	"goboticus/internal/core"
+	"roboticus/internal/agent/tools"
+	"roboticus/internal/core"
 )
 
 func TestPolicy_AllowsNormalCall(t *testing.T) {

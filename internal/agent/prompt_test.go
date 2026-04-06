@@ -9,9 +9,9 @@ import (
 )
 
 func TestBuildSystemPrompt_ContainsAgentName(t *testing.T) {
-	cfg := PromptConfig{AgentName: "Goboticus"}
+	cfg := PromptConfig{AgentName: "Roboticus"}
 	prompt := BuildSystemPrompt(cfg)
-	if !strings.Contains(prompt, "Goboticus") {
+	if !strings.Contains(prompt, "Roboticus") {
 		t.Error("should contain agent name")
 	}
 }

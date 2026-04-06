@@ -1,4 +1,4 @@
-# Goboticus Architecture Diagrams
+# Roboticus Architecture Diagrams
 
 These diagrams define the intended architecture. Use them to audit the actual
 implementation — any divergence between diagram and code is a bug in one or
@@ -8,16 +8,16 @@ the other.
 
 ## C4 Level 1: System Context
 
-Who interacts with Goboticus and what external systems does it depend on?
+Who interacts with Roboticus and what external systems does it depend on?
 
 ```mermaid
 C4Context
-    title System Context — Goboticus Agent Runtime
+    title System Context — Roboticus Agent Runtime
 
     Person(user, "End User", "Interacts via chat channels")
     Person(admin, "Administrator", "Configures and monitors the agent")
 
-    System(goboticus, "Goboticus", "Autonomous AI agent runtime with multi-channel support, tool execution, memory, and policy enforcement")
+    System(roboticus, "Roboticus", "Autonomous AI agent runtime with multi-channel support, tool execution, memory, and policy enforcement")
 
     System_Ext(llmProviders, "LLM Providers", "OpenAI, Anthropic, Ollama, Google — inference APIs")
     System_Ext(telegram, "Telegram Bot API", "Chat messaging")
@@ -28,32 +28,32 @@ C4Context
     System_Ext(ethereum, "Ethereum Network", "Wallet operations, DeFi yield")
     System_Ext(browser, "Chrome (CDP)", "Headless browser automation")
 
-    Rel(user, goboticus, "Sends messages, receives responses", "Channel-specific protocol")
-    Rel(admin, goboticus, "Manages via REST API + Dashboard", "HTTPS")
-    Rel(goboticus, llmProviders, "Sends inference requests", "HTTPS/SSE")
-    Rel(goboticus, telegram, "Sends/receives messages", "HTTPS")
-    Rel(goboticus, discord, "Sends/receives messages", "WSS/HTTPS")
-    Rel(goboticus, signal, "Sends/receives messages", "JSON-RPC")
-    Rel(goboticus, whatsapp, "Sends/receives messages", "HTTPS")
-    Rel(goboticus, email, "Sends/receives email", "IMAP/SMTP")
-    Rel(goboticus, ethereum, "Signs transactions", "JSON-RPC")
-    Rel(goboticus, browser, "Automates web pages", "CDP/WebSocket")
+    Rel(user, roboticus, "Sends messages, receives responses", "Channel-specific protocol")
+    Rel(admin, roboticus, "Manages via REST API + Dashboard", "HTTPS")
+    Rel(roboticus, llmProviders, "Sends inference requests", "HTTPS/SSE")
+    Rel(roboticus, telegram, "Sends/receives messages", "HTTPS")
+    Rel(roboticus, discord, "Sends/receives messages", "WSS/HTTPS")
+    Rel(roboticus, signal, "Sends/receives messages", "JSON-RPC")
+    Rel(roboticus, whatsapp, "Sends/receives messages", "HTTPS")
+    Rel(roboticus, email, "Sends/receives email", "IMAP/SMTP")
+    Rel(roboticus, ethereum, "Signs transactions", "JSON-RPC")
+    Rel(roboticus, browser, "Automates web pages", "CDP/WebSocket")
 ```
 
 ---
 
 ## C4 Level 2: Container Diagram
 
-What are the major deployable/runnable units inside Goboticus?
+What are the major deployable/runnable units inside Roboticus?
 
 ```mermaid
 C4Container
-    title Container Diagram — Goboticus
+    title Container Diagram — Roboticus
 
     Person(user, "End User")
     Person(admin, "Administrator")
 
-    System_Boundary(gob, "Goboticus Runtime") {
+    System_Boundary(gob, "Roboticus Runtime") {
         Container(api, "API Server", "Go, chi", "REST + WebSocket endpoints, embedded dashboard SPA, middleware chain")
         Container(pipeline, "Unified Pipeline", "Go", "Owns ALL business logic: injection defense → session → inference → guards → memory")
         Container(agent, "Agent Core", "Go", "ReAct loop, tool registry, policy engine, injection detector, context builder")

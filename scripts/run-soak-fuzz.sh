@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────
-# run-soak-fuzz.sh — Deterministic soak + bounded fuzzing for Goboticus
+# run-soak-fuzz.sh — Deterministic soak + bounded fuzzing for Roboticus
 #
 # Runs specific test cases in a loop to surface flaky behavior,
 # then exercises Go's native fuzzer on security-critical inputs.

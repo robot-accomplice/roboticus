@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"goboticus/internal/db"
+	"roboticus/internal/db"
 )
 
 // TempStore creates an in-memory SQLite store for testing. The store is
@@ -29,7 +29,7 @@ func TempStore(t *testing.T) *db.Store {
 // TempDir creates a temporary directory for test artifacts.
 func TempDir(t *testing.T) string {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "goboticus-test-*")
+	dir, err := os.MkdirTemp("", "roboticus-test-*")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}

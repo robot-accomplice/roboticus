@@ -10,7 +10,7 @@ import (
 
 	"github.com/spf13/viper"
 
-	"goboticus/internal/core"
+	"roboticus/internal/core"
 )
 
 // apiBaseURL returns the base URL for API calls.
@@ -27,7 +27,7 @@ func apiGet(path string) (map[string]any, error) {
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Get(apiBaseURL() + path)
 	if err != nil {
-		return nil, fmt.Errorf("connection failed (is goboticus running?): %w", err)
+		return nil, fmt.Errorf("connection failed (is roboticus running?): %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -57,7 +57,7 @@ func apiPost(path string, payload map[string]any) (map[string]any, error) {
 	b, _ := json.Marshal(payload)
 	resp, err := client.Post(apiBaseURL()+path, "application/json", strings.NewReader(string(b)))
 	if err != nil {
-		return nil, fmt.Errorf("connection failed (is goboticus running?): %w", err)
+		return nil, fmt.Errorf("connection failed (is roboticus running?): %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 

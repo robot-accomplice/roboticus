@@ -162,7 +162,7 @@ func (c *Connection) initialize(ctx context.Context) error {
 		"protocolVersion": "2024-11-05",
 		"capabilities":    map[string]any{},
 		"clientInfo": map[string]string{
-			"name":    "goboticus",
+			"name":    "roboticus",
 			"version": "0.1.0",
 		},
 	})

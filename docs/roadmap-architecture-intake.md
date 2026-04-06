@@ -1,8 +1,8 @@
-# Roboticus Roadmap Intake For Goboticus Architecture
+# Roboticus Roadmap Intake For Roboticus Architecture
 
 This document is not a parity checklist.
 
-Its purpose is to pull the still-relevant Roboticus roadmap into Goboticus so
+Its purpose is to pull the still-relevant Roboticus roadmap into Roboticus so
 we can make near-term architectural decisions without painting ourselves into a
 corner.
 
@@ -20,12 +20,12 @@ corner.
 
 An item belongs in this document when:
 
-1. it is not yet fully implemented in Goboticus, and
+1. it is not yet fully implemented in Roboticus, and
 2. it could change current architecture decisions if ignored
 
 ## Immediate Architecture Drivers
 
-These are the roadmap items most likely to influence Goboticus architecture in
+These are the roadmap items most likely to influence Roboticus architecture in
 the next wave of work.
 
 ### 1. Integrations Management (`1.21`)
@@ -40,7 +40,7 @@ Why it matters:
   health/testing, and UI/CLI surfaces
 
 Architecture implication:
-- Goboticus should not keep growing ad hoc integration routes
+- Roboticus should not keep growing ad hoc integration routes
 - we need a dedicated integration service boundary with:
   - provider/channel metadata
   - connection test API
@@ -62,7 +62,7 @@ Why it matters:
   one runtime
 
 Architecture implication:
-- Goboticus browser support should be built behind a backend interface:
+- Roboticus browser support should be built behind a backend interface:
   - native browser backend
   - external `agent-browser`-compatible backend
 - policy, provenance, and tool surfaces must be backend-agnostic
@@ -104,7 +104,7 @@ Why it matters:
 - makes route drift and placeholder semantics much more expensive
 
 Architecture implication:
-- Goboticus should treat request/response shapes as stable contracts
+- Roboticus should treat request/response shapes as stable contracts
 - doc generation and route tests should converge on a single source of truth
 
 Must preserve:
@@ -146,7 +146,7 @@ Why it matters:
 
 Architecture implication:
 - channel adapters must not encode bespoke STT/TTS logic
-- Goboticus needs shared provider abstractions for:
+- Roboticus needs shared provider abstractions for:
   - speech-to-text
   - text-to-speech
   - multimodal message parts
@@ -163,7 +163,7 @@ Roboticus source:
 - `ROADMAP.md`, Subroutine P — TUI
 
 Why it matters:
-- if Goboticus adopts TUI parity as a product promise, web-only ad hoc APIs
+- if Roboticus adopts TUI parity as a product promise, web-only ad hoc APIs
   become architectural debt immediately
 
 Architecture implication:
@@ -219,7 +219,7 @@ Implication:
 - theme/profile systems need stable manifest APIs rather than hard-coded UI
   assumptions
 
-## Current Recommendations For Goboticus
+## Current Recommendations For Roboticus
 
 These architectural rules should guide work starting now:
 
@@ -241,7 +241,7 @@ These architectural rules should guide work starting now:
 
 ## Concrete Near-Term Planning Set
 
-If we had to choose the smallest roadmap slice that should shape Goboticus
+If we had to choose the smallest roadmap slice that should shape Roboticus
 architecture immediately, it would be:
 
 1. `1.21` Integrations management
@@ -250,7 +250,7 @@ architecture immediately, it would be:
 4. `1.25` OpenAPI + Swagger contract
 5. `1.26` + `2.19` routing profiles / spider graph / metascore explainability
 6. `1.6` + `2.21` multimodal + voice abstractions
-7. TUI parity contract if Goboticus plans to claim it
+7. TUI parity contract if Roboticus plans to claim it
 
 These items should be treated as **architecture-shaping**, even if we do not
 implement them in the next sprint.

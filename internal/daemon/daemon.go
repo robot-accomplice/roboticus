@@ -12,20 +12,20 @@ import (
 	"github.com/kardianos/service"
 	"github.com/rs/zerolog/log"
 
-	"goboticus/internal/agent"
-	"goboticus/internal/agent/memory"
-	"goboticus/internal/agent/policy"
-	"goboticus/internal/agent/skills"
-	"goboticus/internal/api"
-	"goboticus/internal/api/routes"
-	"goboticus/internal/channel"
-	"goboticus/internal/core"
-	"goboticus/internal/db"
-	"goboticus/internal/llm"
-	"goboticus/internal/mcp"
-	"goboticus/internal/pipeline"
-	"goboticus/internal/schedule"
-	"goboticus/internal/session"
+	"roboticus/internal/agent"
+	"roboticus/internal/agent/memory"
+	"roboticus/internal/agent/policy"
+	"roboticus/internal/agent/skills"
+	"roboticus/internal/api"
+	"roboticus/internal/api/routes"
+	"roboticus/internal/channel"
+	"roboticus/internal/core"
+	"roboticus/internal/db"
+	"roboticus/internal/llm"
+	"roboticus/internal/mcp"
+	"roboticus/internal/pipeline"
+	"roboticus/internal/schedule"
+	"roboticus/internal/session"
 )
 
 // ---------------------------------------------------------------------------
@@ -290,7 +290,7 @@ func (a *streamAdapter) PrepareStream(ctx context.Context, sess *session.Session
 	return req, nil
 }
 
-// Daemon manages the lifecycle of all goboticus subsystems.
+// Daemon manages the lifecycle of all roboticus subsystems.
 // Implements kardianos/service.Interface for cross-platform service management
 // (systemd on Linux, launchd on macOS, SCM on Windows).
 type Daemon struct {
@@ -310,8 +310,8 @@ type Daemon struct {
 // ServiceConfig returns the kardianos service configuration.
 func ServiceConfig() *service.Config {
 	return &service.Config{
-		Name:        "goboticus",
-		DisplayName: "Goboticus Agent Runtime",
+		Name:        "roboticus",
+		DisplayName: "Roboticus Agent Runtime",
 		Description: "Autonomous AI agent runtime with multi-channel support.",
 	}
 }
@@ -504,14 +504,14 @@ func New(cfg *core.Config) (*Daemon, error) {
 
 // Start implements service.Interface. Called by the OS service manager.
 func (d *Daemon) Start(s service.Service) error {
-	log.Info().Str("platform", service.Platform()).Msg("goboticus starting")
+	log.Info().Str("platform", service.Platform()).Msg("roboticus starting")
 	go d.run()
 	return nil
 }
 
 // Stop implements service.Interface. Called by the OS service manager on shutdown.
 func (d *Daemon) Stop(s service.Service) error {
-	log.Info().Msg("goboticus stopping")
+	log.Info().Msg("roboticus stopping")
 	if d.cancel != nil {
 		d.cancel()
 	}
@@ -702,7 +702,7 @@ func (d *Daemon) RunInteractive() error {
 	return svc.Run()
 }
 
-// Install registers goboticus as an OS service.
+// Install registers roboticus as an OS service.
 func Install(cfg *core.Config) error {
 	d, err := New(cfg)
 	if err != nil {
@@ -717,7 +717,7 @@ func Install(cfg *core.Config) error {
 	return svc.Install()
 }
 
-// Uninstall removes goboticus from the OS service manager.
+// Uninstall removes roboticus from the OS service manager.
 func Uninstall(cfg *core.Config) error {
 	d, err := New(cfg)
 	if err != nil {

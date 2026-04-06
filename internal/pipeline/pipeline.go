@@ -6,9 +6,9 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"goboticus/internal/core"
-	"goboticus/internal/db"
-	"goboticus/internal/llm"
+	"roboticus/internal/core"
+	"roboticus/internal/db"
+	"roboticus/internal/llm"
 )
 
 // Outcome represents the result of a pipeline run.

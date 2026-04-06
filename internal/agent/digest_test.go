@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"goboticus/internal/llm"
+	"roboticus/internal/llm"
 )
 
 func TestDigestGenerator_Empty(t *testing.T) {

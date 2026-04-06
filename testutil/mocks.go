@@ -9,8 +9,8 @@ import (
 	"sync"
 	"testing"
 
-	"goboticus/internal/db"
-	"goboticus/internal/llm"
+	"roboticus/internal/db"
+	"roboticus/internal/llm"
 )
 
 // --- MockCompleter ---

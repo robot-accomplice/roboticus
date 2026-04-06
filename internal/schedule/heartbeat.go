@@ -6,7 +6,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"goboticus/internal/core"
+	"roboticus/internal/core"
 )
 
 // HeartbeatTaskKind enumerates recurring heartbeat tasks.

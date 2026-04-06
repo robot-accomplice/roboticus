@@ -1,5 +1,5 @@
 # ============================================================================
-# Goboticus Release Pipeline
+# Roboticus Release Pipeline
 # ============================================================================
 # Triggered by pushing a version tag: v2025.04.02, v2025.04.02.1, etc.
 # Builds cross-platform binaries, generates checksums, creates GitHub Release.
@@ -103,16 +103,16 @@ jobs:
           SUFFIX: ${{ matrix.suffix }}
           BUILD_VERSION: ${{ steps.version.outputs.version }}
         run: |
-          BINARY_NAME="goboticus-${GOOS}-${GOARCH}${SUFFIX}"
+          BINARY_NAME="roboticus-${GOOS}-${GOARCH}${SUFFIX}"
           go build -trimpath \
-            -ldflags="-s -w -X goboticus/cmd.version=${BUILD_VERSION}" \
+            -ldflags="-s -w -X roboticus/cmd.version=${BUILD_VERSION}" \
             -o "${BINARY_NAME}" .
           echo "binary=${BINARY_NAME}" >> "$GITHUB_ENV"
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4
         with:
-          name: goboticus-${{ matrix.goos }}-${{ matrix.goarch }}
+          name: roboticus-${{ matrix.goos }}-${{ matrix.goarch }}
           path: ${{ env.binary }}
           retention-days: 7
 
@@ -135,7 +135,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: dist/
-          pattern: goboticus-*
+          pattern: roboticus-*
           merge-multiple: true
 
       - name: List artifacts
@@ -144,7 +144,7 @@ jobs:
       - name: Generate SHA-256 checksums
         working-directory: dist
         run: |
-          sha256sum goboticus-* > checksums-sha256.txt
+          sha256sum roboticus-* > checksums-sha256.txt
           cat checksums-sha256.txt
 
       - name: Generate changelog from commits
@@ -170,11 +170,13 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: "Goboticus ${{ github.ref_name }}"
+          name: "Roboticus ${{ github.ref_name }}"
           body: ${{ steps.changelog.outputs.body }}
           draft: false
           prerelease: ${{ contains(github.ref_name, '-rc') }}
           files: |
-            dist/goboticus-*
-            dist/checksums-sha256.txt
+            dist/roboticus-*
+            dist/SHA256SUMS.txt
+            scripts/install.sh
+            scripts/install.ps1
           fail_on_unmatched_files: true

@@ -1,4 +1,4 @@
-# CLAUDE.md — Goboticus Development Guide
+# CLAUDE.md — Roboticus Development Guide
 
 ## Build & Test
 ```bash
@@ -6,7 +6,7 @@ go build ./...              # Build all packages
 go test ./...               # Run full test suite
 go test -v -run TestLiveSmokeTest .  # Live smoke test (boots server, hits all endpoints)
 go vet ./...                # Lint
-./goboticus parity-audit --roboticus-dir=../roboticus  # Feature parity check
+./roboticus parity-audit --rust-dir=../roboticus-rust  # Feature parity check
 ```
 
 ## Architecture
@@ -41,7 +41,7 @@ go vet ./...                # Lint
 
 ### Go Module Dependencies
 - `github.com/coder/websocket` — already in go.mod, used for WebSocket (EventBus + CDP sessions)
-- `github.com/charmbracelet/bubbletea` — TUI framework (added for `goboticus tui`)
+- `github.com/charmbracelet/bubbletea` — TUI framework (added for `roboticus tui`)
 - `github.com/charmbracelet/lipgloss` — TUI styling
 
 ## Key File Locations

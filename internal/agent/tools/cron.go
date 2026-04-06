@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"goboticus/internal/db"
+	"roboticus/internal/db"
 )
 
 // CronTool lets the agent manage scheduled cron jobs.

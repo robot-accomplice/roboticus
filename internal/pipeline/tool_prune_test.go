@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"goboticus/internal/core"
+	"roboticus/internal/core"
 )
 
 func TestToolPruner_UnderBudget(t *testing.T) {

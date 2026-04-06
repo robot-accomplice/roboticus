@@ -3,10 +3,10 @@ package pipeline_test
 import (
 	"context"
 
-	"goboticus/internal/core"
-	"goboticus/internal/llm"
-	"goboticus/internal/pipeline"
-	"goboticus/internal/session"
+	"roboticus/internal/core"
+	"roboticus/internal/llm"
+	"roboticus/internal/pipeline"
+	"roboticus/internal/session"
 )
 
 var (

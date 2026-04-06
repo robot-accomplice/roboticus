@@ -6,7 +6,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"goboticus/internal/db"
+	"roboticus/internal/db"
 )
 
 // ListTraces returns recent pipeline traces.

@@ -14,22 +14,22 @@ import (
 
 var parityAuditCmd = &cobra.Command{
 	Use:   "parity-audit",
-	Short: "Compare goboticus against roboticus for feature parity gaps",
+	Short: "Compare roboticus against roboticus for feature parity gaps",
 	RunE:  runParityAudit,
 }
 
 func init() {
-	parityAuditCmd.Flags().String("roboticus-dir", "../roboticus", "Path to roboticus source")
-	parityAuditCmd.Flags().String("goboticus-dir", ".", "Path to goboticus source")
+	parityAuditCmd.Flags().String("rust-dir", "../roboticus-rust", "Path to Rust roboticus source (frozen baseline)")
+	parityAuditCmd.Flags().String("go-dir", ".", "Path to Go roboticus source")
 	parityAuditCmd.Flags().String("output", "", "Output file (default: stdout)")
 	rootCmd.AddCommand(parityAuditCmd)
 }
 
-// subsystem maps a roboticus crate/module to its goboticus equivalent.
+// subsystem maps a roboticus crate/module to its roboticus equivalent.
 type subsystem struct {
 	Name         string
 	RustPaths    []string // glob patterns relative to roboticus root
-	GoPaths      []string // glob patterns relative to goboticus root
+	GoPaths      []string // glob patterns relative to roboticus root
 	KeyFunctions []string // Rust function names that must have Go equivalents
 	Aliases      map[string][]string
 }
@@ -137,8 +137,8 @@ var subsystems = []subsystem{
 }
 
 func runParityAudit(cmd *cobra.Command, args []string) error {
-	rustDir, _ := cmd.Flags().GetString("roboticus-dir")
-	goDir, _ := cmd.Flags().GetString("goboticus-dir")
+	rustDir, _ := cmd.Flags().GetString("rust-dir")
+	goDir, _ := cmd.Flags().GetString("go-dir")
 	output, _ := cmd.Flags().GetString("output")
 
 	var report strings.Builder

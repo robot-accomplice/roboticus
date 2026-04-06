@@ -4,8 +4,8 @@
 package session
 
 import (
-	"goboticus/internal/core"
-	"goboticus/internal/llm"
+	"roboticus/internal/core"
+	"roboticus/internal/llm"
 )
 
 // Session holds the state of an ongoing conversation.

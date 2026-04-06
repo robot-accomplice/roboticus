@@ -5,7 +5,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"goboticus/internal/db"
+	"roboticus/internal/db"
 )
 
 // ListAgents returns all registered agents from the sub_agents table.
@@ -87,7 +87,7 @@ func StopAgent(store *db.Store) http.HandlerFunc {
 func A2AHello() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		card := map[string]any{
-			"name":        "goboticus",
+			"name":        "roboticus",
 			"description": "Autonomous AI agent runtime",
 			"version":     "0.1.0",
 			"protocol":    "a2a/1.0",

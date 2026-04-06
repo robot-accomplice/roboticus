@@ -13,7 +13,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"goboticus/internal/core"
+	"roboticus/internal/core"
 )
 
 // TelegramConfig holds Telegram Bot API connection parameters.

@@ -12,7 +12,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"goboticus/internal/core"
+	"roboticus/internal/core"
 )
 
 const (

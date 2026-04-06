@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"goboticus/testutil"
+	"roboticus/testutil"
 )
 
 func TestDiagnostics_ReturnsValidJSON(t *testing.T) {

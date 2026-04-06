@@ -6,7 +6,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"goboticus/internal/db"
+	"roboticus/internal/db"
 )
 
 // ListObservabilityTraces returns pipeline traces with pagination.

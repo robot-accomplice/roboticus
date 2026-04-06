@@ -5,7 +5,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 
-	"goboticus/internal/db"
+	"roboticus/internal/db"
 )
 
 var migrateCmd = &cobra.Command{

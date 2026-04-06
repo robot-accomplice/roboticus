@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"sync"
 
-	"goboticus/internal/db"
+	"roboticus/internal/db"
 )
 
 // ThemeManifest describes a UI theme.
@@ -25,15 +25,15 @@ var (
 )
 
 var builtinThemes = []ThemeManifest{
-	{ID: "default", Name: "Default", Description: "Standard dark theme", Author: "goboticus", Swatch: "#33ff33",
+	{ID: "default", Name: "Default", Description: "Standard dark theme", Author: "roboticus", Swatch: "#33ff33",
 		Variables: map[string]string{"--bg": "#0a0a0a", "--surface": "#1a1a2e", "--accent": "#33ff33", "--text": "#e0e0e0"}, Source: "builtin"},
-	{ID: "parchment", Name: "Parchment", Description: "Warm paper-like theme", Author: "goboticus", Swatch: "#8b6914",
+	{ID: "parchment", Name: "Parchment", Description: "Warm paper-like theme", Author: "roboticus", Swatch: "#8b6914",
 		Variables: map[string]string{"--bg": "#f5e6c8", "--surface": "#ede0c8", "--accent": "#8b6914", "--text": "#3e2723"}, Source: "builtin"},
-	{ID: "midnight-ocean", Name: "Midnight Ocean", Description: "Deep blue ocean theme", Author: "goboticus", Swatch: "#00bcd4",
+	{ID: "midnight-ocean", Name: "Midnight Ocean", Description: "Deep blue ocean theme", Author: "roboticus", Swatch: "#00bcd4",
 		Variables: map[string]string{"--bg": "#0d1b2a", "--surface": "#1b2838", "--accent": "#00bcd4", "--text": "#b0bec5"}, Source: "builtin"},
-	{ID: "solarized-dark", Name: "Solarized Dark", Description: "Ethan Schoonover's Solarized", Author: "goboticus", Swatch: "#b58900",
+	{ID: "solarized-dark", Name: "Solarized Dark", Description: "Ethan Schoonover's Solarized", Author: "roboticus", Swatch: "#b58900",
 		Variables: map[string]string{"--bg": "#002b36", "--surface": "#073642", "--accent": "#b58900", "--text": "#839496"}, Source: "builtin"},
-	{ID: "nord", Name: "Nord", Description: "Arctic color palette", Author: "goboticus", Swatch: "#88c0d0",
+	{ID: "nord", Name: "Nord", Description: "Arctic color palette", Author: "roboticus", Swatch: "#88c0d0",
 		Variables: map[string]string{"--bg": "#2e3440", "--surface": "#3b4252", "--accent": "#88c0d0", "--text": "#d8dee9"}, Source: "builtin"},
 }
 

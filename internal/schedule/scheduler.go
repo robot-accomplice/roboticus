@@ -25,9 +25,12 @@ type CronJob struct {
 	Expression  string       `json:"schedule_expr"`     // cron expr or at timestamp
 	IntervalMs  int64        `json:"schedule_every_ms"` // for interval kind
 	PayloadJSON string       `json:"payload_json"`
-	Enabled     bool         `json:"enabled"`
-	LastRunAt   *time.Time   `json:"last_run_at,omitempty"`
-	NextRunAt   *time.Time   `json:"next_run_at,omitempty"`
+	Enabled      bool         `json:"enabled"`
+	LastRunAt    *time.Time   `json:"last_run_at,omitempty"`
+	NextRunAt    *time.Time   `json:"next_run_at,omitempty"`
+	RetryCount   int          `json:"retry_count"`
+	MaxRetries   int          `json:"max_retries"`
+	RetryDelayMs int64        `json:"retry_delay_ms"`
 }
 
 // DurableScheduler evaluates cron/interval/at schedules (pure function, no DB).

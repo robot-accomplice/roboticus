@@ -6,7 +6,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"goboticus/internal/db"
+	"roboticus/internal/db"
 )
 
 // QualityTracker maintains per-model sliding windows of quality observations

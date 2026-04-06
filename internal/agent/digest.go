@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"goboticus/internal/llm"
+	"roboticus/internal/llm"
 )
 
 type DigestGenerator struct {

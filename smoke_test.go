@@ -11,14 +11,14 @@ import (
 	"testing"
 	"time"
 
-	"goboticus/internal/agent"
-	agenttools "goboticus/internal/agent/tools"
-	"goboticus/internal/api"
-	"goboticus/internal/core"
-	"goboticus/internal/llm"
-	"goboticus/internal/pipeline"
-	"goboticus/internal/session"
-	"goboticus/testutil"
+	"roboticus/internal/agent"
+	agenttools "roboticus/internal/agent/tools"
+	"roboticus/internal/api"
+	"roboticus/internal/core"
+	"roboticus/internal/llm"
+	"roboticus/internal/pipeline"
+	"roboticus/internal/session"
+	"roboticus/testutil"
 )
 
 // smokeExecutor is a minimal pipeline.ToolExecutor for the smoke test.
@@ -26,7 +26,7 @@ import (
 type smokeExecutor struct{}
 
 func (s *smokeExecutor) RunLoop(_ context.Context, session *session.Session) (string, int, error) {
-	content := "Hello from Goboticus!"
+	content := "Hello from Roboticus!"
 	session.AddAssistantMessage(content, nil)
 	return content, 1, nil
 }
@@ -44,7 +44,7 @@ func TestLiveSmokeTest(t *testing.T) {
 			"choices": []map[string]any{{
 				"message": map[string]any{
 					"role":    "assistant",
-					"content": "Hello from Goboticus!",
+					"content": "Hello from Roboticus!",
 				},
 				"finish_reason": "stop",
 			}},
@@ -120,7 +120,7 @@ func TestLiveSmokeTest(t *testing.T) {
 		resp := get(t, client, base+"/.well-known/agent.json")
 		assertStatus(t, resp, 200)
 		body := readJSON(t, resp)
-		if body["name"] != "goboticus" {
+		if body["name"] != "roboticus" {
 			t.Fatalf("agent card name = %v", body["name"])
 		}
 		t.Logf("PASS: agent card — name=%v, version=%v", body["name"], body["version"])

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Goboticus Dashboard</title>
+  <title>Roboticus Dashboard</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -761,7 +761,7 @@
       <h2 id="sidebar-help-title" class="hint-pref-title">Help &amp; hints</h2>
       <div class="hint-help-wiki-block">
         <p class="hint-help-wiki-desc">Guides and reference material are maintained in the project wiki.</p>
-        <a id="sidebar-help-wiki-link" href="https://github.com/goboticus/goboticus/wiki" target="_blank" rel="noopener noreferrer">Open Goboticus wiki →</a>
+        <a id="sidebar-help-wiki-link" href="https://github.com/roboticus/roboticus/wiki" target="_blank" rel="noopener noreferrer">Open Roboticus wiki →</a>
       </div>
       <div class="hint-help-toggle-row">
         <span class="hint-help-toggle-label" id="modal-hints-label">Show contextual hints</span>
@@ -1067,7 +1067,7 @@
   var HINTS_PROMPTED_KEY = 'ic_hints_prompted';
   var HINTS_DISMISSED_KEY = 'ic_hints_dismissed';
   /** Dashboard “Open wiki” target; keep in sync with repo docs. */
-  var HELP_WIKI_URL = 'https://github.com/goboticus/goboticus/wiki';
+  var HELP_WIKI_URL = 'https://github.com/roboticus/roboticus/wiki';
   function hintsEnabled() {
     try {
       var v = window.localStorage.getItem(HINTS_ENABLED_KEY);
@@ -3464,7 +3464,7 @@
 
         // Network & address card
         var networkBadge = '<span class="badge success" style="font-size:0.625rem;vertical-align:middle">' + esc(network) + '</span>';
-        var addrSection = '<div class="card" style="margin-bottom:1rem"><div class="card-title">Wallet ' + networkBadge + '</div><div style="font-size:0.6875rem;color:var(--muted);margin-bottom:0.5rem">Chain ID: ' + chainId + '</div><div class="card-mono" style="word-break:break-all" id="wallet-addr">' + esc(addrStr) + '</div><div style="display:flex;gap:0.5rem;margin-top:8px"><button class="btn secondary" id="copy-address" style="font-size:0.75rem;padding:0.3rem 0.75rem">Copy</button></div><p style="font-size:0.6875rem;color:var(--muted);margin-top:0.5rem">Wallet settings are immutable at runtime. Update `goboticus.toml` and restart to change address or chain.</p></div>';
+        var addrSection = '<div class="card" style="margin-bottom:1rem"><div class="card-title">Wallet ' + networkBadge + '</div><div style="font-size:0.6875rem;color:var(--muted);margin-bottom:0.5rem">Chain ID: ' + chainId + '</div><div class="card-mono" style="word-break:break-all" id="wallet-addr">' + esc(addrStr) + '</div><div style="display:flex;gap:0.5rem;margin-top:8px"><button class="btn secondary" id="copy-address" style="font-size:0.75rem;padding:0.3rem 0.75rem">Copy</button></div><p style="font-size:0.6875rem;color:var(--muted);margin-top:0.5rem">Wallet settings are immutable at runtime. Update `roboticus.toml` and restart to change address or chain.</p></div>';
 
         // Token balances card
         var tokenRows = '';
@@ -3640,7 +3640,7 @@
       var proxy = this._availableModelsProxyRuntime || {};
       var alerts = [];
       if (proxy.mode === 'in_process') {
-        alerts.push('<div class="card" style="border-color:var(--border);margin-bottom:0.6rem"><div style="font-size:0.72rem;color:var(--muted);font-weight:600">Provider routing mode: in-process</div><div style="font-size:0.72rem;color:var(--muted);margin-top:0.2rem">Dashboard discovery is server-mediated. Providers are contacted only by Goboticus backend APIs.</div></div>');
+        alerts.push('<div class="card" style="border-color:var(--border);margin-bottom:0.6rem"><div style="font-size:0.72rem;color:var(--muted);font-weight:600">Provider routing mode: in-process</div><div style="font-size:0.72rem;color:var(--muted);margin-top:0.2rem">Dashboard discovery is server-mediated. Providers are contacted only by Roboticus backend APIs.</div></div>');
       }
       if (proxy.legacy_loopback_support === 'removed_v0_8') {
         alerts.push('<div class="card" style="border-color:var(--warning);margin-bottom:0.6rem"><div style="font-size:0.72rem;color:var(--warning);font-weight:600">Legacy loopback provider URLs are unsupported</div><div style="font-size:0.72rem;color:var(--muted);margin-top:0.2rem">127.0.0.1:8788 provider URLs are not supported in v0.8.0+. Update providers.*.url to direct upstream provider base URLs.</div></div>');
@@ -3891,7 +3891,7 @@
         if (specialists.length === 0) {
           html += '<div class="card" style="text-align:center;padding:3rem"><div style="font-size:2rem;margin-bottom:0.5rem">\uD83E\uDD16</div>';
           html += '<div style="color:var(--muted)">No taskable sub-agents configured</div>';
-          html += '<div style="font-size:0.75rem;color:var(--muted);margin-top:0.5rem">Import a prior agent export with <code style="background:var(--surface);padding:0.1rem 0.4rem;border-radius:4px">goboticus migrate import &lt;export-root&gt; --areas agents</code> or add one below</div>';
+          html += '<div style="font-size:0.75rem;color:var(--muted);margin-top:0.5rem">Import a prior agent export with <code style="background:var(--surface);padding:0.1rem 0.4rem;border-radius:4px">roboticus migrate import &lt;export-root&gt; --areas agents</code> or add one below</div>';
           html += '</div>';
         }
 
@@ -4274,7 +4274,7 @@
             includeControlModes: false
           });
           var immutableNote = modelsImmutable
-            ? '<div style="font-size:0.75rem;color:var(--muted);margin:0.35rem 0 0.85rem">Model order is immutable at runtime for this instance. Edit `goboticus.toml` and restart.</div>'
+            ? '<div style="font-size:0.75rem;color:var(--muted);margin:0.35rem 0 0.85rem">Model order is immutable at runtime for this instance. Edit `roboticus.toml` and restart.</div>'
             : '<div style="font-size:0.75rem;color:var(--muted);margin:0.35rem 0 0.85rem">Drag rows to reorder preference. Top row is primary; all others are fallback order.</div>';
           var addRow = modelsImmutable ? '' : ('<div class="model-order-add"><input id="model-order-add-input" class="settings-input" list="model-order-known-list" type="text" placeholder="Add model (provider/name)"><datalist id="model-order-known-list">' + knownModelOptions + '</datalist><button class="btn secondary" id="model-order-add-btn">Add model</button></div>');
           var providerAlerts = self._renderProviderDiscoveryAlerts();
@@ -4449,7 +4449,7 @@
 
           if (isImmutableSection) {
             html += '<div class="settings-section"><div class="settings-section-title">' + esc(section) + ' <span class="badge muted" style="font-size:0.6rem">restart required</span></div>'
-              + '<div style="font-size:0.75rem;color:var(--muted);margin-bottom:0.5rem">This section is immutable at runtime. Edit `goboticus.toml` and restart.</div>'
+              + '<div style="font-size:0.75rem;color:var(--muted);margin-bottom:0.5rem">This section is immutable at runtime. Edit `roboticus.toml` and restart.</div>'
               + '<pre class="card-mono" style="white-space:pre-wrap">' + esc(JSON.stringify(sectionData, null, 2)) + '</pre></div>';
             return;
           }
@@ -4911,7 +4911,7 @@
     document.querySelectorAll('.theme-option').forEach(function(o) { o.classList.toggle('active', o.getAttribute('data-theme-set') === theme); });
     var nameEl = document.getElementById('theme-name'); if (nameEl) nameEl.textContent = themeNames[theme] || theme;
   }
-  var savedTheme = localStorage.getItem('goboticus-theme');
+  var savedTheme = localStorage.getItem('roboticus-theme');
   if (savedTheme && themeNames[savedTheme]) applyTheme(savedTheme);
   var themeToggle = document.getElementById('theme-toggle');
   var themeDropdown = document.getElementById('theme-dropdown');
@@ -4922,7 +4922,7 @@
       var opt = e.target.closest('[data-theme-set]'); if (!opt) return;
       var theme = opt.getAttribute('data-theme-set');
       applyTheme(theme);
-      localStorage.setItem('goboticus-theme', theme);
+      localStorage.setItem('roboticus-theme', theme);
       themeDropdown.classList.remove('open');
       if (App.page === 'overview') App.navigate('overview');
     });
@@ -6085,7 +6085,7 @@
       var sched = App._readSchedFromUI(); var cron = App._schedToCron(sched);
       var descEl = document.getElementById('cal-job-description'); var intent = (descEl && descEl.value || '').trim();
       var payloadObj = intent ? { action: 'agent_task', task: intent } : { action: 'log', message: ('scheduled job: ' + name) };
-      var jobData = { name: name, description: intent || null, schedule_kind: cron.kind, schedule_expr: cron.expr, payload_json: JSON.stringify(payloadObj), agent_id: App._activeAgentId || 'goboticus' };
+      var jobData = { name: name, description: intent || null, schedule_kind: cron.kind, schedule_expr: cron.expr, payload_json: JSON.stringify(payloadObj), agent_id: App._activeAgentId || 'roboticus' };
       if (App._calModalMode === 'add') {
         api('/api/cron/jobs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(jobData) }).then(function() { toast('Added "' + name + '"'); App._calModalMode = null; App._calEditJob = null; App.navigate('scheduler'); }).catch(function(err) { toast(err.message || 'Add failed'); });
       } else {

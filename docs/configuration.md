@@ -1,13 +1,13 @@
 # Configuration Reference
 
-Goboticus loads configuration from `~/.goboticus/goboticus.toml` on startup. All settings can be overridden via environment variables with the `GOBOTICUS_` prefix (e.g., `GOBOTICUS_SERVER_PORT=8080`).
+Roboticus loads configuration from `~/.roboticus/roboticus.toml` on startup. All settings can be overridden via environment variables with the `GOBOTICUS_` prefix (e.g., `GOBOTICUS_SERVER_PORT=8080`).
 
 ## Configuration File Location
 
 The config file is searched in order:
 1. `--config` CLI flag
-2. `~/.goboticus/goboticus.toml`
-3. `./goboticus.toml` (current directory)
+2. `~/.roboticus/roboticus.toml`
+3. `./roboticus.toml` (current directory)
 
 If no file is found, sensible defaults are used.
 
@@ -17,16 +17,16 @@ If no file is found, sensible defaults are used.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `name` | string | `"goboticus"` | Agent display name. Used in prompts and responses. |
+| `name` | string | `"roboticus"` | Agent display name. Used in prompts and responses. |
 | `id` | string | `""` | Unique agent identifier. Auto-generated if empty. |
-| `workspace` | string | `~/.goboticus/workspace` | Root directory for agent file operations. All tool paths are sandboxed to this directory. |
+| `workspace` | string | `~/.roboticus/workspace` | Root directory for agent file operations. All tool paths are sandboxed to this directory. |
 | `autonomy_max_react_turns` | int | `25` | Maximum ReAct loop iterations before forcing a response. Prevents runaway tool loops. |
 | `autonomy_max_turn_duration_seconds` | int | `120` | Maximum wall-clock time for a single turn. |
 
 ```toml
 [agent]
-name = "goboticus"
-workspace = "~/.goboticus/workspace"
+name = "roboticus"
+workspace = "~/.roboticus/workspace"
 autonomy_max_react_turns = 25
 ```
 
@@ -38,7 +38,7 @@ autonomy_max_react_turns = 25
 |-------|------|---------|-------------|
 | `port` | int | `18789` | HTTP server listen port. Must be 1-65535. |
 | `bind` | string | `"127.0.0.1"` | Bind address. Use `"0.0.0.0"` to expose to network. Must be a valid IP or `"localhost"`. |
-| `log_dir` | string | `~/.goboticus/logs` | Directory for log file output. |
+| `log_dir` | string | `~/.roboticus/logs` | Directory for log file output. |
 | `cron_max_concurrency` | int | `4` | Maximum concurrent cron job executions. Must be 1-16. |
 
 ```toml
@@ -54,7 +54,7 @@ cron_max_concurrency = 4
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `path` | string | `~/.goboticus/goboticus.db` | Path to SQLite database file. Created automatically if it doesn't exist. |
+| `path` | string | `~/.roboticus/roboticus.db` | Path to SQLite database file. Created automatically if it doesn't exist. |
 
 The database uses WAL journal mode with foreign keys enabled and a 5-second busy timeout. Maximum 4 open connections.
 
@@ -226,7 +226,7 @@ relationship_budget = 10.0
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `path` | string | `~/.goboticus/wallet.enc` | Path to the encrypted wallet file. |
+| `path` | string | `~/.roboticus/wallet.enc` | Path to the encrypted wallet file. |
 
 The wallet requires a passphrase set via `GOBOTICUS_WALLET_PASSPHRASE` environment variable. Plaintext wallet storage is rejected.
 
@@ -245,7 +245,7 @@ The wallet requires a passphrase set via `GOBOTICUS_WALLET_PASSPHRASE` environme
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `dir` | string | `~/.goboticus/plugins` | Plugin discovery directory. |
+| `dir` | string | `~/.roboticus/plugins` | Plugin discovery directory. |
 
 ---
 

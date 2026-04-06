@@ -70,7 +70,7 @@ func NewModel(baseURL, apiKey string) Model {
 // Init starts the TUI with initial commands.
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
-		tea.SetWindowTitle("goboticus"),
+		tea.SetWindowTitle("roboticus"),
 		m.createSession(),
 	)
 }

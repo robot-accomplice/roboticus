@@ -11,14 +11,14 @@ import (
 	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/rs/zerolog/log"
 
-	"goboticus/internal/api/routes"
-	"goboticus/internal/browser"
-	"goboticus/internal/core"
-	"goboticus/internal/db"
-	"goboticus/internal/llm"
-	"goboticus/internal/mcp"
-	"goboticus/internal/pipeline"
-	"goboticus/internal/plugin"
+	"roboticus/internal/api/routes"
+	"roboticus/internal/browser"
+	"roboticus/internal/core"
+	"roboticus/internal/db"
+	"roboticus/internal/llm"
+	"roboticus/internal/mcp"
+	"roboticus/internal/pipeline"
+	"roboticus/internal/plugin"
 )
 
 // AppState holds all shared state for the API server.
@@ -153,6 +153,10 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 		r.Post("/api/knowledge/ingest", routes.IngestKnowledge(state.Store))
 		r.Get("/api/stats/memory-analytics", routes.GetMemoryAnalytics(state.Store))
 		r.Get("/api/memory/health", routes.MemoryHealth(state.Store))
+
+		// Routing profile.
+		r.Get("/api/routing/profile", routes.GetRoutingProfile(state.Store))
+		r.Put("/api/routing/profile", routes.PutRoutingProfile(state.Store))
 
 		// Cron.
 		r.Get("/api/cron/jobs", routes.ListCronJobs(state.Store))

@@ -10,7 +10,7 @@ import (
 
 	"golang.org/x/text/unicode/norm"
 
-	"goboticus/internal/core"
+	"roboticus/internal/core"
 )
 
 // InjectionDetector implements 4-layer prompt injection defense.
@@ -88,10 +88,12 @@ var (
 	// L2: Sanitization patterns (matched and replaced with [REDACTED]).
 	sanitizePatterns = compile(
 		`(?i)ignore\s+(all\s+)?previous\s+instructions?`,
+		`(?i)disregard\s+(all\s+)?prior\s+instructions?[^\.\n]*`,
 		`(?i)you\s+are\s+now\s+[^\.\n]+`,
 		`(?i)system\s*:\s*[^\n]+`,
 		`(?i)new\s+instructions?\s*:\s*[^\n]+`,
 		`(?i)override\s+safety\s+[^\.\n]+`,
+		`(?i)forget\s+(your|all)\s+[^\.\n]*instructions?[^\.\n]*`,
 	)
 
 	// L4: Output-specific patterns (tighter to avoid false positives).

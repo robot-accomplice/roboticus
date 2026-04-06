@@ -6,7 +6,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"goboticus/internal/db"
+	"roboticus/internal/db"
 )
 
 // GetRuntimeSurfaces returns the registered runtime surfaces (agent capabilities).

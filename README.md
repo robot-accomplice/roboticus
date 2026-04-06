@@ -11,13 +11,13 @@
         ═╩═╩═
 ```
 
-# Goboticus
+# Roboticus
 
 ![Go 1.26](https://img.shields.io/badge/Go-1.26-00ADD8?style=flat-square&logo=go&logoColor=white)
-![CI](https://img.shields.io/github/actions/workflow/status/robot-accomplice/goboticus/ci.yml?style=flat-square&label=CI)
-![Parity Audit](https://img.shields.io/github/actions/workflow/status/robot-accomplice/goboticus/parity-audit.yml?style=flat-square&label=parity%20audit)
+![CI](https://img.shields.io/github/actions/workflow/status/robot-accomplice/roboticus/ci.yml?style=flat-square&label=CI)
+![Parity Audit](https://img.shields.io/github/actions/workflow/status/robot-accomplice/roboticus/parity-audit.yml?style=flat-square&label=parity%20audit)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square)
-![Go Version](https://img.shields.io/github/go-mod/go-version/robot-accomplice/goboticus?style=flat-square)
+![Go Version](https://img.shields.io/github/go-mod/go-version/robot-accomplice/roboticus?style=flat-square)
 ![Lines of Code](https://img.shields.io/badge/lines-17k%2B-blue?style=flat-square)
 ![Tests](https://img.shields.io/badge/tests-29%20files-green?style=flat-square)
 ![Channels](https://img.shields.io/badge/channels-7-purple?style=flat-square)
@@ -32,10 +32,10 @@ Multi-model inference - 5-tier memory - 7 channels - On-chain wallet - Full dash
 
 ## Overview
 
-Goboticus is a self-contained AI agent runtime that manages its own context, memory, tools, scheduling, and multi-channel communication. It compiles to a single binary with an embedded web dashboard — no external dependencies beyond an LLM provider and SQLite.
+Roboticus is a self-contained AI agent runtime that manages its own context, memory, tools, scheduling, and multi-channel communication. It compiles to a single binary with an embedded web dashboard — no external dependencies beyond an LLM provider and SQLite.
 
 ```bash
-goboticus serve --port 18789
+roboticus serve --port 18789
 ```
 
 ## Architecture
@@ -145,28 +145,28 @@ goboticus serve --port 18789
 
 ```bash
 # Build
-go build -o goboticus .
+go build -o roboticus .
 
-# Run with defaults (~/.goboticus/ data directory)
-./goboticus serve
+# Run with defaults (~/.roboticus/ data directory)
+./roboticus serve
 
 # Custom port and bind
-./goboticus serve --port 8080 --bind 0.0.0.0
+./roboticus serve --port 8080 --bind 0.0.0.0
 
 # Run parity audit against roboticus source
-./goboticus parity-audit --roboticus-dir=../roboticus
+./roboticus parity-audit --roboticus-dir=../roboticus
 ```
 
 Open `http://localhost:18789` for the dashboard.
 
 ## Configuration
 
-Goboticus loads configuration from `~/.goboticus/goboticus.toml` with environment variable overrides (prefix `GOBOTICUS_`).
+Roboticus loads configuration from `~/.roboticus/roboticus.toml` with environment variable overrides (prefix `GOBOTICUS_`).
 
 ```toml
 [agent]
-name = "goboticus"
-workspace = "~/.goboticus/workspace"
+name = "roboticus"
+workspace = "~/.roboticus/workspace"
 
 [server]
 port = 18789
@@ -265,11 +265,11 @@ These are pre-configured and available without any TOML entries:
 
 ## Parity Tracking
 
-Goboticus includes automated feature parity tracking against roboticus:
+Roboticus includes automated feature parity tracking against roboticus:
 
 ```bash
 # Run locally
-./goboticus parity-audit --roboticus-dir=../roboticus --output=report.md
+./roboticus parity-audit --roboticus-dir=../roboticus --output=report.md
 
 # Automated via GitHub Actions
 # See .github/workflows/parity-audit.yml
@@ -280,7 +280,7 @@ The parity audit compares subsystems (pipeline, memory, LLM, tools, channels, sc
 ## Project Structure
 
 ```text
-goboticus/
+roboticus/
 ├── cmd/                    # CLI commands (serve, migrate, parity-audit)
 ├── internal/
 │   ├── agent/              # Agent loop, memory, retrieval, policy, skills, tools
@@ -306,7 +306,7 @@ goboticus/
 
 ```bash
 # Build
-go build -o goboticus .
+go build -o roboticus .
 
 # Run tests
 go test ./...

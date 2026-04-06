@@ -183,7 +183,7 @@ func (t *HTTPFetchTool) Execute(ctx context.Context, params string, _ *Context) 
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "Goboticus/1.0")
+	req.Header.Set("User-Agent", "Roboticus/1.0")
 	for k, v := range p.Headers {
 		req.Header.Set(k, v)
 	}

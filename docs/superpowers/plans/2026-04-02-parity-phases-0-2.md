@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Bring goboticus to full architectural parity with roboticus by extracting pipeline interfaces (Phase 0), completing pipeline stages (Phase 1), and adding the agent cognitive scaffold (Phase 2).
+**Goal:** Bring roboticus to full architectural parity with roboticus by extracting pipeline interfaces (Phase 0), completing pipeline stages (Phase 1), and adding the agent cognitive scaffold (Phase 2).
 
 **Architecture:** Pipeline-centric approach — the unified pipeline is the architectural spine. Phase 0 breaks the `pipeline → agent` import dependency by defining interfaces in the pipeline package. Phase 1 adds missing pipeline stages (flight recorder, guard retry/fallback, guard registry, tool prune, intent registry, bot commands). Phase 2 adds agent intelligence modules (subagents, action planner, task state, retrieval strategy, compaction, capability discovery, tool output filter, governor). All new code uses table-driven tests with 80%+ coverage.
 
@@ -89,8 +89,8 @@ package pipeline
 import (
 	"context"
 
-	"goboticus/internal/core"
-	"goboticus/internal/llm"
+	"roboticus/internal/core"
+	"roboticus/internal/llm"
 )
 
 // InjectionChecker scores input text for prompt injection risk.
@@ -160,8 +160,8 @@ Ingestor, NicknameRefiner, and StreamPreparer interfaces."
 package pipeline
 
 import (
-	"goboticus/internal/core"
-	"goboticus/internal/llm"
+	"roboticus/internal/core"
+	"roboticus/internal/llm"
 )
 
 // Session holds the in-flight conversation state for the pipeline.
@@ -320,9 +320,9 @@ package pipeline_test
 import (
 	"context"
 
-	"goboticus/internal/core"
-	"goboticus/internal/llm"
-	"goboticus/internal/pipeline"
+	"roboticus/internal/core"
+	"roboticus/internal/llm"
+	"roboticus/internal/pipeline"
 )
 
 // mockInjectionChecker is a test double for pipeline.InjectionChecker.
@@ -450,9 +450,9 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"goboticus/internal/core"
-	"goboticus/internal/db"
-	"goboticus/internal/llm"
+	"roboticus/internal/core"
+	"roboticus/internal/db"
+	"roboticus/internal/llm"
 )
 
 // Outcome represents the result of a pipeline run.
@@ -596,8 +596,8 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"goboticus/internal/core"
-	"goboticus/internal/db"
+	"roboticus/internal/core"
+	"roboticus/internal/db"
 )
 
 // runStandardInference delegates to the ToolExecutor for the full ReAct loop.
@@ -796,7 +796,7 @@ Expected: PASS — no more `agent` import
 
 - [ ] **Step 3: Verify agent import is gone**
 
-Run: `grep -r '"goboticus/internal/agent"' internal/pipeline/`
+Run: `grep -r '"roboticus/internal/agent"' internal/pipeline/`
 Expected: No matches
 
 ### Task 6: Update daemon.go wiring (composition root)
@@ -965,7 +965,7 @@ Expected: PASS
 
 - [ ] **Step 6: Verify no agent import in pipeline**
 
-Run: `grep -rn '"goboticus/internal/agent"' internal/pipeline/`
+Run: `grep -rn '"roboticus/internal/agent"' internal/pipeline/`
 Expected: No output (no matches)
 
 - [ ] **Step 7: Commit**
@@ -1746,7 +1746,7 @@ import (
 	"context"
 	"fmt"
 
-	"goboticus/internal/core"
+	"roboticus/internal/core"
 )
 
 // RetryPolicy controls guard-triggered re-inference behavior.
@@ -1856,7 +1856,7 @@ Expected: PASS
 
 - [ ] **Step 4: Verify no agent import in pipeline**
 
-Run: `grep -rn '"goboticus/internal/agent"' internal/pipeline/`
+Run: `grep -rn '"roboticus/internal/agent"' internal/pipeline/`
 Expected: No output
 
 - [ ] **Step 5: Check coverage on new files**

@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 
-	"goboticus/internal/core"
-	"goboticus/internal/db"
+	"roboticus/internal/core"
+	"roboticus/internal/db"
 )
 
 // Tool is the interface every agent tool must implement.

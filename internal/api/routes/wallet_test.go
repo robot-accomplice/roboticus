@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"goboticus/testutil"
+	"roboticus/testutil"
 )
 
 func TestGetWalletAddress(t *testing.T) {

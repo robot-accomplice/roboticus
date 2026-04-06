@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"goboticus/testutil"
+	"roboticus/testutil"
 )
 
 func TestListCronJobs(t *testing.T) {

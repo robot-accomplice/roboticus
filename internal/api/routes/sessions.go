@@ -8,8 +8,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"goboticus/internal/db"
-	"goboticus/internal/pipeline"
+	"roboticus/internal/db"
+	"roboticus/internal/pipeline"
 )
 
 // ListSessions returns all sessions.
@@ -175,7 +175,7 @@ func PostMessage(p pipeline.Runner) http.HandlerFunc {
 			Content:   req.Content,
 			SessionID: sessionID,
 			AgentID:   req.AgentID,
-			AgentName: "Goboticus",
+			AgentName: "Roboticus",
 			Platform:  "api",
 		}
 

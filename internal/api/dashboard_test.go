@@ -67,15 +67,15 @@ func TestDashboardHandler_NonceInScriptTags(t *testing.T) {
 	}
 }
 
-func TestDashboardHandler_ContainsGoboticus(t *testing.T) {
+func TestDashboardHandler_ContainsRoboticus(t *testing.T) {
 	handler := DashboardHandler()
 	req := httptest.NewRequest("GET", "/", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
 	body := rec.Body.String()
-	if !strings.Contains(body, "Goboticus") {
-		t.Error("dashboard should contain 'Goboticus' branding")
+	if !strings.Contains(body, "Roboticus") {
+		t.Error("dashboard should contain 'Roboticus' branding")
 	}
 }
 

@@ -5,13 +5,13 @@ import (
 	"testing"
 	"time"
 
-	"goboticus/internal/agent"
-	"goboticus/testutil"
+	"roboticus/internal/agent"
+	"roboticus/testutil"
 )
 
 func TestSessionGovernor_NewSessionGovernor(t *testing.T) {
 	store := testutil.TempStore(t)
-	sg := agent.NewSessionGovernor(store, 24*time.Hour)
+	sg := agent.NewSessionGovernor(store, 24*time.Hour, 24*time.Hour)
 	if sg == nil {
 		t.Fatal("expected non-nil SessionGovernor")
 	}
@@ -19,7 +19,7 @@ func TestSessionGovernor_NewSessionGovernor(t *testing.T) {
 
 func TestSessionGovernor_TickEmpty(t *testing.T) {
 	store := testutil.TempStore(t)
-	sg := agent.NewSessionGovernor(store, 24*time.Hour)
+	sg := agent.NewSessionGovernor(store, 24*time.Hour, 24*time.Hour)
 
 	report, err := sg.Tick(context.Background())
 	if err != nil {
@@ -59,7 +59,7 @@ func TestSessionGovernor_ExpireStaleSessions(t *testing.T) {
 		t.Fatalf("insert session: %v", err)
 	}
 
-	sg := agent.NewSessionGovernor(store, 24*time.Hour)
+	sg := agent.NewSessionGovernor(store, 24*time.Hour, 24*time.Hour)
 	report, err := sg.Tick(ctx)
 	if err != nil {
 		t.Fatalf("tick error: %v", err)
@@ -108,7 +108,7 @@ func TestSessionGovernor_DecayEpisodicImportance(t *testing.T) {
 		t.Fatalf("insert memory: %v", err)
 	}
 
-	sg := agent.NewSessionGovernor(store, 24*time.Hour)
+	sg := agent.NewSessionGovernor(store, 24*time.Hour, 24*time.Hour)
 	report, err := sg.Tick(ctx)
 	if err != nil {
 		t.Fatalf("tick error: %v", err)
@@ -148,7 +148,7 @@ func TestSessionGovernor_AdjustSkillPriorities(t *testing.T) {
 		t.Fatalf("insert skill: %v", err)
 	}
 
-	sg := agent.NewSessionGovernor(store, 24*time.Hour)
+	sg := agent.NewSessionGovernor(store, 24*time.Hour, 24*time.Hour)
 	report, err := sg.Tick(ctx)
 	if err != nil {
 		t.Fatalf("tick error: %v", err)
@@ -197,7 +197,7 @@ func TestSessionGovernor_PruneDeadSkills(t *testing.T) {
 		t.Fatalf("insert skill: %v", err)
 	}
 
-	sg := agent.NewSessionGovernor(store, 24*time.Hour)
+	sg := agent.NewSessionGovernor(store, 24*time.Hour, 24*time.Hour)
 	report, err := sg.Tick(ctx)
 	if err != nil {
 		t.Fatalf("tick error: %v", err)
@@ -230,7 +230,7 @@ func TestSessionGovernor_MinInterval(t *testing.T) {
 	store := testutil.TempStore(t)
 	ctx := context.Background()
 
-	sg := agent.NewSessionGovernor(store, 24*time.Hour)
+	sg := agent.NewSessionGovernor(store, 24*time.Hour, 24*time.Hour)
 
 	// First tick should run.
 	report1, err := sg.Tick(ctx)

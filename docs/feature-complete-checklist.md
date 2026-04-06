@@ -1,7 +1,9 @@
-# Goboticus Feature-Complete Checklist
+# Roboticus Feature-Complete Checklist
 
-This document defines the exact bar for declaring Goboticus feature-complete as
+This document defines the exact bar for declaring Roboticus feature-complete as
 the successor to Roboticus.
+
+Transition policy is defined in `docs/migration-release-policy.md`.
 
 ## Baseline
 
@@ -17,10 +19,10 @@ the successor to Roboticus.
 
 ## What "Feature Complete" Means
 
-Goboticus is feature-complete only when all of the following are true:
+Roboticus is feature-complete only when all of the following are true:
 
 1. Every required operator-visible and user-visible capability in this
-   checklist exists in Goboticus.
+   checklist exists in Roboticus.
 2. No advertised feature is backed by placeholder behavior, fake success, or
    silent degraded fallback.
 3. Every required capability has regression coverage at the right layer.
@@ -33,14 +35,14 @@ Goboticus is feature-complete only when all of the following are true:
 
 ## Non-Goals For This Gate
 
-These are not blockers for Goboticus feature-complete status unless Goboticus
+These are not blockers for Roboticus feature-complete status unless Roboticus
 chooses to advertise them:
 
 - future Roboticus roadmap items beyond the final `v0.11.x` baseline
 - speculative discovery/device/network flows that were still partial in
   Roboticus
 - future voice-channel roadmap work
-- generic "infinite parity" infrastructure after Goboticus is accepted as the
+- generic "infinite parity" infrastructure after Roboticus is accepted as the
   primary codebase
 
 ## Required Capability Checklist
@@ -65,7 +67,7 @@ Status key for this checklist:
 
 - [ ] Telegram ingress is fully wired for the chosen runtime mode
   (webhook and/or poll) with the same policy and formatting behavior as web/API.
-- [ ] WhatsApp ingress/verification is fully wired if Goboticus advertises it.
+- [ ] WhatsApp ingress/verification is fully wired if Roboticus advertises it.
 - [ ] Discord outbound messaging path is functional if advertised.
 - [ ] Signal outbound messaging path is functional if advertised.
 - [ ] Delivery retries persist across restart via `delivery_queue`.
@@ -95,11 +97,11 @@ Status key for this checklist:
 - [ ] Session-aware metascore penalties are honored.
 - [ ] Per-context / per-intent metascore behavior is honored.
 - [ ] Per-model timeout overrides are honored.
-- [ ] Model exercise / bootstrap flow exists if Goboticus advertises model
+- [ ] Model exercise / bootstrap flow exists if Roboticus advertises model
   self-baselining.
-- [ ] Model suggestion flow exists if Goboticus advertises suggestion/apply UX.
+- [ ] Model suggestion flow exists if Roboticus advertises suggestion/apply UX.
 - [ ] Routing profile controls and spider-graph weighting are functional if
-  Goboticus advertises user-tunable routing.
+  Roboticus advertises user-tunable routing.
 
 ### E. Memory, Retrieval, And Context
 
@@ -119,7 +121,7 @@ Status key for this checklist:
 - [ ] Browser admin/runtime APIs are functional for the advertised action set.
 - [ ] Plugin discovery, enable/disable, and execution are functional.
 - [ ] MCP management surfaces are functional and aligned across API/UI/CLI for
-  the surfaces Goboticus claims.
+  the surfaces Roboticus claims.
 - [ ] Config-protection guardrails block unsafe config mutation through tools.
 - [ ] Action verification guardrails prevent fabricated financial/action claims.
 
@@ -145,7 +147,7 @@ Status key for this checklist:
 - [ ] Wallet read endpoints are functional and honest.
 - [ ] Treasury state is served from cache/persisted state where promised.
 - [ ] Treasury/runtime policy checks are enforced where advertised.
-- [ ] EIP-3009 and x402 flows are complete for the surfaces Goboticus claims.
+- [ ] EIP-3009 and x402 flows are complete for the surfaces Roboticus claims.
 - [ ] Yield lifecycle behavior is either implemented or explicitly not claimed.
 
 ### J. Discovery, A2A, Runtime, And Device Surfaces
@@ -163,9 +165,9 @@ Status key for this checklist:
 - [ ] Markdown and rendering safety are enforced.
 - [ ] Configuration editing and status surfaces are backed by real state.
 - [ ] Theme/runtime/operator controls validate inputs and persist honest state.
-- [ ] If Goboticus advertises TUI parity, every operator-critical dashboard
+- [ ] If Roboticus advertises TUI parity, every operator-critical dashboard
   surface has a TUI equivalent.
-- [ ] If Goboticus does not yet provide TUI parity, that claim must be absent
+- [ ] If Roboticus does not yet provide TUI parity, that claim must be absent
   from docs and product messaging.
 
 ### L. CLI Product Surfaces
@@ -173,11 +175,26 @@ Status key for this checklist:
 - [ ] `status`, `sessions`, `config`, `subagents`, and other operator-critical
   CLI flows work against a live runtime.
 - [ ] `update` performs a real update check and does not print a placeholder.
+- [ ] `roboticus update all` upgrades the installed runtime and content using
+  the Go-backed release line.
+- [ ] `roboticus upgrade all` is supported as a compatibility path and upgrades
+  the installed runtime and content using the Go-backed release line.
 - [ ] No CLI command presents fake-success output for unimplemented work.
+
+### M. Distribution, Release, And Site Surfaces
+
+- [ ] Release artifacts are complete for every supported platform.
+- [ ] Canonical release checksums are published and validated.
+- [ ] `roboticus.ai/install.sh` installs the Go-based runtime.
+- [ ] `roboticus.ai/install.ps1` installs the Go-based runtime.
+- [ ] `roboticus.ai` changelog, registry, and docs sync from the Go release
+  source correctly.
+- [ ] Public release/download/install surfaces preserve the operator contract
+  unless an explicit migration plan is shipped.
 
 ## Hard Acceptance Rules
 
-Goboticus may be declared feature-complete only if:
+Roboticus may be declared feature-complete only if:
 
 1. Every required checklist item above is either `[x]` or explicitly `[D]`.
 2. No `[D]` item appears in README, dashboard UI, CLI help, or API docs as a
@@ -194,5 +211,7 @@ Before declaring feature-complete:
 - README must match the actual shipped runtime.
 - CLI help text must match actual behavior.
 - Dashboard controls must not expose dead buttons for deferred features.
+- Release/install/update documentation must match actual public distribution
+  behavior.
 - Any remaining unavailable surface must be explicitly unavailable, not merely
   silently inert.

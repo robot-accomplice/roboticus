@@ -3,12 +3,12 @@ package agent
 import (
 	"testing"
 
-	"goboticus/internal/core"
-	"goboticus/internal/llm"
+	"roboticus/internal/core"
+	"roboticus/internal/llm"
 )
 
 func TestSession_Basic(t *testing.T) {
-	s := NewSession("sess1", "agent1", "Goboticus")
+	s := NewSession("sess1", "agent1", "Roboticus")
 	if s.ID != "sess1" {
 		t.Errorf("ID = %q", s.ID)
 	}

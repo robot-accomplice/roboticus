@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"goboticus/internal/browser"
+	"roboticus/internal/browser"
 )
 
 // BrowserStatus returns the browser's running state and CDP port.

@@ -7,13 +7,13 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"goboticus/internal/core"
+	"roboticus/internal/core"
 )
 
 var initCmd = &cobra.Command{
 	Use:   "init",
-	Short: "Initialize a new goboticus workspace",
-	Long:  `Creates the ~/.goboticus/ directory, a default config file, and standard subdirectories.`,
+	Short: "Initialize a new roboticus workspace",
+	Long:  `Creates the ~/.roboticus/ directory, a default config file, and standard subdirectories.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		configDir := core.ConfigDir()
 
@@ -44,16 +44,16 @@ var initCmd = &cobra.Command{
 			fmt.Printf("  config already exists: %s\n", configPath)
 		}
 
-		fmt.Println("\ngoboticus workspace initialized successfully.")
+		fmt.Println("\nroboticus workspace initialized successfully.")
 		return nil
 	},
 }
 
-const defaultConfigTOML = `# Goboticus configuration file
+const defaultConfigTOML = `# Roboticus configuration file
 
 [agent]
-name = "goboticus"
-workspace = "~/.goboticus/workspace"
+name = "roboticus"
+workspace = "~/.roboticus/workspace"
 autonomy_max_react_turns = 25
 autonomy_max_turn_duration_seconds = 120
 
@@ -62,7 +62,7 @@ port = 3577
 bind = "127.0.0.1"
 
 [database]
-path = "~/.goboticus/goboticus.db"
+path = "~/.roboticus/roboticus.db"
 
 [models]
 primary = "claude-sonnet-4-20250514"

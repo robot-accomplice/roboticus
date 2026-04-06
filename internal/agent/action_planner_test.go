@@ -3,7 +3,7 @@ package agent
 import (
 	"testing"
 
-	"goboticus/internal/llm"
+	"roboticus/internal/llm"
 )
 
 func TestPlanNextAction(t *testing.T) {

@@ -10,7 +10,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"goboticus/internal/db"
+	"roboticus/internal/db"
 )
 
 // ObsidianScanner ingests Obsidian vault markdown files into semantic memory.

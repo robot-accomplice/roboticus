@@ -1,7 +1,10 @@
-# Goboticus Regression Test Matrix
+# Roboticus Regression Test Matrix
 
 This matrix defines the minimum regression coverage required to support the
 feature-complete contract in `docs/feature-complete-checklist.md`.
+
+Transition and release sequencing are governed by
+`docs/migration-release-policy.md`.
 
 ## Test Layers
 
@@ -19,7 +22,7 @@ Blocking commands for feature-complete releases:
 - `go test ./internal/api -run Architecture -count=1`
 - `go test ./internal/llm ./internal/db ./internal/api -count=1`
 - `go test -v -run TestLiveSmokeTest .`
-- `./goboticus parity-audit --roboticus-dir=../roboticus`
+- `./roboticus parity-audit --roboticus-dir=../roboticus`
 
 ## Matrix
 
@@ -138,6 +141,7 @@ Blocking commands for feature-complete releases:
 | R-UX-03 | CLI operator-critical flows remain functional against a live runtime | CLI smoke | L3 |
 | R-UX-04 | CLI commands must not be placeholders | CLI unit/integration tests | L1/L2 |
 | R-UX-05 | If TUI parity is claimed, dashboard-to-TUI feature mapping stays current | TUI/UI parity tests | L2/L3 |
+| R-UX-06 | `roboticus update all` and `roboticus upgrade all` preserve the historical operator upgrade path | CLI/update integration tests + release smoke | L2/L3/L4 |
 
 ### R-REL: Release Confidence
 
@@ -146,6 +150,9 @@ Blocking commands for feature-complete releases:
 | R-REL-01 | Live smoke must cover every advertised subsystem | `smoke_test.go` | L3 |
 | R-REL-02 | Parity audit must report no remaining required gaps versus frozen Roboticus baseline | parity-audit + tests | L3/L4 |
 | R-REL-03 | Feature-complete checklist and docs stay aligned with shipped behavior | doc/release review gate | L4 |
+| R-REL-04 | Release artifacts and `SHA256SUMS.txt` are complete and installer-compatible | release gate + artifact validation tests | L4 |
+| R-REL-05 | `roboticus.ai` sync succeeds from the Go release source and publishes matching metadata | site-sync dry run + deploy gate | L4 |
+| R-REL-06 | Public installer scripts install the Go-based runtime without changing the operator contract unexpectedly | installer smoke on Unix + Windows | L3/L4 |
 
 ## Governance Rules
 
@@ -157,6 +164,6 @@ Blocking commands for feature-complete releases:
 3. Any new dashboard or CLI feature must either:
    - gain test coverage and be added to this matrix, or
    - remain explicitly experimental and outside the feature-complete claim.
-4. If Goboticus advertises a user-weighted metascore spider graph, it must have
+4. If Roboticus advertises a user-weighted metascore spider graph, it must have
    explicit weighting-correctness and efficacy tests. Approximate routing tests
    are not enough.

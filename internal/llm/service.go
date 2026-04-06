@@ -8,8 +8,8 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"goboticus/internal/core"
-	"goboticus/internal/db"
+	"roboticus/internal/core"
+	"roboticus/internal/db"
 )
 
 // Service is the top-level LLM orchestrator. It composes caching, routing,

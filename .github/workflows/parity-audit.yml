@@ -18,7 +18,7 @@ jobs:
   audit:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout goboticus
+      - name: Checkout roboticus
         uses: actions/checkout@v4
 
       - name: Checkout roboticus
@@ -33,7 +33,7 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Build goboticus
+      - name: Build roboticus
         run: go build ./...
 
       - name: Run parity audit
@@ -41,7 +41,7 @@ jobs:
         run: |
           go run ./cmd/parity-audit \
             --roboticus-dir=_roboticus \
-            --goboticus-dir=. \
+            --roboticus-dir=. \
             --output=parity-report.md
           echo "report_path=parity-report.md" >> "$GITHUB_OUTPUT"
 

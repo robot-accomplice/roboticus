@@ -5,9 +5,9 @@ import (
 	"net/http"
 	"strconv"
 
-	"goboticus/internal/core"
-	"goboticus/internal/db"
-	"goboticus/internal/llm"
+	"roboticus/internal/core"
+	"roboticus/internal/db"
+	"roboticus/internal/llm"
 )
 
 // GetTransactions returns recent financial transactions.

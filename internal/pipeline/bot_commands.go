@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"goboticus/internal/db"
+	"roboticus/internal/db"
 )
 
 // CommandFunc handles a bot command. Args is everything after the command name.

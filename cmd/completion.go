@@ -13,13 +13,13 @@ var completionCmd = &cobra.Command{
 
 Example usage:
   # Bash
-  goboticus completion bash > /etc/bash_completion.d/goboticus
+  roboticus completion bash > /etc/bash_completion.d/roboticus
 
   # Zsh
-  goboticus completion zsh > "${fpath[1]}/_goboticus"
+  roboticus completion zsh > "${fpath[1]}/_roboticus"
 
   # Fish
-  goboticus completion fish > ~/.config/fish/completions/goboticus.fish`,
+  roboticus completion fish > ~/.config/fish/completions/roboticus.fish`,
 }
 
 var completionBashCmd = &cobra.Command{

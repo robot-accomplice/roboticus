@@ -10,7 +10,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"goboticus/internal/db"
+	"roboticus/internal/db"
 )
 
 // Cache provides a two-tier semantic cache:

@@ -8,7 +8,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
-	"goboticus/internal/core"
+	"roboticus/internal/core"
 )
 
 var webCmd = &cobra.Command{

@@ -1,4 +1,4 @@
-# Goboticus Parity Implementation Design
+# Roboticus Parity Implementation Design
 
 **Date**: 2026-04-01
 **Status**: Approved
@@ -11,7 +11,7 @@
 
 ## 1. Context
 
-Goboticus is a Go port of Roboticus (Rust). The Connector-Factory architecture is correctly
+Roboticus is a Go port of Roboticus (Rust). The Connector-Factory architecture is correctly
 implemented: route handlers use `pipeline.Runner` interface, channel adapters implement
 `channel.Adapter`, and the architecture test enforces no `internal/agent` imports in routes.
 
@@ -104,7 +104,7 @@ type NicknameRefiner interface {
 
 ### Changes to `pipeline/pipeline.go`
 
-- Remove `import "goboticus/internal/agent"`
+- Remove `import "roboticus/internal/agent"`
 - Replace concrete types in `PipelineDeps` with interfaces:
   - `*agent.InjectionDetector` -> `InjectionChecker`
   - `*agent.ToolRegistry` -> removed (pipeline uses `ToolExecutor` for the loop)

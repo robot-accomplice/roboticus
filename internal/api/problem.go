@@ -18,9 +18,9 @@ type ProblemDetails struct {
 // Common problem type URIs.
 const (
 	ProblemTypeBlank        = "about:blank"
-	ProblemTypeInjection    = "urn:goboticus:problem:injection-blocked"
-	ProblemTypeRateLimited  = "urn:goboticus:problem:rate-limited"
-	ProblemTypeUnauthorized = "urn:goboticus:problem:unauthorized"
+	ProblemTypeInjection    = "urn:roboticus:problem:injection-blocked"
+	ProblemTypeRateLimited  = "urn:roboticus:problem:rate-limited"
+	ProblemTypeUnauthorized = "urn:roboticus:problem:unauthorized"
 )
 
 // WriteProblem writes an RFC 9457 problem+json response.

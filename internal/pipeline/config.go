@@ -1,6 +1,6 @@
 package pipeline
 
-import "goboticus/internal/core"
+import "roboticus/internal/core"
 
 // InferenceMode controls whether the pipeline uses the ReAct loop or SSE streaming.
 type InferenceMode int

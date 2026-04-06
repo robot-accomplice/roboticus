@@ -7,8 +7,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"goboticus/internal/db"
-	"goboticus/internal/pipeline"
+	"roboticus/internal/db"
+	"roboticus/internal/pipeline"
 )
 
 // ListCronJobs returns all cron jobs.
@@ -115,8 +115,8 @@ func CreateCronJob(store *db.Store) http.HandlerFunc {
 func ListCronRuns(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		rows, err := store.QueryContext(r.Context(),
-			`SELECT id, job_id, status, duration_ms, error, output_text, created_at
-			 FROM cron_runs ORDER BY created_at DESC LIMIT 50`)
+			`SELECT id, job_id, status, duration_ms, error_msg, '', timestamp
+			 FROM cron_runs ORDER BY timestamp DESC LIMIT 50`)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to query cron runs")
 			return
@@ -299,7 +299,7 @@ func RunCronJobNow(p pipeline.Runner, store *db.Store) http.HandlerFunc {
 		input := pipeline.Input{
 			Content:   payloadJSON,
 			AgentID:   "default",
-			AgentName: "Goboticus",
+			AgentName: "Roboticus",
 			Platform:  "cron",
 		}
 

@@ -3,7 +3,7 @@ package agent
 import (
 	"strings"
 
-	"goboticus/internal/llm"
+	"roboticus/internal/llm"
 )
 
 // PlannedAction represents the agent's next action.

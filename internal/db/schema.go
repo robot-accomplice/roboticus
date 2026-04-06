@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"goboticus/internal/core"
+	"roboticus/internal/core"
 )
 
 //go:embed migrations/*.sql
@@ -16,7 +16,7 @@ var migrationsFS embed.FS
 
 // embeddedSchemaVersion matches the Rust EMBEDDED_SCHEMA_VERSION.
 // The base schema incorporates all migrations through this version.
-const embeddedSchemaVersion = 29
+const embeddedSchemaVersion = 30
 
 // schemaDDL is the full initial schema (ported from schema.rs SCHEMA_SQL).
 const schemaDDL = `
@@ -203,15 +203,14 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
 );
 
 CREATE TABLE IF NOT EXISTS cron_runs (
-    id TEXT PRIMARY KEY,
+    id TEXT PRIMARY KEY DEFAULT (hex(randomblob(16))),
     job_id TEXT NOT NULL REFERENCES cron_jobs(id),
-    status TEXT NOT NULL CHECK(status IN ('success', 'error')),
-    duration_ms INTEGER,
-    error TEXT,
-    output_text TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    status TEXT NOT NULL,
+    duration_ms INTEGER DEFAULT 0,
+    error_msg TEXT DEFAULT '',
+    timestamp TEXT NOT NULL DEFAULT (datetime('now'))
 );
-CREATE INDEX IF NOT EXISTS idx_cron_runs_job ON cron_runs(job_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_cron_runs_job ON cron_runs(job_id, timestamp);
 
 CREATE TABLE IF NOT EXISTS transactions (
     id TEXT PRIMARY KEY,
@@ -735,6 +734,12 @@ CREATE TABLE IF NOT EXISTS installed_themes (
     installed_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS runtime_settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_cron_jobs_enabled ON cron_jobs(enabled, next_run_at);
 CREATE INDEX IF NOT EXISTS idx_transactions_created ON transactions(created_at DESC);
@@ -769,6 +774,9 @@ func (s *Store) ensureOptionalColumns() error {
 		{Table: "skills", Column: "usage_count", ColType: "INTEGER", Default: "0"},
 		{Table: "hippocampus", Column: "access_level", ColType: "TEXT", Default: "'internal'"},
 		{Table: "hippocampus", Column: "row_count", ColType: "INTEGER", Default: "0"},
+		{Table: "cron_jobs", Column: "retry_count", ColType: "INTEGER", Default: "0"},
+		{Table: "cron_jobs", Column: "max_retries", ColType: "INTEGER", Default: "3"},
+		{Table: "cron_jobs", Column: "retry_delay_ms", ColType: "INTEGER", Default: "60000"},
 	}
 
 	for _, col := range columns {

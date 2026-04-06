@@ -11,10 +11,10 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
 
-	"goboticus/internal/core"
-	"goboticus/internal/db"
-	"goboticus/internal/llm"
-	"goboticus/internal/pipeline"
+	"roboticus/internal/core"
+	"roboticus/internal/db"
+	"roboticus/internal/llm"
+	"roboticus/internal/pipeline"
 )
 
 // --- Turns ---

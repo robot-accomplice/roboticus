@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"os"
 
-	"goboticus/internal/core"
+	"roboticus/internal/core"
 )
 
 // GetConfigRaw returns the raw TOML config file content as text/plain.

@@ -123,7 +123,7 @@ func TestEventBus_PublishF(t *testing.T) {
 	ch := bus.Subscribe()
 	defer bus.Unsubscribe(ch)
 
-	bus.PublishF("status", "agent %s is %s", "goboticus", "running")
+	bus.PublishF("status", "agent %s is %s", "roboticus", "running")
 
 	select {
 	case msg := <-ch:

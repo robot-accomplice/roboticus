@@ -17,7 +17,7 @@ var appsListCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		fmt.Println("Installed applications:")
 		fmt.Println("  (none installed)")
-		fmt.Println("\nUse 'goboticus apps install <path>' to install an app.")
+		fmt.Println("\nUse 'roboticus apps install <path>' to install an app.")
 		return nil
 	},
 }

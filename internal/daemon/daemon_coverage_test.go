@@ -3,7 +3,7 @@ package daemon
 import (
 	"testing"
 
-	"goboticus/internal/core"
+	"roboticus/internal/core"
 )
 
 func TestNew_FullBootstrap(t *testing.T) {

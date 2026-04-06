@@ -9,7 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"goboticus/internal/core"
+	"roboticus/internal/core"
 )
 
 var setupCmd = &cobra.Command{
@@ -20,8 +20,8 @@ var setupCmd = &cobra.Command{
 		scanner := bufio.NewScanner(os.Stdin)
 
 		// 1. Agent name.
-		fmt.Print("Agent name [Goboticus]: ")
-		agentName := "Goboticus"
+		fmt.Print("Agent name [Roboticus]: ")
+		agentName := "Roboticus"
 		if scanner.Scan() {
 			if v := strings.TrimSpace(scanner.Text()); v != "" {
 				agentName = v
@@ -61,7 +61,7 @@ var setupCmd = &cobra.Command{
 			return fmt.Errorf("failed to create config dir: %w", err)
 		}
 
-		configPath := filepath.Join(configDir, "goboticus.toml")
+		configPath := filepath.Join(configDir, "roboticus.toml")
 		content := buildConfigTOML(agentName, provider, apiKey)
 
 		if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
@@ -70,7 +70,7 @@ var setupCmd = &cobra.Command{
 
 		fmt.Printf("\nConfiguration written to %s\n", configPath)
 		fmt.Printf("Agent: %s | Provider: %s\n", agentName, provider)
-		fmt.Println("Run 'goboticus serve' to start.")
+		fmt.Println("Run 'roboticus serve' to start.")
 		return nil
 	},
 }

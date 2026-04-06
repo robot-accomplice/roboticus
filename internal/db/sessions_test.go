@@ -106,7 +106,7 @@ func TestInsertMessage(t *testing.T) {
 
 	sess, _ := store.FindOrCreateSession(ctx, "agent-1", "web:test")
 
-	msgID, err := store.InsertMessage(ctx, sess.ID, "user", "Hello, goboticus!")
+	msgID, err := store.InsertMessage(ctx, sess.ID, "user", "Hello, roboticus!")
 	if err != nil {
 		t.Fatalf("InsertMessage() error: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestInsertMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("message should exist: %v", err)
 	}
-	if content != "Hello, goboticus!" {
-		t.Errorf("content = %q, want %q", content, "Hello, goboticus!")
+	if content != "Hello, roboticus!" {
+		t.Errorf("content = %q, want %q", content, "Hello, roboticus!")
 	}
 }

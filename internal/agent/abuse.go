@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"goboticus/internal/db"
+	"roboticus/internal/db"
 )
 
 // AbuseSignalType classifies the kind of abuse signal detected.

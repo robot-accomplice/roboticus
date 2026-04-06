@@ -5,7 +5,7 @@ import (
 
 	"github.com/kardianos/service"
 
-	"goboticus/internal/core"
+	"roboticus/internal/core"
 )
 
 func TestServiceConfig(t *testing.T) {
@@ -13,7 +13,7 @@ func TestServiceConfig(t *testing.T) {
 	if cfg == nil {
 		t.Fatal("should not be nil")
 	}
-	if cfg.Name != "goboticus" {
+	if cfg.Name != "roboticus" {
 		t.Errorf("name = %s", cfg.Name)
 	}
 	if cfg.DisplayName == "" {

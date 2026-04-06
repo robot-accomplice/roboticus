@@ -4,10 +4,10 @@ import (
 	"context"
 	"testing"
 
-	"goboticus/internal/agent"
-	"goboticus/internal/core"
-	"goboticus/internal/llm"
-	"goboticus/testutil"
+	"roboticus/internal/agent"
+	"roboticus/internal/core"
+	"roboticus/internal/llm"
+	"roboticus/testutil"
 )
 
 // stubExecutor is a minimal ToolExecutor for pipeline tests.

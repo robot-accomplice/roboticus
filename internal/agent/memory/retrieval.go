@@ -10,8 +10,8 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"goboticus/internal/db"
-	"goboticus/internal/llm"
+	"roboticus/internal/db"
+	"roboticus/internal/llm"
 )
 
 // RetrievalConfig controls hybrid RAG behavior.

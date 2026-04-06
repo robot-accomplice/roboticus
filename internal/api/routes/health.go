@@ -10,8 +10,8 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"goboticus/internal/db"
-	"goboticus/internal/llm"
+	"roboticus/internal/db"
+	"roboticus/internal/llm"
 )
 
 // Health returns the health check endpoint handler.
@@ -44,9 +44,9 @@ func Health(store *db.Store, llmSvc *llm.Service) http.HandlerFunc {
 func AgentCard() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		card := map[string]any{
-			"name":        "goboticus",
+			"name":        "roboticus",
 			"description": "Autonomous AI agent runtime",
-			"url":         "https://github.com/goboticus",
+			"url":         "https://github.com/roboticus",
 			"version":     "0.1.0",
 			"capabilities": []string{
 				"chat",

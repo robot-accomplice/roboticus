@@ -3,7 +3,7 @@ package channel
 import (
 	"testing"
 
-	"goboticus/testutil"
+	"roboticus/testutil"
 )
 
 func TestDeliveryQueue_EnqueueAndPending(t *testing.T) {

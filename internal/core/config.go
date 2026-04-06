@@ -487,12 +487,12 @@ type ModelOverride struct {
 // DefaultConfig returns a Config with sensible defaults.
 func DefaultConfig() Config {
 	home := homeDir()
-	dataDir := filepath.Join(home, ".goboticus")
+	dataDir := filepath.Join(home, ".roboticus")
 
 	return Config{
 		Agent: AgentConfig{
-			Name:                        "goboticus",
-			ID:                          "goboticus-default",
+			Name:                        "roboticus",
+			ID:                          "roboticus-default",
 			Workspace:                   filepath.Join(dataDir, "workspace"),
 			AutonomyMaxReactTurns:       25,
 			AutonomyMaxTurnDurationSecs: 120,
@@ -509,7 +509,7 @@ func DefaultConfig() Config {
 			LogMaxDays:         7,
 		},
 		Database: DatabaseConfig{
-			Path: filepath.Join(dataDir, "goboticus.db"),
+			Path: filepath.Join(dataDir, "roboticus.db"),
 		},
 		Models: ModelsConfig{
 			Primary: "claude-sonnet-4-20250514",
@@ -664,14 +664,14 @@ func DefaultConfig() Config {
 	}
 }
 
-// ConfigDir returns the goboticus configuration directory.
+// ConfigDir returns the roboticus configuration directory.
 func ConfigDir() string {
-	return filepath.Join(homeDir(), ".goboticus")
+	return filepath.Join(homeDir(), ".roboticus")
 }
 
 // ConfigFilePath returns the default config file path.
 func ConfigFilePath() string {
-	return filepath.Join(ConfigDir(), "goboticus.toml")
+	return filepath.Join(ConfigDir(), "roboticus.toml")
 }
 
 // NormalizePaths expands ~ in all path-valued fields.

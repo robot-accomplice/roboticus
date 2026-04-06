@@ -81,8 +81,8 @@ func TestArchitecture_RoutesDontImportAgent(t *testing.T) {
 		}
 		for _, imp := range f.Imports {
 			importPath := strings.Trim(imp.Path.Value, `"`)
-			if importPath == "goboticus/internal/agent" ||
-				strings.HasPrefix(importPath, "goboticus/internal/agent/") {
+			if importPath == "roboticus/internal/agent" ||
+				strings.HasPrefix(importPath, "roboticus/internal/agent/") {
 				t.Errorf("%s imports %s — route handlers must use pipeline, not agent directly",
 					entry.Name(), importPath)
 			}
@@ -233,12 +233,12 @@ func TestArchitecture_ChannelsDontImportPipeline(t *testing.T) {
 		}
 		for _, imp := range f.Imports {
 			importPath := strings.Trim(imp.Path.Value, `"`)
-			if importPath == "goboticus/internal/pipeline" {
+			if importPath == "roboticus/internal/pipeline" {
 				t.Errorf("%s imports pipeline — channel adapters must not depend on pipeline",
 					entry.Name())
 			}
-			if importPath == "goboticus/internal/agent" ||
-				strings.HasPrefix(importPath, "goboticus/internal/agent/") {
+			if importPath == "roboticus/internal/agent" ||
+				strings.HasPrefix(importPath, "roboticus/internal/agent/") {
 				t.Errorf("%s imports agent — channel adapters must not depend on agent",
 					entry.Name())
 			}
@@ -258,8 +258,8 @@ func TestArchitecture_PipelineDoesNotDependOnAPI(t *testing.T) {
 		}
 		for _, imp := range f.Imports {
 			importPath := strings.Trim(imp.Path.Value, `"`)
-			if importPath == "goboticus/internal/api" ||
-				strings.HasPrefix(importPath, "goboticus/internal/api/") {
+			if importPath == "roboticus/internal/api" ||
+				strings.HasPrefix(importPath, "roboticus/internal/api/") {
 				t.Errorf("%s imports %s — pipeline must not depend on API", path, importPath)
 			}
 		}

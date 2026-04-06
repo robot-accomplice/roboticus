@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"goboticus/internal/db"
-	"goboticus/testutil"
+	"roboticus/internal/db"
+	"roboticus/testutil"
 )
 
 // --- Original Consolidator (Jaccard dedup) tests ---

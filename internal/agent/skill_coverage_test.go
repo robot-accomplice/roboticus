@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"goboticus/internal/agent/skills"
+	"roboticus/internal/agent/skills"
 )
 
 func TestSkillLoader_EmptyDir(t *testing.T) {

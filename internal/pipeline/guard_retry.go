@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"goboticus/internal/core"
+	"roboticus/internal/core"
 )
 
 // RetryPolicy controls guard-triggered re-inference behavior.

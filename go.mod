@@ -1,4 +1,4 @@
-module goboticus
+module roboticus
 
 go 1.26.1
 

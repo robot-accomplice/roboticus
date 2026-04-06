@@ -7,10 +7,10 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"goboticus/internal/agent/memory"
-	"goboticus/internal/agent/policy"
-	"goboticus/internal/core"
-	"goboticus/internal/llm"
+	"roboticus/internal/agent/memory"
+	"roboticus/internal/agent/policy"
+	"roboticus/internal/core"
+	"roboticus/internal/llm"
 )
 
 // LoopState represents the current phase of the ReAct state machine.

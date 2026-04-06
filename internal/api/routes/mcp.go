@@ -6,7 +6,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"goboticus/internal/mcp"
+	"roboticus/internal/mcp"
 )
 
 // ListMCPConnections returns all MCP server connection statuses.

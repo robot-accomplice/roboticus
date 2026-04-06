@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"goboticus/internal/db"
+	"roboticus/internal/db"
 )
 
 // ListDelegations returns recent delegation outcomes for observability.

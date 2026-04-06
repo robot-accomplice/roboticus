@@ -218,7 +218,7 @@ func DefaultGuardChain() *GuardChain {
 	return FullGuardChain()
 }
 
-// FullGuardChain returns all 17 guards for standard inference.
+// FullGuardChain returns all 19 guards for standard inference.
 func FullGuardChain() *GuardChain {
 	return NewGuardChain(
 		// Core guards.
@@ -241,7 +241,10 @@ func FullGuardChain() *GuardChain {
 		&ModelIdentityTruthGuard{},
 		&CurrentEventsTruthGuard{},
 		&ExecutionTruthGuard{},
+		&FinancialActionTruthGuard{},
 		&PersonalityIntegrityGuard{},
+		// Protection guards.
+		&ConfigProtectionGuard{},
 	)
 }
 

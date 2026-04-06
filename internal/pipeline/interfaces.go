@@ -3,9 +3,9 @@ package pipeline
 import (
 	"context"
 
-	"goboticus/internal/core"
-	"goboticus/internal/llm"
-	"goboticus/internal/session"
+	"roboticus/internal/core"
+	"roboticus/internal/llm"
+	"roboticus/internal/session"
 )
 
 // InjectionChecker scores input text for prompt injection risk.

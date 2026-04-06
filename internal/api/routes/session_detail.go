@@ -8,8 +8,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"goboticus/internal/core"
-	"goboticus/internal/db"
+	"roboticus/internal/core"
+	"roboticus/internal/db"
 )
 
 // ListSessionTurns returns turns for a session.

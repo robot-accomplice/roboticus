@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"goboticus/testutil"
+	"roboticus/testutil"
 )
 
 func TestGetWorkingMemory(t *testing.T) {

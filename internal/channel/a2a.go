@@ -245,12 +245,12 @@ func (a *A2AAdapter) domainSalt(peerPubKey *ecdh.PublicKey) []byte {
 		hex.EncodeToString(peerPubKey.Bytes()),
 	}
 	sort.Strings(keys)
-	h := sha256.Sum256([]byte("goboticus-a2a:" + keys[0] + ":" + keys[1]))
+	h := sha256.Sum256([]byte("roboticus-a2a:" + keys[0] + ":" + keys[1]))
 	return h[:]
 }
 
 func deriveKey(secret, salt []byte, length int) ([]byte, error) {
-	info := []byte("goboticus-a2a-session-key")
+	info := []byte("roboticus-a2a-session-key")
 	reader := hkdf.New(sha256.New, secret, salt, info)
 	key := make([]byte, length)
 	if _, err := io.ReadFull(reader, key); err != nil {

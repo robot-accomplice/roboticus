@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"goboticus/internal/llm"
+	"roboticus/internal/llm"
 )
 
 // mockCompleter returns predetermined responses.

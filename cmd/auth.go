@@ -68,7 +68,7 @@ var authLoginCmd = &cobra.Command{
 		req.Header.Set("Content-Type", "application/json")
 		resp, err := client.Do(req)
 		if err != nil {
-			return fmt.Errorf("connection failed (is goboticus running?): %w", err)
+			return fmt.Errorf("connection failed (is roboticus running?): %w", err)
 		}
 		defer func() { _ = resp.Body.Close() }()
 

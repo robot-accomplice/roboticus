@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"goboticus/internal/llm"
+	"roboticus/internal/llm"
 )
 
 // CompactionStage controls how aggressively context is compressed.

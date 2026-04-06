@@ -6,7 +6,7 @@ import (
 	"runtime"
 	"time"
 
-	"goboticus/internal/db"
+	"roboticus/internal/db"
 )
 
 type DiagnosticReport struct {

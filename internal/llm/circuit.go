@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"goboticus/internal/core"
+	"roboticus/internal/core"
 )
 
 // CircuitState represents the breaker state.

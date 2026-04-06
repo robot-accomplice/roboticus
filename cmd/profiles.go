@@ -8,7 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"goboticus/internal/core"
+	"roboticus/internal/core"
 )
 
 var profileCmd = &cobra.Command{
@@ -88,6 +88,6 @@ func init() {
 
 func loadProfileRegistry() *core.ProfileRegistry {
 	home, _ := os.UserHomeDir()
-	basePath := filepath.Join(home, ".goboticus")
+	basePath := filepath.Join(home, ".roboticus")
 	return core.NewProfileRegistry(basePath)
 }

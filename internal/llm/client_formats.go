@@ -6,7 +6,7 @@ import (
 	"io"
 	"net/http"
 
-	"goboticus/internal/core"
+	"roboticus/internal/core"
 )
 
 // marshalRequest translates the provider-agnostic Request into the provider's wire format.

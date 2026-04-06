@@ -5,8 +5,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"goboticus/internal/llm"
-	"goboticus/testutil"
+	"roboticus/internal/llm"
+	"roboticus/testutil"
 )
 
 func TestAgentStatus(t *testing.T) {
@@ -35,7 +35,7 @@ func TestAgentCard(t *testing.T) {
 		t.Errorf("status = %d", rec.Code)
 	}
 	body := jsonBody(t, rec)
-	if body["name"] != "goboticus" {
+	if body["name"] != "roboticus" {
 		t.Errorf("name = %v", body["name"])
 	}
 }

@@ -85,7 +85,7 @@ func TestGateway_Initialize(t *testing.T) {
 	if !ok {
 		t.Fatal("missing serverInfo")
 	}
-	if serverInfo["name"] != "goboticus" {
+	if serverInfo["name"] != "roboticus" {
 		t.Errorf("serverInfo.name = %v", serverInfo["name"])
 	}
 }

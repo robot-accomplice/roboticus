@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"goboticus/internal/agent/tools"
-	"goboticus/internal/core"
+	"roboticus/internal/agent/tools"
+	"roboticus/internal/core"
 )
 
 // DecisionResult holds the outcome of a policy evaluation.
@@ -206,7 +206,7 @@ func (r *pathProtectionRule) Priority() int { return 4 }
 
 var protectedPatterns = []string{
 	".env", ".ssh", "/etc/", "wallet.json", "roboticus.toml",
-	"goboticus.toml", "credentials", "secret", "private_key",
+	"roboticus.toml", "credentials", "secret", "private_key",
 }
 
 func (r *pathProtectionRule) Evaluate(req *ToolCallRequest, _ *tools.Registry) DecisionResult {

@@ -21,7 +21,7 @@ import (
 //
 // Usage:
 //
-//	ks, err := OpenKeystore("~/.goboticus/keystore.enc", masterKey)
+//	ks, err := OpenKeystore("~/.roboticus/keystore.enc", masterKey)
 //	apiKey, err := ks.Get("openai_api_key")
 //	ks.Set("anthropic_api_key", "sk-ant-...")
 //	ks.Save()
@@ -62,7 +62,7 @@ func OpenKeystore(cfg KeystoreConfig) (*Keystore, error) {
 
 	// Derive encryption key from passphrase.
 	// Use a fixed salt derived from the path for determinism.
-	salt := []byte("goboticus-keystore:" + filepath.Base(cfg.Path))
+	salt := []byte("roboticus-keystore:" + filepath.Base(cfg.Path))
 	key, err := scrypt.Key([]byte(passphrase), salt, 32768, 8, 1, 32)
 	if err != nil {
 		return nil, fmt.Errorf("keystore: key derivation failed: %w", err)

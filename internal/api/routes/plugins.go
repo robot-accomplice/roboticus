@@ -7,7 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"goboticus/internal/plugin"
+	"roboticus/internal/plugin"
 )
 
 // ListPlugins returns all registered plugins.

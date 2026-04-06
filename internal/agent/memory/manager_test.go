@@ -3,7 +3,7 @@ package memory
 import (
 	"testing"
 
-	"goboticus/internal/llm"
+	"roboticus/internal/llm"
 )
 
 func TestClassifyTurn_ToolUse(t *testing.T) {

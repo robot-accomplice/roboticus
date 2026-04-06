@@ -1,4 +1,4 @@
-# Lessons Learned: Roboticus → Goboticus Rewrite
+# Lessons Learned: Roboticus → Roboticus Rewrite
 
 Architectural findings from analyzing the Rust roboticus codebase and
 recreating it in Go. These lessons can be applied back to improve the
@@ -6,7 +6,7 @@ original Rust project.
 
 ## Final Project Stats
 
-| Metric | Roboticus (Rust) | Goboticus (Go) |
+| Metric | Roboticus (Rust) | Roboticus (Go) |
 |--------|-----------------|----------------|
 | Language | Rust 1.78 | Go 1.26 |
 | Source Files | 366 (.rs) | 106 (.go) |
@@ -58,7 +58,7 @@ of schema.rs). The in-memory queue should be replaced with SQLite-backed
 persistence using this existing table. The Rust code already has the DDL;
 the runtime code just doesn't use it for the hot path.
 
-**Go approach:** Goboticus reads/writes directly to `delivery_queue` table.
+**Go approach:** Roboticus reads/writes directly to `delivery_queue` table.
 A `container/heap` provides O(log n) next-ready selection vs the O(n) scan
 in Rust.
 
@@ -158,10 +158,10 @@ by the mutation tester. Focus on boundary conditions and error paths.
 
 ## Architectural Patterns Improved in Go
 
-### 1. Or-Done Pattern (New in Goboticus)
+### 1. Or-Done Pattern (New in Roboticus)
 
 Roboticus uses ad-hoc shutdown coordination (signal handlers, manual channel
-closing). Goboticus introduces a systematic **or-done pattern** where every
+closing). Roboticus introduces a systematic **or-done pattern** where every
 goroutine wraps channel reads with `core.OrDone(ctx.Done(), ch)`. This
 guarantees no goroutine leaks on shutdown.
 
@@ -173,7 +173,7 @@ a `CancellableStream` wrapper that combines a `Stream` with a cancellation
 ### 2. Persistent Delivery Queue (Fixing Rust Bug)
 
 The delivery queue table already exists in the Roboticus schema but isn't
-used by the runtime delivery queue code. Goboticus uses it from day one.
+used by the runtime delivery queue code. Roboticus uses it from day one.
 The O(log n) heap-based `next_ready` selection replaces O(n) linear scan.
 
 ### 3. Single-Pass Formatter (Performance Fix)
@@ -191,7 +191,7 @@ switch from `VecDeque` + `Mutex` to a bounded `tokio::sync::mpsc` channel.
 
 ## Technology Trade-Off Notes
 
-| Concern | Rust (Roboticus) | Go (Goboticus) | Winner |
+| Concern | Rust (Roboticus) | Go (Roboticus) | Winner |
 |---------|-----------------|----------------|--------|
 | Compile time | ~2min release | ~30s | Go |
 | Runtime performance | Faster (zero-cost abstractions) | Very good (GC overhead) | Rust |
@@ -226,7 +226,7 @@ switch from `VecDeque` + `Mutex` to a bounded `tokio::sync::mpsc` channel.
 Go doesn't have Rust's async/sync mutex split. There's no way to accidentally use `std::sync::Mutex` in an async context because Go doesn't have async contexts — goroutines are uniformly preemptive. The Signal adapter's three bugs (sync mutex in async, unbounded buffer, no rate limiting) all stem from Rust async complexity that simply doesn't exist in Go.
 
 **2. Service manager integration where none existed.**
-`kardianos/service` — one `Start()`/`Stop()` interface, three platforms. Roboticus runs as a bare process with no OS integration. Goboticus installs as a systemd unit, launchd plist, or Windows Service with `goboticus service install`. This is a deployment maturity gap, not a language gap, but the Go ecosystem made it trivial to close.
+`kardianos/service` — one `Start()`/`Stop()` interface, three platforms. Roboticus runs as a bare process with no OS integration. Roboticus installs as a systemd unit, launchd plist, or Windows Service with `roboticus service install`. This is a deployment maturity gap, not a language gap, but the Go ecosystem made it trivial to close.
 
 **3. Dependency supply chain reduction: 746 → 38.**
 Cargo.lock has 746 entries. go.sum has 38. Every transitive dependency is an attack surface for supply chain compromise. The Go standard library's coverage of HTTP, TLS, crypto, JSON, SQL, and testing means fewer external trust decisions.
@@ -235,7 +235,7 @@ Cargo.lock has 746 entries. go.sum has 38. Every transitive dependency is an att
 Clean build ~3s vs ~45s. Incremental <1s vs ~8s. `go test -fuzz` runs natively with zero setup. This compounds — across hundreds of daily rebuilds during development, it's the difference between flow state and context-switching.
 
 **5. Persistent delivery queue (fixing a data-loss bug).**
-The delivery queue table existed in roboticus's schema DDL but wasn't used by the runtime code. Goboticus uses it from day one. Combined with `container/heap` for O(log n) next-ready selection, this is both a correctness fix and a performance improvement.
+The delivery queue table existed in roboticus's schema DDL but wasn't used by the runtime code. Roboticus uses it from day one. Combined with `container/heap` for O(log n) next-ready selection, this is both a correctness fix and a performance improvement.
 
 ### What We Lost
 
@@ -245,10 +245,10 @@ Rust's `match` on `enum` variants forces handling every case at compile time. Go
 This is the single biggest correctness regression. Mitigated by architecture tests that can check for unhandled cases, but it's a discipline-over-compiler trade.
 
 **2. Error chain provenance.**
-Rust's `anyhow::Context` / `thiserror` gives you a full causal chain: `wallet encrypt → aes_gcm seal → invalid nonce length`. Go's `fmt.Errorf("wallet encrypt: %w", err)` achieves the same thing but only if every call site remembers to wrap. Unwrapped errors lose context silently. Roboticus's error chains are richer than goboticus's because Rust forces the issue.
+Rust's `anyhow::Context` / `thiserror` gives you a full causal chain: `wallet encrypt → aes_gcm seal → invalid nonce length`. Go's `fmt.Errorf("wallet encrypt: %w", err)` achieves the same thing but only if every call site remembers to wrap. Unwrapped errors lose context silently. Roboticus's error chains are richer than roboticus's because Rust forces the issue.
 
 **3. 3,682 tests → 180 tests.**
-Roboticus has 20x more test assertions. Some of this is Rust's testing ergonomics (inline `#[test]` per function) vs Go's table-driven style (one `func TestX` with 10 subtests still counts as 1). But the coverage gap is real — goboticus has structural tests proving the architecture works; roboticus has exhaustive property tests proving edge cases. The fuzz targets partially compensate but don't replace handwritten edge-case coverage.
+Roboticus has 20x more test assertions. Some of this is Rust's testing ergonomics (inline `#[test]` per function) vs Go's table-driven style (one `func TestX` with 10 subtests still counts as 1). But the coverage gap is real — roboticus has structural tests proving the architecture works; roboticus has exhaustive property tests proving edge cases. The fuzz targets partially compensate but don't replace handwritten edge-case coverage.
 
 **4. Zero-cost abstractions for compute paths.**
 The HNSW ANN index, vector cosine similarity, prompt token counting, and Keccak256 hashing are all CPU-bound. Rust's monomorphization and SIMD intrinsics give 2-5x throughput on these paths. Go's GC and runtime overhead are negligible for HTTP round-trips but measurable for tight loops over embeddings. The wallet package using `crypto/ecdh` with P256 as a secp256k1 placeholder is a concrete example — production would need `go-ethereum/crypto` (CGo) or accept the performance hit.
@@ -258,7 +258,7 @@ Rust's borrow checker guarantees a `CdpSession` can't outlive its `Browser`. Go'
 
 ### Production Readiness Gaps
 
-Goboticus is architecturally complete but has gaps before production deployment:
+Roboticus is architecturally complete but has gaps before production deployment:
 
 | Gap | Severity | Fix |
 |-----|----------|-----|
@@ -279,7 +279,7 @@ Goboticus is architecturally complete but has gaps before production deployment:
 
 **For the cross-platform deployment: yes.** Three platforms, one binary, native service manager integration. This was a real gap in roboticus.
 
-**For the long-term: depends on the team.** If the team is strong in Go and maintaining the runtime is the primary workload, goboticus is the better codebase to evolve. If the team is strong in Rust and the compute-heavy subsystems (HNSW, vector search, browser automation) become the bottleneck, roboticus's zero-cost abstractions pay off more.
+**For the long-term: depends on the team.** If the team is strong in Go and maintaining the runtime is the primary workload, roboticus is the better codebase to evolve. If the team is strong in Rust and the compute-heavy subsystems (HNSW, vector search, browser automation) become the bottleneck, roboticus's zero-cost abstractions pay off more.
 
 ### Key Takeaway
 
@@ -319,7 +319,7 @@ use `tokio::select!` between `cancel.cancelled()` and their interval tick. A ded
 shutdown listener task catches SIGINT/SIGTERM and cancels the token, giving all daemons
 a clean exit path before the runtime drops.
 
-**Go comparison:** Goboticus used the or-done pattern with `context.Context` cancellation
+**Go comparison:** Roboticus used the or-done pattern with `context.Context` cancellation
 from day one. This fix brings Rust parity.
 
 #### 2. Test State Construction Fragility (NEW — Observed)
@@ -344,7 +344,7 @@ a helpful message suggesting `--path` for local installs when the catalog is emp
 
 **Problem:** The parity audit uses keyword matching against file names, which creates
 persistent false positives. `hybrid_search`, `cron_worker`, `eip3009`, `csp_nonce`, and
-`plugin_registry` are all implemented in goboticus under different names/files but flagged
+`plugin_registry` are all implemented in roboticus under different names/files but flagged
 as missing every time.
 
 **Recommendation:** The parity audit should use semantic matching or maintain an explicit
@@ -356,7 +356,7 @@ known false positives.
 **Problem:** Roboticus reads `.log` files from disk for `/api/logs`, which requires
 parsing JSON lines from files, handling file rotation, and is fragile to path changes.
 
-**Go improvement:** Goboticus uses an `io.Writer`-based ring buffer injected into zerolog's
+**Go improvement:** Roboticus uses an `io.Writer`-based ring buffer injected into zerolog's
 multi-writer. This captures logs directly in memory with no disk I/O, no file parsing,
 and no rotation handling. The ring buffer is thread-safe and fixed-size (5000 entries).
 This is a pattern worth adopting in roboticus — a `tracing::Subscriber` layer that writes

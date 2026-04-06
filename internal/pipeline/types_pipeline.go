@@ -1,8 +1,8 @@
 package pipeline
 
 import (
-	"goboticus/internal/core"
-	"goboticus/internal/session"
+	"roboticus/internal/core"
+	"roboticus/internal/session"
 )
 
 // Session is an alias for the shared session type.

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"goboticus/internal/core"
+	"roboticus/internal/core"
 )
 
 // ScriptPlugin implements Plugin by executing external scripts.

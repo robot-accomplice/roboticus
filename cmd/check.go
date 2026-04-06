@@ -8,8 +8,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"goboticus/internal/core"
-	"goboticus/internal/db"
+	"roboticus/internal/core"
+	"roboticus/internal/db"
 )
 
 var checkCmd = &cobra.Command{

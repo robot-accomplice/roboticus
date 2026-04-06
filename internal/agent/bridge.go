@@ -1,7 +1,7 @@
 package agent
 
 import (
-	"goboticus/internal/agent/tools"
+	"roboticus/internal/agent/tools"
 )
 
 // ToolRegistry is an alias for tools.Registry, used throughout the agent package.

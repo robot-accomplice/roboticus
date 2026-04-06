@@ -9,14 +9,14 @@ func TestModelIdentityTruthGuard_Rewrite(t *testing.T) {
 	g := &ModelIdentityTruthGuard{}
 	ctx := &GuardContext{
 		Intents:       []string{"model_identity"},
-		AgentName:     "Goboticus",
+		AgentName:     "Roboticus",
 		ResolvedModel: "gpt-4",
 	}
 	result := g.CheckWithContext("I am a large language model.", ctx)
 	if result.Passed {
 		t.Error("should rewrite identity response")
 	}
-	if !strings.Contains(result.Content, "Goboticus") {
+	if !strings.Contains(result.Content, "Roboticus") {
 		t.Errorf("rewritten content should contain agent name, got: %s", result.Content)
 	}
 	if !strings.Contains(result.Content, "gpt-4") {

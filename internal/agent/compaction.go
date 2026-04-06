@@ -3,7 +3,7 @@ package agent
 import (
 	"context"
 
-	"goboticus/internal/llm"
+	"roboticus/internal/llm"
 )
 
 // Summarizer produces a summary of a message sequence.

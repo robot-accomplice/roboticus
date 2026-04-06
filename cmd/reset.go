@@ -8,7 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"goboticus/internal/db"
+	"roboticus/internal/db"
 )
 
 var resetCmd = &cobra.Command{

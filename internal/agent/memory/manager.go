@@ -6,9 +6,9 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"goboticus/internal/db"
-	"goboticus/internal/llm"
-	"goboticus/internal/session"
+	"roboticus/internal/db"
+	"roboticus/internal/llm"
+	"roboticus/internal/session"
 )
 
 // TierBudget defines token allocation percentages per tier.

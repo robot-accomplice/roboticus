@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"goboticus/testutil"
+	"roboticus/testutil"
 )
 
 func TestRetrieve_NilStore(t *testing.T) {

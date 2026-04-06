@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"strings"
 
-	"goboticus/internal/core"
-	"goboticus/internal/db"
+	"roboticus/internal/core"
+	"roboticus/internal/db"
 )
 
 // ConfigApplyRequest is the request body for applying a config section.

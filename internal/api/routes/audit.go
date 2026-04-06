@@ -5,7 +5,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"goboticus/internal/db"
+	"roboticus/internal/db"
 )
 
 // GetPolicyAudit returns policy decisions for a given turn.

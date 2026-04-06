@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"goboticus/internal/core"
+	"roboticus/internal/core"
 )
 
 // mockTask implements HeartbeatTask for testing.

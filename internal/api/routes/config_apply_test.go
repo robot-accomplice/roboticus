@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"goboticus/internal/core"
-	"goboticus/testutil"
+	"roboticus/internal/core"
+	"roboticus/testutil"
 )
 
 func TestConfigApply_ValidSection(t *testing.T) {

@@ -59,8 +59,8 @@ func TestApplyFullWithContext_NilContext(t *testing.T) {
 
 func TestFullGuardChain_Length(t *testing.T) {
 	chain := FullGuardChain()
-	if len(chain.guards) != 17 {
-		t.Errorf("full chain has %d guards, want 17", len(chain.guards))
+	if len(chain.guards) != 19 {
+		t.Errorf("full chain has %d guards, want 19", len(chain.guards))
 	}
 }
 

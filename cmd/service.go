@@ -6,23 +6,23 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 
-	"goboticus/internal/daemon"
+	"roboticus/internal/daemon"
 )
 
 var serviceCmd = &cobra.Command{
 	Use:   "service",
-	Short: "Manage the goboticus system service",
+	Short: "Manage the roboticus system service",
 	Long: `Install, uninstall, start, stop, restart, or check status of the
-goboticus system service.
+roboticus system service.
 
-  Linux:   integrates with systemd (creates goboticus.service)
-  macOS:   integrates with launchd (creates com.goboticus.agent.plist)
+  Linux:   integrates with systemd (creates roboticus.service)
+  macOS:   integrates with launchd (creates com.roboticus.agent.plist)
   Windows: integrates with Service Control Manager`,
 }
 
 var serviceInstallCmd = &cobra.Command{
 	Use:   "install",
-	Short: "Register goboticus as a system service",
+	Short: "Register roboticus as a system service",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := loadConfig()
 		if err != nil {
@@ -38,7 +38,7 @@ var serviceInstallCmd = &cobra.Command{
 
 var serviceUninstallCmd = &cobra.Command{
 	Use:   "uninstall",
-	Short: "Remove goboticus from the system service manager",
+	Short: "Remove roboticus from the system service manager",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := loadConfig()
 		if err != nil {
@@ -54,7 +54,7 @@ var serviceUninstallCmd = &cobra.Command{
 
 var serviceStartCmd = &cobra.Command{
 	Use:   "start",
-	Short: "Start the goboticus service",
+	Short: "Start the roboticus service",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := loadConfig()
 		if err != nil {
@@ -70,7 +70,7 @@ var serviceStartCmd = &cobra.Command{
 
 var serviceStopCmd = &cobra.Command{
 	Use:   "stop",
-	Short: "Stop the goboticus service",
+	Short: "Stop the roboticus service",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := loadConfig()
 		if err != nil {
@@ -86,7 +86,7 @@ var serviceStopCmd = &cobra.Command{
 
 var serviceRestartCmd = &cobra.Command{
 	Use:   "restart",
-	Short: "Restart the goboticus service",
+	Short: "Restart the roboticus service",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := loadConfig()
 		if err != nil {
@@ -102,7 +102,7 @@ var serviceRestartCmd = &cobra.Command{
 
 var serviceStatusCmd = &cobra.Command{
 	Use:   "status",
-	Short: "Check the goboticus service status",
+	Short: "Check the roboticus service status",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := loadConfig()
 		if err != nil {
@@ -112,7 +112,7 @@ var serviceStatusCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("status check failed: %w", err)
 		}
-		fmt.Printf("goboticus service: %s\n", status)
+		fmt.Printf("roboticus service: %s\n", status)
 		return nil
 	},
 }

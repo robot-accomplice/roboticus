@@ -11,7 +11,7 @@ import (
 var logsCmd = &cobra.Command{
 	Use:   "logs",
 	Short: "Stream or fetch recent log entries",
-	Long:  `Fetch recent log entries from the running goboticus server, optionally filtering by level or following in real time.`,
+	Long:  `Fetch recent log entries from the running roboticus server, optionally filtering by level or following in real time.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		lines, _ := cmd.Flags().GetInt("lines")
 		level, _ := cmd.Flags().GetString("level")
@@ -53,7 +53,7 @@ func followLogs(basePath string) error {
 	client := &http.Client{Timeout: 0}
 	resp, err := client.Get(url)
 	if err != nil {
-		return fmt.Errorf("connection failed (is goboticus running?): %w", err)
+		return fmt.Errorf("connection failed (is roboticus running?): %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 

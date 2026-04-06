@@ -13,8 +13,8 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Server.Bind != DefaultServerBind {
 		t.Errorf("default bind = %q, want %q", cfg.Server.Bind, DefaultServerBind)
 	}
-	if cfg.Agent.Name != "goboticus" {
-		t.Errorf("default agent name = %q, want %q", cfg.Agent.Name, "goboticus")
+	if cfg.Agent.Name != "roboticus" {
+		t.Errorf("default agent name = %q, want %q", cfg.Agent.Name, "roboticus")
 	}
 	if cfg.Database.Path == "" {
 		t.Error("default database path should not be empty")

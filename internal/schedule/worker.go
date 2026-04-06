@@ -6,7 +6,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"goboticus/internal/db"
+	"roboticus/internal/db"
 )
 
 // CronWorker polls for due cron jobs and executes them with lease-based locking.
@@ -90,13 +90,16 @@ func (w *CronWorker) tick(ctx context.Context) {
 			run.Status = CronRunFailed
 			run.ErrorMsg = err.Error()
 			log.Warn().Str("job", job.Name).Err(err).Msg("cron job failed")
+			w.recordRun(ctx, run)
+			w.handleRetry(ctx, job, now)
 		} else {
 			run.Status = CronRunSuccess
 			log.Debug().Str("job", job.Name).Dur("duration", duration).Msg("cron job completed")
+			w.recordRun(ctx, run)
+			w.resetRetry(ctx, job.ID)
+			w.updateLastRun(ctx, job, now)
 		}
 
-		w.recordRun(ctx, run)
-		w.updateLastRun(ctx, job, now)
 		w.releaseLease(ctx, job.ID)
 	}
 }
@@ -104,7 +107,8 @@ func (w *CronWorker) tick(ctx context.Context) {
 func (w *CronWorker) listEnabledJobs(ctx context.Context) ([]*CronJob, error) {
 	rows, err := w.store.QueryContext(ctx,
 		`SELECT id, name, agent_id, schedule_kind, schedule_expr, schedule_every_ms,
-		        payload_json, enabled, last_run_at, next_run_at
+		        payload_json, enabled, last_run_at, next_run_at,
+		        COALESCE(retry_count, 0), COALESCE(max_retries, 3), COALESCE(retry_delay_ms, 60000)
 		 FROM cron_jobs WHERE enabled = 1`)
 	if err != nil {
 		return nil, err
@@ -116,7 +120,8 @@ func (w *CronWorker) listEnabledJobs(ctx context.Context) ([]*CronJob, error) {
 		var job CronJob
 		var lastRun, nextRun *string
 		if err := rows.Scan(&job.ID, &job.Name, &job.AgentID, &job.Kind, &job.Expression,
-			&job.IntervalMs, &job.PayloadJSON, &job.Enabled, &lastRun, &nextRun); err != nil {
+			&job.IntervalMs, &job.PayloadJSON, &job.Enabled, &lastRun, &nextRun,
+			&job.RetryCount, &job.MaxRetries, &job.RetryDelayMs); err != nil {
 			continue
 		}
 		if lastRun != nil {
@@ -172,4 +177,52 @@ func (w *CronWorker) updateLastRun(ctx context.Context, job *CronJob, now time.T
 	_, _ = w.store.ExecContext(ctx,
 		`UPDATE cron_jobs SET last_run_at = ?, next_run_at = ? WHERE id = ?`,
 		now.UTC().Format(time.RFC3339), nextRunStr, job.ID)
+}
+
+// handleRetry increments the retry counter and schedules a retry with
+// exponential backoff, or records exhaustion when max retries are exceeded.
+func (w *CronWorker) handleRetry(ctx context.Context, job *CronJob, now time.Time) {
+	newCount := job.RetryCount + 1
+	maxRetries := job.MaxRetries
+	if maxRetries <= 0 {
+		maxRetries = 3
+	}
+
+	if newCount > maxRetries {
+		// Exhausted — record final status and advance to next regular run.
+		w.recordRun(ctx, &CronRun{
+			JobID:     job.ID,
+			Status:    "exhausted",
+			ErrorMsg:  "max retries exceeded",
+			Timestamp: now,
+		})
+		w.resetRetry(ctx, job.ID)
+		w.updateLastRun(ctx, job, now)
+		log.Warn().Str("job", job.Name).Int("retries", maxRetries).Msg("cron job retries exhausted")
+		return
+	}
+
+	// Exponential backoff: delay * 2^(retryCount-1).
+	delayMs := job.RetryDelayMs
+	if delayMs <= 0 {
+		delayMs = 60000
+	}
+	backoff := delayMs
+	for i := 1; i < newCount; i++ {
+		backoff *= 2
+	}
+	retryAt := now.Add(time.Duration(backoff) * time.Millisecond)
+	retryStr := retryAt.UTC().Format(time.RFC3339)
+
+	_, _ = w.store.ExecContext(ctx,
+		`UPDATE cron_jobs SET retry_count = ?, next_run_at = ?, last_run_at = ? WHERE id = ?`,
+		newCount, retryStr, now.UTC().Format(time.RFC3339), job.ID)
+
+	log.Info().Str("job", job.Name).Int("retry", newCount).Time("retry_at", retryAt).Msg("cron job scheduled for retry")
+}
+
+// resetRetry resets the retry counter on successful execution.
+func (w *CronWorker) resetRetry(ctx context.Context, jobID string) {
+	_, _ = w.store.ExecContext(ctx,
+		`UPDATE cron_jobs SET retry_count = 0 WHERE id = ?`, jobID)
 }

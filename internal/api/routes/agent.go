@@ -8,8 +8,8 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"goboticus/internal/llm"
-	"goboticus/internal/pipeline"
+	"roboticus/internal/llm"
+	"roboticus/internal/pipeline"
 )
 
 // EventPublisher is an interface for publishing events (avoids import cycle with api package).
@@ -45,7 +45,7 @@ func AgentMessage(p pipeline.Runner, bus ...EventPublisher) http.HandlerFunc {
 			Content:   req.Content,
 			SessionID: req.SessionID,
 			AgentID:   req.AgentID,
-			AgentName: "Goboticus",
+			AgentName: "Roboticus",
 			Platform:  "api",
 		}
 
@@ -93,7 +93,7 @@ func AgentMessageStream(p pipeline.Runner, llmSvc *llm.Service) http.HandlerFunc
 			Content:   req.Content,
 			SessionID: req.SessionID,
 			AgentID:   req.AgentID,
-			AgentName: "Goboticus",
+			AgentName: "Roboticus",
 			Platform:  "api",
 		}
 

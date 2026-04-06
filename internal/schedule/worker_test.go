@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"goboticus/testutil"
+	"roboticus/testutil"
 )
 
 func TestCronExecutorFunc(t *testing.T) {

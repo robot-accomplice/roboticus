@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"net/http"
 
-	"goboticus/internal/db"
+	"roboticus/internal/db"
 )
 
 // GetWalletBalance returns wallet balance from the transactions table.

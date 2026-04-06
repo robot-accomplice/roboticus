@@ -7,12 +7,13 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"goboticus/internal/db"
+	"roboticus/internal/db"
 )
 
 // GovernorReport contains the counts from a single governance tick.
 type GovernorReport struct {
 	ExpiredSessions int64
+	RotatedSessions int64
 	DecayedMemories int64
 	AdjustedSkills  int64
 	PrunedSkills    int64
@@ -21,18 +22,25 @@ type GovernorReport struct {
 // SessionGovernor performs periodic lifecycle maintenance on sessions,
 // episodic memory, and learned skills.
 type SessionGovernor struct {
-	store       *db.Store
-	sessionTTL  time.Duration
-	lastTick    time.Time
-	minInterval time.Duration // prevent running more than once per minute
+	store            *db.Store
+	sessionTTL       time.Duration
+	rotationInterval time.Duration
+	lastTick         time.Time
+	minInterval      time.Duration // prevent running more than once per minute
 }
 
 // NewSessionGovernor creates a SessionGovernor with the given store and TTL.
-func NewSessionGovernor(store *db.Store, ttl time.Duration) *SessionGovernor {
+// rotationInterval controls how often active sessions are rotated (archived
+// and replaced with a fresh successor). Pass 0 to disable rotation.
+func NewSessionGovernor(store *db.Store, ttl, rotationInterval time.Duration) *SessionGovernor {
+	if rotationInterval == 0 {
+		rotationInterval = 24 * time.Hour
+	}
 	return &SessionGovernor{
-		store:       store,
-		sessionTTL:  ttl,
-		minInterval: 1 * time.Minute,
+		store:            store,
+		sessionTTL:       ttl,
+		rotationInterval: rotationInterval,
+		minInterval:      1 * time.Minute,
 	}
 }
 
@@ -52,6 +60,12 @@ func (sg *SessionGovernor) Tick(ctx context.Context) (*GovernorReport, error) {
 		return report, fmt.Errorf("expire sessions: %w", err)
 	}
 	report.ExpiredSessions = expired
+
+	rotated, err := sg.rotateOldSessions(ctx)
+	if err != nil {
+		return report, fmt.Errorf("rotate sessions: %w", err)
+	}
+	report.RotatedSessions = rotated
 
 	decayed, err := sg.decayEpisodicImportance(ctx)
 	if err != nil {
@@ -73,6 +87,7 @@ func (sg *SessionGovernor) Tick(ctx context.Context) (*GovernorReport, error) {
 
 	log.Debug().
 		Int64("expired", expired).
+		Int64("rotated", rotated).
 		Int64("decayed", decayed).
 		Int64("adjusted", adjusted).
 		Int64("pruned", pruned).
@@ -94,6 +109,78 @@ func (sg *SessionGovernor) expireStaleSessions(ctx context.Context) (int64, erro
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+// rotateOldSessions archives active sessions that haven't been updated within
+// the rotation interval and creates replacement sessions with the same agent
+// and scope prefix, ensuring continuity for long-lived agents.
+func (sg *SessionGovernor) rotateOldSessions(ctx context.Context) (int64, error) {
+	rotationSeconds := int(sg.rotationInterval.Seconds())
+	rows, err := sg.store.QueryContext(ctx,
+		`SELECT id, agent_id, scope_key
+		 FROM sessions
+		 WHERE status = 'active'
+		 AND datetime(updated_at, ?) < datetime('now')`,
+		fmt.Sprintf("+%d seconds", rotationSeconds),
+	)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	type sessionInfo struct {
+		id, agentID, scopeKey string
+	}
+	var toRotate []sessionInfo
+	for rows.Next() {
+		var s sessionInfo
+		if err := rows.Scan(&s.id, &s.agentID, &s.scopeKey); err != nil {
+			continue
+		}
+		toRotate = append(toRotate, s)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	var rotated int64
+	for _, s := range toRotate {
+		// Archive the old session.
+		_, err := sg.store.ExecContext(ctx,
+			`UPDATE sessions SET status = 'archived' WHERE id = ? AND status = 'active'`, s.id)
+		if err != nil {
+			continue
+		}
+
+		// Create successor with same agent and scope prefix.
+		newID := db.NewID()
+		scopePrefix := s.scopeKey
+		if idx := len(scopePrefix) - 1; idx > 0 {
+			// Strip the old session ID suffix (format: "scope:oldid").
+			if colonIdx := lastIndexByte(scopePrefix, ':'); colonIdx > 0 {
+				scopePrefix = scopePrefix[:colonIdx]
+			}
+		}
+		newScope := scopePrefix + ":" + newID
+		_, err = sg.store.ExecContext(ctx,
+			`INSERT INTO sessions (id, agent_id, scope_key) VALUES (?, ?, ?)`,
+			newID, s.agentID, newScope)
+		if err != nil {
+			continue
+		}
+		rotated++
+	}
+	return rotated, nil
+}
+
+// lastIndexByte returns the index of the last occurrence of c in s, or -1.
+func lastIndexByte(s string, c byte) int {
+	for i := len(s) - 1; i >= 0; i-- {
+		if s[i] == c {
+			return i
+		}
+	}
+	return -1
 }
 
 // decayEpisodicImportance reduces importance of episodic memories older than 7 days.

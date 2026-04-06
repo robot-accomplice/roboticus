@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"strconv"
 
-	"goboticus/internal/db"
+	"roboticus/internal/db"
 )
 
 // GetMemoryAnalytics returns memory system health metrics.

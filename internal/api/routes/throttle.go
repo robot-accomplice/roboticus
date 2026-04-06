@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"strconv"
 
-	"goboticus/internal/db"
+	"roboticus/internal/db"
 )
 
 // GetThrottleStats returns abuse event statistics for the throttle dashboard.

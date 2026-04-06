@@ -3,7 +3,7 @@ package pipeline
 import (
 	"testing"
 
-	"goboticus/internal/core"
+	"roboticus/internal/core"
 )
 
 func TestPresetAPI(t *testing.T) {

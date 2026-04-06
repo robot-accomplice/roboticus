@@ -12,7 +12,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"goboticus/internal/core"
+	"roboticus/internal/core"
 )
 
 // MatrixConfig holds Matrix homeserver connection settings.
@@ -103,7 +103,7 @@ func (m *MatrixAdapter) Recv(ctx context.Context) (*InboundMessage, error) {
 
 func (m *MatrixAdapter) Send(ctx context.Context, msg OutboundMessage) error {
 	roomID := msg.RecipientID
-	txnID := fmt.Sprintf("goboticus-%d", time.Now().UnixNano())
+	txnID := fmt.Sprintf("roboticus-%d", time.Now().UnixNano())
 
 	var body any
 	eventType := "m.room.message"

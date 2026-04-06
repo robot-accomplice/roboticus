@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"goboticus/internal/agent/policy"
-	"goboticus/internal/llm"
-	"goboticus/testutil"
+	"roboticus/internal/agent/policy"
+	"roboticus/internal/llm"
+	"roboticus/testutil"
 )
 
 func TestLoop_Run_SimpleResponse(t *testing.T) {

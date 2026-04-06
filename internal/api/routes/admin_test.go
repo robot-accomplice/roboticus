@@ -8,7 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"goboticus/testutil"
+	"roboticus/testutil"
 )
 
 func TestListSkills(t *testing.T) {

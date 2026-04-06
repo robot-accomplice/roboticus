@@ -1,7 +1,7 @@
-# Goboticus — Architectural Principles
+# Roboticus — Architectural Principles
 
 This document defines the non-negotiable architectural principles for the
-Goboticus codebase. Every contributor — human or AI — must follow these
+Roboticus codebase. Every contributor — human or AI — must follow these
 principles. Deviations are bugs and must be corrected before merge.
 
 ---

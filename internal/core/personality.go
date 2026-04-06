@@ -64,7 +64,7 @@ type OperatorPreferences struct {
 func DefaultOsConfig() OsConfig {
 	return OsConfig{
 		Identity: OsIdentity{
-			Name:    "goboticus",
+			Name:    "roboticus",
 			Version: "1.0",
 		},
 		Voice: OsVoice{

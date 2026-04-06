@@ -5,7 +5,7 @@ import (
 	"strings"
 	"sync"
 
-	"goboticus/internal/agent/memory"
+	"roboticus/internal/agent/memory"
 )
 
 // IntentResult represents a classified intent with confidence.

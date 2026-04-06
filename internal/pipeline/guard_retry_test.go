@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"goboticus/internal/core"
+	"roboticus/internal/core"
 )
 
 type countingExecutor struct {

@@ -7,7 +7,7 @@ import (
 	"regexp"
 	"strings"
 
-	"goboticus/internal/db"
+	"roboticus/internal/db"
 )
 
 // validIdentifier matches safe SQL identifiers (alphanumeric + underscore).

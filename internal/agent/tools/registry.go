@@ -3,7 +3,7 @@ package tools
 import (
 	"sync"
 
-	"goboticus/internal/llm"
+	"roboticus/internal/llm"
 )
 
 // Registry manages available tools for an agent.

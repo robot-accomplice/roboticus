@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"time"
 
-	"goboticus/internal/core"
+	"roboticus/internal/core"
 )
 
 // Session represents a conversation session.

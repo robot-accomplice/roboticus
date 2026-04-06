@@ -110,7 +110,7 @@ func (g *Gateway) handleInitialize(w http.ResponseWriter, req gatewayRequest) {
 			"tools": map[string]any{},
 		},
 		"serverInfo": map[string]string{
-			"name":    "goboticus",
+			"name":    "roboticus",
 			"version": "0.1.0",
 		},
 	}

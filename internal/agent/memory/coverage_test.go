@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"goboticus/internal/agent/memory"
-	"goboticus/internal/session"
-	"goboticus/testutil"
+	"roboticus/internal/agent/memory"
+	"roboticus/internal/session"
+	"roboticus/testutil"
 )
 
 func TestManager_IngestTurn(t *testing.T) {
