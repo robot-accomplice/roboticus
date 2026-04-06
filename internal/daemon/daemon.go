@@ -480,11 +480,18 @@ func New(cfg *core.Config) (*Daemon, error) {
 	// MCP connection manager.
 	mcpMgr := mcp.NewConnectionManager()
 
+	// Open keystore with machine-id derived passphrase (matches Rust roboticus).
+	ks, err := core.OpenKeystoreMachine()
+	if err != nil {
+		log.Warn().Err(err).Msg("keystore: failed to open, provider key management unavailable")
+	}
+
 	appState := &api.AppState{
 		Store:     store,
 		Pipeline:  pipe,
 		LLM:       llmSvc,
 		Config:    cfg,
+		Keystore:  ks,
 		EventBus:  eventBus,
 		Approvals: approvalMgr,
 		MCP:       mcpMgr,

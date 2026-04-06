@@ -4,12 +4,14 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 
 	"golang.org/x/crypto/scrypt"
@@ -77,6 +79,55 @@ func OpenKeystore(cfg KeystoreConfig) (*Keystore, error) {
 	}
 
 	return ks, nil
+}
+
+// OpenKeystoreMachine opens the keystore using the machine-derived passphrase,
+// matching the Rust roboticus unlock_machine behavior. This reads or creates
+// a stable machine-id at ~/.roboticus/machine-id and derives the passphrase
+// as "roboticus-machine-key:{id}".
+//
+// If ROBOTICUS_MASTER_KEY is set, it takes precedence over machine-id.
+func OpenKeystoreMachine() (*Keystore, error) {
+	path := filepath.Join(ConfigDir(), "keystore.enc")
+	passphrase := os.Getenv("ROBOTICUS_MASTER_KEY")
+	if passphrase == "" {
+		passphrase = MachinePassphrase()
+	}
+	return OpenKeystore(KeystoreConfig{Path: path, Passphrase: passphrase})
+}
+
+// MachinePassphrase reads or creates the machine-id and returns the derived
+// passphrase in the format "roboticus-machine-key:{hex-id}".
+func MachinePassphrase() string {
+	idPath := machineIDPath()
+	id, err := os.ReadFile(idPath)
+	if err == nil {
+		trimmed := strings.TrimSpace(string(id))
+		if trimmed != "" {
+			return "roboticus-machine-key:" + trimmed
+		}
+	}
+	return "roboticus-machine-key:" + createMachineID(idPath)
+}
+
+func machineIDPath() string {
+	if testDir := os.Getenv("ROBOTICUS_TEST_MACHINE_ID_DIR"); testDir != "" {
+		return filepath.Join(testDir, "machine-id")
+	}
+	return filepath.Join(ConfigDir(), "machine-id")
+}
+
+func createMachineID(path string) string {
+	var bytes [32]byte
+	if _, err := io.ReadFull(rand.Reader, bytes[:]); err != nil {
+		return hex.EncodeToString(bytes[:]) // fallback: zero bytes
+	}
+	id := hex.EncodeToString(bytes[:])
+	if dir := filepath.Dir(path); dir != "" {
+		_ = os.MkdirAll(dir, 0o700)
+	}
+	_ = os.WriteFile(path, []byte(id), 0o600)
+	return id
 }
 
 // Get retrieves a secret by name. If not found in the keystore,

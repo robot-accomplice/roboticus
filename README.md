@@ -1,9 +1,9 @@
 ```
-       o╔═══╗o
+        ╔═══╗
         ║◉ ◉║
-        ║ UU║
+        ║ ▬ ║
         ╚═╤═╝
-      ╔═══╪═══╗       G O B O T I C U S
+      ╔═══╪═══╗       R O B O T I C U S
   ╔═══╣ ▓▓║▓▓ ╠═══╗   Autonomous Agent Runtime
   █   ║ ▓▓║▓▓ ║   █
       ╚══╤═╤══╝
@@ -13,18 +13,20 @@
 
 # Roboticus
 
-![Go 1.26](https://img.shields.io/badge/Go-1.26-00ADD8?style=flat-square&logo=go&logoColor=white)
-![CI](https://img.shields.io/github/actions/workflow/status/robot-accomplice/roboticus/ci.yml?style=flat-square&label=CI)
-![Parity Audit](https://img.shields.io/github/actions/workflow/status/robot-accomplice/roboticus/parity-audit.yml?style=flat-square&label=parity%20audit)
-![License](https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square)
-![Go Version](https://img.shields.io/github/go-mod/go-version/robot-accomplice/roboticus?style=flat-square)
-![Lines of Code](https://img.shields.io/badge/lines-17k%2B-blue?style=flat-square)
-![Tests](https://img.shields.io/badge/tests-29%20files-green?style=flat-square)
-![Channels](https://img.shields.io/badge/channels-7-purple?style=flat-square)
-![Providers](https://img.shields.io/badge/providers-10-orange?style=flat-square)
+> **One binary. One database. One agent that remembers, reasons, and acts.**
 
-**Autonomous AI agent runtime - idiomatic Go rewrite of
-[roboticus](https://github.com/robot-accomplice/roboticus)**
+[![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](https://go.dev)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![Build Status](https://img.shields.io/github/actions/workflow/status/robot-accomplice/roboticus/ci.yml?branch=develop&logo=github&label=CI)](https://github.com/robot-accomplice/roboticus/actions)
+[![Coverage](https://img.shields.io/badge/coverage-80%25-brightgreen)](.)
+[![Channels](https://img.shields.io/badge/channels-7-purple)](.)
+[![Providers](https://img.shields.io/badge/providers-10-orange)](.)
+
+Roboticus is an autonomous agent runtime that ships as a single Go binary
+backed by a single SQLite database. It is a drop-in compatible Go implementation
+of [roboticus (Rust)](https://github.com/robot-accomplice/roboticus), sharing
+the same configuration format (`~/.roboticus/`), database schema, keystore,
+and API surface.
 
 Multi-model inference - 5-tier memory - 7 channels - On-chain wallet - Full dashboard SPA
 

@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/spf13/viper"
 )
 
 func TestLogsCmd_WithMockServer(t *testing.T) {
@@ -71,8 +73,11 @@ func TestLogsCmd_ServerError(t *testing.T) {
 }
 
 func TestFollowLogs_ConnectionRefused(t *testing.T) {
-	// followLogs constructs its own URL, so we need to test with a port that's not listening.
-	// This exercises the error path.
+	// Point viper at a port that's guaranteed not listening.
+	orig := viper.GetInt("server.port")
+	viper.Set("server.port", 19999)
+	defer viper.Set("server.port", orig)
+
 	err := followLogs("/api/logs?lines=10")
 	if err == nil {
 		t.Fatal("expected connection error from followLogs")
