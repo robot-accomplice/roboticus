@@ -8,14 +8,23 @@ import (
 	"roboticus/internal/db"
 )
 
-// routingProfile holds the three normalized weights for metascore routing.
+// routingProfile holds the six normalized weights for metascore routing,
+// matching the MetascoreBreakdown dimensions in the Rust implementation.
 type routingProfile struct {
-	Correctness float64 `json:"correctness"`
-	Cost        float64 `json:"cost"`
-	Speed       float64 `json:"speed"`
+	Efficacy     float64 `json:"efficacy"`
+	Cost         float64 `json:"cost"`
+	Availability float64 `json:"availability"`
+	Locality     float64 `json:"locality"`
+	Confidence   float64 `json:"confidence"`
+	Speed        float64 `json:"speed"`
 }
 
-var defaultProfile = routingProfile{Correctness: 0.5, Cost: 0.25, Speed: 0.25}
+// Default weights match the Rust Metascore formula:
+// 0.35*efficacy + 0.20*(1-cost) + 0.25*availability + 0.10*locality + 0.10*confidence + speed_bonus
+var defaultProfile = routingProfile{
+	Efficacy: 0.35, Cost: 0.20, Availability: 0.25,
+	Locality: 0.10, Confidence: 0.10, Speed: 0.10,
+}
 
 const routingProfileKey = "routing_profile"
 
@@ -51,30 +60,45 @@ func PutRoutingProfile(store *db.Store) http.HandlerFunc {
 		}
 
 		// Validate non-negative.
-		if profile.Correctness < 0 || profile.Cost < 0 || profile.Speed < 0 {
+		if profile.Efficacy < 0 || profile.Cost < 0 || profile.Availability < 0 ||
+			profile.Locality < 0 || profile.Confidence < 0 || profile.Speed < 0 {
 			writeError(w, http.StatusBadRequest, "weights must be non-negative")
 			return
 		}
 
 		// Normalize to sum=1.0.
-		sum := profile.Correctness + profile.Cost + profile.Speed
+		sum := profile.Efficacy + profile.Cost + profile.Availability +
+			profile.Locality + profile.Confidence + profile.Speed
 		if sum == 0 {
 			writeError(w, http.StatusBadRequest, "at least one weight must be positive")
 			return
 		}
-		profile.Correctness = math.Round(profile.Correctness/sum*1000) / 1000
+		profile.Efficacy = math.Round(profile.Efficacy/sum*1000) / 1000
 		profile.Cost = math.Round(profile.Cost/sum*1000) / 1000
+		profile.Availability = math.Round(profile.Availability/sum*1000) / 1000
+		profile.Locality = math.Round(profile.Locality/sum*1000) / 1000
+		profile.Confidence = math.Round(profile.Confidence/sum*1000) / 1000
 		profile.Speed = math.Round(profile.Speed/sum*1000) / 1000
 
 		// Re-normalize rounding residual onto the largest weight.
-		residual := 1.0 - (profile.Correctness + profile.Cost + profile.Speed)
+		sum2 := profile.Efficacy + profile.Cost + profile.Availability +
+			profile.Locality + profile.Confidence + profile.Speed
+		residual := 1.0 - sum2
 		if residual != 0 {
-			if profile.Correctness >= profile.Cost && profile.Correctness >= profile.Speed {
-				profile.Correctness += residual
-			} else if profile.Cost >= profile.Speed {
-				profile.Cost += residual
-			} else {
-				profile.Speed += residual
+			fields := []*float64{
+				&profile.Efficacy, &profile.Cost, &profile.Availability,
+				&profile.Locality, &profile.Confidence, &profile.Speed,
+			}
+			maxVal := 0.0
+			var maxPtr *float64
+			for _, fp := range fields {
+				if *fp >= maxVal {
+					maxVal = *fp
+					maxPtr = fp
+				}
+			}
+			if maxPtr != nil {
+				*maxPtr += residual
 			}
 		}
 

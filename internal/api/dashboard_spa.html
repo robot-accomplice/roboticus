@@ -954,59 +954,56 @@
   function round2(v) {
     return Math.round(Number(v || 0) * 100) / 100;
   }
+  var ROUTING_KEYS = ['efficacy', 'cost', 'availability', 'locality', 'confidence', 'speed'];
   function normalizeRoutingProfile(profile, preferredKey) {
-    var p = {
-      correctness: clamp01(profile && profile.correctness),
-      cost: clamp01(profile && profile.cost),
-      speed: clamp01(profile && profile.speed)
-    };
-    var keys = ['correctness', 'cost', 'speed'];
-    var total = p.correctness + p.cost + p.speed;
+    var p = {};
+    ROUTING_KEYS.forEach(function(k) { p[k] = clamp01(profile && profile[k]); });
+    var total = 0; ROUTING_KEYS.forEach(function(k) { total += p[k]; });
     if (total <= 1.0 + 1e-9) {
-      return { correctness: round2(p.correctness), cost: round2(p.cost), speed: round2(p.speed) };
+      var out = {}; ROUTING_KEYS.forEach(function(k) { out[k] = round2(p[k]); }); return out;
     }
-    if (preferredKey && keys.indexOf(preferredKey) !== -1) {
+    if (preferredKey && ROUTING_KEYS.indexOf(preferredKey) !== -1) {
       var otherSum = 0;
-      keys.forEach(function(k) { if (k !== preferredKey) otherSum += p[k]; });
+      ROUTING_KEYS.forEach(function(k) { if (k !== preferredKey) otherSum += p[k]; });
       p[preferredKey] = Math.max(0, Math.min(p[preferredKey], 1 - otherSum));
-      return { correctness: round2(p.correctness), cost: round2(p.cost), speed: round2(p.speed) };
+      var out2 = {}; ROUTING_KEYS.forEach(function(k) { out2[k] = round2(p[k]); }); return out2;
     }
     if (total > 0) {
       var scale = 1 / total;
-      p.correctness *= scale;
-      p.cost *= scale;
-      p.speed *= scale;
+      ROUTING_KEYS.forEach(function(k) { p[k] *= scale; });
     }
-    return { correctness: round2(p.correctness), cost: round2(p.cost), speed: round2(p.speed) };
+    var result = {}; ROUTING_KEYS.forEach(function(k) { result[k] = round2(p[k]); }); return result;
   }
   function routingProfileTotal(profile) {
-    return round2(clamp01(profile && profile.correctness) + clamp01(profile && profile.cost) + clamp01(profile && profile.speed));
+    var t = 0; ROUTING_KEYS.forEach(function(k) { t += clamp01(profile && profile[k]); }); return round2(t);
   }
   function deriveRoutingProfile(cfg) {
-    var correctness = clamp01(cfg && cfg.accuracy_floor);
+    // Derive 6-axis profile from config routing settings.
+    var efficacy = clamp01(cfg && cfg.accuracy_floor);
     var costWeight = cfg && cfg.cost_weight;
     var cost = clamp01(costWeight == null ? (cfg && cfg.cost_aware ? 0.5 : 0.0) : costWeight);
     var confidence = clamp01(cfg && cfg.confidence_threshold != null ? cfg.confidence_threshold : 0.9);
     var speed = clamp01((0.95 - confidence) / 0.35);
     return normalizeRoutingProfile({
-      correctness: round2(correctness),
+      efficacy: round2(efficacy),
       cost: round2(cost),
+      availability: 0.25,
+      locality: round2(cfg && cfg.local_first ? 0.3 : 0.1),
+      confidence: round2(confidence * 0.1),
       speed: round2(speed)
     });
   }
   function projectRoutingPatchFromProfile(profile) {
-    var p = {
-      correctness: clamp01(profile && profile.correctness),
-      cost: clamp01(profile && profile.cost),
-      speed: clamp01(profile && profile.speed)
-    };
+    var p = {};
+    ROUTING_KEYS.forEach(function(k) { p[k] = clamp01(profile && profile[k]); });
     return {
       models: {
         routing: {
-          accuracy_floor: round2(p.correctness),
+          accuracy_floor: round2(p.efficacy),
           cost_aware: p.cost > 0.01,
           cost_weight: round2(p.cost),
-          confidence_threshold: round2(0.95 - (0.35 * p.speed)),
+          local_first: p.locality > 0.15,
+          confidence_threshold: round2(Math.max(0.5, 0.95 - (0.35 * p.speed))),
           estimated_output_tokens: Math.max(200, Math.min(1200, Math.round(1200 - (800 * p.speed))))
         }
       }
@@ -1025,29 +1022,37 @@
     return normalized;
   }
   function renderRoutingSpiderSvg(profile) {
-    var values = [clamp01(profile.correctness), clamp01(profile.cost), clamp01(profile.speed)];
-    var labels = ['Correctness', 'Cost', 'Speed'];
+    var N = 6;
+    var values = [
+      clamp01(profile.efficacy || profile.correctness || 0),
+      clamp01(profile.cost || 0),
+      clamp01(profile.availability || 0),
+      clamp01(profile.locality || 0),
+      clamp01(profile.confidence || 0),
+      clamp01(profile.speed || 0)
+    ];
+    var labels = ['Efficacy', 'Cost', 'Availability', 'Locality', 'Confidence', 'Speed'];
     var cx = 110, cy = 110, r = 78;
     var grid = '';
     [0.25, 0.5, 0.75, 1.0].forEach(function(level) {
       var pts = [];
-      for (var i = 0; i < 3; i++) {
-        var angle = (-Math.PI / 2) + (i * (2 * Math.PI / 3));
+      for (var i = 0; i < N; i++) {
+        var angle = (-Math.PI / 2) + (i * (2 * Math.PI / N));
         pts.push((cx + Math.cos(angle) * r * level).toFixed(1) + ',' + (cy + Math.sin(angle) * r * level).toFixed(1));
       }
-      grid += '<polygon points="' + pts.join(' ') + '" fill="none" stroke="var(--border)" stroke-width="1"/>';
+      grid += '<polygon points="' + pts.join(' ') + '" fill="none" stroke="var(--border)" stroke-width="0.5" opacity="0.4"/>';
     });
     var axes = '';
     var labelEls = '';
     var polyPts = [];
-    for (var i = 0; i < 3; i++) {
-      var ang = (-Math.PI / 2) + (i * (2 * Math.PI / 3));
+    for (var i = 0; i < N; i++) {
+      var ang = (-Math.PI / 2) + (i * (2 * Math.PI / N));
       var ox = cx + Math.cos(ang) * r;
       var oy = cy + Math.sin(ang) * r;
-      axes += '<line x1="' + cx + '" y1="' + cy + '" x2="' + ox.toFixed(1) + '" y2="' + oy.toFixed(1) + '" stroke="var(--border)"/>';
-      var lx = cx + Math.cos(ang) * (r + 18);
-      var ly = cy + Math.sin(ang) * (r + 18);
-      labelEls += '<text x="' + lx.toFixed(1) + '" y="' + ly.toFixed(1) + '" text-anchor="middle" fill="var(--muted)" style="font-size:10px;font-family:var(--font)">' + labels[i] + '</text>';
+      axes += '<line x1="' + cx + '" y1="' + cy + '" x2="' + ox.toFixed(1) + '" y2="' + oy.toFixed(1) + '" stroke="var(--border)" opacity="0.3"/>';
+      var lx = cx + Math.cos(ang) * (r + 20);
+      var ly = cy + Math.sin(ang) * (r + 20) + 3;
+      labelEls += '<text x="' + lx.toFixed(1) + '" y="' + ly.toFixed(1) + '" text-anchor="middle" fill="var(--muted)" style="font-size:8.5px;font-family:var(--font)">' + labels[i] + '</text>';
       var px = cx + Math.cos(ang) * r * values[i];
       var py = cy + Math.sin(ang) * r * values[i];
       polyPts.push(px.toFixed(1) + ',' + py.toFixed(1));
@@ -3441,7 +3446,7 @@
         var routingConfig = Object.assign({}, (arr[2] && arr[2].config) ? arr[2].config : {}, persistedRoutingConfig);
         var routingProfile = deriveRoutingProfile(routingConfig);
         App._routingProfileDefaults = normalizeRoutingProfile(routingProfile);
-        if (!App._routingProfileDraft) App._routingProfileDraft = normalizeRoutingProfile({ correctness: routingProfile.correctness, cost: routingProfile.cost, speed: routingProfile.speed });
+        if (!App._routingProfileDraft) App._routingProfileDraft = normalizeRoutingProfile({ efficacy: routingProfile.efficacy, cost: routingProfile.cost, availability: routingProfile.availability, locality: routingProfile.locality, confidence: routingProfile.confidence, speed: routingProfile.speed });
         App._routingProfileDraft = normalizeRoutingProfile(App._routingProfileDraft);
 
         var models = report.models || {};
@@ -3461,15 +3466,23 @@
             + esc(savedText)
             + '</div>';
         }
-        var profileCard = '<div class="card" style="margin-bottom:1rem;padding-bottom:0.75rem"><div class="card-title">Routing Weights (Correctness / Cost / Speed)</div>'
-          + '<div style="font-size:0.75rem;color:var(--muted);margin-bottom:0.65rem">Operator profile mapped onto routing controls. Adjust and apply to persist to runtime config.</div>'
+        var rpd = App._routingProfileDraft || routingProfile;
+        function rpSlider(id, label) {
+          var val = round2(rpd[id] || 0).toFixed(2);
+          return '<div class="routing-slider-row"><label for="routing-slider-' + id + '"><span>' + label + '</span><span id="routing-slider-' + id + '-val">' + val + '</span></label><input id="routing-slider-' + id + '" data-routing-slider="' + id + '" type="range" min="0" max="1" step="0.01" value="' + val + '"></div>';
+        }
+        var profileCard = '<div class="card" style="margin-bottom:1rem;padding-bottom:0.75rem"><div class="card-title">Routing Weights (6-axis Metascore Profile)</div>'
+          + '<div style="font-size:0.75rem;color:var(--muted);margin-bottom:0.65rem">Adjust the six metascore dimensions to control model routing. Weights are normalized to sum to 1.0.</div>'
           + '<div class="routing-profile-grid">'
           + '<div id="routing-profile-spider-host">' + spider + '</div>'
           + '<div>'
-          + '<div class="routing-slider-row"><label for="routing-slider-correctness"><span>Correctness</span><span id="routing-slider-correctness-val">' + round2((App._routingProfileDraft || routingProfile).correctness).toFixed(2) + '</span></label><input id="routing-slider-correctness" data-routing-slider="correctness" type="range" min="0" max="1" step="0.01" value="' + round2((App._routingProfileDraft || routingProfile).correctness).toFixed(2) + '"></div>'
-          + '<div class="routing-slider-row"><label for="routing-slider-cost"><span>Cost</span><span id="routing-slider-cost-val">' + round2((App._routingProfileDraft || routingProfile).cost).toFixed(2) + '</span></label><input id="routing-slider-cost" data-routing-slider="cost" type="range" min="0" max="1" step="0.01" value="' + round2((App._routingProfileDraft || routingProfile).cost).toFixed(2) + '"></div>'
-          + '<div class="routing-slider-row"><label for="routing-slider-speed"><span>Speed</span><span id="routing-slider-speed-val">' + round2((App._routingProfileDraft || routingProfile).speed).toFixed(2) + '</span></label><input id="routing-slider-speed" data-routing-slider="speed" type="range" min="0" max="1" step="0.01" value="' + round2((App._routingProfileDraft || routingProfile).speed).toFixed(2) + '"></div>'
-          + '<div style="font-size:0.72rem;color:var(--muted);margin-top:0.35rem">Total: <span id="routing-slider-total">' + routingProfileTotal((App._routingProfileDraft || routingProfile)).toFixed(2) + '</span> / 1.00</div>'
+          + rpSlider('efficacy', 'Efficacy')
+          + rpSlider('cost', 'Cost')
+          + rpSlider('availability', 'Availability')
+          + rpSlider('locality', 'Locality')
+          + rpSlider('confidence', 'Confidence')
+          + rpSlider('speed', 'Speed')
+          + '<div style="font-size:0.72rem;color:var(--muted);margin-top:0.35rem">Total: <span id="routing-slider-total">' + routingProfileTotal(rpd).toFixed(2) + '</span> / 1.00</div>'
           + '<div class="routing-profile-actions"><button class="btn" id="routing-profile-apply" style="font-size:0.6875rem;padding:0.3rem 0.7rem">Apply profile</button><button class="btn secondary" id="routing-profile-reset" style="font-size:0.6875rem;padding:0.3rem 0.7rem">Reset</button></div>'
           + persistedLabel
           + '</div></div></div>';

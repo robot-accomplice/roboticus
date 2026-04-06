@@ -56,9 +56,9 @@ func startWalletPoller(ctx context.Context, cfg *core.Config, store *db.Store, k
 		// Display the passphrase exactly once.
 		fmt.Println()
 		fmt.Println("╔══════════════════════════════════════════════════════════════════════╗")
-		fmt.Println("║  WALLET ENCRYPTED — SAVE THIS PASSPHRASE (shown once only):        ║")
-		fmt.Printf("║  %s  ║\n", passphrase)
-		fmt.Printf("║  Address: %-56s  ║\n", result.Address)
+		fmt.Println("║  WALLET ENCRYPTED — SAVE THIS PASSPHRASE (shown once only):          ║")
+		fmt.Printf("║  %s    ║\n", passphrase)
+		fmt.Printf("║  Address: %-56s   ║\n", result.Address)
 		fmt.Println("║                                                                      ║")
 		fmt.Println("║  The passphrase has been stored in the keystore for auto-unlock.     ║")
 		fmt.Println("║  You can also set ROBOTICUS_WALLET_PASSPHRASE as a backup.           ║")
