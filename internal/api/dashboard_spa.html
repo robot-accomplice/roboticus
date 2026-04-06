@@ -2262,7 +2262,13 @@
             }).join('') || '<p style="color:var(--muted);padding:1rem">Send a message to begin the conversation.</p>';
             var chatLabel = self._activeSession.nickname || truncate(self._activeSession.id, 16);
             var chatAgentLabel = sessionAssistantLabel(self._activeSession, self._activeSession.agent_id || 'default');
-            return '<div class="session-chat-wrap"><div class="session-chat-header"><button class="btn secondary" style="font-size:0.75rem;padding:0.3rem 0.75rem" id="btn-back-sessions">' + uiBtnLabel('back', 'Back') + '</button><span style="font-weight:600">' + esc(chatAgentLabel) + '</span><span class="session-nick" title="' + esc(self._activeSession.id) + '" style="color:var(--muted);font-size:0.75rem">' + esc(chatLabel) + '</span>' + copyIdBtn(self._activeSession.id) + '</div><div class="message-thread">' + msgs + '</div><div class="session-chat-input"><textarea id="session-msg-input" placeholder="Type a message\u2026" rows="1" autocomplete="off"></textarea><button class="btn" id="btn-send-msg">' + uiBtnLabel('send', 'Send') + '</button></div></div>';
+            var sessionAgentId = String(self._activeSession.agent_id || 'default').toLowerCase();
+            var primaryAgentId = String(App._activeAgentId || 'default').toLowerCase();
+            var isOwnSession = (sessionAgentId === primaryAgentId || sessionAgentId === 'default');
+            var inputHtml = isOwnSession
+              ? '<div class="session-chat-input"><textarea id="session-msg-input" placeholder="Type a message\u2026" rows="1" autocomplete="off"></textarea><button class="btn" id="btn-send-msg">' + uiBtnLabel('send', 'Send') + '</button></div>'
+              : '<div class="session-chat-input" style="opacity:0.5;pointer-events:none;border-top:1px solid var(--border-ghost)"><span style="font-size:0.75rem;color:var(--muted);padding:0.5rem 0">\ud83d\udd12 Read-only session \u2014 owned by ' + esc(chatAgentLabel) + '</span></div>';
+            return '<div class="session-chat-wrap"><div class="session-chat-header"><button class="btn secondary" style="font-size:0.75rem;padding:0.3rem 0.75rem" id="btn-back-sessions">' + uiBtnLabel('back', 'Back') + '</button><span style="font-weight:600">' + esc(chatAgentLabel) + '</span><span class="session-nick" title="' + esc(self._activeSession.id) + '" style="color:var(--muted);font-size:0.75rem">' + esc(chatLabel) + '</span>' + copyIdBtn(self._activeSession.id) + '</div><div class="message-thread">' + msgs + '</div>' + inputHtml + '</div>';
           });
         }
 
