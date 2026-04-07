@@ -55,12 +55,14 @@ func ListObservabilityTraces(store *db.Store) http.HandlerFunc {
 }
 
 // TraceWaterfall returns trace stages as a waterfall JSON structure.
+// The dashboard passes turn_id as the {id} URL param, so we look up
+// by both id and turn_id to handle either case.
 func TraceWaterfall(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
 		row := store.QueryRowContext(r.Context(),
 			`SELECT id, turn_id, channel, total_ms, stages_json, created_at
-			 FROM pipeline_traces WHERE id = ? LIMIT 1`, id)
+			 FROM pipeline_traces WHERE id = ? OR turn_id = ? LIMIT 1`, id, id)
 		var traceID, turnID, channel, stagesJSON, createdAt string
 		var totalMs int64
 		err := row.Scan(&traceID, &turnID, &channel, &totalMs, &stagesJSON, &createdAt)

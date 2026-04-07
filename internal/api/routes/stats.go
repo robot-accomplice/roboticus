@@ -116,15 +116,37 @@ func GetTransactions(store *db.Store) http.HandlerFunc {
 }
 
 // GetCapacity returns provider capacity metrics from the LLM service.
+// The dashboard expects sustained_hot, near_capacity, and headroom fields
+// derived from the circuit breaker state for each provider.
 func GetCapacity(llmSvc *llm.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		providers := make(map[string]any)
 		if llmSvc != nil {
 			for _, p := range llmSvc.Status() {
+				// Map circuit breaker state to dashboard-expected capacity fields.
+				sustainedHot := p.State == llm.CircuitOpen
+				nearCapacity := p.State == llm.CircuitHalfOpen
+				headroom := 1.0
+				if sustainedHot {
+					headroom = 0.0
+				} else if nearCapacity {
+					headroom = 0.25
+				}
+
+				stateLabel := "closed"
+				if p.State == llm.CircuitOpen {
+					stateLabel = "open"
+				} else if p.State == llm.CircuitHalfOpen {
+					stateLabel = "half-open"
+				}
+
 				providers[p.Name] = map[string]any{
-					"state":    p.State,
-					"format":   p.Format,
-					"is_local": p.IsLocal,
+					"state":         stateLabel,
+					"format":        p.Format,
+					"is_local":      p.IsLocal,
+					"sustained_hot": sustainedHot,
+					"near_capacity": nearCapacity,
+					"headroom":      headroom,
 				}
 			}
 		}
@@ -194,7 +216,11 @@ func GetEfficiency(store *db.Store) http.HandlerFunc {
 					"total":              cost,
 					"effective_per_turn": costPerTurn,
 					"cache_savings":      0.0,
+					"per_output_token":   func() float64 { if tokOut > 0 { return cost / float64(tokOut) }; return 0 }(),
+					"cumulative_trend":   "stable",
+					"attribution":        map[string]any{},
 				},
+				"trend": map[string]any{},
 			})
 		}
 

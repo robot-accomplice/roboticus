@@ -270,13 +270,28 @@ func UpdateCronJob(store *db.Store) http.HandlerFunc {
 	}
 }
 
-// DeleteCronJob deletes a cron job.
+// DeleteCronJob deletes a cron job and its associated run history.
+// cron_runs has a foreign key referencing cron_jobs(id), so we must
+// delete child rows first to avoid a constraint violation.
 func DeleteCronJob(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
-		_, err := store.ExecContext(r.Context(), `DELETE FROM cron_jobs WHERE id = ?`, id)
+		ctx := r.Context()
+
+		// Delete child run history first (FK constraint: cron_runs.job_id -> cron_jobs.id).
+		if _, err := store.ExecContext(ctx, `DELETE FROM cron_runs WHERE job_id = ?`, id); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to delete cron run history: "+err.Error())
+			return
+		}
+
+		result, err := store.ExecContext(ctx, `DELETE FROM cron_jobs WHERE id = ?`, id)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		rows, _ := result.RowsAffected()
+		if rows == 0 {
+			writeError(w, http.StatusNotFound, "cron job not found")
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})

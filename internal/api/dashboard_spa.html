@@ -3308,16 +3308,48 @@
     },
 
     renderMetricsFlight: function(tabBar) {
+      var self = this;
       var turnId = App._flightTurnId || '';
-      var inputRow = '<div style="margin-bottom:1rem;display:flex;align-items:center;gap:0.75rem">'
-        + '<label style="font-size:0.8125rem;color:var(--muted)">Turn ID:</label>'
-        + '<input id="flight-turn-input" type="text" value="' + esc(turnId) + '" placeholder="Enter turn ID\u2026" style="font-size:0.8125rem;padding:0.3rem 0.6rem;border:1px solid var(--border);border-radius:4px;background:var(--surface);color:var(--text);width:22rem;font-family:var(--mono)">'
-        + '<button class="btn" id="flight-load-btn" style="font-size:0.75rem;padding:0.3rem 0.7rem">Load</button>'
-        + '</div>';
-      if (!turnId) {
-        return Promise.resolve(tabBar + inputRow + '<p style="color:var(--muted);font-size:0.875rem">Enter a turn ID to view the flight recorder trace.</p>');
-      }
-      return api('/api/traces/' + encodeURIComponent(turnId) + '/react').catch(function() { return { steps: [] }; }).then(function(data) {
+      var selectedSession = App._flightSessionId || '';
+      return api('/api/sessions?limit=50').catch(function() { return { sessions: [] }; }).then(function(sessData) {
+        var sessions = sessData.sessions || [];
+        var sessionOpts = sessions.map(function(s) {
+          var sid = s.id || s.session_id || '';
+          var label = s.nickname || s.channel || truncate(sid, 12);
+          return '<option value="' + esc(sid) + '"' + (selectedSession === sid ? ' selected' : '') + '>' + esc(label) + '</option>';
+        }).join('');
+        var selectorRow = '<div style="margin-bottom:0.75rem;display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap">'
+          + '<label style="font-size:0.8125rem;color:var(--muted)">Session:</label>'
+          + '<select id="flight-session-select" style="font-size:0.8125rem;padding:0.3rem 0.6rem;border:1px solid var(--border);border-radius:4px;background:var(--surface);color:var(--text)">'
+          + '<option value="">-- select session --</option>'
+          + sessionOpts
+          + '</select>'
+          + '</div>';
+        if (!selectedSession) {
+          return tabBar + selectorRow + '<p style="color:var(--muted);font-size:0.875rem">Select a session to browse its turns in the flight recorder.</p>';
+        }
+        return api('/api/observability/traces?session_id=' + encodeURIComponent(selectedSession) + '&limit=100').catch(function() { return { traces: [] }; }).then(function(td) {
+          var traces = td.traces || [];
+          var turnOpts = traces.map(function(t) {
+            var tid = t.turn_id || '';
+            var label = truncate(tid, 16) + (t.channel ? ' (' + t.channel + ')' : '') + (t.total_ms ? ' ' + t.total_ms + 'ms' : '');
+            return '<option value="' + esc(tid) + '"' + (turnId === tid ? ' selected' : '') + '>' + esc(label) + '</option>';
+          }).join('');
+          var turnRow = '<div style="margin-bottom:1rem;display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap">'
+            + '<label style="font-size:0.8125rem;color:var(--muted)">Turn:</label>'
+            + '<select id="flight-turn-select" style="font-size:0.8125rem;padding:0.3rem 0.6rem;border:1px solid var(--border);border-radius:4px;background:var(--surface);color:var(--text);max-width:28rem;font-family:var(--mono)">'
+            + '<option value="">-- select turn --</option>'
+            + turnOpts
+            + '</select>'
+            + '<button class="btn" id="flight-load-btn" style="font-size:0.75rem;padding:0.3rem 0.7rem">Load</button>'
+            + '</div>';
+          if (!turnId) {
+            var hint = traces.length
+              ? '<p style="color:var(--muted);font-size:0.875rem">Select a turn to view its flight recorder trace.</p>'
+              : '<p style="color:var(--muted);font-size:0.875rem">No traces found for this session.</p>';
+            return tabBar + selectorRow + turnRow + hint;
+          }
+          return api('/api/traces/' + encodeURIComponent(turnId) + '/react').catch(function() { return { steps: [] }; }).then(function(data) {
         var steps = data.steps || [];
         function stepColor(type) {
           if (type === 'ToolCall') return '#3b82f6';
@@ -3357,7 +3389,9 @@
         var content = steps.length
           ? '<div style="padding:0.25rem 0">' + timeline + '</div>'
           : '<p style="color:var(--muted);font-size:0.875rem">No ReAct steps recorded for this turn.</p>';
-        return tabBar + inputRow + content;
+        return tabBar + selectorRow + turnRow + content;
+          });
+        });
       });
     },
 
@@ -5253,7 +5287,8 @@
               } else {
                 keyBadge = '<span class="badge error" style="font-size:0.6rem;padding:0.1rem 0.4rem">Key missing</span>';
               }
-              html += '<div class="settings-provider-card"><div class="settings-provider-header"><span class="settings-provider-name">' + esc(pName) + '</span>' + keyBadge
+              html += '<div class="settings-provider-card"><div class="settings-provider-header"><span class="settings-provider-name">' + esc(pName) + '</span>'
+                + '<span style="margin-left:0.5rem">' + keyBadge + '</span>'
                 + '<button class="btn secondary remove-provider-btn" data-provider="' + esc(pName) + '" style="margin-left:auto;font-size:0.65rem;padding:0.15rem 0.5rem;color:var(--error, #ef4444)" title="Remove provider">\u2715 Remove</button>'
                 + '</div>';
               Object.keys(pData).forEach(function(pKey) {
@@ -7032,9 +7067,9 @@
 
     // Flight Recorder: load button
     if (e.target.closest('#flight-load-btn')) {
-      var flInput = document.getElementById('flight-turn-input');
-      var flTurn = (flInput && flInput.value || '').trim();
-      if (!flTurn) { toast('Enter a turn ID'); return; }
+      var flSelect = document.getElementById('flight-turn-select');
+      var flTurn = (flSelect && flSelect.value || '').trim();
+      if (!flTurn) { toast('Select a turn first'); return; }
       App._flightTurnId = flTurn;
       App.navigate('metrics');
       return;
@@ -7667,6 +7702,8 @@
   if (content) content.addEventListener('change', function(e) {
     if (e.target && e.target.id === 'mem-session-select') { App._memorySessionId = e.target.value; App._memoryPage = 0; App.navigate('memory'); return; }
     if (e.target && e.target.id === 'traces-session-select') { App._tracesSessionId = e.target.value; App.navigate('metrics'); return; }
+    if (e.target && e.target.id === 'flight-session-select') { App._flightSessionId = e.target.value; App._flightTurnId = ''; App.navigate('metrics'); return; }
+    if (e.target && e.target.id === 'flight-turn-select') { App._flightTurnId = e.target.value; App.navigate('metrics'); return; }
     if (e.target && e.target.id === 'budget-channel-min') {
       var draft = normalizeContextBudget(App._contextBudgetDraft || App._contextBudgetDefaults || {});
       draft.channel_minimum = String(e.target.value || 'L1').toUpperCase();

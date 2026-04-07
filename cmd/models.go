@@ -448,7 +448,7 @@ var modelsBaselineCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		dataset, ok := data["dataset"].([]any)
+		dataset, ok := data["rows"].([]any)
 		if !ok || len(dataset) == 0 {
 			fmt.Println("No routing baseline data available.")
 			return nil
