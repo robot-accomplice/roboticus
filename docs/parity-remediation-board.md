@@ -103,6 +103,34 @@ Use that matrix when evaluating parity-sensitive work:
 - Recorded concrete behavior drift in `docs/deep-parity-audit-matrix.md` for config, memory, MCP, auth, schedule, wallet, plugins, channels/integrations, runtime devices, workspace tasks, dashboard, and status surfaces.
 - Marked the main release-blocking deep-parity backlog there so implementation can proceed against behavior gaps instead of name-only parity.
 
+### 2026-04-07
+
+- Fixed AnalyzeTurn to return 404 for missing turns (was fake 200 "complete").
+- Upgraded both AnalyzeTurn and AnalyzeSession to invoke LLM service when
+  available, building structured prompts from heuristic tips and returning
+  `analysis_model`, `tokens_in`, `tokens_out`, `cost` metadata.
+- Moved prompt builder functions from routes to `internal/pipeline/analyzer.go`
+  (architecture compliance: routes stay thin).
+- Added `models exercise`, `models suggest`, `models reset`, `models baseline`
+  CLI commands matching the Rust model-operations lifecycle.
+- Removed vestigial code: `integrations.go` (duplicated channels), `apps.go`
+  (stub), `parity-audit` command (removed from CI), redundant admin subcommands
+  (breaker/channels/dead-letters duplicated by top-level commands).
+- Fixed last `goboticus` string reference in runtime device_id.
+- Replaced useless model decision SVG graph with structured decision table
+  showing metascores, status badges, and rejection reasons.
+- Fixed doubled status icons in decision table (CSS ::before vs inline Unicode).
+- Fixed routing weight sliders to constrain all 6 axes to sum ≤ 1.0.
+- Grouped settings page config sections into 7 domain categories.
+- Removed vestigial web/voice channel defaults from settings.
+- Hidden internal config sections from settings UI.
+- Added 4 missing API routes: semantic/{category}, MCP discover/disconnect,
+  trace replay.
+- Fixed 3 API response shape mismatches (health models, traces session_id, etc).
+- Upgraded skills import/export, plugins pack, security audit.
+- Bound ROBOTICUS_CONFIG env var.
+- Updated `docs/deep-parity-audit-matrix.md` with current status.
+
 ## Handoff Notes
 
 If interrupted during `RB1`, the next agent should:

@@ -57,7 +57,7 @@ Each subsystem should be classified as:
 
 ### Models CLI
 
-Status: `partial`
+Status: `partial` (improved — was `missing`, now commands exist but scan depth gap remains)
 
 Observed Rust behavior:
 
@@ -68,26 +68,25 @@ Observed Rust behavior:
 - `models reset`
 - `models baseline`
 
-Observed Go behavior:
+Observed Go behavior (as of 2026-04-07):
 
 - `models list`
 - `models diagnostics`
-- `models scan`
+- `models scan` — thin API wrapper (P2 gap: Rust probes providers directly)
+- `models exercise` — exercises via `/api/models/routing-eval` ✓
+- `models suggest` — reads metascore profiles from routing-diagnostics ✓
+- `models reset` — calls `/api/models/reset` ✓
+- `models baseline` — reads routing dataset with tabular display ✓
 
-Code-backed gap summary:
+Remaining code-backed gap:
 
-1. Go has no `models exercise`.
-2. Go has no `models suggest`.
-3. Go has no `models reset`.
-4. Go has no `models baseline`.
-5. Go `models scan` is only a thin call to `/api/models/available?validation_level=scan`; Rust directly probes configured providers and formats discovered model inventory.
-6. Go `models list` lists available models, while Rust `models list` reports configured model roles plus routing settings.
+1. `[P2]` Go `models scan` is still a thin call to `/api/models/available?validation_level=scan`; Rust directly probes configured providers.
+2. `[P2]` Go `models list` lists available models, while Rust reports configured model roles plus routing settings.
 
 Remediation implications:
 
-- Treat the entire `models` command family as a behavior-parity workstream, not a subcommand-counting exercise.
-- Add contract tests for the missing command tree.
-- Add behavior tests for provider probing, baseline/reset loops, and fallback suggestion output.
+- Bring `scan` up to Rust's provider-probing depth.
+- Align `list` to show configured routing roles, not just available models.
 
 ### Config CLI
 
@@ -271,26 +270,26 @@ Remediation implications:
 
 - Finish plugin lifecycle parity; search alone does not close this workstream.
 
-### Channels And Integrations CLI
+### Channels CLI
 
-Status: `partial`
+Status: `partial` (improved — integrations removed as redundant)
 
 Evidence:
 
 - Go has `channels list|test|dead-letter|replay`.
-- Rust has both `channels` and `integrations` workflow families, including
-  health/connect/disconnect guidance.
+- The `integrations` command was removed as it was an exact duplicate of
+  `channels` with no additional behavior. This was a deliberate de-duplication.
 
-Code-backed gap summary:
+Remaining code-backed gap:
 
-1. `[P1]` Go is missing the `integrations` command family.
-2. `[P2]` Go has no CLI health summary for integrations.
-3. `[P2]` Go has no config-snippet guidance flow for connect/disconnect.
+1. `[P2]` Go has no config-snippet guidance flow for connect/disconnect
+   that Rust provides as operator workflow.
+2. `[P2]` Go `channels list` output is thinner than Rust's health-oriented view.
 
 Remediation implications:
 
-- Implement `integrations list|test|health|connect|disconnect` or explicitly
-  retire that contract before claiming parity.
+- Bring `channels list` output up to Rust's health summary class.
+- Consider adding connect/disconnect guidance as a P3 follow-up.
 
 ### Status CLI
 
@@ -358,24 +357,27 @@ Remediation implications:
 
 ### Session And Turn Analysis
 
-Status: `partial`
+Status: `partial` (improved — LLM-backed analysis now implemented)
 
 Evidence:
 
-- Go routes now run heuristic analysis and LLM summarization.
-- Rust analysis routes do the same class of work with a dedicated helper.
+- Go routes now run 12 per-turn + 10 session heuristic rules, build structured
+  LLM prompts, invoke the LLM service, and return `analysis_model`,
+  `tokens_in`, `tokens_out`, `cost` metadata matching the Rust response shape.
+- Missing turns now return 404 (was fake 200 "complete").
+- Falls back to heuristic markdown summary when LLM is unavailable.
 
-Code-backed gap summary:
+Remaining code-backed gap:
 
-1. `[P2]` This gap is smaller than it was, but Go still needs parity validation
-   for output richness, token/cost reporting, and prompt content quality.
-2. `[P2]` Session analysis currently aggregates per-turn tips locally; this
-   needs behavioral tests against Rust examples, not just surface tests.
+1. `[P2]` Go prompt content quality should be validated against Rust examples
+   for equivalent remediation depth.
+2. `[P2]` Session analysis aggregates per-turn tips locally; behavioral test
+   fixtures comparing Go vs Rust output for identical inputs are still needed.
 
 Remediation implications:
 
-- Keep this in the deep-audit program until side-by-side behavioral fixtures are
-  added.
+- Keep in the deep-audit program until side-by-side behavioral fixtures are
+  added, but the implementation class is now aligned.
 
 ### Update Orchestration
 
@@ -414,12 +416,12 @@ Remediation implications:
 
 ## Release-Blocking Backlog From Deep Audit
 
-1. Rebuild the `models` CLI to support `exercise`, `suggest`, `reset`, and
-   `baseline`, and make `scan` probe providers directly.
+1. ~~Rebuild the `models` CLI to support `exercise`, `suggest`, `reset`, and
+   `baseline`.~~ **Done 2026-04-07.** Remaining: make `scan` probe providers directly.
 2. Replace line-based config mutation with structured TOML path mutation.
-3. Align memory CLI semantics with Rust: `list`, `search`, `consolidate`,
-   `reindex`, and strict session/category targeting.
-4. Implement the `integrations` command family and `schedule recover`.
+3. Align memory CLI semantics with Rust: add CLI `consolidate`, `reindex`,
+   and strict session/category targeting.
+4. Add `schedule recover` operator workflow.
 5. Finish plugin lifecycle parity with a real uninstall flow and richer install
    source handling.
 6. Replace API-key-only auth semantics with the final intended OAuth/provider
