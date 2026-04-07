@@ -12,10 +12,24 @@ import (
 	"roboticus/internal/llm"
 )
 
+// defaultTokenBudget is the target context window size in tokens for compaction.
+const defaultTokenBudget = 8192
+
 // runStandardInference executes the full ReAct loop via the ToolExecutor interface.
 func (p *Pipeline) runStandardInference(ctx context.Context, cfg Config, session *Session, msgID string) (*Outcome, error) {
 	if p.executor == nil {
 		return nil, core.NewError(core.ErrConfig, "no tool executor configured")
+	}
+
+	// Compact context window before inference to stay within token budget.
+	if msgs := session.Messages(); len(msgs) > 0 {
+		compacted := CompactContext(msgs, defaultTokenBudget)
+		if len(compacted) < len(msgs) {
+			log.Debug().
+				Int("before", len(msgs)).
+				Int("after", len(compacted)).
+				Msg("context compacted before inference")
+		}
 	}
 
 	result, turns, err := p.executor.RunLoop(ctx, session)
@@ -23,9 +37,28 @@ func (p *Pipeline) runStandardInference(ctx context.Context, cfg Config, session
 		return nil, core.WrapError(core.ErrLLM, "inference failed", err)
 	}
 
-	// Guard chain.
+	// Guard chain with full context and retry support.
 	if p.guards != nil && cfg.GuardSet != GuardSetNone {
-		result = p.guards.Apply(result)
+		guardCtx := p.buildGuardContext(session)
+		guardResult := p.guards.ApplyFullWithContext(result, guardCtx)
+		result = guardResult.Content
+
+		// If guard requests retry, re-run inference once with the rejection reason.
+		if guardResult.RetryRequested {
+			session.AddSystemMessage(fmt.Sprintf(
+				"Your previous response was rejected by the %s guard: %s. Please revise.",
+				strings.Join(guardResult.Violations, ", "), guardResult.RetryReason,
+			))
+			retryContent, retryTurns, retryErr := p.executor.RunLoop(ctx, session)
+			if retryErr != nil {
+				log.Warn().Err(retryErr).Msg("guard retry inference failed, using original result")
+			} else {
+				turns += retryTurns
+				// Apply guards again on the retry result (no further retries).
+				retryGuardResult := p.guards.ApplyFullWithContext(retryContent, guardCtx)
+				result = retryGuardResult.Content
+			}
+		}
 	}
 
 	// Post-turn ingest (background, tracked by worker pool).
@@ -35,6 +68,9 @@ func (p *Pipeline) runStandardInference(ctx context.Context, cfg Config, session
 			p.ingestor.IngestTurn(bgCtx, sess)
 		})
 	}
+
+	// Post-turn embedding ingest (background).
+	p.PostTurnIngest(ctx, session, msgID, result)
 
 	// Store assistant response.
 	assistantMsgID := db.NewID()

@@ -1,0 +1,174 @@
+package pipeline
+
+import (
+	"context"
+	"encoding/json"
+	"strings"
+	"unicode"
+
+	"github.com/rs/zerolog/log"
+
+	"roboticus/internal/db"
+)
+
+// PostTurnIngest runs background work after a turn completes.
+// Matches Rust's post_turn_ingest: memory ingest and embedding generation.
+// All work is submitted to the background worker pool so the response is not delayed.
+func (p *Pipeline) PostTurnIngest(ctx context.Context, session *Session, turnID string, assistantContent string) {
+	if p.bgWorker == nil {
+		return
+	}
+	if assistantContent == "" {
+		return
+	}
+
+	sessionID := session.ID
+
+	// Extract the user content from the last user message for the ingest pair.
+	var userContent string
+	msgs := session.Messages()
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == "user" {
+			userContent = msgs[i].Content
+			break
+		}
+	}
+
+	p.bgWorker.Submit("postTurnIngest", func(bgCtx context.Context) {
+		// 1. Generate and store embeddings for the assistant response.
+		// Chunk the response and embed each chunk for ANN search.
+		if p.store != nil {
+			chunks := ChunkText(assistantContent, 512)
+			for _, chunk := range chunks {
+				p.storeChunkEmbedding(bgCtx, sessionID, turnID, chunk)
+			}
+		}
+
+		// 2. Log the turn pair for analytics/debugging.
+		if userContent != "" {
+			log.Debug().
+				Str("session", sessionID).
+				Str("turn", turnID).
+				Int("user_len", len(userContent)).
+				Int("assistant_len", len(assistantContent)).
+				Int("chunks", len(ChunkText(assistantContent, 512))).
+				Msg("post-turn ingest completed")
+		}
+	})
+}
+
+// storeChunkEmbedding generates an embedding for a text chunk and stores it
+// in the embeddings table for ANN search. Falls back to n-gram hashing if
+// no embedding provider is configured.
+func (p *Pipeline) storeChunkEmbedding(ctx context.Context, sessionID, turnID, chunk string) {
+	if p.store == nil {
+		return
+	}
+
+	// Use the LLM service's embedding client if available, otherwise skip.
+	// The embedding client with nil provider falls back to n-gram hashing,
+	// which is what we want for local/offline operation.
+	embedClient := p.embeddingClient()
+	if embedClient == nil {
+		return
+	}
+
+	vec, err := embedClient.EmbedSingle(ctx, chunk)
+	if err != nil {
+		log.Warn().Err(err).Str("session", sessionID).Msg("embedding generation failed")
+		return
+	}
+
+	vecJSON, err := json.Marshal(vec)
+	if err != nil {
+		log.Warn().Err(err).Msg("embedding serialization failed")
+		return
+	}
+
+	id := db.NewID()
+	_, err = p.store.ExecContext(ctx,
+		`INSERT INTO embeddings (id, source_table, source_id, content_preview, embedding_blob, dimensions)
+		 VALUES (?, 'session_messages', ?, ?, ?, ?)`,
+		id, turnID, truncatePreview(chunk, 200), vecJSON, len(vec),
+	)
+	if err != nil {
+		log.Warn().Err(err).Str("session", sessionID).Msg("embedding storage failed")
+	}
+}
+
+// truncatePreview truncates text for storage as a content preview.
+func truncatePreview(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
+}
+
+// ChunkText splits text into chunks at sentence boundaries, each up to maxChars.
+// Exported for testing.
+func ChunkText(text string, maxChars int) []string {
+	if maxChars <= 0 {
+		maxChars = 512
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+	if len(text) <= maxChars {
+		return []string{text}
+	}
+
+	var chunks []string
+	remaining := text
+
+	for len(remaining) > 0 {
+		if len(remaining) <= maxChars {
+			chunks = append(chunks, strings.TrimSpace(remaining))
+			break
+		}
+
+		// Find the best sentence boundary within the budget.
+		cutPoint := findSentenceBoundary(remaining, maxChars)
+		chunk := strings.TrimSpace(remaining[:cutPoint])
+		if chunk != "" {
+			chunks = append(chunks, chunk)
+		}
+		remaining = strings.TrimSpace(remaining[cutPoint:])
+	}
+
+	return chunks
+}
+
+// findSentenceBoundary finds the best split point at a sentence boundary
+// within maxChars. Falls back to word boundary, then hard cut.
+func findSentenceBoundary(text string, maxChars int) int {
+	if maxChars >= len(text) {
+		return len(text)
+	}
+
+	// Look for sentence terminators (. ! ?) followed by space or end.
+	bestSentence := -1
+	for i := maxChars - 1; i > maxChars/3; i-- {
+		if i >= len(text) {
+			continue
+		}
+		r := rune(text[i])
+		if (r == '.' || r == '!' || r == '?') && (i+1 >= len(text) || unicode.IsSpace(rune(text[i+1]))) {
+			bestSentence = i + 1
+			break
+		}
+	}
+	if bestSentence > 0 {
+		return bestSentence
+	}
+
+	// Fall back to word boundary.
+	for i := maxChars; i > maxChars/2; i-- {
+		if i < len(text) && unicode.IsSpace(rune(text[i])) {
+			return i
+		}
+	}
+
+	// Hard cut as last resort.
+	return maxChars
+}

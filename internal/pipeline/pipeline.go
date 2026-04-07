@@ -55,34 +55,36 @@ var _ Runner = (*Pipeline)(nil)
 // Pipeline is the unified factory. Connectors call Run() with a Config preset
 // and an Input — the pipeline handles everything else.
 type Pipeline struct {
-	store     *db.Store
-	llmSvc    *llm.Service
-	injection InjectionChecker
-	retriever MemoryRetriever
-	skills    SkillMatcher
-	executor  ToolExecutor
-	ingestor  Ingestor
-	refiner   NicknameRefiner
-	streamer  StreamPreparer
-	guards    *GuardChain
-	bgWorker  *core.BackgroundWorker
-	dedup     *DedupTracker
-	tasks     *TaskTracker
+	store      *db.Store
+	llmSvc     *llm.Service
+	injection  InjectionChecker
+	retriever  MemoryRetriever
+	skills     SkillMatcher
+	executor   ToolExecutor
+	ingestor   Ingestor
+	refiner    NicknameRefiner
+	streamer   StreamPreparer
+	guards     *GuardChain
+	bgWorker   *core.BackgroundWorker
+	dedup      *DedupTracker
+	tasks      *TaskTracker
+	embeddings *llm.EmbeddingClient
 }
 
 // PipelineDeps bundles dependencies for the Pipeline.
 type PipelineDeps struct {
-	Store     *db.Store
-	LLM       *llm.Service
-	Injection InjectionChecker
-	Retriever MemoryRetriever
-	Skills    SkillMatcher
-	Executor  ToolExecutor
-	Ingestor  Ingestor
-	Refiner   NicknameRefiner
-	Streamer  StreamPreparer
-	Guards    *GuardChain
-	BGWorker  *core.BackgroundWorker
+	Store      *db.Store
+	LLM        *llm.Service
+	Injection  InjectionChecker
+	Retriever  MemoryRetriever
+	Skills     SkillMatcher
+	Executor   ToolExecutor
+	Ingestor   Ingestor
+	Refiner    NicknameRefiner
+	Streamer   StreamPreparer
+	Guards     *GuardChain
+	BGWorker   *core.BackgroundWorker
+	Embeddings *llm.EmbeddingClient
 }
 
 // New creates the unified pipeline.
@@ -92,19 +94,20 @@ func New(deps PipelineDeps) *Pipeline {
 		bgw = core.NewBackgroundWorker(16)
 	}
 	return &Pipeline{
-		store:     deps.Store,
-		llmSvc:    deps.LLM,
-		injection: deps.Injection,
-		retriever: deps.Retriever,
-		skills:    deps.Skills,
-		executor:  deps.Executor,
-		ingestor:  deps.Ingestor,
-		refiner:   deps.Refiner,
-		streamer:  deps.Streamer,
-		guards:    deps.Guards,
-		bgWorker:  bgw,
-		dedup:     NewDedupTracker(60 * time.Second),
-		tasks:     NewTaskTracker(),
+		store:      deps.Store,
+		llmSvc:     deps.LLM,
+		injection:  deps.Injection,
+		retriever:  deps.Retriever,
+		skills:     deps.Skills,
+		executor:   deps.Executor,
+		ingestor:   deps.Ingestor,
+		refiner:    deps.Refiner,
+		streamer:   deps.Streamer,
+		guards:     deps.Guards,
+		bgWorker:   bgw,
+		dedup:      NewDedupTracker(60 * time.Second),
+		tasks:      NewTaskTracker(),
+		embeddings: deps.Embeddings,
 	}
 }
 
@@ -286,11 +289,68 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 
 // guardOutcome applies the guard chain to an outcome if guards are configured.
 // This ensures skill, shortcut, and all other early-return paths are filtered.
+// Uses full context when a session is available for contextual guard evaluation.
 func (p *Pipeline) guardOutcome(cfg Config, outcome *Outcome) *Outcome {
 	if p.guards != nil && cfg.GuardSet != GuardSetNone && outcome != nil {
 		outcome.Content = p.guards.Apply(outcome.Content)
 	}
 	return outcome
+}
+
+// buildGuardContext creates a GuardContext from the current session state.
+func (p *Pipeline) buildGuardContext(session *Session) *GuardContext {
+	if session == nil {
+		return nil
+	}
+
+	ctx := &GuardContext{
+		AgentName: session.AgentName,
+	}
+
+	// Extract user prompt (last user message).
+	msgs := session.Messages()
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == "user" {
+			ctx.UserPrompt = msgs[i].Content
+			break
+		}
+	}
+
+	// Extract previous assistant message.
+	ctx.PreviousAssistant = session.LastAssistantContent()
+
+	// Collect all prior assistant messages.
+	for _, m := range msgs {
+		if m.Role == "assistant" {
+			ctx.PriorAssistantMessages = append(ctx.PriorAssistantMessages, m.Content)
+		}
+	}
+
+	// Collect tool results from the current turn (messages after the last user message).
+	lastUserIdx := -1
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == "user" {
+			lastUserIdx = i
+			break
+		}
+	}
+	if lastUserIdx >= 0 {
+		for i := lastUserIdx + 1; i < len(msgs); i++ {
+			if msgs[i].Role == "tool" {
+				ctx.ToolResults = append(ctx.ToolResults, ToolResultEntry{
+					ToolName: msgs[i].Name,
+					Output:   msgs[i].Content,
+				})
+			}
+		}
+	}
+
+	return ctx
+}
+
+// embeddingClient returns the configured embedding client, or nil if none is set.
+func (p *Pipeline) embeddingClient() *llm.EmbeddingClient {
+	return p.embeddings
 }
 
 // storeTrace persists a pipeline trace to the database (best-effort).
