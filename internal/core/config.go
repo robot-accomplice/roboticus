@@ -193,7 +193,7 @@ type DatabaseConfig struct {
 // ModelsConfig holds LLM provider and model settings.
 type ModelsConfig struct {
 	Primary         string                   `json:"primary" mapstructure:"primary"`
-	Fallback        []string                 `json:"fallback,omitempty" toml:"fallbacks" mapstructure:"fallbacks"`
+	Fallback        []string                 `json:"fallbacks,omitempty" toml:"fallbacks" mapstructure:"fallbacks"`
 	Routing         RoutingConfig            `json:"routing" mapstructure:"routing"`
 	ModelOverrides  map[string]ModelOverride `json:"model_overrides,omitempty" mapstructure:"model_overrides"`
 	StreamByDefault bool                     `json:"stream_by_default" mapstructure:"stream_by_default"`
