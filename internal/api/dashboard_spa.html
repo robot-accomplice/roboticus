@@ -1066,11 +1066,10 @@
       + labelEls
       + '</svg>';
   }
-  function renderModelDecisionGraph(events, focusTurnId, focusModel, focusEdge) {
-    var MAX_GRAPH_CANDIDATES = 18;
+  function renderModelDecisionGraph(events, focusTurnId) {
     var rows = Array.isArray(events) ? events.slice() : [];
     if (!rows.length) {
-      return '<div class="card" style="margin-bottom:1rem"><div class="card-title">Task Model Decision Graph</div><div style="color:var(--muted)">No model selection events yet.</div></div>';
+      return '<div class="card" style="margin-bottom:1rem"><div class="card-title">Model Routing Decision</div><div style="color:var(--muted)">No model selection events yet.</div></div>';
     }
     var byTurn = {};
     rows.forEach(function(ev) {
@@ -1079,130 +1078,109 @@
       byTurn[tid] = ev;
     });
     var selectedTurn = focusTurnId && byTurn[focusTurnId] ? focusTurnId : String(rows[0].turn_id || '');
-    var selectedEvent = byTurn[selectedTurn] || rows[0] || {};
-    var selectedModel = String(selectedEvent.selected_model || '').trim();
-    var candidates = Array.isArray(selectedEvent.candidates) ? selectedEvent.candidates : [];
+    var ev = byTurn[selectedTurn] || rows[0] || {};
+    var selectedModel = String(ev.selected_model || '').trim();
+    var strategy = String(ev.strategy || 'unknown');
+    var complexity = typeof ev.complexity === 'number' ? ev.complexity.toFixed(2) : '—';
+    var candidates = Array.isArray(ev.candidates) ? ev.candidates : [];
 
-    var nodeMap = {};
+    // Deduplicate candidates by model name, keeping the one with the higher metascore.
+    var seen = {};
+    var deduped = [];
     candidates.forEach(function(c) {
-      var model = String((c && c.model) || '').trim();
-      if (!model) return;
-      var score = typeof c.metascore === 'number' ? c.metascore : null;
-      nodeMap[model] = {
-        model: model,
-        score: score,
-        usable: c && c.usable !== false
-      };
-    });
-    if (selectedModel && !nodeMap[selectedModel]) {
-      nodeMap[selectedModel] = { model: selectedModel, score: null, usable: true };
-    }
-    var sortedNodes = Object.keys(nodeMap).sort(function(a, b) {
-      if (a === selectedModel) return -1;
-      if (b === selectedModel) return 1;
-      var sa = nodeMap[a] && typeof nodeMap[a].score === 'number' ? nodeMap[a].score : -Infinity;
-      var sb = nodeMap[b] && typeof nodeMap[b].score === 'number' ? nodeMap[b].score : -Infinity;
-      if (sa !== sb) return sb - sa;
-      return a.localeCompare(b);
-    });
-    var hiddenCount = Math.max(0, sortedNodes.length - MAX_GRAPH_CANDIDATES);
-    var nodes = sortedNodes.slice(0, MAX_GRAPH_CANDIDATES);
-    if (selectedModel && nodes.indexOf(selectedModel) === -1) {
-      nodes[nodes.length - 1] = selectedModel;
-    }
-    if (!nodes.length) return '';
-
-    var width = 680, height = 320;
-    var selectedX = 530, selectedY = height / 2;
-    var candidateX = 220;
-    var pos = {};
-    var candidateModels = nodes.filter(function(model) { return model !== selectedModel; });
-    if (selectedModel) pos[selectedModel] = { x: selectedX, y: selectedY };
-    candidateModels.forEach(function(model, idx) {
-      var y;
-      if (candidateModels.length === 1) {
-        y = selectedY;
-      } else {
-        var pad = 28;
-        var span = Math.max(10, (height - (pad * 2)));
-        y = pad + ((span * idx) / (candidateModels.length - 1));
+      var m = String(c.model || '');
+      if (!m) return;
+      if (!seen[m] || (typeof c.metascore === 'number' && c.metascore > (seen[m].metascore || 0))) {
+        seen[m] = c;
       }
-      pos[model] = { x: candidateX, y: y };
+    });
+    Object.keys(seen).forEach(function(m) { deduped.push(seen[m]); });
+    // Sort: selected first, then by metascore descending.
+    deduped.sort(function(a, b) {
+      if (a.model === selectedModel) return -1;
+      if (b.model === selectedModel) return 1;
+      return (b.metascore || 0) - (a.metascore || 0);
     });
 
-    var edges = {};
-    candidateModels.forEach(function(model) {
-      if (!selectedModel || model === selectedModel) return;
-      var key = model + '→' + selectedModel;
-      edges[key] = { key: key, from: model, to: selectedModel, count: 1 };
-    });
-    var edgeKeys = Object.keys(edges);
-    var edgeEls = edgeKeys.map(function(k) {
-      var e = edges[k];
-      var a = pos[e.from], b = pos[e.to];
-      if (!a || !b) return '';
-      var active = focusEdge && focusEdge === e.key;
-      var faded = (focusModel && e.from !== focusModel && e.to !== focusModel) || (focusEdge && !active);
-      var cls = 'model-graph-edge' + (active ? ' active' : '') + (faded ? ' model-graph-faded' : '');
-      return '<line class="' + cls + '" data-edge-key="' + esc(e.key) + '" x1="' + a.x.toFixed(1) + '" y1="' + a.y.toFixed(1) + '" x2="' + b.x.toFixed(1) + '" y2="' + b.y.toFixed(1) + '" stroke-width="1.4"><title>' + esc(e.key) + '</title></line>';
-    }).join('');
-
-    var laneGuides = '';
-    if (candidateModels.length > 1) {
-      var yMin = pos[candidateModels[0]].y;
-      var yMax = pos[candidateModels[candidateModels.length - 1]].y;
-      laneGuides = '<line x1="' + candidateX + '" y1="' + yMin.toFixed(1) + '" x2="' + candidateX + '" y2="' + yMax.toFixed(1) + '" stroke="var(--border)" stroke-opacity="0.45" stroke-dasharray="2 3" />';
-    }
-
-    var nodeEls = nodes.map(function(model) {
-      var p = pos[model];
-      if (!p) return '';
-      var active = (focusModel && focusModel === model) || (!focusModel && model === selectedModel);
-      var faded = focusModel && !active;
-      var unusable = nodeMap[model] && nodeMap[model].usable === false;
-      var cls = 'model-graph-node' + (active ? ' active' : '') + (faded ? ' model-graph-faded' : '') + (unusable ? ' model-graph-node-unusable' : '');
-      var short = truncate(model.split('/').pop() || model, 22);
-      var score = nodeMap[model].score;
-      var scoreTxt = typeof score === 'number' ? ' · score ' + score.toFixed(3) : '';
-      var selectedTxt = model === selectedModel ? ' · selected' : '';
-      var r = model === selectedModel ? 14 : 10;
-      var labelX = model === selectedModel ? p.x : (p.x - 14);
-      var labelY = model === selectedModel ? (p.y + 28) : (p.y + 3);
-      var anchor = model === selectedModel ? 'middle' : 'end';
-      return '<g data-node-model="' + esc(model) + '" style="cursor:pointer">'
-        + '<circle class="' + cls + '" cx="' + p.x.toFixed(1) + '" cy="' + p.y.toFixed(1) + '" r="' + r + '"><title>' + esc(model + selectedTxt + scoreTxt) + '</title></circle>'
-        + '<text class="model-graph-node-label" text-anchor="' + anchor + '" x="' + labelX.toFixed(1) + '" y="' + labelY.toFixed(1) + '">' + esc(short) + '</text>'
-        + '</g>';
-    }).join('');
-
-    var options = rows.slice(0, 80).map(function(ev) {
-      var tid = String(ev.turn_id || '');
-      var stamp = String(ev.created_at || '').replace('T', ' ').replace('Z', '');
-      var excerpt = truncate(String(ev.user_excerpt || ''), 44);
-      var label = truncate(tid, 8) + (excerpt ? ' · ' + excerpt : '') + (stamp ? ' · ' + stamp : '');
+    // Turn selector.
+    var options = rows.slice(0, 80).map(function(r) {
+      var tid = String(r.turn_id || '');
+      var stamp = String(r.created_at || '').replace('T', ' ').replace('Z', '').substring(0, 19);
+      var label = truncate(tid, 8) + ' · ' + stamp;
       return '<option value="' + esc(tid) + '"' + (tid === selectedTurn ? ' selected' : '') + '>' + esc(label) + '</option>';
     }).join('');
 
-    var detail = 'Task turn: ' + selectedTurn + '. Selected model: ' + (selectedModel || 'unknown') + '. Displaying top ' + nodes.length + ' candidate models' + (hiddenCount > 0 ? ' (' + hiddenCount + ' hidden).' : '.');
-    if (focusEdge && edges[focusEdge]) {
-      detail = 'Task turn: ' + selectedTurn + '. Candidate edge: ' + edges[focusEdge].from + ' → ' + edges[focusEdge].to + '.';
-    } else if (focusModel) {
-      var n = nodeMap[focusModel];
-      if (n) detail = 'Task turn: ' + selectedTurn + '. Focused model: ' + focusModel + (typeof n.score === 'number' ? ' (metascore ' + n.score.toFixed(3) + ').' : '.');
-    }
+    // Strategy + complexity header.
+    var stratBadge = '<span class="badge" style="font-size:0.625rem;padding:0.1rem 0.4rem">' + esc(strategy.replace(/_/g, ' ')) + '</span>';
+    var header = '<div style="display:flex;gap:0.75rem;align-items:center;flex-wrap:wrap;margin-bottom:0.65rem">'
+      + '<div><span style="font-size:0.7rem;color:var(--muted)">Strategy</span> ' + stratBadge + '</div>'
+      + '<div><span style="font-size:0.7rem;color:var(--muted)">Complexity</span> <span style="font-weight:600;font-size:0.8rem">' + complexity + '</span></div>'
+      + '<div><span style="font-size:0.7rem;color:var(--muted)">Candidates</span> <span style="font-weight:600;font-size:0.8rem">' + deduped.length + '</span></div>'
+      + '</div>';
+
+    // Candidate table.
+    var maxScore = 0;
+    deduped.forEach(function(c) { if (typeof c.metascore === 'number' && c.metascore > maxScore) maxScore = c.metascore; });
+    if (maxScore === 0) maxScore = 1;
+
+    var tableRows = deduped.map(function(c) {
+      var model = String(c.model || '');
+      var short = model.split('/').pop() || model;
+      var provider = model.split('/')[0] || '';
+      var score = typeof c.metascore === 'number' ? c.metascore : 0;
+      var isSelected = model === selectedModel;
+      var blocked = c.breaker_blocked;
+      var gated = c.quality_gated;
+      var usable = c.usable !== false && !blocked && !gated;
+      var note = String(c.note || '');
+
+      // Status badge.
+      var status;
+      if (isSelected) {
+        status = '<span class="badge success" style="font-size:0.5625rem;padding:0.1rem 0.35rem">\u2713 Selected</span>';
+      } else if (blocked) {
+        status = '<span class="badge error" style="font-size:0.5625rem;padding:0.1rem 0.35rem">\u2715 Blocked</span>';
+      } else if (gated) {
+        status = '<span class="badge" style="font-size:0.5625rem;padding:0.1rem 0.35rem;background:var(--warning,#f59e0b);color:#000">\u26a0 Gated</span>';
+      } else if (usable) {
+        status = '<span class="badge muted" style="font-size:0.5625rem;padding:0.1rem 0.35rem">\u25cb Candidate</span>';
+      } else {
+        status = '<span class="badge muted" style="font-size:0.5625rem;padding:0.1rem 0.35rem">\u2212 Unavailable</span>';
+      }
+
+      // Score bar.
+      var barPct = maxScore > 0 ? Math.round((score / maxScore) * 100) : 0;
+      var barColor = isSelected ? 'var(--accent)' : (blocked || gated ? 'var(--error,#ef4444)' : 'var(--muted)');
+      var barOpacity = isSelected ? '1' : (usable ? '0.6' : '0.25');
+      var bar = '<div style="display:flex;align-items:center;gap:0.4rem;min-width:120px">'
+        + '<div style="flex:1;height:6px;background:var(--surface-2);border-radius:3px;overflow:hidden">'
+        + '<div style="width:' + barPct + '%;height:100%;background:' + barColor + ';opacity:' + barOpacity + ';border-radius:3px"></div></div>'
+        + '<span style="font-family:var(--font-mono);font-size:0.6875rem;min-width:2.5rem;text-align:right">' + score.toFixed(3) + '</span></div>';
+
+      var rowBg = isSelected ? 'background:rgba(193,128,255,0.08)' : '';
+      var rowOpacity = (blocked || gated) && !isSelected ? 'opacity:0.55' : '';
+
+      return '<tr style="' + rowBg + ';' + rowOpacity + '">'
+        + '<td style="padding:0.35rem 0.5rem;font-size:0.78rem;font-weight:' + (isSelected ? '600' : '400') + '">' + esc(short) + '<div style="font-size:0.625rem;color:var(--muted)">' + esc(provider) + '</div></td>'
+        + '<td style="padding:0.35rem 0.5rem">' + bar + '</td>'
+        + '<td style="padding:0.35rem 0.5rem">' + status + '</td>'
+        + '<td style="padding:0.35rem 0.5rem;font-size:0.6875rem;color:var(--muted);max-width:220px">' + esc(note) + '</td>'
+        + '</tr>';
+    }).join('');
+
+    var table = '<table style="width:100%;border-collapse:collapse;font-size:0.8rem">'
+      + '<thead><tr style="border-bottom:1px solid var(--border)">'
+      + '<th style="text-align:left;padding:0.3rem 0.5rem;font-size:0.625rem;text-transform:uppercase;letter-spacing:0.08em;color:var(--muted);font-weight:500">Model</th>'
+      + '<th style="text-align:left;padding:0.3rem 0.5rem;font-size:0.625rem;text-transform:uppercase;letter-spacing:0.08em;color:var(--muted);font-weight:500">Metascore</th>'
+      + '<th style="text-align:left;padding:0.3rem 0.5rem;font-size:0.625rem;text-transform:uppercase;letter-spacing:0.08em;color:var(--muted);font-weight:500">Status</th>'
+      + '<th style="text-align:left;padding:0.3rem 0.5rem;font-size:0.625rem;text-transform:uppercase;letter-spacing:0.08em;color:var(--muted);font-weight:500">Reason</th>'
+      + '</tr></thead><tbody>' + tableRows + '</tbody></table>';
 
     return '<div class="card" style="margin-bottom:1rem;padding-bottom:0.75rem">'
-      + '<div class="card-title">Task Model Decision Graph</div>'
-      + '<div style="font-size:0.75rem;color:var(--muted);margin-bottom:0.5rem">Candidate models and chosen model for a single task. Pick a task turn to inspect that decision.</div>'
+      + '<div class="card-title">Model Routing Decision</div>'
+      + '<div style="font-size:0.75rem;color:var(--muted);margin-bottom:0.5rem">How the router chose a model for this task. Each candidate is scored and filtered.</div>'
       + '<div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;margin-bottom:0.55rem"><label for="model-graph-task-select" style="font-size:0.75rem;color:var(--muted)">Task turn</label><select id="model-graph-task-select" class="select" style="min-width:320px;max-width:100%">' + options + '</select></div>'
-      + '<div class="model-graph-wrap">'
-      + '<svg class="model-graph-svg" viewBox="0 0 680 320" preserveAspectRatio="xMidYMid meet">'
-      + '<text x="36" y="22" fill="var(--muted)" style="font-size:10px;font-family:var(--font-mono)">Candidates (ranked)</text>'
-      + '<text x="487" y="22" fill="var(--muted)" style="font-size:10px;font-family:var(--font-mono)">Selected</text>'
-      + laneGuides + edgeEls + nodeEls
-      + '</svg></div>'
-      + '<div id="model-graph-detail" class="model-graph-detail">' + esc(detail) + '</div>'
-      + '<div style="margin-top:0.5rem"><button class="btn secondary" id="model-graph-clear-focus" style="font-size:0.6875rem;padding:0.22rem 0.55rem">Clear focus</button></div>'
+      + header + table
       + '</div>';
   }
   var HINTS_ENABLED_KEY = 'ic_hints_enabled';
@@ -3517,7 +3495,7 @@
           + budgetPersistedLabel
           + '</div>';
 
-        var decisionGraph = renderModelDecisionGraph(modelSelections, App._modelGraphFocusTurn, App._modelGraphFocusModel, App._modelGraphFocusEdge);
+        var decisionGraph = renderModelDecisionGraph(modelSelections, App._modelGraphFocusTurn);
 
         // Period selector
         var periods = ['1h', '24h', '7d', '30d', 'all'];
@@ -5166,11 +5144,13 @@
         };
         var html = tabs + '<div class="settings-form">';
         var specialSections = ['models', 'providers', 'wallet'];
+        // Internal/structural sections that are not user-editable config.
+        var hiddenSections = { security: true, browser: true, daemon: true, discovery: true, devices: true, backups: true, digest: true, heartbeat: true, knowledge: true, learning: true, multimodal: true, obsidian: true, personality: true, tier_adapt: true, yield: true, circuit_breaker: true, context: true, disabled_bundled_providers: true };
         var sections = Object.keys(draft);
         sections.forEach(function(section) {
           var sectionData = draft[section];
           if (typeof sectionData !== 'object' || sectionData === null) return;
-          if (section === 'security') return; // rendered in Access Control tab
+          if (hiddenSections[section]) return;
           var isImmutableSection = !!immutableSet[section];
 
           if (isImmutableSection) {
@@ -7233,7 +7213,7 @@
       if (!channelName) return;
       var draft = App._getSettingsDraft();
       if (!draft.channels) draft.channels = {};
-      var defaults = { telegram: { enabled: true, token_env: 'TELEGRAM_BOT_TOKEN' }, discord: { enabled: true, token_env: 'DISCORD_BOT_TOKEN' }, whatsapp: { enabled: true, token_env: 'WHATSAPP_TOKEN' }, signal: { enabled: true, phone_number: '', daemon_url: 'http://localhost:8080' }, email: { enabled: true, imap_host: '', smtp_host: '' }, web: { enabled: true }, voice: { enabled: true } };
+      var defaults = { telegram: { enabled: true, token_env: 'TELEGRAM_BOT_TOKEN' }, discord: { enabled: true, token_env: 'DISCORD_BOT_TOKEN' }, whatsapp: { enabled: true, token_env: 'WHATSAPP_TOKEN' }, signal: { enabled: true, phone_number: '', daemon_url: 'http://localhost:8080' }, email: { enabled: true, imap_host: '', smtp_host: '' } };
       draft.channels[channelName] = defaults[channelName] || { enabled: true };
       App._settingsDirty = true; App._settingsRawText = null;
       App.navigate('settings');
