@@ -92,7 +92,24 @@ func initLogger() {
 	log.Logger = zerolog.New(
 		zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339},
 	).With().Timestamp().Caller().Logger()
-	zerolog.SetGlobalLevel(zerolog.InfoLevel)
+
+	// Log level: check ROBOTICUS_LOG_LEVEL env, --log-level flag, then default to info.
+	level := os.Getenv("ROBOTICUS_LOG_LEVEL")
+	if level == "" {
+		level = "info"
+	}
+	switch level {
+	case "trace":
+		zerolog.SetGlobalLevel(zerolog.TraceLevel)
+	case "debug":
+		zerolog.SetGlobalLevel(zerolog.DebugLevel)
+	case "warn", "warning":
+		zerolog.SetGlobalLevel(zerolog.WarnLevel)
+	case "error":
+		zerolog.SetGlobalLevel(zerolog.ErrorLevel)
+	default:
+		zerolog.SetGlobalLevel(zerolog.InfoLevel)
+	}
 }
 
 // ensureParentDir creates the parent directory for a file path.
