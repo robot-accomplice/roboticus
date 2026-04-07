@@ -327,7 +327,48 @@ var modelsExerciseCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		printJSON(data)
+
+		// Format results.
+		results, ok := data["results"].([]any)
+		if !ok {
+			// Fall back to showing whatever we got in a formatted way.
+			if msg, ok := data["message"].(string); ok {
+				fmt.Println(msg)
+				return nil
+			}
+			printJSON(data)
+			return nil
+		}
+
+		fmt.Printf("Routing evaluation: %d test(s)\n\n", len(results))
+		passed, failed := 0, 0
+		fmt.Printf("  %-35s %-8s %-10s %s\n", "MODEL", "STATUS", "LATENCY", "NOTES")
+		fmt.Println("  " + "─────────────────────────────────── ──────── ────────── ─────────────────")
+		for _, r := range results {
+			rm, _ := r.(map[string]any)
+			model, _ := rm["model"].(string)
+			success, _ := rm["success"].(bool)
+			latencyMs, _ := rm["latency_ms"].(float64)
+			errMsg, _ := rm["error"].(string)
+			status := "PASS"
+			notes := ""
+			if success {
+				passed++
+			} else {
+				failed++
+				status = "FAIL"
+				if errMsg != "" {
+					notes = errMsg
+				}
+			}
+			fmt.Printf("  %-35s %-8s %-10.0fms %s\n", model, status, latencyMs, notes)
+		}
+		fmt.Printf("\nSummary: %d passed, %d failed\n", passed, failed)
+
+		// Show overall score if present.
+		if score, ok := data["overall_score"].(float64); ok {
+			fmt.Printf("Overall score: %.3f\n", score)
+		}
 		return nil
 	},
 }
@@ -384,7 +425,17 @@ var modelsResetCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		printJSON(data)
+
+		if msg, ok := data["message"].(string); ok {
+			fmt.Println(msg)
+		} else {
+			cleared, _ := data["cleared"].(float64)
+			model := "(all)"
+			if m, ok := data["model"].(string); ok && m != "" {
+				model = m
+			}
+			fmt.Printf("Cleared %d quality observation(s) for %s\n", int(cleared), model)
+		}
 		return nil
 	},
 }

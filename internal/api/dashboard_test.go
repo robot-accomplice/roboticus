@@ -1,11 +1,19 @@
 package api
 
 import (
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"roboticus/internal/core"
+	"roboticus/internal/llm"
+	"roboticus/testutil"
 )
+
+// --- Existing DashboardHandler tests ---
 
 func TestDashboardHandler_StatusOK(t *testing.T) {
 	handler := DashboardHandler()
@@ -121,5 +129,248 @@ func TestGenerateNonce(t *testing.T) {
 	}
 	if n1 == n2 {
 		t.Error("two nonces should differ")
+	}
+}
+
+// --- Dashboard page-level data source tests ---
+
+// newTestServer creates a minimal API server backed by a temp DB for dashboard
+// endpoint testing. No LLM calls are made; routes that need an LLM service
+// receive a minimal mock.
+func newTestServer(t *testing.T) (*httptest.Server, func()) {
+	t.Helper()
+
+	store := testutil.TempStore(t)
+
+	mockLLM := testutil.MockLLMServer(t, func(body map[string]any) (int, any) {
+		return 200, map[string]any{
+			"id": "chatcmpl-test", "model": "test-model",
+			"choices": []map[string]any{{
+				"message":       map[string]any{"role": "assistant", "content": "ok"},
+				"finish_reason": "stop",
+			}},
+			"usage": map[string]any{"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+		}
+	})
+
+	llmSvc, err := llm.NewService(llm.ServiceConfig{
+		Providers: []llm.Provider{{
+			Name: "mock", URL: mockLLM.URL, Format: llm.FormatOpenAI,
+			IsLocal: true, ChatPath: "/v1/chat/completions", AuthHeader: "Bearer",
+		}},
+		Primary: "mock/test-model",
+	}, store)
+	if err != nil {
+		t.Fatalf("llm service: %v", err)
+	}
+
+	cfgVal := core.DefaultConfig()
+	cfg := &cfgVal
+	eventBus := NewEventBus(64)
+
+	state := &AppState{
+		Store:    store,
+		LLM:     llmSvc,
+		Config:   cfg,
+		EventBus: eventBus,
+	}
+
+	srv := NewServer(DefaultServerConfig(), state)
+	ts := httptest.NewServer(srv.Handler)
+
+	return ts, func() { ts.Close() }
+}
+
+// assertEndpointJSON hits an endpoint, asserts 200 status and valid JSON.
+func assertEndpointJSON(t *testing.T, client *http.Client, base, path string) {
+	t.Helper()
+
+	resp, err := client.Get(base + path)
+	if err != nil {
+		t.Fatalf("GET %s: %v", path, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("GET %s: status %d, want 200; body=%s", path, resp.StatusCode, string(body))
+		return
+	}
+
+	var parsed any
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		t.Errorf("GET %s: invalid JSON: %v; body=%s", path, err, string(body))
+	}
+}
+
+func TestDashboard_OverviewDataSources(t *testing.T) {
+	ts, cleanup := newTestServer(t)
+	defer cleanup()
+	client := ts.Client()
+
+	endpoints := []string{
+		"/api/health",
+		"/api/agent/status",
+		"/api/sessions",
+		"/api/skills",
+		"/api/cron/jobs",
+		"/api/stats/cache",
+		"/api/wallet/balance",
+		"/api/channels/status",
+		"/api/breaker/status",
+		"/api/stats/costs",
+		"/api/stats/timeseries",
+		"/api/workspace/state",
+	}
+
+	for _, ep := range endpoints {
+		t.Run(ep, func(t *testing.T) {
+			assertEndpointJSON(t, client, ts.URL, ep)
+		})
+	}
+}
+
+func TestDashboard_SessionsPageDataSources(t *testing.T) {
+	ts, cleanup := newTestServer(t)
+	defer cleanup()
+	client := ts.Client()
+
+	endpoints := []string{
+		"/api/sessions",
+	}
+	for _, ep := range endpoints {
+		t.Run(ep, func(t *testing.T) {
+			assertEndpointJSON(t, client, ts.URL, ep)
+		})
+	}
+}
+
+func TestDashboard_MemoryPageDataSources(t *testing.T) {
+	ts, cleanup := newTestServer(t)
+	defer cleanup()
+	client := ts.Client()
+
+	endpoints := []string{
+		"/api/memory/working",
+		"/api/memory/episodic",
+		"/api/memory/semantic",
+		"/api/memory/semantic/categories",
+		"/api/memory/health",
+		"/api/stats/memory-analytics",
+	}
+	for _, ep := range endpoints {
+		t.Run(ep, func(t *testing.T) {
+			assertEndpointJSON(t, client, ts.URL, ep)
+		})
+	}
+}
+
+func TestDashboard_SkillsPageDataSources(t *testing.T) {
+	ts, cleanup := newTestServer(t)
+	defer cleanup()
+	client := ts.Client()
+
+	endpoints := []string{
+		"/api/skills",
+		"/api/skills/catalog",
+		"/api/skills/audit",
+	}
+	for _, ep := range endpoints {
+		t.Run(ep, func(t *testing.T) {
+			assertEndpointJSON(t, client, ts.URL, ep)
+		})
+	}
+}
+
+func TestDashboard_SchedulerPageDataSources(t *testing.T) {
+	ts, cleanup := newTestServer(t)
+	defer cleanup()
+	client := ts.Client()
+
+	endpoints := []string{
+		"/api/cron/jobs",
+		"/api/cron/runs",
+	}
+	for _, ep := range endpoints {
+		t.Run(ep, func(t *testing.T) {
+			assertEndpointJSON(t, client, ts.URL, ep)
+		})
+	}
+}
+
+func TestDashboard_MetricsPageDataSources(t *testing.T) {
+	ts, cleanup := newTestServer(t)
+	defer cleanup()
+	client := ts.Client()
+
+	endpoints := []string{
+		"/api/stats/costs",
+		"/api/stats/cache",
+		"/api/stats/timeseries",
+		"/api/stats/efficiency",
+		"/api/stats/transactions",
+		"/api/stats/throttle",
+		"/api/delegations",
+	}
+	for _, ep := range endpoints {
+		t.Run(ep, func(t *testing.T) {
+			assertEndpointJSON(t, client, ts.URL, ep)
+		})
+	}
+}
+
+func TestDashboard_WalletPageDataSources(t *testing.T) {
+	ts, cleanup := newTestServer(t)
+	defer cleanup()
+	client := ts.Client()
+
+	endpoints := []string{
+		"/api/wallet/balance",
+		"/api/wallet/address",
+		"/api/services/swaps",
+	}
+	for _, ep := range endpoints {
+		t.Run(ep, func(t *testing.T) {
+			assertEndpointJSON(t, client, ts.URL, ep)
+		})
+	}
+}
+
+func TestDashboard_SettingsPageDataSources(t *testing.T) {
+	ts, cleanup := newTestServer(t)
+	defer cleanup()
+	client := ts.Client()
+
+	endpoints := []string{
+		"/api/config",
+		"/api/config/capabilities",
+		"/api/models/available",
+		"/api/routing/profile",
+	}
+	for _, ep := range endpoints {
+		t.Run(ep, func(t *testing.T) {
+			assertEndpointJSON(t, client, ts.URL, ep)
+		})
+	}
+}
+
+func TestDashboard_WorkspacePageDataSources(t *testing.T) {
+	ts, cleanup := newTestServer(t)
+	defer cleanup()
+	client := ts.Client()
+
+	endpoints := []string{
+		"/api/workspace/state",
+		"/api/workspace/tasks",
+		"/api/admin/task-events",
+		"/api/plugins",
+		"/api/subagents",
+		"/api/roster",
+	}
+	for _, ep := range endpoints {
+		t.Run(ep, func(t *testing.T) {
+			assertEndpointJSON(t, client, ts.URL, ep)
+		})
 	}
 }

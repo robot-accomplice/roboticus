@@ -51,6 +51,21 @@ Planned slices:
 5. Wire `update all`/`upgrade all` through shared orchestration
 6. Add regression coverage for state persistence and orchestration
 
+### Updated Priority Order
+
+After the corrected deep-audit refresh, the remaining execution order is:
+
+1. `RB1` update-system parity polish
+2. plugin lifecycle depth parity
+3. workspace task/task-event richness
+4. dashboard/Web UI workflow parity
+5. daemon/service lifecycle verification
+6. skills import/export/install failure-mode parity
+
+The `models`, `config`, `memory`, `schedule`, `MCP`, `status`, and runtime
+device identity areas are no longer top-of-stack blockers; they now need
+regression protection more than primary implementation work.
+
 ### Deep Audit Program
 
 Behavior parity audits are now tracked separately in

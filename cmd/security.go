@@ -166,6 +166,32 @@ var securityAuditCmd = &cobra.Command{
 			issues++
 		}
 
+		// Check: rate limiting.
+		if cfg.RateLimit.Enabled {
+			fmt.Printf("  [OK]   Rate limiting enabled (%d req / %d sec window)\n",
+				cfg.RateLimit.RequestsPerWindow, cfg.RateLimit.WindowSeconds)
+		} else {
+			fmt.Println("  [WARN] Rate limiting is disabled")
+			issues++
+		}
+
+		// Check: sandbox configuration detail.
+		if cfg.Sandbox.Enabled {
+			detail := ""
+			if cfg.Sandbox.MaxMemoryBytes > 0 {
+				detail += fmt.Sprintf("max_memory=%dMB", cfg.Sandbox.MaxMemoryBytes/(1024*1024))
+			}
+			if len(cfg.Sandbox.AllowedPaths) > 0 {
+				if detail != "" {
+					detail += ", "
+				}
+				detail += fmt.Sprintf("allowed_paths=%d", len(cfg.Sandbox.AllowedPaths))
+			}
+			if detail != "" {
+				fmt.Printf("  [OK]   Sandbox details: %s\n", detail)
+			}
+		}
+
 		// Check: DKIM configuration.
 		if cfg.DKIM.Enabled {
 			fmt.Println("  [OK]   DKIM verification is enabled")

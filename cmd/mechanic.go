@@ -64,6 +64,15 @@ var mechanicCmd = &cobra.Command{
 			}
 		}
 
+		// Always run integrity check.
+		fmt.Println("\nIntegrity check:")
+		var integrityResult string
+		if err := store.QueryRowContext(ctx, `PRAGMA integrity_check`).Scan(&integrityResult); err != nil {
+			fmt.Printf("  FAIL: %v\n", err)
+		} else {
+			fmt.Printf("  %s\n", integrityResult)
+		}
+
 		if repair {
 			fmt.Println("\nRunning VACUUM...")
 			if _, err := store.ExecContext(ctx, `VACUUM`); err != nil {
@@ -72,12 +81,13 @@ var mechanicCmd = &cobra.Command{
 				fmt.Println("  VACUUM complete.")
 			}
 
-			fmt.Println("Running integrity check...")
+			// Re-check after repair.
+			fmt.Println("Re-checking integrity...")
 			var result string
 			if err := store.QueryRowContext(ctx, `PRAGMA integrity_check`).Scan(&result); err != nil {
-				fmt.Printf("  Integrity check failed: %v\n", err)
+				fmt.Printf("  FAIL: %v\n", err)
 			} else {
-				fmt.Printf("  Result: %s\n", result)
+				fmt.Printf("  %s\n", result)
 			}
 		}
 

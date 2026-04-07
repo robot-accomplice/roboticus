@@ -116,6 +116,8 @@ Otherwise, SOURCE is treated as a catalog name.`,
 			}
 			payload["source_path"] = filepath.Dir(pluginJSON)
 
+			checkPluginDependencies(payload)
+
 			data, err := apiPost("/api/plugins/install", payload)
 			if err != nil {
 				return err
@@ -139,6 +141,8 @@ Otherwise, SOURCE is treated as a catalog name.`,
 			// Include the source path so the server knows where the plugin lives.
 			absPath, _ := filepath.Abs(source)
 			payload["source_path"] = absPath
+
+			checkPluginDependencies(payload)
 
 			data, err := apiPost("/api/plugins/install", payload)
 			if err != nil {
@@ -444,6 +448,37 @@ func extractZip(archive, dest string) error {
 		_ = rc.Close()
 	}
 	return nil
+}
+
+// checkPluginDependencies inspects a parsed plugin.json payload for a
+// "dependencies" map and warns about any that are not currently installed.
+func checkPluginDependencies(payload map[string]any) {
+	deps, ok := payload["dependencies"].(map[string]any)
+	if !ok || len(deps) == 0 {
+		return
+	}
+
+	plugins, err := apiGet("/api/plugins")
+	if err != nil {
+		// Server may not be running; skip the check silently.
+		return
+	}
+
+	installed := make(map[string]bool)
+	if list, ok := plugins["plugins"].([]any); ok {
+		for _, p := range list {
+			pm, _ := p.(map[string]any)
+			if name, ok := pm["name"].(string); ok {
+				installed[name] = true
+			}
+		}
+	}
+
+	for depName, depVersion := range deps {
+		if !installed[depName] {
+			fmt.Printf("Warning: dependency %q (version %v) is not installed\n", depName, depVersion)
+		}
+	}
 }
 
 func init() {
