@@ -5181,16 +5181,27 @@
         var html = tabs + '<div class="settings-form">';
         var specialSections = ['models', 'providers', 'wallet'];
         // Internal/structural sections hidden from the settings UI.
-        var hiddenSections = { browser: true, daemon: true, discovery: true, devices: true, backups: true, digest: true, heartbeat: true, knowledge: true, learning: true, multimodal: true, obsidian: true, personality: true, tier_adapt: true, yield: true, circuit_breaker: true, context: true, disabled_bundled_providers: true };
+        // Hide internal/structural sections. Only show sections an operator would edit.
+        // Visible: agent, models, providers, memory, skills, plugins, channels, matrix,
+        //          mcp, server, session, wallet, treasury, security, cache, context_budget, themes, update
+        var hiddenSections = {
+          abuse: true, a2a: true, approvals: true, backups: true, browser: true,
+          circuit_breaker: true, classifier: true, context: true, cors: true,
+          daemon: true, devices: true, digest: true, disabled_bundled_providers: true,
+          discovery: true, dkim: true, heartbeat: true, knowledge: true,
+          learning: true, multimodal: true, obsidian: true, personality: true,
+          planner: true, rate_limit: true, revenue: true, sandbox: true,
+          self_funding: true, tier_adapt: true, workspace: true, yield: true
+        };
         // Group config sections by domain. Sections within each group are alphabetized.
         var sectionGroups = [
-          { label: 'Agent & Identity', sections: ['agent', 'session', 'workspace'] },
-          { label: 'Inference & Routing', sections: ['cache', 'classifier', 'context_budget', 'models', 'planner', 'providers'] },
+          { label: 'Agent & Identity', sections: ['agent', 'session'] },
+          { label: 'Inference & Routing', sections: ['cache', 'context_budget', 'models', 'providers'] },
           { label: 'Memory & Skills', sections: ['memory', 'plugins', 'skills'] },
-          { label: 'Channels & Integrations', sections: ['a2a', 'channels', 'cors', 'dkim', 'matrix', 'mcp'] },
-          { label: 'Security & Access', sections: ['abuse', 'approvals', 'rate_limit', 'sandbox', 'security'] },
-          { label: 'Financial', sections: ['revenue', 'self_funding', 'treasury', 'wallet'] },
-          { label: 'Runtime & System', sections: ['database', 'server', 'themes', 'update'] }
+          { label: 'Channels & Integrations', sections: ['channels', 'matrix', 'mcp'] },
+          { label: 'Security & Access', sections: ['security'] },
+          { label: 'Financial', sections: ['treasury', 'wallet'] },
+          { label: 'Runtime & System', sections: ['server', 'themes', 'update'] }
         ];
         // Collect any sections not in any group (future-proof).
         var grouped = {};

@@ -570,7 +570,11 @@ func DefaultConfig() Config {
 			WatchMode: true,
 		},
 		CORS: CORSConfig{
-			MaxAgeSeconds: 3600,
+			AllowedOrigins: []string{"*"},
+			MaxAgeSeconds:  3600,
+		},
+		Themes: ThemesConfig{
+			CatalogURL: "https://roboticus.ai/registry/themes.json",
 		},
 		Approvals: ApprovalsConfig{
 			TimeoutSeconds: 300,
