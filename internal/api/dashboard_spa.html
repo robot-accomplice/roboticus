@@ -1137,15 +1137,15 @@
       // Status badge.
       var status;
       if (isSelected) {
-        status = '<span class="badge success" style="font-size:0.5625rem;padding:0.1rem 0.35rem">\u2713 Selected</span>';
+        status = '<span class="badge success" style="font-size:0.5625rem;padding:0.1rem 0.35rem">Selected</span>';
       } else if (blocked) {
-        status = '<span class="badge error" style="font-size:0.5625rem;padding:0.1rem 0.35rem">\u2715 Blocked</span>';
+        status = '<span class="badge error" style="font-size:0.5625rem;padding:0.1rem 0.35rem">Blocked</span>';
       } else if (gated) {
         status = '<span class="badge" style="font-size:0.5625rem;padding:0.1rem 0.35rem;background:var(--warning,#f59e0b);color:#000">\u26a0 Gated</span>';
       } else if (usable) {
-        status = '<span class="badge muted" style="font-size:0.5625rem;padding:0.1rem 0.35rem">\u25cb Candidate</span>';
+        status = '<span class="badge muted" style="font-size:0.5625rem;padding:0.1rem 0.35rem">Candidate</span>';
       } else {
-        status = '<span class="badge muted" style="font-size:0.5625rem;padding:0.1rem 0.35rem">\u2212 Unavailable</span>';
+        status = '<span class="badge muted" style="font-size:0.5625rem;padding:0.1rem 0.35rem">Unavailable</span>';
       }
 
       // Score bar.
@@ -5144,13 +5144,36 @@
         };
         var html = tabs + '<div class="settings-form">';
         var specialSections = ['models', 'providers', 'wallet'];
-        // Internal/structural sections that are not user-editable config.
-        var hiddenSections = { security: true, browser: true, daemon: true, discovery: true, devices: true, backups: true, digest: true, heartbeat: true, knowledge: true, learning: true, multimodal: true, obsidian: true, personality: true, tier_adapt: true, yield: true, circuit_breaker: true, context: true, disabled_bundled_providers: true };
-        var sections = Object.keys(draft);
-        sections.forEach(function(section) {
+        // Internal/structural sections hidden from the settings UI.
+        var hiddenSections = { browser: true, daemon: true, discovery: true, devices: true, backups: true, digest: true, heartbeat: true, knowledge: true, learning: true, multimodal: true, obsidian: true, personality: true, tier_adapt: true, yield: true, circuit_breaker: true, context: true, disabled_bundled_providers: true };
+        // Group config sections by domain. Sections within each group are alphabetized.
+        var sectionGroups = [
+          { label: 'Agent & Identity', sections: ['agent', 'session', 'workspace'] },
+          { label: 'Inference & Routing', sections: ['cache', 'classifier', 'context_budget', 'models', 'planner', 'providers'] },
+          { label: 'Memory & Skills', sections: ['memory', 'plugins', 'skills'] },
+          { label: 'Channels & Integrations', sections: ['a2a', 'channels', 'cors', 'dkim', 'matrix', 'mcp'] },
+          { label: 'Security & Access', sections: ['abuse', 'approvals', 'rate_limit', 'sandbox', 'security'] },
+          { label: 'Financial', sections: ['revenue', 'self_funding', 'treasury', 'wallet'] },
+          { label: 'Runtime & System', sections: ['database', 'server', 'themes', 'update'] }
+        ];
+        // Collect any sections not in any group (future-proof).
+        var grouped = {};
+        sectionGroups.forEach(function(g) { g.sections.forEach(function(s) { grouped[s] = true; }); });
+        var ungrouped = Object.keys(draft).filter(function(s) {
+          return typeof draft[s] === 'object' && draft[s] !== null && !hiddenSections[s] && !grouped[s];
+        }).sort();
+        if (ungrouped.length) sectionGroups.push({ label: 'Other', sections: ungrouped });
+
+        sectionGroups.forEach(function(group) {
+        var groupSections = group.sections.filter(function(s) {
+          return draft[s] && typeof draft[s] === 'object' && !hiddenSections[s];
+        });
+        if (!groupSections.length) return;
+        html += '<div style="margin-top:1.25rem;margin-bottom:0.5rem;padding-bottom:0.35rem;border-bottom:1px solid var(--border-ghost)">'
+          + '<span style="font-family:var(--font-headline);font-size:0.6875rem;font-weight:600;text-transform:uppercase;letter-spacing:0.15em;color:var(--accent)">' + esc(group.label) + '</span></div>';
+        groupSections.forEach(function(section) {
           var sectionData = draft[section];
           if (typeof sectionData !== 'object' || sectionData === null) return;
-          if (hiddenSections[section]) return;
           var isImmutableSection = !!immutableSet[section];
 
           if (isImmutableSection) {
@@ -5511,6 +5534,7 @@
           });
           html += '</div>';
         });
+        }); // end sectionGroups.forEach
         html += '</div>' + actions;
         return html;
       });
