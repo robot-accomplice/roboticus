@@ -147,6 +147,7 @@ func (l *Loop) TurnCount() int {
 // Run executes the ReAct loop until completion or context cancellation.
 // It returns the final assistant response content and any error.
 func (l *Loop) Run(ctx context.Context, session *Session) (string, error) {
+	log.Debug().Str("session", session.ID).Int("max_turns", l.config.MaxTurns).Msg("ReAct loop started")
 	for {
 		select {
 		case <-ctx.Done():
@@ -175,7 +176,7 @@ func (l *Loop) Run(ctx context.Context, session *Session) (string, error) {
 		case StateActing:
 			action, err := l.act(ctx, session)
 			if err != nil {
-				log.Warn().Err(err).Msg("tool execution failed")
+				log.Warn().Err(err).Str("session", session.ID).Msg("tool execution failed")
 				// Tool failures are observed, not fatal.
 				l.transition(ActionObserve)
 				continue
@@ -205,6 +206,7 @@ func (l *Loop) think(ctx context.Context, session *Session) (Action, error) {
 	l.mu.Unlock()
 
 	if turn > maxTurns {
+		log.Warn().Str("session", session.ID).Int("max_turns", maxTurns).Msg("ReAct loop hit max turn limit")
 		return ActionFinish, nil
 	}
 
@@ -261,7 +263,7 @@ func (l *Loop) act(ctx context.Context, session *Session) (Action, error) {
 			if decision.Denied() {
 				result := fmt.Sprintf("Policy denied: %s", decision.Reason)
 				session.AddToolResult(tc.ID, tc.Function.Name, result, true)
-				log.Warn().Str("tool", tc.Function.Name).Str("reason", decision.Reason).Msg("tool call denied by policy")
+				log.Warn().Str("tool", tc.Function.Name).Str("reason", decision.Reason).Str("session", session.ID).Msg("tool call denied by policy")
 				continue
 			}
 		}

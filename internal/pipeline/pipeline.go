@@ -132,6 +132,8 @@ func RunPipeline(ctx context.Context, p Runner, cfg Config, input Input) (*Outco
 //  11. Guard chain -> Post-turn ingest -> Response
 func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, error) {
 	tr := NewTraceRecorder()
+	pipelineStart := time.Now()
+	log.Info().Str("channel", cfg.ChannelLabel).Str("agent", input.AgentID).Msg("pipeline started")
 
 	// Stage 1: Input validation.
 	tr.BeginSpan("validation")
@@ -152,12 +154,12 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 		tr.Annotate("score", float64(score))
 		if score.IsBlocked() {
 			tr.EndSpan("error")
-			log.Warn().Float64("score", float64(score)).Str("channel", cfg.ChannelLabel).Msg("injection blocked")
+			log.Warn().Float64("score", float64(score)).Str("channel", cfg.ChannelLabel).Str("session", input.SessionID).Str("agent", input.AgentID).Str("sender", input.SenderID).Msg("injection blocked")
 			return nil, core.NewError(core.ErrInjectionBlocked, "input rejected by injection defense")
 		}
 		if score.IsCaution() {
 			input.Content = p.injection.Sanitize(input.Content)
-			log.Info().Float64("score", float64(score)).Msg("input sanitized")
+			log.Warn().Float64("score", float64(score)).Str("session", input.SessionID).Str("channel", cfg.ChannelLabel).Str("agent", input.AgentID).Msg("input sanitized")
 		}
 	}
 	tr.EndSpan("ok")
@@ -231,6 +233,8 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 		p.tasks.Delegate(taskID, input.AgentID, nil)
 		log.Info().
 			Str("task", taskID).
+			Str("session", session.ID).
+			Str("agent", input.AgentID).
 			Int("subtasks", len(decomp.Subtasks)).
 			Msg("task delegated via decomposition gate")
 	}
@@ -284,6 +288,7 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 	// Mark task completed.
 	p.tasks.Complete(taskID)
 
+	log.Info().Str("session", session.ID).Str("model", outcome.Model).Int("tokens_out", outcome.TokensOut).Int64("duration_ms", time.Since(pipelineStart).Milliseconds()).Msg("pipeline completed")
 	return outcome, nil
 }
 
@@ -364,6 +369,6 @@ func (p *Pipeline) storeTrace(ctx context.Context, tr *TraceRecorder, sessionID,
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		db.NewID(), trace.TurnID, sessionID, trace.Channel, trace.TotalMs, trace.StagesJSON())
 	if err != nil {
-		log.Warn().Err(err).Msg("failed to store pipeline trace")
+		log.Warn().Err(err).Str("session", sessionID).Str("turn", msgID).Msg("failed to store pipeline trace")
 	}
 }

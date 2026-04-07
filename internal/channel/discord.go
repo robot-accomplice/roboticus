@@ -201,7 +201,11 @@ func (d *DiscordAdapter) getGatewayURL(ctx context.Context) (string, error) {
 }
 
 func (d *DiscordAdapter) runGateway(ctx context.Context, wsURL string) error {
-	log.Info().Str("url", wsURL).Msg("discord: connecting to gateway")
+	redactedURL := "wss://gateway.discord.gg/***"
+	if len(wsURL) > 30 {
+		redactedURL = wsURL[:30] + "***"
+	}
+	log.Info().Str("url", redactedURL).Msg("discord: connecting to gateway")
 
 	// Use github.com/coder/websocket for connection.
 	// For now, implement the gateway protocol framework with net/http polling fallback.

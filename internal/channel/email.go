@@ -156,7 +156,7 @@ func (e *EmailAdapter) StartIMAPPoller(ctx context.Context) error {
 			return ctx.Err()
 		case <-ticker.C:
 			if err := e.pollIMAP(ctx); err != nil {
-				log.Warn().Err(err).Msg("email: IMAP poll error")
+				log.Debug().Err(err).Msg("email: IMAP poll error")
 			}
 		}
 	}

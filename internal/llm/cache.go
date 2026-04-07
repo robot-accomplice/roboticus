@@ -78,7 +78,7 @@ func (c *Cache) Get(ctx context.Context, req *Request) *Response {
 			c.mu.Lock()
 			entry.Hits++
 			c.mu.Unlock()
-			log.Debug().Str("hash", hash[:12]).Msg("cache hit (L1)")
+			log.Trace().Str("hash", hash[:12]).Msg("cache hit (L1)")
 			return entry.Response
 		}
 		// Expired — fall through to L2 and evict from L1.
@@ -119,7 +119,7 @@ func (c *Cache) Get(ctx context.Context, req *Request) *Response {
 	_, _ = c.store.ExecContext(ctx,
 		`UPDATE semantic_cache SET hit_count = hit_count + 1 WHERE prompt_hash = ?`, hash)
 
-	log.Debug().Str("hash", hash[:12]).Msg("cache hit (L2)")
+	log.Trace().Str("hash", hash[:12]).Msg("cache hit (L2)")
 	return &resp
 }
 

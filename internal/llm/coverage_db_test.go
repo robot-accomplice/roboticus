@@ -431,15 +431,21 @@ func TestClassifier_EmbedText_EmbedderError(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestNewClient_EnvVarMissing(t *testing.T) {
-	_, err := NewClient(&Provider{
+	// Non-local providers with missing keys are allowed at construction
+	// (they fail at request time). This enables the service to start
+	// even when some providers are unconfigured.
+	client, err := NewClient(&Provider{
 		Name:      "test",
 		URL:       "http://test",
 		Format:    FormatOpenAI,
 		APIKeyEnv: "NONEXISTENT_KEY_FOR_COVERAGE_TEST_XYZ",
 		IsLocal:   false,
 	})
-	if err == nil {
-		t.Error("expected error when required env var is missing")
+	if err != nil {
+		t.Errorf("construction should succeed with missing key: %v", err)
+	}
+	if client == nil {
+		t.Error("client should not be nil")
 	}
 }
 

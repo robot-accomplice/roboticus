@@ -155,7 +155,7 @@ func (a *nicknameAdapter) Refine(ctx context.Context, session *session.Session) 
 
 	resp, err := a.llm.Complete(ctx, req)
 	if err != nil {
-		log.Debug().Err(err).Msg("nickname refinement LLM call failed")
+		log.Warn().Err(err).Str("session", session.ID).Msg("nickname refinement LLM call failed")
 		return
 	}
 
@@ -169,7 +169,7 @@ func (a *nicknameAdapter) Refine(ctx context.Context, session *session.Session) 
 		title, session.ID,
 	)
 	if err != nil {
-		log.Debug().Err(err).Str("session", session.ID).Msg("failed to update session nickname")
+		log.Warn().Err(err).Str("session", session.ID).Msg("failed to update session nickname")
 	}
 }
 

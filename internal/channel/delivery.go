@@ -182,7 +182,7 @@ func (dq *DeliveryQueue) RequeueFailed(item *DeliveryItem, errMsg string) {
 		item.Status = DeliveryDeadLetter
 		dq.deadLetters = append(dq.deadLetters, item)
 		dq.updateItemStatus(item)
-		log.Warn().Str("id", item.ID).Str("channel", item.Channel).Str("error", errMsg).Msg("message dead-lettered")
+		log.Warn().Str("id", item.ID).Str("channel", item.Channel).Str("error", errMsg).Str("recipient", item.RecipientID).Int("attempts", item.Attempts).Msg("message dead-lettered")
 		return
 	}
 

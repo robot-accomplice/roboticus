@@ -168,7 +168,7 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 
 		cb := s.breakers.Get(providerName)
 		if !cb.Allow() {
-			log.Debug().Str("provider", providerName).Msg("circuit breaker open, trying next")
+			log.Warn().Str("provider", providerName).Msg("circuit breaker open, trying next")
 			continue
 		}
 
@@ -178,7 +178,7 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 		if err != nil {
 			cb.RecordFailure()
 			lastErr = err
-			log.Warn().Err(err).Str("provider", providerName).Msg("provider failed, trying next")
+			log.Warn().Err(err).Str("provider", providerName).Str("model", req.Model).Msg("provider failed, trying next")
 			continue
 		}
 
@@ -221,10 +221,12 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 			s.recordCost(ctx, pName, resp)
 		})
 
+		log.Info().Str("provider", providerName).Str("model", resp.Model).Int("tokens_in", resp.Usage.InputTokens).Int("tokens_out", resp.Usage.OutputTokens).Int64("latency_ms", latencyMs).Msg("inference completed")
 		return resp, nil
 	}
 
 	if lastErr != nil {
+		log.Error().Err(lastErr).Msg("all LLM providers failed")
 		return nil, core.WrapError(core.ErrLLM, "all providers failed", lastErr)
 	}
 	return nil, core.NewError(core.ErrLLM, "no providers available")

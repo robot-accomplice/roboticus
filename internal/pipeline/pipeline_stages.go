@@ -42,6 +42,7 @@ func (p *Pipeline) runStandardInference(ctx context.Context, cfg Config, session
 		guardCtx := p.buildGuardContext(session)
 		guardResult := p.guards.ApplyFullWithContext(result, guardCtx)
 		result = guardResult.Content
+		log.Debug().Str("session", session.ID).Bool("retry", guardResult.RetryRequested).Msg("guard chain evaluated")
 
 		// If guard requests retry, re-run inference once with the rejection reason.
 		if guardResult.RetryRequested {

@@ -89,12 +89,12 @@ func (w *CronWorker) tick(ctx context.Context) {
 		if err != nil {
 			run.Status = CronRunFailed
 			run.ErrorMsg = err.Error()
-			log.Warn().Str("job", job.Name).Err(err).Msg("cron job failed")
+			log.Warn().Str("job", job.Name).Str("job_id", job.ID).Str("agent_id", job.AgentID).Err(err).Int64("duration_ms", duration.Milliseconds()).Msg("cron job failed")
 			w.recordRun(ctx, run)
 			w.handleRetry(ctx, job, now)
 		} else {
 			run.Status = CronRunSuccess
-			log.Debug().Str("job", job.Name).Dur("duration", duration).Msg("cron job completed")
+			log.Info().Str("job", job.Name).Str("job_id", job.ID).Str("agent_id", job.AgentID).Int64("duration_ms", duration.Milliseconds()).Msg("cron job completed")
 			w.recordRun(ctx, run)
 			w.resetRetry(ctx, job.ID)
 			w.updateLastRun(ctx, job, now)

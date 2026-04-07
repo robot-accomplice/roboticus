@@ -121,7 +121,7 @@ func pollWalletBalance(ctx context.Context, w *wallet.Wallet, store *db.Store) {
 		ethBalance := weiToEther(balance)
 		upsertBalance(ctx, store, "ETH", "Ether", ethBalance, "", 18, true)
 	} else {
-		log.Debug().Err(err).Msg("wallet poller: failed to fetch ETH balance")
+		log.Warn().Err(err).Msg("wallet poller: failed to fetch ETH balance")
 	}
 
 	// Fetch USDC balance (Base mainnet USDC contract).
@@ -130,7 +130,7 @@ func pollWalletBalance(ctx context.Context, w *wallet.Wallet, store *db.Store) {
 		usdcBalance := float64(balance.Int64()) / 1e6 // USDC has 6 decimals
 		upsertBalance(ctx, store, "USDC", "USD Coin", usdcBalance, usdcContract, 6, false)
 	} else {
-		log.Debug().Err(err).Msg("wallet poller: failed to fetch USDC balance")
+		log.Warn().Err(err).Msg("wallet poller: failed to fetch USDC balance")
 	}
 }
 
@@ -147,7 +147,7 @@ func upsertBalance(ctx context.Context, store *db.Store, symbol, name string, ba
 		   updated_at = datetime('now')`,
 		symbol, name, balance, contract, decimals, native)
 	if err != nil {
-		log.Debug().Err(err).Str("symbol", symbol).Msg("wallet poller: failed to upsert balance")
+		log.Warn().Err(err).Str("symbol", symbol).Msg("wallet poller: failed to upsert balance")
 	}
 }
 

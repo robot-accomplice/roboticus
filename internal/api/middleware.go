@@ -133,8 +133,14 @@ func NewRequestLogger() func(http.Handler) http.Handler {
 			next.ServeHTTP(ww, r)
 			duration := time.Since(start)
 
-			log.Info().
-				Str("method", r.Method).
+			ev := log.Debug()
+			switch {
+			case ww.status >= 500:
+				ev = log.Warn()
+			case ww.status >= 400:
+				ev = log.Info()
+			}
+			ev.Str("method", r.Method).
 				Str("path", r.URL.Path).
 				Int("status", ww.status).
 				Dur("duration", duration).
