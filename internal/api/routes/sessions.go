@@ -2,12 +2,12 @@ package routes
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
 
 	"roboticus/internal/db"
+	"roboticus/internal/llm"
 	"roboticus/internal/pipeline"
 )
 
@@ -251,7 +251,7 @@ func BackfillNicknames(store *db.Store) http.HandlerFunc {
 }
 
 // AnalyzeSession returns basic analytics for a session.
-func AnalyzeSession(store *db.Store) http.HandlerFunc {
+func AnalyzeSession(store *db.Store, llmSvc *llm.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
 		ctx := r.Context()
@@ -364,14 +364,40 @@ func AnalyzeSession(store *db.Store) http.HandlerFunc {
 			}
 		}
 
-		summary := fmt.Sprintf("Session analysis: %d turns, %d critical, %d warning, %d info findings.",
-			len(turns), critCount, warnCount, len(dedupedTips)-critCount-warnCount)
+		// Build LLM analysis prompt from heuristic tips.
+		var analysisText string
+		var analysisModel string
+		var analysisTokIn, analysisTokOut int64
+		var analysisCost float64
+
+		prompt := pipeline.BuildSessionAnalysisPrompt(id, turns, dedupedTips, grades)
+		if llmSvc != nil {
+			resp, err := llmSvc.Complete(ctx, &llm.Request{
+				Messages:  []llm.Message{{Role: "user", Content: prompt}},
+				MaxTokens: 1800,
+			})
+			if err == nil {
+				analysisText = resp.Content
+				analysisModel = resp.Model
+				analysisTokIn = int64(resp.Usage.InputTokens)
+				analysisTokOut = int64(resp.Usage.OutputTokens)
+				_ = analysisCost // cost tracked by LLM service internally
+			} else {
+				analysisText = pipeline.BuildHeuristicSummary(dedupedTips)
+			}
+		} else {
+			analysisText = pipeline.BuildHeuristicSummary(dedupedTips)
+		}
 
 		writeJSON(w, http.StatusOK, map[string]any{
-			"session_id":       id,
-			"status":           "complete",
+			"session_id":         id,
+			"status":             "complete",
 			"heuristic_insights": dedupedTips,
-			"analysis":         summary,
+			"analysis":           analysisText,
+			"analysis_model":     analysisModel,
+			"tokens_in":          analysisTokIn,
+			"tokens_out":         analysisTokOut,
+			"cost":               analysisCost,
 		})
 	}
 }

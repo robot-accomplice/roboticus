@@ -3,12 +3,12 @@ package routes
 import (
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
 
 	"roboticus/internal/db"
+	"roboticus/internal/llm"
 	"roboticus/internal/pipeline"
 )
 
@@ -211,28 +211,27 @@ func GetTurnModelSelection(store *db.Store) http.HandlerFunc {
 }
 
 // AnalyzeTurn returns turn analysis based on available data.
-func AnalyzeTurn(store *db.Store) http.HandlerFunc {
+// When an LLM service is available, heuristic tips are sent to the LLM
+// for a deeper remediation analysis matching the Rust behavior.
+func AnalyzeTurn(store *db.Store, llmSvc *llm.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		turnID := chi.URLParam(r, "id")
 		ctx := r.Context()
 
 		// Gather turn data.
 		row := store.QueryRowContext(ctx,
-			`SELECT model, COALESCE(tokens_in, 0), COALESCE(tokens_out, 0), COALESCE(cost, 0), COALESCE(cached, 0)
+			`SELECT model, COALESCE(tokens_in, 0), COALESCE(tokens_out, 0), COALESCE(cost, 0)
 			 FROM turns WHERE id = ?`, turnID)
 		var model string
 		var tokIn, tokOut int64
 		var cost float64
-		var cached int
-		if err := row.Scan(&model, &tokIn, &tokOut, &cost, &cached); err != nil {
-			writeJSON(w, http.StatusOK, map[string]any{
-				"turn_id":         turnID,
-				"status":          "complete",
-				"heuristic_tips":  []any{},
-				"analysis":        "No turn data available for analysis.",
-			})
+		if err := row.Scan(&model, &tokIn, &tokOut, &cost); err != nil {
+			writeError(w, http.StatusNotFound, "turn not found")
 			return
 		}
+		// Cached flag is optional (column may not exist in older schemas).
+		var cached int
+		_ = store.QueryRowContext(ctx, `SELECT COALESCE(cached, 0) FROM turns WHERE id = ?`, turnID).Scan(&cached)
 
 		// Count tool calls and failures.
 		var toolCount, toolFails int64
@@ -270,24 +269,40 @@ func AnalyzeTurn(store *db.Store) http.HandlerFunc {
 		analyzer := pipeline.NewContextAnalyzer()
 		tips := analyzer.AnalyzeTurn(td)
 
-		// Build summary from tips.
-		var critCount, warnCount int
-		for _, tip := range tips {
-			switch tip.Severity {
-			case "critical":
-				critCount++
-			case "warning":
-				warnCount++
-			}
-		}
+		// Build LLM analysis prompt from heuristic tips.
+		var analysisText string
+		var analysisModel string
+		var analysisTokIn, analysisTokOut int64
+		var analysisCost float64
 
-		summary := fmt.Sprintf("Analysis complete: %d critical, %d warnings, %d info findings across 12 heuristic rules.", critCount, warnCount, len(tips)-critCount-warnCount)
+		prompt := pipeline.BuildTurnAnalysisPrompt(td, tips)
+		if llmSvc != nil {
+			resp, err := llmSvc.Complete(ctx, &llm.Request{
+				Messages:  []llm.Message{{Role: "user", Content: prompt}},
+				MaxTokens: 1200,
+			})
+			if err == nil {
+				analysisText = resp.Content
+				analysisModel = resp.Model
+				analysisTokIn = int64(resp.Usage.InputTokens)
+				analysisTokOut = int64(resp.Usage.OutputTokens)
+				_ = analysisCost // cost tracked by LLM service internally
+			} else {
+				analysisText = pipeline.BuildHeuristicSummary(tips)
+			}
+		} else {
+			analysisText = pipeline.BuildHeuristicSummary(tips)
+		}
 
 		writeJSON(w, http.StatusOK, map[string]any{
 			"turn_id":        turnID,
 			"status":         "complete",
 			"heuristic_tips": tips,
-			"analysis":       summary,
+			"analysis":       analysisText,
+			"analysis_model": analysisModel,
+			"tokens_in":      analysisTokIn,
+			"tokens_out":     analysisTokOut,
+			"cost":           analysisCost,
 		})
 	}
 }

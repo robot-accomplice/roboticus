@@ -400,3 +400,94 @@ func max64(a, b int64) int64 {
 	}
 	return b
 }
+
+// BuildTurnAnalysisPrompt constructs an LLM prompt from turn data and heuristic tips.
+func BuildTurnAnalysisPrompt(td *TurnData, tips []Tip) string {
+	s := fmt.Sprintf("Analyze this inference turn and provide specific remediation advice.\n\n"+
+		"Turn metrics:\n- Model: %s\n- Tokens in: %d, out: %d\n- Cost: $%.4f\n- Token budget: %d\n"+
+		"- System prompt tokens: %d\n- Memory tokens: %d\n- History tokens: %d (depth %d)\n"+
+		"- Tool calls: %d (failures: %d)\n- Complexity: %s\n- Cached: %v\n\n",
+		td.Model, td.TokensIn, td.TokensOut, td.Cost, td.TokenBudget,
+		td.SystemPromptTokens, td.MemoryTokens, td.HistoryTokens, td.HistoryDepth,
+		td.ToolCallCount, td.ToolFailureCount, td.ComplexityLevel, td.Cached)
+
+	if len(tips) > 0 {
+		s += "Heuristic findings:\n"
+		for _, tip := range tips {
+			s += fmt.Sprintf("- [%s/%s] %s: %s\n", tip.Severity, tip.Category, tip.RuleName, tip.Message)
+		}
+	} else {
+		s += "No heuristic issues detected.\n"
+	}
+
+	s += "\nProvide:\n1. A brief assessment of this turn's efficiency\n2. Specific actions to improve cost, quality, or latency\n3. Any configuration changes recommended\n\nBe concise and actionable. Use markdown formatting."
+	return s
+}
+
+// BuildSessionAnalysisPrompt constructs an LLM prompt from session data and heuristic tips.
+func BuildSessionAnalysisPrompt(sessionID string, turns []TurnData, tips []Tip, grades []SessionGrade) string {
+	var totalCost float64
+	var totalTokIn, totalTokOut int64
+	models := make(map[string]int)
+	for _, t := range turns {
+		totalCost += t.Cost
+		totalTokIn += t.TokensIn
+		totalTokOut += t.TokensOut
+		if t.Model != "" {
+			models[t.Model]++
+		}
+	}
+
+	s := fmt.Sprintf("Analyze this agent session and provide specific remediation advice.\n\n"+
+		"Session: %s\n- Turns: %d\n- Total tokens in: %d, out: %d\n- Total cost: $%.4f\n- Models used: %d distinct\n",
+		sessionID, len(turns), totalTokIn, totalTokOut, totalCost, len(models))
+
+	if len(grades) > 0 {
+		var sum float64
+		for _, g := range grades {
+			sum += float64(g.Grade)
+		}
+		s += fmt.Sprintf("- Average quality grade: %.1f/5 (%d graded turns)\n", sum/float64(len(grades)), len(grades))
+	}
+
+	if len(tips) > 0 {
+		s += "\nHeuristic findings:\n"
+		for _, tip := range tips {
+			s += fmt.Sprintf("- [%s/%s] %s: %s\n", tip.Severity, tip.Category, tip.RuleName, tip.Message)
+		}
+		s += "\nTop suggestions:\n"
+		count := 0
+		for _, tip := range tips {
+			if tip.Suggestion != "" && count < 3 {
+				s += fmt.Sprintf("- %s\n", tip.Suggestion)
+				count++
+			}
+		}
+	} else {
+		s += "\nNo heuristic issues detected.\n"
+	}
+
+	s += "\nProvide:\n1. Overall session health assessment\n2. Root cause analysis for any degradation\n3. Specific configuration or behavioral changes recommended\n4. Priority of remediation actions\n\nBe concise and actionable. Use markdown formatting."
+	return s
+}
+
+// BuildHeuristicSummary creates a markdown summary from tips (fallback when LLM unavailable).
+func BuildHeuristicSummary(tips []Tip) string {
+	if len(tips) == 0 {
+		return "No issues detected. Turn appears healthy."
+	}
+	var critCount, warnCount int
+	for _, tip := range tips {
+		switch tip.Severity {
+		case "critical":
+			critCount++
+		case "warning":
+			warnCount++
+		}
+	}
+	s := fmt.Sprintf("Heuristic analysis: %d critical, %d warnings, %d info.\n\n", critCount, warnCount, len(tips)-critCount-warnCount)
+	for _, tip := range tips {
+		s += fmt.Sprintf("**%s** (%s): %s\n  → %s\n\n", tip.RuleName, tip.Severity, tip.Message, tip.Suggestion)
+	}
+	return s
+}

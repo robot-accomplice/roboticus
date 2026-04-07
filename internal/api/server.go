@@ -130,7 +130,7 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 		r.Get("/api/sessions/{id}/feedback", routes.GetSessionFeedback(state.Store))
 		r.Get("/api/sessions/{id}/insights", routes.GetSessionInsights(state.Store))
 		r.Post("/api/sessions/{id}/archive", routes.ArchiveSession(state.Store))
-		r.With(analysisLimit).Post("/api/sessions/{id}/analyze", routes.AnalyzeSession(state.Store))
+		r.With(analysisLimit).Post("/api/sessions/{id}/analyze", routes.AnalyzeSession(state.Store, state.LLM))
 
 		// Turns.
 		r.Get("/api/turns/{id}", routes.GetTurn(state.Store))
@@ -141,7 +141,7 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 		r.Get("/api/turns/{id}/tools", routes.GetTurnTools(state.Store))
 		r.Get("/api/turns/{id}/tips", routes.GetTurnTips(state.Store))
 		r.Get("/api/turns/{id}/model-selection", routes.GetTurnModelSelection(state.Store))
-		r.With(analysisLimit).Post("/api/turns/{id}/analyze", routes.AnalyzeTurn(state.Store))
+		r.With(analysisLimit).Post("/api/turns/{id}/analyze", routes.AnalyzeTurn(state.Store, state.LLM))
 
 		// Memory.
 		r.Get("/api/memory/working", routes.GetWorkingMemory(state.Store))

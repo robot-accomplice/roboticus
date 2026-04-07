@@ -51,6 +51,18 @@ Planned slices:
 5. Wire `update all`/`upgrade all` through shared orchestration
 6. Add regression coverage for state persistence and orchestration
 
+### Deep Audit Program
+
+Behavior parity audits are now tracked separately in
+`docs/deep-parity-audit-matrix.md`.
+
+Use that matrix when evaluating parity-sensitive work:
+
+- do not close an item because the command or route exists
+- compare Go behavior against Rust workflow depth
+- record missing side effects, maintenance steps, and operator semantics
+- add regression coverage only after the real behavior class is understood
+
 ## Progress Log
 
 ### 2026-04-06
@@ -85,6 +97,8 @@ Planned slices:
 - Implemented runtime MCP summary plus MCP server list/show/test routes backed by real config and live connectivity checks.
 - Implemented DB-backed runtime device pair/verify/unpair lifecycle and discovered-agent verification.
 - Implemented workspace task inventory and admin task-event read surfaces backed by `agent_tasks` and `task_events`.
+- Added `docs/deep-parity-audit-matrix.md` to track subsystem-by-subsystem behavior parity instead of surface-only parity.
+- Recorded the first deep-audit finding there: the `models` CLI is still materially behind Rust, including missing `exercise`, `suggest`, `reset`, and `baseline` flows and a thinner `scan` implementation.
 
 ## Handoff Notes
 

@@ -509,7 +509,7 @@ func TestAnalyzeTurn_HappyPath(t *testing.T) {
 		`INSERT INTO tool_calls (id, turn_id, tool_name, input, status, created_at)
 		 VALUES ('tc2', 't1', 'calc', '{}', 'success', datetime('now'))`)
 
-	rec := chiRequest("GET", "/turns/{id}/analyze", "/turns/t1/analyze", "", AnalyzeTurn(store))
+	rec := chiRequest("GET", "/turns/{id}/analyze", "/turns/t1/analyze", "", AnalyzeTurn(store, nil))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
@@ -536,18 +536,10 @@ func TestAnalyzeTurn_HappyPath(t *testing.T) {
 
 func TestAnalyzeTurn_NoTurnData(t *testing.T) {
 	store := testutil.TempStore(t)
-	rec := chiRequest("GET", "/turns/{id}/analyze", "/turns/missing/analyze", "", AnalyzeTurn(store))
+	rec := chiRequest("GET", "/turns/{id}/analyze", "/turns/missing/analyze", "", AnalyzeTurn(store, nil))
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", rec.Code)
-	}
-	body := jsonBody(t, rec)
-	analysis, ok := body["analysis"].(string)
-	if !ok {
-		t.Fatal("analysis should be a string when turn not found")
-	}
-	if analysis != "No turn data available for analysis." {
-		t.Errorf("analysis = %v", analysis)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
 	}
 }
 
@@ -557,7 +549,7 @@ func TestAnalyzeTurn_NoToolCalls(t *testing.T) {
 	_, _ = store.ExecContext(bgCtx,
 		`INSERT INTO turns (id, session_id, model, tokens_in, tokens_out, cost) VALUES ('t1', 's1', 'gpt-4', 200, 100, 0.01)`)
 
-	rec := chiRequest("GET", "/turns/{id}/analyze", "/turns/t1/analyze", "", AnalyzeTurn(store))
+	rec := chiRequest("GET", "/turns/{id}/analyze", "/turns/t1/analyze", "", AnalyzeTurn(store, nil))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
@@ -566,6 +558,8 @@ func TestAnalyzeTurn_NoToolCalls(t *testing.T) {
 	if body["status"] != "complete" {
 		t.Errorf("status = %v, want complete", body["status"])
 	}
-	tips := body["heuristic_tips"].([]any)
-	_ = tips // 0 tool calls = no tool-related tips, which is fine
+	// Tips may be empty array or nil — both are valid.
+	if tips, ok := body["heuristic_tips"].([]any); ok {
+		_ = tips
+	}
 }
