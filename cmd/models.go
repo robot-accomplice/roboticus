@@ -158,7 +158,7 @@ var modelsScanCmd = &cobra.Command{
 			// Offer to add to config.
 			fmt.Print("  Add discovered models to your config? [y/N] ")
 			var input string
-			fmt.Scanln(&input)
+			_, _ = fmt.Scanln(&input)
 			if strings.ToLower(input) == "y" || strings.ToLower(input) == "yes" {
 				// Set the first as primary, rest as fallbacks.
 				if len(allDiscovered) > 0 {
@@ -176,7 +176,7 @@ var modelsScanCmd = &cobra.Command{
 				}
 			} else {
 				fmt.Print("  Print TOML snippet instead? [Y/n] ")
-				fmt.Scanln(&input)
+				_, _ = fmt.Scanln(&input)
 				if input == "" || strings.ToLower(input) == "y" || strings.ToLower(input) == "yes" {
 					fmt.Println("  [models]")
 					if len(allDiscovered) > 0 {
@@ -428,9 +428,8 @@ suggested primary + fallback chain with ready-to-paste TOML config.`,
 		}
 
 		type modelEntry struct {
-			name    string
-			local   bool
-			cost    float64
+			name  string
+			local bool
 		}
 		var available []modelEntry
 
@@ -574,7 +573,7 @@ This re-establishes the metascore quality baseline from scratch.`,
 		// Step 2: Confirm.
 		fmt.Printf("\n  This will flush all quality scores and exercise each model.\n  Proceed? [Y/n] ")
 		var input string
-		fmt.Scanln(&input)
+		_, _ = fmt.Scanln(&input)
 		if input != "" && input != "y" && input != "Y" && input != "yes" {
 			fmt.Println("  Cancelled.")
 			return nil

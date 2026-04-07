@@ -133,11 +133,14 @@ func GetCapacity(llmSvc *llm.Service) http.HandlerFunc {
 					headroom = 0.25
 				}
 
-				stateLabel := "closed"
-				if p.State == llm.CircuitOpen {
+				var stateLabel string
+				switch p.State {
+				case llm.CircuitOpen:
 					stateLabel = "open"
-				} else if p.State == llm.CircuitHalfOpen {
+				case llm.CircuitHalfOpen:
 					stateLabel = "half-open"
+				default:
+					stateLabel = "closed"
 				}
 
 				providers[p.Name] = map[string]any{
