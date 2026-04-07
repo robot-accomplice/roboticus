@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -144,10 +145,51 @@ var modelsScanCmd = &cobra.Command{
 		if len(directResults) > 0 {
 			fmt.Println("Discovered models:")
 			fmt.Println()
+			var allDiscovered []string
 			for provider, models := range directResults {
 				fmt.Printf("  %s (%d models):\n", provider, len(models))
 				for _, m := range models {
 					fmt.Printf("    %s\n", m)
+					allDiscovered = append(allDiscovered, provider+"/"+m)
+				}
+			}
+			fmt.Println()
+
+			// Offer to add to config.
+			fmt.Print("  Add discovered models to your config? [y/N] ")
+			var input string
+			fmt.Scanln(&input)
+			if strings.ToLower(input) == "y" || strings.ToLower(input) == "yes" {
+				// Set the first as primary, rest as fallbacks.
+				if len(allDiscovered) > 0 {
+					body := map[string]any{
+						"models": map[string]any{
+							"primary":   allDiscovered[0],
+							"fallbacks": allDiscovered[1:],
+						},
+					}
+					if _, err := apiPut("/api/config", body); err != nil {
+						fmt.Printf("  Failed to update config: %v\n", err)
+					} else {
+						fmt.Printf("  Config updated: primary=%s, %d fallback(s)\n", allDiscovered[0], len(allDiscovered)-1)
+					}
+				}
+			} else {
+				fmt.Print("  Print TOML snippet instead? [Y/n] ")
+				fmt.Scanln(&input)
+				if input == "" || strings.ToLower(input) == "y" || strings.ToLower(input) == "yes" {
+					fmt.Println("\n  [models]")
+					if len(allDiscovered) > 0 {
+						fmt.Printf("  primary = %q\n", allDiscovered[0])
+					}
+					if len(allDiscovered) > 1 {
+						var fbs []string
+						for _, m := range allDiscovered[1:] {
+							fbs = append(fbs, fmt.Sprintf("%q", m))
+						}
+						fmt.Printf("  fallbacks = [%s]\n", strings.Join(fbs, ", "))
+					}
+					fmt.Println()
 				}
 			}
 			return nil
@@ -375,39 +417,93 @@ var modelsExerciseCmd = &cobra.Command{
 
 var modelsSuggestCmd = &cobra.Command{
 	Use:   "suggest",
-	Short: "Suggest optimal model routing based on current quality and cost data",
+	Short: "Scan providers and suggest an optimal fallback chain configuration",
+	Long: `Suggest probes all configured providers for available models, ranks them
+by locality (local first) and cost (cheapest first), then outputs a
+suggested primary + fallback chain with ready-to-paste TOML config.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		data, err := apiGet("/api/models/routing-diagnostics")
+		fmt.Println("\n  Scanning for available models...\n")
+
+		config, err := apiGet("/api/config")
 		if err != nil {
-			return err
+			return fmt.Errorf("cannot reach API: %w", err)
 		}
-		profiles, ok := data["profiles"].([]any)
-		if !ok {
-			fmt.Println("No model profiles available.")
+
+		providers := extractProviders(config)
+		if len(providers) == 0 {
+			fmt.Println("  No providers configured. Nothing to suggest.")
 			return nil
 		}
-		fmt.Println("Model routing suggestions based on current metascore data:")
-		fmt.Println()
-		for _, p := range profiles {
-			pm, _ := p.(map[string]any)
-			model, _ := pm["model"].(string)
-			meta, _ := pm["metascore"].(map[string]any)
-			score := 0.0
-			if meta != nil {
-				score, _ = meta["final_score"].(float64)
+
+		type modelEntry struct {
+			name    string
+			local   bool
+			cost    float64
+		}
+		var available []modelEntry
+
+		for provName, provURL := range providers {
+			models := probeProvider(provName, provURL)
+			isLocal := false
+			if pc, ok := config["providers"].(map[string]any); ok {
+				if p, ok := pc[provName].(map[string]any); ok {
+					isLocal, _ = p["is_local"].(bool)
+				}
 			}
-			blocked, _ := pm["blocked_by_config"].(bool)
-			local, _ := pm["is_local"].(bool)
-			status := "available"
-			if blocked {
-				status = "blocked"
+			for _, m := range models {
+				available = append(available, modelEntry{
+					name:  provName + "/" + m,
+					local: isLocal,
+				})
+			}
+		}
+
+		if len(available) == 0 {
+			fmt.Println("  No models discovered from any provider.")
+			return nil
+		}
+
+		// Rank: local first, then by name.
+		sort.Slice(available, func(i, j int) bool {
+			if available[i].local != available[j].local {
+				return available[i].local
+			}
+			return available[i].name < available[j].name
+		})
+
+		// Take top 6 for the suggested chain.
+		chain := available
+		if len(chain) > 6 {
+			chain = chain[:6]
+		}
+
+		fmt.Println("  Suggested fallback chain:\n")
+		for i, m := range chain {
+			role := fmt.Sprintf("fallback%d", i)
+			if i == 0 {
+				role = "primary  "
 			}
 			locality := "cloud"
-			if local {
+			if m.local {
 				locality = "local"
 			}
-			fmt.Printf("  %-35s score=%.3f  %s  %s\n", model, score, locality, status)
+			fmt.Printf("  %-10s %s  (%s)\n", role, m.name, locality)
 		}
+
+		// Print TOML snippet.
+		fmt.Println("\n  TOML:\n")
+		if len(chain) > 0 {
+			fmt.Printf("  [models]\n")
+			fmt.Printf("  primary = %q\n", chain[0].name)
+			if len(chain) > 1 {
+				var fbs []string
+				for _, m := range chain[1:] {
+					fbs = append(fbs, fmt.Sprintf("%q", m.name))
+				}
+				fmt.Printf("  fallbacks = [%s]\n", strings.Join(fbs, ", "))
+			}
+		}
+		fmt.Println()
 		return nil
 	},
 }
