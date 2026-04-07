@@ -71,6 +71,17 @@ type Config struct {
 	PostTurnIngest     bool // Background memory ingestion after turn
 	NicknameRefinement bool // Background LLM-driven session naming
 
+	// Model routing overrides.
+	ModelOverride    string // Force a specific model, bypassing router
+	PreferLocalModel bool   // Prefer local models over cloud when quality is comparable
+
+	// Task/planner controls.
+	TaskOperatingState     string // Operator-injected task context (e.g., "maintenance")
+	BackgroundBudget       int    // Token budget for background/low-priority turns
+	CronDelegationWrap     bool   // Wrap cron-triggered turns in delegation context
+	BotCommandDispatch     bool   // Dispatch bot commands to tool executor directly
+	SessionNicknameOverride string // Override auto-generated session nickname
+
 	// Output.
 	InjectDiagnostics bool   // Inject diagnostics metadata into system prompt
 	ChannelLabel      string // Human-readable label for logging/cost tracking
