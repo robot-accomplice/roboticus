@@ -14,6 +14,20 @@ const (
 	DecompSpecialistProposal                              // Propose specialist creation
 )
 
+// String returns the decision name.
+func (d DecompositionDecision) String() string {
+	switch d {
+	case DecompCentralized:
+		return "centralized"
+	case DecompDelegated:
+		return "delegated"
+	case DecompSpecialistProposal:
+		return "specialist_proposal"
+	default:
+		return "unknown"
+	}
+}
+
 // DecompositionResult holds the gate evaluation result.
 type DecompositionResult struct {
 	Decision  DecompositionDecision

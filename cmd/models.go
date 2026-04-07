@@ -178,7 +178,7 @@ var modelsScanCmd = &cobra.Command{
 				fmt.Print("  Print TOML snippet instead? [Y/n] ")
 				fmt.Scanln(&input)
 				if input == "" || strings.ToLower(input) == "y" || strings.ToLower(input) == "yes" {
-					fmt.Println("\n  [models]")
+					fmt.Println("  [models]")
 					if len(allDiscovered) > 0 {
 						fmt.Printf("  primary = %q\n", allDiscovered[0])
 					}
@@ -413,7 +413,8 @@ var modelsSuggestCmd = &cobra.Command{
 by locality (local first) and cost (cheapest first), then outputs a
 suggested primary + fallback chain with ready-to-paste TOML config.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("\n  Scanning for available models...\n")
+		fmt.Println()
+		fmt.Println("  Scanning for available models...")
 
 		config, err := apiGet("/api/config")
 		if err != nil {
@@ -468,7 +469,7 @@ suggested primary + fallback chain with ready-to-paste TOML config.`,
 			chain = chain[:6]
 		}
 
-		fmt.Println("  Suggested fallback chain:\n")
+		fmt.Println("  Suggested fallback chain:")
 		for i, m := range chain {
 			role := fmt.Sprintf("fallback%d", i)
 			if i == 0 {
@@ -482,7 +483,8 @@ suggested primary + fallback chain with ready-to-paste TOML config.`,
 		}
 
 		// Print TOML snippet.
-		fmt.Println("\n  TOML:\n")
+		fmt.Println()
+		fmt.Println("  TOML:")
 		if len(chain) > 0 {
 			fmt.Printf("  [models]\n")
 			fmt.Printf("  primary = %q\n", chain[0].name)
@@ -535,7 +537,7 @@ exercises each model across multiple test prompts, and reports pass/fail results
 This re-establishes the metascore quality baseline from scratch.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Step 1: Discover configured models.
-		fmt.Println("\n  Step 1: Discovering configured models...")
+		fmt.Println("  Step 1: Discovering configured models...")
 		config, err := apiGet("/api/config")
 		if err != nil {
 			return fmt.Errorf("cannot reach API: %w", err)
@@ -579,7 +581,7 @@ This re-establishes the metascore quality baseline from scratch.`,
 		}
 
 		// Step 3: Flush all scores.
-		fmt.Println("\n  Step 2: Flushing all quality scores...")
+		fmt.Println("  Step 2: Flushing all quality scores...")
 		resetData, err := apiPost("/api/models/reset", nil)
 		if err != nil {
 			return fmt.Errorf("failed to reset scores: %w", err)
@@ -588,7 +590,8 @@ This re-establishes the metascore quality baseline from scratch.`,
 		fmt.Printf("  Cleared %.0f observation entries.\n", cleared)
 
 		// Step 4: Exercise each model.
-		fmt.Println("\n  Step 3: Exercising models...\n")
+		fmt.Println()
+		fmt.Println("  Step 3: Exercising models...")
 		type result struct {
 			model string
 			pass  int
@@ -633,7 +636,7 @@ This re-establishes the metascore quality baseline from scratch.`,
 		}
 
 		// Step 5: Summary.
-		fmt.Println("  Baseline Results:\n")
+		fmt.Println("  Baseline Results:")
 		fmt.Printf("  %-35s %-6s %-6s %s\n", "MODEL", "PASS", "FAIL", "STATUS")
 		fmt.Println("  " + "─────────────────────────────────── ────── ────── ──────")
 		for _, r := range results {

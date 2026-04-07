@@ -186,7 +186,7 @@ func TestGenerateRecommendations_DelegatesToAnalysis(t *testing.T) {
 
 func TestGetWorkspaceState(t *testing.T) {
 	store := testutil.TempStore(t)
-	handler := GetWorkspaceState(store)
+	handler := GetWorkspaceState(store, testConfig())
 	req := httptest.NewRequest("GET", "/api/workspace/state", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)

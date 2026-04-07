@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/rs/zerolog/log"
 
@@ -65,6 +66,8 @@ type Pipeline struct {
 	streamer  StreamPreparer
 	guards    *GuardChain
 	bgWorker  *core.BackgroundWorker
+	dedup     *DedupTracker
+	tasks     *TaskTracker
 }
 
 // PipelineDeps bundles dependencies for the Pipeline.
@@ -100,6 +103,8 @@ func New(deps PipelineDeps) *Pipeline {
 		streamer:  deps.Streamer,
 		guards:    deps.Guards,
 		bgWorker:  bgw,
+		dedup:     NewDedupTracker(60 * time.Second),
+		tasks:     NewTaskTracker(),
 	}
 }
 
@@ -113,13 +118,15 @@ func RunPipeline(ctx context.Context, p Runner, cfg Config, input Input) (*Outco
 // Stage order:
 //  1. Input validation
 //  2. Injection defense (L1 score, L2 sanitize)
-//  3. Session resolution
-//  4. Short-followup expansion
-//  5. User message storage
-//  6. Authority resolution
-//  7. Skill-first fulfillment
-//  8. Shortcut dispatch -> Inference
-//  9. Guard chain -> Post-turn ingest -> Response
+//  3. Dedup tracking (reject concurrent identical requests)
+//  4. Session resolution
+//  5. Short-followup expansion
+//  6. User message storage
+//  7. Authority resolution
+//  8. Decomposition gate (classify + potentially delegate)
+//  9. Skill-first fulfillment
+//  10. Shortcut dispatch -> Inference
+//  11. Guard chain -> Post-turn ingest -> Response
 func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, error) {
 	tr := NewTraceRecorder()
 
@@ -152,7 +159,25 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 	}
 	tr.EndSpan("ok")
 
-	// Stage 3: Session resolution.
+	// Stage 3: Dedup tracking — reject concurrent identical requests.
+	var dedupFP string
+	if cfg.DedupTracking && p.dedup != nil {
+		tr.BeginSpan("dedup_check")
+		dedupFP = Fingerprint(input.Content, input.AgentID, input.SessionID)
+		if !p.dedup.CheckAndTrack(dedupFP) {
+			tr.EndSpan("rejected")
+			return nil, core.NewError(core.ErrConfig, "duplicate request already in flight")
+		}
+		defer p.dedup.Release(dedupFP)
+		tr.EndSpan("ok")
+	}
+
+	// Create task for lifecycle tracking.
+	taskID := db.NewID()
+	task := p.tasks.Create(taskID, input.SessionID, input.Content)
+	_ = task
+
+	// Stage 4: Session resolution.
 	tr.BeginSpan("session_resolution")
 	session, err := p.resolveSession(ctx, cfg, input)
 	if err != nil {
@@ -190,7 +215,25 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 	tr.Annotate("authority", authority.String())
 	tr.EndSpan("ok")
 
-	// Stage 7: Skill-first fulfillment.
+	// Stage 7: Decomposition gate — classify and potentially delegate.
+	tr.BeginSpan("decomposition_gate")
+	p.tasks.Start(taskID, msgID)
+	decomp := EvaluateDecomposition(content, len(session.Messages()))
+	p.tasks.Classify(taskID, TaskClassification(decomp.Decision))
+	tr.Annotate("decision", decomp.Decision.String())
+	if decomp.Decision == DecompDelegated && len(decomp.Subtasks) > 0 {
+		tr.Annotate("subtask_count", len(decomp.Subtasks))
+		// Record the delegation in task state. The executor will handle
+		// actual subagent dispatch if the agent has orchestration tools.
+		p.tasks.Delegate(taskID, input.AgentID, nil)
+		log.Info().
+			Str("task", taskID).
+			Int("subtasks", len(decomp.Subtasks)).
+			Msg("task delegated via decomposition gate")
+	}
+	tr.EndSpan("ok")
+
+	// Stage 8: Skill-first fulfillment.
 	tr.BeginSpan("skill_dispatch")
 	if cfg.SkillFirstEnabled && authority == core.AuthorityCreator && p.skills != nil {
 		if result := p.skills.TryMatch(ctx, session, content); result != nil {
@@ -234,6 +277,10 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 	tr.EndSpan("ok")
 
 	p.storeTrace(ctx, tr, session.ID, msgID, cfg.ChannelLabel)
+
+	// Mark task completed.
+	p.tasks.Complete(taskID)
+
 	return outcome, nil
 }
 
