@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -93,22 +94,32 @@ func initLogger() {
 		zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339},
 	).With().Timestamp().Caller().Logger()
 
-	// Log level: check ROBOTICUS_LOG_LEVEL env, --log-level flag, then default to info.
+	// Log level priority: env var > config file > default.
+	// Env var takes precedence so operators can override without editing config.
 	level := os.Getenv("ROBOTICUS_LOG_LEVEL")
+	if level == "" {
+		level = viper.GetString("agent.log_level")
+	}
 	if level == "" {
 		level = "info"
 	}
-	switch level {
+	zerolog.SetGlobalLevel(parseLogLevel(level))
+}
+
+func parseLogLevel(s string) zerolog.Level {
+	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "trace":
-		zerolog.SetGlobalLevel(zerolog.TraceLevel)
+		return zerolog.TraceLevel
 	case "debug":
-		zerolog.SetGlobalLevel(zerolog.DebugLevel)
+		return zerolog.DebugLevel
 	case "warn", "warning":
-		zerolog.SetGlobalLevel(zerolog.WarnLevel)
+		return zerolog.WarnLevel
 	case "error":
-		zerolog.SetGlobalLevel(zerolog.ErrorLevel)
+		return zerolog.ErrorLevel
+	case "fatal":
+		return zerolog.FatalLevel
 	default:
-		zerolog.SetGlobalLevel(zerolog.InfoLevel)
+		return zerolog.InfoLevel
 	}
 }
 
