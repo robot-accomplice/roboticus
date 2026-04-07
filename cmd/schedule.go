@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -70,12 +71,40 @@ var cronDeleteCmd = &cobra.Command{
 	},
 }
 
+// resolveJobID resolves a job argument to a UUID. If the argument contains
+// a dash it is assumed to be a UUID already; otherwise it is treated as a
+// job name and resolved via the API.
+func resolveJobID(arg string) (string, error) {
+	if strings.Contains(arg, "-") {
+		return arg, nil
+	}
+	// Treat as a name — look up from the jobs list.
+	data, err := apiGet("/api/cron/jobs")
+	if err != nil {
+		return "", fmt.Errorf("failed to list jobs for name resolution: %w", err)
+	}
+	jobs, _ := data["jobs"].([]any)
+	for _, j := range jobs {
+		jm, _ := j.(map[string]any)
+		if name, _ := jm["name"].(string); name == arg {
+			if id, _ := jm["id"].(string); id != "" {
+				return id, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("no cron job found with name %q", arg)
+}
+
 var cronRunCmd = &cobra.Command{
-	Use:   "run [id]",
-	Short: "Trigger a cron job immediately",
+	Use:   "run [id-or-name]",
+	Short: "Trigger a cron job immediately (accepts UUID or job name)",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		data, err := apiPost("/api/cron/jobs/"+args[0]+"/run", nil)
+		id, err := resolveJobID(args[0])
+		if err != nil {
+			return err
+		}
+		data, err := apiPost("/api/cron/jobs/"+id+"/run", nil)
 		if err != nil {
 			return err
 		}
@@ -97,13 +126,39 @@ var cronHistoryCmd = &cobra.Command{
 	},
 }
 
+var cronRecoverCmd = &cobra.Command{
+	Use:   "recover",
+	Short: "Recover paused or failed cron jobs",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		data, err := apiGet("/api/cron/jobs")
+		if err != nil {
+			return err
+		}
+		jobs, _ := data["jobs"].([]any)
+		recovered := 0
+		for _, j := range jobs {
+			jm, _ := j.(map[string]any)
+			enabled, _ := jm["enabled"].(bool)
+			id, _ := jm["id"].(string)
+			if !enabled && id != "" {
+				_, err := apiPost("/api/cron/jobs/"+id+"/run", nil)
+				if err == nil {
+					recovered++
+				}
+			}
+		}
+		fmt.Printf("Recovered %d paused/failed job(s)\n", recovered)
+		return nil
+	},
+}
+
 var scheduleCmd = &cobra.Command{
 	Use:   "schedule",
 	Short: "Manage scheduled jobs (alias for cron)",
 }
 
 func init() {
-	cronCmd.AddCommand(cronListCmd, cronCreateCmd, cronDeleteCmd, cronRunCmd, cronHistoryCmd)
+	cronCmd.AddCommand(cronListCmd, cronCreateCmd, cronDeleteCmd, cronRunCmd, cronHistoryCmd, cronRecoverCmd)
 	rootCmd.AddCommand(cronCmd)
 
 	// Register schedule as an alias command with duplicated subcommands.
@@ -126,8 +181,8 @@ func init() {
 			RunE:  cronDeleteCmd.RunE,
 		},
 		&cobra.Command{
-			Use:   "run [id]",
-			Short: "Trigger a scheduled job immediately",
+			Use:   "run [id-or-name]",
+			Short: "Trigger a scheduled job immediately (accepts UUID or job name)",
 			Args:  cobra.ExactArgs(1),
 			RunE:  cronRunCmd.RunE,
 		},
@@ -135,6 +190,11 @@ func init() {
 			Use:   "history",
 			Short: "Show recent scheduled job run history",
 			RunE:  cronHistoryCmd.RunE,
+		},
+		&cobra.Command{
+			Use:   "recover",
+			Short: "Recover paused or failed scheduled jobs",
+			RunE:  cronRecoverCmd.RunE,
 		},
 	)
 	rootCmd.AddCommand(scheduleCmd)

@@ -47,7 +47,12 @@ var authStatusCmd = &cobra.Command{
 
 var authLoginCmd = &cobra.Command{
 	Use:   "login <provider>",
-	Short: "Set API key for a provider",
+	Short: "Set API key for a provider (stores in encrypted keystore)",
+	Long: `Set an API key for a provider. The key is stored in the encrypted keystore.
+
+Note: The Go implementation uses API key authentication. For providers
+that support OAuth (e.g. Anthropic), obtain an API key from the provider's
+dashboard and enter it here. OAuth PKCE flows are not yet supported.`,
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		provider := args[0]

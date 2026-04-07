@@ -1,7 +1,12 @@
 package routes
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -10,6 +15,59 @@ import (
 
 	"roboticus/internal/db"
 )
+
+// getOrCreateDeviceIdentity returns the persistent device identity, creating
+// one on first call. It stores device_id, device_public_key, and
+// device_private_key in the identity table.
+func getOrCreateDeviceIdentity(r *http.Request, store *db.Store) (deviceID, publicKeyHex, fingerprint string, err error) {
+	ctx := r.Context()
+
+	// Try to load existing identity.
+	var existing string
+	row := store.QueryRowContext(ctx, `SELECT value FROM identity WHERE key = 'device_id'`)
+	if row.Scan(&existing) == nil && existing != "" {
+		deviceID = existing
+		row2 := store.QueryRowContext(ctx, `SELECT value FROM identity WHERE key = 'device_public_key'`)
+		if err2 := row2.Scan(&publicKeyHex); err2 != nil {
+			return "", "", "", fmt.Errorf("device_id exists but public key missing: %w", err2)
+		}
+		pubBytes, decErr := hex.DecodeString(publicKeyHex)
+		if decErr != nil {
+			return "", "", "", fmt.Errorf("invalid public key hex: %w", decErr)
+		}
+		hash := sha256.Sum256(pubBytes)
+		fingerprint = hex.EncodeToString(hash[:])
+		return deviceID, publicKeyHex, fingerprint, nil
+	}
+
+	// Generate new identity.
+	pub, priv, genErr := ed25519.GenerateKey(rand.Reader)
+	if genErr != nil {
+		return "", "", "", fmt.Errorf("failed to generate ed25519 keypair: %w", genErr)
+	}
+
+	hash := sha256.Sum256([]byte(pub))
+	deviceID = fmt.Sprintf("dev-%s", hex.EncodeToString(hash[:8]))
+	publicKeyHex = hex.EncodeToString([]byte(pub))
+	privateKeyHex := hex.EncodeToString([]byte(priv))
+	fingerprint = hex.EncodeToString(hash[:])
+
+	// Persist all three values.
+	for _, kv := range [][2]string{
+		{"device_id", deviceID},
+		{"device_public_key", publicKeyHex},
+		{"device_private_key", privateKeyHex},
+	} {
+		_, err = store.ExecContext(ctx,
+			`INSERT INTO identity (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+			kv[0], kv[1])
+		if err != nil {
+			return "", "", "", fmt.Errorf("failed to persist identity key %q: %w", kv[0], err)
+		}
+	}
+
+	return deviceID, publicKeyHex, fingerprint, nil
+}
 
 // GetRuntimeSurfaces returns the registered runtime surfaces (agent capabilities).
 func GetRuntimeSurfaces() http.HandlerFunc {
@@ -177,11 +235,19 @@ func GetRuntimeDevices(store *db.Store) http.HandlerFunc {
 		if devices == nil {
 			devices = []map[string]any{}
 		}
+		identity := map[string]any{"device_id": "unknown"}
+		devID, pubKey, fp, idErr := getOrCreateDeviceIdentity(r, store)
+		if idErr != nil {
+			log.Warn().Err(idErr).Msg("runtime: failed to resolve device identity")
+		} else {
+			identity["device_id"] = devID
+			identity["public_key_hex"] = pubKey
+			identity["fingerprint"] = fp
+		}
+
 		writeJSON(w, http.StatusOK, map[string]any{
-			"identity": map[string]any{
-				"device_id": "roboticus-local-device",
-			},
-			"devices": devices,
+			"identity": identity,
+			"devices":  devices,
 		})
 	}
 }

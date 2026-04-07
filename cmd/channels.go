@@ -24,10 +24,12 @@ var channelsListCmd = &cobra.Command{
 			printJSON(data)
 			return nil
 		}
+		fmt.Println("Channels:")
 		for _, c := range channels {
 			cm, _ := c.(map[string]any)
-			fmt.Printf("  %-15v status=%-8v messages=%v\n",
-				cm["platform"], cm["status"], cm["message_count"])
+			platform, _ := cm["platform"].(string)
+			status, _ := cm["status"].(string)
+			fmt.Printf("  %-15s %s\n", platform, status)
 		}
 		return nil
 	},

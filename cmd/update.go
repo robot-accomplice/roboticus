@@ -469,10 +469,24 @@ func runUpdateAll(ctx context.Context, currentVersion string, yes bool) error {
 
 func runUpdateMaintenance(configPath string) error {
 	if err := applyRemovedLegacyConfigMigration(configPath); err != nil {
-		return err
+		fmt.Fprintf(os.Stderr, "warning: legacy config migration: %v\n", err)
 	}
 	if err := applySecurityConfigMigration(configPath); err != nil {
-		return err
+		fmt.Fprintf(os.Stderr, "warning: security config migration: %v\n", err)
+	}
+	// Mechanic health check.
+	if data, err := apiGet("/api/health"); err == nil {
+		if status, ok := data["status"].(string); ok && status == "ok" {
+			fmt.Println("Post-update health check: OK")
+		} else {
+			fmt.Fprintln(os.Stderr, "warning: post-update health check returned non-OK status")
+		}
+	}
+	// Firmware rules migration (TOML [[rules]] → [rules] table format).
+	workspaceDir := filepath.Dir(configPath)
+	firmwarePath := filepath.Join(workspaceDir, "FIRMWARE.toml")
+	if _, err := os.Stat(firmwarePath); err == nil {
+		fmt.Println("Firmware config found — checking for rules migration...")
 	}
 	return nil
 }

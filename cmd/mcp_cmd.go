@@ -8,30 +8,37 @@ import (
 
 var mcpCmd = &cobra.Command{
 	Use:   "mcp",
-	Short: "Manage MCP (Model Context Protocol) connections",
+	Short: "Manage MCP (Model Context Protocol) servers",
 }
 
 var mcpListCmd = &cobra.Command{
 	Use:   "list",
-	Short: "List active MCP connections",
+	Short: "List configured MCP servers",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		data, err := apiGet("/api/mcp/connections")
+		data, err := apiGet("/api/mcp/servers")
 		if err != nil {
 			return err
 		}
-		connections, ok := data["connections"].([]any)
+		servers, ok := data["servers"].([]any)
 		if !ok {
 			printJSON(data)
 			return nil
 		}
-		if len(connections) == 0 {
-			fmt.Println("No MCP connections.")
+		if len(servers) == 0 {
+			fmt.Println("No MCP servers configured.")
 			return nil
 		}
-		for _, c := range connections {
-			cm, _ := c.(map[string]any)
-			fmt.Printf("  %-20v status=%v  tools=%v\n",
-				cm["name"], cm["status"], cm["tools_count"])
+		for _, s := range servers {
+			sm, _ := s.(map[string]any)
+			name, _ := sm["name"].(string)
+			enabled, _ := sm["enabled"].(bool)
+			connected, _ := sm["connected"].(bool)
+			toolCount := sm["tool_count"]
+			if toolCount == nil {
+				toolCount = sm["tools_count"]
+			}
+			fmt.Printf("  %-20s  enabled=%-5t  connected=%-5t  tools=%v\n",
+				name, enabled, connected, toolCount)
 		}
 		return nil
 	},
@@ -39,7 +46,7 @@ var mcpListCmd = &cobra.Command{
 
 var mcpConnectCmd = &cobra.Command{
 	Use:   "connect [name]",
-	Short: "Connect to an MCP server by name",
+	Short: "Connect to an MCP server by name (runtime-only, does not persist across restarts)",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		data, err := apiPost("/api/mcp/connect", map[string]any{
@@ -56,7 +63,7 @@ var mcpConnectCmd = &cobra.Command{
 
 var mcpDisconnectCmd = &cobra.Command{
 	Use:   "disconnect [name]",
-	Short: "Disconnect from an MCP server",
+	Short: "Disconnect from an MCP server (runtime-only, does not persist across restarts)",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		data, err := apiPost("/api/mcp/disconnect/"+args[0], nil)
@@ -77,39 +84,11 @@ var mcpShowCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
-		data, err := apiGet("/api/mcp/tools")
+		data, err := apiGet("/api/mcp/servers/" + name)
 		if err != nil {
-			return err
+			return fmt.Errorf("MCP server %q not found or unavailable: %w", name, err)
 		}
-
-		// Filter tools by server name.
-		if tools, ok := data["tools"].([]any); ok {
-			var matched []any
-			for _, t := range tools {
-				tm, _ := t.(map[string]any)
-				if tm["server"] == name || tm["server_name"] == name {
-					matched = append(matched, tm)
-				}
-			}
-			if len(matched) > 0 {
-				fmt.Printf("MCP server %q — %d tool(s):\n", name, len(matched))
-				printJSON(matched)
-				return nil
-			}
-		}
-
-		// If no tools matched, try showing the raw response filtered differently.
-		if servers, ok := data["servers"].([]any); ok {
-			for _, s := range servers {
-				sm, _ := s.(map[string]any)
-				if sm["name"] == name {
-					printJSON(sm)
-					return nil
-				}
-			}
-		}
-
-		fmt.Printf("MCP server %q not found or has no tools.\n", name)
+		printJSON(data)
 		return nil
 	},
 }
@@ -122,37 +101,18 @@ var mcpTestCmd = &cobra.Command{
 		name := args[0]
 		fmt.Printf("Testing MCP server %q...\n", name)
 
-		// Step 1: Connect.
-		_, err := apiPost("/api/mcp/connect", map[string]any{
-			"name": name,
-		})
+		data, err := apiPost("/api/mcp/servers/"+name+"/test", nil)
 		if err != nil {
-			fmt.Printf("  FAIL: connection failed: %v\n", err)
+			fmt.Printf("  FAIL: %v\n", err)
 			return nil
 		}
-		fmt.Println("  connected")
 
-		// Step 2: Check tools.
-		data, err := apiGet("/api/mcp/tools")
-		if err != nil {
-			fmt.Printf("  WARN: could not list tools: %v\n", err)
+		if ok, _ := data["ok"].(bool); ok {
+			fmt.Printf("MCP server %q: OK\n", name)
 		} else {
-			toolCount := 0
-			if tools, ok := data["tools"].([]any); ok {
-				for _, t := range tools {
-					tm, _ := t.(map[string]any)
-					if tm["server"] == name || tm["server_name"] == name {
-						toolCount++
-					}
-				}
-			}
-			fmt.Printf("  tools available: %d\n", toolCount)
+			fmt.Printf("MCP server %q: test returned unexpected result\n", name)
 		}
-
-		// Step 3: Disconnect.
-		_, _ = apiPost("/api/mcp/disconnect/"+name, nil)
-		fmt.Println("  disconnected")
-		fmt.Printf("MCP server %q: OK\n", name)
+		printJSON(data)
 		return nil
 	},
 }

@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -61,16 +62,46 @@ var pluginsInfoCmd = &cobra.Command{
 
 var pluginsInstallCmd = &cobra.Command{
 	Use:   "install <SOURCE>",
-	Short: "Install a plugin from the catalog",
-	Args:  cobra.ExactArgs(1),
+	Short: "Install a plugin from the catalog or a local directory",
+	Long: `Install a plugin. If SOURCE contains a path separator (/ or \),
+it is treated as a local directory and plugin.json is read and posted.
+Otherwise, SOURCE is treated as a catalog name.`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		source := args[0]
+
+		// Detect local directory install.
+		if strings.Contains(source, "/") || strings.Contains(source, `\`) {
+			pluginJSON := filepath.Join(source, "plugin.json")
+			raw, err := os.ReadFile(pluginJSON)
+			if err != nil {
+				return fmt.Errorf("failed to read %s: %w", pluginJSON, err)
+			}
+			var payload map[string]any
+			if err := json.Unmarshal(raw, &payload); err != nil {
+				return fmt.Errorf("invalid plugin.json: %w", err)
+			}
+			// Include the source path so the server knows where the plugin lives.
+			absPath, _ := filepath.Abs(source)
+			payload["source_path"] = absPath
+
+			data, err := apiPost("/api/plugins/install", payload)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("Plugin installed from local directory %q.\n", source)
+			printJSON(data)
+			return nil
+		}
+
+		// Catalog install (existing behavior).
 		data, err := apiPost("/api/plugins/catalog/install", map[string]any{
-			"name": args[0],
+			"name": source,
 		})
 		if err != nil {
 			return err
 		}
-		fmt.Printf("Plugin %q installed.\n", args[0])
+		fmt.Printf("Plugin %q installed.\n", source)
 		printJSON(data)
 		return nil
 	},
@@ -78,12 +109,32 @@ var pluginsInstallCmd = &cobra.Command{
 
 var pluginsUninstallCmd = &cobra.Command{
 	Use:   "uninstall <NAME>",
-	Short: "Uninstall a plugin (requires server restart)",
+	Short: "Uninstall a plugin",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Printf("To uninstall plugin %q:\n", args[0])
-		fmt.Println("  1. Remove the plugin directory from your plugins folder")
-		fmt.Println("  2. Restart the roboticus server")
+		name := args[0]
+
+		// Step 1: Disable the plugin via the API.
+		_, err := apiPost("/api/plugins/"+name+"/disable", nil)
+		if err != nil {
+			fmt.Printf("Warning: could not disable plugin %q via API: %v\n", name, err)
+		}
+
+		// Step 2: Remove the plugin directory.
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("failed to determine home directory: %w", err)
+		}
+		pluginDir := filepath.Join(home, ".roboticus", "plugins", name)
+		if _, statErr := os.Stat(pluginDir); os.IsNotExist(statErr) {
+			fmt.Printf("Plugin directory %q does not exist; nothing to remove.\n", pluginDir)
+			return nil
+		}
+		if err := os.RemoveAll(pluginDir); err != nil {
+			return fmt.Errorf("failed to remove plugin directory %q: %w", pluginDir, err)
+		}
+
+		fmt.Printf("Plugin %q uninstalled (disabled and directory removed).\n", name)
 		return nil
 	},
 }
