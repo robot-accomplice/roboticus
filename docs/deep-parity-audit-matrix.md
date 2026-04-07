@@ -26,6 +26,7 @@ Each subsystem should be classified as:
 
 | Area | Rust Baseline | Go Surface | Status | Key Behavioral Questions |
 | --- | --- | --- | --- | --- |
+| **Core Pipeline** | `crates/roboticus-pipeline/src/run.rs` | `internal/pipeline/pipeline.go` | `aligned` | Does Go pipeline match Rust's 11-stage contract with dedup, task state, decomposition, guard context, post-turn ingest, and compaction? |
 | Update orchestration | `crates/roboticus-cli/src/cli/update/` | `cmd/update.go` | `aligned` | Does `update all` perform the full binary/provider/skills/maintenance/restart flow and persist resumable state? |
 | Models CLI | `crates/roboticus-cli/src/cli/admin/models.rs` | `cmd/models.go` | `aligned` | Does Go support real scan, exercise, suggest, reset, and baseline flows, or just thin config/API wrappers? |
 | Sessions CLI/API | `crates/roboticus-cli/src/cli/sessions.rs`, `crates/roboticus-api/src/api/routes/sessions.rs` | `cmd/sessions.go`, `internal/api/routes/sessions.go` | `aligned` | Are create/list/show/export/analyze flows equivalent in depth, output semantics, and side effects? |

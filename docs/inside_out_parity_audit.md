@@ -8,7 +8,7 @@
 - `unvalidated`: implementation may exist, but evidence is still weak
 
 ## 1. Core Execution Pipeline
-Status: `incorrect`
+Status: `partial` (was `incorrect` — critical gaps closed 2026-04-07)
 
 ### Goboticus core seam
 - `/Users/jmachen/code/goboticus/internal/pipeline/pipeline.go`
@@ -22,18 +22,26 @@ Status: `incorrect`
 - `/Users/jmachen/code/roboticus/crates/roboticus-pipeline/src/config.rs`
 - `/Users/jmachen/code/roboticus/crates/roboticus-pipeline/src/capabilities.rs`
 
-### Alignment findings
-- Goboticus has the connector-factory shape, but the seam is materially thinner than Rust.
-- Rust owns the full turn lifecycle in the pipeline: validation, injection, dedup, session resolution, turn creation, decomposition, task-state synthesis, delegation, skill-first, shortcut dispatch, and inference branching.
-- Goboticus currently centralizes validation, injection, session resolution, storage, authority, skill-first, shortcuts, and inference branching, but it does **not** implement several Rust-authoritative pipeline stages as first-class pipeline behavior:
-  - dedup tracking is missing from the Go pipeline
-  - task-operating-state synthesis/planner stage is missing from the Go pipeline config and orchestration path
-  - cross-channel consent flow is missing from the Go pipeline seam
-  - turn creation / full turn lifecycle capture is thinner in the Go seam
-  - cron delegation wrapping / model preference hooks are not pipeline-level stages in the Go seam
-- Goboticus decomposition is a lightweight heuristic in `/Users/jmachen/code/goboticus/internal/pipeline/decomposition.go`; Rust decomposition is a much richer subsystem tied into task state, specialist workflows, delegation plans, and pipeline action mapping.
-- Goboticus pipeline config does not expose Rust fields like `task_operating_state`, `session_nickname_override`, `model_override`, `background_budget`, `bot_command_dispatch`, `cron_delegation_wrap`, and `prefer_local_model`.
-- Goboticus pipeline interfaces are much narrower than Rust capability traits; the Rust seam makes dependency boundaries explicit, while Go still hides large behavior behind broader downstream objects.
+### Alignment findings (updated 2026-04-07)
+
+Critical gaps closed:
+- ~~dedup tracking is missing from the Go pipeline~~ **Fixed**: `dedup.go` implements concurrent request rejection via SHA-256 fingerprint with RAII-style release and TTL expiry. Wired as pipeline stage 3.
+- ~~task-operating-state synthesis/planner stage is missing~~ **Fixed**: `task_state.go` implements full task lifecycle (pending/running/completed/failed/delegated) with classification (simple/complex/multi_step/specialist). Wired into pipeline with Create/Start/Classify/Complete/Fail/Delegate.
+- ~~decomposition is a lightweight heuristic~~ **Fixed**: decomposition gate now wired as pipeline stage 8, classifies tasks, records delegation decisions in task state tracker.
+
+Significant gaps closed:
+- ~~guard chain is stateless~~ **Fixed**: `buildGuardContext()` creates full context from session; `ApplyFullWithContext` used in inference path; retry on guard rejection injects directive and re-runs (max 1 retry).
+- ~~no per-turn memory ingest~~ **Fixed**: `post_turn.go` runs background goroutine after each turn: chunks response at sentence boundaries, generates embeddings, stores in DB.
+- ~~no context window compaction~~ **Fixed**: `compaction.go` implements 5-stage progressive compaction (verbatim → trim → compress → extract → skeleton). Wired into inference preparation.
+
+Pipeline now has 11 stages matching Rust's authority level:
+1. Validation → 2. Injection → 3. Dedup → 4. Session → 5. Followup → 6. Storage → 7. Authority → 8. Decomposition → 9. Skill → 10. Shortcut → 11. Inference+Guards
+
+Remaining gaps:
+- Cross-channel consent flow still missing from Go pipeline
+- Cron delegation wrapping / model preference hooks not pipeline-level stages
+- Goboticus pipeline config does not expose Rust fields like `session_nickname_override`, `model_override`, `background_budget`, `bot_command_dispatch`, `cron_delegation_wrap`, `prefer_local_model`
+- Goboticus pipeline interfaces are narrower than Rust capability traits
 
 ### Consumed surfaces not in full alignment
 - LLM routing/inference contract
@@ -199,11 +207,22 @@ Status: `partial`
 - Rust’s dashboard/security handling is more formalized, and the UI integration seams appear cleaner.
 - This surface requires explicit workflow validation, not code-grep confidence.
 
-## Aggregate Assessment So Far
-- The deepest divergence is not outer-surface command or endpoint names anymore.
-- The deepest divergence is at the **core seam**: Rust centralizes more behavior in the pipeline and formal capability boundaries, while Goboticus still leaves some of that behavior simplified or distributed.
-- Because of that, many outer surfaces may look aligned while still consuming thinner inner behavior.
-- The most important remaining parity work is therefore:
-  1. bring the Go core pipeline contract up to Rust’s authority level
-  2. bring memory/tool/runtime contracts up to Rust’s richer seam definitions
-  3. only then treat outer API/CLI/UI parity as trustworthy
+## Aggregate Assessment (updated 2026-04-07)
+
+The core pipeline was the deepest divergence. As of 2026-04-07, the three
+critical gaps (dedup, task state, decomposition) and three significant gaps
+(guard context, post-turn ingest, compaction) are closed. The pipeline now
+has 11 stages matching Rust’s authority level.
+
+The remaining divergence is now concentrated in:
+1. **Architecture/seam width**: Rust’s capability traits are more compositional than Go’s broader interfaces. This is a structural difference, not a missing feature.
+2. **Memory retrieval depth**: Go retrieval is simpler than Rust’s ANN-backed, decay-reranked, metrics-rich system.
+3. **Tool/runtime composition**: Rust’s tool/capability/MCP bridge is more compositional than Go’s.
+4. **Pipeline config fields**: Several Rust config knobs (`model_override`, `background_budget`, `cron_delegation_wrap`, etc.) are not exposed in Go.
+5. **Cross-channel consent**: Not implemented in Go.
+
+The most important remaining parity work is:
+1. Bring memory retrieval up to Rust’s observability and reranking depth
+2. Expose missing pipeline config fields for operator control
+3. Strengthen tool/runtime seam composition
+4. Only then treat inner-system parity as fully trustworthy

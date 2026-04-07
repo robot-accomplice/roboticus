@@ -146,6 +146,28 @@ Use that matrix when evaluating parity-sensitive work:
 - Bound ROBOTICUS_CONFIG env var.
 - Updated `docs/deep-parity-audit-matrix.md` with current status.
 
+### 2026-04-07 (continued — pipeline core parity)
+
+- Implemented pipeline dedup tracker (`dedup.go`): concurrent request rejection
+  via SHA-256 fingerprint with RAII-style release and TTL safety net. 8 tests.
+- Implemented task state machine (`task_state.go`): full lifecycle tracking —
+  pending/running/completed/failed/delegated with classification and subtask
+  tracking. 10 tests.
+- Wired decomposition gate into pipeline stage 8: EvaluateDecomposition now
+  classifies tasks and records delegation decisions in the task tracker.
+- Enhanced guard chain with full context: `buildGuardContext()` creates
+  GuardContext from session; `ApplyFullWithContext` used in inference path;
+  retry on guard rejection injects directive and re-runs (max 1 retry).
+- Implemented per-turn memory ingest (`post_turn.go`): background goroutine
+  chunks response at sentence boundaries, generates embeddings, stores in DB.
+  9 tests.
+- Implemented 5-stage context window compaction (`compaction.go`): verbatim →
+  selective trim → semantic compress → topic extract → skeleton. 11 tests.
+- Pipeline now has 11 stages matching Rust's authority level.
+- Updated `docs/inside_out_parity_audit.md` core pipeline status from
+  `incorrect` to `partial` with all critical/significant gaps documented.
+- Added core pipeline to `docs/deep-parity-audit-matrix.md` workboard.
+
 ## Handoff Notes
 
 If interrupted during `RB1`, the next agent should:
