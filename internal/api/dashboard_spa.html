@@ -7677,12 +7677,12 @@
     if (!key) return;
     if (!App._routingProfileDraft) {
       App._routingProfileDraft = App._routingProfileDefaults
-        ? { correctness: App._routingProfileDefaults.correctness, cost: App._routingProfileDefaults.cost, speed: App._routingProfileDefaults.speed }
-        : { correctness: 0.0, cost: 0.0, speed: 0.0 };
+        ? normalizeRoutingProfile(App._routingProfileDefaults)
+        : { efficacy: 0.0, cost: 0.0, availability: 0.0, locality: 0.0, confidence: 0.0, speed: 0.0 };
     }
     App._routingProfileDraft[key] = clamp01(slider.value);
     App._routingProfileDraft = normalizeRoutingProfile(App._routingProfileDraft, key);
-    ['correctness', 'cost', 'speed'].forEach(function(k) {
+    ROUTING_KEYS.forEach(function(k) {
       var valEl = document.getElementById('routing-slider-' + k + '-val');
       if (valEl) valEl.textContent = App._routingProfileDraft[k].toFixed(2);
       var sliderEl = document.getElementById('routing-slider-' + k);
