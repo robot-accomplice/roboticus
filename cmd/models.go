@@ -547,7 +547,7 @@ This re-establishes the metascore quality baseline from scratch.`,
 			if p, ok := models["primary"].(string); ok && p != "" {
 				configured = append(configured, p)
 			}
-			if fbs, ok := models["fallback"].([]any); ok {
+			if fbs, ok := models["fallbacks"].([]any); ok {
 				for _, fb := range fbs {
 					if s, ok := fb.(string); ok && s != "" {
 						configured = append(configured, s)

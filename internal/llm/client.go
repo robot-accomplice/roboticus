@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -36,14 +35,23 @@ type Client struct {
 // NewClient creates a Client for the given provider. It resolves the API key
 // from the environment at construction time, returning an error if the key
 // is required but missing.
+// KeyResolver resolves API keys for providers. When set, the LLM client
+// checks the resolver before falling back to environment variables.
+var KeyResolver func(providerName string) string
+
 func NewClient(p *Provider) (*Client, error) {
 	var apiKey string
-	if p.APIKeyEnv != "" && !p.IsLocal {
-		apiKey = os.Getenv(p.APIKeyEnv)
-		if apiKey == "" {
-			return nil, core.NewError(core.ErrConfig,
-				fmt.Sprintf("env var %s not set for provider %s", p.APIKeyEnv, p.Name))
+	if !p.IsLocal {
+		// Priority: KeyResolver (keystore) → env var → error.
+		if KeyResolver != nil {
+			apiKey = KeyResolver(p.Name)
 		}
+		if apiKey == "" && p.APIKeyEnv != "" {
+			apiKey = os.Getenv(p.APIKeyEnv)
+		}
+		// Non-local providers without a key will fail at request time,
+		// not at construction — this allows the service to start even
+		// when some providers are unconfigured.
 	}
 
 	return &Client{

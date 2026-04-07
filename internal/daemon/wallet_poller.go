@@ -34,6 +34,14 @@ func startWalletPoller(ctx context.Context, cfg *core.Config, store *db.Store, k
 		return
 	}
 
+	// Ensure wallet_balances table exists (handles DBs created before migration 030).
+	_, _ = store.ExecContext(ctx,
+		`CREATE TABLE IF NOT EXISTS wallet_balances (
+			symbol TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '', balance REAL NOT NULL DEFAULT 0.0,
+			contract TEXT NOT NULL DEFAULT '', decimals INTEGER NOT NULL DEFAULT 18,
+			is_native INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL DEFAULT (datetime('now')))`)
+
+
 	// Check for plaintext wallet and encrypt it on first run.
 	result, err := wallet.MigratePlaintextWallet(cfg.Wallet.Path)
 	if err != nil {

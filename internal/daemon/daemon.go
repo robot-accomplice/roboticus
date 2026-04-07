@@ -345,6 +345,24 @@ func New(cfg *core.Config) (*Daemon, error) {
 	}
 	bgWorker := core.NewBackgroundWorker(32)
 
+	// Open keystore early so LLM providers can resolve API keys from it.
+	ks, ksErr := core.OpenKeystoreMachine()
+	if ksErr != nil {
+		log.Warn().Err(ksErr).Msg("keystore: failed to open, provider key management unavailable")
+	}
+
+	// Wire keystore into LLM key resolution.
+	if ks != nil && ks.IsUnlocked() {
+		llm.KeyResolver = func(providerName string) string {
+			// Try conventional keystore name: {provider}_api_key.
+			conventional := providerName + "_api_key"
+			if val := ks.GetOrEmpty(conventional); val != "" {
+				return val
+			}
+			return ""
+		}
+	}
+
 	llmSvc, err := llm.NewService(llm.ServiceConfig{
 		Providers: providers,
 		Primary:   cfg.Models.Primary,
@@ -479,12 +497,6 @@ func New(cfg *core.Config) (*Daemon, error) {
 
 	// MCP connection manager.
 	mcpMgr := mcp.NewConnectionManager()
-
-	// Open keystore with machine-id derived passphrase (matches Rust roboticus).
-	ks, err := core.OpenKeystoreMachine()
-	if err != nil {
-		log.Warn().Err(err).Msg("keystore: failed to open, provider key management unavailable")
-	}
 
 	appState := &api.AppState{
 		Store:     store,

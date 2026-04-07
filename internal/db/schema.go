@@ -766,6 +766,16 @@ CREATE TABLE IF NOT EXISTS runtime_settings (
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS wallet_balances (
+    symbol     TEXT PRIMARY KEY,
+    name       TEXT NOT NULL DEFAULT '',
+    balance    REAL NOT NULL DEFAULT 0.0,
+    contract   TEXT NOT NULL DEFAULT '',
+    decimals   INTEGER NOT NULL DEFAULT 18,
+    is_native  INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_cron_jobs_enabled ON cron_jobs(enabled, next_run_at);
 CREATE INDEX IF NOT EXISTS idx_transactions_created ON transactions(created_at DESC);
