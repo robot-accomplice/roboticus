@@ -358,59 +358,50 @@ func probeOpenAI(client *http.Client, baseURL string) []string {
 
 var modelsExerciseCmd = &cobra.Command{
 	Use:   "exercise [model]",
-	Short: "Exercise a model with a test prompt to verify connectivity and quality",
+	Short: "Exercise a model with test prompts to verify connectivity and quality",
 	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		body := map[string]any{"prompt": "Respond with exactly: OK"}
+		prompts := []string{
+			"Respond with exactly: OK",
+			"What is 2 + 2?",
+			"Say hello in one word.",
+		}
+
+		model := ""
 		if len(args) > 0 {
-			body["model"] = args[0]
-		}
-		data, err := apiPost("/api/models/routing-eval", body)
-		if err != nil {
-			return err
+			model = args[0]
 		}
 
-		// Format results.
-		results, ok := data["results"].([]any)
-		if !ok {
-			// Fall back to showing whatever we got in a formatted way.
-			if msg, ok := data["message"].(string); ok {
-				fmt.Println(msg)
-				return nil
+		fmt.Println()
+		pass, fail := 0, 0
+		for _, prompt := range prompts {
+			body := map[string]any{"content": prompt}
+			if model != "" {
+				body["model"] = model
 			}
-			printJSON(data)
-			return nil
-		}
-
-		fmt.Printf("Routing evaluation: %d test(s)\n\n", len(results))
-		passed, failed := 0, 0
-		fmt.Printf("  %-35s %-8s %-10s %s\n", "MODEL", "STATUS", "LATENCY", "NOTES")
-		fmt.Println("  " + "─────────────────────────────────── ──────── ────────── ─────────────────")
-		for _, r := range results {
-			rm, _ := r.(map[string]any)
-			model, _ := rm["model"].(string)
-			success, _ := rm["success"].(bool)
-			latencyMs, _ := rm["latency_ms"].(float64)
-			errMsg, _ := rm["error"].(string)
-			status := "PASS"
-			notes := ""
-			if success {
-				passed++
-			} else {
-				failed++
-				status = "FAIL"
-				if errMsg != "" {
-					notes = errMsg
+			resp, err := apiPost("/api/agent/message", body)
+			if err != nil {
+				fail++
+				fmt.Printf("  FAIL: %v\n", err)
+				continue
+			}
+			content := fmt.Sprintf("%v", resp["content"])
+			if content != "" && content != "<nil>" {
+				pass++
+				if len(content) > 60 {
+					content = content[:60] + "..."
 				}
+				fmt.Printf("  PASS: %s\n", content)
+			} else if errMsg, ok := resp["error"].(string); ok {
+				fail++
+				fmt.Printf("  FAIL: %s\n", errMsg)
+			} else {
+				fail++
+				fmt.Printf("  FAIL: empty response\n")
 			}
-			fmt.Printf("  %-35s %-8s %-10.0fms %s\n", model, status, latencyMs, notes)
 		}
-		fmt.Printf("\nSummary: %d passed, %d failed\n", passed, failed)
 
-		// Show overall score if present.
-		if score, ok := data["overall_score"].(float64); ok {
-			fmt.Printf("Overall score: %.3f\n", score)
-		}
+		fmt.Printf("\n  Result: %d/%d passed\n\n", pass, pass+fail)
 		return nil
 	},
 }
@@ -614,19 +605,27 @@ This re-establishes the metascore quality baseline from scratch.`,
 			fmt.Printf("  --- %s ---\n", model)
 			pass, fail := 0, 0
 			for _, prompt := range prompts {
-				resp, err := apiPost("/api/models/routing-eval", map[string]any{
-					"model":  model,
-					"prompt": prompt,
+				resp, err := apiPost("/api/agent/message", map[string]any{
+					"content": prompt,
+					"model":   model,
 				})
 				if err != nil {
 					fail++
 					fmt.Printf("    FAIL: %v\n", err)
-				} else if status, ok := resp["status"].(string); ok && status == "ok" {
+				} else if resp["content"] != nil && resp["content"] != "" {
 					pass++
-					fmt.Printf("    PASS\n")
+					// Truncate response for display.
+					content := fmt.Sprintf("%v", resp["content"])
+					if len(content) > 60 {
+						content = content[:60] + "..."
+					}
+					fmt.Printf("    PASS: %s\n", content)
+				} else if errMsg, ok := resp["error"].(string); ok {
+					fail++
+					fmt.Printf("    FAIL: %s\n", errMsg)
 				} else {
 					fail++
-					fmt.Printf("    FAIL: %v\n", resp["error"])
+					fmt.Printf("    FAIL: empty response\n")
 				}
 			}
 			results = append(results, result{model, pass, fail})
