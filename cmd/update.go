@@ -436,13 +436,34 @@ func runUpdateAll(ctx context.Context, currentVersion string, yes bool) error {
 		binaryChanged = true
 	}
 
-	providersChanged, err := applyProvidersUpdate(ctx, registryURL, configPath)
-	if err != nil {
-		return fmt.Errorf("provider update failed: %w", err)
+	// Load state to check for already-completed steps (resumability).
+	prevState, _ := loadUpdateState()
+	manifest, manifestErr := fetchRegistryManifest(ctx, registryURL)
+
+	var providersChanged bool
+	if manifestErr == nil && prevState.InstalledContent.Providers != nil &&
+		prevState.InstalledContent.Providers.Version == manifest.Version {
+		fmt.Println("Provider pack already at version " + manifest.Version + ", skipping.")
+		providersChanged = false
+	} else {
+		var pErr error
+		providersChanged, pErr = applyProvidersUpdate(ctx, registryURL, configPath)
+		if pErr != nil {
+			return fmt.Errorf("provider update failed: %w", pErr)
+		}
 	}
-	skillsChanged, err := applySkillsUpdate(ctx, registryURL, configPath)
-	if err != nil {
-		return fmt.Errorf("skills update failed: %w", err)
+
+	var skillsChanged bool
+	if manifestErr == nil && prevState.InstalledContent.Skills != nil &&
+		prevState.InstalledContent.Skills.Version == manifest.Version {
+		fmt.Println("Skills pack already at version " + manifest.Version + ", skipping.")
+		skillsChanged = false
+	} else {
+		var sErr error
+		skillsChanged, sErr = applySkillsUpdate(ctx, registryURL, configPath)
+		if sErr != nil {
+			return fmt.Errorf("skills update failed: %w", sErr)
+		}
 	}
 
 	state, err := loadUpdateState()

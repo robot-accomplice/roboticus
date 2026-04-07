@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -70,6 +71,60 @@ Otherwise, SOURCE is treated as a catalog name.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		source := args[0]
 
+		// Detect archive install (.tar.gz, .zip, .ic.zip).
+		if strings.HasSuffix(source, ".tar.gz") || strings.HasSuffix(source, ".zip") || strings.HasSuffix(source, ".ic.zip") {
+			tmpDir, err := os.MkdirTemp("", "roboticus-plugin-*")
+			if err != nil {
+				return err
+			}
+			defer func() { _ = os.RemoveAll(tmpDir) }()
+
+			if strings.HasSuffix(source, ".tar.gz") {
+				if err := extractTarGz(source, tmpDir); err != nil {
+					return fmt.Errorf("failed to extract archive: %w", err)
+				}
+			} else {
+				if err := extractZip(source, tmpDir); err != nil {
+					return fmt.Errorf("failed to extract archive: %w", err)
+				}
+			}
+
+			// Find plugin.json in extracted contents.
+			pluginJSON := filepath.Join(tmpDir, "plugin.json")
+			if _, err := os.Stat(pluginJSON); os.IsNotExist(err) {
+				// Try one level deeper.
+				dirEntries, _ := os.ReadDir(tmpDir)
+				for _, e := range dirEntries {
+					if e.IsDir() {
+						candidate := filepath.Join(tmpDir, e.Name(), "plugin.json")
+						if _, statErr := os.Stat(candidate); statErr == nil {
+							pluginJSON = candidate
+							break
+						}
+					}
+				}
+			}
+
+			raw, err := os.ReadFile(pluginJSON)
+			if err != nil {
+				return fmt.Errorf("no plugin.json found in archive")
+			}
+
+			var payload map[string]any
+			if err := json.Unmarshal(raw, &payload); err != nil {
+				return fmt.Errorf("invalid plugin.json in archive: %w", err)
+			}
+			payload["source_path"] = filepath.Dir(pluginJSON)
+
+			data, err := apiPost("/api/plugins/install", payload)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("Plugin installed from archive %q.\n", source)
+			printJSON(data)
+			return nil
+		}
+
 		// Detect local directory install.
 		if strings.Contains(source, "/") || strings.Contains(source, `\`) {
 			pluginJSON := filepath.Join(source, "plugin.json")
@@ -132,6 +187,24 @@ var pluginsUninstallCmd = &cobra.Command{
 		}
 		if err := os.RemoveAll(pluginDir); err != nil {
 			return fmt.Errorf("failed to remove plugin directory %q: %w", pluginDir, err)
+		}
+
+		// Check for companion skills that reference this plugin.
+		skillsDir := filepath.Join(home, ".roboticus", "skills")
+		entries, _ := os.ReadDir(skillsDir)
+		var companions []string
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+				continue
+			}
+			content, _ := os.ReadFile(filepath.Join(skillsDir, e.Name()))
+			if strings.Contains(string(content), name) {
+				companions = append(companions, e.Name())
+			}
+		}
+		if len(companions) > 0 {
+			fmt.Printf("Found %d companion skill(s): %s\n", len(companions), strings.Join(companions, ", "))
+			fmt.Println("Remove them manually if they depend on this plugin.")
 		}
 
 		fmt.Printf("Plugin %q uninstalled (disabled and directory removed).\n", name)
@@ -272,6 +345,105 @@ var pluginsPackCmd = &cobra.Command{
 		fmt.Printf("SHA-256: %x\n", h.Sum(nil))
 		return nil
 	},
+}
+
+// extractTarGz extracts a .tar.gz archive to the destination directory.
+func extractTarGz(archive, dest string) error {
+	f, err := os.Open(archive)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+
+	gr, err := gzip.NewReader(f)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = gr.Close() }()
+
+	tr := tar.NewReader(gr)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+
+		target := filepath.Join(dest, hdr.Name)
+		// Guard against zip-slip.
+		if !strings.HasPrefix(filepath.Clean(target), filepath.Clean(dest)+string(os.PathSeparator)) {
+			return fmt.Errorf("invalid path in archive: %s", hdr.Name)
+		}
+
+		switch hdr.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(target, 0o755); err != nil {
+				return err
+			}
+		case tar.TypeReg:
+			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+				return err
+			}
+			out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(hdr.Mode))
+			if err != nil {
+				return err
+			}
+			if _, err := io.Copy(out, tr); err != nil {
+				_ = out.Close()
+				return err
+			}
+			_ = out.Close()
+		}
+	}
+	return nil
+}
+
+// extractZip extracts a .zip archive to the destination directory.
+func extractZip(archive, dest string) error {
+	r, err := zip.OpenReader(archive)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = r.Close() }()
+
+	for _, f := range r.File {
+		target := filepath.Join(dest, f.Name)
+		// Guard against zip-slip.
+		if !strings.HasPrefix(filepath.Clean(target), filepath.Clean(dest)+string(os.PathSeparator)) {
+			return fmt.Errorf("invalid path in archive: %s", f.Name)
+		}
+
+		if f.FileInfo().IsDir() {
+			if err := os.MkdirAll(target, 0o755); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+
+		rc, err := f.Open()
+		if err != nil {
+			return err
+		}
+		out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, f.Mode())
+		if err != nil {
+			_ = rc.Close()
+			return err
+		}
+		if _, err := io.Copy(out, rc); err != nil {
+			_ = out.Close()
+			_ = rc.Close()
+			return err
+		}
+		_ = out.Close()
+		_ = rc.Close()
+	}
+	return nil
 }
 
 func init() {

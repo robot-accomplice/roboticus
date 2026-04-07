@@ -67,9 +67,8 @@ var configGetCmd = &cobra.Command{
 }
 
 var configValidateCmd = &cobra.Command{
-	Use:     "validate",
-	Aliases: []string{"lint"},
-	Short:   "Validate configuration file",
+	Use:   "validate",
+	Short: "Validate configuration file",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		_, err := loadConfig()
 		if err != nil {
@@ -78,6 +77,55 @@ var configValidateCmd = &cobra.Command{
 		fmt.Println("Configuration is valid.")
 		return nil
 	},
+}
+
+var configLintCmd = &cobra.Command{
+	Use:   "lint [file]",
+	Short: "Parse and validate a config file without applying",
+	Long:  "Lint checks TOML syntax, field validation, memory budgets, treasury constraints, and provider reachability without modifying the running config.",
+	Args:  cobra.MaximumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		// Determine file path.
+		path := ""
+		if len(args) > 0 {
+			path = args[0]
+		} else {
+			path = core.ConfigFilePath()
+		}
+
+		// Read and parse TOML.
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("cannot read %s: %w", path, err)
+		}
+
+		var cfg core.Config
+		if err := toml.Unmarshal(data, &cfg); err != nil {
+			fmt.Printf("FAIL: TOML syntax error in %s:\n  %v\n", path, err)
+			return err
+		}
+
+		// Run validation.
+		if err := cfg.Validate(); err != nil {
+			fmt.Printf("FAIL: validation error in %s:\n  %v\n", path, err)
+			return err
+		}
+
+		fmt.Printf("OK: %s is valid (%d bytes, %d sections)\n", path, len(data), countSections(data))
+		return nil
+	},
+}
+
+// countSections counts [section] headers in TOML data.
+func countSections(data []byte) int {
+	count := 0
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[") && !strings.HasPrefix(trimmed, "[[") {
+			count++
+		}
+	}
+	return count
 }
 
 var configCapabilitiesCmd = &cobra.Command{
@@ -285,7 +333,7 @@ func autoType(s string) any {
 }
 
 func init() {
-	configCmd.AddCommand(configShowCmd, configGetCmd, configValidateCmd, configCapabilitiesCmd,
+	configCmd.AddCommand(configShowCmd, configGetCmd, configValidateCmd, configLintCmd, configCapabilitiesCmd,
 		configSetCmd, configUnsetCmd, configBackupCmd)
 	rootCmd.AddCommand(configCmd)
 }

@@ -20,19 +20,50 @@ var cronListCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		jobs, _ := data["jobs"].([]any)
-		if len(jobs) == 0 {
-			fmt.Println("No cron jobs.")
+		jobs, ok := data["jobs"].([]any)
+		if !ok || len(jobs) == 0 {
+			fmt.Println("No scheduled jobs.")
 			return nil
 		}
+
+		fmt.Printf("%-8s %-20s %-10s %-20s %s\n", "STATUS", "NAME", "SCHEDULE", "LAST RUN", "NEXT RUN")
+		fmt.Println("──────── ──────────────────── ────────── ──────────────────── ────────────────────")
 		for _, j := range jobs {
 			jm, _ := j.(map[string]any)
-			enabled := "enabled"
-			if e, ok := jm["enabled"].(bool); ok && !e {
-				enabled = "disabled"
+			name, _ := jm["name"].(string)
+			enabled, _ := jm["enabled"].(bool)
+			expr, _ := jm["schedule_expr"].(string)
+			lastRun, _ := jm["last_run_at"].(string)
+			nextRun, _ := jm["next_run_at"].(string)
+			lastErr, _ := jm["last_error"].(string)
+
+			status := "enabled"
+			if !enabled {
+				status = "paused"
 			}
-			fmt.Printf("  %v  %v  schedule=%v  %s\n",
-				jm["id"], jm["name"], jm["schedule_expr"], enabled)
+			if lastErr != "" {
+				status = "error"
+			}
+
+			if lastRun == "" {
+				lastRun = "never"
+			}
+			if nextRun == "" {
+				nextRun = "—"
+			}
+
+			// Truncate timestamps.
+			if len(lastRun) > 19 {
+				lastRun = lastRun[:19]
+			}
+			if len(nextRun) > 19 {
+				nextRun = nextRun[:19]
+			}
+
+			fmt.Printf("%-8s %-20s %-10s %-20s %s\n", status, name, expr, lastRun, nextRun)
+			if lastErr != "" {
+				fmt.Printf("         └─ error: %s\n", lastErr)
+			}
 		}
 		return nil
 	},

@@ -10,20 +10,16 @@ import (
 func TestMemoryStatsCmd_WithMockServer(t *testing.T) {
 	cleanup := setupMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		switch {
-		case strings.HasSuffix(r.URL.Path, "/working"):
+		if strings.Contains(r.URL.Path, "memory-analytics") {
 			_ = json.NewEncoder(w).Encode(map[string]any{
-				"entries": []any{"a", "b", "c"},
+				"entry_counts":           map[string]any{"working": 3, "episodic": 2, "semantic": 10, "procedural": 1, "relationship": 0},
+				"retrieval_hits":         51,
+				"hit_rate":               0.8,
+				"memory_roi":             1.2,
+				"avg_budget_utilization": 0.65,
+				"total_turns":            100,
 			})
-		case strings.HasSuffix(r.URL.Path, "/episodic"):
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"memories": []any{"d", "e"},
-			})
-		case strings.HasSuffix(r.URL.Path, "/semantic"):
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"other_key": "no entries",
-			})
-		default:
+		} else {
 			w.WriteHeader(http.StatusNotFound)
 			_ = json.NewEncoder(w).Encode(map[string]any{"error": "not found"})
 		}
@@ -43,10 +39,9 @@ func TestMemoryStatsCmd_AllFailing(t *testing.T) {
 	}))
 	defer cleanup()
 
-	// memory stats should not return an error; it just skips failing tiers.
 	err := memoryStatsCmd.RunE(memoryStatsCmd, nil)
-	if err != nil {
-		t.Fatalf("memory stats all failing: %v", err)
+	if err == nil {
+		t.Fatal("expected error when analytics endpoint fails")
 	}
 }
 

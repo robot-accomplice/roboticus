@@ -76,21 +76,49 @@ var memorySearchCmd = &cobra.Command{
 
 var memoryStatsCmd = &cobra.Command{
 	Use:   "stats",
-	Short: "Show memory tier statistics",
+	Short: "Show memory tier statistics and health",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		for _, tier := range []string{"working", "episodic", "semantic"} {
-			data, err := apiGet("/api/memory/" + tier)
-			if err != nil {
-				continue
-			}
-			if entries, ok := data["entries"].([]any); ok {
-				fmt.Printf("%-10s %d entries\n", tier, len(entries))
-			} else if entries, ok := data["memories"].([]any); ok {
-				fmt.Printf("%-10s %d entries\n", tier, len(entries))
-			} else {
-				fmt.Printf("%-10s (no entries key)\n", tier)
+		// Fetch analytics from the dedicated endpoint.
+		data, err := apiGet("/api/stats/memory-analytics")
+		if err != nil {
+			return err
+		}
+
+		fmt.Println("Memory Statistics:")
+		fmt.Println()
+
+		// Entry counts by tier.
+		if counts, ok := data["entry_counts"].(map[string]any); ok {
+			fmt.Println("  Tier           Entries")
+			fmt.Println("  ─────────────  ───────")
+			for _, tier := range []string{"working", "episodic", "semantic", "procedural", "relationship"} {
+				count := 0
+				if v, ok := counts[tier].(float64); ok {
+					count = int(v)
+				}
+				fmt.Printf("  %-15s %d\n", tier, count)
 			}
 		}
+
+		fmt.Println()
+
+		// Retrieval stats.
+		if hits, ok := data["retrieval_hits"].(float64); ok {
+			fmt.Printf("  Retrieval hits:     %.0f\n", hits)
+		}
+		if rate, ok := data["hit_rate"].(float64); ok {
+			fmt.Printf("  Hit rate:           %.1f%%\n", rate*100)
+		}
+		if roi, ok := data["memory_roi"].(float64); ok {
+			fmt.Printf("  Memory ROI:         %.2f\n", roi)
+		}
+		if util, ok := data["avg_budget_utilization"].(float64); ok {
+			fmt.Printf("  Budget utilization: %.1f%%\n", util*100)
+		}
+		if turns, ok := data["total_turns"].(float64); ok {
+			fmt.Printf("  Total turns:        %.0f\n", turns)
+		}
+
 		return nil
 	},
 }
