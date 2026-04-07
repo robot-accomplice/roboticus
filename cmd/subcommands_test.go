@@ -155,7 +155,7 @@ func TestModelsCmd_SubcommandRegistration(t *testing.T) {
 	for _, sub := range modelsCmd.Commands() {
 		subcommands[sub.Name()] = true
 	}
-	for _, name := range []string{"list", "diagnostics"} {
+	for _, name := range []string{"list", "diagnostics", "scan", "exercise", "suggest", "reset", "baseline"} {
 		if !subcommands[name] {
 			t.Errorf("models command missing subcommand %q", name)
 		}

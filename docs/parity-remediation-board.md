@@ -99,6 +99,9 @@ Use that matrix when evaluating parity-sensitive work:
 - Implemented workspace task inventory and admin task-event read surfaces backed by `agent_tasks` and `task_events`.
 - Added `docs/deep-parity-audit-matrix.md` to track subsystem-by-subsystem behavior parity instead of surface-only parity.
 - Recorded the first deep-audit finding there: the `models` CLI is still materially behind Rust, including missing `exercise`, `suggest`, `reset`, and `baseline` flows and a thinner `scan` implementation.
+- Expanded the deep audit from a `models` spot check into a first full-system pass covering CLI, API/runtime, dashboard shape, update orchestration, and operator control-plane semantics.
+- Recorded concrete behavior drift in `docs/deep-parity-audit-matrix.md` for config, memory, MCP, auth, schedule, wallet, plugins, channels/integrations, runtime devices, workspace tasks, dashboard, and status surfaces.
+- Marked the main release-blocking deep-parity backlog there so implementation can proceed against behavior gaps instead of name-only parity.
 
 ## Handoff Notes
 

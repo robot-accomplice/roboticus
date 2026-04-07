@@ -113,7 +113,7 @@ func TestCLI_SubcommandSets(t *testing.T) {
 		{"schedule", scheduleCmd, []string{"list", "create", "delete", "run", "history"}},
 		{"sessions", sessionsCmd, []string{"list", "show", "delete", "export", "create"}},
 		{"memory", memoryCmd, []string{"working", "episodic", "semantic", "search", "stats"}},
-		{"models", modelsCmd, []string{"list", "diagnostics"}},
+		{"models", modelsCmd, []string{"list", "diagnostics", "scan", "exercise", "suggest", "reset", "baseline"}},
 		{"config", configCmd, []string{"show", "get", "validate"}},
 		{"auth", authCmd, []string{"status", "login", "logout"}},
 		{"mcp", mcpCmd, []string{"list", "connect", "disconnect"}},
