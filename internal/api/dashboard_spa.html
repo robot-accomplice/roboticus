@@ -958,17 +958,20 @@
   function normalizeRoutingProfile(profile, preferredKey) {
     var p = {};
     ROUTING_KEYS.forEach(function(k) { p[k] = clamp01(profile && profile[k]); });
-    var total = 0; ROUTING_KEYS.forEach(function(k) { total += p[k]; });
-    if (total <= 1.0 + 1e-9) {
-      var out = {}; ROUTING_KEYS.forEach(function(k) { out[k] = round2(p[k]); }); return out;
-    }
+
+    // When a specific slider is being dragged, clamp it so the total never exceeds 1.0.
+    // Other sliders keep their current values — only the dragged one is constrained.
     if (preferredKey && ROUTING_KEYS.indexOf(preferredKey) !== -1) {
       var otherSum = 0;
       ROUTING_KEYS.forEach(function(k) { if (k !== preferredKey) otherSum += p[k]; });
-      p[preferredKey] = Math.max(0, Math.min(p[preferredKey], 1 - otherSum));
-      var out2 = {}; ROUTING_KEYS.forEach(function(k) { out2[k] = round2(p[k]); }); return out2;
+      var remaining = Math.max(0, 1.0 - otherSum);
+      p[preferredKey] = round2(Math.min(p[preferredKey], remaining));
+      var out = {}; ROUTING_KEYS.forEach(function(k) { out[k] = round2(p[k]); }); return out;
     }
-    if (total > 0) {
+
+    // No preferred key (e.g. reset or initial load): if total exceeds 1.0, scale proportionally.
+    var total = 0; ROUTING_KEYS.forEach(function(k) { total += p[k]; });
+    if (total > 1.0 + 1e-9) {
       var scale = 1 / total;
       ROUTING_KEYS.forEach(function(k) { p[k] *= scale; });
     }
