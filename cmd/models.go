@@ -442,29 +442,115 @@ var modelsResetCmd = &cobra.Command{
 
 var modelsBaselineCmd = &cobra.Command{
 	Use:   "baseline",
-	Short: "Show baseline routing dataset and quality observations",
+	Short: "Flush quality scores and re-exercise all configured models",
+	Long: `Baseline discovers configured models, flushes all quality observations,
+exercises each model across multiple test prompts, and reports pass/fail results.
+This re-establishes the metascore quality baseline from scratch.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		data, err := apiGet("/api/models/routing-dataset")
+		// Step 1: Discover configured models.
+		fmt.Println("\n  Step 1: Discovering configured models...")
+		config, err := apiGet("/api/config")
 		if err != nil {
-			return err
+			return fmt.Errorf("cannot reach API: %w", err)
 		}
-		dataset, ok := data["rows"].([]any)
-		if !ok || len(dataset) == 0 {
-			fmt.Println("No routing baseline data available.")
+
+		var configured []string
+		if models, ok := config["models"].(map[string]any); ok {
+			if p, ok := models["primary"].(string); ok && p != "" {
+				configured = append(configured, p)
+			}
+			if fbs, ok := models["fallback"].([]any); ok {
+				for _, fb := range fbs {
+					if s, ok := fb.(string); ok && s != "" {
+						configured = append(configured, s)
+					}
+				}
+			}
+		}
+
+		if len(configured) == 0 {
+			fmt.Println("  No models configured. Nothing to baseline.")
 			return nil
 		}
-		fmt.Printf("Routing baseline: %d observations\n\n", len(dataset))
-		fmt.Printf("  %-35s %-10s %-8s %-10s %s\n", "MODEL", "STRATEGY", "QUALITY", "COST", "LATENCY")
-		fmt.Println("  " + "─────────────────────────────────── ────────── ──────── ────────── ───────")
-		for _, row := range dataset {
-			rm, _ := row.(map[string]any)
-			model, _ := rm["selected_model"].(string)
-			strategy, _ := rm["strategy"].(string)
-			quality, _ := rm["quality"].(float64)
-			cost, _ := rm["cost"].(float64)
-			latency, _ := rm["latency_ms"].(float64)
-			fmt.Printf("  %-35s %-10s %-8.3f $%-9.4f %.0fms\n", model, strategy, quality, cost, latency)
+
+		fmt.Printf("\n  Found %d configured model(s):\n\n", len(configured))
+		for i, model := range configured {
+			role := "fallback"
+			if i == 0 {
+				role = "primary"
+			}
+			fmt.Printf("    %-10s %s\n", role, model)
 		}
+
+		// Step 2: Confirm.
+		fmt.Printf("\n  This will flush all quality scores and exercise each model.\n  Proceed? [Y/n] ")
+		var input string
+		fmt.Scanln(&input)
+		if input != "" && input != "y" && input != "Y" && input != "yes" {
+			fmt.Println("  Cancelled.")
+			return nil
+		}
+
+		// Step 3: Flush all scores.
+		fmt.Println("\n  Step 2: Flushing all quality scores...")
+		resetData, err := apiPost("/api/models/reset", nil)
+		if err != nil {
+			return fmt.Errorf("failed to reset scores: %w", err)
+		}
+		cleared, _ := resetData["cleared"].(float64)
+		fmt.Printf("  Cleared %.0f observation entries.\n", cleared)
+
+		// Step 4: Exercise each model.
+		fmt.Println("\n  Step 3: Exercising models...\n")
+		type result struct {
+			model string
+			pass  int
+			fail  int
+		}
+		var results []result
+		prompts := []string{
+			"Respond with exactly: OK",
+			"What is 2 + 2?",
+			"Summarize this in one word: The quick brown fox jumps over the lazy dog.",
+		}
+
+		for _, model := range configured {
+			fmt.Printf("  --- %s ---\n", model)
+			pass, fail := 0, 0
+			for _, prompt := range prompts {
+				resp, err := apiPost("/api/models/routing-eval", map[string]any{
+					"model":  model,
+					"prompt": prompt,
+				})
+				if err != nil {
+					fail++
+					fmt.Printf("    FAIL: %v\n", err)
+				} else if status, ok := resp["status"].(string); ok && status == "ok" {
+					pass++
+					fmt.Printf("    PASS\n")
+				} else {
+					fail++
+					fmt.Printf("    FAIL: %v\n", resp["error"])
+				}
+			}
+			results = append(results, result{model, pass, fail})
+			fmt.Println()
+		}
+
+		// Step 5: Summary.
+		fmt.Println("  Baseline Results:\n")
+		fmt.Printf("  %-35s %-6s %-6s %s\n", "MODEL", "PASS", "FAIL", "STATUS")
+		fmt.Println("  " + "─────────────────────────────────── ────── ────── ──────")
+		for _, r := range results {
+			status := "PASS"
+			if r.fail > 0 && r.pass == 0 {
+				status = "FAIL"
+			} else if r.fail > 0 {
+				status = "DEGRADED"
+			}
+			fmt.Printf("  %-35s %-6d %-6d %s\n", r.model, r.pass, r.fail, status)
+		}
+		fmt.Println()
 		return nil
 	},
 }
