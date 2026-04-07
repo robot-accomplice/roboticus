@@ -18,7 +18,7 @@ import (
 )
 
 // GetWorkspaceState returns live runtime state for the workspace page.
-func GetWorkspaceState(store *db.Store) http.HandlerFunc {
+func GetWorkspaceState(store *db.Store, cfg *core.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		dbStats := store.Stats()
 		var sessionCount int64
@@ -27,8 +27,29 @@ func GetWorkspaceState(store *db.Store) http.HandlerFunc {
 			log.Warn().Err(err).Msg("failed to query active session count")
 		}
 
-		// Build agents array from sub_agents table for the fleet activity card.
-		agents := make([]map[string]any, 0)
+		// Primary agent is always first.
+		primaryName := cfg.Agent.Name
+		if primaryName == "" {
+			primaryName = "roboticus"
+		}
+		primaryModel := cfg.Models.Primary
+		if primaryModel == "" {
+			primaryModel = "auto"
+		}
+		agents := []map[string]any{
+			{
+				"name":     strings.ToLower(primaryName),
+				"id":       cfg.Agent.ID,
+				"model":    primaryModel,
+				"enabled":  true,
+				"state":    "running",
+				"activity": "idle",
+				"color":    "#6366f1",
+				"role":     "orchestrator",
+			},
+		}
+
+		// Append subagents from DB.
 		agentRows, err := store.QueryContext(r.Context(),
 			`SELECT name, model, enabled FROM sub_agents ORDER BY name`)
 		if err == nil {
@@ -50,6 +71,7 @@ func GetWorkspaceState(store *db.Store) http.HandlerFunc {
 					"state":    state,
 					"activity": "idle",
 					"color":    "",
+					"role":     "subagent",
 				})
 			}
 		}
@@ -79,28 +101,56 @@ func GetRoster(store *db.Store, cfg *core.Config) http.HandlerFunc {
 		if primaryModel == "" {
 			primaryModel = "auto"
 		}
+		// Count skills for the primary agent.
+		var skillCount int64
+		_ = store.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM skills WHERE enabled = 1`).Scan(&skillCount)
+		var skillNames []string
+		skillRows, sErr := store.QueryContext(r.Context(), `SELECT name FROM skills WHERE enabled = 1 ORDER BY name LIMIT 20`)
+		if sErr == nil {
+			defer func() { _ = skillRows.Close() }()
+			for skillRows.Next() {
+				var sn string
+				if skillRows.Scan(&sn) == nil {
+					skillNames = append(skillNames, sn)
+				}
+			}
+		}
+
 		agents := []map[string]any{
 			{
-				"name":    strings.ToLower(primaryName),
-				"display_name": primaryName,
-				"model":   primaryModel,
-				"enabled": true,
-				"role":    "orchestrator",
+				"name":            strings.ToLower(primaryName),
+				"display_name":    primaryName,
+				"model":           primaryModel,
+				"enabled":         true,
+				"role":            "orchestrator",
+				"description":     "Primary orchestrator agent",
+				"skills":          skillNames,
+				"fallback_models": cfg.Models.Fallback,
 			},
 		}
 
 		rows, err := store.QueryContext(r.Context(),
-			`SELECT name, model, enabled, role FROM sub_agents ORDER BY name`)
+			`SELECT name, COALESCE(display_name, ''), model, enabled, role, COALESCE(description, '')
+			 FROM sub_agents ORDER BY name`)
 		if err == nil {
 			defer func() { _ = rows.Close() }()
 			for rows.Next() {
-				var name, model, role string
+				var name, displayName, model, role, description string
 				var enabled bool
-				if err := rows.Scan(&name, &model, &enabled, &role); err != nil {
+				if err := rows.Scan(&name, &displayName, &model, &enabled, &role, &description); err != nil {
 					continue
 				}
+				if displayName == "" {
+					displayName = name
+				}
 				agents = append(agents, map[string]any{
-					"name": name, "model": model, "enabled": enabled, "role": role,
+					"name":         name,
+					"display_name": displayName,
+					"model":        model,
+					"enabled":      enabled,
+					"role":         role,
+					"description":  description,
+					"skills":       []string{},
 				})
 			}
 		}

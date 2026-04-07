@@ -2250,7 +2250,9 @@
             var chatAgentLabel = sessionAssistantLabel(self._activeSession, self._activeSession.agent_id || 'default');
             var sessionAgentId = String(self._activeSession.agent_id || 'default').toLowerCase();
             var primaryAgentId = String(App._activeAgentId || 'default').toLowerCase();
-            var isOwnSession = (sessionAgentId === primaryAgentId || sessionAgentId === 'default');
+            var scope = String(self._activeSession.scope || '').toLowerCase();
+            var isScheduledTask = scope.indexOf('task') !== -1 || String(self._activeSession.nickname || '').indexOf('Scheduled:') === 0;
+            var isOwnSession = !isScheduledTask && (sessionAgentId === primaryAgentId || sessionAgentId === 'default');
             var inputHtml = isOwnSession
               ? '<div class="session-chat-input"><textarea id="session-msg-input" placeholder="Type a message\u2026" rows="1" autocomplete="off"></textarea><button class="btn" id="btn-send-msg">' + uiBtnLabel('send', 'Send') + '</button></div>'
               : '<div class="session-chat-input" style="opacity:0.5;pointer-events:none;border-top:1px solid var(--border-ghost)"><span style="font-size:0.75rem;color:var(--muted);padding:0.5rem 0">\ud83d\udd12 Read-only session \u2014 owned by ' + esc(chatAgentLabel) + '</span></div>';

@@ -281,7 +281,7 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 		r.Put("/api/roster/{agent}/model", routes.UpdateRosterModel(state.Store))
 
 		// Workspace.
-		r.Get("/api/workspace/state", routes.GetWorkspaceState(state.Store))
+		r.Get("/api/workspace/state", routes.GetWorkspaceState(state.Store, state.Config))
 		r.Get("/api/workspace/tasks", routes.ListWorkspaceTasks(state.Store))
 		r.Get("/api/admin/task-events", routes.GetTaskEvents(state.Store))
 

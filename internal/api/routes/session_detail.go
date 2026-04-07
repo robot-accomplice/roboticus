@@ -253,7 +253,20 @@ func GetSkillsCatalog(store *db.Store) http.HandlerFunc {
 				"created_at":  createdAt,
 			})
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"items": items})
+		// Include builtin themes in the catalog response.
+		themes := make([]map[string]any, 0, len(builtinThemes))
+		for _, t := range builtinThemes {
+			themes = append(themes, map[string]any{
+				"name": t.Name, "id": t.ID, "description": t.Description,
+				"author": t.Author, "source": "builtin",
+			})
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{
+			"items":   items,
+			"plugins": make([]any, 0), // populated from /api/plugins by the dashboard
+			"themes":  themes,
+		})
 	}
 }
 
