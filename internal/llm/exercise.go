@@ -7,14 +7,53 @@ import (
 )
 
 // IntentClass categorizes exercise prompts for per-dimension quality tracking.
-type IntentClass string
+// Uses int enum — no string comparison bugs possible.
+type IntentClass int
 
 const (
-	IntentExecution     IntentClass = "EXECUTION"
-	IntentDelegation    IntentClass = "DELEGATION"
-	IntentIntrospection IntentClass = "INTROSPECTION"
-	IntentConversation  IntentClass = "CONVERSATION"
+	IntentExecution IntentClass = iota
+	IntentDelegation
+	IntentIntrospection
+	IntentConversation
 )
+
+// String returns the canonical label for this intent class.
+func (ic IntentClass) String() string {
+	switch ic {
+	case IntentExecution:
+		return "EXECUTION"
+	case IntentDelegation:
+		return "DELEGATION"
+	case IntentIntrospection:
+		return "INTROSPECTION"
+	case IntentConversation:
+		return "CONVERSATION"
+	default:
+		return "UNKNOWN"
+	}
+}
+
+// ParseIntentClass converts a string label to an IntentClass.
+// Case-insensitive. Returns IntentExecution as fallback for unknown strings.
+func ParseIntentClass(s string) IntentClass {
+	switch strings.ToUpper(s) {
+	case "EXECUTION":
+		return IntentExecution
+	case "DELEGATION":
+		return IntentDelegation
+	case "INTROSPECTION":
+		return IntentIntrospection
+	case "CONVERSATION":
+		return IntentConversation
+	default:
+		return IntentExecution
+	}
+}
+
+// AllIntentClasses returns all defined intent classes in order.
+func AllIntentClasses() []IntentClass {
+	return []IntentClass{IntentExecution, IntentDelegation, IntentIntrospection, IntentConversation}
+}
 
 // ComplexityLevel defines exercise difficulty.
 type ComplexityLevel int

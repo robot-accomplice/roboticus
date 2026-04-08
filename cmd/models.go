@@ -701,7 +701,7 @@ per-intent-class latency scorecard and 6-axis metascore dimension reporting.`,
 					content := fmt.Sprintf("%v", resp["content"])
 					if content != "" && content != "<nil>" {
 						mr.pass++
-						mr.latencies[string(ep.Intent)] = append(mr.latencies[string(ep.Intent)], latencyMs)
+						mr.latencies[ep.Intent.String()] = append(mr.latencies[ep.Intent.String()], latencyMs)
 						fmt.Printf("    %s PASS %.1fs\n", label, float64(latencyMs)/1000.0)
 					} else if errMsg, ok := resp["error"].(string); ok {
 						mr.fail++
@@ -761,7 +761,7 @@ func printLatencyScorecard(latencies map[string][]int64) {
 	fmt.Println("    ├──────────────────┼────────┼────────┼────────┤")
 
 	var allLatencies []int64
-	intents := []string{"execution", "delegation", "introspection", "conversation"}
+	intents := []string{llm.IntentExecution.String(), llm.IntentDelegation.String(), llm.IntentIntrospection.String(), llm.IntentConversation.String()}
 	for _, intent := range intents {
 		times, ok := latencies[intent]
 		if !ok || len(times) == 0 {
