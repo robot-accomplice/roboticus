@@ -117,6 +117,22 @@ func (g *ExecutionTruthGuard) CheckWithContext(content string, ctx *GuardContext
 		return GuardResult{Passed: true}
 	}
 
+	// Intent gate: only fire for execution/task/delegation intents when intent
+	// classification is available. If no intents are populated, fall through
+	// to the existing lexical checks for backward compatibility.
+	if len(ctx.Intents) > 0 {
+		relevant := false
+		for _, intent := range ctx.Intents {
+			switch intent {
+			case "execution", "task", "delegation":
+				relevant = true
+			}
+		}
+		if !relevant {
+			return GuardResult{Passed: true}
+		}
+	}
+
 	// Check 1: Claims execution but no tools ran.
 	if len(ctx.ToolResults) == 0 {
 		lower := strings.ToLower(content)

@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -75,6 +76,7 @@ func NewClient(p *Provider) (*Client, error) {
 		httpClient: &http.Client{
 			Timeout: 120 * time.Second,
 			Transport: &http.Transport{
+				DialContext:         (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
 				MaxIdleConnsPerHost: 10,
 				IdleConnTimeout:     90 * time.Second,
 			},

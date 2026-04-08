@@ -134,6 +134,45 @@ func (g *InternalJargonGuard) CheckWithContext(content string, ctx *GuardContext
 	}
 	lower := strings.ToLower(content)
 
+	// Tier 0: Line-level stripping for delegation jargon prefixes.
+	delegationPrefixes := []string{"centralized delegation", "delegation gate"}
+	{
+		lines := strings.Split(content, "\n")
+		var kept []string
+		stripped := false
+		for _, line := range lines {
+			lineLower := strings.ToLower(strings.TrimSpace(line))
+			drop := false
+			for _, prefix := range delegationPrefixes {
+				if strings.HasPrefix(lineLower, prefix) {
+					drop = true
+					stripped = true
+					break
+				}
+			}
+			if !drop {
+				kept = append(kept, line)
+			}
+		}
+		if stripped {
+			cleaned := strings.TrimSpace(strings.Join(kept, "\n"))
+			if cleaned == "" {
+				return GuardResult{
+					Passed:  false,
+					Retry:   true,
+					Reason:  "response consisted entirely of delegation jargon",
+					Verdict: GuardRetryRequested,
+				}
+			}
+			return GuardResult{
+				Passed:  false,
+				Content: cleaned,
+				Reason:  "delegation jargon lines stripped",
+				Verdict: GuardRewritten,
+			}
+		}
+	}
+
 	// Tier 1: Infrastructure leak keywords.
 	infraMarkers := []string{
 		"decomposition gate decision", "expected_utility_margin",

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 
 	"roboticus/internal/core"
@@ -103,7 +104,7 @@ func (m *MatrixAdapter) Recv(ctx context.Context) (*InboundMessage, error) {
 
 func (m *MatrixAdapter) Send(ctx context.Context, msg OutboundMessage) error {
 	roomID := msg.RecipientID
-	txnID := fmt.Sprintf("roboticus-%d", time.Now().UnixNano())
+	txnID := uuid.New().String()
 
 	var body any
 	eventType := "m.room.message"

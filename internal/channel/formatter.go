@@ -257,6 +257,15 @@ func (f *VoiceFormatter) Format(content string) string {
 type MatrixFormatter struct{}
 
 func (f *MatrixFormatter) Platform() string { return "matrix" }
+// matrixBoldRe matches **text** for bold conversion.
+var matrixBoldRe = regexp.MustCompile(`\*\*([^*]+)\*\*`)
+
+// matrixItalicRe matches *text* for italic conversion (after bold is handled).
+var matrixItalicRe = regexp.MustCompile(`\*([^*]+)\*`)
+
+// matrixInlineCodeRe matches `code` for inline code conversion.
+var matrixInlineCodeRe = regexp.MustCompile("`([^`]+)`")
+
 func (f *MatrixFormatter) Format(content string) string {
 	content = preprocess(content)
 
@@ -282,7 +291,7 @@ func (f *MatrixFormatter) Format(content string) string {
 			continue
 		}
 
-		// Headers → HTML.
+		// Headers -> HTML.
 		if strings.HasPrefix(line, "### ") {
 			b.WriteString("<h3>" + strings.TrimPrefix(line, "### ") + "</h3>\n")
 			continue
@@ -296,9 +305,11 @@ func (f *MatrixFormatter) Format(content string) string {
 			continue
 		}
 
-		// Bold, italic, inline code.
-		line = strings.ReplaceAll(line, "**", "<strong>")
-		// Note: Matrix HTML subset supports <strong>, <em>, <code>, <a>.
+		// Inline formatting: bold, italic, code, links.
+		line = matrixBoldRe.ReplaceAllString(line, "<strong>$1</strong>")
+		line = matrixItalicRe.ReplaceAllString(line, "<em>$1</em>")
+		line = matrixInlineCodeRe.ReplaceAllString(line, "<code>$1</code>")
+		line = mdLinkRe.ReplaceAllString(line, `<a href="$2">$1</a>`)
 
 		b.WriteString(line + "\n")
 	}
