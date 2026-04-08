@@ -1328,6 +1328,8 @@ func TestAllToolRiskLevels(t *testing.T) {
 		{&CreateTableTool{}, RiskCaution},
 		{&QueryTableTool{}, RiskCaution},
 		{&InsertRowTool{}, RiskCaution},
+		{&AlterTableTool{}, RiskCaution},
+		{&DropTableTool{}, RiskCaution},
 		{&CronTool{}, RiskCaution},
 		{&MemoryStatsTool{}, RiskSafe},
 		{NewIntrospectionTool("", "", func() []string { return nil }), RiskSafe},
@@ -1363,5 +1365,202 @@ func TestWebSearchTool_NonJSONResponse(t *testing.T) {
 	// Non-JSON gets returned raw after failed unmarshal
 	if !strings.Contains(result.Output, "plain text response") {
 		t.Errorf("output = %q", result.Output)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AlterTableTool
+// ---------------------------------------------------------------------------
+
+func TestAlterTableTool_Properties(t *testing.T) {
+	tool := &AlterTableTool{}
+	if tool.Name() != "alter_table" {
+		t.Errorf("name = %q", tool.Name())
+	}
+	if tool.Risk() != RiskCaution {
+		t.Errorf("risk = %v", tool.Risk())
+	}
+}
+
+func TestAlterTableTool_NoStore(t *testing.T) {
+	tool := &AlterTableTool{}
+	_, err := tool.Execute(context.Background(),
+		`{"table_name":"t","operation":"add_column","column":{"name":"c","type":"TEXT"}}`, &Context{})
+	if err == nil || !strings.Contains(err.Error(), "database store not available") {
+		t.Errorf("expected store error, got: %v", err)
+	}
+}
+
+func TestAlterTableTool_AddColumn(t *testing.T) {
+	store := testutil.TempStore(t)
+	tctx := &Context{Store: store, AgentID: "bot1"}
+
+	// Create a table first.
+	ct := &CreateTableTool{}
+	_, err := ct.Execute(context.Background(),
+		`{"name":"items","description":"d","columns":[{"name":"val","type":"TEXT"}]}`, tctx)
+	if err != nil {
+		t.Fatalf("create table: %v", err)
+	}
+
+	// Add a column.
+	at := &AlterTableTool{}
+	result, err := at.Execute(context.Background(),
+		`{"table_name":"items","operation":"add_column","column":{"name":"priority","type":"INTEGER"}}`, tctx)
+	if err != nil {
+		t.Fatalf("alter table: %v", err)
+	}
+	if !strings.Contains(result.Output, "add_column") {
+		t.Errorf("output = %q", result.Output)
+	}
+
+	// Verify the column is usable by inserting a row using it.
+	it := &InsertRowTool{}
+	_, err = it.Execute(context.Background(),
+		`{"table":"items","data":{"val":"test","priority":5}}`, tctx)
+	if err != nil {
+		t.Fatalf("insert after alter: %v", err)
+	}
+}
+
+func TestAlterTableTool_DropColumn(t *testing.T) {
+	store := testutil.TempStore(t)
+	tctx := &Context{Store: store, AgentID: "bot1"}
+
+	// Create table with two columns.
+	ct := &CreateTableTool{}
+	_, err := ct.Execute(context.Background(),
+		`{"name":"multi","description":"d","columns":[{"name":"a","type":"TEXT"},{"name":"b","type":"TEXT"}]}`, tctx)
+	if err != nil {
+		t.Fatalf("create table: %v", err)
+	}
+
+	at := &AlterTableTool{}
+	result, err := at.Execute(context.Background(),
+		`{"table_name":"multi","operation":"drop_column","column":{"name":"b"}}`, tctx)
+	if err != nil {
+		t.Fatalf("drop column: %v", err)
+	}
+	if !strings.Contains(result.Output, "drop_column") {
+		t.Errorf("output = %q", result.Output)
+	}
+}
+
+func TestAlterTableTool_DuplicateColumn(t *testing.T) {
+	store := testutil.TempStore(t)
+	tctx := &Context{Store: store, AgentID: "bot1"}
+
+	ct := &CreateTableTool{}
+	_, _ = ct.Execute(context.Background(),
+		`{"name":"dup","description":"d","columns":[{"name":"val","type":"TEXT"}]}`, tctx)
+
+	at := &AlterTableTool{}
+	_, err := at.Execute(context.Background(),
+		`{"table_name":"dup","operation":"add_column","column":{"name":"val","type":"TEXT"}}`, tctx)
+	if err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Errorf("expected duplicate error, got: %v", err)
+	}
+}
+
+func TestAlterTableTool_DropNonexistentColumn(t *testing.T) {
+	store := testutil.TempStore(t)
+	tctx := &Context{Store: store, AgentID: "bot1"}
+
+	ct := &CreateTableTool{}
+	_, _ = ct.Execute(context.Background(),
+		`{"name":"sparse","description":"d","columns":[{"name":"val","type":"TEXT"}]}`, tctx)
+
+	at := &AlterTableTool{}
+	_, err := at.Execute(context.Background(),
+		`{"table_name":"sparse","operation":"drop_column","column":{"name":"missing"}}`, tctx)
+	if err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Errorf("expected not found error, got: %v", err)
+	}
+}
+
+func TestAlterTableTool_InvalidOperation(t *testing.T) {
+	store := testutil.TempStore(t)
+	tctx := &Context{Store: store, AgentID: "bot1"}
+
+	ct := &CreateTableTool{}
+	_, _ = ct.Execute(context.Background(),
+		`{"name":"op","description":"d","columns":[{"name":"val","type":"TEXT"}]}`, tctx)
+
+	at := &AlterTableTool{}
+	_, err := at.Execute(context.Background(),
+		`{"table_name":"op","operation":"rename","column":{"name":"val"}}`, tctx)
+	if err == nil || !strings.Contains(err.Error(), "add_column or drop_column") {
+		t.Errorf("expected operation error, got: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// DropTableTool
+// ---------------------------------------------------------------------------
+
+func TestDropTableTool_Properties(t *testing.T) {
+	tool := &DropTableTool{}
+	if tool.Name() != "drop_table" {
+		t.Errorf("name = %q", tool.Name())
+	}
+	if tool.Risk() != RiskCaution {
+		t.Errorf("risk = %v", tool.Risk())
+	}
+}
+
+func TestDropTableTool_NoStore(t *testing.T) {
+	tool := &DropTableTool{}
+	_, err := tool.Execute(context.Background(), `{"table_name":"t"}`, &Context{})
+	if err == nil || !strings.Contains(err.Error(), "database store not available") {
+		t.Errorf("expected store error, got: %v", err)
+	}
+}
+
+func TestDropTableTool_NotFound(t *testing.T) {
+	store := testutil.TempStore(t)
+	tool := &DropTableTool{}
+	_, err := tool.Execute(context.Background(), `{"table_name":"ghost"}`,
+		&Context{Store: store, AgentID: "bot1"})
+	if err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Errorf("expected not found error, got: %v", err)
+	}
+}
+
+func TestDropTableTool_Success(t *testing.T) {
+	store := testutil.TempStore(t)
+	tctx := &Context{Store: store, AgentID: "bot1"}
+
+	// Create then drop.
+	ct := &CreateTableTool{}
+	_, err := ct.Execute(context.Background(),
+		`{"name":"temp","description":"throwaway","columns":[{"name":"x","type":"TEXT"}]}`, tctx)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	dt := &DropTableTool{}
+	result, err := dt.Execute(context.Background(), `{"table_name":"temp"}`, tctx)
+	if err != nil {
+		t.Fatalf("drop: %v", err)
+	}
+	if !strings.Contains(result.Output, "Dropped table") {
+		t.Errorf("output = %q", result.Output)
+	}
+
+	// Verify it's gone from hippocampus.
+	qt := &QueryTableTool{}
+	_, err = qt.Execute(context.Background(), `{"table":"temp"}`, tctx)
+	if err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Errorf("table should be gone from hippocampus, got: %v", err)
+	}
+}
+
+func TestDropTableTool_InvalidName(t *testing.T) {
+	tool := &DropTableTool{}
+	store := testutil.TempStore(t)
+	_, err := tool.Execute(context.Background(), `{"table_name":"bad-name!"}`,
+		&Context{Store: store, AgentID: "bot1"})
+	if err == nil || !strings.Contains(err.Error(), "alphanumeric") {
+		t.Errorf("expected name error, got: %v", err)
 	}
 }

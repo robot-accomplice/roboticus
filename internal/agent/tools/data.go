@@ -343,3 +343,207 @@ func (t *InsertRowTool) Execute(ctx context.Context, params string, tctx *Contex
 
 	return &Result{Output: fmt.Sprintf("Inserted row (id=%s) into %s", id, tableName)}, nil
 }
+
+// --- AlterTableTool ---
+
+// AlterTableTool lets the agent add or drop columns on its own tables.
+type AlterTableTool struct{}
+
+func (t *AlterTableTool) Name() string        { return "alter_table" }
+func (t *AlterTableTool) Description() string { return "Add or drop a column on an agent-owned table." }
+func (t *AlterTableTool) Risk() RiskLevel     { return RiskCaution }
+func (t *AlterTableTool) ParameterSchema() json.RawMessage {
+	return json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"table_name": {"type": "string", "description": "Table name (without agent prefix)"},
+			"operation": {"type": "string", "enum": ["add_column", "drop_column"], "description": "Operation to perform"},
+			"column": {
+				"type": "object",
+				"properties": {
+					"name":        {"type": "string", "description": "Column name"},
+					"type":        {"type": "string", "enum": ["TEXT", "INTEGER", "REAL", "BLOB"], "description": "Column type (required for add_column)"},
+					"nullable":    {"type": "boolean", "description": "Whether column is nullable", "default": true},
+					"description": {"type": "string", "description": "Column description"}
+				},
+				"required": ["name"]
+			}
+		},
+		"required": ["table_name", "operation", "column"]
+	}`)
+}
+
+func (t *AlterTableTool) Execute(ctx context.Context, params string, tctx *Context) (*Result, error) {
+	var args struct {
+		TableName string `json:"table_name"`
+		Operation string `json:"operation"`
+		Column    struct {
+			Name        string `json:"name"`
+			Type        string `json:"type"`
+			Nullable    *bool  `json:"nullable"`
+			Description string `json:"description"`
+		} `json:"column"`
+	}
+	if err := json.Unmarshal([]byte(params), &args); err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	if tctx.Store == nil {
+		return nil, fmt.Errorf("database store not available")
+	}
+
+	if !validIdentifier.MatchString(args.TableName) {
+		return nil, fmt.Errorf("table name must be alphanumeric and underscores only")
+	}
+	if !validIdentifier.MatchString(args.Column.Name) {
+		return nil, fmt.Errorf("column name must be alphanumeric and underscores only")
+	}
+
+	tableName := agentTableName(tctx.AgentID, args.TableName)
+
+	// Validate table exists in hippocampus.
+	var colsJSON string
+	err := tctx.Store.QueryRowContext(ctx,
+		`SELECT columns_json FROM hippocampus WHERE table_name = ? AND agent_owned = 1`,
+		tableName).Scan(&colsJSON)
+	if err != nil {
+		return nil, fmt.Errorf("table %q not found in hippocampus registry", args.TableName)
+	}
+
+	var registeredCols []struct {
+		Name string `json:"name"`
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal([]byte(colsJSON), &registeredCols); err != nil {
+		return nil, fmt.Errorf("parse registered columns: %w", err)
+	}
+
+	switch args.Operation {
+	case "add_column":
+		colType := strings.ToUpper(args.Column.Type)
+		if !allowedColumnTypes[colType] {
+			return nil, fmt.Errorf("column type %q not allowed; use TEXT, INTEGER, REAL, or BLOB", args.Column.Type)
+		}
+		// Check column count limit.
+		if len(registeredCols)+1 > maxColumns {
+			return nil, fmt.Errorf("maximum %d columns allowed", maxColumns)
+		}
+		// Check for duplicate.
+		for _, c := range registeredCols {
+			if c.Name == args.Column.Name {
+				return nil, fmt.Errorf("column %q already exists", args.Column.Name)
+			}
+		}
+
+		alterSQL := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", tableName, args.Column.Name, colType)
+		if _, err := tctx.Store.ExecContext(ctx, alterSQL); err != nil {
+			return nil, fmt.Errorf("alter table: %w", err)
+		}
+
+		// Update hippocampus registry.
+		registeredCols = append(registeredCols, struct {
+			Name string `json:"name"`
+			Type string `json:"type"`
+		}{Name: args.Column.Name, Type: colType})
+
+	case "drop_column":
+		// Verify column exists.
+		found := false
+		var newCols []struct {
+			Name string `json:"name"`
+			Type string `json:"type"`
+		}
+		for _, c := range registeredCols {
+			if c.Name == args.Column.Name {
+				found = true
+			} else {
+				newCols = append(newCols, c)
+			}
+		}
+		if !found {
+			return nil, fmt.Errorf("column %q not found in table %q", args.Column.Name, args.TableName)
+		}
+
+		alterSQL := fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s", tableName, args.Column.Name)
+		if _, err := tctx.Store.ExecContext(ctx, alterSQL); err != nil {
+			return nil, fmt.Errorf("alter table: %w", err)
+		}
+		registeredCols = newCols
+
+	default:
+		return nil, fmt.Errorf("operation must be add_column or drop_column")
+	}
+
+	// Persist updated columns to hippocampus.
+	updatedJSON, err := json.Marshal(registeredCols)
+	if err != nil {
+		return nil, fmt.Errorf("marshal columns: %w", err)
+	}
+	_, err = tctx.Store.ExecContext(ctx,
+		`UPDATE hippocampus SET columns_json = ? WHERE table_name = ?`,
+		string(updatedJSON), tableName)
+	if err != nil {
+		return nil, fmt.Errorf("update hippocampus: %w", err)
+	}
+
+	return &Result{Output: fmt.Sprintf("Altered table %q: %s column %q", tableName, args.Operation, args.Column.Name)}, nil
+}
+
+// --- DropTableTool ---
+
+// DropTableTool lets the agent drop its own tables.
+type DropTableTool struct{}
+
+func (t *DropTableTool) Name() string        { return "drop_table" }
+func (t *DropTableTool) Description() string { return "Drop an agent-owned table." }
+func (t *DropTableTool) Risk() RiskLevel     { return RiskCaution }
+func (t *DropTableTool) ParameterSchema() json.RawMessage {
+	return json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"table_name": {"type": "string", "description": "Table name (without agent prefix)"}
+		},
+		"required": ["table_name"]
+	}`)
+}
+
+func (t *DropTableTool) Execute(ctx context.Context, params string, tctx *Context) (*Result, error) {
+	var args struct {
+		TableName string `json:"table_name"`
+	}
+	if err := json.Unmarshal([]byte(params), &args); err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	if tctx.Store == nil {
+		return nil, fmt.Errorf("database store not available")
+	}
+
+	if !validIdentifier.MatchString(args.TableName) {
+		return nil, fmt.Errorf("table name must be alphanumeric and underscores only")
+	}
+
+	tableName := agentTableName(tctx.AgentID, args.TableName)
+
+	// Validate table exists in hippocampus.
+	var exists int
+	err := tctx.Store.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM hippocampus WHERE table_name = ? AND agent_owned = 1`,
+		tableName).Scan(&exists)
+	if err != nil || exists == 0 {
+		return nil, fmt.Errorf("table %q not found in hippocampus registry", args.TableName)
+	}
+
+	// Drop the table.
+	dropSQL := fmt.Sprintf("DROP TABLE IF EXISTS %s", tableName)
+	if _, err := tctx.Store.ExecContext(ctx, dropSQL); err != nil {
+		return nil, fmt.Errorf("drop table: %w", err)
+	}
+
+	// Remove from hippocampus.
+	_, err = tctx.Store.ExecContext(ctx,
+		`DELETE FROM hippocampus WHERE table_name = ?`, tableName)
+	if err != nil {
+		return nil, fmt.Errorf("remove from hippocampus: %w", err)
+	}
+
+	return &Result{Output: fmt.Sprintf("Dropped table %q", tableName)}, nil
+}

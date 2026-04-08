@@ -1,6 +1,7 @@
 package channel
 
 import (
+	"bytes"
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
@@ -10,7 +11,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"sort"
 	"sync"
 	"time"
 
@@ -239,18 +239,28 @@ func (a *A2AAdapter) DecryptInbound(peerID string, ciphertext []byte) error {
 }
 
 // domainSalt creates an order-independent salt from both public keys.
+// Keys are ordered by raw byte comparison (matching Rust's Ord on &[u8]),
+// concatenated, and hashed — ensuring cross-implementation interop.
 func (a *A2AAdapter) domainSalt(peerPubKey *ecdh.PublicKey) []byte {
-	keys := []string{
-		hex.EncodeToString(a.publicKey.Bytes()),
-		hex.EncodeToString(peerPubKey.Bytes()),
+	ourBytes := a.publicKey.Bytes()
+	theirBytes := peerPubKey.Bytes()
+
+	var left, right []byte
+	if bytes.Compare(ourBytes, theirBytes) <= 0 {
+		left, right = ourBytes, theirBytes
+	} else {
+		left, right = theirBytes, ourBytes
 	}
-	sort.Strings(keys)
-	h := sha256.Sum256([]byte("roboticus-a2a:" + keys[0] + ":" + keys[1]))
+
+	saltMaterial := make([]byte, 0, len(left)+len(right))
+	saltMaterial = append(saltMaterial, left...)
+	saltMaterial = append(saltMaterial, right...)
+	h := sha256.Sum256(saltMaterial)
 	return h[:]
 }
 
 func deriveKey(secret, salt []byte, length int) ([]byte, error) {
-	info := []byte("roboticus-a2a-session-key")
+	info := []byte("roboticus-a2a-session")
 	reader := hkdf.New(sha256.New, secret, salt, info)
 	key := make([]byte, length)
 	if _, err := io.ReadFull(reader, key); err != nil {

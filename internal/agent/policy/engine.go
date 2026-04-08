@@ -68,6 +68,7 @@ func NewEngine(cfg Config) *Engine {
 			calls:        make(map[string][]time.Time),
 		},
 		&validationRule{maxParamBytes: cfg.MaxParamBytes},
+		&configProtectionRule{},
 	}
 	return &Engine{rules: rules}
 }
@@ -397,6 +398,81 @@ func (r *financialDrainRule) Evaluate(req *ToolCallRequest, _ *tools.Registry) D
 		strings.Contains(lowerArgs, `"amount":"all"`) ||
 		strings.Contains(lowerArgs, `"amount": "all"`) {
 		return Deny("financial_drain", "arguments indicate full-balance drain")
+	}
+
+	return Allow()
+}
+
+// --- Rule: Config Protection ---
+
+// configProtectionRule prevents write tools from modifying protected config
+// files that contain sensitive fields (API keys, tokens, secrets, etc.).
+type configProtectionRule struct{}
+
+func (r *configProtectionRule) Name() string  { return "config_protection" }
+func (r *configProtectionRule) Priority() int { return 7 }
+
+// configWriteTools are tools that can modify files.
+var configWriteTools = map[string]bool{
+	"write_file": true,
+	"bash":       true,
+	"run_script": true,
+}
+
+// protectedConfigFiles are filenames that contain critical configuration.
+var protectedConfigFiles = []string{
+	"roboticus.toml",
+	"config-overrides.toml",
+}
+
+// protectedConfigFields are field names/patterns that must not be written via tools.
+// Exact matches and suffix patterns (starting with *) are supported.
+var protectedConfigFields = []string{
+	"scope_mode",
+	"api_key",
+	"admin_token",
+	"keystore",
+	"trusted_proxy",
+	"private_key",
+}
+
+// protectedConfigSuffixes are suffix patterns for fields like *_secret, *_token.
+var protectedConfigSuffixes = []string{
+	"_secret",
+	"_token",
+}
+
+func (r *configProtectionRule) Evaluate(req *ToolCallRequest, _ *tools.Registry) DecisionResult {
+	if !configWriteTools[req.ToolName] {
+		return Allow()
+	}
+
+	lowerArgs := strings.ToLower(req.Arguments)
+
+	// Check if arguments reference a config file.
+	referencesConfig := false
+	for _, cf := range protectedConfigFiles {
+		if strings.Contains(lowerArgs, cf) {
+			referencesConfig = true
+			break
+		}
+	}
+	if !referencesConfig {
+		return Allow()
+	}
+
+	// Check if arguments contain a protected field.
+	for _, field := range protectedConfigFields {
+		if strings.Contains(lowerArgs, field) {
+			return Deny("config_protection",
+				fmt.Sprintf("write to config file references protected field %q", field))
+		}
+	}
+	for _, suffix := range protectedConfigSuffixes {
+		if strings.Contains(lowerArgs, suffix) {
+			return Deny("config_protection",
+				fmt.Sprintf("write to config file references protected field pattern %q", "*"+suffix))
+		}
 	}
 
 	return Allow()
