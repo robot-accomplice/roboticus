@@ -363,7 +363,7 @@ func DefaultConfig() Config {
 			Routing: RoutingConfig{
 				Mode:                   "auto",
 				ConfidenceThreshold:    0.9,
-				EstimatedOutputTokens:  512,
+				EstimatedOutputTokens:  500,
 				AccuracyFloor:          0.0,
 				AccuracyMinObs:         10,
 				CostAware:              false,
@@ -417,7 +417,7 @@ func DefaultConfig() Config {
 			ScriptTimeoutSeconds: 30,
 			ScriptMaxOutputBytes: 1 << 20, // 1 MiB
 			AllowedInterpreters:  []string{"sh", "bash", "python3", "node", "ruby", "perl"},
-			SandboxEnv:           false,
+			SandboxEnv:           true,
 			HotReload:            true,
 			ScriptMaxMemoryBytes: 256 << 20, // 256 MiB
 			NetworkAllowed:       false,

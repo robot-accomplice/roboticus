@@ -27,5 +27,5 @@ const (
 	DefaultServerPort = 18789
 
 	// DefaultServerBind is the default HTTP server bind address.
-	DefaultServerBind = "127.0.0.1"
+	DefaultServerBind = "localhost"
 )

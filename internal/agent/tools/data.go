@@ -119,7 +119,7 @@ func (t *CreateTableTool) Execute(ctx context.Context, params string, tctx *Cont
 	for _, col := range args.Columns {
 		colDefs = append(colDefs, fmt.Sprintf("%s %s", col.Name, strings.ToUpper(col.Type)))
 	}
-	createSQL := fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s (id TEXT PRIMARY KEY, %s)",
+	createSQL := fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s (id TEXT PRIMARY KEY, created_at TEXT NOT NULL DEFAULT (datetime('now')), %s)",
 		tableName, strings.Join(colDefs, ", "))
 
 	if _, err := tctx.Store.ExecContext(ctx, createSQL); err != nil {

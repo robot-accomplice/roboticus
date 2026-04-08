@@ -19,9 +19,30 @@ func (g *ModelIdentityTruthGuard) CheckWithContext(content string, ctx *GuardCon
 	if ctx == nil || !ctx.HasIntent("model_identity") {
 		return GuardResult{Passed: true}
 	}
-	canonical := fmt.Sprintf("%s reporting in. I am currently running on %s.",
-		ctx.AgentName, ctx.ResolvedModel)
-	return GuardResult{Passed: false, Content: canonical}
+
+	// Length-based logic: short responses get full canonical rewrite,
+	// longer responses get model name redacted instead.
+	lines := strings.Count(content, "\n") + 1
+	if len(content) <= 200 && lines <= 3 {
+		canonical := fmt.Sprintf("%s reporting in. I am currently running on %s.",
+			ctx.AgentName, ctx.ResolvedModel)
+		return GuardResult{Passed: false, Content: canonical}
+	}
+
+	// For longer responses, redact the model name instead of full rewrite.
+	redacted := content
+	if ctx.ResolvedModel != "" {
+		redacted = strings.ReplaceAll(redacted, ctx.ResolvedModel, ctx.AgentName)
+	}
+	// Also redact common model family names.
+	modelFamilies := []string{"Claude", "GPT-4", "GPT-3.5", "Gemini", "Llama", "Mistral", "DeepSeek"}
+	for _, family := range modelFamilies {
+		redacted = strings.ReplaceAll(redacted, family, ctx.AgentName)
+	}
+	if redacted != content {
+		return GuardResult{Passed: false, Content: redacted}
+	}
+	return GuardResult{Passed: true}
 }
 
 // --- CurrentEventsTruthGuard ---

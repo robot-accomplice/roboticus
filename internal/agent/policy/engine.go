@@ -62,7 +62,7 @@ func NewEngine(cfg Config) *Engine {
 		&authorityRule{},
 		&commandSafetyRule{},
 		&financialRule{maxAmountCents: cfg.MaxTransferCents},
-		&pathProtectionRule{},
+		&pathProtectionRule{workspaceOnly: cfg.WorkspaceOnly, allowedPaths: cfg.AllowedPaths},
 		&rateLimitRule{
 			maxPerMinute: cfg.RateLimitPerMinute,
 			calls:        make(map[string][]time.Time),
@@ -75,9 +75,11 @@ func NewEngine(cfg Config) *Engine {
 
 // Config controls policy engine thresholds.
 type Config struct {
-	MaxTransferCents   int64 // max financial transfer in cents (default 10000 = $100)
-	RateLimitPerMinute int   // max tool calls per tool per minute (default 30)
-	MaxParamBytes      int   // max serialized param size (default 102400)
+	MaxTransferCents   int64    // max financial transfer in cents (default 10000 = $100)
+	RateLimitPerMinute int      // max tool calls per tool per minute (default 30)
+	MaxParamBytes      int      // max serialized param size (default 102400)
+	WorkspaceOnly      bool     // if true, deny absolute paths outside allowed paths and /tmp
+	AllowedPaths       []string // paths allowed when WorkspaceOnly is true
 }
 
 // DefaultConfig returns sensible defaults.
@@ -241,7 +243,10 @@ func (r *financialRule) Evaluate(req *ToolCallRequest, _ *tools.Registry) Decisi
 
 // --- Rule: Path Protection ---
 
-type pathProtectionRule struct{}
+type pathProtectionRule struct {
+	workspaceOnly bool
+	allowedPaths  []string
+}
 
 func (r *pathProtectionRule) Name() string  { return "path_protection" }
 func (r *pathProtectionRule) Priority() int { return 4 }
@@ -264,6 +269,43 @@ func (r *pathProtectionRule) Evaluate(req *ToolCallRequest, _ *tools.Registry) D
 	if strings.Contains(req.Arguments, "..") {
 		return Deny("path_protection", "path traversal detected")
 	}
+
+	// Workspace-only enforcement: deny absolute paths not in allowed list and not under /tmp.
+	if r.workspaceOnly {
+		// Extract potential file paths from arguments.
+		var args map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(req.Arguments), &args); err == nil {
+			pathKeys := []string{"path", "file", "filepath", "filename", "directory", "dir"}
+			for _, key := range pathKeys {
+				raw, ok := args[key]
+				if !ok {
+					continue
+				}
+				var pathVal string
+				if err := json.Unmarshal(raw, &pathVal); err != nil {
+					continue
+				}
+				if !strings.HasPrefix(pathVal, "/") {
+					continue // relative paths are OK
+				}
+				if strings.HasPrefix(pathVal, "/tmp") || strings.HasPrefix(pathVal, "/tmp/") {
+					continue // /tmp is always allowed
+				}
+				allowed := false
+				for _, ap := range r.allowedPaths {
+					if strings.HasPrefix(pathVal, ap) {
+						allowed = true
+						break
+					}
+				}
+				if !allowed {
+					return Deny("path_protection",
+						fmt.Sprintf("absolute path %q not in allowed paths (workspace_only mode)", pathVal))
+				}
+			}
+		}
+	}
+
 	return Allow()
 }
 

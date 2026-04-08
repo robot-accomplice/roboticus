@@ -90,6 +90,8 @@ func (g *TaskDeferralGuard) CheckWithContext(content string, ctx *GuardContext) 
 	introspectionTools := map[string]bool{
 		"get_memory_stats": true, "get_runtime_context": true,
 		"get_channel_health": true, "get_subagent_status": true,
+		"list-subagent-roster": true, "list-available-skills": true,
+		"task-status": true, "list-open-tasks": true,
 	}
 	for _, tr := range ctx.ToolResults {
 		if !introspectionTools[tr.ToolName] {
@@ -198,6 +200,8 @@ func (g *DeclaredActionGuard) CheckWithContext(content string, ctx *GuardContext
 		"roll", "d20", "dc ", "check", "succeed", "fail",
 		"attempt", "consequences", "are you sure", "damage",
 		"hit", "miss", "save", "result",
+		"try", "manage", "unable", "before we resolve",
+		"before proceeding", "what would happen",
 	}
 	for _, ind := range resolutionIndicators {
 		if strings.Contains(respLower, ind) {

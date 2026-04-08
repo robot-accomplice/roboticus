@@ -39,6 +39,21 @@ func ParseToolCallsFromText(content string) []ToolCall {
 			continue
 		}
 
+		// False positive check: if there is a closing brace between the
+		// opening brace and the "tool_call" marker, this brace belongs to
+		// a different JSON object — skip it.
+		hasClosingBetween := false
+		for i := braceStart + 1; i < idx; i++ {
+			if content[i] == '}' {
+				hasClosingBetween = true
+				break
+			}
+		}
+		if hasClosingBetween {
+			searchFrom = idx + 1
+			continue
+		}
+
 		// Track brace depth to find the closing brace.
 		depth := 0
 		braceEnd := -1
