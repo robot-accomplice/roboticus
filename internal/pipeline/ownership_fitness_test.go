@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"testing"
+	"time"
 
 	"roboticus/internal/core"
 	"roboticus/testutil"
@@ -12,10 +13,12 @@ import (
 // all pipeline behavior by calling RunPipeline with zero connector-side logic.
 func TestOwnership_NewConnectorInheritsAllStages(t *testing.T) {
 	store := testutil.TempStore(t)
+	bgw := core.NewBackgroundWorker(4)
+	defer bgw.Drain(5 * time.Second)
 	pipe := New(PipelineDeps{
 		Store:    store,
 		Executor: &stubExecutor{response: "inherited"},
-		BGWorker: core.NewBackgroundWorker(4),
+		BGWorker: bgw,
 	})
 
 	// This is what a new connector would do: parse → call → format.
@@ -43,10 +46,12 @@ func TestOwnership_NewConnectorInheritsAllStages(t *testing.T) {
 // Config flag differences — nothing more.
 func TestOwnership_TwoPresetsProduceOnlyConfigDifferences(t *testing.T) {
 	store := testutil.TempStore(t)
+	bgw := core.NewBackgroundWorker(4)
+	defer bgw.Drain(5 * time.Second)
 	pipe := New(PipelineDeps{
 		Store:    store,
 		Executor: &stubExecutor{response: "config diff"},
-		BGWorker: core.NewBackgroundWorker(4),
+		BGWorker: bgw,
 	})
 	ctx := context.Background()
 
@@ -79,10 +84,12 @@ func TestOwnership_TwoPresetsProduceOnlyConfigDifferences(t *testing.T) {
 // gives connectors everything they need — no DB queries required.
 func TestOwnership_PipelineOutcomeContainsAllMetadata(t *testing.T) {
 	store := testutil.TempStore(t)
+	bgw := core.NewBackgroundWorker(4)
+	defer bgw.Drain(5 * time.Second)
 	pipe := New(PipelineDeps{
 		Store:    store,
 		Executor: &stubExecutor{response: "metadata check"},
-		BGWorker: core.NewBackgroundWorker(4),
+		BGWorker: bgw,
 	})
 
 	outcome, err := RunPipeline(context.Background(), pipe, PresetAPI(),
