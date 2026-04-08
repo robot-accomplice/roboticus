@@ -1,8 +1,8 @@
 # Architecture Rules Diagrams
 
 These diagrams are the visual companion to
-[architecture_rules.md](/Users/jmachen/code/goboticus/architecture_rules.md)
-and [ARCHITECTURE.md](/Users/jmachen/code/goboticus/ARCHITECTURE.md).
+[architecture_rules.md](/Users/jmachen/code/roboticus/architecture_rules.md)
+and [ARCHITECTURE.md](/Users/jmachen/code/roboticus/ARCHITECTURE.md).
 
 They are intentionally optimized for:
 
