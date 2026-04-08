@@ -1,13 +1,14 @@
 package api
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
 )
 
 func TestTicketStore_IssueAndValidate(t *testing.T) {
-	ts := NewTicketStore(60 * time.Second)
+	ts := NewTicketStore(context.Background(), 60 * time.Second)
 
 	ticket := ts.Issue()
 	if ticket == "" {
@@ -29,7 +30,7 @@ func TestTicketStore_IssueAndValidate(t *testing.T) {
 }
 
 func TestTicketStore_InvalidTicket(t *testing.T) {
-	ts := NewTicketStore(60 * time.Second)
+	ts := NewTicketStore(context.Background(), 60 * time.Second)
 
 	if ts.Validate("wst_nonexistent") {
 		t.Error("non-existent ticket should fail validation")
@@ -37,7 +38,7 @@ func TestTicketStore_InvalidTicket(t *testing.T) {
 }
 
 func TestTicketStore_ExpiredTicket(t *testing.T) {
-	ts := NewTicketStore(1 * time.Millisecond) // very short TTL
+	ts := NewTicketStore(context.Background(), 1 * time.Millisecond) // very short TTL
 
 	ticket := ts.Issue()
 	time.Sleep(5 * time.Millisecond)
@@ -48,7 +49,7 @@ func TestTicketStore_ExpiredTicket(t *testing.T) {
 }
 
 func TestTicketStore_MultipleTickets(t *testing.T) {
-	ts := NewTicketStore(60 * time.Second)
+	ts := NewTicketStore(context.Background(), 60 * time.Second)
 
 	t1 := ts.Issue()
 	t2 := ts.Issue()
@@ -66,7 +67,7 @@ func TestTicketStore_MultipleTickets(t *testing.T) {
 }
 
 func TestTicketStore_Cleanup(t *testing.T) {
-	ts := NewTicketStore(1 * time.Millisecond)
+	ts := NewTicketStore(context.Background(), 1 * time.Millisecond)
 
 	ts.Issue()
 	ts.Issue()
@@ -84,7 +85,7 @@ func TestTicketStore_Cleanup(t *testing.T) {
 }
 
 func TestTicketStore_CleanupKeepsValid(t *testing.T) {
-	ts := NewTicketStore(60 * time.Second)
+	ts := NewTicketStore(context.Background(), 60 * time.Second)
 
 	ticket := ts.Issue()
 	ts.cleanup() // should not remove the valid ticket
@@ -95,7 +96,7 @@ func TestTicketStore_CleanupKeepsValid(t *testing.T) {
 }
 
 func TestTicketStore_EntropyLength(t *testing.T) {
-	ts := NewTicketStore(60 * time.Second)
+	ts := NewTicketStore(context.Background(), 60 * time.Second)
 	ticket := ts.Issue()
 	// "wst_" prefix + 64 hex chars (32 bytes of entropy).
 	expectedLen := 4 + 64
@@ -105,7 +106,7 @@ func TestTicketStore_EntropyLength(t *testing.T) {
 }
 
 func TestTicketStore_UniqueTokens(t *testing.T) {
-	ts := NewTicketStore(60 * time.Second)
+	ts := NewTicketStore(context.Background(), 60 * time.Second)
 	seen := make(map[string]bool)
 	for i := 0; i < 100; i++ {
 		token := ts.Issue()

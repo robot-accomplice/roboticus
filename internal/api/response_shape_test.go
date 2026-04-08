@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -173,7 +174,7 @@ func createTestServer(t *testing.T) *httptest.Server {
 		Config:   &cfgVal,
 		EventBus: NewEventBus(64),
 	}
-	srv := NewServer(DefaultServerConfig(), state)
+	srv := NewServer(context.Background(), DefaultServerConfig(), state)
 	return httptest.NewServer(srv.Handler)
 }
 

@@ -714,7 +714,7 @@ func (d *Daemon) run() {
 	if d.cfg.Server.Bind != "" {
 		srvCfg.Bind = d.cfg.Server.Bind
 	}
-	httpSrv := api.NewServer(srvCfg, d.appState)
+	httpSrv := api.NewServer(ctx, srvCfg, d.appState)
 
 	d.wg.Add(1)
 	go func() {

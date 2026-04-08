@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"sync"
@@ -15,17 +16,23 @@ type TicketStore struct {
 }
 
 // NewTicketStore creates a ticket store with the given TTL.
-func NewTicketStore(ttl time.Duration) *TicketStore {
+// The background cleanup goroutine exits when ctx is cancelled.
+func NewTicketStore(ctx context.Context, ttl time.Duration) *TicketStore {
 	ts := &TicketStore{
 		tickets: make(map[string]time.Time),
 		ttl:     ttl,
 	}
-	// Background cleanup.
+	// Background cleanup — exits when context cancels.
 	go func() {
 		ticker := time.NewTicker(time.Minute)
 		defer ticker.Stop()
-		for range ticker.C {
-			ts.cleanup()
+		for {
+			select {
+			case <-ticker.C:
+				ts.cleanup()
+			case <-ctx.Done():
+				return
+			}
 		}
 	}()
 	return ts

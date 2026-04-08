@@ -6,7 +6,6 @@ import (
 	"reflect"
 	"testing"
 
-	"roboticus/internal/core"
 	"roboticus/internal/db"
 	"roboticus/testutil"
 )
@@ -53,7 +52,7 @@ func TestParity_CoreStagesFireForAllPresets(t *testing.T) {
 	pipe := New(PipelineDeps{
 		Store:    store,
 		Executor: &stubExecutor{response: "parity test"},
-		BGWorker: core.NewBackgroundWorker(4),
+		BGWorker: testutil.BGWorker(t, 4),
 	})
 
 	// Universal stages that must fire for EVERY preset.

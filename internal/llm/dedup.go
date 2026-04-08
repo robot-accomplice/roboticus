@@ -55,7 +55,10 @@ func (d *Dedup) Do(ctx context.Context, key string, fn func() (*Response, error)
 
 	// Clean up after TTL (allow brief reuse of result for near-simultaneous calls).
 	go func() {
-		time.Sleep(d.ttl)
+		select {
+		case <-time.After(d.ttl):
+		case <-ctx.Done():
+		}
 		d.mu.Lock()
 		delete(d.inflight, key)
 		d.mu.Unlock()

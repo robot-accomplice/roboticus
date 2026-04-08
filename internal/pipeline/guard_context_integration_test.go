@@ -3,9 +3,7 @@ package pipeline_test
 import (
 	"context"
 	"testing"
-	"time"
 
-	"roboticus/internal/core"
 	"roboticus/internal/pipeline"
 	"roboticus/internal/session"
 
@@ -31,14 +29,11 @@ func TestGuardContextRetry_StandardInference(t *testing.T) {
 	retryGuard := &emptyRetryGuard{}
 	guards := pipeline.NewGuardChain(retryGuard)
 
-	bgw := core.NewBackgroundWorker(4)
-	defer bgw.Drain(2 * time.Second)
-
 	p := pipeline.New(pipeline.PipelineDeps{
 		Store:    store,
 		Executor: executor,
 		Guards:   guards,
-		BGWorker: bgw,
+		BGWorker: testutil.BGWorker(t, 4),
 	})
 
 	cfg := pipeline.PresetAPI()

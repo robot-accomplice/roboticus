@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -57,7 +58,8 @@ func DefaultServerConfig() ServerConfig {
 }
 
 // NewServer creates the HTTP server with all routes and middleware.
-func NewServer(cfg ServerConfig, state *AppState) *http.Server {
+// The context controls the lifetime of background goroutines (rate limit cleanup, ticket cleanup).
+func NewServer(ctx context.Context, cfg ServerConfig, state *AppState) *http.Server {
 	r := chi.NewRouter()
 
 	// Global middleware.
@@ -65,11 +67,23 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 	r.Use(chimw.RealIP)
 	r.Use(NewRequestLogger())
 	r.Use(chimw.Recoverer)
-	r.Use(chimw.Timeout(cfg.WriteTimeout))
+	// Timeout middleware for non-streaming endpoints. WebSocket and SSE
+	// connections are long-lived and must NOT be killed by this timeout.
+	r.Use(func(next http.Handler) http.Handler {
+		timeout := chimw.Timeout(cfg.WriteTimeout)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Skip timeout for WebSocket upgrades and SSE streaming.
+			if r.URL.Path == "/ws" || strings.HasSuffix(r.URL.Path, "/stream") {
+				next.ServeHTTP(w, r)
+				return
+			}
+			timeout(next).ServeHTTP(w, r)
+		})
+	})
 	r.Use(SecurityHeaders)
 	r.Use(CORSMiddleware(state.Config.CORS.AllowedOrigins, state.Config.CORS.MaxAgeSeconds))
 	r.Use(BodyLimit(1 << 20)) // 1MB
-	r.Use(RateLimitMiddleware(
+	r.Use(RateLimitMiddleware(ctx,
 		state.Config.RateLimit.Enabled,
 		state.Config.RateLimit.RequestsPerWindow,
 		state.Config.RateLimit.WindowSeconds,
@@ -397,7 +411,7 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 
 		// WebSocket.
 		r.Get("/ws", HandleWebSocket(state.EventBus, cfg.APIKey))
-		wsTickets := NewTicketStore(60 * time.Second)
+		wsTickets := NewTicketStore(ctx, 60 * time.Second)
 		r.Post("/api/ws-ticket", routes.IssueWSTicket(wsTickets))
 	})
 

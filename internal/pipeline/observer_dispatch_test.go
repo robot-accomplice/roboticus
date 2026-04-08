@@ -4,7 +4,6 @@ import (
 	"context"
 	"testing"
 
-	"roboticus/internal/core"
 	"roboticus/testutil"
 )
 
@@ -24,7 +23,7 @@ func TestObserverDispatch_SendsToObservers(t *testing.T) {
 	pipe := New(PipelineDeps{
 		Store:    store,
 		Executor: &stubExecutor{response: "observed"},
-		BGWorker: core.NewBackgroundWorker(4),
+		BGWorker: testutil.BGWorker(t, 4),
 	})
 
 	sess := NewSession("obs-sess", "default", "TestBot")
@@ -58,7 +57,7 @@ func TestObserverDispatch_NoObservers(t *testing.T) {
 	store := testutil.TempStore(t)
 	pipe := New(PipelineDeps{
 		Store:    store,
-		BGWorker: core.NewBackgroundWorker(2),
+		BGWorker: testutil.BGWorker(t, 2),
 	})
 
 	// Should not panic or error.

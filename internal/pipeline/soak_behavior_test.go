@@ -4,7 +4,6 @@ import (
 	"strings"
 	"testing"
 
-	"roboticus/internal/core"
 	"roboticus/testutil"
 )
 
@@ -294,7 +293,7 @@ func TestBehaviorSoak_LiveScenarios(t *testing.T) {
 				Store:    store,
 				Executor: &stubExecutor{response: sc.mockResponse},
 				Guards:   DefaultGuardChain(),
-				BGWorker: core.NewBackgroundWorker(4),
+				BGWorker: testutil.BGWorker(t, 4),
 			})
 
 			outcome, err := RunPipeline(t.Context(), pipe, PresetAPI(), Input{

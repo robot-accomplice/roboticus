@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"roboticus/internal/core"
 	"roboticus/testutil"
 )
 
@@ -19,7 +18,7 @@ func TestFinalizeStream_StoresAssistantMessage(t *testing.T) {
 	pipe := New(PipelineDeps{
 		Store:    store,
 		Executor: &stubExecutor{response: "stream test"},
-		BGWorker: core.NewBackgroundWorker(4),
+		BGWorker: testutil.BGWorker(t, 4),
 	})
 
 	// Create a session (must exist in DB for FK constraint).
@@ -63,7 +62,9 @@ func TestFinalizeStream_InvokesIngestor(t *testing.T) {
 	store := testutil.TempStore(t)
 
 	ingestor := &testIngestor{}
-	bgw := core.NewBackgroundWorker(4)
+	// This test observes a side effect of background work, so we need
+	// the worker reference to drain BEFORE asserting (not just at cleanup).
+	bgw := testutil.BGWorker(t, 4)
 	pipe := New(PipelineDeps{
 		Store:    store,
 		Executor: &stubExecutor{response: "ok"},
@@ -85,7 +86,7 @@ func TestFinalizeStream_InvokesIngestor(t *testing.T) {
 
 	pipe.FinalizeStream(context.Background(), outcome, "hello")
 
-	// Drain background worker — use Drain(timeout) not Sleep to avoid race.
+	// Wait for background ingest to complete before asserting.
 	bgw.Drain(5 * time.Second)
 
 	if !ingestor.WasCalled() {
@@ -96,7 +97,7 @@ func TestFinalizeStream_InvokesIngestor(t *testing.T) {
 // TestFinalizeStream_NilOutcomeIsNoOp verifies no panic on nil inputs.
 func TestFinalizeStream_NilOutcomeIsNoOp(t *testing.T) {
 	store := testutil.TempStore(t)
-	pipe := New(PipelineDeps{Store: store, BGWorker: core.NewBackgroundWorker(2)})
+	pipe := New(PipelineDeps{Store: store, BGWorker: testutil.BGWorker(t, 2)})
 
 	// Should not panic.
 	pipe.FinalizeStream(context.Background(), nil, "content")
@@ -112,7 +113,7 @@ func TestFinalizeStream_MatchesStandardPostTurn(t *testing.T) {
 	pipe := New(PipelineDeps{
 		Store:    store,
 		Executor: &stubExecutor{response: "parity content"},
-		BGWorker: core.NewBackgroundWorker(4),
+		BGWorker: testutil.BGWorker(t, 4),
 	})
 
 	// Standard inference path.
@@ -143,7 +144,6 @@ func TestFinalizeStream_MatchesStandardPostTurn(t *testing.T) {
 		streamConfig:  cfgPtr(PresetStreaming()),
 	}
 	pipe.FinalizeStream(ctx, streamOutcome, "parity content")
-	time.Sleep(100 * time.Millisecond) // Wait for background worker to execute.
 
 	// Count streaming artifacts.
 	var streamMsgCount int

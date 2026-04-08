@@ -487,6 +487,14 @@ func (s *Service) ResetQualityScores(model string) int {
 	return s.quality.ClearModel(model)
 }
 
+// Drain waits for all background workers (cost recording, etc.) to complete.
+// Call in tests to prevent TempDir cleanup races.
+func (s *Service) Drain(timeout time.Duration) {
+	if s != nil && s.bgWorker != nil {
+		s.bgWorker.Drain(timeout)
+	}
+}
+
 // wrapStreamCache accumulates streamed chunks and caches the full response.
 func (s *Service) wrapStreamCache(ctx context.Context, in <-chan StreamChunk, req *Request) <-chan StreamChunk {
 	out := make(chan StreamChunk, 32)

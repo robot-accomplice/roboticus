@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -175,7 +176,7 @@ func newTestServer(t *testing.T) (*httptest.Server, func()) {
 		EventBus: eventBus,
 	}
 
-	srv := NewServer(DefaultServerConfig(), state)
+	srv := NewServer(context.Background(), DefaultServerConfig(), state)
 	ts := httptest.NewServer(srv.Handler)
 
 	return ts, func() { ts.Close() }

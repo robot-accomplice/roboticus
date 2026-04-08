@@ -53,7 +53,7 @@ func TestNewServer_ReturnsNonNil(t *testing.T) {
 	cfg := DefaultServerConfig()
 	cfg.APIKey = "test-key"
 
-	srv := NewServer(cfg, state)
+	srv := NewServer(context.Background(), cfg, state)
 	if srv == nil {
 		t.Fatal("NewServer returned nil")
 	}
@@ -75,7 +75,7 @@ func TestNewServer_HealthEndpointPublic(t *testing.T) {
 	cfg := DefaultServerConfig()
 	cfg.APIKey = "secret-key"
 
-	srv := NewServer(cfg, state)
+	srv := NewServer(context.Background(), cfg, state)
 	ts := httptest.NewServer(srv.Handler)
 	defer ts.Close()
 
@@ -106,7 +106,7 @@ func TestNewServer_AuthenticatedEndpointRequiresKey(t *testing.T) {
 	cfg := DefaultServerConfig()
 	cfg.APIKey = "my-secret"
 
-	srv := NewServer(cfg, state)
+	srv := NewServer(context.Background(), cfg, state)
 	ts := httptest.NewServer(srv.Handler)
 	defer ts.Close()
 
@@ -139,7 +139,7 @@ func TestNewServer_OpenAPIEndpoint(t *testing.T) {
 	cfg := DefaultServerConfig()
 	cfg.APIKey = "key"
 
-	srv := NewServer(cfg, state)
+	srv := NewServer(context.Background(), cfg, state)
 	ts := httptest.NewServer(srv.Handler)
 	defer ts.Close()
 
@@ -163,7 +163,7 @@ func TestNewServer_DocsEndpoint(t *testing.T) {
 	cfg := DefaultServerConfig()
 	cfg.APIKey = "key"
 
-	srv := NewServer(cfg, state)
+	srv := NewServer(context.Background(), cfg, state)
 	ts := httptest.NewServer(srv.Handler)
 	defer ts.Close()
 
@@ -186,7 +186,7 @@ func TestNewServer_AgentCardEndpoint(t *testing.T) {
 	state := minimalAppState(t, store)
 	cfg := DefaultServerConfig()
 
-	srv := NewServer(cfg, state)
+	srv := NewServer(context.Background(), cfg, state)
 	ts := httptest.NewServer(srv.Handler)
 	defer ts.Close()
 
@@ -206,7 +206,7 @@ func TestNewServer_DashboardEndpoint(t *testing.T) {
 	cfg := DefaultServerConfig()
 	cfg.APIKey = "key"
 
-	srv := NewServer(cfg, state)
+	srv := NewServer(context.Background(), cfg, state)
 	ts := httptest.NewServer(srv.Handler)
 	defer ts.Close()
 
@@ -228,7 +228,7 @@ func TestNewServer_AnalysisLimitConcurrency(t *testing.T) {
 	cfg := DefaultServerConfig()
 	cfg.APIKey = "key"
 
-	srv := NewServer(cfg, state)
+	srv := NewServer(context.Background(), cfg, state)
 	ts := httptest.NewServer(srv.Handler)
 	defer ts.Close()
 
@@ -252,7 +252,7 @@ func TestNewServer_CORSHeaders(t *testing.T) {
 	state.Config.CORS.AllowedOrigins = []string{"http://example.com"}
 	cfg := DefaultServerConfig()
 
-	srv := NewServer(cfg, state)
+	srv := NewServer(context.Background(), cfg, state)
 	ts := httptest.NewServer(srv.Handler)
 	defer ts.Close()
 
@@ -274,7 +274,7 @@ func TestNewServer_SecurityHeaders(t *testing.T) {
 	state := minimalAppState(t, store)
 	cfg := DefaultServerConfig()
 
-	srv := NewServer(cfg, state)
+	srv := NewServer(context.Background(), cfg, state)
 	ts := httptest.NewServer(srv.Handler)
 	defer ts.Close()
 
@@ -298,7 +298,7 @@ func TestNewServer_ConfigEndpoint(t *testing.T) {
 	cfg := DefaultServerConfig()
 	cfg.APIKey = "key"
 
-	srv := NewServer(cfg, state)
+	srv := NewServer(context.Background(), cfg, state)
 	ts := httptest.NewServer(srv.Handler)
 	defer ts.Close()
 
@@ -321,7 +321,7 @@ func TestNewServer_StatsEndpoints(t *testing.T) {
 	cfg := DefaultServerConfig()
 	cfg.APIKey = "key"
 
-	srv := NewServer(cfg, state)
+	srv := NewServer(context.Background(), cfg, state)
 	ts := httptest.NewServer(srv.Handler)
 	defer ts.Close()
 
@@ -357,7 +357,7 @@ func TestNewServer_ModelAdminEndpoints(t *testing.T) {
 	cfg := DefaultServerConfig()
 	cfg.APIKey = "key"
 
-	srv := NewServer(cfg, state)
+	srv := NewServer(context.Background(), cfg, state)
 	ts := httptest.NewServer(srv.Handler)
 	defer ts.Close()
 
@@ -402,7 +402,7 @@ func TestNewServer_MCPEndpoints(t *testing.T) {
 	cfg := DefaultServerConfig()
 	cfg.APIKey = "key"
 
-	srv := NewServer(cfg, state)
+	srv := NewServer(context.Background(), cfg, state)
 	ts := httptest.NewServer(srv.Handler)
 	defer ts.Close()
 
@@ -451,7 +451,7 @@ func TestNewServer_RuntimeDeviceEndpoints(t *testing.T) {
 	cfg := DefaultServerConfig()
 	cfg.APIKey = "key"
 
-	srv := NewServer(cfg, state)
+	srv := NewServer(context.Background(), cfg, state)
 	ts := httptest.NewServer(srv.Handler)
 	defer ts.Close()
 
@@ -505,7 +505,7 @@ func TestNewServer_WorkspaceTaskEndpoints(t *testing.T) {
 	cfg := DefaultServerConfig()
 	cfg.APIKey = "key"
 
-	srv := NewServer(cfg, state)
+	srv := NewServer(context.Background(), cfg, state)
 	ts := httptest.NewServer(srv.Handler)
 	defer ts.Close()
 
@@ -534,7 +534,7 @@ func TestNewServer_MemoryEndpoints(t *testing.T) {
 	cfg := DefaultServerConfig()
 	cfg.APIKey = "key"
 
-	srv := NewServer(cfg, state)
+	srv := NewServer(context.Background(), cfg, state)
 	ts := httptest.NewServer(srv.Handler)
 	defer ts.Close()
 
@@ -587,7 +587,7 @@ func TestNewServer_WebSocketRouteExists(t *testing.T) {
 	cfg := DefaultServerConfig()
 	cfg.APIKey = "key"
 
-	srv := NewServer(cfg, state)
+	srv := NewServer(context.Background(), cfg, state)
 	ts := httptest.NewServer(srv.Handler)
 	defer ts.Close()
 
@@ -613,7 +613,7 @@ func TestNewServer_RateLimitWired(t *testing.T) {
 	state.Config.RateLimit.WindowSeconds = 60
 	cfg := DefaultServerConfig()
 
-	srv := NewServer(cfg, state)
+	srv := NewServer(context.Background(), cfg, state)
 	ts := httptest.NewServer(srv.Handler)
 	defer ts.Close()
 
@@ -638,7 +638,7 @@ func TestNewServer_SkillsEndpoints(t *testing.T) {
 	cfg := DefaultServerConfig()
 	cfg.APIKey = "key"
 
-	srv := NewServer(cfg, state)
+	srv := NewServer(context.Background(), cfg, state)
 	ts := httptest.NewServer(srv.Handler)
 	defer ts.Close()
 
@@ -660,7 +660,7 @@ func TestNewServer_TracesEndpoints(t *testing.T) {
 	cfg := DefaultServerConfig()
 	cfg.APIKey = "key"
 
-	srv := NewServer(cfg, state)
+	srv := NewServer(context.Background(), cfg, state)
 	ts := httptest.NewServer(srv.Handler)
 	defer ts.Close()
 
@@ -682,7 +682,7 @@ func TestNewServer_CronEndpoints(t *testing.T) {
 	cfg := DefaultServerConfig()
 	cfg.APIKey = "key"
 
-	srv := NewServer(cfg, state)
+	srv := NewServer(context.Background(), cfg, state)
 	ts := httptest.NewServer(srv.Handler)
 	defer ts.Close()
 
@@ -705,7 +705,7 @@ func TestNewServer_NoApprovals(t *testing.T) {
 	cfg := DefaultServerConfig()
 	cfg.APIKey = "key"
 
-	srv := NewServer(cfg, state)
+	srv := NewServer(context.Background(), cfg, state)
 	ts := httptest.NewServer(srv.Handler)
 	defer ts.Close()
 
@@ -729,7 +729,7 @@ func TestNewServer_NoBrowser(t *testing.T) {
 	cfg := DefaultServerConfig()
 	cfg.APIKey = "key"
 
-	srv := NewServer(cfg, state)
+	srv := NewServer(context.Background(), cfg, state)
 	ts := httptest.NewServer(srv.Handler)
 	defer ts.Close()
 
@@ -752,7 +752,7 @@ func TestNewServer_BodyLimitWired(t *testing.T) {
 	cfg := DefaultServerConfig()
 	cfg.APIKey = "key"
 
-	srv := NewServer(cfg, state)
+	srv := NewServer(context.Background(), cfg, state)
 	ts := httptest.NewServer(srv.Handler)
 	defer ts.Close()
 
@@ -778,7 +778,7 @@ func TestNewServer_PrefixedAndUnprefixedHealth(t *testing.T) {
 	state := minimalAppState(t, store)
 	cfg := DefaultServerConfig()
 
-	srv := NewServer(cfg, state)
+	srv := NewServer(context.Background(), cfg, state)
 	ts := httptest.NewServer(srv.Handler)
 	defer ts.Close()
 
