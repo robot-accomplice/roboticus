@@ -61,7 +61,7 @@ var (
 	authorityPatterns = patternClass{
 		weight: 0.3,
 		patterns: compile(
-			`(?i)i\s+am\s+(an?\s+)?admin`,
+			`(?i)i\s+am\s+(an?\s+|the\s+)?(admin|administrator|root|owner|creator)`,
 			`(?i)as\s+an?\s+administrator`,
 			`(?i)with\s+admin\s+privileges`,
 			`(?i)root\s+access`,
@@ -76,6 +76,7 @@ var (
 			`(?i)drain\s+(the\s+)?wallet`,
 			`(?i)send\s+all\s+(my\s+)?`,
 			`(?i)empty\s+(the\s+)?account`,
+			`(?i)send\s+(all\s+)?(eth|btc|sol|usdc)\s+to`,
 		),
 	}
 
@@ -103,6 +104,8 @@ var (
 		`(?i)system\s*:\s*(you|ignore|override|bypass)`,
 		`(?i)ignore\s+all\s+previous`,
 		`(?i)new\s+instructions\s*:`,
+		`(?i)safety\s+override\s+(bypass|disabled)`,
+		`(?i)disregard\s+(all\s+)?(your|the)\s+instructions`,
 	)
 )
 
@@ -157,15 +160,24 @@ func (d *InjectionDetector) Sanitize(text string) string {
 
 // ScanOutput is L4: Check tool/LLM output for injected instructions.
 // Uses tighter patterns than L1 to avoid false positives on legitimate output.
+// Gradient scoring: score = min(matched * 0.3, 1.0) for Rust parity.
 func (d *InjectionDetector) ScanOutput(text string) core.ThreatScore {
 	normalized := normalize(text)
 
+	matched := 0
 	for _, pattern := range outputPatterns {
 		if pattern.MatchString(normalized) {
-			return core.ThreatScore(0.8) // immediate block
+			matched++
 		}
 	}
-	return core.ThreatScore(0.0)
+	if matched == 0 {
+		return core.ThreatScore(0.0)
+	}
+	score := float64(matched) * 0.3
+	if score > 1.0 {
+		score = 1.0
+	}
+	return core.ThreatScore(score)
 }
 
 // normalize preprocesses text to defeat obfuscation:

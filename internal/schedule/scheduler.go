@@ -110,6 +110,9 @@ func findNearestCronSlot(cronExpr string, now time.Time) (time.Time, bool) {
 
 // EvaluateInterval checks if enough time has passed since last run.
 func (s *DurableScheduler) EvaluateInterval(lastRun *time.Time, intervalMs int64, now time.Time) bool {
+	if intervalMs <= 0 {
+		return false // zero or negative interval is invalid
+	}
 	if lastRun == nil {
 		return true // never run, fire immediately
 	}

@@ -21,8 +21,9 @@ type PromptConfig struct {
 	Version     string               // runtime version
 	Model       string               // primary model name
 	Workspace   string               // workspace root path
-	Skills      []string             // active skill names
-	IsSubagent  bool                 // include orchestration workflow block
+	Skills            []string            // active skill names
+	SkillDescriptions map[string]string   // optional: skill name -> description
+	IsSubagent        bool                // include orchestration workflow block
 	BoundaryKey []byte               // HMAC-SHA256 key for trust boundary signing (nil = no signing)
 	ToolNames   []string             // registered tool names for introspection block
 	Obsidian    *core.ObsidianConfig // optional Obsidian config for vault directive
@@ -68,12 +69,15 @@ func BuildSystemPrompt(cfg PromptConfig) string {
 		sections = append(sections, "## Active Directives\n"+cfg.Directives+"\n")
 	}
 
-	// 4. Active skills.
+	// 4. Active skills (nested heading format matching Rust).
 	if len(cfg.Skills) > 0 {
 		var sb strings.Builder
 		sb.WriteString("## Active Skills\n")
-		for _, skill := range cfg.Skills {
-			fmt.Fprintf(&sb, "- %s\n", skill)
+		for i, skill := range cfg.Skills {
+			fmt.Fprintf(&sb, "### Skill %d: %s\n", i+1, skill)
+			if desc, ok := cfg.SkillDescriptions[skill]; ok && desc != "" {
+				fmt.Fprintf(&sb, "%s\n", desc)
+			}
 		}
 		sections = append(sections, sb.String())
 	}

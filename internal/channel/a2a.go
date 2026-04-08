@@ -77,7 +77,7 @@ func NewA2AAdapter(cfg A2AConfig) (*A2AAdapter, error) {
 		cfg.RateLimitPerPeer = DefaultA2ARateLimitPerPeer
 	}
 	if cfg.NonceTTL <= 0 {
-		cfg.NonceTTL = DefaultA2ANonceTTL
+		cfg.NonceTTL = 2 * cfg.SessionTimeout // default: 2x session timeout (Rust parity)
 	}
 	if cfg.MaxSessions <= 0 {
 		cfg.MaxSessions = DefaultA2AMaxSessions
@@ -154,6 +154,9 @@ func (a *A2AAdapter) EstablishSession(peerID string, peerPubKeyHex string, nonce
 	if !a.checkRateLimit(peerID) {
 		return fmt.Errorf("a2a: rate limit exceeded for peer %s", peerID)
 	}
+
+	// Evict stale nonces before checking (G050).
+	a.evictStaleNonces()
 
 	// Replay detection.
 	if _, seen := a.seenNonces[nonce]; seen {
@@ -320,7 +323,7 @@ func (a *A2AAdapter) checkRateLimit(peerID string) bool {
 	}
 	window.timestamps = fresh
 
-	if len(window.timestamps) >= a.cfg.RateLimitPerPeer {
+	if a.cfg.RateLimitPerPeer > 0 && len(window.timestamps) >= a.cfg.RateLimitPerPeer {
 		return false
 	}
 	window.timestamps = append(window.timestamps, now)
@@ -339,6 +342,43 @@ func (a *A2AAdapter) evictOldestSession() {
 	if oldestID != "" {
 		delete(a.sessions, oldestID)
 		log.Debug().Str("peer", oldestID).Msg("a2a: evicted oldest session")
+	}
+}
+
+// validateTimestamp checks that a timestamp is within maxDrift seconds of now.
+func validateTimestamp(timestamp int64, maxDriftSeconds int) bool {
+	now := time.Now().Unix()
+	diff := now - timestamp
+	if diff < 0 {
+		diff = -diff
+	}
+	return diff <= int64(maxDriftSeconds)
+}
+
+// evictStaleNonces removes nonce entries older than NonceTTL and caps map at 1000.
+// Must be called with a.mu held.
+func (a *A2AAdapter) evictStaleNonces() {
+	now := time.Now()
+	ttl := time.Duration(a.cfg.NonceTTL) * time.Second
+	for nonce, t := range a.seenNonces {
+		if now.Sub(t) > ttl {
+			delete(a.seenNonces, nonce)
+		}
+	}
+	// Cap at 1000 entries — evict oldest if still over limit.
+	const maxNonces = 1000
+	for len(a.seenNonces) > maxNonces {
+		var oldestKey string
+		var oldestTime time.Time
+		for k, v := range a.seenNonces {
+			if oldestKey == "" || v.Before(oldestTime) {
+				oldestKey = k
+				oldestTime = v
+			}
+		}
+		if oldestKey != "" {
+			delete(a.seenNonces, oldestKey)
+		}
 	}
 }
 
