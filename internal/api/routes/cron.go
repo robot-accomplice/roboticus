@@ -99,7 +99,7 @@ func CreateCronJob(store *db.Store) http.HandlerFunc {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusCreated, map[string]string{"id": id})
+		writeJSON(w, http.StatusCreated, map[string]string{"id": id, "job_id": id})
 	}
 }
 

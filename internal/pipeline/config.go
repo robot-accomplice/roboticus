@@ -180,6 +180,7 @@ func PresetCron() Config {
 		NicknameRefinement:     false,
 		InjectDiagnostics:      false,
 		ChannelLabel:           "cron",
+		CronDelegationWrap:     true,
 	}
 }
 

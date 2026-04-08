@@ -607,6 +607,7 @@ type CostMetadata struct {
 	Quality   float64 // 0–1
 	Escalated bool
 	Cached    bool
+	Tier      string  // routing tier (e.g., "local", "cloud", "premium")
 }
 
 // recordCost logs inference cost to the database for analytics.
@@ -636,14 +637,22 @@ func (s *Service) recordCostWithMeta(ctx context.Context, providerName string, r
 	if meta.Cached {
 		cached = 1
 	}
+	// Determine tier from provider metadata if not explicitly set.
+	tier := meta.Tier
+	if tier == "" && client.provider.IsLocal {
+		tier = "local"
+	} else if tier == "" {
+		tier = "cloud"
+	}
+
 	_, _ = s.store.ExecContext(ctx,
 		`INSERT INTO inference_costs (id, model, provider, tokens_in, tokens_out, cost,
-		 latency_ms, quality_score, escalation, turn_id, cached, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+		 tier, latency_ms, quality_score, escalation, turn_id, cached, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
 		fmt.Sprintf("%s-%d", resp.ID, resp.Usage.OutputTokens),
 		resp.Model, providerName,
 		resp.Usage.InputTokens, resp.Usage.OutputTokens, cost,
-		meta.Latency, meta.Quality, escalated, meta.TurnID, cached,
+		tier, meta.Latency, meta.Quality, escalated, meta.TurnID, cached,
 	)
 }
 

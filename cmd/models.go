@@ -462,23 +462,29 @@ suggested primary + fallback chain with ready-to-paste TOML config.`,
 		}
 
 		type modelEntry struct {
-			name  string
-			local bool
+			name     string
+			local    bool
+			costRate float64 // cost_per_output_token (0 = unknown/free)
 		}
 		var available []modelEntry
 
 		for provName, provURL := range providers {
 			models := probeProvider(provName, provURL)
 			isLocal := false
+			costRate := 0.0
 			if pc, ok := config["providers"].(map[string]any); ok {
 				if p, ok := pc[provName].(map[string]any); ok {
 					isLocal, _ = p["is_local"].(bool)
+					if c, ok := p["cost_per_output_token"].(float64); ok {
+						costRate = c
+					}
 				}
 			}
 			for _, m := range models {
 				available = append(available, modelEntry{
-					name:  provName + "/" + m,
-					local: isLocal,
+					name:     provName + "/" + m,
+					local:    isLocal,
+					costRate: costRate,
 				})
 			}
 		}
@@ -488,10 +494,13 @@ suggested primary + fallback chain with ready-to-paste TOML config.`,
 			return nil
 		}
 
-		// Rank: local first, then by name.
+		// Rank: local first, then cheapest first, then by name.
 		sort.Slice(available, func(i, j int) bool {
 			if available[i].local != available[j].local {
 				return available[i].local
+			}
+			if available[i].costRate != available[j].costRate {
+				return available[i].costRate < available[j].costRate
 			}
 			return available[i].name < available[j].name
 		})
@@ -512,7 +521,11 @@ suggested primary + fallback chain with ready-to-paste TOML config.`,
 			if m.local {
 				locality = "local"
 			}
-			fmt.Printf("  %-10s %s  (%s)\n", role, m.name, locality)
+			costLabel := "free"
+			if m.costRate > 0 {
+				costLabel = fmt.Sprintf("$%.6f/tok", m.costRate)
+			}
+			fmt.Printf("  %-10s %s  (%s, %s)\n", role, m.name, locality, costLabel)
 		}
 
 		// Print TOML snippet.

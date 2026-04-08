@@ -18,14 +18,6 @@ type EventPublisher interface {
 	PublishEvent(eventType string, data any)
 }
 
-// agentMessageRequest is the JSON body for POST /api/agent/message.
-type agentMessageRequest struct {
-	Content   string `json:"content"`
-	SessionID string `json:"session_id,omitempty"`
-	AgentID   string `json:"agent_id,omitempty"`
-	Model     string `json:"model,omitempty"`
-}
-
 // AgentMessage handles standard (non-streaming) inference requests.
 func AgentMessage(p pipeline.Runner, agentName string, bus ...EventPublisher) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -42,12 +34,19 @@ func AgentMessage(p pipeline.Runner, agentName string, bus ...EventPublisher) ht
 			req.AgentID = "default"
 		}
 
+		platform := "api"
+		if req.Channel != "" {
+			platform = req.Channel
+		}
+
 		input := pipeline.Input{
 			Content:   req.Content,
 			SessionID: req.SessionID,
 			AgentID:   req.AgentID,
 			AgentName: agentName,
-			Platform:  "api",
+			Platform:  platform,
+			SenderID:  req.SenderID,
+			ChatID:    req.GroupID,
 		}
 
 		outcome, err := pipeline.RunPipeline(r.Context(), p, pipeline.PresetAPI(), input)
@@ -67,7 +66,19 @@ func AgentMessage(p pipeline.Runner, agentName string, bus ...EventPublisher) ht
 			})
 		}
 
-		writeJSON(w, http.StatusOK, outcome)
+		resp := agentMessageResponse{
+			SessionID:          outcome.SessionID,
+			MessageID:          outcome.MessageID,
+			Content:            outcome.Content,
+			Model:              outcome.Model,
+			TokensIn:           outcome.TokensIn,
+			TokensOut:          outcome.TokensOut,
+			ReactTurns:         outcome.ReactTurns,
+			FromCache:          outcome.FromCache,
+			Cached:             outcome.FromCache,
+			AssistantMessageID: outcome.MessageID,
+		}
+		writeJSON(w, http.StatusOK, resp)
 	}
 }
 
