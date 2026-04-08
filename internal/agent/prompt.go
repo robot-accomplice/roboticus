@@ -42,14 +42,20 @@ func BuildSystemPrompt(cfg PromptConfig) string {
 	// 1. Agent name header.
 	sections = append(sections, fmt.Sprintf("You are %s, an autonomous AI agent.\n", cfg.AgentName))
 
-	// 2. Firmware/platform instructions.
-	if cfg.Firmware != "" {
-		sections = append(sections, "## Platform Instructions\n"+cfg.Firmware+"\n")
+	// 2. Personality/identity — placed BEFORE firmware so the model sees
+	// who it IS before learning what rules it follows. This matches the
+	// Rust reference's prompt ordering and gives personality text the
+	// highest positional weight after the name.
+	if cfg.Personality != "" {
+		sections = append(sections, "## Identity & Personality\n"+
+			"The following defines your core identity. This is WHO YOU ARE, not optional guidance.\n"+
+			"Embody this personality in every response.\n\n"+
+			cfg.Personality+"\n")
 	}
 
-	// 3. Personality/identity.
-	if cfg.Personality != "" {
-		sections = append(sections, "## Identity\n"+cfg.Personality+"\n")
+	// 3. Firmware/platform instructions (rules and constraints).
+	if cfg.Firmware != "" {
+		sections = append(sections, "## Platform Instructions\n"+cfg.Firmware+"\n")
 	}
 
 	// 3a. Operator context (OPERATOR.toml).

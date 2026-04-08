@@ -20,6 +20,7 @@ type OsVoice struct {
 	Proactiveness string `json:"proactiveness" toml:"proactiveness" mapstructure:"proactiveness"`
 	Verbosity     string `json:"verbosity" toml:"verbosity" mapstructure:"verbosity"`
 	Humor         string `json:"humor" toml:"humor" mapstructure:"humor"`
+	Warmth        string `json:"warmth" toml:"warmth" mapstructure:"warmth"`
 	Domain        string `json:"domain" toml:"domain" mapstructure:"domain"`
 	PromptText    string `json:"prompt_text" toml:"prompt_text" mapstructure:"prompt_text"`
 }

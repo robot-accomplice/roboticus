@@ -579,6 +579,21 @@ func (c *Config) NormalizePaths() {
 		c.Security.ScriptAllowedPaths[i] = expandTilde(p)
 	}
 
+	// Rust-aligned: auto-populate allowed_paths from Obsidian vault_path.
+	if c.Obsidian.VaultPath != "" {
+		vaultPath := expandTilde(c.Obsidian.VaultPath)
+		found := false
+		for _, ap := range c.Security.AllowedPaths {
+			if ap == vaultPath {
+				found = true
+				break
+			}
+		}
+		if !found {
+			c.Security.AllowedPaths = append(c.Security.AllowedPaths, vaultPath)
+		}
+	}
+
 	// Merge script_allowed_paths into allowed_paths.
 	for _, sp := range c.Security.ScriptAllowedPaths {
 		found := false
@@ -602,7 +617,16 @@ func (c *Config) MergeBundledProviders() {
 	if c.Providers == nil {
 		c.Providers = make(map[string]ProviderConfig)
 	}
+	// Build disabled set for O(1) lookup.
+	disabledSet := make(map[string]bool, len(c.DisabledBundledProviders))
+	for _, d := range c.DisabledBundledProviders {
+		disabledSet[strings.ToLower(strings.TrimSpace(d))] = true
+	}
+
 	for name, bcfg := range bundled {
+		if disabledSet[strings.ToLower(name)] {
+			continue
+		}
 		if existing, exists := c.Providers[name]; !exists {
 			c.Providers[name] = bcfg
 		} else {

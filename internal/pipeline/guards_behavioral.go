@@ -25,11 +25,41 @@ func (g *SubagentClaimGuard) CheckWithContext(content string, ctx *GuardContext)
 		return GuardResult{Passed: true}
 	}
 	lower := strings.ToLower(content)
+
 	markers := []string{
 		"let me delegate", "delegating to", "i have a specialist",
 		"passing this to", "routing to my", "subagent-generated",
 		"my specialist will", "handing off to",
+		"i'll delegate", "i will delegate", "delegate the task",
+		"delegate this to", "let me hand this off",
+		"came directly from the running subagent",
+		"standing by for tasking",
 	}
+
+	// Short-turn exemption: if content is under 100 chars and contains
+	// no delegation markers or subagent names, skip (Rust parity).
+	if len(content) < 100 {
+		hasMarker := false
+		for _, m := range markers {
+			if strings.Contains(lower, m) {
+				hasMarker = true
+				break
+			}
+		}
+		if !hasMarker {
+			hasSubagentName := false
+			for _, name := range ctx.SubagentNames {
+				if strings.Contains(lower, strings.ToLower(name)) {
+					hasSubagentName = true
+					break
+				}
+			}
+			if !hasSubagentName {
+				return GuardResult{Passed: true}
+			}
+		}
+	}
+
 	for _, m := range markers {
 		if strings.Contains(lower, m) {
 			return GuardResult{
