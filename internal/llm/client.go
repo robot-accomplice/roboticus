@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -298,12 +299,13 @@ func (c *Client) chatURL() string {
 	}
 	url := strings.TrimRight(c.provider.URL, "/") + path
 
-	// Query-parameter authentication: append API key to URL.
+	// Query-parameter authentication: append API key to URL (RFC 3986 encoded).
 	if c.provider.AuthMode == "query" && c.apiKey != "" {
+		encoded := pctEncodeQueryValue(c.apiKey)
 		if strings.Contains(url, "?") {
-			url += "&api_key=" + c.apiKey
+			url += "&api_key=" + encoded
 		} else {
-			url += "?api_key=" + c.apiKey
+			url += "?api_key=" + encoded
 		}
 	}
 
@@ -339,4 +341,28 @@ func (c *Client) setHeaders(req *http.Request) {
 	for k, v := range c.provider.ExtraHeaders {
 		req.Header.Set(k, v)
 	}
+}
+
+// pctEncodeQueryValue encodes a string for use as a URL query parameter value
+// following RFC 3986 unreserved characters. Matches Rust's percent-encode.
+func pctEncodeQueryValue(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if isUnreserved(c) {
+			b.WriteByte(c)
+		} else {
+			fmt.Fprintf(&b, "%%%02X", c)
+		}
+	}
+	return b.String()
+}
+
+// isUnreserved returns true for RFC 3986 unreserved characters: A-Z a-z 0-9 - _ . ~
+func isUnreserved(c byte) bool {
+	return (c >= 'A' && c <= 'Z') ||
+		(c >= 'a' && c <= 'z') ||
+		(c >= '0' && c <= '9') ||
+		c == '-' || c == '_' || c == '.' || c == '~'
 }

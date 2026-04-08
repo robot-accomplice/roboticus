@@ -50,7 +50,8 @@ func (r *MemoryRepository) StoreEpisodic(ctx context.Context, id, classification
 func (r *MemoryRepository) StoreSemantic(ctx context.Context, id, category, key, value string, confidence float64) error {
 	_, err := r.q.ExecContext(ctx,
 		`INSERT INTO semantic_memory (id, category, key, value, confidence) VALUES (?, ?, ?, ?, ?)
-		 ON CONFLICT(category, key) DO UPDATE SET value = excluded.value, confidence = excluded.confidence`,
+		 ON CONFLICT(category, key) DO UPDATE SET value = excluded.value, confidence = excluded.confidence,
+		 memory_state = 'active', state_reason = NULL`,
 		id, category, key, value, confidence)
 	return err
 }

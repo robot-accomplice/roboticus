@@ -97,8 +97,13 @@ func (c *Client) marshalOllama(req *Request) ([]byte, error) {
 }
 
 func (c *Client) marshalGoogle(req *Request) ([]byte, error) {
+	var systemParts []string
 	var contents []map[string]any
 	for _, m := range req.Messages {
+		if m.Role == "system" {
+			systemParts = append(systemParts, m.Content)
+			continue
+		}
 		role := m.Role
 		if role == "assistant" {
 			role = "model"
@@ -109,8 +114,30 @@ func (c *Client) marshalGoogle(req *Request) ([]byte, error) {
 		})
 	}
 	payload := map[string]any{"contents": contents}
+	if len(systemParts) > 0 {
+		payload["systemInstruction"] = map[string]any{
+			"parts": []map[string]any{{"text": strings.Join(systemParts, "\n")}},
+		}
+	}
 	if req.MaxTokens > 0 {
 		payload["generationConfig"] = map[string]any{"maxOutputTokens": req.MaxTokens}
+	}
+	if len(req.Tools) > 0 {
+		var funcDecls []map[string]any
+		for _, t := range req.Tools {
+			decl := map[string]any{
+				"name":        t.Function.Name,
+				"description": t.Function.Description,
+			}
+			if len(t.Function.Parameters) > 0 {
+				var params any
+				if err := json.Unmarshal(t.Function.Parameters, &params); err == nil {
+					decl["parameters"] = params
+				}
+			}
+			funcDecls = append(funcDecls, decl)
+		}
+		payload["tools"] = []map[string]any{{"functionDeclarations": funcDecls}}
 	}
 	return json.Marshal(payload)
 }
@@ -253,7 +280,9 @@ func (c *Client) unmarshalOllamaResponse(data []byte) (*Response, error) {
 
 func (c *Client) unmarshalGoogleResponse(data []byte) (*Response, error) {
 	var raw struct {
-		Candidates []struct {
+		ModelVersion string `json:"modelVersion"`
+		Model        string `json:"model"`
+		Candidates   []struct {
 			Content struct {
 				Parts []struct {
 					Text         string `json:"text,omitempty"`
@@ -294,8 +323,12 @@ func (c *Client) unmarshalGoogleResponse(data []byte) (*Response, error) {
 			toolCalls = append(toolCalls, tc)
 		}
 	}
+	model := raw.ModelVersion
+	if model == "" {
+		model = raw.Model
+	}
 	return &Response{
-		Model:        "",
+		Model:        model,
 		Content:      content,
 		ToolCalls:    toolCalls,
 		FinishReason: raw.Candidates[0].FinishReason,

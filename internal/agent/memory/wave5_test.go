@@ -360,9 +360,9 @@ func TestPipeline_FullRunWithNewPhases(t *testing.T) {
 
 	// Seed derivable tool output.
 	seedEpisodic(t, store, "ep-derive", "tool_event", "read_file: contents of main.go", 5, nowStr())
-	// Seed within-tier duplicate.
-	seedEpisodic(t, store, "ep-dup1", "fact", "the sun is shining brightly", 5, nowStr())
-	seedEpisodic(t, store, "ep-dup2", "fact", "the sun is shining brightly today", 7, nowStr())
+	// Seed within-tier duplicate (Jaccard >= 0.85 required for dedup).
+	seedEpisodic(t, store, "ep-dup1", "fact", "the sun is shining brightly over the hills and valleys", 5, nowStr())
+	seedEpisodic(t, store, "ep-dup2", "fact", "the sun is shining brightly over the hills and valleys today", 7, nowStr())
 	// Seed low-confidence semantic.
 	seedSemantic(t, store, "sem-low", "knowledge", "weak-fact", "barely known", 0.12, nowStr())
 

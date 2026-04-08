@@ -238,7 +238,7 @@ func TestValidate_SessionScopeMode(t *testing.T) {
 
 func TestValidate_MemoryBudgetsSum(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.Memory.WorkingBudget = 50 // total 50+25+15+10+10 = 110
+	cfg.Memory.WorkingBudget = 50 // total 50+25+20+15+10 = 120
 	if err := cfg.Validate(); err == nil {
 		t.Error("memory budgets not summing to 100 should be invalid")
 	}

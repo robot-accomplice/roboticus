@@ -14,7 +14,7 @@ func TestConfig_Validate_DefaultPasses(t *testing.T) {
 
 func TestConfig_Validate_MemoryBudgetMustSumTo100(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.Memory.WorkingBudget = 50 // 50+25+15+10+10 = 110
+	cfg.Memory.WorkingBudget = 50 // 50+25+20+15+10 = 120
 	err := cfg.Validate()
 	if err == nil {
 		t.Fatal("expected validation error for memory budget sum != 100")
@@ -26,7 +26,7 @@ func TestConfig_Validate_MemoryBudgetMustSumTo100(t *testing.T) {
 
 func TestConfig_Validate_MemoryBudgetExactly100(t *testing.T) {
 	cfg := DefaultConfig()
-	// Default is 40+25+15+10+10 = 100, should pass
+	// Default is 30+25+20+15+10 = 100, should pass
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("expected pass with sum=100, got: %v", err)
 	}
@@ -35,7 +35,7 @@ func TestConfig_Validate_MemoryBudgetExactly100(t *testing.T) {
 func TestConfig_Validate_MemoryBudgetTolerance(t *testing.T) {
 	cfg := DefaultConfig()
 	// Within 0.01 tolerance
-	cfg.Memory.WorkingBudget = 40.005
+	cfg.Memory.WorkingBudget = 30.005
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("expected pass within tolerance, got: %v", err)
 	}

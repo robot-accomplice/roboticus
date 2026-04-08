@@ -241,7 +241,7 @@ func ngramHash(text string, dim int) []float32 {
 	// Character trigrams.
 	for i := 0; i+3 <= len(s); i++ {
 		tri := s[i : i+3]
-		h := fnvHash(tri)
+		h := rollingHash(tri)
 		idx := h % uint32(dim)
 		if (h>>16)&1 == 0 {
 			vec[idx] += 1.0
@@ -265,14 +265,13 @@ func ngramHash(text string, dim int) []float32 {
 	return result
 }
 
-// fnvHash is a simple FNV-1a hash for trigrams.
-func fnvHash(s string) uint32 {
-	h := uint32(2166136261)
-	for i := 0; i < len(s); i++ {
-		h ^= uint32(s[i])
-		h *= 16777619
+// rollingHash produces a deterministic hash matching Rust's (acc * 31) + char_as_u32.
+func rollingHash(s string) uint32 {
+	var acc uint32
+	for _, c := range s {
+		acc = acc*31 + uint32(c)
 	}
-	return h
+	return acc
 }
 
 // CosineSimilarity computes the cosine similarity between two vectors.

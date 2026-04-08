@@ -268,7 +268,7 @@ func TestPipeline_Phase3_EpisodicPromotion(t *testing.T) {
 	pipe.MinInterval = 0
 
 	// 3 episodic entries similar enough for promotion (Jaccard > 0.5) but
-	// different enough to avoid within-tier dedup (Jaccard < 0.7).
+	// different enough to avoid within-tier dedup (Jaccard < 0.85).
 	// Each pair shares 5 words and has 2 unique => Jaccard ~0.556.
 	seedEpisodic(t, store, "ep1", "tool_event", "user asked about weather forecast details report", 5, nowStr())
 	seedEpisodic(t, store, "ep2", "tool_event", "user asked about weather forecast temperature update", 5, nowStr())
@@ -325,7 +325,7 @@ func TestPipeline_Phase4_ConfidenceDecay(t *testing.T) {
 		t.Errorf("expected 1 confidence decayed, got %d", r.ConfidenceDecayed)
 	}
 
-	// Check new confidence: 0.8 * 0.95^10 ~= 0.478
+	// Check new confidence: 0.8 * 0.995 = 0.796 (constant multiplier, one decay step per consolidation pass)
 	var conf float64
 	_ = store.QueryRowContext(ctx, `SELECT confidence FROM semantic_memory WHERE id = 'sem1'`).Scan(&conf)
 	if conf >= 0.8 {

@@ -3,7 +3,6 @@ package memory
 import (
 	"context"
 	"database/sql"
-	"math"
 
 	"github.com/rs/zerolog/log"
 
@@ -128,7 +127,7 @@ func (p *ConsolidationPipeline) dedupWithinTier(ctx context.Context, store *db.S
 				continue
 			}
 			sim := jaccardSimilarity(entries[i].content, entries[j].content)
-			if sim < 0.7 {
+			if sim < 0.85 {
 				continue
 			}
 			// Keep the higher-scored entry, mark the other as deduped.
@@ -270,7 +269,10 @@ func (p *ConsolidationPipeline) phaseConfidenceDecay(ctx context.Context, store 
 		if daysStale < 1 {
 			continue
 		}
-		newConf := confidence * math.Pow(0.95, daysStale)
+		// Rust parity: constant multiplier 0.995 applied once per 24h sentinel gate,
+		// not exponential per-day decay. Each consolidation pass applies one decay step
+		// for entries that haven't been updated in >= 24h.
+		newConf := confidence * 0.995
 		if newConf < 0.1 {
 			newConf = 0.1
 		}
