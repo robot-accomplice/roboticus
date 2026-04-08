@@ -16,8 +16,6 @@ import (
 func getOrCreateDeviceIdentity(r *http.Request, store *db.Store) (deviceID, publicKeyHex, fingerprint string, err error) {
 	repo := db.NewRuntimeRepository(store)
 	return repo.GetOrCreateDeviceIdentity(r.Context())
-
-	return deviceID, publicKeyHex, fingerprint, nil
 }
 
 // GetRuntimeSurfaces returns the registered runtime surfaces (agent capabilities).
