@@ -25,6 +25,10 @@ func FormatFor(platform string) Formatter {
 		return &SignalFormatter{}
 	case "email":
 		return &EmailFormatter{}
+	case "voice":
+		return &VoiceFormatter{}
+	case "matrix":
+		return &MatrixFormatter{}
 	default:
 		return &WebFormatter{}
 	}
@@ -195,6 +199,110 @@ type EmailFormatter struct{}
 func (f *EmailFormatter) Platform() string { return "email" }
 func (f *EmailFormatter) Format(content string) string {
 	return preprocess(content)
+}
+
+// --- Voice Formatter ---
+
+// VoiceFormatter strips all formatting for TTS output. Produces clean
+// spoken-word text: no markdown, no code blocks, no URLs.
+type VoiceFormatter struct{}
+
+func (f *VoiceFormatter) Platform() string { return "voice" }
+func (f *VoiceFormatter) Format(content string) string {
+	content = preprocess(content)
+
+	var b strings.Builder
+	inCode := false
+	for _, line := range strings.Split(content, "\n") {
+		if strings.HasPrefix(line, "```") {
+			inCode = !inCode
+			if !inCode {
+				b.WriteString("(end of code)\n")
+			} else {
+				b.WriteString("(code block)\n")
+			}
+			continue
+		}
+		if inCode {
+			continue // Skip code block contents for voice.
+		}
+
+		// Strip markdown.
+		line = strings.ReplaceAll(line, "**", "")
+		line = strings.ReplaceAll(line, "__", "")
+		line = strings.ReplaceAll(line, "~~", "")
+		line = strings.ReplaceAll(line, "`", "")
+		for strings.HasPrefix(line, "# ") {
+			line = line[2:]
+		}
+
+		// Links → just the text, drop URL.
+		line = mdLinkRe.ReplaceAllString(line, "$1")
+
+		// Strip bullet markers.
+		line = strings.TrimPrefix(line, "- ")
+		line = strings.TrimPrefix(line, "* ")
+
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			b.WriteString(trimmed + " ")
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
+// --- Matrix Formatter ---
+
+// MatrixFormatter converts Markdown to Matrix's HTML-subset format.
+// Matrix supports a subset of HTML in formatted_body.
+type MatrixFormatter struct{}
+
+func (f *MatrixFormatter) Platform() string { return "matrix" }
+func (f *MatrixFormatter) Format(content string) string {
+	content = preprocess(content)
+
+	var b strings.Builder
+	inCode := false
+	for _, line := range strings.Split(content, "\n") {
+		if strings.HasPrefix(line, "```") {
+			if inCode {
+				b.WriteString("</code></pre>\n")
+			} else {
+				lang := strings.TrimPrefix(line, "```")
+				if lang != "" {
+					b.WriteString("<pre><code class=\"language-" + lang + "\">")
+				} else {
+					b.WriteString("<pre><code>")
+				}
+			}
+			inCode = !inCode
+			continue
+		}
+		if inCode {
+			b.WriteString(line + "\n")
+			continue
+		}
+
+		// Headers → HTML.
+		if strings.HasPrefix(line, "### ") {
+			b.WriteString("<h3>" + strings.TrimPrefix(line, "### ") + "</h3>\n")
+			continue
+		}
+		if strings.HasPrefix(line, "## ") {
+			b.WriteString("<h2>" + strings.TrimPrefix(line, "## ") + "</h2>\n")
+			continue
+		}
+		if strings.HasPrefix(line, "# ") {
+			b.WriteString("<h1>" + strings.TrimPrefix(line, "# ") + "</h1>\n")
+			continue
+		}
+
+		// Bold, italic, inline code.
+		line = strings.ReplaceAll(line, "**", "<strong>")
+		// Note: Matrix HTML subset supports <strong>, <em>, <code>, <a>.
+
+		b.WriteString(line + "\n")
+	}
+	return strings.TrimSpace(b.String())
 }
 
 // --- Web Formatter ---

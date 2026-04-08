@@ -37,8 +37,8 @@ type SessionGrade struct {
 
 // Tip is a structured analysis finding.
 type Tip struct {
-	Severity   string `json:"severity"`   // "critical", "warning", "info"
-	Category   string `json:"category"`   // "budget", "memory", "prompt", "tools", "cost", "quality"
+	Severity   string `json:"severity"` // "critical", "warning", "info"
+	Category   string `json:"category"` // "budget", "memory", "prompt", "tools", "cost", "quality"
 	RuleName   string `json:"rule_name"`
 	Message    string `json:"message"`
 	Suggestion string `json:"suggestion"`

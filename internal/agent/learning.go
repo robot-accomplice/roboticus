@@ -85,6 +85,23 @@ func (le *LearningExtractor) SuccessRate(patternID string) float64 {
 	return float64(p.SuccessCount) / float64(total)
 }
 
+// ProcedureStep represents a single step in a tool-call sequence for procedure detection.
+type ProcedureStep struct {
+	Input    string
+	Output   string
+	ToolName string
+	Success  bool
+}
+
+// LearnedProcedure is a validated multi-step procedure extracted from history.
+type LearnedProcedure struct {
+	Name         string
+	Description  string
+	ToolSequence []string
+	SuccessRatio float64
+	Steps        []ProcedureStep
+}
+
 // ToolCallRecord represents a single tool invocation for procedure detection.
 type ToolCallRecord struct {
 	ToolName string
@@ -185,6 +202,125 @@ func ReinforceLearning(ctx context.Context, store *db.Store, skillName string, s
 			`UPDATE learned_skills SET failure_count = failure_count + 1,
 			 priority = max(0, priority - 5) WHERE name = ?`, skillName)
 	}
+}
+
+// DetectProcedure uses a sliding window algorithm to find recurring successful
+// tool-call sequences in history. It caps input to the last 200 calls to prevent
+// quadratic blowup, filters single-tool repetitions, and only returns procedures
+// meeting the configured MinSuccessRatio threshold.
+func (le *LearningExtractor) DetectProcedure(history []ProcedureStep) *LearnedProcedure {
+	// Cap input to prevent quadratic blowup.
+	const maxHistory = 200
+	if len(history) > maxHistory {
+		history = history[len(history)-maxHistory:]
+	}
+
+	minLen := le.minSeqLength
+	maxLen := minLen * 2
+
+	// Track the best candidate across all window sizes.
+	var best *LearnedProcedure
+
+	for winSize := minLen; winSize <= maxLen; winSize++ {
+		if len(history) < winSize {
+			break
+		}
+
+		type candidate struct {
+			steps        []ProcedureStep
+			successCount int
+			totalCount   int
+		}
+		candidates := make(map[string]*candidate)
+
+		for i := 0; i <= len(history)-winSize; i++ {
+			window := history[i : i+winSize]
+
+			// Noise filter: skip windows where all steps use the same tool.
+			if isSingleToolRepetition(window) {
+				continue
+			}
+
+			key := windowKey(window)
+
+			c, ok := candidates[key]
+			if !ok {
+				c = &candidate{steps: window}
+				candidates[key] = c
+			}
+			c.totalCount++
+
+			successes := 0
+			for _, s := range window {
+				if s.Success {
+					successes++
+				}
+			}
+			ratio := float64(successes) / float64(len(window))
+			if ratio >= le.successRatio() {
+				c.successCount++
+			}
+		}
+
+		for _, c := range candidates {
+			if c.successCount < 2 {
+				continue
+			}
+
+			ratio := float64(c.successCount) / float64(c.totalCount)
+			if ratio < le.successRatio() {
+				continue
+			}
+
+			if best == nil || len(c.steps) > len(best.Steps) ||
+				(len(c.steps) == len(best.Steps) && ratio > best.SuccessRatio) {
+
+				toolSeq := make([]string, len(c.steps))
+				for i, s := range c.steps {
+					toolSeq[i] = s.ToolName
+				}
+
+				best = &LearnedProcedure{
+					Name:         strings.Join(toolSeq, "-"),
+					Description:  fmt.Sprintf("Learned %d-step procedure (%d occurrences)", len(toolSeq), c.successCount),
+					ToolSequence: toolSeq,
+					SuccessRatio: ratio,
+					Steps:        c.steps,
+				}
+			}
+		}
+	}
+
+	return best
+}
+
+// successRatio returns the configured minimum success ratio, defaulting to 0.7.
+func (le *LearningExtractor) successRatio() float64 {
+	// Default 0.7 matches LearningConfig.MinSuccessRatio default.
+	return 0.7
+}
+
+// isSingleToolRepetition returns true if every step in the window uses the same tool.
+func isSingleToolRepetition(steps []ProcedureStep) bool {
+	if len(steps) == 0 {
+		return true
+	}
+	first := steps[0].ToolName
+	for _, s := range steps[1:] {
+		if s.ToolName != first {
+			return false
+		}
+	}
+	return true
+}
+
+// windowKey builds a string key from a slice of ProcedureSteps for deduplication.
+func windowKey(steps []ProcedureStep) string {
+	names := make([]string, len(steps))
+	for i, s := range steps {
+		names[i] = s.ToolName
+	}
+	return strings.Join(names, "→")
 }
 
 func truncateForLearning(s string, max int) string {

@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"strings"
 	"testing"
+
+	"roboticus/internal/core"
 )
 
 func TestBuildSystemPrompt_ContainsAgentName(t *testing.T) {
@@ -85,6 +87,78 @@ func TestBuildSystemPrompt_EmptyKeyNoMarkers(t *testing.T) {
 	prompt := BuildSystemPrompt(cfg)
 	if strings.Contains(prompt, "[BOUNDARY:") {
 		t.Error("empty key should not produce boundary markers")
+	}
+}
+
+func TestBuildSystemPrompt_OperationalIntrospectionBlock(t *testing.T) {
+	cfg := PromptConfig{
+		AgentName: "Bot",
+		ToolNames: []string{"search", "read_file", "shell"},
+	}
+	prompt := BuildSystemPrompt(cfg)
+	if !strings.Contains(prompt, "Operational Discipline") {
+		t.Error("should contain operational introspection block")
+	}
+	if !strings.Contains(prompt, "3 tools registered") {
+		t.Error("should list tool count")
+	}
+}
+
+func TestBuildSystemPrompt_RuntimeMetadataBlock(t *testing.T) {
+	cfg := PromptConfig{
+		AgentName: "Bot",
+		Model:     "gpt-4",
+		Workspace: "/home/user/project",
+		Version:   "0.11.4",
+	}
+	prompt := BuildSystemPrompt(cfg)
+	if !strings.Contains(prompt, "Runtime Context") {
+		t.Error("should contain runtime context block")
+	}
+	if !strings.Contains(prompt, "gpt-4") {
+		t.Error("should contain model name in runtime context")
+	}
+	if !strings.Contains(prompt, "/home/user/project") {
+		t.Error("should contain workspace in runtime context")
+	}
+}
+
+func TestBuildSystemPrompt_ObsidianDirective_Enabled(t *testing.T) {
+	cfg := PromptConfig{
+		AgentName: "Bot",
+		Obsidian: &core.ObsidianConfig{
+			Enabled:   true,
+			VaultPath: "/home/user/vault",
+		},
+	}
+	prompt := BuildSystemPrompt(cfg)
+	if !strings.Contains(prompt, "Obsidian Integration") {
+		t.Error("should contain Obsidian directive when enabled")
+	}
+	if !strings.Contains(prompt, "/home/user/vault") {
+		t.Error("should contain vault path")
+	}
+}
+
+func TestBuildSystemPrompt_ObsidianDirective_Disabled(t *testing.T) {
+	cfg := PromptConfig{
+		AgentName: "Bot",
+		Obsidian: &core.ObsidianConfig{
+			Enabled:   false,
+			VaultPath: "/home/user/vault",
+		},
+	}
+	prompt := BuildSystemPrompt(cfg)
+	if strings.Contains(prompt, "Obsidian Integration") {
+		t.Error("should not contain Obsidian directive when disabled")
+	}
+}
+
+func TestBuildSystemPrompt_ObsidianDirective_Nil(t *testing.T) {
+	cfg := PromptConfig{AgentName: "Bot"}
+	prompt := BuildSystemPrompt(cfg)
+	if strings.Contains(prompt, "Obsidian Integration") {
+		t.Error("should not contain Obsidian directive when nil")
 	}
 }
 

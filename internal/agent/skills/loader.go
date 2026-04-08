@@ -9,6 +9,8 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"gopkg.in/yaml.v3"
+
+	"roboticus/internal/core"
 )
 
 // Type distinguishes between structured and instruction skills.
@@ -169,6 +171,43 @@ func (sl *Loader) loadStructured(path string) (*Skill, error) {
 		Hash:       hash,
 		SourcePath: path,
 	}, nil
+}
+
+// HashSkillContent returns the hex-encoded SHA-256 hash of the given content.
+// Used for change detection and cache invalidation.
+func HashSkillContent(content []byte) string {
+	return fmt.Sprintf("%x", sha256.Sum256(content))
+}
+
+// LoadedSkillKind distinguishes the two dual-format skill representations.
+type LoadedSkillKind int
+
+const (
+	LoadedSkillStructured  LoadedSkillKind = iota // TOML/YAML manifest with tool chain
+	LoadedSkillInstruction                        // Markdown with frontmatter
+)
+
+// LoadedSkill wraps a skill with its source format, core types, and content hash.
+// Supports dual-format loading: structured manifests (core.SkillManifest) and
+// instruction skills (core.InstructionSkill).
+type LoadedSkill struct {
+	Kind        LoadedSkillKind
+	Structured  *core.SkillManifest
+	Instruction *core.InstructionSkill
+	Hash        string
+	Path        string
+}
+
+// LoadRecursive walks one or more directories (e.g. learned/, custom/) and
+// returns all skills found. Subdirectory failures are logged but don't abort.
+func LoadRecursive(dirs ...string) []*Skill {
+	loader := NewLoader()
+	var all []*Skill
+	for _, dir := range dirs {
+		skills := loader.LoadFromDir(dir)
+		all = append(all, skills...)
+	}
+	return all
 }
 
 // Matcher matches user input against loaded skill triggers.

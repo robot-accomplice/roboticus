@@ -1,6 +1,10 @@
 package pipeline
 
-import "strings"
+import (
+	"strings"
+
+	"roboticus/internal/core"
+)
 
 // Intent represents a classified user intent.
 type Intent string
@@ -11,7 +15,95 @@ const (
 	IntentCreative Intent = "creative"
 	IntentAnalysis Intent = "analysis"
 	IntentChat     Intent = "chat"
+
+	// Expanded semantic intents (Wave 8, #70).
+	IntentModelIdentity    Intent = "model_identity"
+	IntentAcknowledgement  Intent = "acknowledgement"
+	IntentFinancialAction  Intent = "financial_action"
+	IntentCreativeWriting  Intent = "creative_writing"
+	IntentCodeGeneration   Intent = "code_generation"
+	IntentSystemAdmin      Intent = "system_admin"
+	IntentCurrentEvents    Intent = "current_events"
+	IntentDelegation       Intent = "delegation"
+	IntentMemoryQuery      Intent = "memory_query"
+	IntentFileOperation    Intent = "file_operation"
+	IntentWebSearch        Intent = "web_search"
+	IntentScheduling       Intent = "scheduling"
+	IntentMathCalculation  Intent = "math_calculation"
+	IntentTranslation      Intent = "translation"
+	IntentSummarization    Intent = "summarization"
+	IntentDebug            Intent = "debug"
+	IntentExplanation      Intent = "explanation"
+	IntentRolePlay         Intent = "role_play"
+	IntentImageGeneration  Intent = "image_generation"
+	IntentDataExtraction   Intent = "data_extraction"
+	IntentConversation     Intent = "conversation"
+	IntentFeedback         Intent = "feedback"
+	IntentNavigation       Intent = "navigation"
+	IntentConfiguration    Intent = "configuration"
+	IntentHealthCheck      Intent = "health_check"
+	IntentPluginInvocation Intent = "plugin_invocation"
+	IntentToolUse          Intent = "tool_use"
+	IntentSecurityAudit    Intent = "security_audit"
+	IntentDocumentation    Intent = "documentation"
+	IntentRefactoring      Intent = "refactoring"
+	IntentTesting          Intent = "testing"
 )
+
+// IntentMetadata carries routing and caching hints for a classified intent.
+type IntentMetadata struct {
+	Priority      int            // Higher = more urgent (0 = default)
+	BypassCache   bool           // If true, never serve from cache
+	PreferredTier core.ModelTier // Routing hint for model selection
+}
+
+// intentMetadata maps expanded intents to their metadata.
+var intentMetadata = map[Intent]IntentMetadata{
+	IntentModelIdentity:    {Priority: 10, BypassCache: true, PreferredTier: core.ModelTierSmall},
+	IntentAcknowledgement:  {Priority: 1, BypassCache: false, PreferredTier: core.ModelTierSmall},
+	IntentFinancialAction:  {Priority: 9, BypassCache: true, PreferredTier: core.ModelTierLarge},
+	IntentCreativeWriting:  {Priority: 5, BypassCache: false, PreferredTier: core.ModelTierLarge},
+	IntentCodeGeneration:   {Priority: 7, BypassCache: false, PreferredTier: core.ModelTierFrontier},
+	IntentSystemAdmin:      {Priority: 8, BypassCache: true, PreferredTier: core.ModelTierMedium},
+	IntentCurrentEvents:    {Priority: 6, BypassCache: true, PreferredTier: core.ModelTierMedium},
+	IntentDelegation:       {Priority: 7, BypassCache: true, PreferredTier: core.ModelTierLarge},
+	IntentMemoryQuery:      {Priority: 4, BypassCache: false, PreferredTier: core.ModelTierSmall},
+	IntentFileOperation:    {Priority: 6, BypassCache: true, PreferredTier: core.ModelTierMedium},
+	IntentWebSearch:        {Priority: 5, BypassCache: true, PreferredTier: core.ModelTierMedium},
+	IntentScheduling:       {Priority: 6, BypassCache: true, PreferredTier: core.ModelTierMedium},
+	IntentMathCalculation:  {Priority: 5, BypassCache: false, PreferredTier: core.ModelTierMedium},
+	IntentTranslation:      {Priority: 4, BypassCache: false, PreferredTier: core.ModelTierMedium},
+	IntentSummarization:    {Priority: 4, BypassCache: false, PreferredTier: core.ModelTierMedium},
+	IntentDebug:            {Priority: 7, BypassCache: true, PreferredTier: core.ModelTierLarge},
+	IntentExplanation:      {Priority: 4, BypassCache: false, PreferredTier: core.ModelTierMedium},
+	IntentRolePlay:         {Priority: 3, BypassCache: false, PreferredTier: core.ModelTierLarge},
+	IntentImageGeneration:  {Priority: 5, BypassCache: true, PreferredTier: core.ModelTierLarge},
+	IntentDataExtraction:   {Priority: 5, BypassCache: false, PreferredTier: core.ModelTierMedium},
+	IntentConversation:     {Priority: 2, BypassCache: false, PreferredTier: core.ModelTierSmall},
+	IntentFeedback:         {Priority: 3, BypassCache: false, PreferredTier: core.ModelTierSmall},
+	IntentNavigation:       {Priority: 3, BypassCache: false, PreferredTier: core.ModelTierSmall},
+	IntentConfiguration:    {Priority: 7, BypassCache: true, PreferredTier: core.ModelTierMedium},
+	IntentHealthCheck:      {Priority: 8, BypassCache: true, PreferredTier: core.ModelTierSmall},
+	IntentPluginInvocation: {Priority: 6, BypassCache: true, PreferredTier: core.ModelTierMedium},
+	IntentToolUse:          {Priority: 6, BypassCache: true, PreferredTier: core.ModelTierMedium},
+	IntentSecurityAudit:    {Priority: 8, BypassCache: true, PreferredTier: core.ModelTierFrontier},
+	IntentDocumentation:    {Priority: 4, BypassCache: false, PreferredTier: core.ModelTierMedium},
+	IntentRefactoring:      {Priority: 6, BypassCache: false, PreferredTier: core.ModelTierLarge},
+	IntentTesting:          {Priority: 5, BypassCache: false, PreferredTier: core.ModelTierMedium},
+	IntentQuestion:         {Priority: 3, BypassCache: false, PreferredTier: core.ModelTierMedium},
+	IntentCommand:          {Priority: 6, BypassCache: true, PreferredTier: core.ModelTierMedium},
+	IntentCreative:         {Priority: 5, BypassCache: false, PreferredTier: core.ModelTierLarge},
+	IntentAnalysis:         {Priority: 5, BypassCache: false, PreferredTier: core.ModelTierLarge},
+	IntentChat:             {Priority: 1, BypassCache: false, PreferredTier: core.ModelTierSmall},
+}
+
+// GetIntentMetadata returns metadata for the given intent, or a zero-value default.
+func GetIntentMetadata(intent Intent) IntentMetadata {
+	if m, ok := intentMetadata[intent]; ok {
+		return m
+	}
+	return IntentMetadata{}
+}
 
 // IntentClassifier classifies user input into an intent with confidence.
 type IntentClassifier interface {
@@ -69,11 +161,87 @@ func (k *keywordClassifier) Classify(content string) (Intent, float64) {
 
 	lower := strings.ToLower(strings.TrimSpace(content))
 
-	// Commands: starts with / or imperative verbs
+	// --- Highest-specificity intents first (before generic question/command/creative) ---
+
+	// Slash commands: always take priority.
 	if strings.HasPrefix(lower, "/") {
 		return IntentCommand, 0.9
 	}
-	for _, verb := range []string{"run ", "execute ", "start ", "stop ", "restart ", "deploy ", "install "} {
+
+	// Acknowledgements (exact match, highest confidence).
+	for _, kw := range []string{"ok", "thanks", "thank you", "got it", "understood"} {
+		if lower == kw || lower == kw+"." || lower == kw+"!" {
+			return IntentAcknowledgement, 0.9
+		}
+	}
+
+	// Model identity questions.
+	for _, kw := range []string{"who are you", "what are you", "what model", "which model", "your name"} {
+		if strings.Contains(lower, kw) {
+			return IntentModelIdentity, 0.85
+		}
+	}
+
+	// Financial actions.
+	for _, kw := range []string{"transfer ", "send money", "pay ", "deposit", "withdraw", "balance", "wallet"} {
+		if strings.Contains(lower, kw) {
+			return IntentFinancialAction, 0.75
+		}
+	}
+
+	// Code generation (checked before generic "write" creative).
+	for _, kw := range []string{"write code", "implement ", "function ", "class ", "refactor", "debug "} {
+		if strings.Contains(lower, kw) {
+			return IntentCodeGeneration, 0.7
+		}
+	}
+
+	// System admin (checked before generic "restart" command).
+	for _, kw := range []string{"restart ", "shutdown", "config ", "configure ", "status ", "health"} {
+		if strings.Contains(lower, kw) {
+			return IntentSystemAdmin, 0.7
+		}
+	}
+
+	// Summarization (checked before generic "summarize" analysis).
+	for _, kw := range []string{"summarize", "tldr", "summary of", "recap ", "condense"} {
+		if strings.Contains(lower, kw) {
+			return IntentSummarization, 0.7
+		}
+	}
+
+	// Scheduling.
+	for _, kw := range []string{"schedule ", "remind ", "cron ", "timer ", "alarm "} {
+		if strings.Contains(lower, kw) {
+			return IntentScheduling, 0.7
+		}
+	}
+
+	// File operations.
+	for _, kw := range []string{"read file", "write file", "list files", "open file", "save file", "delete file"} {
+		if strings.Contains(lower, kw) {
+			return IntentFileOperation, 0.7
+		}
+	}
+
+	// Web search.
+	for _, kw := range []string{"search for", "look up", "find online", "google ", "web search"} {
+		if strings.Contains(lower, kw) {
+			return IntentWebSearch, 0.7
+		}
+	}
+
+	// Translation.
+	for _, kw := range []string{"translate ", "in spanish", "in french", "in german", "to english"} {
+		if strings.Contains(lower, kw) {
+			return IntentTranslation, 0.7
+		}
+	}
+
+	// --- Generic intents (lower specificity) ---
+
+	// Commands: imperative verbs (slash commands handled above).
+	for _, verb := range []string{"run ", "execute ", "start ", "stop ", "deploy ", "install "} {
 		if strings.HasPrefix(lower, verb) {
 			return IntentCommand, 0.7
 		}
@@ -97,7 +265,7 @@ func (k *keywordClassifier) Classify(content string) (Intent, float64) {
 	}
 
 	// Analysis: data/analysis keywords
-	for _, aw := range []string{"analyze ", "analyse ", "compare ", "evaluate ", "assess ", "review ", "summarize ", "breakdown"} {
+	for _, aw := range []string{"analyze ", "analyse ", "compare ", "evaluate ", "assess ", "review ", "breakdown"} {
 		if strings.Contains(lower, aw) {
 			return IntentAnalysis, 0.7
 		}

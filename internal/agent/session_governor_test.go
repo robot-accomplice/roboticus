@@ -2,6 +2,7 @@ package agent_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -223,6 +224,134 @@ func TestSessionGovernor_PruneDeadSkills(t *testing.T) {
 	}
 	if state != "active" {
 		t.Errorf("expected active, got %s", state)
+	}
+}
+
+func TestSessionGovernor_CompactBeforeArchive(t *testing.T) {
+	store := testutil.TempStore(t)
+	ctx := context.Background()
+
+	// Create a session.
+	_, err := store.ExecContext(ctx,
+		`INSERT INTO sessions (id, agent_id, scope_key, status)
+		 VALUES ('compact-sess', 'agent1', 'test', 'active')`)
+	if err != nil {
+		t.Fatalf("insert session: %v", err)
+	}
+
+	// Insert 10 messages.
+	for i := 0; i < 10; i++ {
+		role := "user"
+		if i%2 == 1 {
+			role = "assistant"
+		}
+		_, err := store.ExecContext(ctx,
+			`INSERT INTO session_messages (id, session_id, role, content, created_at)
+			 VALUES (?, 'compact-sess', ?, ?, datetime('now', ?))`,
+			fmt.Sprintf("msg-%d", i), role, fmt.Sprintf("message %d content", i),
+			fmt.Sprintf("-%d minutes", 60-i))
+		if err != nil {
+			t.Fatalf("insert message %d: %v", i, err)
+		}
+	}
+
+	sg := agent.NewSessionGovernor(store, 24*time.Hour, 24*time.Hour)
+	err = sg.CompactBeforeArchive(ctx, "compact-sess")
+	if err != nil {
+		t.Fatalf("compact error: %v", err)
+	}
+
+	// Count remaining messages — should have summary + preserved recent messages.
+	var count int
+	err = store.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM session_messages WHERE session_id = 'compact-sess'`).Scan(&count)
+	if err != nil {
+		t.Fatalf("count: %v", err)
+	}
+
+	// 10 messages: oldest 50% = 5 compacted, 5 preserved + 1 summary = 6.
+	// But preserve min is 4, so halfPoint = min(5, 10-4=6) = 5.
+	// Result: 5 deleted, 1 summary inserted, 5 kept = 6 total.
+	if count != 6 {
+		t.Errorf("expected 6 messages after compaction, got %d", count)
+	}
+
+	// Verify summary message exists.
+	var summaryContent string
+	err = store.QueryRowContext(ctx,
+		`SELECT content FROM session_messages WHERE session_id = 'compact-sess' AND role = 'system'`).Scan(&summaryContent)
+	if err != nil {
+		t.Fatalf("summary query: %v", err)
+	}
+	if len(summaryContent) == 0 {
+		t.Error("expected non-empty summary content")
+	}
+}
+
+func TestSessionGovernor_CompactBeforeArchive_FewMessages(t *testing.T) {
+	store := testutil.TempStore(t)
+	ctx := context.Background()
+
+	_, err := store.ExecContext(ctx,
+		`INSERT INTO sessions (id, agent_id, scope_key, status)
+		 VALUES ('few-sess', 'agent1', 'test', 'active')`)
+	if err != nil {
+		t.Fatalf("insert session: %v", err)
+	}
+
+	// Insert only 3 messages — fewer than preserveRecent (4).
+	for i := 0; i < 3; i++ {
+		_, err := store.ExecContext(ctx,
+			`INSERT INTO session_messages (id, session_id, role, content, created_at)
+			 VALUES (?, 'few-sess', 'user', ?, datetime('now'))`,
+			fmt.Sprintf("fmsg-%d", i), fmt.Sprintf("msg %d", i))
+		if err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+	}
+
+	sg := agent.NewSessionGovernor(store, 24*time.Hour, 24*time.Hour)
+	err = sg.CompactBeforeArchive(ctx, "few-sess")
+	if err != nil {
+		t.Fatalf("compact error: %v", err)
+	}
+
+	// All 3 messages should remain — nothing to compact.
+	var count int
+	_ = store.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM session_messages WHERE session_id = 'few-sess'`).Scan(&count)
+	if count != 3 {
+		t.Errorf("expected 3 messages (no compaction), got %d", count)
+	}
+}
+
+func TestAdjustPriority(t *testing.T) {
+	tests := []struct {
+		name     string
+		success  int
+		failure  int
+		boost    int
+		decay    int
+		expected int
+	}{
+		{"high success rate boosts", 9, 1, 5, 10, 5},
+		{"exactly 80% boosts", 8, 2, 5, 10, 5},
+		{"high failure decays", 2, 8, 5, 10, -10},
+		{"balanced returns 0", 5, 5, 5, 10, 0}, // 50% failure rate == 0.5, not > 0.5
+		{"no calls returns 0", 0, 0, 5, 10, 0},
+		{"default boost/decay", 9, 1, 0, 0, 5},
+		{"all success boosts", 10, 0, 7, 15, 7},
+		{"all failure decays", 0, 10, 5, 12, -12},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := agent.AdjustPriority(tt.success, tt.failure, tt.boost, tt.decay)
+			if got != tt.expected {
+				t.Errorf("AdjustPriority(%d, %d, %d, %d) = %d, want %d",
+					tt.success, tt.failure, tt.boost, tt.decay, got, tt.expected)
+			}
+		})
 	}
 }
 

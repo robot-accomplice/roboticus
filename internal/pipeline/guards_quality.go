@@ -90,7 +90,47 @@ func (g *NonRepetitionGuardV2) CheckWithContext(content string, ctx *GuardContex
 		}
 	}
 
+	// Cross-turn self-echo detection (Wave 8, #80).
+	if echoReason := findSelfEchoAcrossHistory(content, ctx.PriorAssistantMessages); echoReason != "" {
+		return GuardResult{
+			Passed:  false,
+			Retry:   true,
+			Reason:  echoReason,
+			Verdict: GuardRetryRequested,
+		}
+	}
+
 	return GuardResult{Passed: true}
+}
+
+// findSelfEchoAcrossHistory detects structural self-echo: when the agent
+// produces the same opening pattern across multiple prior turns, suggesting
+// it's stuck in a response template loop.
+func findSelfEchoAcrossHistory(content string, history []string) string {
+	if len(history) < 2 {
+		return ""
+	}
+	contentLines := strings.Split(strings.TrimSpace(content), "\n")
+	if len(contentLines) == 0 {
+		return ""
+	}
+	firstLine := strings.TrimSpace(contentLines[0])
+	if len(firstLine) < 15 {
+		return ""
+	}
+
+	// Check if the same opening line appears in 2+ prior assistant messages.
+	matchCount := 0
+	for _, prior := range history {
+		priorLines := strings.Split(strings.TrimSpace(prior), "\n")
+		if len(priorLines) > 0 && strings.TrimSpace(priorLines[0]) == firstLine {
+			matchCount++
+		}
+	}
+	if matchCount >= 2 {
+		return "response opening repeats across 3+ turns (template loop detected)"
+	}
+	return ""
 }
 
 // --- OutputContractGuard ---

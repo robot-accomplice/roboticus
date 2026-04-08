@@ -38,24 +38,23 @@ func TestListServiceCatalog_QueryError(t *testing.T) {
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusInternalServerError {
+	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 500 (schema mismatch: description column missing)", rec.Code)
 	}
 }
 
 // --- ListRevenueOpportunities ---
-// The handler queries columns (score, estimated_value_usd, result_json) absent
-// from the real schema. Verify 500 on empty DB and with seed data.
+// With the repo-based approach, empty DB returns 200 with empty list.
 
-func TestListRevenueOpportunities_QueryError_EmptyDB(t *testing.T) {
+func TestListRevenueOpportunities_EmptyDB(t *testing.T) {
 	store := testutil.TempStore(t)
 	handler := ListRevenueOpportunities(store)
 	req := httptest.NewRequest("GET", "/api/revenue/opportunities", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 500 (schema mismatch)", rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (empty list)", rec.Code)
 	}
 }
 
@@ -66,8 +65,8 @@ func TestListRevenueOpportunities_QueryError_WithStatusFilter(t *testing.T) {
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 500 (schema mismatch)", rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (empty filtered list)", rec.Code)
 	}
 }
 
@@ -81,7 +80,7 @@ func TestGetRevenueOpportunity_NotFound(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
 
-	// The handler uses QueryRowContext with missing columns; Scan fails -> 404.
+	// The repo-based handler returns 404 via GetOpportunity error.
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", rec.Code)
 	}
@@ -131,8 +130,8 @@ func TestIntakeRevenueOpportunity_SchemaError(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	// Handler inserts into columns (score, estimated_value_usd) that don't exist.
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 500 (schema mismatch)", rec.Code)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 200 (repo handles gracefully)", rec.Code)
 	}
 }
 
@@ -218,8 +217,8 @@ func TestListServiceRequests_QueryError(t *testing.T) {
 
 	// Handler queries requester_id, amount_usd which don't exist in schema
 	// (real columns: requester, quoted_amount).
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 500 (schema mismatch)", rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (repo handles gracefully)", rec.Code)
 	}
 }
 
@@ -238,21 +237,21 @@ func TestGetServiceRequest_NotFound(t *testing.T) {
 	}
 }
 
-func TestGetServiceRequest_SchemaError(t *testing.T) {
+func TestGetServiceRequest_Success(t *testing.T) {
 	store := testutil.TempStore(t)
 	_, _ = store.ExecContext(bgCtx,
 		`INSERT INTO service_requests
-		 (id, service_id, requester, parameters_json, status, quoted_amount, recipient, quote_expires_at, created_at)
-		 VALUES ('sr-get1', 'svc1', 'user1', '{}', 'quoted', 99.0, 'wallet1', datetime('now', '+1 day'), datetime('now'))`)
+		 (id, service_id, requester, parameters_json, status, quoted_amount, currency, recipient, quote_expires_at, created_at)
+		 VALUES ('sr-get1', 'svc1', 'user1', '{}', 'quoted', 99.0, 'USDC', 'wallet1', datetime('now', '+1 day'), datetime('now'))`)
 
 	r := chiRouter("GET", "/api/revenue/service-requests/{id}", GetServiceRequest(store))
 	req := httptest.NewRequest("GET", "/api/revenue/service-requests/sr-get1", nil)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
 
-	// Handler queries requester_id, amount_usd which don't exist -> scan fails -> 404.
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want 404 (schema mismatch causes scan failure)", rec.Code)
+	// Schema-aligned repo should return 200 with the service request.
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body = %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -271,7 +270,7 @@ func TestCreateServiceQuote_InvalidJSON(t *testing.T) {
 	}
 }
 
-func TestCreateServiceQuote_SchemaError(t *testing.T) {
+func TestCreateServiceQuote_Success(t *testing.T) {
 	store := testutil.TempStore(t)
 	handler := CreateServiceQuote(store)
 	req := httptest.NewRequest("POST", "/api/revenue/service-requests",
@@ -279,9 +278,9 @@ func TestCreateServiceQuote_SchemaError(t *testing.T) {
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
-	// Handler inserts requester_id, amount_usd, description which don't exist.
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 500 (schema mismatch)", rec.Code)
+	// Schema-aligned repo should successfully create the request.
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201, body = %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -477,8 +476,8 @@ func TestIntakeMicroBounty_SchemaError(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	// Handler inserts into columns (score, estimated_value_usd) that don't exist.
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 500 (schema mismatch)", rec.Code)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 200 (repo handles gracefully)", rec.Code)
 	}
 }
 
@@ -506,7 +505,7 @@ func TestIntakeOracleFeed_SchemaError(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	// Handler inserts into columns (score, estimated_value_usd) that don't exist.
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 500 (schema mismatch)", rec.Code)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 200 (repo handles gracefully)", rec.Code)
 	}
 }

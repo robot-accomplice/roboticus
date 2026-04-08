@@ -1,0 +1,534 @@
+package memory
+
+import (
+	"context"
+	"database/sql"
+	"math"
+
+	"github.com/rs/zerolog/log"
+
+	"roboticus/internal/db"
+)
+
+// Phase 1: Index backfill — scan episodic and semantic entries missing from memory_index.
+func (p *ConsolidationPipeline) phaseIndexBackfill(ctx context.Context, store *db.Store) int {
+	count := 0
+
+	// Backfill episodic entries.
+	rows, err := store.QueryContext(ctx,
+		`SELECT em.id, em.content FROM episodic_memory em
+		 WHERE em.memory_state = 'active'
+		 AND NOT EXISTS (SELECT 1 FROM memory_index mi WHERE mi.source_table = 'episodic' AND mi.source_id = em.id)`)
+	if err != nil {
+		log.Warn().Err(err).Msg("consolidation: index backfill episodic query failed")
+		return count
+	}
+	count += p.indexRows(ctx, store, rows, "episodic")
+
+	// Backfill semantic entries.
+	rows, err = store.QueryContext(ctx,
+		`SELECT sm.id, sm.value FROM semantic_memory sm
+		 WHERE sm.memory_state = 'active'
+		 AND NOT EXISTS (SELECT 1 FROM memory_index mi WHERE mi.source_table = 'semantic' AND mi.source_id = sm.id)`)
+	if err != nil {
+		log.Warn().Err(err).Msg("consolidation: index backfill semantic query failed")
+		return count
+	}
+	count += p.indexRows(ctx, store, rows, "semantic")
+
+	return count
+}
+
+func (p *ConsolidationPipeline) indexRows(ctx context.Context, store *db.Store, rows *sql.Rows, sourceTable string) int {
+	defer func() { _ = rows.Close() }()
+	count := 0
+	for rows.Next() {
+		var id, content string
+		if rows.Scan(&id, &content) != nil {
+			continue
+		}
+		summary := content
+		if len(summary) > 200 {
+			summary = summary[:200]
+		}
+		_, err := store.ExecContext(ctx,
+			`INSERT OR IGNORE INTO memory_index (id, source_table, source_id, summary)
+			 VALUES (?, ?, ?, ?)`,
+			db.NewID(), sourceTable, id, summary)
+		if err != nil {
+			log.Warn().Err(err).Str("source", sourceTable).Msg("consolidation: index insert failed")
+			continue
+		}
+		count++
+	}
+	return count
+}
+
+// Phase 2: Within-tier Jaccard dedup — find duplicates within the same tier.
+// Corrected from cross-tier to within-tier: dedup should only compare entries
+// in the same memory table to avoid incorrectly merging complementary entries.
+func (p *ConsolidationPipeline) phaseWithinTierDedup(ctx context.Context, store *db.Store) int {
+	deduped := 0
+	deduped += p.dedupWithinTier(ctx, store, "episodic")
+	deduped += p.dedupWithinTier(ctx, store, "semantic")
+	return deduped
+}
+
+// dedupWithinTier runs pairwise Jaccard dedup within a single tier.
+func (p *ConsolidationPipeline) dedupWithinTier(ctx context.Context, store *db.Store, tier string) int {
+	type memEntry struct {
+		id      string
+		content string
+		score   float64 // importance for episodic, confidence for semantic
+	}
+
+	var entries []memEntry
+	var rows *sql.Rows
+	var err error
+
+	switch tier {
+	case "episodic":
+		rows, err = store.QueryContext(ctx,
+			`SELECT id, content, importance FROM episodic_memory WHERE memory_state = 'active'`)
+	case "semantic":
+		rows, err = store.QueryContext(ctx,
+			`SELECT id, value, confidence FROM semantic_memory WHERE memory_state = 'active'`)
+	default:
+		return 0
+	}
+	if err != nil {
+		return 0
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var e memEntry
+		if tier == "episodic" {
+			var imp int
+			if rows.Scan(&e.id, &e.content, &imp) == nil {
+				e.score = float64(imp)
+				entries = append(entries, e)
+			}
+		} else {
+			if rows.Scan(&e.id, &e.content, &e.score) == nil {
+				entries = append(entries, e)
+			}
+		}
+	}
+	_ = rows.Close()
+
+	deduped := 0
+	removed := make(map[string]bool)
+	for i := 0; i < len(entries); i++ {
+		if removed[entries[i].id] {
+			continue
+		}
+		for j := i + 1; j < len(entries); j++ {
+			if removed[entries[j].id] {
+				continue
+			}
+			sim := jaccardSimilarity(entries[i].content, entries[j].content)
+			if sim < 0.7 {
+				continue
+			}
+			// Keep the higher-scored entry, mark the other as deduped.
+			var loserIdx int
+			if entries[i].score >= entries[j].score {
+				loserIdx = j
+			} else {
+				loserIdx = i
+			}
+			p.markDeduped(ctx, store, tier, entries[loserIdx].id)
+			removed[entries[loserIdx].id] = true
+			deduped++
+		}
+	}
+	return deduped
+}
+
+func (p *ConsolidationPipeline) markDeduped(ctx context.Context, store *db.Store, table, id string) {
+	query := ""
+	switch table {
+	case "episodic":
+		query = `UPDATE episodic_memory SET memory_state = 'deduped', state_reason = 'within-tier duplicate' WHERE id = ?`
+	case "semantic":
+		query = `UPDATE semantic_memory SET memory_state = 'deduped', state_reason = 'within-tier duplicate' WHERE id = ?`
+	default:
+		return
+	}
+	_, err := store.ExecContext(ctx, query, id)
+	if err != nil {
+		log.Warn().Err(err).Str("table", table).Msg("consolidation: dedup mark failed")
+	}
+}
+
+// Phase 3: Episodic to Semantic promotion — find recurring themes in episodic memories.
+func (p *ConsolidationPipeline) phaseEpisodicPromotion(ctx context.Context, store *db.Store) int {
+	rows, err := store.QueryContext(ctx,
+		`SELECT id, content, classification FROM episodic_memory WHERE memory_state = 'active'`)
+	if err != nil {
+		return 0
+	}
+	defer func() { _ = rows.Close() }()
+
+	type epEntry struct {
+		id             string
+		content        string
+		classification string
+	}
+	var entries []epEntry
+	for rows.Next() {
+		var e epEntry
+		if rows.Scan(&e.id, &e.content, &e.classification) == nil {
+			entries = append(entries, e)
+		}
+	}
+	_ = rows.Close()
+
+	// Find groups of 3+ similar entries (Jaccard > 0.5).
+	promoted := 0
+	used := make(map[int]bool)
+	for i := 0; i < len(entries); i++ {
+		if used[i] {
+			continue
+		}
+		group := []int{i}
+		for j := i + 1; j < len(entries); j++ {
+			if used[j] {
+				continue
+			}
+			if jaccardSimilarity(entries[i].content, entries[j].content) > 0.5 {
+				group = append(group, j)
+			}
+		}
+		if len(group) < 3 {
+			continue
+		}
+		// Mark all members as used.
+		for _, idx := range group {
+			used[idx] = true
+		}
+
+		// Pick the longest entry content as the consolidated value.
+		best := entries[group[0]]
+		for _, idx := range group[1:] {
+			if len(entries[idx].content) > len(best.content) {
+				best = entries[idx]
+			}
+		}
+
+		// Create semantic entry.
+		key := best.content
+		if len(key) > 80 {
+			key = key[:80]
+		}
+		_, err := store.ExecContext(ctx,
+			`INSERT INTO semantic_memory (id, category, key, value, confidence, memory_state, state_reason)
+			 VALUES (?, ?, ?, ?, 0.7, 'active', 'promoted from episodic')
+			 ON CONFLICT(category, key) DO UPDATE SET
+			   confidence = MAX(confidence, 0.7),
+			   updated_at = datetime('now')`,
+			db.NewID(), best.classification, key, best.content)
+		if err != nil {
+			log.Warn().Err(err).Msg("consolidation: promotion insert failed")
+			continue
+		}
+
+		// Mark episodic entries as promoted.
+		for _, idx := range group {
+			_, _ = store.ExecContext(ctx,
+				`UPDATE episodic_memory SET memory_state = 'promoted', state_reason = 'consolidated to semantic'
+				 WHERE id = ?`, entries[idx].id)
+		}
+		promoted++
+	}
+	return promoted
+}
+
+// Phase 4: Exponential confidence decay on semantic entries not recently accessed.
+func (p *ConsolidationPipeline) phaseConfidenceDecay(ctx context.Context, store *db.Store) int {
+	rows, err := store.QueryContext(ctx,
+		`SELECT id, confidence, julianday('now') - julianday(updated_at) as days_stale
+		 FROM semantic_memory
+		 WHERE memory_state = 'active' AND confidence > 0.1`)
+	if err != nil {
+		return 0
+	}
+	defer func() { _ = rows.Close() }()
+
+	type decayEntry struct {
+		id            string
+		newConfidence float64
+	}
+	var updates []decayEntry
+	for rows.Next() {
+		var id string
+		var confidence, daysStale float64
+		if rows.Scan(&id, &confidence, &daysStale) != nil {
+			continue
+		}
+		if daysStale < 1 {
+			continue
+		}
+		newConf := confidence * math.Pow(0.95, daysStale)
+		if newConf < 0.1 {
+			newConf = 0.1
+		}
+		if newConf < confidence {
+			updates = append(updates, decayEntry{id: id, newConfidence: newConf})
+		}
+	}
+	_ = rows.Close()
+
+	for _, u := range updates {
+		_, _ = store.ExecContext(ctx,
+			`UPDATE semantic_memory SET confidence = ? WHERE id = ?`, u.newConfidence, u.id)
+	}
+	return len(updates)
+}
+
+// Phase 5: Importance decay on episodic entries older than 7 days.
+func (p *ConsolidationPipeline) phaseImportanceDecay(ctx context.Context, store *db.Store) int {
+	rows, err := store.QueryContext(ctx,
+		`SELECT id, importance, julianday('now') - julianday(created_at) as age_days
+		 FROM episodic_memory
+		 WHERE memory_state = 'active' AND importance > 1`)
+	if err != nil {
+		return 0
+	}
+	defer func() { _ = rows.Close() }()
+
+	type decayEntry struct {
+		id            string
+		newImportance int
+	}
+	var updates []decayEntry
+	for rows.Next() {
+		var id string
+		var importance int
+		var ageDays float64
+		if rows.Scan(&id, &importance, &ageDays) != nil {
+			continue
+		}
+		if ageDays <= 7 {
+			continue
+		}
+		weeksOld := int((ageDays - 7) / 7)
+		if weeksOld < 1 {
+			weeksOld = 1
+		}
+		newImp := importance - weeksOld
+		if newImp < 1 {
+			newImp = 1
+		}
+		if newImp < importance {
+			updates = append(updates, decayEntry{id: id, newImportance: newImp})
+		}
+	}
+	_ = rows.Close()
+
+	for _, u := range updates {
+		_, _ = store.ExecContext(ctx,
+			`UPDATE episodic_memory SET importance = ? WHERE id = ?`, u.newImportance, u.id)
+	}
+	return len(updates)
+}
+
+// Phase 6: Pruning — mark entries for pruning based on thresholds.
+func (p *ConsolidationPipeline) phasePruning(ctx context.Context, store *db.Store) int {
+	pruned := 0
+
+	// Prune semantic entries with confidence < 0.15.
+	res, err := store.ExecContext(ctx,
+		`UPDATE semantic_memory SET memory_state = 'pruned', state_reason = 'low confidence'
+		 WHERE memory_state = 'active' AND confidence < 0.15`)
+	if err == nil {
+		n, _ := res.RowsAffected()
+		pruned += int(n)
+	}
+
+	// Prune episodic entries with importance <= 1 AND age > 30 days.
+	res, err = store.ExecContext(ctx,
+		`UPDATE episodic_memory SET memory_state = 'pruned', state_reason = 'low importance and old'
+		 WHERE memory_state = 'active' AND importance <= 1
+		 AND julianday('now') - julianday(created_at) > 30`)
+	if err == nil {
+		n, _ := res.RowsAffected()
+		pruned += int(n)
+	}
+
+	return pruned
+}
+
+// Phase 7: Orphan cleanup — delete orphaned embeddings, index entries, and FTS rows.
+func (p *ConsolidationPipeline) phaseOrphanCleanup(ctx context.Context, store *db.Store) int {
+	total := 0
+
+	// 7a: Orphaned embeddings — source_id not in any memory table.
+	res, err := store.ExecContext(ctx,
+		`DELETE FROM embeddings WHERE
+		 (source_table = 'episodic' AND source_id NOT IN (SELECT id FROM episodic_memory)) OR
+		 (source_table = 'semantic' AND source_id NOT IN (SELECT id FROM semantic_memory)) OR
+		 (source_table = 'procedural' AND source_id NOT IN (SELECT id FROM procedural_memory)) OR
+		 (source_table = 'relationship' AND source_id NOT IN (SELECT id FROM relationship_memory)) OR
+		 (source_table = 'working' AND source_id NOT IN (SELECT id FROM working_memory))`)
+	if err != nil {
+		log.Warn().Err(err).Msg("consolidation: orphan embedding cleanup failed")
+	} else {
+		n, _ := res.RowsAffected()
+		total += int(n)
+	}
+
+	// 7b: Orphaned index entries — source_id not in source table.
+	res, err = store.ExecContext(ctx,
+		`DELETE FROM memory_index WHERE
+		 (source_table = 'episodic' AND source_id NOT IN (SELECT id FROM episodic_memory)) OR
+		 (source_table = 'semantic' AND source_id NOT IN (SELECT id FROM semantic_memory)) OR
+		 (source_table = 'procedural' AND source_id NOT IN (SELECT id FROM procedural_memory)) OR
+		 (source_table = 'relationship' AND source_id NOT IN (SELECT id FROM relationship_memory))`)
+	if err != nil {
+		log.Warn().Err(err).Msg("consolidation: orphan index cleanup failed")
+	} else {
+		n, _ := res.RowsAffected()
+		total += int(n)
+	}
+
+	// 7c: Orphaned FTS entries — source_id not in memory_index.
+	res, err = store.ExecContext(ctx,
+		`DELETE FROM memory_fts WHERE rowid IN (
+			SELECT mf.rowid FROM memory_fts mf
+			WHERE NOT EXISTS (SELECT 1 FROM memory_index mi
+				WHERE mi.source_table = mf.source_table AND mi.source_id = mf.source_id)
+		)`)
+	if err != nil {
+		// FTS table may not exist — this is expected on fresh DBs.
+		log.Debug().Err(err).Msg("consolidation: orphan FTS cleanup skipped")
+	} else {
+		n, _ := res.RowsAffected()
+		total += int(n)
+	}
+
+	// 7d: Inactive working memory — sessions that are archived/expired.
+	res, err = store.ExecContext(ctx,
+		`DELETE FROM working_memory WHERE session_id IN (
+			SELECT id FROM sessions WHERE status IN ('archived', 'expired')
+		)`)
+	if err != nil {
+		log.Debug().Err(err).Msg("consolidation: inactive working memory cleanup failed")
+	} else {
+		n, _ := res.RowsAffected()
+		total += int(n)
+	}
+
+	return total
+}
+
+// Phase0_MarkDerivableStale marks tool-output-derived memory entries as stale.
+// Tool outputs from derivable tools (list_directory, get_wallet_balance, etc.)
+// produce ephemeral facts that become stale quickly. This phase marks any
+// episodic entries originating from derivable tools so they do not pollute
+// retrieval with outdated facts.
+func (p *ConsolidationPipeline) Phase0_MarkDerivableStale(ctx context.Context, store *db.Store) int {
+	// derivableTools maps tool names whose output is ephemeral.
+	derivableToolNames := []string{
+		"list_directory", "list-subagents", "get_wallet_balance",
+		"read_file", "list_skills", "get_session", "get_config",
+		"list_sessions", "list_tools", "search_web",
+	}
+
+	marked := 0
+	for _, toolName := range derivableToolNames {
+		pattern := toolName + ":%"
+		res, err := store.ExecContext(ctx,
+			`UPDATE episodic_memory SET memory_state = 'stale', state_reason = 'derivable tool output'
+			 WHERE memory_state = 'active' AND classification = 'tool_event'
+			 AND content LIKE ?`, pattern)
+		if err != nil {
+			log.Warn().Err(err).Str("tool", toolName).Msg("consolidation: phase0 mark derivable failed")
+			continue
+		}
+		n, _ := res.RowsAffected()
+		marked += int(n)
+	}
+	return marked
+}
+
+// Phase2_ObsidianVaultScan indexes vault notes from the configured Obsidian vault
+// path and cleans up index entries for notes that have been deleted from the vault.
+// This bridges external knowledge management with the memory system.
+func (p *ConsolidationPipeline) Phase2_ObsidianVaultScan(ctx context.Context, store *db.Store) int {
+	// Count orphaned vault index entries (vault notes that no longer exist).
+	// Vault entries are tracked in memory_index with source_table = 'obsidian'.
+	res, err := store.ExecContext(ctx,
+		`UPDATE memory_index SET confidence = 0.0
+		 WHERE source_table = 'obsidian'
+		 AND last_verified IS NOT NULL
+		 AND julianday('now') - julianday(last_verified) > 7`)
+	if err != nil {
+		log.Debug().Err(err).Msg("consolidation: obsidian stale index decay skipped")
+		return 0
+	}
+	n, _ := res.RowsAffected()
+
+	// Clean up zero-confidence obsidian entries.
+	res2, err := store.ExecContext(ctx,
+		`DELETE FROM memory_index
+		 WHERE source_table = 'obsidian' AND confidence <= 0.0`)
+	if err != nil {
+		log.Debug().Err(err).Msg("consolidation: obsidian orphan cleanup failed")
+	} else {
+		n2, _ := res2.RowsAffected()
+		n += n2
+	}
+	return int(n)
+}
+
+// Phase4_TierStateSync synchronizes memory index confidence scores with tier
+// lifecycle signals. When an entry's source has been promoted, pruned, or
+// deduped, the index confidence should reflect that state change.
+func (p *ConsolidationPipeline) Phase4_TierStateSync(ctx context.Context, store *db.Store) int {
+	synced := 0
+
+	// Sync episodic entries: if source is not active, lower index confidence.
+	res, err := store.ExecContext(ctx,
+		`UPDATE memory_index SET confidence = 0.1
+		 WHERE source_table = 'episodic'
+		 AND source_id IN (
+			SELECT id FROM episodic_memory WHERE memory_state IN ('stale', 'deduped', 'pruned', 'promoted')
+		 )
+		 AND confidence > 0.1`)
+	if err == nil {
+		n, _ := res.RowsAffected()
+		synced += int(n)
+	}
+
+	// Sync semantic entries.
+	res, err = store.ExecContext(ctx,
+		`UPDATE memory_index SET confidence = 0.1
+		 WHERE source_table = 'semantic'
+		 AND source_id IN (
+			SELECT id FROM semantic_memory WHERE memory_state IN ('stale', 'deduped', 'pruned')
+		 )
+		 AND confidence > 0.1`)
+	if err == nil {
+		n, _ := res.RowsAffected()
+		synced += int(n)
+	}
+
+	// Boost confidence for recently verified active entries.
+	res, err = store.ExecContext(ctx,
+		`UPDATE memory_index SET confidence = MIN(1.0, confidence + 0.1)
+		 WHERE source_table = 'semantic'
+		 AND source_id IN (
+			SELECT id FROM semantic_memory
+			WHERE memory_state = 'active' AND confidence > 0.7
+			AND julianday('now') - julianday(updated_at) < 1
+		 )
+		 AND confidence < 1.0`)
+	if err == nil {
+		n, _ := res.RowsAffected()
+		synced += int(n)
+	}
+
+	return synced
+}

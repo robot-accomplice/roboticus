@@ -37,6 +37,34 @@ func DefaultTransformPipeline() *TransformPipeline {
 	)
 }
 
+// TransformOutput holds the result of a transform pipeline run with full metadata.
+type TransformOutput struct {
+	Content            string `json:"content"`
+	ReasoningExtracted string `json:"reasoning_extracted,omitempty"`
+	Modified           bool   `json:"modified"`
+}
+
+// ApplyWithOutput runs all transforms and returns a TransformOutput with metadata
+// about what changed. The ReasoningExtracted field captures any <think> blocks
+// that were stripped by the ReasoningExtractor.
+func (p *TransformPipeline) ApplyWithOutput(content string) TransformOutput {
+	original := content
+	var reasoning string
+
+	for _, t := range p.transforms {
+		if re, ok := t.(*ReasoningExtractor); ok {
+			reasoning = re.ExtractReasoning(content)
+		}
+		content = t.Transform(content)
+	}
+
+	return TransformOutput{
+		Content:            content,
+		ReasoningExtracted: reasoning,
+		Modified:           content != original,
+	}
+}
+
 // ReasoningExtractor strips <think>...</think> blocks from chain-of-thought
 // model responses (e.g., DeepSeek, Qwen with reasoning). These blocks contain
 // internal reasoning that should not be shown to the user.
@@ -47,6 +75,25 @@ var thinkBlockRe = regexp.MustCompile(`(?s)<think>.*?</think>`)
 func (r *ReasoningExtractor) Transform(content string) string {
 	result := thinkBlockRe.ReplaceAllString(content, "")
 	return strings.TrimSpace(result)
+}
+
+// ExtractReasoning returns the concatenated content of all <think> blocks.
+func (r *ReasoningExtractor) ExtractReasoning(content string) string {
+	matches := thinkBlockRe.FindAllString(content, -1)
+	if len(matches) == 0 {
+		return ""
+	}
+	var parts []string
+	for _, m := range matches {
+		// Strip the <think> and </think> tags.
+		inner := strings.TrimPrefix(m, "<think>")
+		inner = strings.TrimSuffix(inner, "</think>")
+		inner = strings.TrimSpace(inner)
+		if inner != "" {
+			parts = append(parts, inner)
+		}
+	}
+	return strings.Join(parts, "\n\n")
 }
 
 // ContentGuard detects and redacts prompt injection markers that may have

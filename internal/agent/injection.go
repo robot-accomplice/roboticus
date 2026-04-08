@@ -4,6 +4,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"regexp"
 	"strings"
 	"unicode"
@@ -116,6 +117,8 @@ func compile(patterns ...string) []*regexp.Regexp {
 
 // CheckInput is L1: Score input text for injection attempts.
 func (d *InjectionDetector) CheckInput(text string) core.ThreatScore {
+	// Decode HTML entities first to catch obfuscated injections (#49).
+	text = decodeHTMLEntities(text)
 	normalized := normalize(text)
 
 	var score float64
@@ -291,4 +294,82 @@ func foldHomoglyph(r rune) rune {
 		return 'X'
 	}
 	return r
+}
+
+// decodeHTMLEntities decodes common HTML entities and percent-encoded sequences
+// to catch injection attempts that use encoding to bypass pattern matching.
+// Handles: &#xHH; (hex), &#DDD; (decimal), named entities, %HH (URL encoding).
+func decodeHTMLEntities(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+
+	i := 0
+	for i < len(s) {
+		if s[i] == '&' {
+			// Try hex numeric entity: &#xHH;
+			if i+4 < len(s) && s[i+1] == '#' && (s[i+2] == 'x' || s[i+2] == 'X') {
+				end := strings.IndexByte(s[i+3:], ';')
+				if end > 0 && end <= 6 {
+					hexStr := s[i+3 : i+3+end]
+					var val int
+					if _, err := fmt.Sscanf(hexStr, "%x", &val); err == nil && val > 0 && val < 0x110000 {
+						b.WriteRune(rune(val))
+						i += 3 + end + 1
+						continue
+					}
+				}
+			}
+			// Try decimal numeric entity: &#DDD;
+			if i+3 < len(s) && s[i+1] == '#' {
+				end := strings.IndexByte(s[i+2:], ';')
+				if end > 0 && end <= 7 {
+					decStr := s[i+2 : i+2+end]
+					var val int
+					if _, err := fmt.Sscanf(decStr, "%d", &val); err == nil && val > 0 && val < 0x110000 {
+						b.WriteRune(rune(val))
+						i += 2 + end + 1
+						continue
+					}
+				}
+			}
+			// Named entities.
+			for _, ent := range namedEntities {
+				if strings.HasPrefix(s[i:], ent.entity) {
+					b.WriteString(ent.replacement)
+					i += len(ent.entity)
+					goto next
+				}
+			}
+			b.WriteByte(s[i])
+			i++
+			continue
+		}
+		if s[i] == '%' && i+2 < len(s) {
+			// URL percent-encoding: %HH
+			var val int
+			if _, err := fmt.Sscanf(s[i+1:i+3], "%02x", &val); err == nil {
+				b.WriteByte(byte(val))
+				i += 3
+				continue
+			}
+		}
+		b.WriteByte(s[i])
+		i++
+		continue
+	next:
+	}
+	return b.String()
+}
+
+type htmlEntity struct {
+	entity      string
+	replacement string
+}
+
+var namedEntities = []htmlEntity{
+	{"&lt;", "<"},
+	{"&gt;", ">"},
+	{"&amp;", "&"},
+	{"&quot;", "\""},
+	{"&apos;", "'"},
 }

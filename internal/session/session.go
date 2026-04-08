@@ -17,6 +17,7 @@ type Session struct {
 	Workspace    string
 	AllowedPaths []string
 	Channel      string
+	ScopeKey     string // "platform:chatid" — used for cross-channel consent
 
 	messages     []llm.Message
 	pendingCalls []llm.ToolCall

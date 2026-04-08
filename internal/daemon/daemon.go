@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"roboticus/internal/agent/memory"
 	"roboticus/internal/agent/policy"
 	"roboticus/internal/agent/skills"
+	agenttools "roboticus/internal/agent/tools"
 	"roboticus/internal/api"
 	"roboticus/internal/api/routes"
 	"roboticus/internal/channel"
@@ -66,12 +68,30 @@ func (a *ingestorAdapter) IngestTurn(ctx context.Context, session *session.Sessi
 
 // buildAgentContext assembles a ContextBuilder with system prompt, tool defs,
 // and memory retrieval. Shared by executorAdapter and streamAdapter.
-func buildAgentContext(ctx context.Context, sess *session.Session, tools *agent.ToolRegistry, retriever *memory.Retriever, promptCfg agent.PromptConfig) *agent.ContextBuilder {
+func buildAgentContext(ctx context.Context, sess *session.Session, tools *agent.ToolRegistry, retriever *memory.Retriever, store *db.Store, promptCfg agent.PromptConfig) *agent.ContextBuilder {
 	ctxBuilder := agent.NewContextBuilder(agent.DefaultContextConfig())
 
 	cfg := promptCfg
-	cfg.AgentName = sess.AgentName
-	ctxBuilder.SetSystemPrompt(agent.BuildSystemPrompt(cfg))
+	// Use session's agent name only if explicitly set (not "default").
+	// Otherwise keep the configured agent name (e.g., "Duncan").
+	if sess.AgentName != "" && sess.AgentName != "default" {
+		cfg.AgentName = sess.AgentName
+	}
+	systemPrompt := agent.BuildSystemPrompt(cfg)
+	log.Info().
+		Str("agent_name", cfg.AgentName).
+		Int("personality_len", len(cfg.Personality)).
+		Int("firmware_len", len(cfg.Firmware)).
+		Int("prompt_len", len(systemPrompt)).
+		Int("tools", func() int {
+			if tools != nil {
+				return len(tools.ToolDefs())
+			}
+			return 0
+		}()).
+		Bool("has_retriever", retriever != nil).
+		Msg("context built for inference")
+	ctxBuilder.SetSystemPrompt(systemPrompt)
 
 	if tools != nil {
 		ctxBuilder.SetTools(tools.ToolDefs())
@@ -90,6 +110,16 @@ func buildAgentContext(ctx context.Context, sess *session.Session, tools *agent.
 		}
 	}
 
+	// Inject memory index summary — lightweight list of top memories the agent
+	// can recall on demand via recall_memory(id). Matches Rust's two-stage
+	// memory pattern: index always injected, full content fetched on demand.
+	if store != nil {
+		index := agenttools.BuildMemoryIndex(ctx, store, 20)
+		if index != "" {
+			ctxBuilder.SetMemoryIndex(index)
+		}
+	}
+
 	return ctxBuilder
 }
 
@@ -101,11 +131,12 @@ type executorAdapter struct {
 	injection    *agent.InjectionDetector
 	memMgr       *memory.Manager
 	retriever    *memory.Retriever
+	store        *db.Store
 	promptConfig agent.PromptConfig
 }
 
 func (a *executorAdapter) RunLoop(ctx context.Context, sess *session.Session) (string, int, error) {
-	ctxBuilder := buildAgentContext(ctx, sess, a.tools, a.retriever, a.promptConfig)
+	ctxBuilder := buildAgentContext(ctx, sess, a.tools, a.retriever, a.store, a.promptConfig)
 
 	loop := agent.NewLoop(agent.DefaultLoopConfig(), agent.LoopDeps{
 		LLM:       a.llmSvc,
@@ -280,11 +311,12 @@ type streamAdapter struct {
 	llmSvc       *llm.Service
 	tools        *agent.ToolRegistry
 	retriever    *memory.Retriever
+	store        *db.Store
 	promptConfig agent.PromptConfig
 }
 
 func (a *streamAdapter) PrepareStream(ctx context.Context, sess *session.Session) (*llm.Request, error) {
-	ctxBuilder := buildAgentContext(ctx, sess, a.tools, a.retriever, a.promptConfig)
+	ctxBuilder := buildAgentContext(ctx, sess, a.tools, a.retriever, a.store, a.promptConfig)
 	req := ctxBuilder.BuildRequest(sess)
 	req.Stream = true
 	return req, nil
@@ -331,6 +363,7 @@ func New(cfg *core.Config) (*Daemon, error) {
 			URL:              pc.URL,
 			Format:           llm.APIFormat(pc.Format),
 			APIKeyEnv:        pc.APIKeyEnv,
+			APIKeyRef:        pc.APIKeyRef,
 			ChatPath:         pc.ChatPath,
 			EmbeddingPath:    pc.EmbeddingPath,
 			EmbeddingModel:   pc.EmbeddingModel,
@@ -352,14 +385,11 @@ func New(cfg *core.Config) (*Daemon, error) {
 	}
 
 	// Wire keystore into LLM key resolution.
+	// NewClient handles the resolution cascade (explicit ref → conventional
+	// name → env var); this closure is just the keystore lookup layer.
 	if ks != nil && ks.IsUnlocked() {
-		llm.KeyResolver = func(providerName string) string {
-			// Try conventional keystore name: {provider}_api_key.
-			conventional := providerName + "_api_key"
-			if val := ks.GetOrEmpty(conventional); val != "" {
-				return val
-			}
-			return ""
+		llm.KeyResolver = func(keystoreKey string) string {
+			return ks.GetOrEmpty(keystoreKey)
 		}
 	}
 
@@ -374,8 +404,47 @@ func New(cfg *core.Config) (*Daemon, error) {
 		return nil, fmt.Errorf("daemon: init LLM: %w", err)
 	}
 
+	// Warm-start quality and latency trackers from DB history.
+	llmSvc.SeedStartup(context.Background(), store)
+
 	injection := agent.NewInjectionDetector()
 	tools := agent.NewToolRegistry()
+
+	// Register builtin tools (matching Rust's tool_registry setup).
+	// Execution tools.
+	tools.Register(&agenttools.EchoTool{})
+	tools.Register(&agenttools.BashTool{})
+
+	// Filesystem tools.
+	tools.Register(&agenttools.ReadFileTool{})
+	tools.Register(&agenttools.WriteFileTool{})
+	tools.Register(&agenttools.EditFileTool{})
+	tools.Register(&agenttools.ListDirectoryTool{})
+	tools.Register(&agenttools.SearchFilesTool{})
+	tools.Register(&agenttools.GlobFilesTool{})
+
+	// Scheduling.
+	tools.Register(&agenttools.CronTool{})
+
+	// Introspection tools.
+	tools.Register(&agenttools.RuntimeContextTool{})
+	tools.Register(&agenttools.MemoryStatsTool{})
+	tools.Register(agenttools.NewIntrospectionTool(cfg.Agent.Name, "0.1.0", tools.Names))
+
+	// Memory tools.
+	tools.Register(agenttools.NewMemoryRecallTool(store))
+
+	// Channel and subagent introspection.
+	tools.Register(&agenttools.ChannelHealthTool{})
+	tools.Register(&agenttools.SubagentStatusTool{})
+
+	// Data tools (hippocampus).
+	tools.Register(&agenttools.CreateTableTool{})
+	tools.Register(&agenttools.QueryTableTool{})
+	tools.Register(&agenttools.InsertRowTool{})
+
+	log.Info().Int("count", len(tools.Names())).Strs("tools", tools.Names()).Msg("builtin tools registered")
+
 	policyEngine := policy.NewEngine(policy.Config{
 		MaxTransferCents:   int64(cfg.Treasury.PerPaymentCap * 100),
 		RateLimitPerMinute: 30,
@@ -420,6 +489,18 @@ func New(cfg *core.Config) (*Daemon, error) {
 		fwCfg = core.DefaultFirmwareConfig()
 	}
 
+	// Load optional OPERATOR.toml and DIRECTIVES.toml.
+	opCfg, err := core.LoadOperatorConfig(cfg.Agent.Workspace, "OPERATOR.toml")
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to load operator config")
+		opCfg = core.DefaultOperatorConfig()
+	}
+	dirCfg, err := core.LoadDirectivesConfig(cfg.Agent.Workspace, "DIRECTIVES.toml")
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to load directives config")
+		dirCfg = core.DefaultDirectivesConfig()
+	}
+
 	// Build shared prompt config with personality and workspace context.
 	var skillNames []string
 	for _, s := range loadedSkills {
@@ -429,6 +510,8 @@ func New(cfg *core.Config) (*Daemon, error) {
 		AgentName:   cfg.Agent.Name,
 		Firmware:    core.FormatFirmwareRules(fwCfg),
 		Personality: core.FormatOsPersonality(osCfg),
+		Operator:    core.FormatOperatorContext(opCfg),
+		Directives:  core.FormatDirectives(dirCfg),
 		Workspace:   cfg.Agent.Workspace,
 		Skills:      skillNames,
 		Model:       cfg.Models.Primary,
@@ -437,10 +520,64 @@ func New(cfg *core.Config) (*Daemon, error) {
 		Str("agent", cfg.Agent.Name).
 		Bool("has_firmware", basePromptCfg.Firmware != "").
 		Bool("has_personality", basePromptCfg.Personality != "").
+		Bool("has_operator", basePromptCfg.Operator != "").
+		Bool("has_directives", basePromptCfg.Directives != "").
 		Msg("personality loaded")
 
 	dq := channel.NewDeliveryQueue(store)
 	router := channel.NewRouter(dq)
+
+	// Register channel adapters from config + keystore.
+	telegramToken := resolveChannelToken(cfg.Channels.TelegramTokenEnv, "telegram_bot_token", ks)
+	if telegramToken != "" {
+		// Discover allowed chat IDs from existing Telegram sessions in the DB.
+		allowedChatIDs := discoverTelegramChatIDs(store)
+		tgCfg := channel.TelegramConfig{
+			Token:          telegramToken,
+			PollTimeout:    5,
+			AllowedChatIDs: allowedChatIDs,
+			DenyOnEmpty:    cfg.Security.DenyOnEmptyAllowlist,
+		}
+		tgAdapter := channel.NewTelegramAdapter(tgCfg)
+		// Clear any stale webhook so getUpdates polling works.
+		if err := tgAdapter.DeleteWebhook(context.Background()); err != nil {
+			log.Warn().Err(err).Msg("telegram: failed to delete webhook")
+		}
+		router.Register(tgAdapter)
+		log.Info().Msg("telegram adapter registered (polling mode)")
+	}
+
+	// Create embedding client for post-turn ingest and ANN search.
+	// Priority: config's memory.embedding_provider → any provider with embedding_model set → nil (n-gram fallback).
+	var embedClient *llm.EmbeddingClient
+	embedProviderName := cfg.Memory.EmbeddingProvider
+	if embedProviderName == "" {
+		// Auto-detect: find first provider with an embedding model or path configured.
+		for name, pc := range cfg.Providers {
+			if pc.EmbeddingModel != "" || pc.EmbeddingPath != "" {
+				embedProviderName = name
+				break
+			}
+		}
+	}
+	if embedProviderName != "" {
+		if pc, ok := cfg.Providers[embedProviderName]; ok {
+			embedClient = llm.NewEmbeddingClient(&llm.Provider{
+				Name:           embedProviderName,
+				URL:            pc.URL,
+				Format:         llm.APIFormat(pc.Format),
+				EmbeddingPath:  pc.EmbeddingPath,
+				EmbeddingModel: pc.EmbeddingModel,
+				IsLocal:        pc.IsLocal,
+			})
+			log.Info().Str("provider", embedProviderName).Str("model", pc.EmbeddingModel).Msg("embedding client configured")
+		}
+	}
+	if embedClient == nil {
+		// Fallback: n-gram hashing (no API calls, works offline).
+		embedClient = llm.NewEmbeddingClient(nil)
+		log.Info().Msg("embedding client: using local n-gram fallback")
+	}
 
 	pipe := pipeline.New(pipeline.PipelineDeps{
 		Store:     store,
@@ -455,6 +592,7 @@ func New(cfg *core.Config) (*Daemon, error) {
 			injection:    injection,
 			memMgr:       memMgr,
 			retriever:    retriever,
+			store:        store,
 			promptConfig: basePromptCfg,
 		},
 		Ingestor: &ingestorAdapter{m: memMgr},
@@ -463,10 +601,12 @@ func New(cfg *core.Config) (*Daemon, error) {
 			llmSvc:       llmSvc,
 			tools:        tools,
 			retriever:    retriever,
+			store:        store,
 			promptConfig: basePromptCfg,
 		},
-		Guards:   guards,
-		BGWorker: bgWorker,
+		Guards:     guards,
+		BGWorker:   bgWorker,
+		Embeddings: embedClient,
 	})
 
 	// Sync hippocampus schema registry.
@@ -499,14 +639,15 @@ func New(cfg *core.Config) (*Daemon, error) {
 	mcpMgr := mcp.NewConnectionManager()
 
 	appState := &api.AppState{
-		Store:     store,
-		Pipeline:  pipe,
-		LLM:       llmSvc,
-		Config:    cfg,
-		Keystore:  ks,
-		EventBus:  eventBus,
-		Approvals: approvalMgr,
-		MCP:       mcpMgr,
+		Store:           store,
+		Pipeline:        pipe,
+		StreamFinalizer: pipe, // *Pipeline satisfies both Runner and StreamFinalizer
+		LLM:             llmSvc,
+		Config:          cfg,
+		Keystore:        ks,
+		EventBus:        eventBus,
+		Approvals:       approvalMgr,
+		MCP:             mcpMgr,
 	}
 
 	return &Daemon{
@@ -624,6 +765,9 @@ func (d *Daemon) run() {
 		worker.Run(ctx)
 	}()
 
+	// Note: Telegram polling is handled by runChannelListener via router.PollAll().
+	// No dedicated poller needed — PollAll calls Recv on all registered adapters.
+
 	// Signal poll loop.
 	if d.cfg.Channels.SignalAccount != "" {
 		d.wg.Add(1)
@@ -645,7 +789,150 @@ func (d *Daemon) run() {
 	// Start wallet balance poller.
 	startWalletPoller(ctx, d.cfg, d.store, d.appState.Keystore)
 
+	// Memory consolidation heartbeat — runs the dreaming cycle periodically.
+	// Matches Rust's heartbeat-triggered consolidation.
+	d.wg.Add(1)
+	go func() {
+		defer d.wg.Done()
+		d.runConsolidationHeartbeat(ctx)
+	}()
+
 	log.Info().Msg("all subsystems started")
+}
+
+// runConsolidationHeartbeat runs memory consolidation on a periodic schedule.
+// Matches Rust's heartbeat-triggered MemoryPrune signal.
+func (d *Daemon) runConsolidationHeartbeat(ctx context.Context) {
+	// Initial delay to let the system settle after startup.
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(30 * time.Second):
+	}
+
+	ticker := time.NewTicker(1 * time.Hour)
+	defer ticker.Stop()
+	log.Info().Msg("memory consolidation heartbeat started (1h interval)")
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			report := pipeline.RunMemoryConsolidation(ctx, d.store, false)
+			log.Info().
+				Int("indexed", report.Indexed).
+				Int("deduped", report.Deduped).
+				Int("promoted", report.Promoted).
+				Int("pruned", report.Pruned).
+				Msg("memory consolidation completed")
+		}
+	}
+}
+
+// runTelegramPoller polls the Telegram adapter for inbound messages via long polling.
+func (d *Daemon) runTelegramPoller(ctx context.Context) {
+	log.Info().Msg("telegram poller started")
+
+	tgAdapter := d.router.GetAdapter("telegram")
+	if tgAdapter == nil {
+		log.Warn().Msg("telegram adapter not registered, poller exiting")
+		return
+	}
+
+	// Clear any registered webhook so getUpdates polling works.
+	// Telegram returns 409 if both webhook and polling are active.
+	if tg, ok := tgAdapter.(*channel.TelegramAdapter); ok {
+		if err := tg.DeleteWebhook(ctx); err != nil {
+			log.Warn().Err(err).Msg("telegram: failed to delete webhook")
+		} else {
+			log.Info().Msg("telegram: webhook cleared, polling active")
+			time.Sleep(2 * time.Second) // Give Telegram API time to propagate
+		}
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		// Telegram long-polls internally (30s timeout in getUpdates),
+		// so no ticker needed — Recv blocks until messages arrive.
+		msg, err := tgAdapter.Recv(ctx)
+		if err != nil {
+			errMsg := err.Error()
+			if strings.Contains(errMsg, "409") {
+				// 409 = "terminated by other getUpdates request".
+				// Another long-poll is still in-flight (previous process or our own).
+				// Back off for the poll timeout duration (30s) to let it expire.
+				log.Warn().Msg("telegram: 409 conflict (previous poll in-flight), waiting for expiry")
+				time.Sleep(35 * time.Second)
+			} else {
+				log.Warn().Err(err).Msg("telegram recv error")
+				time.Sleep(5 * time.Second)
+			}
+			continue
+		}
+		if msg == nil {
+			continue
+		}
+		m := *msg
+		d.bgWorker.Submit("inbound:telegram", func(bgCtx context.Context) {
+			d.handleInbound(bgCtx, m)
+		})
+	}
+}
+
+// discoverTelegramChatIDs extracts known Telegram chat IDs from existing
+// sessions in the database. This bootstraps the allowlist from prior
+// interactions so DenyOnEmpty works correctly without manual config.
+func discoverTelegramChatIDs(store *db.Store) []int64 {
+	rows, err := store.QueryContext(context.Background(),
+		`SELECT DISTINCT scope_key FROM sessions WHERE scope_key LIKE '%telegram%'`)
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = rows.Close() }()
+
+	seen := make(map[int64]bool)
+	for rows.Next() {
+		var scope string
+		if rows.Scan(&scope) != nil {
+			continue
+		}
+		// scope format: "peer:telegram:CHATID"
+		parts := strings.SplitN(scope, ":", 3)
+		if len(parts) >= 3 {
+			if chatID, err := strconv.ParseInt(parts[2], 10, 64); err == nil {
+				seen[chatID] = true
+			}
+		}
+	}
+
+	ids := make([]int64, 0, len(seen))
+	for id := range seen {
+		ids = append(ids, id)
+	}
+	if len(ids) > 0 {
+		log.Info().Ints64("chat_ids", ids).Msg("telegram: discovered allowed chat IDs from sessions")
+	}
+	return ids
+}
+
+// resolveChannelToken resolves a channel token from env var or keystore.
+func resolveChannelToken(envName, keystoreName string, ks *core.Keystore) string {
+	if envName != "" {
+		if val := os.Getenv(envName); val != "" {
+			return val
+		}
+	}
+	if ks != nil && ks.IsUnlocked() {
+		if val := ks.GetOrEmpty(keystoreName); val != "" {
+			return val
+		}
+	}
+	return ""
 }
 
 // runSignalPoller polls the Signal adapter for inbound messages in a loop.
@@ -825,12 +1112,20 @@ func (d *Daemon) handleInbound(ctx context.Context, msg channel.InboundMessage) 
 		Str("chat", msg.ChatID).
 		Msg("processing inbound message")
 
+	// Send typing indicator before pipeline runs so user sees activity.
+	d.router.SendTypingIndicator(ctx, msg.Platform, msg.ChatID)
+
+	agentName := d.cfg.Agent.Name
+	if agentName == "" {
+		agentName = "Roboticus"
+	}
 	cfg := pipeline.PresetChannel(msg.Platform)
 	result, err := pipeline.RunPipeline(ctx, d.pipe, cfg, pipeline.Input{
-		Content:  msg.Content,
-		Platform: msg.Platform,
-		SenderID: msg.SenderID,
-		ChatID:   msg.ChatID,
+		Content:   msg.Content,
+		Platform:  msg.Platform,
+		SenderID:  msg.SenderID,
+		ChatID:    msg.ChatID,
+		AgentName: agentName,
 	})
 	if err != nil {
 		log.Error().Err(err).Str("platform", msg.Platform).Msg("pipeline error")

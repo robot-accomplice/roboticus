@@ -3,7 +3,6 @@ package routes
 import (
 	"encoding/json"
 	"net/http"
-	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -14,10 +13,7 @@ import (
 // ListCronJobs returns all cron jobs.
 func ListCronJobs(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		rows, err := store.QueryContext(r.Context(),
-			`SELECT id, name, description, enabled, schedule_kind, schedule_expr,
-			        schedule_every_ms, agent_id, payload_json, last_run_at, last_status, next_run_at
-			 FROM cron_jobs ORDER BY name`)
+		rows, err := db.NewRouteQueries(store).ListCronJobs(r.Context())
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to query cron jobs")
 			return
@@ -98,12 +94,8 @@ func CreateCronJob(store *db.Store) http.HandlerFunc {
 		}
 
 		id := db.NewID()
-		_, err := store.ExecContext(r.Context(),
-			`INSERT INTO cron_jobs (id, name, description, schedule_kind, schedule_expr, schedule_every_ms, agent_id, payload_json)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			id, req.Name, req.Description, req.ScheduleKind, req.ScheduleExpr, req.ScheduleEveryMs, req.AgentID, req.PayloadJSON,
-		)
-		if err != nil {
+		cronRepo := db.NewCronRepository(store)
+		if err := cronRepo.CreateJob(r.Context(), id, req.Name, req.Description, req.ScheduleKind, req.ScheduleExpr, req.ScheduleEveryMs, req.AgentID, req.PayloadJSON); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -114,9 +106,7 @@ func CreateCronJob(store *db.Store) http.HandlerFunc {
 // ListCronRuns returns recent cron run history.
 func ListCronRuns(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		rows, err := store.QueryContext(r.Context(),
-			`SELECT id, job_id, status, duration_ms, error_msg, '', timestamp
-			 FROM cron_runs ORDER BY timestamp DESC LIMIT 50`)
+		rows, err := db.NewRouteQueries(store).ListCronRuns(r.Context(), 50)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to query cron runs")
 			return
@@ -160,10 +150,7 @@ func ListCronRuns(store *db.Store) http.HandlerFunc {
 func GetCronJob(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
-		row := store.QueryRowContext(r.Context(),
-			`SELECT id, name, description, enabled, schedule_kind, schedule_expr, schedule_every_ms,
-			        agent_id, payload_json, last_run_at, last_status, next_run_at
-			 FROM cron_jobs WHERE id = ?`, id)
+		row := db.NewRouteQueries(store).GetCronJob(r.Context(), id)
 
 		var name, scheduleKind, agentID, payloadJSON string
 		var description, scheduleExpr, lastRunAt, lastStatus, nextRunAt *string
@@ -252,17 +239,9 @@ func UpdateCronJob(store *db.Store) http.HandlerFunc {
 			return
 		}
 
-		args = append(args, id)
-		query := "UPDATE cron_jobs SET " + strings.Join(setClauses, ", ") + " WHERE id = ?"
-
-		result, err := store.ExecContext(r.Context(), query, args...)
-		if err != nil {
+		cronRepo := db.NewCronRepository(store)
+		if err := cronRepo.UpdateJob(r.Context(), id, setClauses, args); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to update cron job")
-			return
-		}
-		rows, _ := result.RowsAffected()
-		if rows == 0 {
-			writeError(w, http.StatusNotFound, "cron job not found")
 			return
 		}
 
@@ -279,18 +258,13 @@ func DeleteCronJob(store *db.Store) http.HandlerFunc {
 		ctx := r.Context()
 
 		// Delete child run history first (FK constraint: cron_runs.job_id -> cron_jobs.id).
-		if _, err := store.ExecContext(ctx, `DELETE FROM cron_runs WHERE job_id = ?`, id); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to delete cron run history: "+err.Error())
-			return
-		}
-
-		result, err := store.ExecContext(ctx, `DELETE FROM cron_jobs WHERE id = ?`, id)
+		cronRepo := db.NewCronRepository(store)
+		affected, err := cronRepo.DeleteJob(ctx, id)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		rows, _ := result.RowsAffected()
-		if rows == 0 {
+		if affected == 0 {
 			writeError(w, http.StatusNotFound, "cron job not found")
 			return
 		}
@@ -299,11 +273,10 @@ func DeleteCronJob(store *db.Store) http.HandlerFunc {
 }
 
 // RunCronJobNow triggers immediate execution of a cron job.
-func RunCronJobNow(p pipeline.Runner, store *db.Store) http.HandlerFunc {
+func RunCronJobNow(p pipeline.Runner, store *db.Store, agentName ...string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
-		row := store.QueryRowContext(r.Context(),
-			`SELECT payload_json FROM cron_jobs WHERE id = ? AND enabled = 1`, id)
+		row := db.NewRouteQueries(store).GetCronJobPayload(r.Context(), id)
 
 		var payloadJSON string
 		if err := row.Scan(&payloadJSON); err != nil {
@@ -311,10 +284,14 @@ func RunCronJobNow(p pipeline.Runner, store *db.Store) http.HandlerFunc {
 			return
 		}
 
+		cronAgentName := "Roboticus"
+		if len(agentName) > 0 && agentName[0] != "" {
+			cronAgentName = agentName[0]
+		}
 		input := pipeline.Input{
 			Content:   payloadJSON,
 			AgentID:   "default",
-			AgentName: "Roboticus",
+			AgentName: cronAgentName,
 			Platform:  "cron",
 		}
 

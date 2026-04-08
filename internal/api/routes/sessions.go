@@ -14,9 +14,7 @@ import (
 // ListSessions returns all sessions.
 func ListSessions(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		rows, err := store.QueryContext(r.Context(),
-			`SELECT id, agent_id, scope_key, status, nickname, created_at, updated_at
-			 FROM sessions ORDER BY created_at DESC LIMIT 100`)
+		rows, err := db.NewRouteQueries(store).ListSessions(r.Context(), 100)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -69,15 +67,9 @@ func CreateSession(store *db.Store) http.HandlerFunc {
 		}
 
 		id := db.NewID()
-		// Append session ID to scope to make it unique per session.
-		// The partial unique index on (agent_id, scope_key) WHERE status='active'
-		// prevents duplicate active sessions with the same scope.
 		scopeKey := req.Scope + ":" + id
-		_, err := store.ExecContext(r.Context(),
-			`INSERT INTO sessions (id, agent_id, scope_key) VALUES (?, ?, ?)`,
-			id, req.AgentID, scopeKey,
-		)
-		if err != nil {
+		repo := db.NewSessionRepository(store)
+		if err := repo.CreateSession(r.Context(), id, req.AgentID, scopeKey); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -94,8 +86,7 @@ func CreateSession(store *db.Store) http.HandlerFunc {
 func GetSession(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
-		row := store.QueryRowContext(r.Context(),
-			`SELECT id, agent_id, scope_key, status, nickname, created_at, updated_at FROM sessions WHERE id = ?`, id)
+		row := db.NewRouteQueries(store).GetSession(r.Context(), id)
 
 		var agentID, scopeKey, status, createdAt, updatedAt string
 		var nickname *string
@@ -123,9 +114,7 @@ func GetSession(store *db.Store) http.HandlerFunc {
 func ListMessages(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessionID := chi.URLParam(r, "id")
-		rows, err := store.QueryContext(r.Context(),
-			`SELECT id, role, content, created_at FROM session_messages
-			 WHERE session_id = ? ORDER BY created_at ASC LIMIT 200`, sessionID)
+		rows, err := db.NewRouteQueries(store).SessionMessages(r.Context(), sessionID, 200)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -151,7 +140,7 @@ func ListMessages(store *db.Store) http.HandlerFunc {
 }
 
 // PostMessage sends a message to a session via the pipeline.
-func PostMessage(p pipeline.Runner) http.HandlerFunc {
+func PostMessage(p pipeline.Runner, agentName ...string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessionID := chi.URLParam(r, "id")
 		var req struct {
@@ -170,11 +159,15 @@ func PostMessage(p pipeline.Runner) http.HandlerFunc {
 			req.AgentID = "default"
 		}
 
+		name := "Roboticus"
+		if len(agentName) > 0 && agentName[0] != "" {
+			name = agentName[0]
+		}
 		input := pipeline.Input{
 			Content:   req.Content,
 			SessionID: sessionID,
 			AgentID:   req.AgentID,
-			AgentName: "Roboticus",
+			AgentName: name,
 			Platform:  "api",
 		}
 
@@ -191,15 +184,9 @@ func PostMessage(p pipeline.Runner) http.HandlerFunc {
 func ArchiveSession(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
-		res, err := store.ExecContext(r.Context(),
-			`UPDATE sessions SET status = 'archived' WHERE id = ?`, id)
-		if err != nil {
+		repo := db.NewSessionRepository(store)
+		if err := repo.ArchiveSession(r.Context(), id); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		n, _ := res.RowsAffected()
-		if n == 0 {
-			writeError(w, http.StatusNotFound, "session not found")
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "archived", "id": id})
@@ -211,14 +198,7 @@ func ArchiveSession(store *db.Store) http.HandlerFunc {
 func BackfillNicknames(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
-		rows, err := store.QueryContext(ctx,
-			`SELECT s.id, (
-				SELECT content FROM session_messages
-				WHERE session_id = s.id AND role = 'user'
-				ORDER BY created_at ASC LIMIT 1
-			) AS first_msg
-			FROM sessions s
-			WHERE s.nickname IS NULL OR s.nickname = ''`)
+		rows, err := db.NewRouteQueries(store).SessionsWithoutNicknames(ctx)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -240,9 +220,8 @@ func BackfillNicknames(store *db.Store) http.HandlerFunc {
 					nick = nick[:50]
 				}
 			}
-			_, err := store.ExecContext(ctx,
-				`UPDATE sessions SET nickname = ? WHERE id = ?`, nick, id)
-			if err == nil {
+			repo := db.NewSessionRepository(store)
+			if err := repo.SetNickname(ctx, id, nick); err == nil {
 				updated++
 			}
 		}
@@ -258,18 +237,14 @@ func AnalyzeSession(store *db.Store, llmSvc *llm.Service) http.HandlerFunc {
 
 		// Verify session exists.
 		var createdAt string
-		row := store.QueryRowContext(ctx,
-			`SELECT created_at FROM sessions WHERE id = ?`, id)
+		row := db.NewRouteQueries(store).SessionExists(ctx, id)
 		if err := row.Scan(&createdAt); err != nil {
 			writeError(w, http.StatusNotFound, "session not found")
 			return
 		}
 
 		// Load all turns for this session.
-		turnRows, err := store.QueryContext(ctx,
-			`SELECT t.id, COALESCE(t.model, ''), COALESCE(t.tokens_in, 0), COALESCE(t.tokens_out, 0),
-			        COALESCE(t.cost, 0), COALESCE(t.cached, 0)
-			 FROM turns t WHERE t.session_id = ? ORDER BY t.created_at`, id)
+		turnRows, err := db.NewRouteQueries(store).ListTurnsForAnalysis(ctx, id)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to query turns")
 			return
@@ -287,33 +262,27 @@ func AnalyzeSession(store *db.Store, llmSvc *llm.Service) http.HandlerFunc {
 			}
 
 			td := pipeline.TurnData{
-				TurnID:   turnID,
-				Model:    model,
-				TokensIn: tokIn,
+				TurnID:    turnID,
+				Model:     model,
+				TokensIn:  tokIn,
 				TokensOut: tokOut,
-				Cost:     cost,
-				Cached:   cached == 1,
+				Cost:      cost,
+				Cached:    cached == 1,
 			}
 
 			// Load context snapshot for this turn.
-			snapRow := store.QueryRowContext(ctx,
-				`SELECT COALESCE(max_tokens, 0), COALESCE(system_tokens, 0), COALESCE(memory_tokens, 0),
-				        COALESCE(history_tokens, 0), COALESCE(history_depth, 0)
-				 FROM context_snapshots WHERE turn_id = ?`, turnID)
+			snapRow := db.NewRouteQueries(store).ContextSnapshotForTurn(ctx, turnID)
 			_ = snapRow.Scan(&td.TokenBudget, &td.SystemPromptTokens, &td.MemoryTokens, &td.HistoryTokens, &td.HistoryDepth)
 
 			// Count tool calls.
-			_ = store.QueryRowContext(ctx,
-				`SELECT COUNT(*), COALESCE(SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END), 0)
-				 FROM tool_calls WHERE turn_id = ?`, turnID).
+			_ = db.NewRouteQueries(store).ToolCallCountsForTurn(ctx, turnID).
 				Scan(&td.ToolCallCount, &td.ToolFailureCount)
 
 			turns = append(turns, td)
 		}
 
 		// Load feedback grades.
-		gradeRows, err := store.QueryContext(ctx,
-			`SELECT turn_id, COALESCE(grade, 0) FROM turn_feedback WHERE session_id = ?`, id)
+		gradeRows, err := db.NewRouteQueries(store).SessionFeedbackGrades(ctx, id)
 		var grades []pipeline.SessionGrade
 		if err == nil {
 			defer func() { _ = gradeRows.Close() }()

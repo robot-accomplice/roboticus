@@ -34,6 +34,11 @@ func NewDefaultGuardRegistry() *GuardRegistry {
 	r.Register(&CurrentEventsTruthGuard{})
 	r.Register(&ExecutionTruthGuard{})
 	r.Register(&PersonalityIntegrityGuard{})
+	// Wave 8 guards.
+	r.Register(&PerspectiveGuard{})
+	r.Register(&InternalProtocolGuard{})
+	r.Register(&ActionVerificationGuard{})
+	r.Register(&LiteraryQuoteRetryGuard{})
 	return r
 }
 
@@ -48,16 +53,35 @@ func (r *GuardRegistry) Get(name string) (Guard, bool) {
 	return g, ok
 }
 
+// guardsExcludedFromCache lists guards that should not run on cached responses.
+// These guards either depend on fresh tool context or are too expensive for cache hits.
+var guardsExcludedFromCache = map[string]bool{
+	"perspective":         true,
+	"declared_action":     true,
+	"user_echo":           true,
+	"action_verification": true,
+}
+
 // Chain materializes a guard chain for the given preset.
 func (r *GuardRegistry) Chain(preset GuardSetPreset) *GuardChain {
 	switch preset {
-	case GuardSetFull, GuardSetCached:
+	case GuardSetFull:
 		return r.chainFromNames(
 			"empty_response", "content_classification", "repetition",
 			"system_prompt_leak", "internal_marker",
 			"subagent_claim", "task_deferral", "internal_jargon", "declared_action",
 			"low_value_parroting", "non_repetition_v2", "output_contract", "user_echo",
 			"model_identity_truth", "current_events_truth", "execution_truth", "personality_integrity",
+			"perspective", "internal_protocol", "action_verification", "literary_quote_retry",
+		)
+	case GuardSetCached:
+		return r.chainExcluding(guardsExcludedFromCache,
+			"empty_response", "content_classification", "repetition",
+			"system_prompt_leak", "internal_marker",
+			"subagent_claim", "task_deferral", "internal_jargon",
+			"low_value_parroting", "non_repetition_v2", "output_contract",
+			"model_identity_truth", "current_events_truth", "execution_truth", "personality_integrity",
+			"internal_protocol", "literary_quote_retry",
 		)
 	case GuardSetStream:
 		return r.chainFromNames(
@@ -68,6 +92,20 @@ func (r *GuardRegistry) Chain(preset GuardSetPreset) *GuardChain {
 		return NewGuardChain()
 	}
 	return NewGuardChain()
+}
+
+// chainExcluding builds a chain from names, skipping any in the exclusion set.
+func (r *GuardRegistry) chainExcluding(exclude map[string]bool, names ...string) *GuardChain {
+	var guards []Guard
+	for _, name := range names {
+		if exclude[name] {
+			continue
+		}
+		if g, ok := r.guards[name]; ok {
+			guards = append(guards, g)
+		}
+	}
+	return NewGuardChain(guards...)
 }
 
 func (r *GuardRegistry) chainFromNames(names ...string) *GuardChain {

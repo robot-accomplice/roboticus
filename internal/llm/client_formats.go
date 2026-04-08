@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"roboticus/internal/core"
 )
@@ -121,18 +122,30 @@ func (c *Client) unmarshalResponse(body io.Reader) (*Response, error) {
 		return nil, core.WrapError(core.ErrNetwork, "failed to read response", err)
 	}
 
+	var resp *Response
 	switch c.provider.Format {
 	case FormatAnthropic:
-		return c.unmarshalAnthropicResponse(data)
+		resp, err = c.unmarshalAnthropicResponse(data)
 	case FormatOllama:
-		return c.unmarshalOllamaResponse(data)
+		resp, err = c.unmarshalOllamaResponse(data)
 	case FormatGoogle:
-		return c.unmarshalGoogleResponse(data)
+		resp, err = c.unmarshalGoogleResponse(data)
 	case FormatOpenAIResponses:
-		return c.unmarshalOpenAIResponsesResponse(data)
+		resp, err = c.unmarshalOpenAIResponsesResponse(data)
 	default:
-		return c.unmarshalOpenAIResponse(data)
+		resp, err = c.unmarshalOpenAIResponse(data)
 	}
+	if err != nil {
+		return nil, err
+	}
+
+	// Fallback: if no structured tool calls found but content contains
+	// tool_call markers, parse them from text (Rust: parse_tool_calls).
+	if len(resp.ToolCalls) == 0 && strings.Contains(resp.Content, `"tool_call"`) {
+		resp.ToolCalls = ParseToolCallsFromText(resp.Content)
+	}
+
+	return resp, nil
 }
 
 func (c *Client) unmarshalOpenAIResponse(data []byte) (*Response, error) {
@@ -169,8 +182,11 @@ func (c *Client) unmarshalAnthropicResponse(data []byte) (*Response, error) {
 		ID      string `json:"id"`
 		Model   string `json:"model"`
 		Content []struct {
-			Type string `json:"type"`
-			Text string `json:"text,omitempty"`
+			Type  string          `json:"type"`
+			Text  string          `json:"text,omitempty"`
+			ID    string          `json:"id,omitempty"`
+			Name  string          `json:"name,omitempty"`
+			Input json.RawMessage `json:"input,omitempty"`
 		} `json:"content"`
 		StopReason string `json:"stop_reason"`
 		Usage      struct {
@@ -182,15 +198,29 @@ func (c *Client) unmarshalAnthropicResponse(data []byte) (*Response, error) {
 		return nil, core.WrapError(core.ErrLLM, "failed to parse Anthropic response", err)
 	}
 	var content string
+	var toolCalls []ToolCall
 	for _, block := range raw.Content {
-		if block.Type == "text" {
+		switch block.Type {
+		case "text":
 			content += block.Text
+		case "tool_use":
+			// Anthropic tool_use blocks → ToolCall structs.
+			tc := ToolCall{
+				ID:   block.ID,
+				Type: "function",
+				Function: ToolCallFunc{
+					Name:      block.Name,
+					Arguments: string(block.Input),
+				},
+			}
+			toolCalls = append(toolCalls, tc)
 		}
 	}
 	return &Response{
 		ID:           raw.ID,
 		Model:        raw.Model,
 		Content:      content,
+		ToolCalls:    toolCalls,
 		FinishReason: raw.StopReason,
 		Usage:        Usage{InputTokens: raw.Usage.InputTokens, OutputTokens: raw.Usage.OutputTokens},
 	}, nil
@@ -198,17 +228,27 @@ func (c *Client) unmarshalAnthropicResponse(data []byte) (*Response, error) {
 
 func (c *Client) unmarshalOllamaResponse(data []byte) (*Response, error) {
 	var raw struct {
-		Model   string  `json:"model"`
-		Message Message `json:"message"`
+		Model   string `json:"model"`
+		Message struct {
+			Role      string     `json:"role"`
+			Content   string     `json:"content"`
+			ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+		} `json:"message"`
+		DoneReason string `json:"done_reason,omitempty"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil, core.WrapError(core.ErrLLM, "failed to parse Ollama response", err)
 	}
-	return &Response{
+	resp := &Response{
 		Model:        raw.Model,
 		Content:      raw.Message.Content,
+		ToolCalls:    raw.Message.ToolCalls,
 		FinishReason: "stop",
-	}, nil
+	}
+	if raw.DoneReason != "" {
+		resp.FinishReason = raw.DoneReason
+	}
+	return resp, nil
 }
 
 func (c *Client) unmarshalGoogleResponse(data []byte) (*Response, error) {
@@ -216,7 +256,11 @@ func (c *Client) unmarshalGoogleResponse(data []byte) (*Response, error) {
 		Candidates []struct {
 			Content struct {
 				Parts []struct {
-					Text string `json:"text"`
+					Text         string `json:"text,omitempty"`
+					FunctionCall *struct {
+						Name string          `json:"name"`
+						Args json.RawMessage `json:"args"`
+					} `json:"functionCall,omitempty"`
 				} `json:"parts"`
 			} `json:"content"`
 			FinishReason string `json:"finishReason"`
@@ -233,12 +277,27 @@ func (c *Client) unmarshalGoogleResponse(data []byte) (*Response, error) {
 		return nil, core.NewError(core.ErrLLM, "empty candidates in Google response")
 	}
 	var content string
+	var toolCalls []ToolCall
 	for _, part := range raw.Candidates[0].Content.Parts {
-		content += part.Text
+		if part.Text != "" {
+			content += part.Text
+		}
+		if part.FunctionCall != nil {
+			tc := ToolCall{
+				ID:   fmt.Sprintf("call_%s_%d", part.FunctionCall.Name, len(toolCalls)),
+				Type: "function",
+				Function: ToolCallFunc{
+					Name:      part.FunctionCall.Name,
+					Arguments: string(part.FunctionCall.Args),
+				},
+			}
+			toolCalls = append(toolCalls, tc)
+		}
 	}
 	return &Response{
 		Model:        "",
 		Content:      content,
+		ToolCalls:    toolCalls,
 		FinishReason: raw.Candidates[0].FinishReason,
 		Usage: Usage{
 			InputTokens:  raw.UsageMetadata.PromptTokenCount,

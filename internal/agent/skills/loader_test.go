@@ -169,6 +169,66 @@ func TestLoader_HashChangesOnContent(t *testing.T) {
 	}
 }
 
+func TestHashSkillContent(t *testing.T) {
+	hash1 := HashSkillContent([]byte("hello world"))
+	hash2 := HashSkillContent([]byte("hello world"))
+	hash3 := HashSkillContent([]byte("different content"))
+
+	if hash1 != hash2 {
+		t.Error("same content should produce same hash")
+	}
+	if hash1 == hash3 {
+		t.Error("different content should produce different hash")
+	}
+	if len(hash1) != 64 {
+		t.Errorf("SHA-256 hex should be 64 chars, got %d", len(hash1))
+	}
+}
+
+func TestLoadedSkillKind(t *testing.T) {
+	if LoadedSkillStructured != 0 {
+		t.Errorf("LoadedSkillStructured = %d, want 0", LoadedSkillStructured)
+	}
+	if LoadedSkillInstruction != 1 {
+		t.Errorf("LoadedSkillInstruction = %d, want 1", LoadedSkillInstruction)
+	}
+}
+
+func TestLoadedSkillFields(t *testing.T) {
+	ls := LoadedSkill{
+		Kind: LoadedSkillInstruction,
+		Hash: "abc123",
+		Path: "/tmp/skill.md",
+	}
+	if ls.Kind != LoadedSkillInstruction {
+		t.Error("kind mismatch")
+	}
+	if ls.Hash != "abc123" {
+		t.Error("hash mismatch")
+	}
+}
+
+func TestLoadRecursive(t *testing.T) {
+	dir1 := t.TempDir()
+	dir2 := t.TempDir()
+
+	_ = os.WriteFile(filepath.Join(dir1, "s1.md"), []byte("---\nname: skill1\n---\nBody1"), 0644)
+	_ = os.WriteFile(filepath.Join(dir2, "s2.md"), []byte("---\nname: skill2\n---\nBody2"), 0644)
+
+	skills := LoadRecursive(dir1, dir2)
+	if len(skills) != 2 {
+		t.Errorf("expected 2 skills from LoadRecursive, got %d", len(skills))
+	}
+}
+
+func TestLoadRecursive_EmptyDirs(t *testing.T) {
+	dir := t.TempDir()
+	skills := LoadRecursive(dir)
+	if len(skills) != 0 {
+		t.Errorf("expected 0 skills, got %d", len(skills))
+	}
+}
+
 func TestNewSkillLoader_LoadSkills(t *testing.T) {
 	dir := t.TempDir()
 	content := "---\nname: parity-skill\n---\nBody"

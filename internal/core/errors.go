@@ -61,3 +61,48 @@ func NewError(category error, msg string) *GobError {
 func WrapError(category error, msg string, cause error) *GobError {
 	return &GobError{Category: category, Message: msg, Cause: cause}
 }
+
+// HTTPStatusForError maps a pipeline/core error to the appropriate HTTP status code.
+// This is the canonical error-to-status mapping (Rule 4.1: owned by core, not connectors).
+// Connectors should call this instead of implementing their own status logic.
+func HTTPStatusForError(err error) int {
+	if err == nil {
+		return 200
+	}
+	var ge *GobError
+	if errors.As(err, &ge) {
+		switch {
+		case errors.Is(ge.Category, ErrDuplicate):
+			return 429 // Too Many Requests
+		case errors.Is(ge.Category, ErrInjectionBlocked):
+			return 403 // Forbidden
+		case errors.Is(ge.Category, ErrUnauthorized):
+			return 403 // Forbidden
+		case errors.Is(ge.Category, ErrNotFound):
+			return 404
+		case errors.Is(ge.Category, ErrConfig):
+			if containsAny(ge.Message, "empty message", "exceeds") {
+				return 400 // Bad Request
+			}
+			return 500
+		case errors.Is(ge.Category, ErrRateLimited):
+			return 429
+		case errors.Is(ge.Category, ErrCreditExhausted):
+			return 402 // Payment Required
+		}
+	}
+	return 500
+}
+
+func containsAny(s string, substrs ...string) bool {
+	for _, sub := range substrs {
+		if len(s) >= len(sub) {
+			for i := 0; i <= len(s)-len(sub); i++ {
+				if s[i:i+len(sub)] == sub {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}

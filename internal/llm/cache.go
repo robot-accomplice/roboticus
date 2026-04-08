@@ -33,6 +33,7 @@ type cacheEntry struct {
 	CreatedAt     time.Time
 	InvolvedTools bool // true when the originating request had tools
 	Hits          uint64
+	Embedding     []float64 // optional embedding for semantic lookup
 }
 
 // CacheConfig controls cache behavior.
@@ -184,6 +185,119 @@ func (c *Cache) putWithTools(hash string, resp *Response, created time.Time, inv
 		c.order = append(c.order[:lfuIdx], c.order[lfuIdx+1:]...)
 		delete(c.mem, evictHash)
 	}
+}
+
+// PutWithEmbedding stores a response with an associated embedding for semantic lookup.
+func (c *Cache) PutWithEmbedding(ctx context.Context, req *Request, resp *Response, embedding []float64) {
+	hash := hashRequest(req)
+	now := time.Now()
+	involvedTools := len(req.Tools) > 0
+
+	c.mu.Lock()
+	c.mem[hash] = &cacheEntry{
+		Response:      resp,
+		CreatedAt:     now,
+		InvolvedTools: involvedTools,
+		Hits:          0,
+		Embedding:     embedding,
+	}
+	c.order = append(c.order, hash)
+
+	// Evict if over capacity.
+	for len(c.mem) > c.maxSize && len(c.order) > 0 {
+		lfuIdx := 0
+		lfuHits := ^uint64(0)
+		for i, h := range c.order {
+			if e, ok := c.mem[h]; ok && e.Hits < lfuHits {
+				lfuHits = e.Hits
+				lfuIdx = i
+			}
+		}
+		evictHash := c.order[lfuIdx]
+		c.order = append(c.order[:lfuIdx], c.order[lfuIdx+1:]...)
+		delete(c.mem, evictHash)
+	}
+	c.mu.Unlock()
+
+	// Persist to L2 (same as Put, embedding is L1-only for now).
+	if c.store == nil {
+		return
+	}
+	respJSON, err := json.Marshal(resp)
+	if err != nil {
+		return
+	}
+	id := hash[:32]
+	expires := now.Add(c.ttl).Format(time.RFC3339)
+	tokensSaved := resp.Usage.InputTokens + resp.Usage.OutputTokens
+	_, _ = c.store.ExecContext(ctx,
+		`INSERT OR REPLACE INTO semantic_cache
+		 (id, prompt_hash, response, model, tokens_saved, hit_count, created_at, expires_at)
+		 VALUES (?, ?, ?, ?, ?, 0, datetime('now'), ?)`,
+		id, hash, string(respJSON), resp.Model, tokensSaved, expires,
+	)
+}
+
+// GetSemantic searches L1 cache entries by cosine similarity against the given
+// embedding. Returns the best-matching cached response if similarity exceeds
+// the threshold. This is the three-tier cache's semantic lookup layer.
+func (c *Cache) GetSemantic(_ context.Context, embedding []float64, threshold float64) (*Response, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	var bestEntry *cacheEntry
+	var bestSim float64
+
+	for _, entry := range c.mem {
+		if len(entry.Embedding) == 0 {
+			continue
+		}
+		if time.Since(entry.CreatedAt) >= c.ttl {
+			continue
+		}
+		sim := cosineSimilarity(embedding, entry.Embedding)
+		if sim > bestSim {
+			bestSim = sim
+			bestEntry = entry
+		}
+	}
+
+	if bestEntry == nil || bestSim < threshold {
+		return nil, false
+	}
+
+	log.Trace().Float64("similarity", bestSim).Msg("cache hit (semantic)")
+	return bestEntry.Response, true
+}
+
+// cosineSimilarity computes the cosine similarity between two vectors.
+// Returns 0 if either vector is zero-length or they have different dimensions.
+func cosineSimilarity(a, b []float64) float64 {
+	if len(a) != len(b) || len(a) == 0 {
+		return 0
+	}
+	var dot, normA, normB float64
+	for i := range a {
+		dot += a[i] * b[i]
+		normA += a[i] * a[i]
+		normB += b[i] * b[i]
+	}
+	if normA == 0 || normB == 0 {
+		return 0
+	}
+	return dot / (sqrt(normA) * sqrt(normB))
+}
+
+// sqrt is a simple Newton's method square root to avoid importing math.
+func sqrt(x float64) float64 {
+	if x <= 0 {
+		return 0
+	}
+	z := x
+	for i := 0; i < 20; i++ {
+		z = (z + x/z) / 2
+	}
+	return z
 }
 
 // hashRequest produces a deterministic hash of the request for cache keying.

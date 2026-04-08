@@ -242,3 +242,75 @@ func DefaultEvalCorpus() []EvalCase {
 func paddingOfSize(n int) string {
 	return strings.Repeat("x", n)
 }
+
+// MetascoreEvalCase defines a test case for evaluating the impact of different
+// routing weight configurations on model selection.
+type MetascoreEvalCase struct {
+	Label    string         `json:"label"`
+	Profiles []ModelProfile `json:"profiles"`
+	Weights  RoutingWeights `json:"weights"`
+	Expected string         `json:"expected"` // expected winning model name
+}
+
+// MetascoreEvalResult holds aggregate results from a metascore evaluation run.
+type MetascoreEvalResult struct {
+	Total   int                   `json:"total"`
+	Correct int                   `json:"correct"`
+	Errors  []MetascoreEvalError  `json:"errors,omitempty"`
+	Details []MetascoreEvalDetail `json:"details,omitempty"`
+}
+
+// MetascoreEvalError records a single metascore misroute.
+type MetascoreEvalError struct {
+	Label    string `json:"label"`
+	Expected string `json:"expected"`
+	Got      string `json:"got"`
+}
+
+// MetascoreEvalDetail records the scoring details for a single case.
+type MetascoreEvalDetail struct {
+	Label  string             `json:"label"`
+	Winner string             `json:"winner"`
+	Scores map[string]float64 `json:"scores"`
+}
+
+// RunMetascoreEval evaluates metascore-based model selection against a corpus
+// of labeled test cases. For each case, it computes metascores using the
+// provided weights and checks whether the highest-scoring model matches the
+// expected winner.
+func RunMetascoreEval(corpus []MetascoreEvalCase) *MetascoreEvalResult {
+	result := &MetascoreEvalResult{}
+
+	for _, tc := range corpus {
+		scores := make(map[string]float64, len(tc.Profiles))
+		for _, p := range tc.Profiles {
+			scores[p.Model] = p.MetascoreWith(tc.Weights)
+		}
+
+		winner := SelectByMetascoreWeighted(tc.Profiles, tc.Weights)
+		winnerModel := ""
+		if winner != nil {
+			winnerModel = winner.Model
+		}
+
+		detail := MetascoreEvalDetail{
+			Label:  tc.Label,
+			Winner: winnerModel,
+			Scores: scores,
+		}
+		result.Details = append(result.Details, detail)
+		result.Total++
+
+		if winnerModel == tc.Expected {
+			result.Correct++
+		} else {
+			result.Errors = append(result.Errors, MetascoreEvalError{
+				Label:    tc.Label,
+				Expected: tc.Expected,
+				Got:      winnerModel,
+			})
+		}
+	}
+
+	return result
+}

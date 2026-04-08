@@ -16,10 +16,7 @@ import (
 func GetTurnContext(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		turnID := chi.URLParam(r, "id")
-		row := store.QueryRowContext(r.Context(),
-			`SELECT complexity_level, token_budget, system_prompt_tokens, memory_tokens,
-			        history_tokens, history_depth, model
-			 FROM context_snapshots WHERE turn_id = ?`, turnID)
+		row := db.NewRouteQueries(store).GetTurnContext(r.Context(), turnID)
 		var complexity, model string
 		var budget int64
 		var sysTokens, memTokens, histTokens, histDepth *int64
@@ -36,17 +33,17 @@ func GetTurnContext(store *db.Store) http.HandlerFunc {
 		mt := derefInt64(memTokens)
 		ht := derefInt64(histTokens)
 		writeJSON(w, http.StatusOK, map[string]any{
-			"system_tokens":       st,
+			"system_tokens":        st,
 			"system_prompt_tokens": st,
-			"memory_tokens":       mt,
-			"history_tokens":      ht,
-			"total_tokens":        st + mt + ht,
-			"max_tokens":          budget,
-			"token_budget":        budget,
-			"complexity_level":    complexity,
-			"history_depth":       derefInt64(histDepth),
-			"model":               model,
-			"snapshot":            true,
+			"memory_tokens":        mt,
+			"history_tokens":       ht,
+			"total_tokens":         st + mt + ht,
+			"max_tokens":           budget,
+			"token_budget":         budget,
+			"complexity_level":     complexity,
+			"history_depth":        derefInt64(histDepth),
+			"model":                model,
+			"snapshot":             true,
 		})
 	}
 }
@@ -67,14 +64,11 @@ func PutTurnFeedback(store *db.Store) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "grade must be between 1 and 5")
 			return
 		}
-		res, err := store.ExecContext(r.Context(),
-			`UPDATE turn_feedback SET grade = ?, comment = ? WHERE turn_id = ?`,
-			req.Grade, req.Comment, id)
+		n, err := db.NewRouteQueries(store).UpdateTurnFeedback(r.Context(), id, req.Grade, req.Comment)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		n, _ := res.RowsAffected()
 		if n == 0 {
 			writeError(w, http.StatusNotFound, "feedback not found for this turn")
 			return
@@ -87,9 +81,7 @@ func PutTurnFeedback(store *db.Store) http.HandlerFunc {
 func GetTurnTools(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		turnID := chi.URLParam(r, "id")
-		rows, err := store.QueryContext(r.Context(),
-			`SELECT id, tool_name, input, output, status, duration_ms, skill_name, created_at
-			 FROM tool_calls WHERE turn_id = ? ORDER BY created_at`, turnID)
+		rows, err := db.NewRouteQueries(store).GetTurnToolsDetailed(r.Context(), turnID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to query turn tools")
 			return
@@ -143,9 +135,7 @@ func GetTurnTips(store *db.Store) http.HandlerFunc {
 		tips := make([]map[string]string, 0)
 
 		// Check if this turn used excessive tokens.
-		row := store.QueryRowContext(r.Context(),
-			`SELECT COALESCE(tokens_in, 0), COALESCE(tokens_out, 0), COALESCE(cost, 0)
-			 FROM turns WHERE id = ?`, turnID)
+		row := db.NewRouteQueries(store).GetTurnTokens(r.Context(), turnID)
 		var tokIn, tokOut int64
 		var cost float64
 		if row.Scan(&tokIn, &tokOut, &cost) == nil {
@@ -172,10 +162,7 @@ func GetTurnTips(store *db.Store) http.HandlerFunc {
 func GetTurnModelSelection(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		turnID := chi.URLParam(r, "id")
-		row := store.QueryRowContext(r.Context(),
-			`SELECT id, selected_model, strategy, primary_model, override_model,
-			        complexity, candidates_json, attribution, created_at
-			 FROM model_selection_events WHERE turn_id = ? LIMIT 1`, turnID)
+		row := db.NewRouteQueries(store).GetTurnModelSelection(r.Context(), turnID)
 		var id, model, strategy, primary, createdAt string
 		var override, complexity, candidatesJSON, attribution *string
 		err := row.Scan(&id, &model, &strategy, &primary, &override, &complexity, &candidatesJSON, &attribution, &createdAt)
@@ -219,9 +206,8 @@ func AnalyzeTurn(store *db.Store, llmSvc *llm.Service) http.HandlerFunc {
 		ctx := r.Context()
 
 		// Gather turn data.
-		row := store.QueryRowContext(ctx,
-			`SELECT model, COALESCE(tokens_in, 0), COALESCE(tokens_out, 0), COALESCE(cost, 0)
-			 FROM turns WHERE id = ?`, turnID)
+		rq := db.NewRouteQueries(store)
+		row := rq.GetTurnForAnalysis(ctx, turnID)
 		var model string
 		var tokIn, tokOut int64
 		var cost float64
@@ -231,22 +217,17 @@ func AnalyzeTurn(store *db.Store, llmSvc *llm.Service) http.HandlerFunc {
 		}
 		// Cached flag is optional (column may not exist in older schemas).
 		var cached int
-		_ = store.QueryRowContext(ctx, `SELECT COALESCE(cached, 0) FROM turns WHERE id = ?`, turnID).Scan(&cached)
+		_ = rq.TurnCachedFlag(ctx, turnID).Scan(&cached)
 
 		// Count tool calls and failures.
 		var toolCount, toolFails int64
-		_ = store.QueryRowContext(ctx,
-			`SELECT COUNT(*), COALESCE(SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END), 0) FROM tool_calls WHERE turn_id = ?`, turnID).
-			Scan(&toolCount, &toolFails)
+		_ = rq.ToolCallCountsForTurn(ctx, turnID).Scan(&toolCount, &toolFails)
 
 		// Load context snapshot if available.
 		var tokenBudget, sysTok, memTok, histTok, histDepth int64
 		var complexLevel string
-		snapRow := store.QueryRowContext(ctx,
-			`SELECT COALESCE(max_tokens, 0), COALESCE(system_tokens, 0), COALESCE(memory_tokens, 0),
-			        COALESCE(history_tokens, 0), COALESCE(history_depth, 0), COALESCE(complexity_level, '')
-			 FROM context_snapshots WHERE turn_id = ?`, turnID)
-		_ = snapRow.Scan(&tokenBudget, &sysTok, &memTok, &histTok, &histDepth, &complexLevel)
+		_ = rq.GetContextSnapshotForAnalysis(ctx, turnID).
+			Scan(&tokenBudget, &sysTok, &memTok, &histTok, &histDepth, &complexLevel)
 
 		// Build TurnData and run analyzer.
 		td := &pipeline.TurnData{

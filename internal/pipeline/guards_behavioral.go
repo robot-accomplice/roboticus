@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"regexp"
 	"strings"
 )
 
@@ -177,4 +178,113 @@ func (g *DeclaredActionGuard) CheckWithContext(content string, ctx *GuardContext
 		Passed: false, Retry: true,
 		Reason: "declared action '" + declaredVerb + "' was not resolved in response",
 	}
+}
+
+// --- PerspectiveGuard (Wave 8, #78) ---
+
+// PerspectiveGuard catches first-person narration of user actions.
+// The agent should never say "you walk into the room" or "you feel confused"
+// unless it's in a role-play context. Outside of RP, this is a perspective violation.
+type PerspectiveGuard struct{}
+
+// perspectivePatterns matches "you [verb]" constructions that narrate user actions.
+var perspectivePatterns = regexp.MustCompile(
+	`(?i)\byou\s+(?:walk|run|feel|see|hear|notice|realize|decide|grab|pick up|open|close|enter|leave|step|look|turn|reach|touch|take)\b`,
+)
+
+func (g *PerspectiveGuard) Name() string { return "perspective" }
+func (g *PerspectiveGuard) Check(content string) GuardResult {
+	return GuardResult{Passed: true}
+}
+func (g *PerspectiveGuard) CheckWithContext(content string, ctx *GuardContext) GuardResult {
+	if ctx == nil {
+		return GuardResult{Passed: true}
+	}
+
+	// Skip perspective check in role-play / interactive fiction contexts.
+	if ctx.HasIntent("role_play") {
+		return GuardResult{Passed: true}
+	}
+	for _, intent := range ctx.Intents {
+		if intent == "declared_action" || intent == "role_play" {
+			return GuardResult{Passed: true}
+		}
+	}
+
+	matches := perspectivePatterns.FindAllString(content, -1)
+	if len(matches) >= 2 {
+		return GuardResult{
+			Passed:  false,
+			Retry:   true,
+			Reason:  "first-person narration of user actions detected",
+			Verdict: GuardRetryRequested,
+		}
+	}
+	return GuardResult{Passed: true}
+}
+
+// --- InternalProtocolGuard (Wave 8, #79) ---
+
+// InternalProtocolGuard provides unified protocol metadata stripping.
+// It catches any internal protocol markers, debug annotations, or
+// system-level metadata that should never appear in user-facing output.
+type InternalProtocolGuard struct{}
+
+var internalProtocolMarkers = []string{
+	"[PROTOCOL:",
+	"[TRACE:",
+	"[DEBUG:",
+	"[GUARD:",
+	"[PIPELINE:",
+	"[METRIC:",
+	"[CACHE:",
+	"[ROUTING:",
+	"<system>",
+	"</system>",
+	"<internal>",
+	"</internal>",
+	"```system",
+	"[SESSION_ID:",
+	"[TURN_ID:",
+	"[MODEL:",
+	"[TOKENS:",
+}
+
+func (g *InternalProtocolGuard) Name() string { return "internal_protocol" }
+func (g *InternalProtocolGuard) Check(content string) GuardResult {
+	modified := content
+	for _, marker := range internalProtocolMarkers {
+		if strings.Contains(modified, marker) {
+			// Strip lines containing the marker.
+			lines := strings.Split(modified, "\n")
+			var kept []string
+			for _, line := range lines {
+				if !strings.Contains(line, marker) {
+					kept = append(kept, line)
+				}
+			}
+			modified = strings.Join(kept, "\n")
+		}
+	}
+	if modified != content {
+		trimmed := strings.TrimSpace(modified)
+		if trimmed == "" {
+			return GuardResult{
+				Passed:  false,
+				Retry:   true,
+				Reason:  "response consisted entirely of internal protocol metadata",
+				Verdict: GuardRetryRequested,
+			}
+		}
+		return GuardResult{
+			Passed:  false,
+			Content: trimmed,
+			Reason:  "internal protocol metadata stripped",
+			Verdict: GuardRewritten,
+		}
+	}
+	return GuardResult{Passed: true}
+}
+func (g *InternalProtocolGuard) CheckWithContext(content string, _ *GuardContext) GuardResult {
+	return g.Check(content)
 }

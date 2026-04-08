@@ -32,6 +32,7 @@ type ToolDef struct {
 	Description    string         `json:"description"`
 	ParametersJSON string         `json:"parameters_json"`
 	RiskLevel      core.RiskLevel `json:"risk_level"`
+	Embedding      []float64      `json:"-"` // Pre-computed embedding for relevance pruning (Wave 8, #84)
 }
 
 // EstimateTokens returns a rough token count for this tool definition.

@@ -75,7 +75,7 @@ func TestRouter_SetOverride_ClearOverride(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// modelSpecForTarget (service.go:427 — 40%)
+// ModelSpecForTarget (service.go:427 — 40%)
 // ---------------------------------------------------------------------------
 
 func TestModelSpecForTarget(t *testing.T) {
@@ -90,9 +90,9 @@ func TestModelSpecForTarget(t *testing.T) {
 		{RouteTarget{Provider: "", Model: ""}, ""},
 	}
 	for _, tt := range tests {
-		got := modelSpecForTarget(tt.target)
+		got := ModelSpecForTarget(tt.target)
 		if got != tt.want {
-			t.Errorf("modelSpecForTarget(%+v) = %q, want %q", tt.target, got, tt.want)
+			t.Errorf("ModelSpecForTarget(%+v) = %q, want %q", tt.target, got, tt.want)
 		}
 	}
 }

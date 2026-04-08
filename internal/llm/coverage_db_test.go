@@ -482,6 +482,82 @@ func TestNewClient_LocalNoEnvRequired(t *testing.T) {
 	}
 }
 
+func TestNewClient_KeyResolutionCascade(t *testing.T) {
+	// Verify the key resolution priority matches Rust:
+	// 1. Explicit api_key_ref → keystore
+	// 2. Conventional {provider}_api_key → keystore
+	// 3. Environment variable
+
+	// Save and restore the global KeyResolver.
+	origResolver := KeyResolver
+	defer func() { KeyResolver = origResolver }()
+
+	keystore := map[string]string{
+		"custom_secret":     "key-from-explicit-ref",
+		"openai_api_key":    "key-from-conventional",
+		"anthropic_api_key": "key-from-conventional-anthropic",
+	}
+	KeyResolver = func(keystoreKey string) string {
+		return keystore[keystoreKey]
+	}
+
+	// Case 1: Explicit api_key_ref takes priority.
+	c1, err := NewClient(&Provider{
+		Name:      "openai",
+		URL:       "http://test",
+		Format:    FormatOpenAI,
+		APIKeyRef: "keystore:custom_secret",
+	})
+	if err != nil {
+		t.Fatalf("case 1: %v", err)
+	}
+	if c1.apiKey != "key-from-explicit-ref" {
+		t.Errorf("case 1: apiKey = %q, want key-from-explicit-ref", c1.apiKey)
+	}
+
+	// Case 2: Conventional name when no explicit ref.
+	c2, err := NewClient(&Provider{
+		Name:   "anthropic",
+		URL:    "http://test",
+		Format: FormatAnthropic,
+	})
+	if err != nil {
+		t.Fatalf("case 2: %v", err)
+	}
+	if c2.apiKey != "key-from-conventional-anthropic" {
+		t.Errorf("case 2: apiKey = %q, want key-from-conventional-anthropic", c2.apiKey)
+	}
+
+	// Case 3: Env var fallback when keystore has no entry.
+	t.Setenv("MOONSHOT_KEY", "key-from-env")
+	c3, err := NewClient(&Provider{
+		Name:      "moonshot",
+		URL:       "http://test",
+		Format:    FormatOpenAI,
+		APIKeyEnv: "MOONSHOT_KEY",
+	})
+	if err != nil {
+		t.Fatalf("case 3: %v", err)
+	}
+	if c3.apiKey != "key-from-env" {
+		t.Errorf("case 3: apiKey = %q, want key-from-env", c3.apiKey)
+	}
+
+	// Case 4: api_key_ref without "keystore:" prefix.
+	c4, err := NewClient(&Provider{
+		Name:      "custom",
+		URL:       "http://test",
+		Format:    FormatOpenAI,
+		APIKeyRef: "custom_secret",
+	})
+	if err != nil {
+		t.Fatalf("case 4: %v", err)
+	}
+	if c4.apiKey != "key-from-explicit-ref" {
+		t.Errorf("case 4: apiKey = %q, want key-from-explicit-ref", c4.apiKey)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // unmarshalOpenAIResponsesResponse error path
 // ---------------------------------------------------------------------------

@@ -16,6 +16,29 @@ const (
 	SurvivalTierThriving
 )
 
+// SurvivalTierFromBalance computes the survival tier from the agent's USD balance
+// and how long it has been below zero. Matches the Rust reference thresholds:
+// Dead: balance < 0 AND hours_below_zero >= 0.999
+// Survival: balance < $0.10
+// Stable: balance < $0.50
+// Growth: balance < $5.00
+// Thriving: balance >= $5.00
+func SurvivalTierFromBalance(usd float64, hoursBelowZero float64) SurvivalTier {
+	if usd < 0 && hoursBelowZero >= 0.999 {
+		return SurvivalTierDead
+	}
+	if usd < 0.10 {
+		return SurvivalTierSurvival
+	}
+	if usd < 0.50 {
+		return SurvivalTierStable
+	}
+	if usd < 5.00 {
+		return SurvivalTierGrowth
+	}
+	return SurvivalTierThriving
+}
+
 func (s SurvivalTier) String() string {
 	switch s {
 	case SurvivalTierDead:
@@ -34,6 +57,11 @@ func (s SurvivalTier) String() string {
 }
 
 // AgentState represents the current state of the ReAct loop.
+//
+// NOTE: Go intentionally uses 6 ReAct loop states (Idle/Thinking/Acting/Observing/
+// Persisting/Done) while the Rust reference uses 5 lifecycle states (Setup/Waking/
+// Running/Sleeping/Dead). This divergence is by design: Go models the inner ReAct
+// state machine, Rust models the outer agent lifecycle. Both are valid views.
 type AgentState int
 
 const (
@@ -97,12 +125,20 @@ const (
 	APIFormatAnthropic
 	APIFormatOllama
 	APIFormatGoogle
+	// APIFormatOpenAICompletions distinguishes the /v1/chat/completions endpoint
+	// from the /v1/responses endpoint. Legacy code using APIFormatOpenAI is treated
+	// as completions for backward compatibility.
+	APIFormatOpenAICompletions
+	// APIFormatOpenAIResponses is the newer OpenAI /v1/responses endpoint.
+	APIFormatOpenAIResponses
 )
 
 func (f APIFormat) String() string {
 	switch f {
-	case APIFormatOpenAI:
+	case APIFormatOpenAI, APIFormatOpenAICompletions:
 		return "openai"
+	case APIFormatOpenAIResponses:
+		return "openai_responses"
 	case APIFormatAnthropic:
 		return "anthropic"
 	case APIFormatOllama:
@@ -112,6 +148,11 @@ func (f APIFormat) String() string {
 	default:
 		return "unknown"
 	}
+}
+
+// IsOpenAI returns true if the format is any OpenAI variant.
+func (f APIFormat) IsOpenAI() bool {
+	return f == APIFormatOpenAI || f == APIFormatOpenAICompletions || f == APIFormatOpenAIResponses
 }
 
 // RiskLevel classifies the risk of a tool execution.
@@ -140,6 +181,12 @@ func (r RiskLevel) String() string {
 }
 
 // AuthorityLevel represents the trust level of the message source.
+//
+// This is the Go equivalent of Rust's InputAuthority enum. The iota ordering
+// (External=0 < Peer=1 < SelfGenerated=2 < Creator=3) enables min/max
+// comparison for the SecurityClaim composition algorithm:
+//
+//	effective = min(max(grants...), min(ceilings...))
 type AuthorityLevel int
 
 const (
@@ -305,3 +352,14 @@ func (t ThreatScore) IsCaution() bool { return t >= ThreatThresholdClean && t < 
 
 // IsBlocked returns true if the score should block the request.
 func (t ThreatScore) IsBlocked() bool { return t >= ThreatThresholdCaution }
+
+// DowngradeCeiling caps the threat score at the given ceiling.
+// This implements the Rust threat_caution_ceiling mechanism: if a ceiling is
+// applied and the score exceeds it, the effective score is reduced to the
+// ceiling value, preventing over-aggressive blocking.
+func (t ThreatScore) DowngradeCeiling(ceiling ThreatScore) ThreatScore {
+	if t > ceiling {
+		return ceiling
+	}
+	return t
+}

@@ -31,19 +31,19 @@ func TestBuildTurnAnalysisPrompt_IncludesAllMetricFields(t *testing.T) {
 	prompt := BuildTurnAnalysisPrompt(td, nil)
 
 	requiredFields := []string{
-		"gpt-4",      // Model
-		"3500",       // TokensIn
-		"800",        // TokensOut
-		"0.0300",     // Cost
-		"8192",       // TokenBudget
-		"2000",       // SystemPromptTokens
-		"500",        // MemoryTokens
-		"1000",       // HistoryTokens
-		"depth 5",    // HistoryDepth
-		"3",          // ToolCallCount
-		"failures: 1",// ToolFailureCount
-		"high",       // ComplexityLevel
-		"false",      // Cached
+		"gpt-4",       // Model
+		"3500",        // TokensIn
+		"800",         // TokensOut
+		"0.0300",      // Cost
+		"8192",        // TokenBudget
+		"2000",        // SystemPromptTokens
+		"500",         // MemoryTokens
+		"1000",        // HistoryTokens
+		"depth 5",     // HistoryDepth
+		"3",           // ToolCallCount
+		"failures: 1", // ToolFailureCount
+		"high",        // ComplexityLevel
+		"false",       // Cached
 	}
 
 	for _, field := range requiredFields {
@@ -168,10 +168,10 @@ func TestAnalyzeTurn_TableDriven(t *testing.T) {
 	analyzer := NewContextAnalyzer()
 
 	tests := []struct {
-		name         string
-		turn         TurnData
-		expectRules  []string // rules that MUST fire
-		rejectRules  []string // rules that must NOT fire
+		name        string
+		turn        TurnData
+		expectRules []string // rules that MUST fire
+		rejectRules []string // rules that must NOT fire
 	}{
 		{
 			name: "BudgetPressure fires at 95%",
@@ -204,7 +204,7 @@ func TestAnalyzeTurn_TableDriven(t *testing.T) {
 		{
 			name: "MemoryStarvation fires when memory < 5% of large budget",
 			turn: TurnData{
-				TokenBudget: 10000,
+				TokenBudget:  10000,
 				MemoryTokens: 200,
 			},
 			expectRules: []string{"MemoryStarvation"},

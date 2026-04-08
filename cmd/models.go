@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"roboticus/internal/llm"
 )
 
 var modelsCmd = &cobra.Command{
@@ -358,50 +360,82 @@ func probeOpenAI(client *http.Client, baseURL string) []string {
 
 var modelsExerciseCmd = &cobra.Command{
 	Use:   "exercise [model]",
-	Short: "Exercise a model with test prompts to verify connectivity and quality",
+	Short: "Exercise a model with the 20-prompt matrix to establish quality baseline",
 	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		prompts := []string{
-			"Respond with exactly: OK",
-			"What is 2 + 2?",
-			"Say hello in one word.",
-		}
-
 		model := ""
 		if len(args) > 0 {
 			model = args[0]
 		}
 
 		fmt.Println()
+		fmt.Printf("  Exercising %s with %d prompts across 4 intent classes...\n\n",
+			func() string {
+				if model != "" {
+					return model
+				}
+				return "default model"
+			}(),
+			len(llm.ExerciseMatrix))
+
+		// Per-intent-class tracking.
+		type intentStats struct {
+			pass, fail int
+			totalMs    int64
+		}
+		byIntent := make(map[llm.IntentClass]*intentStats)
+		for _, ic := range []llm.IntentClass{llm.IntentExecution, llm.IntentDelegation, llm.IntentIntrospection, llm.IntentConversation} {
+			byIntent[ic] = &intentStats{}
+		}
+
 		pass, fail := 0, 0
-		for _, prompt := range prompts {
-			body := map[string]any{"content": prompt}
+		for i, ep := range llm.ExerciseMatrix {
+			body := map[string]any{"content": ep.Prompt}
 			if model != "" {
 				body["model"] = model
 			}
+			start := time.Now()
 			resp, err := apiPost("/api/agent/message", body)
+			latencyMs := time.Since(start).Milliseconds()
+
+			prefix := fmt.Sprintf("  [%2d/%d] %-15s C%d", i+1, len(llm.ExerciseMatrix), ep.Intent, ep.Complexity)
+
+			stats := byIntent[ep.Intent]
 			if err != nil {
 				fail++
-				fmt.Printf("  FAIL: %v\n", err)
+				stats.fail++
+				fmt.Printf("%s FAIL: %v\n", prefix, err)
 				continue
 			}
 			content := fmt.Sprintf("%v", resp["content"])
 			if content != "" && content != "<nil>" {
 				pass++
-				if len(content) > 60 {
-					content = content[:60] + "..."
+				stats.pass++
+				stats.totalMs += latencyMs
+				if len(content) > 50 {
+					content = content[:50] + "..."
 				}
-				fmt.Printf("  PASS: %s\n", content)
-			} else if errMsg, ok := resp["error"].(string); ok {
-				fail++
-				fmt.Printf("  FAIL: %s\n", errMsg)
+				fmt.Printf("%s PASS %4dms: %s\n", prefix, latencyMs, content)
 			} else {
 				fail++
-				fmt.Printf("  FAIL: empty response\n")
+				stats.fail++
+				fmt.Printf("%s FAIL: empty response\n", prefix)
 			}
 		}
 
-		fmt.Printf("\n  Result: %d/%d passed\n\n", pass, pass+fail)
+		fmt.Printf("\n  ── Results ──────────────────────────────────\n")
+		fmt.Printf("  Total: %d/%d passed\n\n", pass, pass+fail)
+		fmt.Printf("  %-15s  %s  %s  %s\n", "Intent Class", "Pass", "Fail", "Avg Latency")
+		fmt.Printf("  %-15s  %s  %s  %s\n", "───────────────", "────", "────", "───────────")
+		for _, ic := range []llm.IntentClass{llm.IntentExecution, llm.IntentDelegation, llm.IntentIntrospection, llm.IntentConversation} {
+			s := byIntent[ic]
+			avgMs := int64(0)
+			if s.pass > 0 {
+				avgMs = s.totalMs / int64(s.pass)
+			}
+			fmt.Printf("  %-15s  %4d  %4d  %6dms\n", ic, s.pass, s.fail, avgMs)
+		}
+		fmt.Println()
 		return nil
 	},
 }

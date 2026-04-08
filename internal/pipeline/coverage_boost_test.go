@@ -649,7 +649,7 @@ func (s *errorStreamPreparer) PrepareStream(_ context.Context, _ *Session) (*llm
 func TestRunStandardInference_NoExecutor(t *testing.T) {
 	pipe := &Pipeline{}
 	sess := NewSession("s1", "a1", "Bot")
-	_, err := pipe.runStandardInference(context.Background(), Config{}, sess, "m1")
+	_, err := pipe.runStandardInference(context.Background(), Config{}, sess, "m1", "t1")
 	if err == nil {
 		t.Error("should fail without executor")
 	}
@@ -665,7 +665,7 @@ func TestRunStandardInference_WithGuards(t *testing.T) {
 		bgWorker: bgw,
 	}
 	sess := NewSession("s1", "a1", "Bot")
-	outcome, err := pipe.runStandardInference(context.Background(), Config{GuardSet: GuardSetFull}, sess, "m1")
+	outcome, err := pipe.runStandardInference(context.Background(), Config{GuardSet: GuardSetFull}, sess, "m1", "t1")
 	if err != nil {
 		t.Fatalf("runStandardInference: %v", err)
 	}
@@ -698,7 +698,7 @@ func TestRunStandardInference_ExecutorError(t *testing.T) {
 		bgWorker: bgw,
 	}
 	sess := NewSession("s1", "a1", "Bot")
-	_, err := pipe.runStandardInference(context.Background(), Config{}, sess, "m1")
+	_, err := pipe.runStandardInference(context.Background(), Config{}, sess, "m1", "t1")
 	if err == nil {
 		t.Error("should propagate executor error")
 	}

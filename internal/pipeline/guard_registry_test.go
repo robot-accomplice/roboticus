@@ -8,7 +8,7 @@ func TestGuardRegistry_Chain(t *testing.T) {
 		preset    GuardSetPreset
 		wantCount int
 	}{
-		{"full set", GuardSetFull, 17},
+		{"full set", GuardSetFull, 21},
 		{"stream set", GuardSetStream, 5},
 		{"cached set", GuardSetCached, 17},
 		{"none set", GuardSetNone, 0},

@@ -83,6 +83,9 @@ type Request struct {
 	MaxTokens   int       `json:"max_tokens,omitempty"`
 	Stream      bool      `json:"stream,omitempty"`
 	Stop        []string  `json:"stop,omitempty"`
+	// IntentClass carries the classified intent for per-(model, intent) quality
+	// tracking. Set by the pipeline before inference. Not sent to the provider.
+	IntentClass string `json:"-"`
 }
 
 // Response is a provider-agnostic inference response.

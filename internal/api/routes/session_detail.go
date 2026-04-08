@@ -2,9 +2,9 @@ package routes
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"path/filepath"
 
 	"github.com/go-chi/chi/v5"
@@ -17,13 +17,7 @@ import (
 func ListSessionTurns(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessionID := chi.URLParam(r, "id")
-		rows, err := store.QueryContext(r.Context(),
-			`SELECT sm.id, sm.role, sm.content, sm.created_at,
-			        COALESCE(t.model, ''), COALESCE(t.cost, 0.0),
-			        COALESCE(t.tokens_in, 0), COALESCE(t.tokens_out, 0)
-			 FROM session_messages sm
-			 LEFT JOIN turns t ON t.id = sm.id AND t.session_id = sm.session_id
-			 WHERE sm.session_id = ? ORDER BY sm.created_at`, sessionID)
+		rows, err := db.NewRouteQueries(store).SessionTurnsWithMessages(r.Context(), sessionID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to query session turns")
 			return
@@ -52,11 +46,7 @@ func ListSessionTurns(store *db.Store) http.HandlerFunc {
 func GetSessionFeedback(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessionID := chi.URLParam(r, "id")
-		rows, err := store.QueryContext(r.Context(),
-			`SELECT tf.id, tf.turn_id, tf.grade, tf.source, tf.comment, tf.created_at
-			 FROM turn_feedback tf
-			 WHERE tf.session_id = ?
-			 ORDER BY tf.created_at DESC`, sessionID)
+		rows, err := db.NewRouteQueries(store).SessionFeedback(r.Context(), sessionID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to query session feedback")
 			return
@@ -94,27 +84,21 @@ func GetSessionInsights(store *db.Store) http.HandlerFunc {
 		// Gather session metrics.
 		var turnCount, totalTokens int64
 		var totalCost float64
-		row := store.QueryRowContext(ctx,
-			`SELECT COUNT(*), COALESCE(SUM(tokens_in + tokens_out), 0), COALESCE(SUM(cost), 0)
-			 FROM turns WHERE session_id = ?`, sessionID)
+		row := db.NewRouteQueries(store).SessionTurnStats(ctx, sessionID)
 		if err := row.Scan(&turnCount, &totalTokens, &totalCost); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 
-		var msgCount int64
-		row = store.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM session_messages WHERE session_id = ?`, sessionID)
-		if err := row.Scan(&msgCount); err != nil {
+		msgCountInt, err := db.NewRouteQueries(store).SessionMessageCount(ctx, sessionID)
+		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		msgCount := int64(msgCountInt)
 
 		var toolCallCount int64
-		row = store.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM tool_calls tc
-			 JOIN turns t ON t.id = tc.turn_id
-			 WHERE t.session_id = ?`, sessionID)
+		row = db.NewRouteQueries(store).SessionToolCallCount(ctx, sessionID)
 		if err := row.Scan(&toolCallCount); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -146,12 +130,8 @@ func GetSessionInsights(store *db.Store) http.HandlerFunc {
 func DeleteSession(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessionID := chi.URLParam(r, "id")
-		_, err := store.ExecContext(r.Context(), `DELETE FROM session_messages WHERE session_id = ?`, sessionID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		if _, err = store.ExecContext(r.Context(), `DELETE FROM sessions WHERE id = ?`, sessionID); err != nil {
+		repo := db.NewSessionRepository(store)
+		if err := repo.DeleteSession(r.Context(), sessionID); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -162,8 +142,7 @@ func DeleteSession(store *db.Store) http.HandlerFunc {
 // GetSemanticCategories returns semantic memory categories with counts.
 func GetSemanticCategories(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		rows, err := store.QueryContext(r.Context(),
-			`SELECT category, COUNT(*) as cnt FROM semantic_memory GROUP BY category ORDER BY cnt DESC`)
+		rows, err := db.NewRouteQueries(store).SemanticCategories(r.Context())
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to query semantic categories")
 			return
@@ -188,12 +167,12 @@ func GetSemanticCategories(store *db.Store) http.HandlerFunc {
 func DeleteSkill(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		skillID := chi.URLParam(r, "id")
-		result, err := store.ExecContext(r.Context(), `DELETE FROM skills WHERE id = ?`, skillID)
+		repo := db.NewSkillsRepository(store)
+		affected, err := repo.DeleteByID(r.Context(), skillID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		affected, _ := result.RowsAffected()
 		if affected == 0 {
 			writeError(w, http.StatusNotFound, "skill not found")
 			return
@@ -206,13 +185,12 @@ func DeleteSkill(store *db.Store) http.HandlerFunc {
 func ToggleSkill(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		skillID := chi.URLParam(r, "id")
-		result, err := store.ExecContext(r.Context(),
-			`UPDATE skills SET enabled = CASE WHEN enabled = 1 THEN 0 ELSE 1 END WHERE id = ?`, skillID)
+		repo := db.NewSkillsRepository(store)
+		affected, err := repo.ToggleByID(r.Context(), skillID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		affected, _ := result.RowsAffected()
 		if affected == 0 {
 			writeError(w, http.StatusNotFound, "skill not found")
 			return
@@ -224,9 +202,7 @@ func ToggleSkill(store *db.Store) http.HandlerFunc {
 // GetSkillsCatalog returns available skills from the catalog.
 func GetSkillsCatalog(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		rows, err := store.QueryContext(r.Context(),
-			`SELECT id, name, kind, description, version, risk_level, enabled, created_at
-			 FROM skills ORDER BY name`)
+		rows, err := db.NewRouteQueries(store).ListSkillsAll(r.Context())
 		if err != nil {
 			writeJSON(w, http.StatusOK, map[string]any{"items": make([]any, 0)})
 			return
@@ -291,24 +267,12 @@ func InstallSkillFromCatalog(cfg *core.Config, store *db.Store) http.HandlerFunc
 		if skillsDir == "" {
 			skillsDir = filepath.Join(core.ConfigDir(), "skills")
 		}
-		if err := os.MkdirAll(skillsDir, 0o755); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to create skills directory: "+err.Error())
+		installer := db.NewInstaller(store, skillsDir)
+		path, err := installer.Install(r.Context(), req.Name, req.Content)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-
-		path := filepath.Join(skillsDir, req.Name+".md")
-		if err := os.WriteFile(path, []byte(req.Content), 0o644); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to write skill file: "+err.Error())
-			return
-		}
-
-		// Also register in the database.
-		id := db.NewID()
-		_, _ = store.ExecContext(r.Context(),
-			`INSERT INTO skills (id, name, kind, source_path, content_hash, enabled, version, risk_level)
-			 VALUES (?, ?, 'instruction', ?, '', 1, '1.0.0', 'Safe')
-			 ON CONFLICT(name) DO UPDATE SET source_path = excluded.source_path`,
-			id, req.Name, path)
 
 		writeJSON(w, http.StatusCreated, map[string]string{
 			"status": "installed",
@@ -334,15 +298,13 @@ func ActivateSkillFromCatalog(store *db.Store) http.HandlerFunc {
 			return
 		}
 
-		result, err := store.ExecContext(r.Context(),
-			`UPDATE skills SET enabled = 1 WHERE name = ?`, req.Name)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		affected, _ := result.RowsAffected()
-		if affected == 0 {
-			writeError(w, http.StatusNotFound, "skill not found: "+req.Name)
+		repo := db.NewSkillsRepository(store)
+		if err := repo.SetEnabled(r.Context(), req.Name, true); err != nil {
+			if errors.Is(err, db.ErrNoRowsAffected) {
+				writeError(w, http.StatusNotFound, "skill not found: "+req.Name)
+			} else {
+				writeError(w, http.StatusInternalServerError, err.Error())
+			}
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "activated", "name": req.Name})
@@ -370,16 +332,10 @@ func InstallPlugin(cfg *core.Config) http.HandlerFunc {
 		if pluginsDir == "" {
 			pluginsDir = filepath.Join(core.ConfigDir(), "plugins")
 		}
-
 		pluginDir := filepath.Join(pluginsDir, req.Name)
-		if err := os.MkdirAll(pluginDir, 0o755); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to create plugin directory: "+err.Error())
-			return
-		}
-
-		path := filepath.Join(pluginDir, "main.lua")
-		if err := os.WriteFile(path, []byte(req.Content), 0o644); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to write plugin file: "+err.Error())
+		path, err := core.WritePluginFile(pluginDir, "main", req.Content)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 
@@ -395,9 +351,7 @@ func InstallPlugin(cfg *core.Config) http.HandlerFunc {
 func GetSkill(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		skillID := chi.URLParam(r, "id")
-		row := store.QueryRowContext(r.Context(),
-			`SELECT id, name, kind, description, enabled, version, risk_level, created_at
-			 FROM skills WHERE id = ?`, skillID)
+		row := db.NewRouteQueries(store).GetSkillByID(r.Context(), skillID)
 
 		var id, name, kind, riskLevel, createdAt, version string
 		var description *string
@@ -431,24 +385,22 @@ func UpdateSkill(store *db.Store) http.HandlerFunc {
 			return
 		}
 
-		// Build dynamic update.
+		// Build dynamic update via repo.
+		repo := db.NewSkillsRepository(store)
 		if req.Description != nil {
-			if _, err := store.ExecContext(r.Context(),
-				`UPDATE skills SET description = ? WHERE id = ?`, *req.Description, skillID); err != nil {
+			if err := repo.UpdateField(r.Context(), skillID, "description", *req.Description); err != nil {
 				writeError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
 		}
 		if req.RiskLevel != nil {
-			if _, err := store.ExecContext(r.Context(),
-				`UPDATE skills SET risk_level = ? WHERE id = ?`, *req.RiskLevel, skillID); err != nil {
+			if err := repo.UpdateField(r.Context(), skillID, "risk_level", *req.RiskLevel); err != nil {
 				writeError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
 		}
 		if req.Version != nil {
-			if _, err := store.ExecContext(r.Context(),
-				`UPDATE skills SET version = ? WHERE id = ?`, *req.Version, skillID); err != nil {
+			if err := repo.UpdateField(r.Context(), skillID, "version", *req.Version); err != nil {
 				writeError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
@@ -462,28 +414,27 @@ func AuditSkills(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 
-		var activeCount, disabledCount, totalCount int64
-		row := store.QueryRowContext(ctx, `SELECT COUNT(*) FROM skills WHERE enabled = 1`)
-		if err := row.Scan(&activeCount); err != nil {
+		rq := db.NewRouteQueries(store)
+		activeCount, err := rq.CountEnabledSkills(ctx)
+		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to query active skills")
 			return
 		}
 
-		row = store.QueryRowContext(ctx, `SELECT COUNT(*) FROM skills WHERE enabled = 0`)
-		if err := row.Scan(&disabledCount); err != nil {
+		disabledCount, err := rq.CountDisabledSkills(ctx)
+		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to query disabled skills")
 			return
 		}
 
-		row = store.QueryRowContext(ctx, `SELECT COUNT(*) FROM skills`)
-		if err := row.Scan(&totalCount); err != nil {
+		totalCount, err := rq.CountAllSkills(ctx)
+		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to query total skills")
 			return
 		}
 
-		var lastReload *string
-		row = store.QueryRowContext(ctx, `SELECT MAX(created_at) FROM skills`)
-		if err := row.Scan(&lastReload); err != nil {
+		lastReload, err := rq.LatestSkillTimestamp(ctx)
+		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to query skill audit reload time")
 			return
 		}

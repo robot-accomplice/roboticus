@@ -61,6 +61,7 @@ type ContextBuilder struct {
 	systemPrompt string
 	toolDefs     []llm.ToolDef
 	memory       string // current memory block
+	memoryIndex  string // lightweight memory index for recall_memory
 }
 
 // NewContextBuilder creates a builder with the given config.
@@ -81,6 +82,11 @@ func (cb *ContextBuilder) SetTools(defs []llm.ToolDef) {
 // SetMemory sets the memory block to inject after the system prompt.
 func (cb *ContextBuilder) SetMemory(mem string) {
 	cb.memory = mem
+}
+
+// SetMemoryIndex sets the lightweight memory index for recall_memory tool usage.
+func (cb *ContextBuilder) SetMemoryIndex(index string) {
+	cb.memoryIndex = index
 }
 
 // BuildRequest constructs an LLM request from session state, applying
@@ -105,6 +111,15 @@ func (cb *ContextBuilder) BuildRequest(session *Session) *llm.Request {
 		memMsg := llm.Message{Role: "system", Content: cb.memory}
 		memTokCount = cb.estimateTokens(cb.memory)
 		result = append(result, memMsg)
+	}
+
+	// Inject memory index as third system message if present.
+	// This is the lightweight recall list — the agent can call recall_memory(id)
+	// to fetch full content of any entry.
+	if cb.memoryIndex != "" {
+		indexMsg := llm.Message{Role: "system", Content: cb.memoryIndex}
+		memTokCount += cb.estimateTokens(cb.memoryIndex)
+		result = append(result, indexMsg)
 	}
 
 	remaining := budget - sysTokCount - memTokCount

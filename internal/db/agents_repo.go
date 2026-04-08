@@ -75,3 +75,89 @@ func (r *AgentsRepository) Delete(ctx context.Context, id string) error {
 	_, err := r.q.ExecContext(ctx, `DELETE FROM sub_agents WHERE id = ?`, id)
 	return err
 }
+
+// DeleteByName removes a sub-agent by name.
+func (r *AgentsRepository) DeleteByName(ctx context.Context, name string) (int64, error) {
+	res, err := r.q.ExecContext(ctx, `DELETE FROM sub_agents WHERE name = ?`, name)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// UpdateModel updates a sub-agent's model (and optionally description).
+// Returns ErrNoRowsAffected if no agent matched.
+func (r *AgentsRepository) UpdateModel(ctx context.Context, name, model, description string) error {
+	var res sql.Result
+	var err error
+	if description != "" {
+		res, err = r.q.ExecContext(ctx,
+			`UPDATE sub_agents SET model = ?, description = ? WHERE name = ?`, model, description, name)
+	} else {
+		res, err = r.q.ExecContext(ctx, `UPDATE sub_agents SET model = ? WHERE name = ?`, model, name)
+	}
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrNoRowsAffected
+	}
+	return nil
+}
+
+// ToggleEnabled flips a sub-agent's enabled flag.
+// Returns ErrNoRowsAffected if no agent matched.
+func (r *AgentsRepository) ToggleEnabled(ctx context.Context, name string) error {
+	res, err := r.q.ExecContext(ctx,
+		`UPDATE sub_agents SET enabled = CASE WHEN enabled = 1 THEN 0 ELSE 1 END WHERE name = ?`, name)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrNoRowsAffected
+	}
+	return nil
+}
+
+// SetEnabledByNameOrID enables or disables a sub-agent by name or ID.
+// Returns ErrNoRowsAffected if no agent matched.
+func (r *AgentsRepository) SetEnabledByNameOrID(ctx context.Context, nameOrID string, enabled bool) error {
+	val := 0
+	if enabled {
+		val = 1
+	}
+	res, err := r.q.ExecContext(ctx,
+		`UPDATE sub_agents SET enabled = ? WHERE id = ? OR name = ?`, val, nameOrID, nameOrID)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrNoRowsAffected
+	}
+	return nil
+}
+
+// PruneOld deletes sub-agents older than the given number of days.
+func (r *AgentsRepository) PruneOld(ctx context.Context, olderThanDays int) (int64, error) {
+	res, err := r.q.ExecContext(ctx,
+		`DELETE FROM sub_agents WHERE created_at < datetime('now', '-' || ? || ' days')`, olderThanDays)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// Insert creates a new sub-agent with the given fields.
+func (r *AgentsRepository) Insert(ctx context.Context, id, name, model, skillsJSON string, enabled bool) error {
+	e := 0
+	if enabled {
+		e = 1
+	}
+	_, err := r.q.ExecContext(ctx,
+		`INSERT INTO sub_agents (id, name, model, skills_json, enabled) VALUES (?, ?, ?, ?, ?)`,
+		id, name, model, skillsJSON, e)
+	return err
+}

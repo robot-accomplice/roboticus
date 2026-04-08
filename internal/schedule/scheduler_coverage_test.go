@@ -164,6 +164,20 @@ func TestParseTZPrefix(t *testing.T) {
 	}
 }
 
+func TestParseTZPrefix_CronTZ(t *testing.T) {
+	// Rust supports CRON_TZ= prefix in addition to TZ= (parity test).
+	loc, expr := parseTZPrefix("CRON_TZ=Europe/London 30 14 * * 1-5")
+	if loc == nil {
+		t.Fatal("should parse CRON_TZ prefix")
+	}
+	if loc.String() != "Europe/London" {
+		t.Errorf("timezone = %s, want Europe/London", loc.String())
+	}
+	if expr != "30 14 * * 1-5" {
+		t.Errorf("expr = %s", expr)
+	}
+}
+
 func TestParseTZPrefix_NoTZ(t *testing.T) {
 	loc, expr := parseTZPrefix("0 9 * * *")
 	if loc != nil {

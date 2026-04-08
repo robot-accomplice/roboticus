@@ -22,19 +22,21 @@ import (
 //	Circuit breaker → Client (format translation + HTTP) →
 //	Cache store → Response
 type Service struct {
-	providers  map[string]*Client
-	router     *Router
-	breakers   *BreakerRegistry
-	cache      *Cache
-	dedup      *Dedup
-	transforms *TransformPipeline
-	primary    string   // primary model name
-	fallbacks  []string // fallback model names
-	store      *db.Store
-	bgWorker   *core.BackgroundWorker
-	Confidence *ConfidenceEvaluator
-	Escalation *EscalationTracker
-	quality    *QualityTracker
+	providers     map[string]*Client
+	router        *Router
+	breakers      *BreakerRegistry
+	cache         *Cache
+	dedup         *Dedup
+	transforms    *TransformPipeline
+	primary       string   // primary model name
+	fallbacks     []string // fallback model names
+	store         *db.Store
+	bgWorker      *core.BackgroundWorker
+	Confidence    *ConfidenceEvaluator
+	Escalation    *EscalationTracker
+	quality       *QualityTracker
+	intentQuality *IntentQualityTracker
+	latency       *LatencyTracker
 }
 
 // ServiceConfig holds configuration for the LLM service.
@@ -81,19 +83,19 @@ func NewService(cfg ServiceConfig, store *db.Store) (*Service, error) {
 		}
 		clients[p.Name] = client
 
-		// Use the model name from primary/fallback spec if available,
-		// otherwise fall back to provider name (for direct model selection).
-		modelName := p.Name
-		if m, ok := providerModels[p.Name]; ok {
-			modelName = m
+		// Only add routing targets for providers that appear in the primary
+		// or fallback specs. Matching Rust: ordered_models is built from
+		// primary + fallbacks only — providers not in that list are never
+		// routing candidates (they can still be reached via explicit
+		// "provider/model" requests).
+		if modelName, ok := providerModels[p.Name]; ok {
+			targets = append(targets, RouteTarget{
+				Model:    modelName,
+				Provider: p.Name,
+				IsLocal:  p.IsLocal,
+				Cost:     p.CostPerOutputTok,
+			})
 		}
-
-		targets = append(targets, RouteTarget{
-			Model:    modelName,
-			Provider: p.Name,
-			IsLocal:  p.IsLocal,
-			Cost:     p.CostPerOutputTok,
-		})
 	}
 
 	if len(clients) == 0 {
@@ -111,19 +113,21 @@ func NewService(cfg ServiceConfig, store *db.Store) (*Service, error) {
 	}
 
 	return &Service{
-		providers:  clients,
-		router:     NewRouter(targets, cfg.Router),
-		breakers:   NewBreakerRegistry(cfg.Breaker),
-		cache:      NewCache(cfg.Cache, store),
-		dedup:      NewDedup(2000), // 2s dedup window
-		transforms: DefaultTransformPipeline(),
-		primary:    cfg.Primary,
-		fallbacks:  cfg.Fallbacks,
-		store:      store,
-		bgWorker:   bgw,
-		Confidence: NewConfidenceEvaluator(floor),
-		Escalation: NewEscalationTracker(),
-		quality:    NewQualityTracker(100),
+		providers:     clients,
+		router:        NewRouter(targets, cfg.Router),
+		breakers:      NewBreakerRegistry(cfg.Breaker),
+		cache:         NewCache(cfg.Cache, store),
+		dedup:         NewDedup(2000), // 2s dedup window
+		transforms:    DefaultTransformPipeline(),
+		primary:       cfg.Primary,
+		fallbacks:     cfg.Fallbacks,
+		store:         store,
+		bgWorker:      bgw,
+		Confidence:    NewConfidenceEvaluator(floor),
+		Escalation:    NewEscalationTracker(),
+		quality:       NewQualityTracker(100),
+		intentQuality: NewIntentQualityTracker(100),
+		latency:       NewLatencyTracker(100),
 	}, nil
 }
 
@@ -147,38 +151,111 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 	// Route: select model if not explicitly set.
 	if req.Model == "" {
 		target := s.router.Select(req)
-		req.Model = modelSpecForTarget(target)
+		req.Model = ModelSpecForTarget(target)
+	}
+	// Fall back to configured primary if routing didn't produce a model.
+	if req.Model == "" && s.primary != "" {
+		req.Model = s.primary
 	}
 
-	// Parse "provider/model" format: "ollama/qwen3.5:35b-a3b" → provider="ollama", model="qwen3.5:35b-a3b".
-	providerHint, modelName := splitModelSpec(req.Model)
-	if modelName != "" {
-		req.Model = modelName
+	// Build the provider/model chain: primary first, then each fallback
+	// with its OWN provider and model name. Each entry is a (provider, model)
+	// pair so we send the right model name to each provider.
+	//
+	// Matching Rust behavior: primary and fallbacks are expected in
+	// "provider/model" format (e.g., "openai/gpt-4o"). Bare names without
+	// a slash are handled gracefully: if the name matches a known provider,
+	// it's used as the provider with the current model; otherwise it's
+	// treated as a bare model name and tried on all registered providers.
+	type providerModel struct {
+		provider string
+		model    string
+	}
+	var chain []providerModel
+	var primaryModel string
+
+	// Primary: parse "provider/model" from req.Model.
+	primaryProvider, primaryModelParsed := splitModelSpec(req.Model)
+	if primaryModelParsed != "" {
+		// Explicit "provider/model" format — use as-is.
+		primaryModel = primaryModelParsed
+		chain = append(chain, providerModel{primaryProvider, primaryModel})
+	} else {
+		// No slash — bare name. Could be a provider name or a model name.
+		if _, ok := s.providers[primaryProvider]; ok {
+			// Known provider — use it with its own name as model (unusual case).
+			primaryModel = primaryProvider
+			chain = append(chain, providerModel{primaryProvider, primaryModel})
+		} else {
+			// Not a known provider — treat as bare model name, try all providers.
+			primaryModel = req.Model
+			for name := range s.providers {
+				chain = append(chain, providerModel{name, primaryModel})
+			}
+		}
 	}
 
-	// Try primary provider, then fallbacks.
-	providers := s.resolveProviderChain(providerHint)
+	// Fallbacks: each has its own provider/model pair.
+	for _, fb := range s.fallbacks {
+		fbProvider, fbModel := splitModelSpec(fb)
+		if fbModel != "" {
+			// Explicit "provider/model" — use as-is.
+		} else {
+			// Bare name — if it's a known provider, use it with the primary model.
+			if _, ok := s.providers[fbProvider]; ok {
+				fbModel = primaryModel
+			} else {
+				// Unknown provider, no model — skip.
+				continue
+			}
+		}
+		// Deduplicate: skip if already in chain.
+		dup := false
+		for _, existing := range chain {
+			if existing.provider == fbProvider && existing.model == fbModel {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			chain = append(chain, providerModel{fbProvider, fbModel})
+		}
+	}
+
+	// If chain is still empty, try all providers with the original model name.
+	if len(chain) == 0 {
+		for name := range s.providers {
+			chain = append(chain, providerModel{name, req.Model})
+		}
+	}
+
 	var lastErr error
 
-	for _, providerName := range providers {
-		client, ok := s.providers[providerName]
+	log.Debug().Int("chain_len", len(chain)).Str("model", req.Model).Msg("inference chain built")
+
+	for _, pm := range chain {
+		client, ok := s.providers[pm.provider]
 		if !ok {
 			continue
 		}
 
-		cb := s.breakers.Get(providerName)
+		cb := s.breakers.Get(pm.provider)
 		if !cb.Allow() {
-			log.Warn().Str("provider", providerName).Msg("circuit breaker open, trying next")
+			log.Warn().Str("provider", pm.provider).Msg("circuit breaker open, trying next")
 			continue
 		}
 
+		// Set the model for this provider.
+		inferReq := *req
+		inferReq.Model = pm.model
+
 		start := time.Now()
-		resp, err := client.Complete(ctx, req)
+		resp, err := client.Complete(ctx, &inferReq)
 		latencyMs := time.Since(start).Milliseconds()
 		if err != nil {
 			cb.RecordFailure()
 			lastErr = err
-			log.Warn().Err(err).Str("provider", providerName).Str("model", req.Model).Msg("provider failed, trying next")
+			log.Warn().Err(err).Str("provider", pm.provider).Str("model", pm.model).Msg("provider failed, trying next")
 			continue
 		}
 
@@ -192,7 +269,7 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 				s.Escalation.RecordLocalEscalated()
 				log.Info().
 					Float64("confidence", s.Confidence.ConfidenceScore(resp.Content, latency)).
-					Str("provider", providerName).
+					Str("provider", pm.provider).
 					Msg("local response below confidence floor, escalating to cloud")
 				// Continue to next (non-local) provider.
 				continue
@@ -210,18 +287,26 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 		// Cache the successful response.
 		s.cache.Put(ctx, req, resp)
 
-		// Record quality observation for model routing feedback.
+		// Record quality and latency observations for model routing feedback.
+		qScore := qualityFromResponse(resp)
 		if s.quality != nil {
-			s.quality.Record(resp.Model, qualityFromResponse(resp))
+			s.quality.Record(resp.Model, qScore)
+		}
+		// Also record with intent context for per-(model, intent) quality cells.
+		if s.intentQuality != nil && req.IntentClass != "" {
+			s.intentQuality.RecordWithIntent(resp.Model, req.IntentClass, qScore)
+		}
+		if s.latency != nil {
+			s.latency.Record(resp.Model, latencyMs)
 		}
 
 		// Record cost asynchronously via tracked worker pool.
-		pName := providerName
+		pName := pm.provider
 		s.bgWorker.Submit("recordCost", func(ctx context.Context) {
 			s.recordCost(ctx, pName, resp)
 		})
 
-		log.Info().Str("provider", providerName).Str("model", resp.Model).Int("tokens_in", resp.Usage.InputTokens).Int("tokens_out", resp.Usage.OutputTokens).Int64("latency_ms", latencyMs).Msg("inference completed")
+		log.Info().Str("provider", pm.provider).Str("model", resp.Model).Int("tokens_in", resp.Usage.InputTokens).Int("tokens_out", resp.Usage.OutputTokens).Int64("latency_ms", latencyMs).Msg("inference completed")
 		return resp, nil
 	}
 
@@ -250,32 +335,81 @@ func (s *Service) Stream(ctx context.Context, req *Request) (<-chan StreamChunk,
 	// Route if needed.
 	if req.Model == "" {
 		target := s.router.Select(req)
-		req.Model = modelSpecForTarget(target)
+		req.Model = ModelSpecForTarget(target)
+	}
+	// Fall back to configured primary if routing didn't produce a model.
+	if req.Model == "" && s.primary != "" {
+		req.Model = s.primary
 	}
 
-	// Parse "provider/model" format.
-	providerHint, modelName := splitModelSpec(req.Model)
-	if modelName != "" {
-		req.Model = modelName
+	// Build provider/model chain using the same logic as completeWithFallback.
+	// Streaming uses the same cascade but without confidence escalation (Rust parity).
+	type streamPM struct {
+		provider string
+		model    string
+	}
+	var streamChain []streamPM
+	var streamPrimaryModel string
+
+	sProv, sModel := splitModelSpec(req.Model)
+	if sModel != "" {
+		streamPrimaryModel = sModel
+		streamChain = append(streamChain, streamPM{sProv, sModel})
+	} else {
+		if _, ok := s.providers[sProv]; ok {
+			streamPrimaryModel = sProv
+			streamChain = append(streamChain, streamPM{sProv, sProv})
+		} else {
+			streamPrimaryModel = req.Model
+			for name := range s.providers {
+				streamChain = append(streamChain, streamPM{name, streamPrimaryModel})
+			}
+		}
+	}
+	for _, fb := range s.fallbacks {
+		fbProv, fbModel := splitModelSpec(fb)
+		if fbModel == "" {
+			if _, ok := s.providers[fbProv]; ok {
+				fbModel = streamPrimaryModel
+			} else {
+				continue
+			}
+		}
+		dup := false
+		for _, ex := range streamChain {
+			if ex.provider == fbProv && ex.model == fbModel {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			streamChain = append(streamChain, streamPM{fbProv, fbModel})
+		}
+	}
+	if len(streamChain) == 0 {
+		for name := range s.providers {
+			streamChain = append(streamChain, streamPM{name, req.Model})
+		}
 	}
 
-	providers := s.resolveProviderChain(providerHint)
-
-	for _, providerName := range providers {
-		client, ok := s.providers[providerName]
+	for _, pm := range streamChain {
+		client, ok := s.providers[pm.provider]
 		if !ok {
 			continue
 		}
 
-		cb := s.breakers.Get(providerName)
+		cb := s.breakers.Get(pm.provider)
 		if !cb.Allow() {
 			continue
 		}
 
-		chunks, errs := client.Stream(ctx, req)
+		// Set the correct model for this provider.
+		streamReq := *req
+		streamReq.Model = pm.model
+		chunks, errs := client.Stream(ctx, &streamReq)
 
 		// Wrap to track circuit breaker state and cache the full response.
-		outChunks, outErrs := s.wrapStreamBreaker(ctx, chunks, errs, cb, providerName)
+		outChunks, outErrs := s.wrapStreamBreaker(ctx, chunks, errs, cb, pm.provider)
 		outChunks = s.wrapStreamCache(ctx, outChunks, req)
 		return outChunks, outErrs
 	}
@@ -287,6 +421,58 @@ func (s *Service) Stream(ctx context.Context, req *Request) (<-chan StreamChunk,
 	errs <- core.NewError(core.ErrLLM, "no providers available for streaming")
 	close(errs)
 	return chunks, errs
+}
+
+// IntentQuality returns the intent-class quality tracker for external access.
+func (s *Service) IntentQuality() *IntentQualityTracker {
+	if s == nil {
+		return nil
+	}
+	return s.intentQuality
+}
+
+// Quality returns the quality tracker for external access (e.g., startup seeding).
+func (s *Service) Quality() *QualityTracker {
+	if s == nil {
+		return nil
+	}
+	return s.quality
+}
+
+// Latency returns the latency tracker for external access.
+func (s *Service) Latency() *LatencyTracker {
+	if s == nil {
+		return nil
+	}
+	return s.latency
+}
+
+// SeedStartup warms both quality and latency trackers from DB history.
+// Called once at daemon startup.
+func (s *Service) SeedStartup(ctx context.Context, store *db.Store) {
+	if s == nil {
+		return
+	}
+	if s.quality != nil {
+		s.quality.SeedFromHistory(ctx, store)
+	}
+	if s.latency != nil {
+		s.latency.SeedFromHistory(ctx, store)
+	}
+
+	// Log cold-start models that may need baselining.
+	models := []string{s.primary}
+	models = append(models, s.fallbacks...)
+	for _, m := range models {
+		if m == "" {
+			continue
+		}
+		hasQ := s.quality != nil && s.quality.HasObservations(m)
+		hasL := s.latency != nil && s.latency.HasObservations(m)
+		if !hasQ && !hasL {
+			log.Info().Str("model", m).Msg("model has no performance data — run 'roboticus models exercise' to baseline it")
+		}
+	}
 }
 
 // ResetQualityScores clears metascore quality observations. When model is empty,
@@ -360,9 +546,10 @@ func (s *Service) wrapStreamBreaker(ctx context.Context, in <-chan StreamChunk, 
 	return out, outErrs
 }
 
-// resolveProviderChain returns the ordered list of providers to try.
 // splitModelSpec parses "provider/model" format into (provider, model).
-// If there's no slash, returns (spec, "") — the spec is treated as a provider name.
+// If there's no slash, returns (spec, "") — the full spec as provider, empty model.
+// Callers must check whether the returned "provider" is actually a registered
+// provider name or a bare model name (see completeWithFallback for the pattern).
 func splitModelSpec(spec string) (provider, model string) {
 	if i := strings.Index(spec, "/"); i >= 0 {
 		return spec[:i], spec[i+1:]
@@ -370,6 +557,10 @@ func splitModelSpec(spec string) (provider, model string) {
 	return spec, ""
 }
 
+// resolveProviderChain returns the ordered list of provider names to try.
+// Note: this returns a flat list of providers, NOT (provider, model) pairs.
+// For inference, use the chain-building logic in completeWithFallback/Stream
+// which properly pairs each provider with its correct model name.
 func (s *Service) resolveProviderChain(providerHint string) []string {
 	var chain []string
 
@@ -408,8 +599,25 @@ func (s *Service) resolveProviderChain(providerHint string) []string {
 	return chain
 }
 
+// CostMetadata holds additional metadata for cost recording.
+// Populated by the pipeline and passed through to recordCost.
+type CostMetadata struct {
+	TurnID    string
+	Latency   int64   // milliseconds
+	Quality   float64 // 0–1
+	Escalated bool
+	Cached    bool
+}
+
 // recordCost logs inference cost to the database for analytics.
+// Populates all Rust-parity fields: model, provider, tokens, cost,
+// latency_ms, quality_score, escalation, turn_id, cached.
 func (s *Service) recordCost(ctx context.Context, providerName string, resp *Response) {
+	s.recordCostWithMeta(ctx, providerName, resp, CostMetadata{})
+}
+
+// recordCostWithMeta logs inference cost with full metadata (Rust parity).
+func (s *Service) recordCostWithMeta(ctx context.Context, providerName string, resp *Response, meta CostMetadata) {
 	if s.store == nil {
 		return
 	}
@@ -420,12 +628,22 @@ func (s *Service) recordCost(ctx context.Context, providerName string, resp *Res
 	}
 
 	cost := resp.Usage.Cost(client.provider)
+	escalated := 0
+	if meta.Escalated {
+		escalated = 1
+	}
+	cached := 0
+	if meta.Cached {
+		cached = 1
+	}
 	_, _ = s.store.ExecContext(ctx,
-		`INSERT INTO inference_costs (id, model, provider, tokens_in, tokens_out, cost, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, datetime('now'))`,
+		`INSERT INTO inference_costs (id, model, provider, tokens_in, tokens_out, cost,
+		 latency_ms, quality_score, escalation, turn_id, cached, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
 		fmt.Sprintf("%s-%d", resp.ID, resp.Usage.OutputTokens),
 		resp.Model, providerName,
 		resp.Usage.InputTokens, resp.Usage.OutputTokens, cost,
+		meta.Latency, meta.Quality, escalated, meta.TurnID, cached,
 	)
 }
 
@@ -438,7 +656,8 @@ func contains(slice []string, s string) bool {
 	return false
 }
 
-func modelSpecForTarget(target RouteTarget) string {
+// ModelSpecForTarget formats a RouteTarget as a "provider/model" spec string.
+func ModelSpecForTarget(target RouteTarget) string {
 	if target.Provider != "" && target.Model != "" && !strings.Contains(target.Model, "/") {
 		return target.Provider + "/" + target.Model
 	}
@@ -446,6 +665,25 @@ func modelSpecForTarget(target RouteTarget) string {
 		return target.Model
 	}
 	return target.Provider
+}
+
+// RecordModelSelection persists a model selection event to the database.
+// Matches Rust's record_model_selection_event.
+func (s *Service) RecordModelSelection(ctx context.Context, turnID, sessionID, agentID, channel, selectedModel, strategy, userExcerpt string) {
+	if s.store == nil {
+		return
+	}
+	primary := s.primary
+	excerpt := userExcerpt
+	if len(excerpt) > 200 {
+		excerpt = excerpt[:200]
+	}
+	_, _ = s.store.ExecContext(ctx,
+		`INSERT INTO model_selection_events (id, turn_id, session_id, agent_id, channel, selected_model, strategy, primary_model, user_excerpt, candidates_json, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', datetime('now'))`,
+		fmt.Sprintf("mse-%s", turnID), turnID, sessionID, agentID, channel,
+		selectedModel, strategy, primary, excerpt,
+	)
 }
 
 // ProviderStatus reports the health of each configured provider.
@@ -479,6 +717,11 @@ func (s *Service) ForceOpenBreaker(providerName string) error {
 // Router returns the service's model router for external use (e.g., routing eval).
 func (s *Service) Router() *Router {
 	return s.router
+}
+
+// Primary returns the configured primary model name.
+func (s *Service) Primary() string {
+	return s.primary
 }
 
 // Status returns the health of all providers (for /api/health).

@@ -12,9 +12,7 @@ import (
 func GetWalletBalance(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Read cached balances from wallet_balances table.
-		rows, err := store.QueryContext(r.Context(),
-			`SELECT symbol, name, balance, contract, decimals, is_native, updated_at
-			 FROM wallet_balances ORDER BY symbol`)
+		rows, err := db.NewRouteQueries(store).ListWalletBalances(r.Context())
 		if err != nil {
 			// Table may not exist yet — return empty.
 			writeJSON(w, http.StatusOK, map[string]any{
@@ -66,8 +64,7 @@ func GetWalletBalance(store *db.Store) http.HandlerFunc {
 func GetWalletAddress(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var address string
-		row := store.QueryRowContext(r.Context(),
-			`SELECT value FROM identity WHERE key = 'wallet_address'`)
+		row := db.NewRouteQueries(store).GetIdentityValue(r.Context(), "wallet_address")
 		if err := row.Scan(&address); err != nil {
 			if err != sql.ErrNoRows {
 				writeError(w, http.StatusInternalServerError, "failed to query wallet address")
@@ -83,61 +80,33 @@ func GetWalletAddress(store *db.Store) http.HandlerFunc {
 	}
 }
 
-// GetSwaps returns swap service tasks from service_requests.
+// GetSwaps returns swap service tasks via repository.
 func GetSwaps(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		rows, err := store.QueryContext(r.Context(),
-			`SELECT id, service_id, status, quoted_amount, currency, created_at
-			 FROM service_requests WHERE service_id LIKE '%swap%'
-			 ORDER BY created_at DESC LIMIT 20`)
+		svcRepo := db.NewServiceRequestsRepository(store)
+		tasks, err := svcRepo.ListByServicePattern(r.Context(), "%swap%", 20)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to query swap tasks")
 			return
 		}
-		defer func() { _ = rows.Close() }()
-
-		tasks := make([]map[string]any, 0)
-		for rows.Next() {
-			var id, serviceID, status, currency, createdAt string
-			var amount float64
-			if err := rows.Scan(&id, &serviceID, &status, &amount, &currency, &createdAt); err != nil {
-				writeError(w, http.StatusInternalServerError, "failed to read swap task row")
-				return
-			}
-			tasks = append(tasks, map[string]any{
-				"id": id, "service_id": serviceID, "status": status,
-				"amount": amount, "currency": currency, "created_at": createdAt,
-			})
+		if tasks == nil {
+			tasks = []map[string]any{}
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"swap_tasks": tasks})
 	}
 }
 
-// GetTaxPayouts returns tax payout tasks from service_requests.
+// GetTaxPayouts returns tax payout tasks via repository.
 func GetTaxPayouts(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		rows, err := store.QueryContext(r.Context(),
-			`SELECT id, service_id, status, quoted_amount, currency, created_at
-			 FROM service_requests WHERE service_id LIKE '%tax%'
-			 ORDER BY created_at DESC LIMIT 20`)
+		svcRepo := db.NewServiceRequestsRepository(store)
+		tasks, err := svcRepo.ListByServicePattern(r.Context(), "%tax%", 20)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to query tax tasks")
 			return
 		}
-		defer func() { _ = rows.Close() }()
-
-		tasks := make([]map[string]any, 0)
-		for rows.Next() {
-			var id, serviceID, status, currency, createdAt string
-			var amount float64
-			if err := rows.Scan(&id, &serviceID, &status, &amount, &currency, &createdAt); err != nil {
-				writeError(w, http.StatusInternalServerError, "failed to read tax task row")
-				return
-			}
-			tasks = append(tasks, map[string]any{
-				"id": id, "service_id": serviceID, "status": status,
-				"amount": amount, "currency": currency, "created_at": createdAt,
-			})
+		if tasks == nil {
+			tasks = []map[string]any{}
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"tax_tasks": tasks})
 	}

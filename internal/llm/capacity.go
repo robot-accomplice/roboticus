@@ -172,6 +172,46 @@ func (ct *CapacityTracker) IsSustainedHot(provider string) bool {
 	return maxUtil >= sustainedHotThreshold
 }
 
+// CapacityUtilizationStats holds a snapshot of a single provider's capacity usage.
+type CapacityUtilizationStats struct {
+	Provider    string  `json:"provider"`
+	RPMUsed     int     `json:"rpm_used"`
+	RPMLimit    int     `json:"rpm_limit"`
+	TPMUsed     int     `json:"tpm_used"`
+	TPMLimit    int     `json:"tpm_limit"`
+	Utilization float64 `json:"utilization"` // max of RPM and TPM utilization (0-1)
+}
+
+// UtilizationStats returns a snapshot of capacity utilization for all tracked providers.
+func (ct *CapacityTracker) UtilizationStats() []CapacityUtilizationStats {
+	ct.mu.RLock()
+	defer ct.mu.RUnlock()
+
+	cutoff := ct.nowFunc().Add(-windowDuration)
+	stats := make([]CapacityUtilizationStats, 0, len(ct.providers))
+
+	for name, pw := range ct.providers {
+		rpm, tpm := pw.usageSince(cutoff)
+
+		rpmUtil := utilization(rpm, pw.rpmLimit)
+		tpmUtil := utilization(tpm, pw.tpmLimit)
+		maxUtil := rpmUtil
+		if tpmUtil > maxUtil {
+			maxUtil = tpmUtil
+		}
+
+		stats = append(stats, CapacityUtilizationStats{
+			Provider:    name,
+			RPMUsed:     rpm,
+			RPMLimit:    pw.rpmLimit,
+			TPMUsed:     tpm,
+			TPMLimit:    pw.tpmLimit,
+			Utilization: maxUtil,
+		})
+	}
+	return stats
+}
+
 // ---------- internal helpers ----------
 
 // getOrCreate returns the providerWindow for the given provider, creating one

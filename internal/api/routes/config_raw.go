@@ -11,8 +11,7 @@ import (
 // GetConfigRaw returns the raw TOML config file content as text/plain.
 func GetConfigRaw() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		path := core.ConfigFilePath()
-		data, err := os.ReadFile(path)
+		data, err := core.ReadConfigRaw()
 		if err != nil {
 			if os.IsNotExist(err) {
 				writeError(w, http.StatusNotFound, "config file not found")
@@ -30,8 +29,6 @@ func GetConfigRaw() http.HandlerFunc {
 // UpdateConfigRaw writes new TOML content to the config file.
 func UpdateConfigRaw() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		path := core.ConfigFilePath()
-
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "failed to read request body")
@@ -42,10 +39,11 @@ func UpdateConfigRaw() http.HandlerFunc {
 			return
 		}
 
-		if err := os.WriteFile(path, body, 0o644); err != nil {
+		writtenPath, err := core.WriteConfigRaw(body)
+		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]string{"status": "updated", "path": path})
+		writeJSON(w, http.StatusOK, map[string]string{"status": "updated", "path": writtenPath})
 	}
 }

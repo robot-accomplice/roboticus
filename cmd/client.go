@@ -137,8 +137,105 @@ func apiDelete(path string) error {
 	return nil
 }
 
-// printJSON pretty-prints a map as JSON.
+// printJSON pretty-prints data as JSON. Respects --quiet (suppresses output)
+// and --json (compact single-line output for piping).
 func printJSON(data any) {
+	if viper.GetBool("quiet") {
+		return
+	}
+	if viper.GetBool("json") {
+		b, _ := json.Marshal(data)
+		fmt.Println(string(b))
+		return
+	}
 	b, _ := json.MarshalIndent(data, "", "  ")
 	fmt.Println(string(b))
+}
+
+// outputResult is the unified output function that respects --json and --quiet flags.
+// All commands should use this instead of raw fmt.Println/printJSON.
+//
+//   - With --json: outputs json.Marshal(data)
+//   - With --quiet: suppresses all non-error output
+//   - Otherwise: calls the humanFn to produce formatted human-readable output
+//
+// The humanFn receives the data and should print it. If humanFn is nil,
+// printJSON is used as the default.
+func outputResult(data any, humanFn func(any)) {
+	if viper.GetBool("quiet") {
+		return
+	}
+	if viper.GetBool("json") {
+		b, err := json.Marshal(data)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "JSON encode error: %v\n", err)
+			return
+		}
+		fmt.Println(string(b))
+		return
+	}
+	if humanFn != nil {
+		humanFn(data)
+	} else {
+		printJSON(data)
+	}
+}
+
+// outputTable prints a simple table. Used by commands that list items.
+func outputTable(headers []string, rows [][]string) {
+	if viper.GetBool("quiet") {
+		return
+	}
+	if viper.GetBool("json") {
+		var items []map[string]string
+		for _, row := range rows {
+			item := make(map[string]string)
+			for i, h := range headers {
+				if i < len(row) {
+					item[h] = row[i]
+				}
+			}
+			items = append(items, item)
+		}
+		b, _ := json.Marshal(items)
+		fmt.Println(string(b))
+		return
+	}
+
+	// Calculate column widths.
+	widths := make([]int, len(headers))
+	for i, h := range headers {
+		widths[i] = len(h)
+	}
+	for _, row := range rows {
+		for i, cell := range row {
+			if i < len(widths) && len(cell) > widths[i] {
+				widths[i] = len(cell)
+			}
+		}
+	}
+
+	// Print header.
+	for i, h := range headers {
+		fmt.Printf("%-*s  ", widths[i], strings.ToUpper(h))
+	}
+	fmt.Println()
+
+	// Print rows.
+	for _, row := range rows {
+		for i, cell := range row {
+			if i < len(widths) {
+				fmt.Printf("%-*s  ", widths[i], cell)
+			}
+		}
+		fmt.Println()
+	}
+}
+
+// outputMessage prints a simple message, respecting --quiet.
+func outputMessage(format string, args ...any) {
+	if viper.GetBool("quiet") {
+		return
+	}
+	fmt.Printf(format+"\n", args...)
 }

@@ -19,11 +19,24 @@ type BranchResult struct {
 }
 
 type SpeculativeExecutor struct {
-	timeout time.Duration
+	timeout     time.Duration
+	slotMu      sync.Mutex
+	activeSlots int
+	maxSlots    int
 }
 
+// NewSpeculativeExecutor creates an executor with the given timeout and a
+// default maximum of 4 concurrent speculation slots.
 func NewSpeculativeExecutor(timeout time.Duration) *SpeculativeExecutor {
-	return &SpeculativeExecutor{timeout: timeout}
+	return &SpeculativeExecutor{timeout: timeout, maxSlots: 4}
+}
+
+// NewSpeculativeExecutorWithSlots creates an executor with explicit slot limit.
+func NewSpeculativeExecutorWithSlots(timeout time.Duration, maxSlots int) *SpeculativeExecutor {
+	if maxSlots <= 0 {
+		maxSlots = 4
+	}
+	return &SpeculativeExecutor{timeout: timeout, maxSlots: maxSlots}
 }
 
 func (se *SpeculativeExecutor) EvaluateBranches(ctx context.Context, branches []Branch) []BranchResult {

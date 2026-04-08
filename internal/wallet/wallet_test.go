@@ -75,6 +75,29 @@ func TestTreasuryPolicy(t *testing.T) {
 	}
 }
 
+func TestValidateAddress(t *testing.T) {
+	tests := []struct {
+		addr    string
+		wantErr bool
+	}{
+		{"0x742d35Cc6634C0532925a3b844Bc9e7595f2bD18", false},
+		{"0x0000000000000000000000000000000000000000", false},
+		{"0xABCDEF1234567890ABCDEF1234567890ABCDEF12", false},
+		{"", true},      // too short
+		{"0x123", true}, // too short
+		{"742d35Cc6634C0532925a3b844Bc9e7595f2bD18", true},    // no 0x prefix
+		{"0xGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG", true},  // non-hex chars
+		{"0x742d35Cc6634C0532925a3b844Bc9e7595f2bD1", true},   // 41 chars (too short)
+		{"0x742d35Cc6634C0532925a3b844Bc9e7595f2bD18a", true}, // 43 chars (too long)
+	}
+	for _, tc := range tests {
+		err := ValidateAddress(tc.addr)
+		if (err != nil) != tc.wantErr {
+			t.Errorf("ValidateAddress(%q) error = %v, wantErr = %v", tc.addr, err, tc.wantErr)
+		}
+	}
+}
+
 func TestYieldEngine(t *testing.T) {
 	y := NewYieldEngine(YieldConfig{
 		Enabled:             true,

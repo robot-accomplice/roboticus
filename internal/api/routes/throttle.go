@@ -12,25 +12,18 @@ func GetThrottleStats(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		hours := parseIntParam(r, "hours", 24)
+		offset := intToNegStr(hours)
+		rq := db.NewRouteQueries(store)
 
 		// Total events in window.
-		var totalEvents int64
-		row := store.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM abuse_events
-			 WHERE created_at >= datetime('now', ? || ' hours')`,
-			intToNegStr(hours))
-		if err := row.Scan(&totalEvents); err != nil {
+		totalEvents, err := rq.AbuseSummary(ctx, offset)
+		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to query throttle totals")
 			return
 		}
 
 		// Events by signal type.
-		typeRows, err := store.QueryContext(ctx,
-			`SELECT signal_type, COUNT(*), COALESCE(AVG(score), 0)
-			 FROM abuse_events
-			 WHERE created_at >= datetime('now', ? || ' hours')
-			 GROUP BY signal_type ORDER BY COUNT(*) DESC`,
-			intToNegStr(hours))
+		typeRows, err := rq.AbuseByType(ctx, offset)
 		byType := make([]map[string]any, 0)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to query throttle signal types")
@@ -51,12 +44,7 @@ func GetThrottleStats(store *db.Store) http.HandlerFunc {
 		}
 
 		// Top offending actors.
-		actorRows, err := store.QueryContext(ctx,
-			`SELECT actor_id, COUNT(*), COALESCE(SUM(score), 0), MAX(action_taken)
-			 FROM abuse_events
-			 WHERE created_at >= datetime('now', ? || ' hours')
-			 GROUP BY actor_id ORDER BY SUM(score) DESC LIMIT 10`,
-			intToNegStr(hours))
+		actorRows, err := rq.AbuseByActor(ctx, offset)
 		topActors := make([]map[string]any, 0)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to query throttle actors")
@@ -78,14 +66,8 @@ func GetThrottleStats(store *db.Store) http.HandlerFunc {
 		}
 
 		// Active penalties.
-		var slowdownCount, quarantineCount int64
-		row = store.QueryRowContext(ctx,
-			`SELECT
-			   COALESCE(SUM(CASE WHEN action_taken = 'slowdown' THEN 1 ELSE 0 END), 0),
-			   COALESCE(SUM(CASE WHEN action_taken = 'quarantine' THEN 1 ELSE 0 END), 0)
-			 FROM abuse_events
-			 WHERE created_at >= datetime('now', '-5 minutes')`)
-		if err := row.Scan(&slowdownCount, &quarantineCount); err != nil {
+		slowdownCount, quarantineCount, err := rq.RateLimitCurrent(ctx)
+		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to query active throttle penalties")
 			return
 		}

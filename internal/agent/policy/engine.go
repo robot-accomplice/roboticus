@@ -3,6 +3,7 @@ package policy
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -35,9 +36,10 @@ func Deny(rule, reason string) DecisionResult {
 
 // ToolCallRequest represents a tool invocation for policy evaluation.
 type ToolCallRequest struct {
-	ToolName  string
-	Arguments string // raw JSON
-	Authority core.AuthorityLevel
+	ToolName      string
+	Arguments     string // raw JSON
+	Authority     core.AuthorityLevel
+	SecurityClaim *core.SecurityClaim // optional; when set, rules can inspect the full claim
 }
 
 // Rule is the interface for individual policy checks.
@@ -50,6 +52,7 @@ type Rule interface {
 // Engine evaluates tool calls against a chain of rules.
 // Rules are evaluated in priority order; first denial wins.
 type Engine struct {
+	mu    sync.RWMutex
 	rules []Rule
 }
 
@@ -85,9 +88,42 @@ func DefaultConfig() Config {
 	}
 }
 
+// RegisterDynamic inserts a rule in priority-sorted order. Rules with lower
+// priority values are evaluated first. Thread-safe.
+func (pe *Engine) RegisterDynamic(rule Rule, priority int) {
+	pe.mu.Lock()
+	defer pe.mu.Unlock()
+
+	// Wrap if the rule's own Priority() disagrees with the explicit priority arg.
+	wrapped := &priorityOverrideRule{inner: rule, priority: priority}
+
+	// Find insertion point to keep sorted by priority ascending.
+	idx := sort.Search(len(pe.rules), func(i int) bool {
+		return pe.rules[i].Priority() > priority
+	})
+
+	pe.rules = append(pe.rules, nil)
+	copy(pe.rules[idx+1:], pe.rules[idx:])
+	pe.rules[idx] = wrapped
+}
+
+// Rules returns a snapshot of currently registered rules (for testing/inspection).
+func (pe *Engine) Rules() []Rule {
+	pe.mu.RLock()
+	defer pe.mu.RUnlock()
+	out := make([]Rule, len(pe.rules))
+	copy(out, pe.rules)
+	return out
+}
+
 // Evaluate checks a tool call against all rules in priority order.
 func (pe *Engine) Evaluate(req *ToolCallRequest) DecisionResult {
-	for _, rule := range pe.rules {
+	pe.mu.RLock()
+	rules := make([]Rule, len(pe.rules))
+	copy(rules, pe.rules)
+	pe.mu.RUnlock()
+
+	for _, rule := range rules {
 		result := rule.Evaluate(req, nil)
 		if result.Denied() {
 			return result
@@ -98,7 +134,12 @@ func (pe *Engine) Evaluate(req *ToolCallRequest) DecisionResult {
 
 // EvaluateWithTools checks a tool call with access to the tool registry.
 func (pe *Engine) EvaluateWithTools(req *ToolCallRequest, reg *tools.Registry) DecisionResult {
-	for _, rule := range pe.rules {
+	pe.mu.RLock()
+	rules := make([]Rule, len(pe.rules))
+	copy(rules, pe.rules)
+	pe.mu.RUnlock()
+
+	for _, rule := range rules {
 		result := rule.Evaluate(req, reg)
 		if result.Denied() {
 			return result
@@ -292,6 +333,70 @@ func (r *validationRule) Evaluate(req *ToolCallRequest, _ *tools.Registry) Decis
 			return Deny("validation",
 				fmt.Sprintf("potential shell injection: %q found in arguments", pattern))
 		}
+	}
+
+	return Allow()
+}
+
+// --- priorityOverrideRule wraps a Rule with an explicit priority ---
+
+type priorityOverrideRule struct {
+	inner    Rule
+	priority int
+}
+
+func (r *priorityOverrideRule) Name() string  { return r.inner.Name() }
+func (r *priorityOverrideRule) Priority() int { return r.priority }
+func (r *priorityOverrideRule) Evaluate(req *ToolCallRequest, reg *tools.Registry) DecisionResult {
+	return r.inner.Evaluate(req, reg)
+}
+
+// --- Rule: Financial Drain Detection ---
+
+// drainPatterns are tool-call argument patterns that indicate an attempt to
+// drain a wallet or transfer all funds.
+var drainPatterns = []string{
+	"drain", "withdraw_all", "sweep", "transfer_all",
+	"empty_wallet", "max_amount", "send_all",
+}
+
+type financialDrainRule struct{}
+
+func (r *financialDrainRule) Name() string  { return "financial_drain" }
+func (r *financialDrainRule) Priority() int { return 3 } // same tier as financial rule
+
+// CheckFinancialDrain scans a tool call request for drain/withdraw-all patterns
+// in both the tool name and its arguments. Returns a denial if detected.
+func CheckFinancialDrain(req *ToolCallRequest) DecisionResult {
+	r := &financialDrainRule{}
+	return r.Evaluate(req, nil)
+}
+
+func (r *financialDrainRule) Evaluate(req *ToolCallRequest, _ *tools.Registry) DecisionResult {
+	// Check tool name.
+	lowerTool := strings.ToLower(req.ToolName)
+	for _, pattern := range drainPatterns {
+		if strings.Contains(lowerTool, pattern) {
+			return Deny("financial_drain",
+				fmt.Sprintf("tool name %q matches drain pattern %q", req.ToolName, pattern))
+		}
+	}
+
+	// Check arguments (raw JSON string scan).
+	lowerArgs := strings.ToLower(req.Arguments)
+	for _, pattern := range drainPatterns {
+		if strings.Contains(lowerArgs, pattern) {
+			return Deny("financial_drain",
+				fmt.Sprintf("arguments contain drain pattern %q", pattern))
+		}
+	}
+
+	// Check for percentage-based drains (100% or "all").
+	if strings.Contains(lowerArgs, `"percentage":100`) ||
+		strings.Contains(lowerArgs, `"percentage": 100`) ||
+		strings.Contains(lowerArgs, `"amount":"all"`) ||
+		strings.Contains(lowerArgs, `"amount": "all"`) {
+		return Deny("financial_drain", "arguments indicate full-balance drain")
 	}
 
 	return Allow()

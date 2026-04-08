@@ -704,3 +704,348 @@ Use these diagrams to verify the implementation:
 | **Sequence: Failover** | Circuit breaker is checked before each provider attempt |
 | **Sequence: Injection** | Blocked requests never create sessions or call the LLM |
 | **Sequence: Policy** | Rules evaluate in priority order; first denial stops chain |
+| **Flowchart: SecurityClaim** | Claims compose correctly from balance + context + policy |
+| **Sequence: Guard Chain** | Pre-computation → chain → verdict → retry matches implementation |
+| **Flowchart: Memory Consolidation** | All 6 phases execute in order with correct gating |
+| **Diagram: Distributed Heartbeat** | Leader election, lease renewal, and failover work correctly |
+
+---
+
+## Flowchart: SecurityClaim Composition
+
+> **Not a C4 view** — shows how SecurityClaim values are assembled from runtime inputs.
+
+How does the system compute a SecurityClaim for a given request?
+
+```mermaid
+flowchart TB
+    subgraph Inputs["Runtime Inputs"]
+        Balance["Wallet Balance\n(from DB cache)"]
+        Session["Session Context\n(authority, channel, history)"]
+        Config["Security Config\n(thresholds, overrides)"]
+    end
+
+    subgraph TierCalc["Survival Tier Calculation"]
+        BalCheck{"Balance >= threshold?"}
+        Tier0["Tier 0: Critical\n< $1 USDC"]
+        Tier1["Tier 1: Survival\n$1 - $10"]
+        Tier2["Tier 2: Operational\n$10 - $100"]
+        Tier3["Tier 3: Comfortable\n> $100"]
+    end
+
+    subgraph ClaimAssembly["Claim Assembly"]
+        ThreatScore["Injection ThreatScore\nfrom L1-L4 scan"]
+        Authority["Authority Level\nExternal / SelfGenerated\n/ Creator / System"]
+        ToolRisk["Tool Risk Class\nSafe / Caution\n/ Dangerous / Critical"]
+        Compose["Compose SecurityClaim"]
+    end
+
+    subgraph Claims["SecurityClaim Values"]
+        Trusted["Trusted\nhigh authority + low threat\n+ sufficient balance"]
+        Standard["Standard\nmoderate authority\n+ clean injection scan"]
+        Restricted["Restricted\nlow authority OR\nelevated threat score"]
+        Quarantined["Quarantined\ninjection detected OR\ncritical balance"]
+        Elevated["Elevated\nadmin override OR\nsystem-initiated"]
+        Probation["Probation\npost-violation\nmonitoring period"]
+    end
+
+    subgraph Effect["Policy Effect"]
+        PolicyEval["Policy Engine\nevaluates claim\nagainst tool request"]
+        Allow["ALLOW\ntool execution proceeds"]
+        Deny["DENY\ntool blocked + reason logged"]
+        Escalate["ESCALATE\nrequires approval"]
+    end
+
+    Balance --> BalCheck
+    BalCheck -->|"< $1"| Tier0
+    BalCheck -->|"$1-$10"| Tier1
+    BalCheck -->|"$10-$100"| Tier2
+    BalCheck -->|"> $100"| Tier3
+
+    Session --> Authority
+    Session --> ThreatScore
+    Config --> ToolRisk
+
+    Tier0 --> Compose
+    Tier1 --> Compose
+    Tier2 --> Compose
+    Tier3 --> Compose
+    ThreatScore --> Compose
+    Authority --> Compose
+    ToolRisk --> Compose
+
+    Compose --> Trusted
+    Compose --> Standard
+    Compose --> Restricted
+    Compose --> Quarantined
+    Compose --> Elevated
+    Compose --> Probation
+
+    Trusted --> PolicyEval
+    Standard --> PolicyEval
+    Restricted --> PolicyEval
+    Quarantined --> PolicyEval
+    Elevated --> PolicyEval
+    Probation --> PolicyEval
+
+    PolicyEval --> Allow
+    PolicyEval --> Deny
+    PolicyEval --> Escalate
+
+    style Quarantined fill:#f66,stroke:#333
+    style Deny fill:#f66,stroke:#333
+    style Trusted fill:#6f6,stroke:#333
+    style Allow fill:#6f6,stroke:#333
+    style Escalate fill:#ff6,stroke:#333
+```
+
+---
+
+## Sequence Diagram: Guard Chain Execution
+
+> **Not a C4 view** — interaction timeline for the guard chain during inference.
+
+How does the guard chain evaluate model output and handle retry on rejection?
+
+```mermaid
+sequenceDiagram
+    participant Agent as ReAct Loop
+    participant GCtx as Guard Context Builder
+    participant Chain as Guard Chain
+    participant Pre as Pre-Computation Guards
+    participant Config as ConfigProtectionGuard
+    participant FS as FilesystemDenialGuard
+    participant Exec as ExecutionBlockGuard
+    participant Output as Output Guards
+    participant Leak as SystemPromptLeakGuard
+    participant Content as ContentClassificationGuard
+    participant Rep as RepetitionGuard
+    participant Verdict as Verdict Assembler
+    participant LLM as LLM Pipeline
+
+    Agent->>GCtx: buildGuardContext(session, response)
+    GCtx-->>Agent: GuardContext (session + response + history hash)
+
+    Agent->>Chain: ApplyFullWithContext(ctx, response)
+
+    rect rgb(255, 245, 235)
+    Note over Chain,Exec: Phase 1: Pre-Computation Guards
+        Chain->>Pre: Run pre-computation guards
+        Pre->>Config: Check for config mutation attempts
+        Config-->>Pre: Pass
+        Pre->>FS: Check path access patterns
+        FS-->>Pre: Pass
+        Pre->>Exec: Check execution authority
+        Exec-->>Pre: Pass
+        Pre-->>Chain: All pre-computation guards pass
+    end
+
+    rect rgb(235, 245, 255)
+    Note over Chain,Rep: Phase 2: Output Guards
+        Chain->>Output: Run output guards
+        Output->>Leak: Scan for system prompt fragments
+        Leak-->>Output: Pass
+        Output->>Content: Classify content safety
+        Content-->>Output: Violation: unsafe content detected
+        Note over Content: Violation accumulated (not short-circuit)
+        Output->>Rep: Check repetition patterns
+        Rep-->>Output: Pass
+        Output-->>Chain: 1 violation accumulated
+    end
+
+    Chain->>Verdict: Assemble verdict from all violations
+    Verdict-->>Chain: GuardVerdict{Retry, directive="rephrase without unsafe content"}
+
+    Chain-->>Agent: GuardVerdict = Retry
+
+    rect rgb(245, 255, 245)
+    Note over Agent,LLM: Retry Phase (max 1 retry)
+        Agent->>Agent: Inject retry directive into context
+        Agent->>LLM: Complete(ctx, request + directive)
+        LLM-->>Agent: Revised response
+
+        Agent->>Chain: ApplyFullWithContext(ctx, revised)
+        Chain->>Pre: Re-run pre-computation guards
+        Pre-->>Chain: Pass
+        Chain->>Output: Re-run output guards
+        Output-->>Chain: Pass
+        Chain->>Verdict: Assemble verdict
+        Verdict-->>Chain: GuardVerdict{Pass}
+        Chain-->>Agent: GuardVerdict = Pass
+    end
+
+    Agent->>Agent: Proceed with approved response
+```
+
+---
+
+## Flowchart: Memory Consolidation Pipeline
+
+> **Not a C4 view** — shows the 6-phase consolidation lifecycle.
+
+How do memories flow through the consolidation pipeline from intake to archive?
+
+```mermaid
+flowchart TB
+    subgraph Trigger["Consolidation Trigger"]
+        Timer["Periodic Timer\n(default: 1h)"]
+        Manual["Manual Trigger\n(/memory consolidate)"]
+        Quiesce{"Quiescence Gate\nidle period met?"}
+    end
+
+    subgraph Phase0["Phase 0: Intake"]
+        Ingest["Accept raw memories\nfrom post-turn ingest"]
+        Classify["Classify tier:\nworking / episodic\nsemantic / procedural\nrelationship"]
+        Dedup0["Within-tier dedup\ncosine similarity > 0.95"]
+    end
+
+    subgraph Phase1["Phase 1: Scoring"]
+        Relevance["Compute relevance score\n(recency + access count\n+ connection strength)"]
+        Decay["Apply episodic decay\ntime-weighted exponential"]
+        DecayGate{"Decay below\nmin floor?"}
+        Preserve["Preserve with\nfloor relevance"]
+    end
+
+    subgraph Phase2["Phase 2: Merge"]
+        Candidates["Find merge candidates\nsimilarity > 0.85\nsame tier"]
+        Merge["Merge overlapping memories\npreserve highest-value content"]
+        Reembed["Re-generate embeddings\nfor merged entries"]
+    end
+
+    subgraph Phase3["Phase 3: Promote / Demote"]
+        AccessCheck{"Access count\n> promotion threshold?"}
+        Promote["Promote tier:\nworking → episodic\nepisodic → semantic"]
+        Demote["Demote tier:\nlow relevance entries\nmove down"]
+        PriorityAdj["Adjust priority\non access pattern"]
+    end
+
+    subgraph Phase4["Phase 4: Compact & Archive"]
+        ProcDetect{"Procedure\ndetected?"}
+        ProcStep["Extract ProcedureSteps\nwith ordinals"]
+        Compact["CompactBeforeArchive\ncompress content"]
+        Archive["Move to archival tier\nwith compressed payload"]
+    end
+
+    subgraph Phase5["Phase 5: Cleanup"]
+        Prune["Prune orphaned embeddings"]
+        Reindex["Rebuild FTS5 index\nif schema changed"]
+        Stats["Emit consolidation stats\nto event bus"]
+    end
+
+    Timer --> Quiesce
+    Manual --> Quiesce
+    Quiesce -->|"no"| Timer
+    Quiesce -->|"yes"| Ingest
+
+    Ingest --> Classify
+    Classify --> Dedup0
+
+    Dedup0 --> Relevance
+    Relevance --> Decay
+    Decay --> DecayGate
+    DecayGate -->|"yes"| Preserve
+    DecayGate -->|"no"| Candidates
+    Preserve --> Candidates
+
+    Candidates --> Merge
+    Merge --> Reembed
+
+    Reembed --> AccessCheck
+    AccessCheck -->|"high"| Promote
+    AccessCheck -->|"low"| Demote
+    AccessCheck -->|"normal"| PriorityAdj
+    Promote --> PriorityAdj
+    Demote --> PriorityAdj
+
+    PriorityAdj --> ProcDetect
+    ProcDetect -->|"yes"| ProcStep
+    ProcDetect -->|"no"| Compact
+    ProcStep --> Compact
+    Compact --> Archive
+
+    Archive --> Prune
+    Prune --> Reindex
+    Reindex --> Stats
+
+    style Phase0 fill:#e8f4fd,stroke:#333
+    style Phase1 fill:#e8f4fd,stroke:#333
+    style Phase2 fill:#e8f4fd,stroke:#333
+    style Phase3 fill:#e8f4fd,stroke:#333
+    style Phase4 fill:#e8f4fd,stroke:#333
+    style Phase5 fill:#e8f4fd,stroke:#333
+    style Preserve fill:#ff6,stroke:#333
+```
+
+---
+
+## Diagram: Distributed Heartbeat Architecture
+
+> **Not a C4 view** — shows multi-instance heartbeat with leader election.
+
+How do multiple Roboticus instances coordinate via distributed heartbeat?
+
+```mermaid
+flowchart TB
+    subgraph Instance1["Instance A (Leader)"]
+        HB_A["Heartbeat Daemon"]
+        Lease_A["Holds Leader Lease\nexpires_at = now + 30s"]
+        Cron_A["Runs Cron Jobs"]
+        Sched_A["Runs Scheduled Tasks"]
+    end
+
+    subgraph Instance2["Instance B (Follower)"]
+        HB_B["Heartbeat Daemon"]
+        Watch_B["Watches Leader Lease"]
+        Standby_B["Standby Mode\n(no cron execution)"]
+    end
+
+    subgraph Instance3["Instance C (Follower)"]
+        HB_C["Heartbeat Daemon"]
+        Watch_C["Watches Leader Lease"]
+        Standby_C["Standby Mode\n(no cron execution)"]
+    end
+
+    subgraph SharedDB["Shared SQLite (WAL mode)"]
+        LeaseRow["heartbeat_leases table\nholder | expires_at | instance_id"]
+        CronTable["cron_jobs table\nlease_holder | lease_expires_at"]
+    end
+
+    subgraph LeaderElection["Leader Election Protocol"]
+        Acquire{"Atomic UPDATE\nSET holder = me\nWHERE expires_at < now\nOR holder = me"}
+        Renew["Renew lease\nSET expires_at = now + 30s"]
+        Failover["Lease expired\nfollower acquires"]
+    end
+
+    HB_A -->|"every 10s"| Renew
+    Renew --> LeaseRow
+    HB_A --> Cron_A
+    HB_A --> Sched_A
+    Cron_A --> CronTable
+
+    HB_B -->|"every 10s"| Watch_B
+    Watch_B -->|"check lease"| LeaseRow
+    Watch_B -->|"leader alive"| Standby_B
+
+    HB_C -->|"every 10s"| Watch_C
+    Watch_C -->|"check lease"| LeaseRow
+    Watch_C -->|"leader alive"| Standby_C
+
+    LeaseRow -->|"lease expired"| Failover
+    Failover --> Acquire
+    Acquire -->|"Instance B wins"| HB_B
+
+    style Instance1 fill:#d4edda,stroke:#333
+    style Instance2 fill:#e8e8e8,stroke:#333
+    style Instance3 fill:#e8e8e8,stroke:#333
+    style SharedDB fill:#fff3cd,stroke:#333
+    style Failover fill:#f8d7da,stroke:#333
+```
+
+**How it works:**
+
+1. On startup, each instance attempts to acquire the leader lease via atomic UPDATE
+2. The winner becomes leader and runs cron jobs and scheduled tasks
+3. The leader renews its lease every 10 seconds (lease TTL = 30 seconds)
+4. Followers poll the lease row every 10 seconds; if expired, they attempt acquisition
+5. Only one instance can hold the lease at a time (SQLite WAL serializes the UPDATE)
+6. Per-job leases in `cron_jobs` use the same pattern for individual job locking

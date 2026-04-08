@@ -10,14 +10,39 @@ import (
 	"roboticus/internal/core"
 )
 
+// ChannelHealth represents the connection health state (Rust parity).
+type ChannelHealth int
+
+const (
+	HealthConnected    ChannelHealth = iota // Healthy, recent activity
+	HealthDegraded                          // Errors occurring but still partially functional
+	HealthDisconnected                      // No successful communication
+)
+
+func (h ChannelHealth) String() string {
+	switch h {
+	case HealthConnected:
+		return "connected"
+	case HealthDegraded:
+		return "degraded"
+	case HealthDisconnected:
+		return "disconnected"
+	default:
+		return "unknown"
+	}
+}
+
 // ChannelStatus tracks the health of a channel adapter.
 type ChannelStatus struct {
-	Name             string     `json:"name"`
-	Connected        bool       `json:"connected"`
-	MessagesReceived int64      `json:"messages_received"`
-	MessagesSent     int64      `json:"messages_sent"`
-	LastError        string     `json:"last_error,omitempty"`
-	LastActivity     *time.Time `json:"last_activity,omitempty"`
+	Name             string        `json:"name"`
+	Connected        bool          `json:"connected"`
+	Health           ChannelHealth `json:"health"`
+	MessagesReceived int64         `json:"messages_received"`
+	MessagesSent     int64         `json:"messages_sent"`
+	ErrorCount       int64         `json:"error_count"`
+	LastError        string        `json:"last_error,omitempty"`
+	LastActivity     *time.Time    `json:"last_activity,omitempty"`
+	LastSuccessfulAt *time.Time    `json:"last_successful_at,omitempty"`
 }
 
 type channelEntry struct {
@@ -64,12 +89,18 @@ func (r *Router) PollAll(ctx context.Context) []InboundMessage {
 	}
 	r.mu.Unlock()
 
+	if len(entries) == 0 {
+		return nil
+	}
+
 	var messages []InboundMessage
 	for name, entry := range entries {
 		msg, err := entry.adapter.Recv(ctx)
 		if err != nil {
 			r.mu.Lock()
 			entry.status.LastError = err.Error()
+			entry.status.ErrorCount++
+			r.recordHealthTransition(entry)
 			r.mu.Unlock()
 			continue
 		}
@@ -78,6 +109,10 @@ func (r *Router) PollAll(ctx context.Context) []InboundMessage {
 			entry.status.MessagesReceived++
 			now := time.Now()
 			entry.status.LastActivity = &now
+			entry.status.LastSuccessfulAt = &now
+			entry.status.LastError = "" // Clear error on success.
+			entry.status.Health = HealthConnected
+			entry.status.Connected = true
 			r.mu.Unlock()
 
 			msg.Platform = name
@@ -104,6 +139,8 @@ func (r *Router) SendTo(ctx context.Context, platform string, msg OutboundMessag
 
 		r.mu.Lock()
 		entry.status.LastError = errStr
+		entry.status.ErrorCount++
+		r.recordHealthTransition(entry)
 		r.mu.Unlock()
 
 		if isPermanentError(errStr) {
@@ -121,7 +158,10 @@ func (r *Router) SendTo(ctx context.Context, platform string, msg OutboundMessag
 	entry.status.MessagesSent++
 	now := time.Now()
 	entry.status.LastActivity = &now
+	entry.status.LastSuccessfulAt = &now
 	entry.status.LastError = ""
+	entry.status.Health = HealthConnected
+	entry.status.Connected = true
 	r.mu.Unlock()
 
 	return nil
@@ -135,6 +175,24 @@ func (r *Router) SendReply(ctx context.Context, platform, recipientID, content s
 		RecipientID: recipientID,
 		Platform:    platform,
 	})
+}
+
+// TypingIndicator is an optional interface for adapters that support typing indicators.
+type TypingIndicator interface {
+	SendTyping(ctx context.Context, chatID string)
+}
+
+// SendTypingIndicator sends a typing/thinking indicator if the platform supports it.
+func (r *Router) SendTypingIndicator(ctx context.Context, platform, chatID string) {
+	r.mu.Lock()
+	entry, ok := r.channels[platform]
+	r.mu.Unlock()
+	if !ok {
+		return
+	}
+	if ti, ok := entry.adapter.(TypingIndicator); ok {
+		ti.SendTyping(ctx, chatID)
+	}
 }
 
 // Status returns the health of all registered channels.
@@ -184,4 +242,59 @@ func (r *Router) GetAdapter(platform string) Adapter {
 // DeliveryQueue returns the underlying queue for inspection/admin.
 func (r *Router) DeliveryQueue() *DeliveryQueue {
 	return r.queue
+}
+
+// recordHealthTransition updates the health state based on error patterns.
+// Must be called with r.mu held.
+func (r *Router) recordHealthTransition(entry *channelEntry) {
+	// Transition: Connected → Degraded after 3+ errors, Degraded → Disconnected after 10+.
+	switch {
+	case entry.status.ErrorCount >= 10:
+		entry.status.Health = HealthDisconnected
+		entry.status.Connected = false
+	case entry.status.ErrorCount >= 3:
+		entry.status.Health = HealthDegraded
+		entry.status.Connected = true // Still partially functional
+	default:
+		// Keep current health (don't downgrade on single error)
+	}
+}
+
+// RecordReceived explicitly records an inbound message (for adapters that push).
+func (r *Router) RecordReceived(platform string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if entry, ok := r.channels[platform]; ok {
+		entry.status.MessagesReceived++
+		now := time.Now()
+		entry.status.LastActivity = &now
+		entry.status.LastSuccessfulAt = &now
+		entry.status.LastError = ""
+		entry.status.Health = HealthConnected
+		entry.status.Connected = true
+	}
+}
+
+// RecordSent explicitly records an outbound message.
+func (r *Router) RecordSent(platform string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if entry, ok := r.channels[platform]; ok {
+		entry.status.MessagesSent++
+		now := time.Now()
+		entry.status.LastActivity = &now
+		entry.status.LastSuccessfulAt = &now
+		entry.status.Health = HealthConnected
+	}
+}
+
+// RecordError explicitly records a processing error.
+func (r *Router) RecordError(platform, errMsg string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if entry, ok := r.channels[platform]; ok {
+		entry.status.LastError = errMsg
+		entry.status.ErrorCount++
+		r.recordHealthTransition(entry)
+	}
 }

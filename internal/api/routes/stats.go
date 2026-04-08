@@ -15,9 +15,7 @@ import (
 func GetCosts(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		limit := parseIntParam(r, "limit", 500)
-		rows, err := store.QueryContext(r.Context(),
-			`SELECT id, model, provider, cost, tokens_in, tokens_out, created_at, cached, COALESCE(latency_ms, 0)
-			 FROM inference_costs ORDER BY created_at DESC LIMIT ?`, limit)
+		rows, err := db.NewRouteQueries(store).ListCostRows(r.Context(), limit)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to query cost rows")
 			return
@@ -53,20 +51,14 @@ func GetCosts(store *db.Store) http.HandlerFunc {
 // GetCacheStats returns semantic cache statistics including hit_rate.
 func GetCacheStats(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		row := store.QueryRowContext(r.Context(),
-			`SELECT COUNT(*) FROM semantic_cache`)
-		var count int64
-		if err := row.Scan(&count); err != nil {
+		count, total, cached, err := db.NewRouteQueries(store).CacheStats(r.Context())
+		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 
-		// Compute hit_rate from inference_costs: ratio of cached requests to total.
 		hitRate := 0.0
-		costRow := store.QueryRowContext(r.Context(),
-			`SELECT COUNT(*), COALESCE(SUM(CASE WHEN cached = 1 THEN 1 ELSE 0 END), 0) FROM inference_costs`)
-		var total, cached int64
-		if err := costRow.Scan(&total, &cached); err == nil && total > 0 {
+		if total > 0 {
 			hitRate = float64(cached) / float64(total)
 		}
 
@@ -81,9 +73,7 @@ func GetCacheStats(store *db.Store) http.HandlerFunc {
 func GetTransactions(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		limit := parseIntParam(r, "limit", 50)
-		rows, err := store.QueryContext(r.Context(),
-			`SELECT id, tx_type, amount, currency, counterparty, tx_hash, created_at
-			 FROM transactions ORDER BY created_at DESC LIMIT ?`, limit)
+		rows, err := db.NewRouteQueries(store).ListFinancialTransactions(r.Context(), limit)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to query transactions")
 			return
@@ -162,18 +152,11 @@ func GetEfficiency(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		hours := parsePeriodHours(r.URL.Query().Get("period"), 24)
 		ctx := r.Context()
+		offset := strconv.Itoa(-hours)
+		rq := db.NewRouteQueries(store)
 
-		row := store.QueryRowContext(ctx,
-			`SELECT COALESCE(SUM(tokens_in + tokens_out), 0),
-			        COALESCE(SUM(cost), 0),
-			        COALESCE(AVG(latency_ms), 0),
-			        COUNT(*),
-			        COALESCE(SUM(CASE WHEN cached = 1 THEN 1 ELSE 0 END), 0)
-			 FROM inference_costs
-			 WHERE created_at >= datetime('now', ? || ' hours')`, strconv.Itoa(-hours))
-		var totalTokens, count, cachedCount int64
-		var totalCost, avgLatency float64
-		if err := row.Scan(&totalTokens, &totalCost, &avgLatency, &count, &cachedCount); err != nil {
+		totalTokens, count, cachedCount, totalCost, avgLatency, err := rq.EfficiencyMetrics(ctx, offset)
+		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to query efficiency metrics")
 			return
 		}
@@ -183,11 +166,7 @@ func GetEfficiency(store *db.Store) http.HandlerFunc {
 			cacheRate = float64(cachedCount) / float64(count) * 100.0
 		}
 
-		modelRows, err := store.QueryContext(ctx,
-			`SELECT model, COUNT(*), COALESCE(SUM(cost), 0), COALESCE(SUM(tokens_in), 0), COALESCE(SUM(tokens_out), 0)
-			 FROM inference_costs
-			 WHERE created_at >= datetime('now', ? || ' hours')
-			 GROUP BY model ORDER BY COUNT(*) DESC`, strconv.Itoa(-hours))
+		modelRows, err := rq.ModelCostBreakdown(ctx, offset)
 		models := make([]map[string]any, 0)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to query efficiency breakdown")
@@ -219,9 +198,14 @@ func GetEfficiency(store *db.Store) http.HandlerFunc {
 					"total":              cost,
 					"effective_per_turn": costPerTurn,
 					"cache_savings":      0.0,
-					"per_output_token":   func() float64 { if tokOut > 0 { return cost / float64(tokOut) }; return 0 }(),
-					"cumulative_trend":   "stable",
-					"attribution":        map[string]any{},
+					"per_output_token": func() float64 {
+						if tokOut > 0 {
+							return cost / float64(tokOut)
+						}
+						return 0
+					}(),
+					"cumulative_trend": "stable",
+					"attribution":      map[string]any{},
 				},
 				"trend": map[string]any{},
 			})
@@ -276,9 +260,7 @@ func GetEfficiency(store *db.Store) http.HandlerFunc {
 func GetModelSelections(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		limit := parseIntParam(r, "limit", 50)
-		rows, err := store.QueryContext(r.Context(),
-			`SELECT id, turn_id, session_id, selected_model, strategy, complexity, candidates_json, created_at
-			 FROM model_selection_events ORDER BY created_at DESC LIMIT ?`, limit)
+		rows, err := db.NewRouteQueries(store).ListModelSelectionEvents(r.Context(), limit)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to query model selections")
 			return
@@ -333,18 +315,8 @@ func GetRecommendations(store *db.Store) http.HandlerFunc {
 		hours := parsePeriodHours(r.URL.Query().Get("period"), 24)
 		ctx := r.Context()
 
-		row := store.QueryRowContext(ctx,
-			`SELECT COUNT(*),
-			        COALESCE(SUM(cost), 0),
-			        COALESCE(AVG(latency_ms), 0),
-			        COALESCE(SUM(CASE WHEN cached = 1 THEN 1 ELSE 0 END), 0),
-			        COALESCE(SUM(tokens_in + tokens_out), 0)
-			 FROM inference_costs
-			 WHERE created_at >= datetime('now', ? || ' hours')`, strconv.Itoa(-hours))
-
-		var requests, cachedCount, totalTokens int64
-		var totalCost, avgLatency float64
-		if err := row.Scan(&requests, &totalCost, &avgLatency, &cachedCount, &totalTokens); err != nil {
+		requests, cachedCount, totalTokens, totalCost, avgLatency, err := db.NewRouteQueries(store).RecommendationMetrics(ctx, strconv.Itoa(-hours))
+		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to analyze recommendations")
 			return
 		}
@@ -442,13 +414,7 @@ func GenerateRecommendations(store *db.Store) http.HandlerFunc {
 func GetTimeseries(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		days := parseIntParam(r, "days", 7)
-		rows, err := store.QueryContext(r.Context(),
-			`SELECT strftime('%Y-%m-%dT%H:00:00', created_at) as bucket,
-			        COUNT(*) as requests, COALESCE(SUM(cost), 0) as cost,
-			        COALESCE(SUM(tokens_in + tokens_out), 0) as tokens
-			 FROM inference_costs
-			 WHERE created_at >= datetime('now', ? || ' days')
-			 GROUP BY bucket ORDER BY bucket`, strconv.Itoa(-days))
+		rows, err := db.NewRouteQueries(store).CostTimeseries(r.Context(), days)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to query timeseries")
 			return

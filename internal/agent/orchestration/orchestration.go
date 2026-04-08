@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // OrchestrationPattern defines how subtasks are coordinated.
@@ -34,9 +35,11 @@ type Subtask struct {
 	Capabilities []string // required agent capabilities
 	AgentID      string   // assigned agent (empty if unassigned)
 	Status       SubtaskStatus
-	Model        string // optional model preference
-	Result       string // filled on completion
-	Error        string // filled on failure
+	Model        string     // optional model preference
+	Result       string     // filled on completion
+	Error        string     // filled on failure
+	CreatedAt    time.Time  // when the subtask was created
+	CompletedAt  *time.Time // when the subtask reached terminal state (nil if pending)
 }
 
 // WorkflowStatus tracks the overall workflow state.
@@ -52,11 +55,13 @@ const (
 
 // Workflow is a named container of subtasks with an orchestration pattern.
 type Workflow struct {
-	ID       string
-	Name     string
-	Pattern  OrchestrationPattern
-	Status   WorkflowStatus
-	Subtasks []*Subtask
+	ID          string
+	Name        string
+	Pattern     OrchestrationPattern
+	Status      WorkflowStatus
+	Subtasks    []*Subtask
+	CreatedAt   time.Time  // when the workflow was created
+	CompletedAt *time.Time // when all subtasks reached terminal state (nil if running)
 }
 
 // Orchestrator manages multi-agent task decomposition and coordination.
@@ -79,18 +84,23 @@ func (o *Orchestrator) CreateWorkflow(name string, pattern OrchestrationPattern,
 	defer o.mu.Unlock()
 
 	id := fmt.Sprintf("wf_%d", o.counter.Add(1))
+	now := time.Now()
 	for i, st := range subtasks {
 		if st.ID == "" {
 			st.ID = fmt.Sprintf("%s_t%d", id, i+1)
 		}
+		if st.CreatedAt.IsZero() {
+			st.CreatedAt = now
+		}
 	}
 
 	wf := &Workflow{
-		ID:       id,
-		Name:     name,
-		Pattern:  pattern,
-		Status:   WorkflowCreated,
-		Subtasks: subtasks,
+		ID:        id,
+		Name:      name,
+		Pattern:   pattern,
+		Status:    WorkflowCreated,
+		Subtasks:  subtasks,
+		CreatedAt: now,
 	}
 	o.workflows[id] = wf
 	return id
@@ -151,8 +161,10 @@ func (o *Orchestrator) CompleteTask(workflowID, taskID, result string) error {
 
 	for _, st := range wf.Subtasks {
 		if st.ID == taskID {
+			now := time.Now()
 			st.Status = SubtaskCompleted
 			st.Result = result
+			st.CompletedAt = &now
 			o.checkWorkflowComplete(wf)
 			return nil
 		}
@@ -172,8 +184,10 @@ func (o *Orchestrator) FailTask(workflowID, taskID, errMsg string) error {
 
 	for _, st := range wf.Subtasks {
 		if st.ID == taskID {
+			now := time.Now()
 			st.Status = SubtaskFailed
 			st.Error = errMsg
+			st.CompletedAt = &now
 			o.checkWorkflowComplete(wf)
 			return nil
 		}
@@ -270,6 +284,8 @@ func (o *Orchestrator) checkWorkflowComplete(wf *Workflow) {
 		}
 	}
 	if allDone {
+		now := time.Now()
+		wf.CompletedAt = &now
 		if anyFailed {
 			wf.Status = WorkflowFailed
 		} else {

@@ -76,6 +76,8 @@ func (ce *ConfidenceEvaluator) lengthScore(content string) float64 {
 		return 0.4
 	case n < 200:
 		return 0.7
+	case n <= 1000:
+		return 0.85 // 5th length bucket: 201-1000 chars
 	default:
 		return 1.0
 	}
@@ -112,8 +114,10 @@ func (ce *ConfidenceEvaluator) hedgingScore(content string) float64 {
 func (ce *ConfidenceEvaluator) latencyScore(latency time.Duration) float64 {
 	ms := latency.Milliseconds()
 	switch {
+	case ms < 200:
+		return 1.0 // fast threshold tightened from 1000ms
 	case ms < 1000:
-		return 1.0
+		return 0.9
 	case ms < 3000:
 		return 0.8
 	case ms < 10000:

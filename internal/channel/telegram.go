@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -60,12 +61,39 @@ func NewTelegramAdapterWithHTTP(cfg TelegramConfig, httpClient core.HTTPDoer) *T
 
 func (t *TelegramAdapter) PlatformName() string { return "telegram" }
 
+// DeleteWebhook removes any registered webhook so getUpdates polling works.
+// Telegram returns 409 Conflict if both webhook and polling are active.
+func (t *TelegramAdapter) DeleteWebhook(ctx context.Context) error {
+	payload := []byte(`{"drop_pending_updates":true}`)
+	req, err := http.NewRequestWithContext(ctx, "POST", t.apiURL("deleteWebhook"), bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := t.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var result struct {
+		OK          bool   `json:"ok"`
+		Description string `json:"description"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&result)
+	if !result.OK {
+		return fmt.Errorf("deleteWebhook failed: %s", result.Description)
+	}
+	return nil
+}
+
 func (t *TelegramAdapter) apiURL(method string) string {
 	return fmt.Sprintf("https://api.telegram.org/bot%s/%s", t.cfg.Token, method)
 }
 
 // Recv polls getUpdates and returns the next buffered message.
 func (t *TelegramAdapter) Recv(ctx context.Context) (*InboundMessage, error) {
+	log.Debug().Msg("telegram: polling getUpdates")
 	t.mu.Lock()
 	if len(t.messageBuffer) > 0 {
 		msg := t.messageBuffer[0]
@@ -105,7 +133,8 @@ func (t *TelegramAdapter) Recv(ctx context.Context) (*InboundMessage, error) {
 		return nil, nil
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("telegram getUpdates: %d", resp.StatusCode)
+		errBody, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("telegram getUpdates %d: %s", resp.StatusCode, string(errBody))
 	}
 
 	var result struct {
@@ -131,6 +160,10 @@ func (t *TelegramAdapter) Recv(ctx context.Context) (*InboundMessage, error) {
 	}
 	if !result.OK {
 		return nil, fmt.Errorf("telegram API returned ok=false")
+	}
+
+	if len(result.Result) > 0 {
+		log.Debug().Int("updates", len(result.Result)).Msg("telegram: received updates")
 	}
 
 	var messages []InboundMessage
@@ -193,6 +226,10 @@ func (t *TelegramAdapter) isChatAllowed(chatID int64) bool {
 // Sends typing indicator first, chunks at 4096 chars,
 // tries MarkdownV2 with fallback to plain text.
 func (t *TelegramAdapter) Send(ctx context.Context, msg OutboundMessage) error {
+	if strings.TrimSpace(msg.Content) == "" {
+		return nil // Telegram rejects empty messages (400 Bad Request)
+	}
+
 	// Best-effort typing indicator.
 	t.sendChatAction(ctx, msg.RecipientID, "typing")
 
@@ -242,6 +279,12 @@ func (t *TelegramAdapter) postMessage(ctx context.Context, chatID, text, parseMo
 		return fmt.Errorf("telegram sendMessage %d: %s", resp.StatusCode, string(respBody))
 	}
 	return nil
+}
+
+// SendTyping sends a "typing" chat action indicator.
+// Implements the TypingIndicator interface.
+func (t *TelegramAdapter) SendTyping(ctx context.Context, chatID string) {
+	t.sendChatAction(ctx, chatID, "typing")
 }
 
 func (t *TelegramAdapter) sendChatAction(ctx context.Context, chatID, action string) {

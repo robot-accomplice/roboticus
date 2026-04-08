@@ -35,6 +35,20 @@ func (r *SessionRepository) CreateSession(ctx context.Context, id, agentID, scop
 	return err
 }
 
+// ArchiveSession sets a session's status to 'archived'.
+func (r *SessionRepository) ArchiveSession(ctx context.Context, sessionID string) error {
+	_, err := r.q.ExecContext(ctx,
+		`UPDATE sessions SET status = 'archived' WHERE id = ?`, sessionID)
+	return err
+}
+
+// DeleteSession removes a session and its messages.
+func (r *SessionRepository) DeleteSession(ctx context.Context, sessionID string) error {
+	_, _ = r.q.ExecContext(ctx, `DELETE FROM session_messages WHERE session_id = ?`, sessionID)
+	_, err := r.q.ExecContext(ctx, `DELETE FROM sessions WHERE id = ?`, sessionID)
+	return err
+}
+
 // SetNickname updates a session's nickname.
 func (r *SessionRepository) SetNickname(ctx context.Context, sessionID, nickname string) error {
 	_, err := r.q.ExecContext(ctx,

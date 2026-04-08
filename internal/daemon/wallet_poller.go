@@ -41,7 +41,6 @@ func startWalletPoller(ctx context.Context, cfg *core.Config, store *db.Store, k
 			contract TEXT NOT NULL DEFAULT '', decimals INTEGER NOT NULL DEFAULT 18,
 			is_native INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL DEFAULT (datetime('now')))`)
 
-
 	// Check for plaintext wallet and encrypt it on first run.
 	result, err := wallet.MigratePlaintextWallet(cfg.Wallet.Path)
 	if err != nil {
