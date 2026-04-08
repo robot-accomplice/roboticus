@@ -345,8 +345,9 @@ func (a *A2AAdapter) evictOldestSession() {
 	}
 }
 
-// validateTimestamp checks that a timestamp is within maxDrift seconds of now.
-func validateTimestamp(timestamp int64, maxDriftSeconds int) bool {
+// ValidateTimestamp checks that a timestamp is within maxDrift seconds of now.
+// Used by A2A handshake handlers to reject stale or future-dated messages.
+func ValidateTimestamp(timestamp int64, maxDriftSeconds int) bool {
 	now := time.Now().Unix()
 	diff := now - timestamp
 	if diff < 0 {
