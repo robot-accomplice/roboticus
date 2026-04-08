@@ -219,7 +219,7 @@ func TestRegisterDynamic_RulesSnapshot(t *testing.T) {
 	original := len(snap)
 
 	// Mutating the snapshot should not affect the engine.
-	snap = append(snap, &testRule{name: "rogue"})
+	_ = append(snap, &testRule{name: "rogue"})
 	if len(pe.Rules()) != original {
 		t.Error("mutating Rules() snapshot should not affect engine")
 	}

@@ -244,11 +244,11 @@ func TestParity_ConfigSerializationDeterministic(t *testing.T) {
 
 	resp1, _ := client.Get(ts.URL + "/api/config")
 	b1, _ := io.ReadAll(resp1.Body)
-	resp1.Body.Close()
+	_ = resp1.Body.Close()
 
 	resp2, _ := client.Get(ts.URL + "/api/config")
 	b2, _ := io.ReadAll(resp2.Body)
-	resp2.Body.Close()
+	_ = resp2.Body.Close()
 
 	if string(b1) != string(b2) {
 		t.Error("config serialization is non-deterministic — two calls produced different JSON")
@@ -356,7 +356,7 @@ func TestParity_CronJobsListShape(t *testing.T) {
 
 func parityReadJSON(t *testing.T, resp *http.Response) map[string]any {
 	t.Helper()
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	var data map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
 		t.Fatalf("decode JSON: %v", err)

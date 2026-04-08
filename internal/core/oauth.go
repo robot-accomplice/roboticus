@@ -136,7 +136,7 @@ func RunOAuthPKCEFlow(ctx context.Context, cfg OAuthPKCEConfig) (*OAuthToken, er
 	if err != nil {
 		return nil, fmt.Errorf("start callback server: %w", err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 
 	server := &http.Server{Handler: mux}
 	go func() { _ = server.Serve(listener) }()
@@ -178,7 +178,7 @@ func exchangeCodeForToken(ctx context.Context, tokenURL, clientID, code, redirec
 	if err != nil {
 		return nil, fmt.Errorf("token exchange: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != 200 {
@@ -213,7 +213,7 @@ func RefreshOAuthToken(ctx context.Context, tokenURL, clientID, refreshToken str
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != 200 {
