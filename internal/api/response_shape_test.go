@@ -195,7 +195,7 @@ func assertStatus(t *testing.T, resp *http.Response, expected int) {
 
 func readBody(t *testing.T, resp *http.Response) []byte {
 	t.Helper()
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	var buf [64 * 1024]byte
 	n, _ := resp.Body.Read(buf[:])
 	return buf[:n]

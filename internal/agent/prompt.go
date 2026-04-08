@@ -165,8 +165,8 @@ func buildOperationalIntrospectionBlock(cfg PromptConfig) string {
 	sb.WriteString("- Check your memory for relevant prior context.\n")
 	sb.WriteString("- Review your tool roster before claiming you can or cannot do something.\n")
 	if len(cfg.ToolNames) > 0 {
-		sb.WriteString(fmt.Sprintf("- You have %d tools registered: %s.\n",
-			len(cfg.ToolNames), strings.Join(cfg.ToolNames, ", ")))
+		fmt.Fprintf(&sb, "- You have %d tools registered: %s.\n",
+			len(cfg.ToolNames), strings.Join(cfg.ToolNames, ", "))
 	}
 	sb.WriteString("- If uncertain, say so rather than fabricating an answer.\n")
 	return sb.String()
@@ -178,12 +178,12 @@ func buildOperationalIntrospectionBlock(cfg PromptConfig) string {
 func buildRuntimeMetadataBlock(cfg PromptConfig) string {
 	var sb strings.Builder
 	sb.WriteString("## Runtime Context\n")
-	sb.WriteString(fmt.Sprintf("- Local time: %s\n", time.Now().Format(time.RFC3339)))
+	fmt.Fprintf(&sb, "- Local time: %s\n", time.Now().Format(time.RFC3339))
 	if cfg.Model != "" {
-		sb.WriteString(fmt.Sprintf("- Active model: %s\n", cfg.Model))
+		fmt.Fprintf(&sb, "- Active model: %s\n", cfg.Model)
 	}
 	if cfg.Workspace != "" {
-		sb.WriteString(fmt.Sprintf("- Workspace root: %s\n", cfg.Workspace))
+		fmt.Fprintf(&sb, "- Workspace root: %s\n", cfg.Workspace)
 	}
 	if cfg.Version != "" {
 		sb.WriteString(fmt.Sprintf("- Agent version: %s\n", cfg.Version))

@@ -25,7 +25,7 @@ func TagContent(content string, secret []byte) string {
 // VerifyHMACBoundary checks if content has valid HMAC trust boundaries.
 // Returns the inner content and true if valid, or the original content and false if not.
 func VerifyHMACBoundary(tagged string, secret []byte) (string, bool) {
-	lines := strings.SplitN(tagged, "\n", -1)
+	lines := strings.Split(tagged, "\n")
 	if len(lines) < 3 {
 		return tagged, false
 	}

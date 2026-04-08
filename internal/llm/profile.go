@@ -190,7 +190,7 @@ func (p ModelProfile) BreakdownWithComplexity(complexity float64, costAware bool
 	availability := p.Availability
 
 	// Locality: local models get a bonus for simple tasks, cloud for complex.
-	locality := p.Locality
+	var locality float64
 	if p.Locality == 1.0 {
 		// Local model: advantage fades with complexity
 		locality = max64(0, 1.0-complexity*0.4)
