@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -62,11 +63,12 @@ func TestFinalizeStream_InvokesIngestor(t *testing.T) {
 	store := testutil.TempStore(t)
 
 	ingestor := &testIngestor{}
+	bgw := core.NewBackgroundWorker(4)
 	pipe := New(PipelineDeps{
 		Store:    store,
 		Executor: &stubExecutor{response: "ok"},
 		Ingestor: ingestor,
-		BGWorker: core.NewBackgroundWorker(4),
+		BGWorker: bgw,
 	})
 
 	_, _ = store.ExecContext(context.Background(),
@@ -83,10 +85,10 @@ func TestFinalizeStream_InvokesIngestor(t *testing.T) {
 
 	pipe.FinalizeStream(context.Background(), outcome, "hello")
 
-	// Drain background worker.
-	time.Sleep(100 * time.Millisecond) // Wait for background worker to execute.
+	// Drain background worker — use Drain(timeout) not Sleep to avoid race.
+	bgw.Drain(5 * time.Second)
 
-	if !ingestor.called {
+	if !ingestor.WasCalled() {
 		t.Error("FinalizeStream did not invoke ingestor — post-turn parity broken (Rule 7.2)")
 	}
 }
@@ -161,11 +163,15 @@ func TestFinalizeStream_MatchesStandardPostTurn(t *testing.T) {
 
 func cfgPtr(c Config) *Config { return &c }
 
-// testIngestor records whether IngestTurn was called.
+// testIngestor records whether IngestTurn was called (race-safe).
 type testIngestor struct {
-	called bool
+	called atomic.Bool
 }
 
 func (ti *testIngestor) IngestTurn(_ context.Context, _ *Session) {
-	ti.called = true
+	ti.called.Store(true)
+}
+
+func (ti *testIngestor) WasCalled() bool {
+	return ti.called.Load()
 }
