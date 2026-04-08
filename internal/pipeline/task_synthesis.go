@@ -156,7 +156,7 @@ func classifyComplexity(content string, sessionTurns int) string {
 // Matches Rust's capability_tokens: non-alphanumeric split, min 4 chars.
 func capabilityTokens(content string) []string {
 	words := strings.FieldsFunc(strings.ToLower(content), func(r rune) bool {
-		return !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_')
+		return (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '-' && r != '_'
 	})
 	var tokens []string
 	for _, w := range words {

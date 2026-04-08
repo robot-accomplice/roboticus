@@ -98,6 +98,7 @@ func TestRouterHealth_TransitionModel(t *testing.T) {
 	if s := router.Status(); s[0].ErrorCount != 0 {
 		// ErrorCount is cumulative; health resets but count doesn't.
 		// That's the correct behavior — the count is for observability.
+		_ = s // SA9003: intentionally empty — documenting expected behavior
 	}
 }
 

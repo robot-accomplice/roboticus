@@ -109,6 +109,7 @@ func TestRetryWithGuardsResume(t *testing.T) {
 	result := retryWithGuardsResume(chain, "hello world", nil, 1)
 	if !result.RetryRequested {
 		// Should pass since "hello world" is fine for RepetitionGuard.
+		_ = result // SA9003: intentionally empty — documenting expected non-retry
 	}
 	if len(result.Violations) > 0 {
 		t.Errorf("expected no violations, got %v", result.Violations)

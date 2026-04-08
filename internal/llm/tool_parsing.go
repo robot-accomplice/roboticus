@@ -41,6 +41,7 @@ func ParseToolCallsFromText(content string) []ToolCall {
 		// Track brace depth to find the closing brace.
 		depth := 0
 		braceEnd := -1
+	scanLoop:
 		for i := braceStart; i < len(content); i++ {
 			switch content[i] {
 			case '{':
@@ -49,11 +50,8 @@ func ParseToolCallsFromText(content string) []ToolCall {
 				depth--
 				if depth == 0 {
 					braceEnd = i + 1
-					break
+					break scanLoop
 				}
-			}
-			if braceEnd > 0 {
-				break
 			}
 		}
 
@@ -165,9 +163,10 @@ func parseToolCallFromEnd(content string) (ToolCall, bool) {
 			// Try with truncation repair.
 			depth := 0
 			for _, c := range jsonStr {
-				if c == '{' {
+				switch c {
+				case '{':
 					depth++
-				} else if c == '}' {
+				case '}':
 					depth--
 				}
 			}

@@ -186,7 +186,7 @@ func buildRuntimeMetadataBlock(cfg PromptConfig) string {
 		fmt.Fprintf(&sb, "- Workspace root: %s\n", cfg.Workspace)
 	}
 	if cfg.Version != "" {
-		sb.WriteString(fmt.Sprintf("- Agent version: %s\n", cfg.Version))
+		fmt.Fprintf(&sb, "- Agent version: %s\n", cfg.Version)
 	}
 	return sb.String()
 }

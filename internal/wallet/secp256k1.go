@@ -242,13 +242,13 @@ const (
 // reference's Zeroizing<Vec<u8>> pattern. After calling this, the key is
 // unusable for signing.
 func ZeroizePrivateKey(key *ecdsa.PrivateKey) {
-	if key == nil || key.D == nil {
+	if key == nil || key.D == nil { //nolint:staticcheck // secp256k1 zeroization requires direct big.Int field access; no stdlib alternative
 		return
 	}
 	// Overwrite the big.Int's internal words with zeros
-	words := key.D.Bits()
+	words := key.D.Bits() //nolint:staticcheck // secp256k1 zeroization requires direct big.Int field access
 	for i := range words {
 		words[i] = 0
 	}
-	key.D.SetInt64(0)
+	key.D.SetInt64(0) //nolint:staticcheck // secp256k1 zeroization requires direct big.Int field access
 }

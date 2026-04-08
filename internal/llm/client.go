@@ -54,10 +54,7 @@ func NewClient(p *Provider) (*Client, error) {
 		if KeyResolver != nil {
 			if p.APIKeyRef != "" {
 				// Strip "keystore:" prefix if present (Rust convention).
-				ref := p.APIKeyRef
-				if strings.HasPrefix(ref, "keystore:") {
-					ref = strings.TrimPrefix(ref, "keystore:")
-				}
+				ref := strings.TrimPrefix(p.APIKeyRef, "keystore:")
 				apiKey = KeyResolver(ref)
 			}
 			if apiKey == "" {

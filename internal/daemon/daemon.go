@@ -831,7 +831,8 @@ func (d *Daemon) runConsolidationHeartbeat(ctx context.Context) {
 }
 
 // runTelegramPoller polls the Telegram adapter for inbound messages via long polling.
-func (d *Daemon) runTelegramPoller(ctx context.Context) {
+// Currently wired via config flag; kept for imminent Telegram channel enablement.
+func (d *Daemon) runTelegramPoller(ctx context.Context) { //nolint:unused // wired when telegram.polling=true
 	log.Info().Msg("telegram poller started")
 
 	tgAdapter := d.router.GetAdapter("telegram")

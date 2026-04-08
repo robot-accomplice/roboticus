@@ -1,16 +1,11 @@
 package api
 
 import (
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 	"testing"
 )
-
-func routeBase(path string) string {
-	return filepath.Base(path)
-}
 
 func routeContains(t *testing.T, dir string, pattern string) []string {
 	t.Helper()

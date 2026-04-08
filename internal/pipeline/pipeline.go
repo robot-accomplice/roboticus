@@ -317,6 +317,7 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 		if p.skills != nil {
 			// Skills interface doesn't expose a list method; use empty for now.
 			// The synthesis still works — it just reports 0% capability fit.
+			_ = agentSkills // SA9003: populated when skills list method is added
 		}
 		synthesis := SynthesizeTaskState(content, session.TurnCount(), agentSkills)
 		tr.Annotate("intent", synthesis.Intent)

@@ -181,8 +181,9 @@ func outputResult(data any, humanFn func(any)) {
 	}
 }
 
-// outputTable prints a simple table. Used by commands that list items.
-func outputTable(headers []string, rows [][]string) {
+// _outputTable prints a simple table. Used by commands that list items.
+// Currently unused but retained for upcoming CLI list commands (Rust parity).
+func _outputTable(headers []string, rows [][]string) { //nolint:unused // planned for CLI list commands
 	if viper.GetBool("quiet") {
 		return
 	}

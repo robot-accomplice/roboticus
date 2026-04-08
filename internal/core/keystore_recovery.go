@@ -45,14 +45,3 @@ func zeroize(data []byte) {
 		data[i] = 0
 	}
 }
-
-// zeroizeString attempts to overwrite a string's underlying bytes.
-// Note: Go strings are immutable and this relies on unsafe behavior.
-// For production use, prefer keeping secrets in []byte and calling zeroize().
-// This function is a best-effort defense for passphrase cleanup.
-func zeroizeString(s *string) {
-	// In Go, we cannot truly zeroize a string without unsafe.
-	// The pragmatic approach is to overwrite the variable with empty string
-	// and rely on the GC to eventually reclaim the original.
-	*s = ""
-}

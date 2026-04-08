@@ -369,7 +369,7 @@ func ValidateAddress(addr string) error {
 		return fmt.Errorf("wallet: address must start with 0x")
 	}
 	for _, c := range addr[2:] {
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
 			return fmt.Errorf("wallet: address contains invalid hex character: %c", c)
 		}
 	}

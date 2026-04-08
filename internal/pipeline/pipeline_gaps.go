@@ -106,7 +106,7 @@ func textOverlapScore(a, b string) float64 {
 func tokenizeWords(text string) []string {
 	text = strings.ToLower(text)
 	words := strings.FieldsFunc(text, func(r rune) bool {
-		return !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'))
+		return (r < 'a' || r > 'z') && (r < '0' || r > '9')
 	})
 	// Filter short words.
 	var result []string
@@ -201,7 +201,7 @@ func (p *Pipeline) executeDelegation(ctx context.Context, session *Session, deco
 	var sb strings.Builder
 	sb.WriteString("Execute the following subtasks:\n")
 	for i, st := range decomp.Subtasks {
-		sb.WriteString(fmt.Sprintf("%d. %s\n", i+1, st))
+		fmt.Fprintf(&sb, "%d. %s\n", i+1, st)
 	}
 
 	// Inject delegation directive as a system message.

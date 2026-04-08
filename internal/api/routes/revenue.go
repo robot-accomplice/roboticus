@@ -299,10 +299,3 @@ func IntakeOracleFeed(store *db.Store) http.HandlerFunc {
 		writeJSON(w, http.StatusCreated, map[string]string{"id": id, "strategy": "oracle-feed", "status": "intake"})
 	}
 }
-
-// queryResult matches *sql.Rows for testability.
-type queryResult interface {
-	Next() bool
-	Scan(dest ...any) error
-	Close() error
-}

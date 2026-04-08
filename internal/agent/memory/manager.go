@@ -185,7 +185,8 @@ func safeUTF8Truncate(s string, maxBytes int) string {
 }
 
 // storeWorkingMemory writes to the working_memory table with default importance.
-func (mm *Manager) storeWorkingMemory(ctx context.Context, sessionID, entryType, content string) {
+// Retained as convenience wrapper for Rust parity; will be called from upcoming memory subsystem integration.
+func (mm *Manager) storeWorkingMemory(ctx context.Context, sessionID, entryType, content string) { //nolint:unused // Rust parity stub
 	mm.storeWorkingMemoryWithImportance(ctx, sessionID, entryType, content, 5)
 }
 
@@ -202,7 +203,8 @@ func (mm *Manager) storeWorkingMemoryWithImportance(ctx context.Context, session
 }
 
 // storeEpisodicMemory writes to the episodic_memory table with default importance.
-func (mm *Manager) storeEpisodicMemory(ctx context.Context, classification, content string) {
+// Retained as convenience wrapper for Rust parity; will be called from upcoming memory subsystem integration.
+func (mm *Manager) storeEpisodicMemory(ctx context.Context, classification, content string) { //nolint:unused // Rust parity stub
 	mm.storeEpisodicMemoryWithImportance(ctx, classification, content, 5)
 }
 
@@ -268,7 +270,8 @@ func (mm *Manager) recordToolStat(ctx context.Context, toolName string, success 
 }
 
 // ingestRelationships extracts entity mentions from user messages and updates relationship memory.
-func (mm *Manager) ingestRelationships(ctx context.Context, messages []llm.Message) {
+// Retained as convenience wrapper for Rust parity; will be called from upcoming memory subsystem integration.
+func (mm *Manager) ingestRelationships(ctx context.Context, messages []llm.Message) { //nolint:unused // Rust parity stub
 	mm.ingestRelationshipsWithTrust(ctx, messages, 0.5)
 }
 
