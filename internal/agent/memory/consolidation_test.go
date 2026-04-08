@@ -205,29 +205,56 @@ func TestPipeline_Phase1_IndexBackfill(t *testing.T) {
 	}
 }
 
-func TestPipeline_Phase2_CrossTierDedup(t *testing.T) {
+func TestPipeline_Phase2_WithinTierDedup(t *testing.T) {
 	store := testutil.TempStore(t)
 	ctx := context.Background()
 	pipe := NewConsolidationPipeline()
 	pipe.MinInterval = 0
 
-	// Create an episodic and semantic entry with very similar content.
+	// Two very similar episodic entries within the same tier.
 	seedEpisodic(t, store, "ep1", "fact", "the cat sat on the mat in the sun", 5, nowStr())
-	seedSemantic(t, store, "sem1", "fact", "cat-mat", "the cat sat on the mat in the sun today", 0.8, nowStr())
+	seedEpisodic(t, store, "ep2", "fact", "the cat sat on the mat in the sun today", 7, nowStr())
 
 	r := pipe.Run(ctx, store)
 	if r.Deduped != 1 {
 		t.Errorf("expected 1 deduped, got %d", r.Deduped)
 	}
 
-	// Verify episodic was marked as deduped (not semantic).
+	// The lower-scored entry (ep1, importance=5) should be deduped.
 	var state string
 	_ = store.QueryRowContext(ctx, `SELECT memory_state FROM episodic_memory WHERE id = 'ep1'`).Scan(&state)
 	if state != "deduped" {
-		t.Errorf("expected episodic state 'deduped', got %q", state)
+		t.Errorf("expected ep1 state 'deduped', got %q", state)
 	}
 
-	// Verify semantic remains active.
+	// The higher-scored entry (ep2) should remain active.
+	_ = store.QueryRowContext(ctx, `SELECT memory_state FROM episodic_memory WHERE id = 'ep2'`).Scan(&state)
+	if state != "active" {
+		t.Errorf("expected ep2 state 'active', got %q", state)
+	}
+}
+
+func TestPipeline_Phase2_CrossTierNotDeduped(t *testing.T) {
+	store := testutil.TempStore(t)
+	ctx := context.Background()
+	pipe := NewConsolidationPipeline()
+	pipe.MinInterval = 0
+
+	// Cross-tier similar entries should NOT be deduped (within-tier only).
+	seedEpisodic(t, store, "ep1", "fact", "the cat sat on the mat in the sun", 5, nowStr())
+	seedSemantic(t, store, "sem1", "fact", "cat-mat", "the cat sat on the mat in the sun today", 0.8, nowStr())
+
+	r := pipe.Run(ctx, store)
+	if r.Deduped != 0 {
+		t.Errorf("expected 0 deduped (cross-tier should not dedup), got %d", r.Deduped)
+	}
+
+	// Both should remain active.
+	var state string
+	_ = store.QueryRowContext(ctx, `SELECT memory_state FROM episodic_memory WHERE id = 'ep1'`).Scan(&state)
+	if state != "active" {
+		t.Errorf("expected episodic state 'active', got %q", state)
+	}
 	_ = store.QueryRowContext(ctx, `SELECT memory_state FROM semantic_memory WHERE id = 'sem1'`).Scan(&state)
 	if state != "active" {
 		t.Errorf("expected semantic state 'active', got %q", state)
@@ -240,10 +267,12 @@ func TestPipeline_Phase3_EpisodicPromotion(t *testing.T) {
 	pipe := NewConsolidationPipeline()
 	pipe.MinInterval = 0
 
-	// 3 similar episodic entries should trigger promotion.
-	seedEpisodic(t, store, "ep1", "tool_event", "user asked about weather forecast", 5, nowStr())
-	seedEpisodic(t, store, "ep2", "tool_event", "user asked about weather forecast today", 5, nowStr())
-	seedEpisodic(t, store, "ep3", "tool_event", "user asked about weather forecast report", 5, nowStr())
+	// 3 episodic entries similar enough for promotion (Jaccard > 0.5) but
+	// different enough to avoid within-tier dedup (Jaccard < 0.7).
+	// Each pair shares 5 words and has 2 unique => Jaccard ~0.556.
+	seedEpisodic(t, store, "ep1", "tool_event", "user asked about weather forecast details report", 5, nowStr())
+	seedEpisodic(t, store, "ep2", "tool_event", "user asked about weather forecast temperature update", 5, nowStr())
+	seedEpisodic(t, store, "ep3", "tool_event", "user asked about weather forecast wind conditions", 5, nowStr())
 
 	r := pipe.Run(ctx, store)
 	if r.Promoted != 1 {

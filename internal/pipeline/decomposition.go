@@ -30,9 +30,28 @@ func (d DecompositionDecision) String() string {
 
 // DecompositionResult holds the gate evaluation result.
 type DecompositionResult struct {
-	Decision  DecompositionDecision
-	Subtasks  []string // for delegation
-	Rationale string
+	Decision    DecompositionDecision
+	Subtasks    []string // for delegation
+	Rationale   string
+	Specialists []SpecialistProposal // for specialist proposals (Wave 8, #82)
+}
+
+// SpecialistProposal recommends creating a specialist agent for a subtask (Wave 8, #82).
+type SpecialistProposal struct {
+	Name            string  // Proposed specialist name (e.g., "security-auditor")
+	Query           string  // The subtask query for this specialist
+	EstimatedTokens int     // Estimated token cost for this subtask
+	UtilityMargin   float64 // Expected utility margin from utilityMargin()
+}
+
+// utilityMargin computes the expected utility of delegating to a specialist (Wave 8, #83).
+// Formula: (complexity * 0.5) + (subtasks-1) * 0.12 + fit_ratio * 0.45 - (0.25 + subtasks * 0.04)
+// Returns a value where positive means delegation is worthwhile.
+func utilityMargin(complexity float64, subtasks int, fitRatio float64) float64 {
+	return (complexity * 0.5) +
+		float64(subtasks-1)*0.12 +
+		fitRatio*0.45 -
+		(0.25 + float64(subtasks)*0.04)
 }
 
 // EvaluateDecomposition decides whether a request needs multi-agent delegation.
@@ -63,10 +82,18 @@ func EvaluateDecomposition(content string, sessionTurns int) DecompositionResult
 		}
 		for phrase, domain := range specialists {
 			if strings.Contains(lower, phrase) {
+				query := content[:min(100, len(content))]
+				margin := utilityMargin(0.8, 1, 0.7)
 				return DecompositionResult{
 					Decision:  DecompSpecialistProposal,
-					Subtasks:  []string{domain + ": " + content[:min(100, len(content))]},
+					Subtasks:  []string{domain + ": " + query},
 					Rationale: "complex domain-specific request; specialist recommended",
+					Specialists: []SpecialistProposal{{
+						Name:            domain + "-specialist",
+						Query:           query,
+						EstimatedTokens: 4096,
+						UtilityMargin:   margin,
+					}},
 				}
 			}
 		}

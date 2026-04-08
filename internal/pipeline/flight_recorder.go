@@ -12,6 +12,12 @@ const (
 	StepLLMCall                    // LLM inference call
 	StepGuardCheck                 // Guard evaluation
 	StepRetry                      // Guard-triggered retry
+
+	// Extended step kinds (Wave 8, #89).
+	StepGuardPrecompute // Guard score pre-computation before chain
+	StepCacheHit        // Cache hit — response served from cache
+	StepDecomposition   // Decomposition gate evaluation
+	StepSpeculation     // Speculative execution path
 )
 
 // ToolSource identifies where a tool came from.

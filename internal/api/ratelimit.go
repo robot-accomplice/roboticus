@@ -3,8 +3,10 @@ package api
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"net"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -106,6 +108,111 @@ func checkBucket(buckets *sync.Map, key string, limit int, window time.Duration)
 func hashAPIKey(key string) string {
 	h := sha256.Sum256([]byte(key))
 	return hex.EncodeToString(h[:])
+}
+
+// GlobalCapacityTier defines tiered global rate limits that apply across all clients.
+type GlobalCapacityTier struct {
+	Name              string `json:"name"`
+	MaxRequestsPerSec int    `json:"max_requests_per_sec"`
+	BurstSize         int    `json:"burst_size"`
+}
+
+var defaultGlobalTiers = []GlobalCapacityTier{
+	{Name: "free", MaxRequestsPerSec: 10, BurstSize: 20},
+	{Name: "standard", MaxRequestsPerSec: 100, BurstSize: 200},
+	{Name: "premium", MaxRequestsPerSec: 1000, BurstSize: 2000},
+}
+
+// GlobalCapacity returns the default global capacity tiers.
+func GlobalCapacity() []GlobalCapacityTier {
+	result := make([]GlobalCapacityTier, len(defaultGlobalTiers))
+	copy(result, defaultGlobalTiers)
+	return result
+}
+
+// GlobalCapacityForTier returns the tier config by name, or the free tier if not found.
+func GlobalCapacityForTier(name string) GlobalCapacityTier {
+	for _, t := range defaultGlobalTiers {
+		if t.Name == name {
+			return t
+		}
+	}
+	return defaultGlobalTiers[0] // default to free
+}
+
+// writeRateLimitHeaders adds RFC 6585 compliant rate limit headers to a response.
+// X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset, and Retry-After.
+func writeRateLimitHeaders(w http.ResponseWriter, limit, remaining int, resetAt time.Time) {
+	w.Header().Set("X-RateLimit-Limit", strconv.Itoa(limit))
+	w.Header().Set("X-RateLimit-Remaining", strconv.Itoa(remaining))
+	w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(resetAt.Unix(), 10))
+	if remaining <= 0 {
+		retryAfter := int(time.Until(resetAt).Seconds())
+		if retryAfter < 1 {
+			retryAfter = 1
+		}
+		w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
+	}
+}
+
+// TrustedProxyCIDRs validates and stores trusted proxy CIDR ranges.
+type TrustedProxyCIDRs struct {
+	mu   sync.RWMutex
+	nets []*net.IPNet
+}
+
+// NewTrustedProxyCIDRs creates an empty trusted proxy set.
+func NewTrustedProxyCIDRs() *TrustedProxyCIDRs {
+	return &TrustedProxyCIDRs{}
+}
+
+// SetTrustedProxyCIDRs parses and validates CIDR strings, replacing the current set.
+// Returns an error if any CIDR string is invalid.
+func (tp *TrustedProxyCIDRs) SetTrustedProxyCIDRs(cidrs []string) error {
+	var nets []*net.IPNet
+	for _, cidr := range cidrs {
+		_, ipNet, err := net.ParseCIDR(cidr)
+		if err != nil {
+			return fmt.Errorf("invalid CIDR %q: %w", cidr, err)
+		}
+		nets = append(nets, ipNet)
+	}
+	tp.mu.Lock()
+	tp.nets = nets
+	tp.mu.Unlock()
+	return nil
+}
+
+// IsTrusted checks if the given IP is within any trusted CIDR range.
+func (tp *TrustedProxyCIDRs) IsTrusted(ip string) bool {
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		return false
+	}
+	tp.mu.RLock()
+	defer tp.mu.RUnlock()
+	for _, n := range tp.nets {
+		if n.Contains(parsed) {
+			return true
+		}
+	}
+	return false
+}
+
+// CIDRCount returns the number of configured trusted CIDRs.
+func (tp *TrustedProxyCIDRs) CIDRCount() int {
+	tp.mu.RLock()
+	defer tp.mu.RUnlock()
+	return len(tp.nets)
+}
+
+// ThrottleSnapshot captures rate limit state for admin reporting.
+type ThrottleSnapshot struct {
+	Timestamp        time.Time `json:"timestamp"`
+	ActiveBuckets    int       `json:"active_buckets"`
+	TotalRequests    int64     `json:"total_requests"`
+	RejectedRequests int64     `json:"rejected_requests"`
+	TopOffenders     []string  `json:"top_offenders,omitempty"`
 }
 
 // extractIP gets the client IP from X-Real-IP, X-Forwarded-For, or RemoteAddr.

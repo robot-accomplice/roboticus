@@ -6,19 +6,26 @@ import (
 	"encoding/hex"
 	"fmt"
 	"strings"
+	"time"
+
+	"roboticus/internal/core"
 )
 
 // PromptConfig holds parameters for system prompt construction.
 type PromptConfig struct {
 	AgentName   string
-	Firmware    string   // optional platform instructions
-	Personality string   // optional OS personality/identity
-	Version     string   // runtime version
-	Model       string   // primary model name
-	Workspace   string   // workspace root path
-	Skills      []string // active skill names
-	IsSubagent  bool     // include orchestration workflow block
-	BoundaryKey []byte   // HMAC-SHA256 key for trust boundary signing (nil = no signing)
+	Firmware    string               // optional platform instructions
+	Personality string               // optional OS personality/identity
+	Operator    string               // optional operator context (OPERATOR.toml)
+	Directives  string               // optional goals/missions (DIRECTIVES.toml)
+	Version     string               // runtime version
+	Model       string               // primary model name
+	Workspace   string               // workspace root path
+	Skills      []string             // active skill names
+	IsSubagent  bool                 // include orchestration workflow block
+	BoundaryKey []byte               // HMAC-SHA256 key for trust boundary signing (nil = no signing)
+	ToolNames   []string             // registered tool names for introspection block
+	Obsidian    *core.ObsidianConfig // optional Obsidian config for vault directive
 }
 
 // BuildSystemPrompt constructs the full system prompt from config sections.
@@ -43,6 +50,16 @@ func BuildSystemPrompt(cfg PromptConfig) string {
 	// 3. Personality/identity.
 	if cfg.Personality != "" {
 		sections = append(sections, "## Identity\n"+cfg.Personality+"\n")
+	}
+
+	// 3a. Operator context (OPERATOR.toml).
+	if cfg.Operator != "" {
+		sections = append(sections, "## Operator Context\n"+cfg.Operator+"\n")
+	}
+
+	// 3b. Active directives (DIRECTIVES.toml).
+	if cfg.Directives != "" {
+		sections = append(sections, "## Active Directives\n"+cfg.Directives+"\n")
 	}
 
 	// 4. Active skills.
@@ -95,6 +112,17 @@ func BuildSystemPrompt(cfg PromptConfig) string {
 				"Do not attempt to manage the overall workflow.\n")
 	}
 
+	// 9. Operational introspection nudge (#50).
+	sections = append(sections, buildOperationalIntrospectionBlock(cfg))
+
+	// 10. Runtime metadata block (#51).
+	sections = append(sections, buildRuntimeMetadataBlock(cfg))
+
+	// 11. Obsidian directive (#52).
+	if obsBlock := buildObsidianDirective(cfg); obsBlock != "" {
+		sections = append(sections, obsBlock)
+	}
+
 	// Join sections, inserting HMAC boundaries if key is provided.
 	// The boundary marker signs exactly the section text. Separators are
 	// placed between boundary-terminated blocks so that verification can
@@ -126,4 +154,53 @@ func signBoundary(key []byte, content string) string {
 	mac.Write([]byte(content))
 	sig := hex.EncodeToString(mac.Sum(nil))
 	return "[BOUNDARY:" + sig + "]"
+}
+
+// buildOperationalIntrospectionBlock nudges the agent to inspect memory, tools,
+// and roster before guessing. Helps reduce hallucinated capabilities.
+func buildOperationalIntrospectionBlock(cfg PromptConfig) string {
+	var sb strings.Builder
+	sb.WriteString("## Operational Discipline\n")
+	sb.WriteString("Before answering, inspect what you actually have available:\n")
+	sb.WriteString("- Check your memory for relevant prior context.\n")
+	sb.WriteString("- Review your tool roster before claiming you can or cannot do something.\n")
+	if len(cfg.ToolNames) > 0 {
+		fmt.Fprintf(&sb, "- You have %d tools registered: %s.\n",
+			len(cfg.ToolNames), strings.Join(cfg.ToolNames, ", "))
+	}
+	sb.WriteString("- If uncertain, say so rather than fabricating an answer.\n")
+	return sb.String()
+}
+
+// buildRuntimeMetadataBlock provides the agent with current runtime context:
+// local time, model config, workspace path. Supplements the basic Runtime
+// section with dynamic data the agent can reference.
+func buildRuntimeMetadataBlock(cfg PromptConfig) string {
+	var sb strings.Builder
+	sb.WriteString("## Runtime Context\n")
+	fmt.Fprintf(&sb, "- Local time: %s\n", time.Now().Format(time.RFC3339))
+	if cfg.Model != "" {
+		fmt.Fprintf(&sb, "- Active model: %s\n", cfg.Model)
+	}
+	if cfg.Workspace != "" {
+		fmt.Fprintf(&sb, "- Workspace root: %s\n", cfg.Workspace)
+	}
+	if cfg.Version != "" {
+		fmt.Fprintf(&sb, "- Agent version: %s\n", cfg.Version)
+	}
+	return sb.String()
+}
+
+// buildObsidianDirective conditionally injects an Obsidian preferred-destination
+// block if Obsidian integration is enabled in config. Tells the agent to
+// prefer writing notes/knowledge to the vault path when appropriate.
+func buildObsidianDirective(cfg PromptConfig) string {
+	if cfg.Obsidian == nil || !cfg.Obsidian.Enabled || cfg.Obsidian.VaultPath == "" {
+		return ""
+	}
+	return fmt.Sprintf("## Obsidian Integration\n"+
+		"An Obsidian vault is configured at: %s\n"+
+		"When saving notes, research, or knowledge artifacts, prefer writing "+
+		"to this vault using Markdown format compatible with Obsidian.\n",
+		cfg.Obsidian.VaultPath)
 }

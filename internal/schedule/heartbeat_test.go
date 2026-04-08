@@ -140,6 +140,110 @@ func TestHeartbeatTaskKind_Constants(t *testing.T) {
 	}
 }
 
+// --- Wave 11: #102 Heartbeat distributed loops ---
+
+func TestDefaultDomainIntervals(t *testing.T) {
+	di := DefaultDomainIntervals()
+	if di.Financial <= 0 || di.Memory <= 0 || di.Monitoring <= 0 || di.Default <= 0 {
+		t.Error("all domain intervals should be positive")
+	}
+}
+
+func TestDomainForTask(t *testing.T) {
+	tests := []struct {
+		kind   HeartbeatTaskKind
+		domain string
+	}{
+		{TaskSurvivalCheck, "financial"},
+		{TaskUSDCMonitor, "financial"},
+		{TaskYield, "financial"},
+		{TaskMemoryPrune, "memory"},
+		{TaskCacheEvict, "memory"},
+		{TaskMetricSnapshot, "monitoring"},
+		{TaskAgentCardRefresh, "monitoring"},
+		{TaskSessionGovernor, "monitoring"},
+		{"custom_task", "default"},
+	}
+	for _, tc := range tests {
+		got := domainForTask(tc.kind)
+		if got != tc.domain {
+			t.Errorf("domainForTask(%q) = %q, want %q", tc.kind, got, tc.domain)
+		}
+	}
+}
+
+func TestDomainIntervals_IntervalForDomain(t *testing.T) {
+	di := DomainIntervals{
+		Financial:  10 * time.Second,
+		Memory:     20 * time.Second,
+		Monitoring: 30 * time.Second,
+		Default:    40 * time.Second,
+	}
+	if di.intervalForDomain("financial") != 10*time.Second {
+		t.Error("financial interval mismatch")
+	}
+	if di.intervalForDomain("memory") != 20*time.Second {
+		t.Error("memory interval mismatch")
+	}
+	if di.intervalForDomain("monitoring") != 30*time.Second {
+		t.Error("monitoring interval mismatch")
+	}
+	if di.intervalForDomain("unknown") != 40*time.Second {
+		t.Error("unknown should fall back to default")
+	}
+}
+
+func TestRunDistributed_CancelledImmediately(t *testing.T) {
+	task1 := &mockTask{kind: TaskSurvivalCheck, result: TaskResult{Success: true}}
+	task2 := &mockTask{kind: TaskMemoryPrune, result: TaskResult{Success: true}}
+	d := NewHeartbeatDaemon(30*time.Second, []HeartbeatTask{task1, task2})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	done := make(chan struct{})
+	go func() {
+		d.RunDistributed(ctx, DefaultDomainIntervals(), func() *TickContext {
+			return &TickContext{SurvivalTier: core.SurvivalTierStable, Timestamp: time.Now()}
+		})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunDistributed did not return after cancel")
+	}
+}
+
+func TestRunDistributed_TasksExecuted(t *testing.T) {
+	financialTask := &mockTask{kind: TaskUSDCMonitor, result: TaskResult{Success: true}}
+	memoryTask := &mockTask{kind: TaskCacheEvict, result: TaskResult{Success: true}}
+
+	d := NewHeartbeatDaemon(20*time.Millisecond, []HeartbeatTask{financialTask, memoryTask})
+
+	intervals := DomainIntervals{
+		Financial:  20 * time.Millisecond,
+		Memory:     20 * time.Millisecond,
+		Monitoring: 20 * time.Millisecond,
+		Default:    20 * time.Millisecond,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	d.RunDistributed(ctx, intervals, func() *TickContext {
+		return &TickContext{SurvivalTier: core.SurvivalTierStable, Timestamp: time.Now()}
+	})
+
+	if financialTask.callCount.Load() == 0 {
+		t.Error("financial task should have been called")
+	}
+	if memoryTask.callCount.Load() == 0 {
+		t.Error("memory task should have been called")
+	}
+}
+
 func TestTickContext_Fields(t *testing.T) {
 	tc := &TickContext{
 		CreditBalance: 100.5,

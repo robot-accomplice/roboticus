@@ -8,7 +8,7 @@ import (
 )
 
 func TestInterviewStart(t *testing.T) {
-	mgr := NewInterviewManager()
+	mgr := NewInterviewManager(nil, "")
 	handler := InterviewStart(mgr)
 	req := httptest.NewRequest("POST", "/api/interview/start",
 		strings.NewReader(`{"agent_name":"testbot"}`))
@@ -25,7 +25,7 @@ func TestInterviewStart(t *testing.T) {
 }
 
 func TestInterviewTurn(t *testing.T) {
-	mgr := NewInterviewManager()
+	mgr := NewInterviewManager(nil, "")
 	// Start first.
 	startReq := httptest.NewRequest("POST", "/api/interview/start",
 		strings.NewReader(`{"agent_name":"testbot"}`))
@@ -46,7 +46,7 @@ func TestInterviewTurn(t *testing.T) {
 }
 
 func TestInterviewFinish(t *testing.T) {
-	mgr := NewInterviewManager()
+	mgr := NewInterviewManager(nil, "")
 	startReq := httptest.NewRequest("POST", "/api/interview/start",
 		strings.NewReader(`{"agent_name":"testbot"}`))
 	startRec := httptest.NewRecorder()

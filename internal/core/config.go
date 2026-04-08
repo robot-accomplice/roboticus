@@ -75,53 +75,6 @@ type Config struct {
 	DisabledBundledProviders []string             `json:"disabled_bundled_providers" mapstructure:"disabled_bundled_providers"`
 }
 
-// CORSConfig holds cross-origin request settings.
-type CORSConfig struct {
-	AllowedOrigins []string `json:"allowed_origins" mapstructure:"allowed_origins"`
-	MaxAgeSeconds  int      `json:"max_age_seconds" mapstructure:"max_age_seconds"`
-}
-
-// MatrixChannelConfig holds Matrix homeserver connection settings.
-type MatrixChannelConfig struct {
-	Enabled       bool     `json:"enabled" mapstructure:"enabled"`
-	HomeserverURL string   `json:"homeserver_url" mapstructure:"homeserver_url"`
-	AccessToken   string   `json:"access_token" mapstructure:"access_token"`
-	DeviceID      string   `json:"device_id" mapstructure:"device_id"`
-	AllowedRooms  []string `json:"allowed_rooms" mapstructure:"allowed_rooms"`
-	AutoJoin      bool     `json:"auto_join" mapstructure:"auto_join"`
-	E2EEEnabled   bool     `json:"e2ee_enabled" mapstructure:"e2ee_enabled"`
-}
-
-// SandboxCfg holds OS-level process confinement settings.
-type SandboxCfg struct {
-	Enabled        bool     `json:"enabled" mapstructure:"enabled"`
-	MaxMemoryBytes int64    `json:"max_memory_bytes" mapstructure:"max_memory_bytes"`
-	AllowedPaths   []string `json:"allowed_paths" mapstructure:"allowed_paths"`
-}
-
-// ClassifierConfig holds intent classification settings.
-type ClassifierConfig struct {
-	Enabled             bool    `json:"enabled" mapstructure:"enabled"`
-	ConfidenceThreshold float64 `json:"confidence_threshold" mapstructure:"confidence_threshold"`
-}
-
-// PlannerConfig holds action planner settings.
-type PlannerConfig struct {
-	Enabled                 bool `json:"enabled" mapstructure:"enabled"`
-	MaxNormalizationRetries int  `json:"max_normalization_retries" mapstructure:"max_normalization_retries"`
-}
-
-// ThemesConfig holds theme marketplace settings.
-type ThemesConfig struct {
-	CatalogURL string `json:"catalog_url" mapstructure:"catalog_url"`
-}
-
-// DKIMConfig holds DKIM verification settings.
-type DKIMConfig struct {
-	Enabled      bool `json:"enabled" mapstructure:"enabled"`
-	RequireValid bool `json:"require_valid" mapstructure:"require_valid"`
-}
-
 // MCPConfig holds MCP (Model Context Protocol) server configuration.
 type MCPConfig struct {
 	Servers []MCPServerEntry `json:"servers" mapstructure:"servers"`
@@ -129,13 +82,15 @@ type MCPConfig struct {
 
 // MCPServerEntry defines an MCP server to connect to.
 type MCPServerEntry struct {
-	Name      string            `json:"name" mapstructure:"name"`
-	Transport string            `json:"transport" mapstructure:"transport"` // "stdio" or "sse"
-	Command   string            `json:"command" mapstructure:"command"`
-	Args      []string          `json:"args" mapstructure:"args"`
-	URL       string            `json:"url" mapstructure:"url"`
-	Env       map[string]string `json:"env" mapstructure:"env"`
-	Enabled   bool              `json:"enabled" mapstructure:"enabled"`
+	Name          string            `json:"name" mapstructure:"name"`
+	Transport     string            `json:"transport" mapstructure:"transport"` // "stdio" or "sse"
+	Command       string            `json:"command" mapstructure:"command"`
+	Args          []string          `json:"args" mapstructure:"args"`
+	URL           string            `json:"url" mapstructure:"url"`
+	Env           map[string]string `json:"env" mapstructure:"env"`
+	Enabled       bool              `json:"enabled" mapstructure:"enabled"`
+	AuthTokenEnv  string            `json:"auth_token_env,omitempty" mapstructure:"auth_token_env"`
+	ToolAllowlist []string          `json:"tool_allowlist,omitempty" mapstructure:"tool_allowlist"`
 }
 
 // ApprovalsConfig controls human-in-the-loop tool gating.
@@ -313,6 +268,9 @@ type SecurityConfig struct {
 	InterpreterAllow     []string `json:"interpreter_allow" mapstructure:"interpreter_allow"`
 	ScriptAllowedPaths   []string `json:"script_allowed_paths" mapstructure:"script_allowed_paths"`
 	ThreatCautionCeiling string   `json:"threat_caution_ceiling,omitempty" mapstructure:"threat_caution_ceiling"`
+	// Filesystem is a nested security section for fine-grained filesystem access control.
+	// Mirrors Rust's security.filesystem configuration.
+	Filesystem FilesystemSecurityConfig `json:"filesystem" mapstructure:"filesystem"`
 }
 
 // RevenueConfig holds revenue settlement settings.
@@ -320,17 +278,6 @@ type RevenueConfig struct {
 	Enabled           bool    `json:"enabled" mapstructure:"enabled"`
 	TaxRate           float64 `json:"tax_rate" mapstructure:"tax_rate"`
 	DestinationWallet string  `json:"destination_wallet" mapstructure:"destination_wallet"`
-}
-
-// HeartbeatConfig holds heartbeat timing settings.
-type HeartbeatConfig struct {
-	IntervalSeconds int `json:"interval_seconds" mapstructure:"interval_seconds"`
-}
-
-// SkillsConfig holds skill discovery settings.
-type SkillsConfig struct {
-	Directory string `json:"directory" mapstructure:"directory"`
-	WatchMode bool   `json:"watch_mode" mapstructure:"watch_mode"`
 }
 
 // CircuitBreakerConfig holds circuit breaker settings.
@@ -374,107 +321,6 @@ type A2AConfig struct {
 	SessionTimeoutSeconds  int  `json:"session_timeout_seconds" mapstructure:"session_timeout_seconds"`
 	RequireOnChainIdentity bool `json:"require_on_chain_identity" mapstructure:"require_on_chain_identity"`
 	NonceTTLSeconds        int  `json:"nonce_ttl_seconds" mapstructure:"nonce_ttl_seconds"`
-}
-
-// ContextConfig holds context window management settings.
-type ContextConfig struct {
-	MaxTokens               int     `json:"max_tokens" mapstructure:"max_tokens"`
-	SoftTrimRatio           float64 `json:"soft_trim_ratio" mapstructure:"soft_trim_ratio"`
-	HardClearRatio          float64 `json:"hard_clear_ratio" mapstructure:"hard_clear_ratio"`
-	PreserveRecent          int     `json:"preserve_recent" mapstructure:"preserve_recent"`
-	CheckpointEnabled       bool    `json:"checkpoint_enabled" mapstructure:"checkpoint_enabled"`
-	CheckpointIntervalTurns int     `json:"checkpoint_interval_turns" mapstructure:"checkpoint_interval_turns"`
-}
-
-// BrowserConfig holds headless browser / CDP settings.
-type BrowserConfig struct {
-	CDPPort        int `json:"cdp_port" mapstructure:"cdp_port"`
-	TimeoutSeconds int `json:"timeout_seconds" mapstructure:"timeout_seconds"`
-}
-
-// DaemonConfig holds background daemon settings.
-type DaemonConfig struct {
-	AutoRestart bool   `json:"auto_restart" mapstructure:"auto_restart"`
-	PIDFile     string `json:"pid_file" mapstructure:"pid_file"`
-}
-
-// UpdateConfig holds auto-update settings.
-type UpdateConfig struct {
-	Enabled            bool `json:"enabled" mapstructure:"enabled"`
-	CheckIntervalHours int  `json:"check_interval_hours" mapstructure:"check_interval_hours"`
-}
-
-// TierAdaptConfig holds adaptive tier settings.
-type TierAdaptConfig struct {
-	Enabled bool `json:"enabled" mapstructure:"enabled"`
-}
-
-// PersonalityConfig holds personality file paths.
-type PersonalityConfig struct {
-	OSPath       string `json:"os_path" mapstructure:"os_path"`
-	FirmwarePath string `json:"firmware_path" mapstructure:"firmware_path"`
-	OperatorPath string `json:"operator_path" mapstructure:"operator_path"`
-}
-
-// DigestConfig holds conversation digest settings.
-type DigestConfig struct {
-	Enabled  bool `json:"enabled" mapstructure:"enabled"`
-	MinTurns int  `json:"min_turns" mapstructure:"min_turns"`
-}
-
-// LearningConfig holds pattern learning settings.
-type LearningConfig struct {
-	Enabled           bool `json:"enabled" mapstructure:"enabled"`
-	MinSequenceLength int  `json:"min_sequence_length" mapstructure:"min_sequence_length"`
-}
-
-// MultimodalConfig holds multimodal input settings.
-type MultimodalConfig struct {
-	VisionEnabled bool `json:"vision_enabled" mapstructure:"vision_enabled"`
-	AudioEnabled  bool `json:"audio_enabled" mapstructure:"audio_enabled"`
-}
-
-// KnowledgeConfig holds knowledge base settings.
-type KnowledgeConfig struct {
-	SourcesDir string `json:"sources_dir" mapstructure:"sources_dir"`
-	Enabled    bool   `json:"enabled" mapstructure:"enabled"`
-}
-
-// WorkspaceCfg holds workspace indexing settings (distinct from SandboxCfg).
-type WorkspaceCfg struct {
-	IndexingEnabled bool `json:"indexing_enabled" mapstructure:"indexing_enabled"`
-}
-
-// DeviceConfig holds device pairing settings.
-type DeviceConfig struct {
-	PairingEnabled bool `json:"pairing_enabled" mapstructure:"pairing_enabled"`
-}
-
-// DiscoveryConfig holds network discovery settings.
-type DiscoveryConfig struct {
-	MDNSEnabled bool `json:"mdns_enabled" mapstructure:"mdns_enabled"`
-}
-
-// ObsidianConfig holds Obsidian vault integration settings.
-type ObsidianConfig struct {
-	VaultPath string `json:"vault_path" mapstructure:"vault_path"`
-	Enabled   bool   `json:"enabled" mapstructure:"enabled"`
-}
-
-// BackupsConfig holds backup settings.
-type BackupsConfig struct {
-	Enabled       bool `json:"enabled" mapstructure:"enabled"`
-	RetentionDays int  `json:"retention_days" mapstructure:"retention_days"`
-}
-
-// ContextBudgetConfig holds per-layer context budget settings.
-type ContextBudgetConfig struct {
-	L0                int     `json:"l0" mapstructure:"l0"`
-	L1                int     `json:"l1" mapstructure:"l1"`
-	L2                int     `json:"l2" mapstructure:"l2"`
-	L3                int     `json:"l3" mapstructure:"l3"`
-	ChannelMinimum    string  `json:"channel_minimum" mapstructure:"channel_minimum"`
-	SoulMaxContextPct float64 `json:"soul_max_context_pct" mapstructure:"soul_max_context_pct"`
 }
 
 // ModelOverride holds per-model override settings.
@@ -567,7 +413,14 @@ func DefaultConfig() Config {
 			DenyOnEmptyAllowlist: true,
 		},
 		Skills: SkillsConfig{
-			WatchMode: true,
+			WatchMode:            true,
+			ScriptTimeoutSeconds: 30,
+			ScriptMaxOutputBytes: 1 << 20, // 1 MiB
+			AllowedInterpreters:  []string{"sh", "bash", "python3", "node", "ruby", "perl"},
+			SandboxEnv:           false,
+			HotReload:            true,
+			ScriptMaxMemoryBytes: 256 << 20, // 256 MiB
+			NetworkAllowed:       false,
 		},
 		CORS: CORSConfig{
 			AllowedOrigins: []string{"*"},
@@ -629,16 +482,28 @@ func DefaultConfig() Config {
 			Enabled: false,
 		},
 		Digest: DigestConfig{
-			Enabled:  true,
-			MinTurns: 3,
+			Enabled:           true,
+			MinTurns:          3,
+			MaxTokens:         512,
+			DecayHalfLifeDays: 7.0,
 		},
 		Learning: LearningConfig{
-			Enabled:           true,
-			MinSequenceLength: 3,
+			Enabled:                    true,
+			MinSequenceLength:          3,
+			MinSuccessRatio:            0.7,
+			PriorityBoostOnSuccess:     5,
+			PriorityDecayOnFailure:     10, // intentional 2:1 asymmetry with boost
+			MaxLearnedSkills:           100,
+			StaleProceduralDays:        30,
+			DeadSkillPriorityThreshold: 0,
 		},
 		Multimodal: MultimodalConfig{
-			VisionEnabled: false,
-			AudioEnabled:  false,
+			VisionEnabled:        false,
+			AudioEnabled:         false,
+			MaxImageSizeBytes:    10 << 20, // 10 MiB
+			MaxAudioSizeBytes:    25 << 20, // 25 MiB
+			MaxVideoSizeBytes:    50 << 20, // 50 MiB
+			MaxDocumentSizeBytes: 50 << 20, // 50 MiB
 		},
 		Knowledge: KnowledgeConfig{
 			Enabled: false,
@@ -658,6 +523,15 @@ func DefaultConfig() Config {
 		Backups: BackupsConfig{
 			Enabled:       false,
 			RetentionDays: 30,
+		},
+		Heartbeat: HeartbeatConfig{
+			IntervalSeconds:            60,
+			TreasuryIntervalSeconds:    300,
+			YieldIntervalSeconds:       600,
+			MemoryIntervalSeconds:      60,
+			MaintenanceIntervalSeconds: 60,
+			SessionIntervalSeconds:     60,
+			DiscoveryIntervalSeconds:   300,
 		},
 		ContextBudget: ContextBudgetConfig{
 			L0:                8000,
@@ -895,9 +769,15 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("%w: memory budgets must sum to 100, got %.2f", ErrConfig, budgetSum)
 	}
 
-	// Treasury constraints.
+	// Treasury constraints — all limits must be non-negative.
+	if c.Treasury.DailyCap < 0 {
+		return fmt.Errorf("%w: treasury.daily_cap must be >= 0, got %.2f", ErrConfig, c.Treasury.DailyCap)
+	}
 	if c.Treasury.PerPaymentCap <= 0 {
 		return fmt.Errorf("%w: treasury.per_payment_cap must be > 0", ErrConfig)
+	}
+	if c.Treasury.TransferLimit < 0 {
+		return fmt.Errorf("%w: treasury.transfer_limit must be >= 0, got %.2f", ErrConfig, c.Treasury.TransferLimit)
 	}
 	if c.Treasury.MinimumReserve < 0 {
 		return fmt.Errorf("%w: treasury.minimum_reserve must be >= 0", ErrConfig)

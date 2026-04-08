@@ -170,7 +170,7 @@ func newTestServer(t *testing.T) (*httptest.Server, func()) {
 
 	state := &AppState{
 		Store:    store,
-		LLM:     llmSvc,
+		LLM:      llmSvc,
 		Config:   cfg,
 		EventBus: eventBus,
 	}

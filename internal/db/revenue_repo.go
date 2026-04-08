@@ -102,11 +102,18 @@ func (r *RevenueRepository) CreateOpportunity(ctx context.Context, row RevenueOp
 
 // UpdateOpportunityStatus updates the status of an opportunity.
 func (r *RevenueRepository) UpdateOpportunityStatus(ctx context.Context, id, status string) error {
-	_, err := r.q.ExecContext(ctx,
+	res, err := r.q.ExecContext(ctx,
 		`UPDATE revenue_opportunities SET status = ?, updated_at = datetime('now') WHERE id = ?`,
 		status, id,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrNoRowsAffected
+	}
+	return nil
 }
 
 // GetOpportunity retrieves a single opportunity by ID.

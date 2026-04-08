@@ -31,8 +31,7 @@ const routingProfileKey = "routing_profile"
 // GetRoutingProfile returns the persisted routing profile weights.
 func GetRoutingProfile(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		row := store.QueryRowContext(r.Context(),
-			`SELECT value FROM runtime_settings WHERE key = ?`, routingProfileKey)
+		row := db.NewRouteQueries(store).GetRuntimeSetting(r.Context(), routingProfileKey)
 
 		var raw string
 		if err := row.Scan(&raw); err != nil {
@@ -108,10 +107,7 @@ func PutRoutingProfile(store *db.Store) http.HandlerFunc {
 			return
 		}
 
-		_, err = store.ExecContext(r.Context(),
-			`INSERT INTO runtime_settings (key, value, updated_at) VALUES (?, ?, datetime('now'))
-			 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`,
-			routingProfileKey, string(data))
+		err = db.NewRouteQueries(store).UpsertRuntimeSetting(r.Context(), routingProfileKey, string(data))
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return

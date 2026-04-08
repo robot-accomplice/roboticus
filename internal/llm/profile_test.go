@@ -35,7 +35,7 @@ func TestBuildModelProfiles(t *testing.T) {
 	qt.Record("gpt-4", 0.9)
 	qt.Record("qwen", 0.6)
 
-	profiles := BuildModelProfiles(targets, qt, nil, nil)
+	profiles := BuildModelProfiles(targets, qt, nil, nil, nil)
 	if len(profiles) != 2 {
 		t.Fatalf("got %d profiles, want 2", len(profiles))
 	}

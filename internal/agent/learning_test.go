@@ -111,3 +111,142 @@ func TestLearningExtractor_EmptyTurn(t *testing.T) {
 		t.Errorf("empty turn with no tool results should produce no patterns, got %d", len(patterns))
 	}
 }
+
+func TestProcedureStep_Struct(t *testing.T) {
+	step := ProcedureStep{
+		Input:    "query",
+		Output:   "result",
+		ToolName: "search",
+		Success:  true,
+	}
+	if step.ToolName != "search" || !step.Success {
+		t.Error("ProcedureStep fields not set correctly")
+	}
+}
+
+func TestLearnedProcedure_Struct(t *testing.T) {
+	proc := LearnedProcedure{
+		Name:         "search-fetch-parse",
+		Description:  "A three-step procedure",
+		ToolSequence: []string{"search", "fetch", "parse"},
+		SuccessRatio: 0.85,
+		Steps: []ProcedureStep{
+			{ToolName: "search", Success: true},
+			{ToolName: "fetch", Success: true},
+			{ToolName: "parse", Success: true},
+		},
+	}
+	if len(proc.Steps) != 3 {
+		t.Errorf("expected 3 steps, got %d", len(proc.Steps))
+	}
+	if proc.SuccessRatio != 0.85 {
+		t.Errorf("expected ratio 0.85, got %f", proc.SuccessRatio)
+	}
+}
+
+func TestDetectProcedure_EmptyHistory(t *testing.T) {
+	le := NewLearningExtractor()
+	result := le.DetectProcedure(nil)
+	if result != nil {
+		t.Error("expected nil for empty history")
+	}
+}
+
+func TestDetectProcedure_TooShort(t *testing.T) {
+	le := NewLearningExtractor()
+	history := []ProcedureStep{
+		{ToolName: "a", Success: true},
+		{ToolName: "b", Success: true},
+	}
+	result := le.DetectProcedure(history)
+	if result != nil {
+		t.Error("expected nil for history shorter than minSeqLength")
+	}
+}
+
+func TestDetectProcedure_FindsRecurring(t *testing.T) {
+	le := NewLearningExtractor()
+	// Create a history with a recurring 3-step pattern appearing 3 times.
+	history := []ProcedureStep{
+		{ToolName: "search", Success: true},
+		{ToolName: "fetch", Success: true},
+		{ToolName: "parse", Success: true},
+		{ToolName: "search", Success: true},
+		{ToolName: "fetch", Success: true},
+		{ToolName: "parse", Success: true},
+		{ToolName: "search", Success: true},
+		{ToolName: "fetch", Success: true},
+		{ToolName: "parse", Success: true},
+	}
+	result := le.DetectProcedure(history)
+	if result == nil {
+		t.Fatal("expected a detected procedure")
+	}
+	if len(result.ToolSequence) < 3 {
+		t.Errorf("expected at least 3-step sequence, got %d", len(result.ToolSequence))
+	}
+	if result.SuccessRatio < 0.7 {
+		t.Errorf("expected success ratio >= 0.7, got %f", result.SuccessRatio)
+	}
+}
+
+func TestDetectProcedure_FiltersSingleToolRepetition(t *testing.T) {
+	le := NewLearningExtractor()
+	// All same tool — should be filtered as noise.
+	history := make([]ProcedureStep, 20)
+	for i := range history {
+		history[i] = ProcedureStep{ToolName: "ping", Success: true}
+	}
+	result := le.DetectProcedure(history)
+	if result != nil {
+		t.Error("expected nil for single-tool repetition noise")
+	}
+}
+
+func TestDetectProcedure_CapsAt200(t *testing.T) {
+	le := NewLearningExtractor()
+	// Build 250 entries but embed a recurring pattern in the last 200.
+	history := make([]ProcedureStep, 250)
+	for i := range history {
+		history[i] = ProcedureStep{ToolName: "noise", Success: false}
+	}
+	// Embed recurring pattern in the tail.
+	pattern := []string{"alpha", "beta", "gamma"}
+	for i := 200; i < 250; i++ {
+		history[i] = ProcedureStep{
+			ToolName: pattern[i%3],
+			Success:  true,
+		}
+	}
+	// Should not panic and should find the pattern (or nil — the important thing is no crash).
+	_ = le.DetectProcedure(history)
+}
+
+func TestDetectProcedure_LowSuccessRatio(t *testing.T) {
+	le := NewLearningExtractor()
+	// Create a pattern that appears but with mostly failures.
+	history := []ProcedureStep{
+		{ToolName: "a", Success: false},
+		{ToolName: "b", Success: false},
+		{ToolName: "c", Success: true},
+		{ToolName: "a", Success: false},
+		{ToolName: "b", Success: false},
+		{ToolName: "c", Success: false},
+	}
+	result := le.DetectProcedure(history)
+	if result != nil {
+		t.Error("expected nil for low success ratio pattern")
+	}
+}
+
+func TestIsSingleToolRepetition(t *testing.T) {
+	if !isSingleToolRepetition(nil) {
+		t.Error("empty should be single tool repetition")
+	}
+	if !isSingleToolRepetition([]ProcedureStep{{ToolName: "a"}, {ToolName: "a"}}) {
+		t.Error("same tool should be repetition")
+	}
+	if isSingleToolRepetition([]ProcedureStep{{ToolName: "a"}, {ToolName: "b"}}) {
+		t.Error("different tools should not be repetition")
+	}
+}

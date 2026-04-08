@@ -50,6 +50,8 @@ func init() {
 	_ = viper.BindPFlag("server.bind", rootCmd.PersistentFlags().Lookup("bind"))
 	_ = viper.BindPFlag("gateway.url", rootCmd.PersistentFlags().Lookup("url"))
 	_ = viper.BindPFlag("profile", rootCmd.PersistentFlags().Lookup("profile"))
+	_ = viper.BindPFlag("quiet", rootCmd.PersistentFlags().Lookup("quiet"))
+	_ = viper.BindPFlag("json", rootCmd.PersistentFlags().Lookup("json"))
 	_ = viper.BindEnv("config", "ROBOTICUS_CONFIG")
 }
 

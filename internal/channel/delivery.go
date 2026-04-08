@@ -122,24 +122,42 @@ func NewDeliveryQueue(store *db.Store) *DeliveryQueue {
 	return dq
 }
 
-// Enqueue adds a message to the delivery queue.
-func (dq *DeliveryQueue) Enqueue(channel, recipientID, content string) {
+// Enqueue adds a message to the delivery queue and returns its ID.
+func (dq *DeliveryQueue) Enqueue(channel, recipientID, content string) string {
+	return dq.EnqueueWithOptions(channel, recipientID, content, "", 5)
+}
+
+// EnqueueWithOptions adds a message with configurable idempotency key and max attempts.
+// If an item with the same idempotency key already exists, the enqueue is skipped (dedup).
+func (dq *DeliveryQueue) EnqueueWithOptions(channel, recipientID, content, idempotencyKey string, maxAttempts int) string {
 	dq.mu.Lock()
 	defer dq.mu.Unlock()
 
+	// Idempotency dedup: skip if key already exists in pending queue.
+	if idempotencyKey != "" {
+		for _, existing := range dq.pending {
+			if existing.IdempotencyKey == idempotencyKey {
+				log.Debug().Str("key", idempotencyKey).Msg("delivery enqueue skipped: duplicate idempotency key")
+				return existing.ID
+			}
+		}
+	}
+
 	item := &DeliveryItem{
-		ID:          db.NewID(),
-		Channel:     channel,
-		RecipientID: recipientID,
-		Content:     content,
-		Status:      DeliveryPending,
-		MaxAttempts: 5,
-		NextRetryAt: time.Now(),
-		CreatedAt:   time.Now(),
+		ID:             db.NewID(),
+		Channel:        channel,
+		RecipientID:    recipientID,
+		Content:        content,
+		IdempotencyKey: idempotencyKey,
+		Status:         DeliveryPending,
+		MaxAttempts:    maxAttempts,
+		NextRetryAt:    time.Now(),
+		CreatedAt:      time.Now(),
 	}
 
 	heap.Push(&dq.pending, item)
 	dq.persistItem(item)
+	return item.ID
 }
 
 // DrainReady returns all items whose NextRetryAt has passed.
@@ -202,10 +220,12 @@ func (dq *DeliveryQueue) DeadLetters() []*DeliveryItem {
 }
 
 // ReplayDeadLetter moves a dead-lettered item back to pending.
+// Checks in-memory first, then falls back to store (Rust parity: dual path).
 func (dq *DeliveryQueue) ReplayDeadLetter(id string) bool {
 	dq.mu.Lock()
 	defer dq.mu.Unlock()
 
+	// Try in-memory dead letters first.
 	for i, item := range dq.deadLetters {
 		if item.ID == id {
 			item.Status = DeliveryPending
@@ -218,7 +238,67 @@ func (dq *DeliveryQueue) ReplayDeadLetter(id string) bool {
 			return true
 		}
 	}
+
+	// Fallback: try store-backed replay (item may have been evicted from memory).
+	if dq.store != nil {
+		return dq.replayDeadLetterFromStore(id)
+	}
 	return false
+}
+
+// replayDeadLetterFromStore replays a dead-lettered item from the persistent store.
+func (dq *DeliveryQueue) replayDeadLetterFromStore(id string) bool {
+	row := dq.store.QueryRowContext(context.Background(),
+		`SELECT id, channel, recipient_id, content, max_attempts FROM delivery_queue
+		 WHERE id = ? AND status = ?`, id, DeliveryDeadLetter)
+
+	var item DeliveryItem
+	if err := row.Scan(&item.ID, &item.Channel, &item.RecipientID, &item.Content, &item.MaxAttempts); err != nil {
+		return false
+	}
+
+	item.Status = DeliveryPending
+	item.Attempts = 0
+	item.NextRetryAt = time.Now()
+	item.CreatedAt = time.Now()
+	heap.Push(&dq.pending, &item)
+	dq.updateItemStatus(&item)
+	log.Info().Str("id", id).Msg("dead letter replayed from store")
+	return true
+}
+
+// DeadLettersFromStore returns dead-lettered items from the persistent store.
+// This catches items that were dead-lettered in a previous process lifetime.
+func (dq *DeliveryQueue) DeadLettersFromStore() []*DeliveryItem {
+	if dq.store == nil {
+		return dq.DeadLetters()
+	}
+	rows, err := dq.store.QueryContext(context.Background(),
+		`SELECT id, channel, recipient_id, content, attempts, max_attempts, last_error, created_at
+		 FROM delivery_queue WHERE status = ? ORDER BY created_at DESC LIMIT 100`,
+		DeliveryDeadLetter)
+	if err != nil {
+		return dq.DeadLetters()
+	}
+	defer func() { _ = rows.Close() }()
+
+	var items []*DeliveryItem
+	for rows.Next() {
+		var item DeliveryItem
+		var created string
+		var lastErr *string
+		if err := rows.Scan(&item.ID, &item.Channel, &item.RecipientID, &item.Content,
+			&item.Attempts, &item.MaxAttempts, &lastErr, &created); err != nil {
+			continue
+		}
+		item.Status = DeliveryDeadLetter
+		item.CreatedAt, _ = time.Parse(time.RFC3339, created)
+		if lastErr != nil {
+			item.LastError = *lastErr
+		}
+		items = append(items, &item)
+	}
+	return items
 }
 
 // PendingCount returns the number of items waiting for delivery.

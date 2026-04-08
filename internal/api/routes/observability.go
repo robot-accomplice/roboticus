@@ -14,9 +14,7 @@ func ListObservabilityTraces(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		limit := parseIntParam(r, "limit", 50)
 		offset := parseIntParam(r, "offset", 0)
-		rows, err := store.QueryContext(r.Context(),
-			`SELECT id, turn_id, session_id, channel, total_ms, stages_json, created_at
-			 FROM pipeline_traces ORDER BY created_at DESC LIMIT ? OFFSET ?`, limit, offset)
+		rows, err := db.NewRouteQueries(store).ListObservabilityTracesPage(r.Context(), limit, offset)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to query observability traces")
 			return
@@ -41,9 +39,8 @@ func ListObservabilityTraces(store *db.Store) http.HandlerFunc {
 			})
 		}
 
-		var total int64
-		row := store.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM pipeline_traces`)
-		if err := row.Scan(&total); err != nil {
+		total, err := db.NewRouteQueries(store).CountPipelineTraces(r.Context())
+		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -60,9 +57,7 @@ func ListObservabilityTraces(store *db.Store) http.HandlerFunc {
 func TraceWaterfall(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
-		row := store.QueryRowContext(r.Context(),
-			`SELECT id, turn_id, channel, total_ms, stages_json, created_at
-			 FROM pipeline_traces WHERE id = ? OR turn_id = ? LIMIT 1`, id, id)
+		row := db.NewRouteQueries(store).GetTraceByIDOrTurnID(r.Context(), id)
 		var traceID, turnID, channel, stagesJSON, createdAt string
 		var totalMs int64
 		err := row.Scan(&traceID, &turnID, &channel, &totalMs, &stagesJSON, &createdAt)
@@ -88,10 +83,7 @@ func TraceWaterfall(store *db.Store) http.HandlerFunc {
 func DelegationOutcomes(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		limit := parseIntParam(r, "limit", 50)
-		rows, err := store.QueryContext(r.Context(),
-			`SELECT id, turn_id, session_id, task_description, subtask_count,
-			        pattern, assigned_agents_json, duration_ms, success, quality_score, created_at
-			 FROM delegation_outcomes ORDER BY created_at DESC LIMIT ?`, limit)
+		rows, err := db.NewRouteQueries(store).ListDelegationOutcomesDetailed(r.Context(), limit)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to query delegation outcomes")
 			return
@@ -129,21 +121,16 @@ func DelegationOutcomes(store *db.Store) http.HandlerFunc {
 func DelegationStats(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
+		rq := db.NewRouteQueries(store)
 
-		var total, successful int64
-		var avgDuration float64
-		row := store.QueryRowContext(ctx,
-			`SELECT COUNT(*), COALESCE(SUM(success), 0), COALESCE(AVG(duration_ms), 0)
-			 FROM delegation_outcomes`)
-		if err := row.Scan(&total, &successful, &avgDuration); err != nil {
+		total, successful, avgDuration, err := rq.DelegationTotals(ctx)
+		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 
-		var avgQuality float64
-		row = store.QueryRowContext(ctx,
-			`SELECT COALESCE(AVG(quality_score), 0) FROM delegation_outcomes WHERE quality_score IS NOT NULL`)
-		if err := row.Scan(&avgQuality); err != nil {
+		avgQuality, err := rq.DelegationAvgQuality(ctx)
+		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}

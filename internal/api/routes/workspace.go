@@ -3,7 +3,7 @@ package routes
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"net/http"
 	"os"
 	"runtime"
@@ -21,9 +21,8 @@ import (
 func GetWorkspaceState(store *db.Store, cfg *core.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		dbStats := store.Stats()
-		var sessionCount int64
-		row := store.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM sessions WHERE status = 'active'`)
-		if err := row.Scan(&sessionCount); err != nil {
+		sessionCount, err := db.NewRouteQueries(store).CountActiveSessions(r.Context())
+		if err != nil {
 			log.Warn().Err(err).Msg("failed to query active session count")
 		}
 
@@ -50,8 +49,7 @@ func GetWorkspaceState(store *db.Store, cfg *core.Config) http.HandlerFunc {
 		}
 
 		// Append subagents from DB.
-		agentRows, err := store.QueryContext(r.Context(),
-			`SELECT name, model, enabled FROM sub_agents ORDER BY name`)
+		agentRows, err := db.NewRouteQueries(store).ListSubAgentNamesModels(r.Context())
 		if err == nil {
 			defer func() { _ = agentRows.Close() }()
 			for agentRows.Next() {
@@ -102,10 +100,9 @@ func GetRoster(store *db.Store, cfg *core.Config) http.HandlerFunc {
 			primaryModel = "auto"
 		}
 		// Count skills for the primary agent.
-		var skillCount int64
-		_ = store.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM skills WHERE enabled = 1`).Scan(&skillCount)
+		rq := db.NewRouteQueries(store)
 		var skillNames []string
-		skillRows, sErr := store.QueryContext(r.Context(), `SELECT name FROM skills WHERE enabled = 1 ORDER BY name LIMIT 20`)
+		skillRows, sErr := rq.ListEnabledSkillNames(r.Context(), 20)
 		if sErr == nil {
 			defer func() { _ = skillRows.Close() }()
 			for skillRows.Next() {
@@ -129,9 +126,7 @@ func GetRoster(store *db.Store, cfg *core.Config) http.HandlerFunc {
 			},
 		}
 
-		rows, err := store.QueryContext(r.Context(),
-			`SELECT name, COALESCE(display_name, ''), model, enabled, role, COALESCE(description, '')
-			 FROM sub_agents ORDER BY name`)
+		rows, err := rq.ListSubAgentRoster(r.Context())
 		if err == nil {
 			defer func() { _ = rows.Close() }()
 			for rows.Next() {
@@ -170,15 +165,13 @@ func UpdateRosterModel(store *db.Store) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "invalid JSON")
 			return
 		}
-		result, err := store.ExecContext(r.Context(),
-			`UPDATE sub_agents SET model = ? WHERE name = ?`, req.Model, agentName)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		affected, _ := result.RowsAffected()
-		if affected == 0 {
-			writeError(w, http.StatusNotFound, "agent not found")
+		repo := db.NewAgentsRepository(store)
+		if err := repo.UpdateModel(r.Context(), agentName, req.Model, ""); err != nil {
+			if errors.Is(err, db.ErrNoRowsAffected) {
+				writeError(w, http.StatusNotFound, "agent not found")
+			} else {
+				writeError(w, http.StatusInternalServerError, err.Error())
+			}
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -197,16 +190,13 @@ func UpdateSubagent(store *db.Store) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "invalid JSON")
 			return
 		}
-		result, err := store.ExecContext(r.Context(),
-			`UPDATE sub_agents SET model = ?, description = ? WHERE name = ?`,
-			req.Model, req.Description, name)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		affected, _ := result.RowsAffected()
-		if affected == 0 {
-			writeError(w, http.StatusNotFound, "subagent not found")
+		repo := db.NewAgentsRepository(store)
+		if err := repo.UpdateModel(r.Context(), name, req.Model, req.Description); err != nil {
+			if errors.Is(err, db.ErrNoRowsAffected) {
+				writeError(w, http.StatusNotFound, "subagent not found")
+			} else {
+				writeError(w, http.StatusInternalServerError, err.Error())
+			}
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
@@ -217,15 +207,13 @@ func UpdateSubagent(store *db.Store) http.HandlerFunc {
 func ToggleSubagent(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		name := chi.URLParam(r, "name")
-		result, err := store.ExecContext(r.Context(),
-			`UPDATE sub_agents SET enabled = CASE WHEN enabled = 1 THEN 0 ELSE 1 END WHERE name = ?`, name)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		affected, _ := result.RowsAffected()
-		if affected == 0 {
-			writeError(w, http.StatusNotFound, "subagent not found")
+		repo := db.NewAgentsRepository(store)
+		if err := repo.ToggleEnabled(r.Context(), name); err != nil {
+			if errors.Is(err, db.ErrNoRowsAffected) {
+				writeError(w, http.StatusNotFound, "subagent not found")
+			} else {
+				writeError(w, http.StatusInternalServerError, err.Error())
+			}
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "toggled"})
@@ -236,12 +224,12 @@ func ToggleSubagent(store *db.Store) http.HandlerFunc {
 func DeleteSubagent(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		name := chi.URLParam(r, "name")
-		result, err := store.ExecContext(r.Context(), `DELETE FROM sub_agents WHERE name = ?`, name)
+		repo := db.NewAgentsRepository(store)
+		affected, err := repo.DeleteByName(r.Context(), name)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		affected, _ := result.RowsAffected()
 		if affected == 0 {
 			writeError(w, http.StatusNotFound, "subagent not found")
 			return
@@ -250,72 +238,11 @@ func DeleteSubagent(store *db.Store) http.HandlerFunc {
 	}
 }
 
-// applyConfigPatch loads the config from disk, merges the patch via JSON round-trip,
-// validates the result, and writes valid TOML back to disk. It also persists an
-// audit trail entry. This is the shared implementation used by both UpdateConfig
-// and ConfigApply.
+// applyConfigPatch delegates to core.ApplyConfigPatch — the canonical config
+// mutation path. Route handlers call this thin wrapper; they do not implement
+// config persistence directly (architecture_rules.md §4.1, §4.2).
 func applyConfigPatch(ctx context.Context, store *db.Store, patch map[string]any) (string, error) {
-	path := core.ConfigFilePath()
-
-	// Load the existing config from disk (falls back to defaults if absent).
-	merged, err := core.LoadConfigFromFile(path)
-	if err != nil {
-		return path, fmt.Errorf("failed to load config: %w", err)
-	}
-
-	// Apply the patch: marshal the current config to JSON, overlay the patch
-	// keys, then unmarshal back into the Config struct. This ensures only
-	// known fields are accepted and types are enforced.
-	base, err := json.Marshal(merged)
-	if err != nil {
-		return path, fmt.Errorf("failed to marshal config: %w", err)
-	}
-
-	var baseMap map[string]any
-	if err := json.Unmarshal(base, &baseMap); err != nil {
-		return path, fmt.Errorf("failed to parse config: %w", err)
-	}
-
-	for k, v := range patch {
-		baseMap[k] = v
-	}
-
-	patchedJSON, err := json.Marshal(baseMap)
-	if err != nil {
-		return path, fmt.Errorf("failed to marshal patched config: %w", err)
-	}
-
-	if err := json.Unmarshal(patchedJSON, &merged); err != nil {
-		return path, fmt.Errorf("patch produced invalid config: %w", err)
-	}
-
-	// Validate the merged config.
-	if err := merged.Validate(); err != nil {
-		return path, fmt.Errorf("validation failed: %w", err)
-	}
-
-	// Persist patch to identity table for audit trail.
-	auditJSON, _ := json.Marshal(patch)
-	if _, err := store.ExecContext(ctx,
-		`INSERT INTO identity (key, value) VALUES ('config_patch:latest', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-		string(auditJSON)); err != nil {
-		return path, fmt.Errorf("failed to persist config audit trail: %w", err)
-	}
-
-	// Write the validated config as TOML.
-	tomlBytes, err := core.MarshalTOML(&merged)
-	if err != nil {
-		return path, fmt.Errorf("failed to marshal TOML: %w", err)
-	}
-
-	if err := os.MkdirAll(core.ConfigDir(), 0o755); err != nil {
-		return path, fmt.Errorf("failed to create config dir: %w", err)
-	}
-	if err := os.WriteFile(path, tomlBytes, 0o644); err != nil {
-		return path, fmt.Errorf("failed to write config file: %w", err)
-	}
-
-	return path, nil
+	return core.ApplyConfigPatch(ctx, store, patch)
 }
 
 // UpdateConfig applies a JSON config patch by loading the existing TOML config,

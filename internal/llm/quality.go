@@ -104,6 +104,11 @@ func (qt *QualityTracker) ObservationCount(model string) int {
 	return rb.count
 }
 
+// HasObservations returns true if any quality data exists for this model.
+func (qt *QualityTracker) HasObservations(model string) bool {
+	return qt.ObservationCount(model) > 0
+}
+
 // ClearModel removes all observations for a single model and returns the number removed.
 func (qt *QualityTracker) ClearModel(model string) int {
 	qt.mu.Lock()
@@ -166,6 +171,94 @@ func (qt *QualityTracker) SeedFromHistory(ctx context.Context, store *db.Store) 
 
 	if seeded > 0 {
 		log.Info().Int("seeded", seeded).Msg("quality tracker: warm-started from history")
+	}
+}
+
+// IntentClassKey identifies a model+intentClass pair for quality tracking.
+type IntentClassKey struct {
+	Model       string
+	IntentClass string
+}
+
+// IntentQualityTracker extends QualityTracker with per-intent-class tracking.
+// This enables the router to estimate quality for specific intent categories
+// (e.g., "code", "creative", "math") rather than just per-model averages.
+type IntentQualityTracker struct {
+	mu         sync.RWMutex
+	intents    map[IntentClassKey]*ringBuffer
+	baselines  map[string]float64 // intentClass → baseline quality
+	windowSize int
+}
+
+// NewIntentQualityTracker creates an intent-class-aware quality tracker.
+func NewIntentQualityTracker(windowSize int) *IntentQualityTracker {
+	if windowSize <= 0 {
+		windowSize = 50
+	}
+	return &IntentQualityTracker{
+		intents:    make(map[IntentClassKey]*ringBuffer),
+		baselines:  make(map[string]float64),
+		windowSize: windowSize,
+	}
+}
+
+// RecordWithIntent adds a quality observation for a model + intent class pair.
+func (iq *IntentQualityTracker) RecordWithIntent(model, intentClass string, score float64) {
+	if score < 0 {
+		score = 0
+	}
+	if score > 1 {
+		score = 1
+	}
+
+	key := IntentClassKey{Model: model, IntentClass: intentClass}
+
+	iq.mu.Lock()
+	defer iq.mu.Unlock()
+
+	rb, ok := iq.intents[key]
+	if !ok {
+		rb = newRingBuffer(iq.windowSize)
+		iq.intents[key] = rb
+	}
+	rb.push(score)
+}
+
+// EstimatedQualityForIntent returns the windowed average quality for a
+// model+intentClass pair. Falls back to the baseline for the intent class
+// if no observations exist, or 0.5 if no baseline is set either.
+func (iq *IntentQualityTracker) EstimatedQualityForIntent(model, intentClass string) float64 {
+	key := IntentClassKey{Model: model, IntentClass: intentClass}
+
+	iq.mu.RLock()
+	defer iq.mu.RUnlock()
+
+	rb, ok := iq.intents[key]
+	if ok && rb.count > 0 {
+		return rb.average()
+	}
+
+	// Fall back to baseline for this intent class.
+	if baseline, exists := iq.baselines[intentClass]; exists {
+		return baseline
+	}
+	return 0.5
+}
+
+// SeedFromBaselines sets cold-start priors for intent classes. These are used
+// when no observations exist for a model+intentClass pair.
+func (iq *IntentQualityTracker) SeedFromBaselines(baselines map[string]float64) {
+	iq.mu.Lock()
+	defer iq.mu.Unlock()
+
+	for k, v := range baselines {
+		if v < 0 {
+			v = 0
+		}
+		if v > 1 {
+			v = 1
+		}
+		iq.baselines[k] = v
 	}
 }
 

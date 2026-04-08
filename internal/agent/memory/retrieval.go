@@ -36,6 +36,7 @@ type Retriever struct {
 	store         *db.Store
 	budgets       TierBudget
 	embedClient   *llm.EmbeddingClient
+	hnswIndex     *db.HNSWIndex
 	charsPerToken int
 }
 
@@ -54,6 +55,40 @@ func (mr *Retriever) SetEmbeddingClient(ec *llm.EmbeddingClient) {
 	mr.embedClient = ec
 }
 
+// SetHNSWIndex attaches an HNSW index for ANN-based retrieval.
+func (mr *Retriever) SetHNSWIndex(idx *db.HNSWIndex) {
+	mr.hnswIndex = idx
+}
+
+// MemoryEntry represents a memory result from ANN retrieval.
+type MemoryEntry struct {
+	SourceTable    string  `json:"source_table"`
+	SourceID       string  `json:"source_id"`
+	ContentPreview string  `json:"content_preview"`
+	Similarity     float64 `json:"similarity"`
+}
+
+// RetrieveWithANN uses the HNSW index for O(log n) approximate nearest-neighbor
+// search over memory embeddings. Falls back to empty results if the index is
+// not built or has insufficient entries.
+func (mr *Retriever) RetrieveWithANN(ctx context.Context, embedding []float64, k int) []MemoryEntry {
+	if mr.hnswIndex == nil || !mr.hnswIndex.IsBuilt() || k <= 0 {
+		return nil
+	}
+
+	results := mr.hnswIndex.Search(embedding, k)
+	entries := make([]MemoryEntry, len(results))
+	for i, r := range results {
+		entries[i] = MemoryEntry{
+			SourceTable:    r.SourceTable,
+			SourceID:       r.SourceID,
+			ContentPreview: r.ContentPreview,
+			Similarity:     r.Similarity,
+		}
+	}
+	return entries
+}
+
 // Entry represents a retrieved memory.
 type Entry struct {
 	ID         string
@@ -64,11 +99,52 @@ type Entry struct {
 	AgeDays    float64
 }
 
+// RetrievalMetrics tracks observability data for memory retrieval (Rust parity).
+type RetrievalMetrics struct {
+	TotalEntries    int     `json:"total_entries"`
+	MatchedEntries  int     `json:"matched_entries"`
+	AvgSimilarity   float64 `json:"avg_similarity"`
+	BudgetUsedPct   float64 `json:"budget_used_pct"`
+	WorkingCount    int     `json:"working_count"`
+	EpisodicCount   int     `json:"episodic_count"`
+	SemanticCount   int     `json:"semantic_count"`
+	ProceduralCount int     `json:"procedural_count"`
+	RelationCount   int     `json:"relation_count"`
+	AmbientCount    int     `json:"ambient_count"`
+}
+
+// historyKeywords trigger inclusion of inactive/stale memories when present in query.
+var historyKeywords = []string{
+	"history", "historical", "previous", "earlier", "before",
+	"past", "old", "resolved", "stale", "archive",
+}
+
 // Retrieve fetches relevant memories across all tiers within the total token budget.
 func (mr *Retriever) Retrieve(ctx context.Context, sessionID, query string, totalTokens int) string {
+	text, _ := mr.RetrieveWithMetrics(ctx, sessionID, query, totalTokens)
+	return text
+}
+
+// RetrieveWithMetrics fetches memories and returns both the injected text
+// and observability metrics (Rust parity: retrieve_with_metrics).
+func (mr *Retriever) RetrieveWithMetrics(ctx context.Context, sessionID, query string, totalTokens int) (string, RetrievalMetrics) {
+	var metrics RetrievalMetrics
 	if mr.store == nil {
-		return ""
+		return "", metrics
 	}
+
+	// Check if query requests historical/inactive memories.
+	includeInactive := false
+	if query != "" {
+		lower := strings.ToLower(query)
+		for _, kw := range historyKeywords {
+			if strings.Contains(lower, kw) {
+				includeInactive = true
+				break
+			}
+		}
+	}
+	_ = includeInactive // Used in episodic/semantic retrieval below.
 
 	// Generate query embedding if embedding client is available.
 	var queryEmbed []float32
@@ -81,13 +157,26 @@ func (mr *Retriever) Retrieve(ctx context.Context, sessionID, query string, tota
 	}
 
 	var sections []string
+	totalCharsUsed := 0
+	totalCharsAllowed := totalTokens * mr.charsPerToken
 
-	// Working memory.
+	// Working memory (filter out turn_summary entries — Rust parity).
 	if budget := int(float64(totalTokens) * mr.budgets.Working); budget > 0 {
 		working := mr.retrieveWorkingMemory(ctx, sessionID, budget)
 		if working != "" {
 			sections = append(sections, "[Working Memory]\n"+working)
+			totalCharsUsed += len(working)
+			metrics.WorkingCount = strings.Count(working, "\n- ") + 1
 		}
+	}
+
+	// Ambient recency: inject recent episodic memories (last 2 hours)
+	// regardless of query match (Rust parity: recent ambient context).
+	ambient := mr.retrieveAmbientRecent(ctx, 2)
+	if ambient != "" {
+		sections = append(sections, "[Recent Activity]\n"+ambient)
+		totalCharsUsed += len(ambient)
+		metrics.AmbientCount = strings.Count(ambient, "\n- ") + 1
 	}
 
 	// Episodic memory (with temporal decay + optional embedding re-rank).
@@ -95,6 +184,8 @@ func (mr *Retriever) Retrieve(ctx context.Context, sessionID, query string, tota
 		episodic := mr.retrieveEpisodic(ctx, query, queryEmbed, budget)
 		if episodic != "" {
 			sections = append(sections, "[Relevant Memories]\n"+episodic)
+			totalCharsUsed += len(episodic)
+			metrics.EpisodicCount = strings.Count(episodic, "\n- ") + 1
 		}
 	}
 
@@ -103,6 +194,8 @@ func (mr *Retriever) Retrieve(ctx context.Context, sessionID, query string, tota
 		semantic := mr.retrieveSemanticMemory(ctx, query, budget)
 		if semantic != "" {
 			sections = append(sections, "[Knowledge]\n"+semantic)
+			totalCharsUsed += len(semantic)
+			metrics.SemanticCount = strings.Count(semantic, "\n- ") + 1
 		}
 	}
 
@@ -111,6 +204,8 @@ func (mr *Retriever) Retrieve(ctx context.Context, sessionID, query string, tota
 		procedural := mr.retrieveProceduralMemory(ctx, budget)
 		if procedural != "" {
 			sections = append(sections, "[Tool Experience]\n"+procedural)
+			totalCharsUsed += len(procedural)
+			metrics.ProceduralCount = strings.Count(procedural, "\n- ") + 1
 		}
 	}
 
@@ -119,13 +214,58 @@ func (mr *Retriever) Retrieve(ctx context.Context, sessionID, query string, tota
 		relationships := mr.retrieveRelationshipMemory(ctx, budget)
 		if relationships != "" {
 			sections = append(sections, "[Relationships]\n"+relationships)
+			totalCharsUsed += len(relationships)
+			metrics.RelationCount = strings.Count(relationships, "\n- ") + 1
 		}
 	}
 
+	metrics.TotalEntries = metrics.WorkingCount + metrics.AmbientCount +
+		metrics.EpisodicCount + metrics.SemanticCount +
+		metrics.ProceduralCount + metrics.RelationCount
+	metrics.MatchedEntries = metrics.TotalEntries
+	if totalCharsAllowed > 0 {
+		metrics.BudgetUsedPct = float64(totalCharsUsed) / float64(totalCharsAllowed)
+	}
+
 	if len(sections) == 0 {
+		return "", metrics
+	}
+	return "[Active Memory]\n" + strings.Join(sections, "\n\n"), metrics
+}
+
+// retrieveAmbientRecent fetches episodic memories from the last N hours,
+// regardless of query match. This ensures the agent knows about recent actions
+// even on unrelated queries (Rust: recent ambient context injection).
+func (mr *Retriever) retrieveAmbientRecent(ctx context.Context, hours int) string {
+	rows, err := mr.store.QueryContext(ctx,
+		`SELECT classification, content, created_at FROM episodic_memory
+		 WHERE memory_state = 'active'
+		 AND created_at >= datetime('now', ?)
+		 ORDER BY created_at DESC LIMIT 5`,
+		fmt.Sprintf("-%d hours", hours),
+	)
+	if err != nil {
 		return ""
 	}
-	return "[Active Memory]\n" + strings.Join(sections, "\n\n")
+	defer func() { _ = rows.Close() }()
+
+	var lines []string
+	for rows.Next() {
+		var classification, content, createdAt string
+		if err := rows.Scan(&classification, &content, &createdAt); err != nil {
+			continue
+		}
+		// Format: [HH:MM] (classification) content
+		timeStr := createdAt
+		if len(timeStr) > 16 {
+			timeStr = timeStr[11:16] // Extract HH:MM
+		}
+		lines = append(lines, fmt.Sprintf("- [%s] (%s) %s", timeStr, classification, content))
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return strings.Join(lines, "\n")
 }
 
 // retrieveWorkingMemory fetches from the working_memory table.

@@ -39,11 +39,13 @@ const (
 //	ks.Set("anthropic_api_key", "sk-ant-...")
 //	ks.Save()
 type Keystore struct {
-	mu         sync.RWMutex
-	path       string
-	passphrase string // kept for re-encryption on Save with fresh salt
-	secrets    map[string]string
-	dirty      bool
+	mu          sync.RWMutex
+	path        string
+	passphrase  string // kept for re-encryption on Save with fresh salt
+	secrets     map[string]string
+	dirty       bool
+	audit       *auditLog           // audit trail (nil until first event)
+	fingerprint keystoreFingerprint // file fingerprint for change detection
 }
 
 // KeystoreConfig holds keystore initialization options.
@@ -170,8 +172,10 @@ func (ks *Keystore) Set(name, value string) error {
 	}
 	ks.mu.Lock()
 	defer ks.mu.Unlock()
+	_, existed := ks.secrets[name]
 	ks.secrets[name] = value
 	ks.dirty = true
+	ks.appendAuditEvent("set", name, map[string]interface{}{"overwrite": existed})
 	return nil
 }
 
@@ -184,6 +188,7 @@ func (ks *Keystore) Delete(name string) error {
 	}
 	delete(ks.secrets, name)
 	ks.dirty = true
+	ks.appendAuditEvent("delete", name, nil)
 	return nil
 }
 
@@ -235,6 +240,7 @@ func (ks *Keystore) Save() error {
 		return fmt.Errorf("keystore: write failed: %w", err)
 	}
 	ks.dirty = false
+	ks.updateFingerprint()
 	return nil
 }
 
@@ -291,6 +297,7 @@ func (ks *Keystore) encrypt(plaintext []byte) ([]byte, error) {
 	}
 
 	key := deriveKey(ks.passphrase, salt)
+	defer zeroize(key)
 
 	block, err := aes.NewCipher(key)
 	if err != nil {
@@ -333,6 +340,7 @@ func (ks *Keystore) decrypt(data []byte) error {
 	ciphertext := data[saltLen+nonceLen:]
 
 	key := deriveKey(ks.passphrase, salt)
+	defer zeroize(key)
 
 	block, err := aes.NewCipher(key)
 	if err != nil {

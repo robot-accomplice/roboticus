@@ -23,17 +23,18 @@ import (
 
 // AppState holds all shared state for the API server.
 type AppState struct {
-	Store      *db.Store
-	Pipeline   pipeline.Runner // connectors must depend on the interface, not *pipeline.Pipeline
-	LLM        *llm.Service
-	Config     *core.Config
-	Keystore   *core.Keystore
-	EventBus   *EventBus
-	Approvals  routes.ApprovalService
-	MCP        *mcp.ConnectionManager
-	MCPGateway *mcp.Gateway // serves the agent's tools to external MCP clients
-	Plugins    *plugin.Registry
-	Browser    *browser.Browser
+	Store           *db.Store
+	Pipeline        pipeline.Runner          // connectors must depend on the interface, not *pipeline.Pipeline
+	StreamFinalizer pipeline.StreamFinalizer // post-stream work (Rule 7.2 parity)
+	LLM             *llm.Service
+	Config          *core.Config
+	Keystore        *core.Keystore
+	EventBus        *EventBus
+	Approvals       routes.ApprovalService
+	MCP             *mcp.ConnectionManager
+	MCPGateway      *mcp.Gateway // serves the agent's tools to external MCP clients
+	Plugins         *plugin.Registry
+	Browser         *browser.Browser
 }
 
 // ServerConfig controls the HTTP server.
@@ -114,8 +115,12 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 		r.Get("/dashboard", DashboardHandler())
 
 		// Agent inference.
-		r.Post("/api/agent/message", routes.AgentMessage(state.Pipeline))
-		r.Post("/api/agent/message/stream", routes.AgentMessageStream(state.Pipeline, state.LLM))
+		agentName := "Roboticus"
+		if state.Config != nil && state.Config.Agent.Name != "" {
+			agentName = state.Config.Agent.Name
+		}
+		r.Post("/api/agent/message", routes.AgentMessage(state.Pipeline, agentName))
+		r.Post("/api/agent/message/stream", routes.AgentMessageStream(state.Pipeline, state.LLM, agentName, state.StreamFinalizer))
 		r.Get("/api/agent/status", routes.AgentStatus(state.LLM, state.Config))
 
 		// Sessions.
@@ -125,7 +130,7 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 		r.Get("/api/sessions/{id}", routes.GetSession(state.Store))
 		r.Delete("/api/sessions/{id}", routes.DeleteSession(state.Store))
 		r.Get("/api/sessions/{id}/messages", routes.ListMessages(state.Store))
-		r.Post("/api/sessions/{id}/messages", routes.PostMessage(state.Pipeline))
+		r.Post("/api/sessions/{id}/messages", routes.PostMessage(state.Pipeline, agentName))
 		r.Get("/api/sessions/{id}/turns", routes.ListSessionTurns(state.Store))
 		r.Get("/api/sessions/{id}/feedback", routes.GetSessionFeedback(state.Store))
 		r.Get("/api/sessions/{id}/insights", routes.GetSessionInsights(state.Store))
@@ -168,7 +173,7 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 		r.Get("/api/cron/jobs/{id}", routes.GetCronJob(state.Store))
 		r.Put("/api/cron/jobs/{id}", routes.UpdateCronJob(state.Store))
 		r.Delete("/api/cron/jobs/{id}", routes.DeleteCronJob(state.Store))
-		r.Post("/api/cron/jobs/{id}/run", routes.RunCronJobNow(state.Pipeline, state.Store))
+		r.Post("/api/cron/jobs/{id}/run", routes.RunCronJobNow(state.Pipeline, state.Store, agentName))
 
 		// Skills.
 		r.Get("/api/skills", routes.ListSkills(state.Store))
@@ -373,7 +378,11 @@ func NewServer(cfg ServerConfig, state *AppState) *http.Server {
 		r.Post("/api/keystore/unlock", routes.KeystoreUnlock())
 
 		// Interview.
-		interviewMgr := routes.NewInterviewManager()
+		interviewWorkspace := ""
+		if state.Config != nil {
+			interviewWorkspace = state.Config.Agent.Workspace
+		}
+		interviewMgr := routes.NewInterviewManager(state.LLM, interviewWorkspace)
 		r.Post("/api/interview/start", routes.InterviewStart(interviewMgr))
 		r.Post("/api/interview/turn", routes.InterviewTurn(interviewMgr))
 		r.Post("/api/interview/finish", routes.InterviewFinish(interviewMgr))

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"roboticus/internal/llm"
@@ -81,8 +82,8 @@ func TestLoop_MaxTurns(t *testing.T) {
 
 	cfg := LoopConfig{
 		MaxTurns:      3,
-		IdleThreshold: 3,
-		LoopWindow:    3,
+		IdleThreshold: 10,
+		LoopWindow:    100, // high window to prevent loop detection from firing before max turns
 	}
 
 	reg := NewToolRegistry()
@@ -99,8 +100,12 @@ func TestLoop_MaxTurns(t *testing.T) {
 	session.AddUserMessage("do something")
 
 	_, err := loop.Run(context.Background(), session)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	// Hard max turn enforcement: should return ErrMaxTurns.
+	if err == nil {
+		t.Fatal("expected error from max turns enforcement")
+	}
+	if !errors.Is(err, ErrMaxTurns) {
+		t.Errorf("expected ErrMaxTurns, got: %v", err)
 	}
 
 	if loop.TurnCount() > cfg.MaxTurns+1 {

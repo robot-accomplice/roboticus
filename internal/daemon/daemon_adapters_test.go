@@ -592,7 +592,7 @@ func TestBuildAgentContext_Basic(t *testing.T) {
 	sess.AddUserMessage("Hello there")
 
 	// No tools, no retriever — should not panic.
-	ctx := buildAgentContext(context.Background(), sess, nil, nil, agent.PromptConfig{
+	ctx := buildAgentContext(context.Background(), sess, nil, nil, nil, agent.PromptConfig{
 		AgentName: "TestBot",
 	})
 	if ctx == nil {
@@ -607,7 +607,7 @@ func TestBuildAgentContext_WithTools(t *testing.T) {
 	reg := agent.NewToolRegistry()
 	reg.Register(&tools.EchoTool{})
 
-	ctx := buildAgentContext(context.Background(), sess, reg, nil, agent.PromptConfig{
+	ctx := buildAgentContext(context.Background(), sess, reg, nil, nil, agent.PromptConfig{
 		AgentName: "TestBot",
 	})
 	if ctx == nil {
@@ -624,7 +624,7 @@ func TestBuildAgentContext_WithRetriever(t *testing.T) {
 	sess := session.New("s1", "a1", "TestBot")
 	sess.AddUserMessage("query about something")
 
-	ctx := buildAgentContext(context.Background(), sess, nil, retriever, agent.PromptConfig{
+	ctx := buildAgentContext(context.Background(), sess, nil, retriever, store, agent.PromptConfig{
 		AgentName: "TestBot",
 	})
 	if ctx == nil {
@@ -640,7 +640,7 @@ func TestBuildAgentContext_NoUserMessages(t *testing.T) {
 
 	sess := session.New("s1", "a1", "TestBot")
 	// No messages.
-	ctx := buildAgentContext(context.Background(), sess, nil, retriever, agent.PromptConfig{
+	ctx := buildAgentContext(context.Background(), sess, nil, retriever, store, agent.PromptConfig{
 		AgentName: "TestBot",
 	})
 	if ctx == nil {
@@ -652,7 +652,7 @@ func TestBuildAgentContext_SetsAgentName(t *testing.T) {
 	sess := session.New("s1", "a1", "OverrideName")
 	sess.AddUserMessage("test")
 
-	ctx := buildAgentContext(context.Background(), sess, nil, nil, agent.PromptConfig{
+	ctx := buildAgentContext(context.Background(), sess, nil, nil, nil, agent.PromptConfig{
 		AgentName: "DefaultName",
 	})
 	if ctx == nil {

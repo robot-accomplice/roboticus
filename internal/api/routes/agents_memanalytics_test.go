@@ -463,17 +463,17 @@ func TestUpdateConfigRaw_EmptyBody(t *testing.T) {
 	}
 }
 
-func TestUpdateConfigRaw_WriteError(t *testing.T) {
+func TestUpdateConfigRaw_CreatesDir(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
-	// Don't create .roboticus dir so WriteFile fails.
+	// core.WriteConfigRaw now creates .roboticus dir automatically.
 
 	handler := UpdateConfigRaw()
 	req := httptest.NewRequest("PUT", "/api/config/raw", strings.NewReader("[server]\nport=1\n"))
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 500", rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (auto-creates dir), body = %s", rec.Code, rec.Body.String())
 	}
 }

@@ -94,6 +94,16 @@ func TestTicketStore_CleanupKeepsValid(t *testing.T) {
 	}
 }
 
+func TestTicketStore_EntropyLength(t *testing.T) {
+	ts := NewTicketStore(60 * time.Second)
+	ticket := ts.Issue()
+	// "wst_" prefix + 64 hex chars (32 bytes of entropy).
+	expectedLen := 4 + 64
+	if len(ticket) != expectedLen {
+		t.Errorf("ticket length = %d, want %d (32 bytes entropy)", len(ticket), expectedLen)
+	}
+}
+
 func TestTicketStore_UniqueTokens(t *testing.T) {
 	ts := NewTicketStore(60 * time.Second)
 	seen := make(map[string]bool)

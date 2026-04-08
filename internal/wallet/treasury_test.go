@@ -42,6 +42,46 @@ func TestTreasuryPolicy_CheckMinimumReserve(t *testing.T) {
 	}
 }
 
+func TestValidateTreasuryConfig(t *testing.T) {
+	// Valid config.
+	if err := ValidateTreasuryConfig(TreasuryConfig{
+		PerPaymentCap: 50, HourlyTransferLimit: 100, DailyTransferLimit: 500,
+		MinimumReserve: 10, DailyInferenceBudget: 20,
+	}); err != nil {
+		t.Errorf("valid config should pass: %v", err)
+	}
+
+	// Zero values are fine (means no limit).
+	if err := ValidateTreasuryConfig(TreasuryConfig{}); err != nil {
+		t.Errorf("zero config should pass: %v", err)
+	}
+
+	// Negative per-payment cap.
+	if err := ValidateTreasuryConfig(TreasuryConfig{PerPaymentCap: -1}); err == nil {
+		t.Error("negative PerPaymentCap should fail")
+	}
+
+	// Negative hourly limit.
+	if err := ValidateTreasuryConfig(TreasuryConfig{HourlyTransferLimit: -5}); err == nil {
+		t.Error("negative HourlyTransferLimit should fail")
+	}
+
+	// Negative daily limit.
+	if err := ValidateTreasuryConfig(TreasuryConfig{DailyTransferLimit: -10}); err == nil {
+		t.Error("negative DailyTransferLimit should fail")
+	}
+
+	// Negative minimum reserve.
+	if err := ValidateTreasuryConfig(TreasuryConfig{MinimumReserve: -1}); err == nil {
+		t.Error("negative MinimumReserve should fail")
+	}
+
+	// Negative inference budget.
+	if err := ValidateTreasuryConfig(TreasuryConfig{DailyInferenceBudget: -0.5}); err == nil {
+		t.Error("negative DailyInferenceBudget should fail")
+	}
+}
+
 func TestTreasuryPolicy_Config(t *testing.T) {
 	cfg := TreasuryConfig{
 		PerPaymentCap:       25.0,

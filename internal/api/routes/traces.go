@@ -14,9 +14,7 @@ import (
 func ListTraces(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		limit := parseIntParam(r, "limit", 50)
-		rows, err := store.QueryContext(r.Context(),
-			`SELECT id, turn_id, channel, total_ms, created_at
-			 FROM pipeline_traces ORDER BY created_at DESC LIMIT ?`, limit)
+		rows, err := db.NewRouteQueries(store).ListTracesSimple(r.Context(), limit)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to query traces")
 			return
@@ -74,7 +72,7 @@ func SearchTraces(store *db.Store) http.HandlerFunc {
 		query += ` ORDER BY created_at DESC LIMIT ?`
 		args = append(args, limit)
 
-		rows, err := store.QueryContext(r.Context(), query, args...)
+		rows, err := db.NewRouteQueries(store).Query(r.Context(), query, args...)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to query traces")
 			return
@@ -109,9 +107,7 @@ func SearchTraces(store *db.Store) http.HandlerFunc {
 func GetTrace(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		turnID := chi.URLParam(r, "turn_id")
-		row := store.QueryRowContext(r.Context(),
-			`SELECT id, turn_id, channel, total_ms, stages_json, created_at
-			 FROM pipeline_traces WHERE turn_id = ? LIMIT 1`, turnID)
+		row := db.NewRouteQueries(store).GetTraceByTurnID(r.Context(), turnID)
 		var id, tid, channel, stagesJSON, createdAt string
 		var totalMs int64
 		err := row.Scan(&id, &tid, &channel, &totalMs, &stagesJSON, &createdAt)
@@ -137,11 +133,7 @@ func GetReactTrace(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		turnID := chi.URLParam(r, "turn_id")
 		// First find the pipeline trace for this turn, then get the react trace.
-		row := store.QueryRowContext(r.Context(),
-			`SELECT rt.id, rt.pipeline_trace_id, rt.react_json, rt.created_at
-			 FROM react_traces rt
-			 JOIN pipeline_traces pt ON pt.id = rt.pipeline_trace_id
-			 WHERE pt.turn_id = ? LIMIT 1`, turnID)
+		row := db.NewRouteQueries(store).GetReactTraceByTurnID(r.Context(), turnID)
 		var id, pipelineTraceID, reactJSON, createdAt string
 		err := row.Scan(&id, &pipelineTraceID, &reactJSON, &createdAt)
 		if err != nil {
@@ -174,9 +166,7 @@ func GetReactTrace(store *db.Store) http.HandlerFunc {
 func ExportTrace(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		turnID := chi.URLParam(r, "turn_id")
-		row := store.QueryRowContext(r.Context(),
-			`SELECT id, turn_id, channel, total_ms, stages_json, created_at
-			 FROM pipeline_traces WHERE turn_id = ? LIMIT 1`, turnID)
+		row := db.NewRouteQueries(store).GetTraceByTurnID(r.Context(), turnID)
 		var id, tid, channel, stagesJSON, createdAt string
 		var totalMs int64
 		err := row.Scan(&id, &tid, &channel, &totalMs, &stagesJSON, &createdAt)
@@ -204,9 +194,7 @@ func ExportTrace(store *db.Store) http.HandlerFunc {
 func ReplayTrace(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		turnID := chi.URLParam(r, "turn_id")
-		row := store.QueryRowContext(r.Context(),
-			`SELECT id, turn_id, channel, total_ms, stages_json, created_at
-			 FROM pipeline_traces WHERE turn_id = ? LIMIT 1`, turnID)
+		row := db.NewRouteQueries(store).GetTraceByTurnID(r.Context(), turnID)
 		var id, tid, channel, stagesJSON, createdAt string
 		var totalMs int64
 		err := row.Scan(&id, &tid, &channel, &totalMs, &stagesJSON, &createdAt)
@@ -235,9 +223,7 @@ func ReplayTrace(store *db.Store) http.HandlerFunc {
 func GetTraceFlow(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		turnID := chi.URLParam(r, "turn_id")
-		row := store.QueryRowContext(r.Context(),
-			`SELECT id, turn_id, channel, total_ms, stages_json, created_at
-			 FROM pipeline_traces WHERE turn_id = ? LIMIT 1`, turnID)
+		row := db.NewRouteQueries(store).GetTraceByTurnID(r.Context(), turnID)
 		var id, tid, channel, stagesJSON, createdAt string
 		var totalMs int64
 		err := row.Scan(&id, &tid, &channel, &totalMs, &stagesJSON, &createdAt)

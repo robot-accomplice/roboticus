@@ -21,7 +21,7 @@ func TestRouter_MetascoreOverridesHeuristicRouting(t *testing.T) {
 	qt := NewQualityTracker(32)
 	seedQuality(qt, "small-fast", 0.20, 16)
 	seedQuality(qt, "frontier-smart", 0.95, 16)
-	router.EnableMetascoreRouting(qt, nil, nil)
+	router.EnableMetascoreRouting(qt, nil, nil, nil)
 
 	req := &Request{Messages: []Message{{Role: "user", Content: "hi"}}}
 	selected := router.Select(req)
@@ -42,7 +42,7 @@ func TestRouter_MetascoreSkipsBreakerBlockedWinner(t *testing.T) {
 	seedQuality(qt, "frontier-smart", 0.95, 16)
 	breakers := NewBreakerRegistry(DefaultCircuitBreakerConfig())
 	breakers.Get("frontier-smart").ForceOpen()
-	router.EnableMetascoreRouting(qt, nil, breakers)
+	router.EnableMetascoreRouting(qt, nil, nil, breakers)
 
 	req := &Request{Messages: []Message{{Role: "user", Content: "hi"}}}
 	selected := router.Select(req)
@@ -92,7 +92,7 @@ func TestRouter_MetascoreFitnessOnRepresentativeTraffic(t *testing.T) {
 	qt := NewQualityTracker(64)
 	seedQuality(qt, "local-cheap", 0.15, 24)
 	seedQuality(qt, "cloud-strong", 0.96, 24)
-	router.EnableMetascoreRouting(qt, nil, nil)
+	router.EnableMetascoreRouting(qt, nil, nil, nil)
 
 	cases := []*Request{
 		{Messages: []Message{{Role: "user", Content: "hello"}}},
@@ -143,7 +143,7 @@ func TestService_Complete_UsesMetascoreSelectedProvider(t *testing.T) {
 
 	seedQuality(svc.quality, "local-model", 0.10, 16)
 	seedQuality(svc.quality, "cloud-model", 0.95, 16)
-	svc.router.EnableMetascoreRouting(svc.quality, nil, svc.breakers)
+	svc.router.EnableMetascoreRouting(svc.quality, nil, nil, svc.breakers)
 
 	resp, err := svc.Complete(context.Background(), &Request{
 		Messages: []Message{{Role: "user", Content: "hello"}},
@@ -222,7 +222,7 @@ func TestService_MetascoreRoutingImprovesOutcomeVsBaseline(t *testing.T) {
 	metascoreSvc := newService()
 	seedQuality(metascoreSvc.quality, "local-model", 0.10, 16)
 	seedQuality(metascoreSvc.quality, "cloud-model", 0.95, 16)
-	metascoreSvc.router.EnableMetascoreRouting(metascoreSvc.quality, nil, metascoreSvc.breakers)
+	metascoreSvc.router.EnableMetascoreRouting(metascoreSvc.quality, nil, nil, metascoreSvc.breakers)
 
 	var baselineUtility, metascoreUtility float64
 	var baselineCorrect, metascoreCorrect int

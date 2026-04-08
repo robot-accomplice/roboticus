@@ -16,7 +16,7 @@ import (
 const defaultTokenBudget = 8192
 
 // runStandardInference executes the full ReAct loop via the ToolExecutor interface.
-func (p *Pipeline) runStandardInference(ctx context.Context, cfg Config, session *Session, msgID string) (*Outcome, error) {
+func (p *Pipeline) runStandardInference(ctx context.Context, cfg Config, session *Session, msgID, turnID string) (*Outcome, error) {
 	if p.executor == nil {
 		return nil, core.NewError(core.ErrConfig, "no tool executor configured")
 	}
@@ -42,7 +42,12 @@ func (p *Pipeline) runStandardInference(ctx context.Context, cfg Config, session
 		guardCtx := p.buildGuardContext(session)
 		guardResult := p.guards.ApplyFullWithContext(result, guardCtx)
 		result = guardResult.Content
-		log.Debug().Str("session", session.ID).Bool("retry", guardResult.RetryRequested).Msg("guard chain evaluated")
+		log.Debug().
+			Str("session", session.ID).
+			Bool("retry", guardResult.RetryRequested).
+			Strs("violations", guardResult.Violations).
+			Str("reason", guardResult.RetryReason).
+			Msg("guard chain evaluated")
 
 		// If guard requests retry, re-run inference once with the rejection reason.
 		if guardResult.RetryRequested {
@@ -62,6 +67,24 @@ func (p *Pipeline) runStandardInference(ctx context.Context, cfg Config, session
 		}
 	}
 
+	// Store assistant response with topic tag (matching Rust: append_message_with_topic).
+	assistantMsgID := db.NewID()
+	topicTag := p.deriveTopicTag(session, result)
+	_, storeErr := p.store.ExecContext(ctx,
+		`INSERT INTO session_messages (id, session_id, role, content, topic_tag)
+		 VALUES (?, ?, 'assistant', ?, ?)`,
+		assistantMsgID, session.ID, result, topicTag,
+	)
+	if storeErr != nil {
+		log.Error().Err(storeErr).Str("session", session.ID).Msg("failed to store assistant message")
+	}
+
+	// Update turn record with inference metadata.
+	_, _ = p.store.ExecContext(ctx,
+		`UPDATE turns SET tokens_in = ?, tokens_out = ?, model = ? WHERE id = ?`,
+		0, 0, "", turnID, // tokens are tracked in inference_costs
+	)
+
 	// Post-turn ingest (background, tracked by worker pool).
 	if cfg.PostTurnIngest && p.ingestor != nil {
 		sess := session
@@ -70,19 +93,8 @@ func (p *Pipeline) runStandardInference(ctx context.Context, cfg Config, session
 		})
 	}
 
-	// Post-turn embedding ingest (background).
-	p.PostTurnIngest(ctx, session, msgID, result)
-
-	// Store assistant response.
-	assistantMsgID := db.NewID()
-	_, storeErr := p.store.ExecContext(ctx,
-		`INSERT INTO session_messages (id, session_id, role, content)
-		 VALUES (?, ?, 'assistant', ?)`,
-		assistantMsgID, session.ID, result,
-	)
-	if storeErr != nil {
-		log.Error().Err(storeErr).Str("session", session.ID).Msg("failed to store assistant message")
-	}
+	// Post-turn embedding ingest + context checkpoint (background).
+	p.PostTurnIngest(ctx, session, turnID, result)
 
 	// Nickname refinement (background, tracked by worker pool).
 	if cfg.NicknameRefinement && session.TurnCount() >= 4 && p.refiner != nil {
@@ -103,7 +115,12 @@ func (p *Pipeline) runStandardInference(ctx context.Context, cfg Config, session
 // prepareStreamInference sets up streaming inference via the StreamPreparer interface.
 // Returns the fully-prepared LLM request in Outcome.StreamRequest so the SSE handler
 // uses the same context (session history, memory, tools, system prompt) as standard inference.
-func (p *Pipeline) prepareStreamInference(ctx context.Context, _ Config, session *Session, msgID string) (*Outcome, error) {
+//
+// IMPORTANT (Rule 7.2): The SSE handler MUST call Pipeline.FinalizeStream after
+// streaming completes, passing the assembled content. This ensures post-turn
+// behavior (memory ingest, embedding, observer dispatch, assistant storage,
+// nickname refinement) runs identically to the standard path.
+func (p *Pipeline) prepareStreamInference(ctx context.Context, cfg Config, session *Session, msgID string) (*Outcome, error) {
 	var streamReq *llm.Request
 	if p.streamer != nil {
 		req, err := p.streamer.PrepareStream(ctx, session)
@@ -118,7 +135,113 @@ func (p *Pipeline) prepareStreamInference(ctx context.Context, _ Config, session
 		MessageID:     msgID,
 		Stream:        true,
 		StreamRequest: streamReq,
+		streamSession: session,
+		streamConfig:  &cfg,
 	}, nil
+}
+
+// FinalizeStream runs post-turn pipeline work after streaming completes.
+// This is the streaming-parity guarantee (Rule 7.2): the same post-turn
+// behavior that runs for standard inference also runs for streaming.
+//
+// The SSE handler MUST call this after the chunk loop closes, passing
+// the assembled full content. Without this call, streaming turns will
+// not have memory ingestion, embeddings, observer dispatch, assistant
+// message storage, or nickname refinement.
+func (p *Pipeline) FinalizeStream(ctx context.Context, outcome *Outcome, assembledContent string) {
+	if outcome == nil || outcome.streamSession == nil {
+		return
+	}
+	session := outcome.streamSession
+	cfg := outcome.streamConfig
+	if cfg == nil {
+		defaultCfg := PresetStreaming()
+		cfg = &defaultCfg
+	}
+	turnID := outcome.TurnID
+
+	// Store assistant response with topic tag.
+	assistantMsgID := db.NewID()
+	topicTag := p.deriveTopicTag(session, assembledContent)
+	_, storeErr := p.store.ExecContext(ctx,
+		`INSERT INTO session_messages (id, session_id, role, content, topic_tag)
+		 VALUES (?, ?, 'assistant', ?, ?)`,
+		assistantMsgID, session.ID, assembledContent, topicTag,
+	)
+	if storeErr != nil {
+		log.Error().Err(storeErr).Str("session", session.ID).Msg("failed to store streaming assistant message")
+	}
+
+	// Post-turn ingest (background, tracked by worker pool).
+	if cfg.PostTurnIngest && p.ingestor != nil {
+		sess := session
+		p.bgWorker.Submit("streamIngestTurn", func(bgCtx context.Context) {
+			p.ingestor.IngestTurn(bgCtx, sess)
+		})
+	}
+
+	// Post-turn embedding ingest + context checkpoint (background).
+	p.PostTurnIngest(ctx, session, turnID, assembledContent)
+
+	// Nickname refinement (background).
+	if cfg.NicknameRefinement && session.TurnCount() >= 4 && p.refiner != nil {
+		sess := session
+		p.bgWorker.Submit("streamRefineNickname", func(bgCtx context.Context) {
+			p.refiner.Refine(bgCtx, sess)
+		})
+	}
+
+	log.Debug().Str("session", session.ID).Int("content_len", len(assembledContent)).Msg("stream post-turn finalized")
+}
+
+// precomputeGuardScores runs lightweight pre-computation before the guard chain,
+// populating the GuardContext with scores that individual guards can use (Wave 8, #71).
+// This avoids redundant work when multiple guards need the same signals.
+func precomputeGuardScores(ctx *GuardContext, content string) {
+	if ctx == nil {
+		return
+	}
+
+	// Pre-compute intent classification if not already set.
+	if len(ctx.Intents) == 0 && ctx.UserPrompt != "" {
+		registry := NewIntentRegistry()
+		intent, _ := registry.Classify(ctx.UserPrompt)
+		ctx.Intents = append(ctx.Intents, string(intent))
+	}
+
+	// Pre-compute semantic scores for common guard signals.
+	if ctx.SemanticScores == nil {
+		ctx.SemanticScores = make(map[string]float64)
+	}
+
+	lower := strings.ToLower(content)
+
+	// Financial claim score: how strongly does the content claim financial actions?
+	financialScore := 0.0
+	for _, claim := range financialActionClaims {
+		if strings.Contains(lower, claim) {
+			financialScore += 0.2
+		}
+	}
+	if financialScore > 1.0 {
+		financialScore = 1.0
+	}
+	ctx.SemanticScores["financial_claim"] = financialScore
+
+	// Repetition score: overlap with previous assistant message.
+	if ctx.PreviousAssistant != "" {
+		ctx.SemanticScores["prev_overlap"] = tokenOverlapRatio(content, ctx.PreviousAssistant)
+	}
+
+	// Identity claim score: does the content make identity claims?
+	identityScore := 0.0
+	for _, marker := range foreignIdentityMarkers {
+		if strings.Contains(lower, marker) {
+			identityScore = 1.0
+			break
+		}
+	}
+	ctx.SemanticScores["identity_claim"] = identityScore
 }
 
 // resolveSession finds or creates a session based on the resolution mode.

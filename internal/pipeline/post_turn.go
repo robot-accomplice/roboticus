@@ -44,7 +44,13 @@ func (p *Pipeline) PostTurnIngest(ctx context.Context, session *Session, turnID 
 			}
 		}
 
-		// 2. Log the turn pair for analytics/debugging.
+		// 2. Context checkpoint (periodic, Rust: save_checkpoint).
+		p.maybeCheckpoint(bgCtx, session, turnID)
+
+		// 3. Observer subagent dispatch (Rust: role="observer" receives turn summary).
+		p.dispatchToObservers(bgCtx, sessionID, turnID, userContent, assistantContent)
+
+		// 4. Log the turn pair for analytics/debugging.
 		if userContent != "" {
 			log.Debug().
 				Str("session", sessionID).
@@ -55,6 +61,57 @@ func (p *Pipeline) PostTurnIngest(ctx context.Context, session *Session, turnID 
 				Msg("post-turn ingest completed")
 		}
 	})
+}
+
+// dispatchToObservers sends a turn summary to all observer subagents.
+// Matches Rust's post_turn_ingest observer dispatch: finds role="observer"
+// subagents, ingests the turn as episodic memory attributed to each observer,
+// and touches their last_used_at timestamp.
+func (p *Pipeline) dispatchToObservers(ctx context.Context, sessionID, turnID, userContent, assistantContent string) {
+	if p.store == nil {
+		return
+	}
+
+	// Find observer subagents.
+	rows, err := p.store.QueryContext(ctx,
+		`SELECT id, name FROM sub_agents WHERE role = 'observer' AND enabled = 1`)
+	if err != nil {
+		return
+	}
+	defer func() { _ = rows.Close() }()
+
+	// Build turn summary for observers.
+	userSnippet := userContent
+	if len(userSnippet) > 500 {
+		userSnippet = userSnippet[:500]
+	}
+	assistantSnippet := assistantContent
+	if len(assistantSnippet) > 1000 {
+		assistantSnippet = assistantSnippet[:1000]
+	}
+	summary := "[Turn Observation] User: " + userSnippet + "\nAssistant: " + assistantSnippet
+
+	for rows.Next() {
+		var observerID, observerName string
+		if err := rows.Scan(&observerID, &observerName); err != nil {
+			continue
+		}
+
+		// Ingest as episodic memory attributed to the observer.
+		_, _ = p.store.ExecContext(ctx,
+			`INSERT INTO episodic_memory (id, classification, content, importance, owner_id)
+			 VALUES (?, 'observation', ?, 4, ?)`,
+			db.NewID(), summary, observerID,
+		)
+
+		// Touch last_used_at timestamp.
+		_, _ = p.store.ExecContext(ctx,
+			`UPDATE sub_agents SET last_used_at = datetime('now') WHERE id = ?`,
+			observerID,
+		)
+
+		log.Debug().Str("observer", observerName).Str("session", sessionID).Msg("observer subagent received turn summary")
+	}
 }
 
 // storeChunkEmbedding generates an embedding for a text chunk and stores it

@@ -3,6 +3,8 @@ package agent
 import (
 	"encoding/json"
 	"time"
+
+	"roboticus/internal/core"
 )
 
 type AgentManifest struct {
@@ -15,6 +17,11 @@ type AgentManifest struct {
 	Tools        []string  `json:"tools"`
 	Skills       []string  `json:"skills"`
 	CreatedAt    time.Time `json:"created_at"`
+	// SkillManifests holds the full skill metadata for each loaded skill.
+	// This complements the Skills []string field (which holds just names)
+	// with the complete manifest including triggers, priority, tool chains,
+	// and policy overrides — matching the Rust reference's agent manifest.
+	SkillManifests []core.SkillManifest `json:"skill_manifests,omitempty"`
 }
 
 func NewAgentManifest(id, name, version, description string) *AgentManifest {

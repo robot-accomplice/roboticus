@@ -18,6 +18,8 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 	"github.com/spf13/cobra"
+
+	"roboticus/internal/core"
 )
 
 // version is injected at build time via -ldflags "-X roboticus/cmd.version=YYYY.MM.DD".
@@ -489,13 +491,37 @@ func runUpdateAll(ctx context.Context, currentVersion string, yes bool) error {
 }
 
 func runUpdateMaintenance(configPath string) error {
+	// Step 1: Create a backup before any modifications.
+	backupPath, err := core.BackupConfigFile(configPath, 10, 30)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: config backup failed: %v\n", err)
+	} else if backupPath != "" {
+		fmt.Printf("Config backed up to: %s\n", backupPath)
+	}
+
+	// Step 2: Legacy config migrations.
 	if err := applyRemovedLegacyConfigMigration(configPath); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: legacy config migration: %v\n", err)
 	}
 	if err := applySecurityConfigMigration(configPath); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: security config migration: %v\n", err)
 	}
-	// Mechanic health check.
+
+	// Step 3: Firmware rules migration (TOML [[rules]] → [rules] table format).
+	workspaceDir := filepath.Dir(configPath)
+	firmwarePath := filepath.Join(workspaceDir, "FIRMWARE.toml")
+	if _, err := os.Stat(firmwarePath); err == nil {
+		if migErr := migrateFirmwareRules(firmwarePath); migErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: firmware migration: %v\n", migErr)
+		} else {
+			fmt.Println("Firmware rules migration: OK")
+		}
+	}
+
+	// Step 4: OAuth token refresh (for providers using OAuth PKCE).
+	refreshOAuthTokens()
+
+	// Step 5: Post-update health check.
 	if data, err := apiGet("/api/health"); err == nil {
 		if status, ok := data["status"].(string); ok && status == "ok" {
 			fmt.Println("Post-update health check: OK")
@@ -503,13 +529,75 @@ func runUpdateMaintenance(configPath string) error {
 			fmt.Fprintln(os.Stderr, "warning: post-update health check returned non-OK status")
 		}
 	}
-	// Firmware rules migration (TOML [[rules]] → [rules] table format).
-	workspaceDir := filepath.Dir(configPath)
-	firmwarePath := filepath.Join(workspaceDir, "FIRMWARE.toml")
-	if _, err := os.Stat(firmwarePath); err == nil {
-		fmt.Println("Firmware config found — checking for rules migration...")
-	}
+
 	return nil
+}
+
+// migrateFirmwareRules converts legacy [[rules]] TOML arrays to [rules] table format.
+// This handles the firmware format change between Rust versions.
+func migrateFirmwareRules(firmwarePath string) error {
+	data, err := os.ReadFile(firmwarePath)
+	if err != nil {
+		return err
+	}
+
+	content := string(data)
+	// Check if migration is needed: [[rules]] is the old format.
+	if !strings.Contains(content, "[[rules]]") {
+		return nil // Already in new format or no rules.
+	}
+
+	// Back up firmware before modification.
+	backupPath := firmwarePath + ".bak." + time.Now().UTC().Format("20060102-150405")
+	if err := os.WriteFile(backupPath, data, 0o644); err != nil {
+		return fmt.Errorf("backup firmware: %w", err)
+	}
+	fmt.Printf("Firmware backed up to: %s\n", backupPath)
+
+	// Parse and re-serialize to normalize format.
+	var parsed map[string]any
+	if err := toml.Unmarshal(data, &parsed); err != nil {
+		return fmt.Errorf("parse firmware TOML: %w", err)
+	}
+
+	// Re-marshal to normalize the format.
+	out, err := toml.Marshal(parsed)
+	if err != nil {
+		return fmt.Errorf("re-serialize firmware: %w", err)
+	}
+
+	return os.WriteFile(firmwarePath, out, 0o644)
+}
+
+// refreshOAuthTokens attempts to refresh OAuth tokens for providers that use them.
+// This runs during update maintenance to ensure tokens don't expire silently.
+func refreshOAuthTokens() {
+	data, err := apiGet("/api/config")
+	if err != nil {
+		return // Server not running — skip.
+	}
+	providers, _ := data["providers"].(map[string]any)
+	for name, v := range providers {
+		pm, _ := v.(map[string]any)
+		authMode, _ := pm["auth_mode"].(string)
+		if authMode != "oauth" {
+			continue
+		}
+		// Check if provider has a refresh token in keystore.
+		ksData, err := apiGet("/api/keystore/status")
+		if err != nil {
+			continue
+		}
+		keys, _ := ksData["keys"].(map[string]any)
+		refreshKey := name + "_refresh_token"
+		if _, hasRefresh := keys[refreshKey]; !hasRefresh {
+			continue
+		}
+		fmt.Printf("Refreshing OAuth token for %s...\n", name)
+		// The actual refresh would need the token URL and client ID.
+		// For now, log the intent — full implementation requires provider config.
+		fmt.Printf("  (Token refresh for %s would require provider-specific config)\n", name)
+	}
 }
 
 func applyRemovedLegacyConfigMigration(configPath string) error {

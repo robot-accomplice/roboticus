@@ -14,9 +14,7 @@ import (
 // GetWorkingMemory returns all working memory entries.
 func GetWorkingMemory(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		rows, err := store.QueryContext(r.Context(),
-			`SELECT id, session_id, entry_type, content, importance, created_at
-			 FROM working_memory ORDER BY created_at DESC LIMIT 100`)
+		rows, err := db.NewRouteQueries(store).ListWorkingMemory(r.Context(), "", 100)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to query working memory")
 			return
@@ -47,9 +45,7 @@ func GetWorkingMemory(store *db.Store) http.HandlerFunc {
 func GetSessionWorkingMemory(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessionID := chi.URLParam(r, "session_id")
-		rows, err := store.QueryContext(r.Context(),
-			`SELECT id, session_id, entry_type, content, importance, created_at
-			 FROM working_memory WHERE session_id = ? ORDER BY created_at DESC LIMIT 100`, sessionID)
+		rows, err := db.NewRouteQueries(store).ListWorkingMemory(r.Context(), sessionID, 100)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to query session working memory")
 			return
@@ -79,9 +75,7 @@ func GetSessionWorkingMemory(store *db.Store) http.HandlerFunc {
 // GetEpisodicMemory returns episodic memory entries.
 func GetEpisodicMemory(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		rows, err := store.QueryContext(r.Context(),
-			`SELECT id, classification, content, importance, created_at
-			 FROM episodic_memory ORDER BY created_at DESC LIMIT 100`)
+		rows, err := db.NewRouteQueries(store).ListEpisodicMemory(r.Context(), 100)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to query episodic memory")
 			return
@@ -111,9 +105,7 @@ func GetEpisodicMemory(store *db.Store) http.HandlerFunc {
 // GetSemanticMemory returns all semantic memory.
 func GetSemanticMemory(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		rows, err := store.QueryContext(r.Context(),
-			`SELECT id, category, key, value, confidence, created_at
-			 FROM semantic_memory ORDER BY category, key LIMIT 200`)
+		rows, err := db.NewRouteQueries(store).ListSemanticMemory(r.Context(), "", 200)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to query semantic memory")
 			return
@@ -145,10 +137,7 @@ func GetSemanticMemoryByCategory(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		category := chi.URLParam(r, "category")
 		limit := parseIntParam(r, "limit", 100)
-		rows, err := store.QueryContext(r.Context(),
-			`SELECT id, category, key, value, confidence
-			 FROM semantic_memory WHERE category = ? ORDER BY confidence DESC LIMIT ?`,
-			category, limit)
+		rows, err := db.NewRouteQueries(store).ListSemanticMemory(r.Context(), category, limit)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to query semantic memory by category")
 			return
@@ -192,11 +181,8 @@ func IngestKnowledge(store *db.Store) http.HandlerFunc {
 			return
 		}
 		id := db.NewID()
-		_, err := store.ExecContext(r.Context(),
-			`INSERT INTO semantic_memory (id, category, key, value, confidence)
-			 VALUES (?, ?, ?, ?, 1.0)`,
-			id, req.Category, req.Key, req.Content)
-		if err != nil {
+		memRepo := db.NewMemoryRepository(store)
+		if err := memRepo.StoreSemantic(r.Context(), id, req.Category, req.Key, req.Content, 1.0); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -217,9 +203,7 @@ func SearchMemory(store *db.Store) http.HandlerFunc {
 		pattern := "%" + query + "%"
 
 		// Search working memory.
-		rows, err := store.QueryContext(r.Context(),
-			`SELECT id, 'working' as tier, entry_type, content, created_at
-			 FROM working_memory WHERE content LIKE ? LIMIT 20`, pattern)
+		rows, err := db.NewRouteQueries(store).SearchWorkingMemory(r.Context(), pattern, 20)
 		if err == nil {
 			defer func() { _ = rows.Close() }()
 			for rows.Next() {
@@ -234,9 +218,7 @@ func SearchMemory(store *db.Store) http.HandlerFunc {
 		}
 
 		// Search episodic memory.
-		rows2, err := store.QueryContext(r.Context(),
-			`SELECT id, 'episodic' as tier, classification, content, created_at
-			 FROM episodic_memory WHERE content LIKE ? LIMIT 20`, pattern)
+		rows2, err := db.NewRouteQueries(store).SearchEpisodicMemory(r.Context(), pattern, 20)
 		if err == nil {
 			defer func() { _ = rows2.Close() }()
 			for rows2.Next() {
@@ -251,9 +233,7 @@ func SearchMemory(store *db.Store) http.HandlerFunc {
 		}
 
 		// Search semantic memory.
-		rows3, err := store.QueryContext(r.Context(),
-			`SELECT id, 'semantic' as tier, category, value, created_at
-			 FROM semantic_memory WHERE value LIKE ? OR key LIKE ? LIMIT 20`, pattern, pattern)
+		rows3, err := db.NewRouteQueries(store).SearchSemanticMemory(r.Context(), pattern, 20)
 		if err == nil {
 			defer func() { _ = rows3.Close() }()
 			for rows3.Next() {

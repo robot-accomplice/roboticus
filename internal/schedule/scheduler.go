@@ -110,10 +110,10 @@ func (s *DurableScheduler) CalculateNextRun(job *CronJob, now time.Time) *time.T
 		}
 		return &t
 	case ScheduleCron:
-		// Scan forward minute-by-minute (max 24h).
+		// Scan forward minute-by-minute (max 7 days for complex expressions).
 		tz, cronExpr := parseTZPrefix(job.Expression)
 		candidate := now.Truncate(time.Minute).Add(time.Minute)
-		limit := now.Add(24 * time.Hour)
+		limit := now.Add(7 * 24 * time.Hour)
 		for candidate.Before(limit) {
 			check := candidate
 			if tz != nil {
@@ -130,15 +130,19 @@ func (s *DurableScheduler) CalculateNextRun(job *CronJob, now time.Time) *time.T
 	}
 }
 
-// parseTZPrefix extracts an optional TZ= prefix from a cron expression.
+// parseTZPrefix extracts an optional TZ= or CRON_TZ= prefix from a cron expression.
+// Supports both forms for Rust parity (Rust accepts both).
 func parseTZPrefix(expr string) (*time.Location, string) {
-	if strings.HasPrefix(expr, "TZ=") {
-		parts := strings.SplitN(expr, " ", 2)
-		if len(parts) == 2 {
-			tzName := strings.TrimPrefix(parts[0], "TZ=")
-			loc, err := time.LoadLocation(tzName)
-			if err == nil {
-				return loc, parts[1]
+	// Try both TZ= and CRON_TZ= prefixes.
+	for _, prefix := range []string{"CRON_TZ=", "TZ="} {
+		if strings.HasPrefix(expr, prefix) {
+			parts := strings.SplitN(expr, " ", 2)
+			if len(parts) == 2 {
+				tzName := strings.TrimPrefix(parts[0], prefix)
+				loc, err := time.LoadLocation(tzName)
+				if err == nil {
+					return loc, parts[1]
+				}
 			}
 		}
 	}

@@ -79,10 +79,18 @@ func (co *CascadeOptimizer) ShouldCascade(queryClass string) CascadeStrategy {
 }
 
 // expectedUtility computes expected utility for cascade vs direct strategies.
-// Utility = quality - latencyWeight * latencyMs
-// For cascade: quality = successRate (cheap model answers correctly) + (1-successRate)*1.0 (strong always correct)
-// For direct: quality = 1.0 (strong model always correct)
-// Cascade saves latency when cheap succeeds; costs extra latency when it fails.
+//
+// The utility formula aligns with the Rust reference:
+//
+//	U = P(weak_ok) * saved_latency - (1 - P(weak_ok)) * wasted_latency - cost_delta
+//
+// Where:
+//   - P(weak_ok) = success rate of the weak model
+//   - saved_latency = strong_latency - weak_latency (latency saved when weak succeeds)
+//   - wasted_latency = weak_latency (latency wasted when weak fails and we must retry)
+//   - cost_delta = latencyWeight * avgWeakLatency (proxy for the extra cost of trying weak)
+//
+// Cascade is preferred when U > 0 (positive expected savings).
 func (co *CascadeOptimizer) expectedUtility(window []CascadeOutcome) (cascade, direct float64) {
 	if len(window) == 0 {
 		return 0.5, 0.5
@@ -112,13 +120,20 @@ func (co *CascadeOptimizer) expectedUtility(window []CascadeOutcome) (cascade, d
 	successRate := float64(weakSuccesses) / float64(weakAttempts)
 	avgWeakLatency /= float64(weakAttempts)
 
-	// Cascade utility: when weak succeeds, we pay weak latency only.
-	// When weak fails, we pay weak + strong latency.
-	cascadeLatency := successRate*avgWeakLatency + (1-successRate)*(avgWeakLatency+avgStrongLatency)
-	cascade = 1.0 - co.latencyWeight*cascadeLatency
+	// Rust-aligned utility formula:
+	// U = P(weak_ok) * saved_latency - (1-P(weak_ok)) * wasted_latency - cost_delta
+	savedLatency := avgStrongLatency - avgWeakLatency
+	wastedLatency := avgWeakLatency
+	costDelta := co.latencyWeight * avgWeakLatency
 
-	// Direct utility: always pay strong latency.
+	cascadeU := successRate*co.latencyWeight*savedLatency -
+		(1-successRate)*co.latencyWeight*wastedLatency -
+		costDelta
+
+	// Direct utility is the baseline (0); cascade is chosen when U > 0.
+	// We normalize to the same scale as before for backward compatibility.
 	direct = 1.0 - co.latencyWeight*avgStrongLatency
+	cascade = direct + cascadeU
 
 	return cascade, direct
 }

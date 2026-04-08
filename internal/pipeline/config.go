@@ -76,10 +76,10 @@ type Config struct {
 	PreferLocalModel bool   // Prefer local models over cloud when quality is comparable
 
 	// Task/planner controls.
-	TaskOperatingState     string // Operator-injected task context (e.g., "maintenance")
-	BackgroundBudget       int    // Token budget for background/low-priority turns
-	CronDelegationWrap     bool   // Wrap cron-triggered turns in delegation context
-	BotCommandDispatch     bool   // Dispatch bot commands to tool executor directly
+	TaskOperatingState      string // Operator-injected task context (e.g., "maintenance")
+	BackgroundBudget        int    // Token budget for background/low-priority turns
+	CronDelegationWrap      bool   // Wrap cron-triggered turns in delegation context
+	BotCommandDispatch      bool   // Dispatch bot commands to tool executor directly
 	SessionNicknameOverride string // Override auto-generated session nickname
 
 	// Output.
@@ -180,6 +180,7 @@ func PresetCron() Config {
 		NicknameRefinement:     false,
 		InjectDiagnostics:      false,
 		ChannelLabel:           "cron",
+		CronDelegationWrap:     true,
 	}
 }
 

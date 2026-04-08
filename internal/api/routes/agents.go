@@ -1,6 +1,7 @@
 package routes
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -11,9 +12,7 @@ import (
 // ListAgents returns all registered agents from the sub_agents table.
 func ListAgents(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		rows, err := store.QueryContext(r.Context(),
-			`SELECT id, name, display_name, model, role, description, enabled, created_at
-			 FROM sub_agents ORDER BY created_at DESC`)
+		rows, err := db.NewRouteQueries(store).ListAgentsFull(r.Context())
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to query agents")
 			return
@@ -49,15 +48,13 @@ func ListAgents(store *db.Store) http.HandlerFunc {
 func StartAgent(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
-		res, err := store.ExecContext(r.Context(),
-			`UPDATE sub_agents SET enabled = 1 WHERE id = ? OR name = ?`, id, id)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		n, _ := res.RowsAffected()
-		if n == 0 {
-			writeError(w, http.StatusNotFound, "agent not found")
+		repo := db.NewAgentsRepository(store)
+		if err := repo.SetEnabledByNameOrID(r.Context(), id, true); err != nil {
+			if errors.Is(err, db.ErrNoRowsAffected) {
+				writeError(w, http.StatusNotFound, "agent not found")
+			} else {
+				writeError(w, http.StatusInternalServerError, err.Error())
+			}
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"id": id, "status": "running"})
@@ -68,13 +65,16 @@ func StartAgent(store *db.Store) http.HandlerFunc {
 func StopAgent(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
-		res, err := store.ExecContext(r.Context(),
-			`UPDATE sub_agents SET enabled = 0 WHERE id = ? OR name = ?`, id, id)
-		if err != nil {
+		repo := db.NewAgentsRepository(store)
+		if err := repo.SetEnabledByNameOrID(r.Context(), id, false); err != nil {
+			if errors.Is(err, db.ErrNoRowsAffected) {
+				writeError(w, http.StatusNotFound, "agent not found")
+				return
+			}
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		n, _ := res.RowsAffected()
+		n := int64(1)
 		if n == 0 {
 			writeError(w, http.StatusNotFound, "agent not found")
 			return

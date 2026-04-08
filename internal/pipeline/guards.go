@@ -10,12 +10,22 @@ type Guard interface {
 	Check(content string) GuardResult
 }
 
+// GuardVerdict classifies the type of guard action taken.
+type GuardVerdict int
+
+const (
+	GuardPass           GuardVerdict = iota // Content passed without modification
+	GuardRewritten                          // Content was rewritten by the guard
+	GuardRetryRequested                     // Guard requests a full re-inference
+)
+
 // GuardResult holds the outcome of a guard check.
 type GuardResult struct {
 	Passed  bool
-	Content string // modified content (same as input if unchanged)
-	Retry   bool   // request retry with modified prompt
-	Reason  string // why the guard triggered
+	Content string       // modified content (same as input if unchanged)
+	Retry   bool         // request retry with modified prompt
+	Reason  string       // why the guard triggered
+	Verdict GuardVerdict // classification of the guard action (Wave 8, #72)
 }
 
 // GuardChain applies an ordered sequence of guards.
@@ -218,7 +228,7 @@ func DefaultGuardChain() *GuardChain {
 	return FullGuardChain()
 }
 
-// FullGuardChain returns all 19 guards for standard inference.
+// FullGuardChain returns all guards for standard inference.
 func FullGuardChain() *GuardChain {
 	return NewGuardChain(
 		// Core guards.
@@ -232,6 +242,8 @@ func FullGuardChain() *GuardChain {
 		&TaskDeferralGuard{},
 		&InternalJargonGuard{},
 		&DeclaredActionGuard{},
+		&PerspectiveGuard{},      // Wave 8, #78
+		&InternalProtocolGuard{}, // Wave 8, #79
 		// Quality guards.
 		&LowValueParrotingGuard{},
 		&NonRepetitionGuardV2{},
@@ -241,20 +253,33 @@ func FullGuardChain() *GuardChain {
 		&ModelIdentityTruthGuard{},
 		&CurrentEventsTruthGuard{},
 		&ExecutionTruthGuard{},
+		&ExecutionBlockGuard{},
+		&DelegationMetadataGuard{},
+		&FilesystemDenialGuard{},
 		&FinancialActionTruthGuard{},
 		&PersonalityIntegrityGuard{},
+		&ActionVerificationGuard{}, // Wave 8, #76
+		&LiteraryQuoteRetryGuard{}, // Wave 8, #77
 		// Protection guards.
 		&ConfigProtectionGuard{},
 	)
 }
 
 // StreamGuardChain returns a lightweight chain for SSE streaming.
+// Matches Rust's 6-guard streaming set: no retry-capable guards.
 func StreamGuardChain() *GuardChain {
 	return NewGuardChain(
 		&EmptyResponseGuard{},
-		&SubagentClaimGuard{},
+		&ExecutionTruthGuard{},
+		&TaskDeferralGuard{},
+		&ModelIdentityTruthGuard{},
 		&InternalJargonGuard{},
-		&PersonalityIntegrityGuard{},
 		&NonRepetitionGuardV2{},
 	)
+}
+
+// CachedGuardChain returns the guard chain for cached responses.
+// Matches Rust's cached guard set (same as Full).
+func CachedGuardChain() *GuardChain {
+	return FullGuardChain()
 }

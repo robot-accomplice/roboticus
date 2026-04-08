@@ -58,7 +58,7 @@ func installedThemeIDs(store *db.Store) map[string]bool {
 	if store == nil {
 		return installed
 	}
-	rows, err := store.QueryContext(context.Background(), `SELECT id FROM installed_themes`)
+	rows, err := db.NewRouteQueries(store).ListInstalledThemeIDs(context.Background())
 	if err != nil {
 		return installed
 	}
@@ -144,9 +144,7 @@ func InstallCatalogTheme(store *db.Store) http.HandlerFunc {
 			writeError(w, http.StatusInternalServerError, "failed to encode theme")
 			return
 		}
-		if _, err := store.ExecContext(r.Context(),
-			`INSERT OR REPLACE INTO installed_themes (id, name, source, version, active, content) VALUES (?, ?, 'catalog', '1.0.0', 0, ?)`,
-			req.ID, theme.Name, string(content)); err != nil {
+		if err := db.NewRouteQueries(store).InstallTheme(r.Context(), req.ID, theme.Name, string(content)); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -158,8 +156,7 @@ func InstallCatalogTheme(store *db.Store) http.HandlerFunc {
 func GetActiveTheme(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var themeID string
-		row := store.QueryRowContext(r.Context(),
-			`SELECT value FROM identity WHERE key = 'active_theme'`)
+		row := db.NewRouteQueries(store).GetIdentityValue(r.Context(), "active_theme")
 		if row.Scan(&themeID) != nil {
 			themeID = "default"
 		}
@@ -191,8 +188,7 @@ func SetActiveTheme(store *db.Store) http.HandlerFunc {
 			return
 		}
 
-		if _, err := store.ExecContext(r.Context(),
-			`INSERT OR REPLACE INTO identity (key, value) VALUES ('active_theme', ?)`, req.ThemeID); err != nil {
+		if err := db.NewRouteQueries(store).SetActiveThemeID(r.Context(), req.ThemeID); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}

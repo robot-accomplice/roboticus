@@ -42,6 +42,21 @@ var staleKnowledgeMarkers = []string{
 
 func (g *CurrentEventsTruthGuard) Name() string { return "current_events_truth" }
 func (g *CurrentEventsTruthGuard) Check(content string) GuardResult {
+	// Always strip stale-knowledge disclaimers regardless of intent context.
+	// These phrases are never appropriate for a tool-equipped agent.
+	lower := strings.ToLower(content)
+	for _, marker := range staleKnowledgeMarkers {
+		if strings.Contains(lower, marker) {
+			cleaned := stripSentencesContaining(content, staleKnowledgeMarkers)
+			if strings.TrimSpace(cleaned) == "" {
+				return GuardResult{
+					Passed: false, Retry: true,
+					Reason: "response consisted entirely of stale-knowledge disclaimers",
+				}
+			}
+			return GuardResult{Passed: false, Content: cleaned}
+		}
+	}
 	return GuardResult{Passed: true}
 }
 func (g *CurrentEventsTruthGuard) CheckWithContext(content string, ctx *GuardContext) GuardResult {
@@ -171,6 +186,185 @@ func (g *PersonalityIntegrityGuard) Check(content string) GuardResult {
 	return GuardResult{Passed: true}
 }
 func (g *PersonalityIntegrityGuard) CheckWithContext(content string, ctx *GuardContext) GuardResult {
+	return g.Check(content)
+}
+
+// --- ExecutionBlockGuard (LS-002) ---
+
+// ExecutionBlockGuard detects false "I did not execute" messages where the
+// agent claims it didn't run a tool when it should have. Matches Rust's
+// execution truth guard for the specific "false negative" case.
+type ExecutionBlockGuard struct{}
+
+var execBlockPatterns = []string{
+	"i did not execute a tool",
+	"i did not execute a delegated subagent task",
+	"i did not execute a cron scheduling tool",
+}
+
+func (g *ExecutionBlockGuard) Name() string { return "execution_block" }
+func (g *ExecutionBlockGuard) Check(content string) GuardResult {
+	lower := strings.ToLower(content)
+	for _, m := range execBlockPatterns {
+		if strings.Contains(lower, m) {
+			cleaned := stripSentencesContaining(content, execBlockPatterns)
+			if strings.TrimSpace(cleaned) == "" {
+				return GuardResult{
+					Passed: false, Retry: true,
+					Reason: "response consisted entirely of false execution block claims",
+				}
+			}
+			return GuardResult{Passed: false, Content: cleaned}
+		}
+	}
+	return GuardResult{Passed: true}
+}
+func (g *ExecutionBlockGuard) CheckWithContext(content string, _ *GuardContext) GuardResult {
+	return g.Check(content)
+}
+
+// --- DelegationMetadataGuard (LS-004) ---
+
+// DelegationMetadataGuard strips internal delegation/orchestration metadata
+// that should never be visible to the user. Matches Rust's
+// strip_internal_delegation_metadata sanitizer.
+type DelegationMetadataGuard struct{}
+
+var delegationMetadataPatterns = []string{
+	"delegated_subagent=",
+	"selected_subagent=",
+	"subtask 1 ->",
+	"subtask 2 ->",
+	"subtask 3 ->",
+	"expected_utility_margin",
+	"decomposition gate decision",
+}
+
+func (g *DelegationMetadataGuard) Name() string { return "delegation_metadata" }
+func (g *DelegationMetadataGuard) Check(content string) GuardResult {
+	lower := strings.ToLower(content)
+	for _, m := range delegationMetadataPatterns {
+		if strings.Contains(lower, m) {
+			cleaned := stripSentencesContaining(content, delegationMetadataPatterns)
+			if strings.TrimSpace(cleaned) == "" {
+				return GuardResult{
+					Passed: false, Retry: true,
+					Reason: "response consisted entirely of internal delegation metadata",
+				}
+			}
+			return GuardResult{Passed: false, Content: cleaned}
+		}
+	}
+	return GuardResult{Passed: true}
+}
+func (g *DelegationMetadataGuard) CheckWithContext(content string, _ *GuardContext) GuardResult {
+	return g.Check(content)
+}
+
+// --- FilesystemDenialGuard (LS-005) ---
+
+// FilesystemDenialGuard detects false filesystem-access denials where the agent
+// claims it cannot access files when it has tool access. Matches Rust's
+// intent classifier + execution shortcut for filesystem prompts.
+type FilesystemDenialGuard struct{}
+
+var filesystemDenialPatterns = []string{
+	"can't access your files",
+	"cannot access your files",
+	"can't access your folders",
+	"cannot access your folders",
+	"don't have access to your files",
+	"as an ai, i don't have access to your files",
+	"as an ai text-based interface, i'm not able to directly access",
+}
+
+func (g *FilesystemDenialGuard) Name() string { return "filesystem_denial" }
+func (g *FilesystemDenialGuard) Check(content string) GuardResult {
+	lower := strings.ToLower(content)
+	for _, m := range filesystemDenialPatterns {
+		if strings.Contains(lower, m) {
+			cleaned := stripSentencesContaining(content, filesystemDenialPatterns)
+			if strings.TrimSpace(cleaned) == "" {
+				return GuardResult{
+					Passed: false, Retry: true,
+					Reason: "response consisted entirely of false filesystem-access denial",
+				}
+			}
+			return GuardResult{Passed: false, Content: cleaned}
+		}
+	}
+	return GuardResult{Passed: true}
+}
+func (g *FilesystemDenialGuard) CheckWithContext(content string, _ *GuardContext) GuardResult {
+	return g.Check(content)
+}
+
+// --- LiteraryQuoteRetryGuard (Wave 8, #77) ---
+
+// LiteraryQuoteRetryGuard detects when the model narrates literary quotes,
+// song lyrics, or extended passages instead of providing original content.
+// These are often hallucinated or improperly attributed.
+type LiteraryQuoteRetryGuard struct{}
+
+var literaryQuoteMarkers = []string{
+	"as the poet wrote",
+	"in the words of",
+	"to quote",
+	"as shakespeare said",
+	"the famous quote",
+	"the poem goes",
+	"the verse reads",
+	"once upon a midnight dreary",
+	"shall i compare thee",
+	"it was the best of times",
+	"all that glitters",
+	"to be or not to be",
+	"roses are red",
+}
+
+func (g *LiteraryQuoteRetryGuard) Name() string { return "literary_quote_retry" }
+func (g *LiteraryQuoteRetryGuard) Check(content string) GuardResult {
+	lower := strings.ToLower(content)
+
+	// Count quotation mark pairs as indicator of extended quoting.
+	quoteCount := strings.Count(content, "\"") / 2
+	if quoteCount >= 3 {
+		// Check if the content is mostly quotes.
+		totalLen := len(content)
+		quotedLen := 0
+		inQuote := false
+		for _, ch := range content {
+			if ch == '"' {
+				inQuote = !inQuote
+				continue
+			}
+			if inQuote {
+				quotedLen++
+			}
+		}
+		if totalLen > 0 && float64(quotedLen)/float64(totalLen) > 0.5 {
+			return GuardResult{
+				Passed:  false,
+				Retry:   true,
+				Reason:  "response is predominantly quoted material",
+				Verdict: GuardRetryRequested,
+			}
+		}
+	}
+
+	for _, marker := range literaryQuoteMarkers {
+		if strings.Contains(lower, marker) {
+			return GuardResult{
+				Passed:  false,
+				Retry:   true,
+				Reason:  "narrated literary quote detected: " + marker,
+				Verdict: GuardRetryRequested,
+			}
+		}
+	}
+	return GuardResult{Passed: true}
+}
+func (g *LiteraryQuoteRetryGuard) CheckWithContext(content string, _ *GuardContext) GuardResult {
 	return g.Check(content)
 }
 

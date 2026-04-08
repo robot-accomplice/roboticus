@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"fmt"
 )
 
 // SkillRow represents a row in the skills table.
@@ -124,13 +125,51 @@ func (r *SkillsRepository) List(ctx context.Context, kind string) ([]SkillRow, e
 
 // SetEnabled toggles a skill's enabled state.
 func (r *SkillsRepository) SetEnabled(ctx context.Context, name string, enabled bool) error {
-	_, err := r.q.ExecContext(ctx,
+	res, err := r.q.ExecContext(ctx,
 		`UPDATE skills SET enabled = ? WHERE name = ?`, boolToInt(enabled), name)
-	return err
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrNoRowsAffected
+	}
+	return nil
 }
 
 // Delete removes a skill by name.
 func (r *SkillsRepository) Delete(ctx context.Context, name string) error {
 	_, err := r.q.ExecContext(ctx, `DELETE FROM skills WHERE name = ?`, name)
+	return err
+}
+
+// DeleteByID removes a skill by ID. Returns the number of rows affected.
+func (r *SkillsRepository) DeleteByID(ctx context.Context, id string) (int64, error) {
+	res, err := r.q.ExecContext(ctx, `DELETE FROM skills WHERE id = ?`, id)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// ToggleByID flips a skill's enabled flag by ID. Returns rows affected.
+func (r *SkillsRepository) ToggleByID(ctx context.Context, id string) (int64, error) {
+	res, err := r.q.ExecContext(ctx,
+		`UPDATE skills SET enabled = CASE WHEN enabled = 1 THEN 0 ELSE 1 END WHERE id = ?`, id)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// UpdateField updates a single field on a skill by ID.
+func (r *SkillsRepository) UpdateField(ctx context.Context, id, field, value string) error {
+	// Only allow known fields to prevent SQL injection.
+	allowed := map[string]bool{"description": true, "risk_level": true, "version": true, "enabled": true}
+	if !allowed[field] {
+		return fmt.Errorf("unknown skill field: %s", field)
+	}
+	_, err := r.q.ExecContext(ctx,
+		`UPDATE skills SET `+field+` = ? WHERE id = ?`, value, id)
 	return err
 }

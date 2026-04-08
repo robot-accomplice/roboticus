@@ -742,10 +742,15 @@ CREATE INDEX IF NOT EXISTS idx_session_model_perf_session ON session_model_perfo
 CREATE TABLE IF NOT EXISTS consent_requests (
     id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL REFERENCES sessions(id),
-    consent_type TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'granted', 'denied')),
+    origin_channel TEXT NOT NULL DEFAULT '',
+    origin_recipient TEXT NOT NULL DEFAULT '',
+    requesting_channel TEXT NOT NULL DEFAULT '',
+    requesting_recipient TEXT NOT NULL DEFAULT '',
+    consent_type TEXT NOT NULL DEFAULT 'cross_channel',
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'fulfilled', 'granted', 'denied')),
     granted_by TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    expires_at TEXT,
     resolved_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_consent_requests_session ON consent_requests(session_id, status);

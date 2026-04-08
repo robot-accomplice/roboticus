@@ -81,9 +81,9 @@ func (r *Router) ClearOverride() {
 }
 
 // EnableMetascoreRouting activates runtime-feedback-driven model selection.
-func (r *Router) EnableMetascoreRouting(quality *QualityTracker, capacity *CapacityTracker, breakers *BreakerRegistry) {
+func (r *Router) EnableMetascoreRouting(quality *QualityTracker, latency *LatencyTracker, capacity *CapacityTracker, breakers *BreakerRegistry) {
 	r.MetascoreSelector = func(targets []RouteTarget) *ModelProfile {
-		profiles := BuildModelProfiles(targets, quality, capacity, breakers)
+		profiles := BuildModelProfiles(targets, quality, latency, capacity, breakers)
 		return SelectByMetascore(profiles, breakers)
 	}
 }

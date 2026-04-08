@@ -5,6 +5,19 @@ import (
 	"time"
 )
 
+// Trace namespace constants for structured trace span naming (Wave 8, #88).
+// Use these as prefixes for TraceSpan.Name to enable filtering and aggregation.
+const (
+	TraceNSPipeline   = "pipeline"   // Top-level pipeline orchestration spans
+	TraceNSGuard      = "guard"      // Guard chain evaluation spans
+	TraceNSInference  = "inference"  // LLM inference spans (standard and streaming)
+	TraceNSRetrieval  = "retrieval"  // Memory retrieval and context assembly spans
+	TraceNSToolSearch = "toolsearch" // Tool discovery and pruning spans
+	TraceNSMCP        = "mcp"        // MCP server interaction spans
+	TraceNSDelegation = "delegation" // Subagent delegation spans
+	TraceNSTaskState  = "taskstate"  // Task state machine transition spans
+)
+
 // PipelineTrace records per-stage timing for a single pipeline run.
 type PipelineTrace struct {
 	ID      string      `json:"id"`

@@ -18,16 +18,8 @@ type EventPublisher interface {
 	PublishEvent(eventType string, data any)
 }
 
-// agentMessageRequest is the JSON body for POST /api/agent/message.
-type agentMessageRequest struct {
-	Content   string `json:"content"`
-	SessionID string `json:"session_id,omitempty"`
-	AgentID   string `json:"agent_id,omitempty"`
-	Model     string `json:"model,omitempty"`
-}
-
 // AgentMessage handles standard (non-streaming) inference requests.
-func AgentMessage(p pipeline.Runner, bus ...EventPublisher) http.HandlerFunc {
+func AgentMessage(p pipeline.Runner, agentName string, bus ...EventPublisher) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req agentMessageRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -42,17 +34,24 @@ func AgentMessage(p pipeline.Runner, bus ...EventPublisher) http.HandlerFunc {
 			req.AgentID = "default"
 		}
 
+		platform := "api"
+		if req.Channel != "" {
+			platform = req.Channel
+		}
+
 		input := pipeline.Input{
 			Content:   req.Content,
 			SessionID: req.SessionID,
 			AgentID:   req.AgentID,
-			AgentName: "Roboticus",
-			Platform:  "api",
+			AgentName: agentName,
+			Platform:  platform,
+			SenderID:  req.SenderID,
+			ChatID:    req.GroupID,
 		}
 
 		outcome, err := pipeline.RunPipeline(r.Context(), p, pipeline.PresetAPI(), input)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			writeError(w, core.HTTPStatusForError(err), err.Error())
 			return
 		}
 
@@ -67,7 +66,19 @@ func AgentMessage(p pipeline.Runner, bus ...EventPublisher) http.HandlerFunc {
 			})
 		}
 
-		writeJSON(w, http.StatusOK, outcome)
+		resp := agentMessageResponse{
+			SessionID:          outcome.SessionID,
+			MessageID:          outcome.MessageID,
+			Content:            outcome.Content,
+			Model:              outcome.Model,
+			TokensIn:           outcome.TokensIn,
+			TokensOut:          outcome.TokensOut,
+			ReactTurns:         outcome.ReactTurns,
+			FromCache:          outcome.FromCache,
+			Cached:             outcome.FromCache,
+			AssistantMessageID: outcome.MessageID,
+		}
+		writeJSON(w, http.StatusOK, resp)
 	}
 }
 
@@ -75,7 +86,7 @@ func AgentMessage(p pipeline.Runner, bus ...EventPublisher) http.HandlerFunc {
 // The pipeline prepares full context (session history, memory, tools, system prompt)
 // via StreamPreparer, returned in outcome.StreamRequest. This handler only does
 // SSE plumbing — it never builds its own LLM request.
-func AgentMessageStream(p pipeline.Runner, llmSvc *llm.Service) http.HandlerFunc {
+func AgentMessageStream(p pipeline.Runner, llmSvc *llm.Service, agentName string, finalizer ...pipeline.StreamFinalizer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req agentMessageRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -94,7 +105,7 @@ func AgentMessageStream(p pipeline.Runner, llmSvc *llm.Service) http.HandlerFunc
 			Content:   req.Content,
 			SessionID: req.SessionID,
 			AgentID:   req.AgentID,
-			AgentName: "Roboticus",
+			AgentName: agentName,
 			Platform:  "api",
 		}
 
@@ -103,7 +114,7 @@ func AgentMessageStream(p pipeline.Runner, llmSvc *llm.Service) http.HandlerFunc
 		// session context, memory retrieval, tools, and system prompt.
 		outcome, err := pipeline.RunPipeline(r.Context(), p, pipeline.PresetStreaming(), input)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			writeError(w, core.HTTPStatusForError(err), err.Error())
 			return
 		}
 
@@ -162,6 +173,13 @@ func AgentMessageStream(p pipeline.Runner, llmSvc *llm.Service) http.HandlerFunc
 
 		_, _ = fmt.Fprintf(w, "data: [DONE]\n\n")
 		flusher.Flush()
+
+		// Post-stream finalization: run the same post-turn work that standard
+		// inference does (Rule 7.2). Without this call, streaming turns would
+		// silently lose memory ingest, embeddings, and observer dispatch.
+		if len(finalizer) > 0 && finalizer[0] != nil {
+			finalizer[0].FinalizeStream(r.Context(), outcome, fullContent.String())
+		}
 	}
 }
 

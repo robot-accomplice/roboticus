@@ -266,6 +266,30 @@ func TestArchitecture_PipelineDoesNotDependOnAPI(t *testing.T) {
 	}
 }
 
+// TestArchitecture_DocsStaySynchronizedOnOffPipelineExemptions verifies the
+// approved exemption list is identical across both architecture documents.
+func TestArchitecture_DocsStaySynchronizedOnOffPipelineExemptions(t *testing.T) {
+	architecture := readRepoFile(t, repoRootPath("ARCHITECTURE.md"))
+	rules := readRepoFile(t, repoRootPath("architecture_rules.md"))
+
+	requiredMentions := []string{
+		"/api/interview/start",
+		"/api/interview/turn",
+		"/api/interview/finish",
+		"AnalyzeSession",
+		"AnalyzeTurn",
+	}
+
+	for _, phrase := range requiredMentions {
+		if !strings.Contains(architecture, phrase) {
+			t.Fatalf("ARCHITECTURE.md is missing required exemption text %q", phrase)
+		}
+		if !strings.Contains(rules, phrase) {
+			t.Fatalf("architecture_rules.md is missing required exemption text %q", phrase)
+		}
+	}
+}
+
 // TestArchitecture_PipelineHasNoAppStateReferences ensures the pipeline operates
 // through capability interfaces and pipeline-scoped types, not concrete API state.
 func TestArchitecture_PipelineHasNoAppStateReferences(t *testing.T) {

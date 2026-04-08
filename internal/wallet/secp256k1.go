@@ -236,3 +236,19 @@ const (
 	maxInt64 = int64(^uint64(0) >> 1)
 	minInt64 = -maxInt64 - 1
 )
+
+// ZeroizePrivateKey overwrites the private key's secret scalar with zeros.
+// This provides defense-in-depth for key material cleanup, matching the Rust
+// reference's Zeroizing<Vec<u8>> pattern. After calling this, the key is
+// unusable for signing.
+func ZeroizePrivateKey(key *ecdsa.PrivateKey) {
+	if key == nil || key.D == nil { //nolint:staticcheck // secp256k1 zeroization requires direct big.Int field access; no stdlib alternative
+		return
+	}
+	// Overwrite the big.Int's internal words with zeros
+	words := key.D.Bits() //nolint:staticcheck // secp256k1 zeroization requires direct big.Int field access
+	for i := range words {
+		words[i] = 0
+	}
+	key.D.SetInt64(0) //nolint:staticcheck // secp256k1 zeroization requires direct big.Int field access
+}

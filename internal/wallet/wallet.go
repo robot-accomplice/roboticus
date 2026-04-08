@@ -360,6 +360,22 @@ func (w *Wallet) GetTransactionCount() (uint64, error) {
 	return nonce.Uint64(), nil
 }
 
+// ValidateAddress checks that addr is a valid Ethereum address: "0x" prefix + 40 hex chars.
+func ValidateAddress(addr string) error {
+	if len(addr) != 42 {
+		return fmt.Errorf("wallet: address must be 42 characters (got %d)", len(addr))
+	}
+	if !strings.HasPrefix(addr, "0x") && !strings.HasPrefix(addr, "0X") {
+		return fmt.Errorf("wallet: address must start with 0x")
+	}
+	for _, c := range addr[2:] {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
+			return fmt.Errorf("wallet: address contains invalid hex character: %c", c)
+		}
+	}
+	return nil
+}
+
 // EthCall performs a read-only contract call and returns the hex result.
 func (w *Wallet) EthCall(to string, data string) (string, error) {
 	result, err := w.rpcCall("eth_call", []any{

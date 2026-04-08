@@ -11,10 +11,7 @@ import (
 func ListDelegations(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		limit := parseIntParam(r, "limit", 50)
-		rows, err := store.QueryContext(r.Context(),
-			`SELECT id, session_id, turn_id, task_description, assigned_agents_json,
-			        pattern, duration_ms, success, quality_score, created_at
-			 FROM delegation_outcomes ORDER BY created_at DESC LIMIT ?`, limit)
+		rows, err := db.NewRouteQueries(store).ListDelegationOutcomes(r.Context(), limit)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to query delegations")
 			return

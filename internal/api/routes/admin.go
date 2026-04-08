@@ -96,9 +96,7 @@ func GetChannelsStatus(cfg *core.Config, ks *core.Keystore) http.HandlerFunc {
 // GetDeadLetters returns dead letter queue entries.
 func GetDeadLetters(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		rows, err := store.QueryContext(r.Context(),
-			`SELECT id, channel, recipient_id, content, last_error, created_at
-			 FROM delivery_queue WHERE status = 'dead_letter' ORDER BY created_at DESC LIMIT 50`)
+		rows, err := db.NewRouteQueries(store).ListDeadLetters(r.Context(), 50)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to query dead letters")
 			return
@@ -175,11 +173,7 @@ func KeystoreUnlock() http.HandlerFunc {
 // SubagentRetirementCandidates returns subagents not used in 30 days.
 func SubagentRetirementCandidates(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		rows, err := store.QueryContext(r.Context(),
-			`SELECT id, name, display_name, model, role, created_at
-			 FROM sub_agents
-			 WHERE created_at < datetime('now', '-30 days')
-			 ORDER BY created_at ASC`)
+		rows, err := db.NewRouteQueries(store).ListRetirementCandidates(r.Context())
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to query retirement candidates")
 			return
@@ -210,15 +204,10 @@ func SubagentRetirementCandidates(store *db.Store) http.HandlerFunc {
 // RetireUnusedSubagents deletes subagents not used in 30 days.
 func RetireUnusedSubagents(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		res, err := store.ExecContext(r.Context(),
-			`DELETE FROM sub_agents WHERE created_at < datetime('now', '-30 days')`)
+		repo := db.NewAgentsRepository(store)
+		n, err := repo.PruneOld(r.Context(), 30)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		n, err2 := res.RowsAffected()
-		if err2 != nil {
-			writeError(w, http.StatusInternalServerError, err2.Error())
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"retired": n})
@@ -354,36 +343,32 @@ func BreakerForceOpen(llmSvc *llm.Service) http.HandlerFunc {
 func MemoryHealth(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
+		rq := db.NewRouteQueries(store)
 
-		var workingCount, workingStale int64
-		row := store.QueryRowContext(ctx, `SELECT COUNT(*) FROM working_memory`)
-		if err := row.Scan(&workingCount); err != nil {
+		workingCount, err := rq.CountWorkingMemory(ctx)
+		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to query working memory health")
 			return
 		}
-		row = store.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM working_memory WHERE created_at < datetime('now', '-24 hours')`)
-		if err := row.Scan(&workingStale); err != nil {
+		workingStale, err := rq.CountWorkingMemoryStale(ctx)
+		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to query working memory staleness")
 			return
 		}
 
-		var episodicCount, episodicStale int64
-		row = store.QueryRowContext(ctx, `SELECT COUNT(*) FROM episodic_memory`)
-		if err := row.Scan(&episodicCount); err != nil {
+		episodicCount, err := rq.CountEpisodicMemory(ctx)
+		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to query episodic memory health")
 			return
 		}
-		row = store.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM episodic_memory WHERE created_at < datetime('now', '-7 days')`)
-		if err := row.Scan(&episodicStale); err != nil {
+		episodicStale, err := rq.CountEpisodicMemoryStale(ctx)
+		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to query episodic memory staleness")
 			return
 		}
 
-		var semanticCount int64
-		row = store.QueryRowContext(ctx, `SELECT COUNT(*) FROM semantic_memory`)
-		if err := row.Scan(&semanticCount); err != nil {
+		semanticCount, err := rq.CountSemanticMemory(ctx)
+		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to query semantic memory health")
 			return
 		}
@@ -410,13 +395,12 @@ func MemoryHealth(store *db.Store) http.HandlerFunc {
 func ReplayDeadLetter(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
-		res, err := store.ExecContext(r.Context(),
-			`UPDATE delivery_queue SET status = 'pending', last_error = NULL WHERE id = ? AND status = 'dead_letter'`, id)
+		repo := db.NewDeliveryRepository(store)
+		n, err := repo.ReplayDeadLetter(r.Context(), id)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		n, _ := res.RowsAffected()
 		if n == 0 {
 			writeError(w, http.StatusNotFound, "dead letter entry not found or already replayed")
 			return
@@ -430,9 +414,7 @@ func ReplayDeadLetter(store *db.Store) http.HandlerFunc {
 // ListSubagents returns registered subagents.
 func ListSubagents(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		rows, err := store.QueryContext(r.Context(),
-			`SELECT id, name, display_name, model, role, description, enabled, created_at
-			 FROM sub_agents ORDER BY created_at DESC`)
+		rows, err := db.NewRouteQueries(store).ListSubAgentsAdmin(r.Context())
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to query subagents")
 			return
@@ -481,12 +463,8 @@ func CreateSubagent(store *db.Store) http.HandlerFunc {
 		}
 		skillsJSON, _ := json.Marshal(req.Capabilities)
 		id := db.NewID()
-		_, err := store.ExecContext(r.Context(),
-			`INSERT INTO sub_agents (id, name, model, skills_json, enabled)
-			 VALUES (?, ?, ?, ?, 1)`,
-			id, req.Name, req.Model, string(skillsJSON),
-		)
-		if err != nil {
+		repo := db.NewAgentsRepository(store)
+		if err := repo.Insert(r.Context(), id, req.Name, req.Model, string(skillsJSON), true); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}

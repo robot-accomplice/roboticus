@@ -29,6 +29,18 @@ type Outcome struct {
 	// full context (session history, memory, tools, system prompt). The SSE handler
 	// must use this instead of building its own request, to avoid context divergence.
 	StreamRequest *llm.Request `json:"-"`
+
+	// TurnID is the pre-created turn record ID. Used by FinalizeStream to
+	// run post-turn work (memory ingest, embedding, observer dispatch,
+	// assistant message storage) after streaming completes.
+	TurnID string `json:"-"`
+
+	// streamSession holds the session reference for post-stream finalization.
+	// Not exported — only used by the pipeline's FinalizeStream method.
+	streamSession *Session `json:"-"`
+
+	// streamConfig holds the pipeline config for post-stream finalization.
+	streamConfig *Config `json:"-"`
 }
 
 // Input is the raw request to the pipeline.
@@ -47,6 +59,14 @@ type Input struct {
 // Routes and tests should depend on this interface, not the concrete Pipeline.
 type Runner interface {
 	Run(ctx context.Context, cfg Config, input Input) (*Outcome, error)
+}
+
+// StreamFinalizer runs post-turn work after streaming completes.
+// Connectors MUST call this after assembling the full streamed content,
+// or streaming turns will silently lose memory ingestion, embedding
+// generation, observer dispatch, and assistant message storage.
+type StreamFinalizer interface {
+	FinalizeStream(ctx context.Context, outcome *Outcome, assembledContent string)
 }
 
 // Ensure *Pipeline satisfies Runner at compile time.
@@ -118,25 +138,51 @@ func RunPipeline(ctx context.Context, p Runner, cfg Config, input Input) (*Outco
 
 // Run executes the full pipeline with the given config and input.
 //
-// Stage order:
-//  1. Input validation
+// Stage order (matching Rust pipeline):
+//
+//  1. Input validation (addressability, bot command, delegation wrap, size)
 //  2. Injection defense (L1 score, L2 sanitize)
 //  3. Dedup tracking (reject concurrent identical requests)
-//  4. Session resolution
-//  5. Short-followup expansion
-//  6. User message storage
-//  7. Authority resolution
-//  8. Decomposition gate (classify + potentially delegate)
-//  9. Skill-first fulfillment
-//  10. Shortcut dispatch -> Inference
-//  11. Guard chain -> Post-turn ingest -> Response
+//  4. Session resolution (find/create, consent, short-followup expansion)
+//  5. User message storage (with topic tag derivation)
+//  6. Turn creation (pre-create turn record in DB)
+//  7. Decomposition gate (classify + potentially delegate)
+//  8. Authority resolution (threat-aware RBAC)
+//  9. Delegated execution (orchestrate-subagents if delegation decided)
+//  10. Skill-first fulfillment (Creator-only, channel-only)
+//  11. Shortcut dispatch (acknowledgements, identity, /help)
+//  12. Inference (standard ReAct or streaming)
+//  13. Guard chain → Post-turn ingest → Response
 func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, error) {
+	if p.store == nil {
+		return nil, core.NewError(core.ErrConfig, "pipeline requires a database store")
+	}
 	tr := NewTraceRecorder()
 	pipelineStart := time.Now()
 	log.Info().Str("channel", cfg.ChannelLabel).Str("agent", input.AgentID).Msg("pipeline started")
 
-	// Stage 1: Input validation.
+	// ── Stage 1: Input validation ──────────────────────────────────────────
 	tr.BeginSpan("validation")
+
+	// Bot command dispatch: handle /commands before any processing.
+	if cfg.BotCommandDispatch && len(input.Content) > 0 && input.Content[0] == '/' {
+		if result := p.tryBotCommand(ctx, input); result != nil {
+			tr.Annotate("bot_command", true)
+			tr.EndSpan("ok")
+			return result, nil
+		}
+	}
+
+	// Cron delegation wrap: prepend subagent directive for non-root cron tasks.
+	if cfg.CronDelegationWrap && input.AgentID != "" && input.AgentID != "default" {
+		input.Content = fmt.Sprintf("[Delegated to %s] %s", input.AgentID, input.Content)
+	}
+
+	// Prefer local model: scan fallbacks for a local provider and set override.
+	if cfg.PreferLocalModel && cfg.ModelOverride == "" {
+		cfg.ModelOverride = p.findLocalModel()
+	}
+
 	if input.Content == "" {
 		tr.EndSpan("error")
 		return nil, core.NewError(core.ErrConfig, "empty message content")
@@ -147,8 +193,9 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 	}
 	tr.EndSpan("ok")
 
-	// Stage 2: Injection defense.
+	// ── Stage 2: Injection defense ─────────────────────────────────────────
 	tr.BeginSpan("injection_defense")
+	var threatCaution bool
 	if cfg.InjectionDefense && p.injection != nil {
 		score := p.injection.CheckInput(input.Content)
 		tr.Annotate("score", float64(score))
@@ -159,19 +206,19 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 		}
 		if score.IsCaution() {
 			input.Content = p.injection.Sanitize(input.Content)
+			threatCaution = true
 			log.Warn().Float64("score", float64(score)).Str("session", input.SessionID).Str("channel", cfg.ChannelLabel).Str("agent", input.AgentID).Msg("input sanitized")
 		}
 	}
 	tr.EndSpan("ok")
 
-	// Stage 3: Dedup tracking — reject concurrent identical requests.
-	var dedupFP string
+	// ── Stage 3: Dedup tracking ────────────────────────────────────────────
 	if cfg.DedupTracking && p.dedup != nil {
 		tr.BeginSpan("dedup_check")
-		dedupFP = Fingerprint(input.Content, input.AgentID, input.SessionID)
+		dedupFP := Fingerprint(input.Content, input.AgentID, input.SessionID)
 		if !p.dedup.CheckAndTrack(dedupFP) {
 			tr.EndSpan("rejected")
-			return nil, core.NewError(core.ErrConfig, "duplicate request already in flight")
+			return nil, core.NewError(core.ErrDuplicate, "duplicate request already in flight")
 		}
 		defer p.dedup.Release(dedupFP)
 		tr.EndSpan("ok")
@@ -182,7 +229,7 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 	task := p.tasks.Create(taskID, input.SessionID, input.Content)
 	_ = task
 
-	// Stage 4: Session resolution.
+	// ── Stage 4: Session resolution ────────────────────────────────────────
 	tr.BeginSpan("session_resolution")
 	session, err := p.resolveSession(ctx, cfg, input)
 	if err != nil {
@@ -192,19 +239,34 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 	tr.Annotate("session_id", session.ID)
 	tr.EndSpan("ok")
 
-	// Stage 4: Short-followup expansion.
+	// Stage 4a: Cross-channel consent check (Rust parity).
+	// Runs immediately after session resolution to gate cross-channel access.
+	consentResult, consentMsg := p.checkCrossChannelConsent(ctx, session, input)
+	switch consentResult {
+	case ConsentGranted:
+		// User confirmed consent — return synthetic response.
+		return &Outcome{SessionID: session.ID, Content: consentMsg}, nil
+	case ConsentBlocked:
+		// Cross-channel access denied — return error with instructions.
+		return nil, core.NewError(core.ErrUnauthorized, consentMsg)
+	case ConsentContinue:
+		// No consent action needed — proceed.
+	}
+
+	// Short-followup expansion (Rust: contextualize_short_followup).
 	content := input.Content
 	if cfg.ShortFollowupExpansion {
 		content = p.expandShortFollowup(session, content)
 	}
 
-	// Stage 5: User message storage.
+	// ── Stage 5: User message storage (with topic tag) ─────────────────────
 	tr.BeginSpan("message_storage")
 	msgID := db.NewID()
+	topicTag := p.deriveTopicTag(session, content)
 	_, err = p.store.ExecContext(ctx,
-		`INSERT INTO session_messages (id, session_id, role, content)
-		 VALUES (?, ?, 'user', ?)`,
-		msgID, session.ID, content,
+		`INSERT INTO session_messages (id, session_id, role, content, topic_tag)
+		 VALUES (?, ?, 'user', ?, ?)`,
+		msgID, session.ID, content, topicTag,
 	)
 	if err != nil {
 		tr.EndSpan("error")
@@ -213,63 +275,123 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 	session.AddUserMessage(content)
 	tr.EndSpan("ok")
 
-	// Stage 6: Authority resolution.
+	// ── Stage 6: Turn creation ─────────────────────────────────────────────
+	turnID := db.NewID()
+	_, turnErr := p.store.ExecContext(ctx,
+		`INSERT INTO turns (id, session_id) VALUES (?, ?)`,
+		turnID, session.ID,
+	)
+	if turnErr != nil {
+		log.Warn().Err(turnErr).Str("turn", turnID).Msg("turn creation failed, continuing")
+	}
+
+	// ── Stage 7: Decomposition gate ────────────────────────────────────────
+	tr.BeginSpan("decomposition_gate")
+	p.tasks.Start(taskID, msgID)
+	var decomp *DecompositionResult
+	if cfg.DecompositionGate {
+		d := EvaluateDecomposition(content, len(session.Messages()))
+		decomp = &d
+		p.tasks.Classify(taskID, TaskClassification(decomp.Decision))
+		tr.Annotate("decision", decomp.Decision.String())
+		if decomp.Decision == DecompDelegated && len(decomp.Subtasks) > 0 {
+			tr.Annotate("subtask_count", len(decomp.Subtasks))
+			p.tasks.Delegate(taskID, input.AgentID, nil)
+			log.Info().
+				Str("task", taskID).
+				Str("session", session.ID).
+				Str("agent", input.AgentID).
+				Int("subtasks", len(decomp.Subtasks)).
+				Msg("task delegated via decomposition gate")
+		}
+	} else {
+		decomp = &DecompositionResult{Decision: DecompCentralized}
+	}
+	tr.EndSpan("ok")
+
+	// ── Stage 7.5: Task state synthesis (Rust: synthesize_task_state + plan) ──
+	if cfg.TaskOperatingState != "" || cfg.DecompositionGate {
+		tr.BeginSpan("task_synthesis")
+		// Gather agent skills for capability matching.
+		var agentSkills []string
+		if p.skills != nil {
+			// Skills interface doesn't expose a list method; use empty for now.
+			// The synthesis still works — it just reports 0% capability fit.
+			_ = agentSkills // SA9003: populated when skills list method is added
+		}
+		synthesis := SynthesizeTaskState(content, session.TurnCount(), agentSkills)
+		tr.Annotate("intent", synthesis.Intent)
+		tr.Annotate("complexity", synthesis.Complexity)
+		tr.Annotate("planned_action", synthesis.PlannedAction)
+		tr.Annotate("capability_fit", synthesis.CapabilityFit)
+		tr.EndSpan("ok")
+
+		// Override decomposition decision based on planner action.
+		if synthesis.PlannedAction == "delegate_to_specialist" && decomp.Decision == DecompCentralized {
+			decomp.Decision = DecompDelegated
+			log.Info().Str("session", session.ID).Msg("planner upgraded decision to delegation")
+		}
+	}
+
+	// ── Stage 8: Authority resolution ──────────────────────────────────────
 	tr.BeginSpan("authority_resolution")
 	authority := ResolveAuthority(cfg.AuthorityMode, input.Claim)
+	// Reduce authority if injection threat was caution-level (Rust parity).
+	if threatCaution && authority == core.AuthorityCreator {
+		authority = core.AuthorityPeer
+		log.Warn().Str("session", session.ID).Msg("authority reduced due to injection caution")
+	}
 	session.Authority = authority
 	tr.Annotate("authority", authority.String())
 	tr.EndSpan("ok")
 
-	// Stage 7: Decomposition gate — classify and potentially delegate.
-	tr.BeginSpan("decomposition_gate")
-	p.tasks.Start(taskID, msgID)
-	decomp := EvaluateDecomposition(content, len(session.Messages()))
-	p.tasks.Classify(taskID, TaskClassification(decomp.Decision))
-	tr.Annotate("decision", decomp.Decision.String())
-	if decomp.Decision == DecompDelegated && len(decomp.Subtasks) > 0 {
-		tr.Annotate("subtask_count", len(decomp.Subtasks))
-		// Record the delegation in task state. The executor will handle
-		// actual subagent dispatch if the agent has orchestration tools.
-		p.tasks.Delegate(taskID, input.AgentID, nil)
-		log.Info().
-			Str("task", taskID).
-			Str("session", session.ID).
-			Str("agent", input.AgentID).
-			Int("subtasks", len(decomp.Subtasks)).
-			Msg("task delegated via decomposition gate")
+	// ── Stage 9: Delegated execution ───────────────────────────────────────
+	if cfg.DelegatedExecution && decomp.Decision == DecompDelegated && len(decomp.Subtasks) > 0 {
+		tr.BeginSpan("delegated_execution")
+		delegResult := p.executeDelegation(ctx, session, decomp, turnID)
+		if delegResult != nil {
+			tr.Annotate("delegation_ok", true)
+			tr.EndSpan("ok")
+			p.storeTrace(ctx, tr, session.ID, msgID, cfg.ChannelLabel)
+			p.tasks.Complete(taskID)
+			return delegResult, nil
+		}
+		tr.EndSpan("fallthrough")
 	}
-	tr.EndSpan("ok")
 
-	// Stage 8: Skill-first fulfillment.
+	// ── Stage 10: Skill-first fulfillment ──────────────────────────────────
 	tr.BeginSpan("skill_dispatch")
 	if cfg.SkillFirstEnabled && authority == core.AuthorityCreator && p.skills != nil {
 		if result := p.skills.TryMatch(ctx, session, content); result != nil {
 			tr.Annotate("matched", true)
 			tr.EndSpan("ok")
 			p.storeTrace(ctx, tr, session.ID, msgID, cfg.ChannelLabel)
+			p.tasks.Complete(taskID)
 			return p.guardOutcome(cfg, result), nil
 		}
 	}
 	tr.EndSpan("skipped")
 
-	// Stage 8: Shortcut dispatch.
+	// ── Stage 11: Shortcut dispatch ────────────────────────────────────────
 	tr.BeginSpan("shortcut_dispatch")
 	if cfg.ShortcutsEnabled {
 		if result := p.tryShortcut(ctx, session, content); result != nil {
 			tr.Annotate("matched", true)
 			tr.EndSpan("ok")
+			p.recordShortcutCost(ctx, turnID, session.ID, cfg.ChannelLabel)
 			p.storeTrace(ctx, tr, session.ID, msgID, cfg.ChannelLabel)
+			p.tasks.Complete(taskID)
 			return p.guardOutcome(cfg, result), nil
 		}
 	}
 	tr.EndSpan("skipped")
 
-	// Stage 9: Inference.
+	// ── Stage 12: Inference ────────────────────────────────────────────────
 	tr.BeginSpan("inference")
 	var outcome *Outcome
 	switch cfg.InferenceMode {
 	case InferenceStandard:
-		outcome, err = p.runStandardInference(ctx, cfg, session, msgID)
+		outcome, err = p.runStandardInference(ctx, cfg, session, msgID, turnID)
 	case InferenceStreaming:
 		outcome, err = p.prepareStreamInference(ctx, cfg, session, msgID)
 	default:

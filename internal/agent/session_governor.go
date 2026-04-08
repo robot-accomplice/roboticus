@@ -96,6 +96,134 @@ func (sg *SessionGovernor) Tick(ctx context.Context) (*GovernorReport, error) {
 	return report, nil
 }
 
+// CompactBeforeArchive performs progressive compaction on a session before archiving.
+// It summarizes the oldest 50% of turns while preserving the 4 most recent messages.
+func (sg *SessionGovernor) CompactBeforeArchive(ctx context.Context, sessionID string) error {
+	// Fetch all messages ordered by time.
+	rows, err := sg.store.QueryContext(ctx,
+		`SELECT id, role, content FROM session_messages
+		 WHERE session_id = ? ORDER BY created_at ASC`, sessionID)
+	if err != nil {
+		return fmt.Errorf("query messages: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	type msg struct {
+		id, role, content string
+	}
+	var messages []msg
+	for rows.Next() {
+		var m msg
+		if err := rows.Scan(&m.id, &m.role, &m.content); err != nil {
+			continue
+		}
+		messages = append(messages, m)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate messages: %w", err)
+	}
+
+	const preserveRecent = 4
+	if len(messages) <= preserveRecent {
+		// Nothing to compact — too few messages.
+		return nil
+	}
+
+	// Split: oldest 50% becomes summary candidates, but always preserve last 4.
+	halfPoint := len(messages) / 2
+	cutoff := len(messages) - preserveRecent
+	if halfPoint > cutoff {
+		halfPoint = cutoff
+	}
+	if halfPoint <= 0 {
+		return nil
+	}
+
+	toCompact := messages[:halfPoint]
+
+	// Build a summary from the compacted messages.
+	var summaryParts []string
+	for _, m := range toCompact {
+		snippet := m.content
+		if len(snippet) > 120 {
+			snippet = snippet[:120] + "..."
+		}
+		summaryParts = append(summaryParts, fmt.Sprintf("[%s] %s", m.role, snippet))
+	}
+	summary := fmt.Sprintf("[compacted %d messages]\n%s",
+		len(toCompact), joinLines(summaryParts))
+
+	// Delete old messages and insert the summary.
+	for _, m := range toCompact {
+		_, err := sg.store.ExecContext(ctx,
+			`DELETE FROM session_messages WHERE id = ?`, m.id)
+		if err != nil {
+			log.Warn().Err(err).Str("msg_id", m.id).Msg("failed to delete compacted message")
+		}
+	}
+
+	// Insert summary message as a system message at the beginning.
+	summaryID := db.NewID()
+	_, err = sg.store.ExecContext(ctx,
+		`INSERT INTO session_messages (id, session_id, role, content, created_at)
+		 VALUES (?, ?, 'system', ?, datetime('now', '-1 hour'))`,
+		summaryID, sessionID, summary)
+	if err != nil {
+		return fmt.Errorf("insert summary: %w", err)
+	}
+
+	log.Debug().
+		Str("session_id", sessionID).
+		Int("compacted", len(toCompact)).
+		Int("preserved", len(messages)-halfPoint).
+		Msg("compact-before-archive complete")
+
+	return nil
+}
+
+// joinLines joins string slices with newlines.
+func joinLines(parts []string) string {
+	result := ""
+	for i, p := range parts {
+		if i > 0 {
+			result += "\n"
+		}
+		result += p
+	}
+	return result
+}
+
+// AdjustPriority calculates an adjusted priority based on success/failure counts.
+// It boosts priority by PriorityBoostOnSuccess (default 5) when success rate >= 80%,
+// and decays by PriorityDecayOnFailure (default 10) when failure ratio is high.
+// The 2:1 asymmetry (penalizing failure harder than rewarding success) is intentional.
+func AdjustPriority(successCount, failureCount int, boostOnSuccess, decayOnFailure int) int {
+	if boostOnSuccess <= 0 {
+		boostOnSuccess = 5
+	}
+	if decayOnFailure <= 0 {
+		decayOnFailure = 10
+	}
+
+	total := successCount + failureCount
+	if total == 0 {
+		return 0
+	}
+
+	successRate := float64(successCount) / float64(total)
+
+	if successRate >= 0.8 {
+		return boostOnSuccess
+	}
+
+	failureRate := float64(failureCount) / float64(total)
+	if failureRate > 0.5 {
+		return -decayOnFailure
+	}
+
+	return 0
+}
+
 // expireStaleSessions marks active sessions older than sessionTTL as expired.
 func (sg *SessionGovernor) expireStaleSessions(ctx context.Context) (int64, error) {
 	ttlSeconds := int(sg.sessionTTL.Seconds())

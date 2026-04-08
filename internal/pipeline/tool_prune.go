@@ -70,3 +70,77 @@ func (tp *ToolPruner) Prune(_ context.Context, tools []ToolDef, _ string, sessio
 
 	return result
 }
+
+// PruneByEmbedding selects the topK most relevant tools based on cosine similarity
+// between tool description embeddings and the query embedding (Wave 8, #84).
+// queryEmbedding should be a float64 vector from the same embedding model used
+// to generate toolEmbeddings.
+func PruneByEmbedding(tools []ToolDef, queryEmbedding []float64, topK int) []ToolDef {
+	if len(tools) == 0 || len(queryEmbedding) == 0 || topK <= 0 {
+		return tools
+	}
+	if topK >= len(tools) {
+		return tools
+	}
+
+	type scored struct {
+		tool  ToolDef
+		score float64
+	}
+	var scored_tools []scored
+	for _, t := range tools {
+		if len(t.Embedding) != len(queryEmbedding) {
+			// No embedding or dimension mismatch — include by default.
+			scored_tools = append(scored_tools, scored{tool: t, score: 0.5})
+			continue
+		}
+		sim := cosineSimilarity(queryEmbedding, t.Embedding)
+		scored_tools = append(scored_tools, scored{tool: t, score: sim})
+	}
+
+	// Selection sort for topK (simple, avoids sort import for small N).
+	for i := 0; i < topK && i < len(scored_tools); i++ {
+		maxIdx := i
+		for j := i + 1; j < len(scored_tools); j++ {
+			if scored_tools[j].score > scored_tools[maxIdx].score {
+				maxIdx = j
+			}
+		}
+		scored_tools[i], scored_tools[maxIdx] = scored_tools[maxIdx], scored_tools[i]
+	}
+
+	result := make([]ToolDef, 0, topK)
+	for i := 0; i < topK && i < len(scored_tools); i++ {
+		result = append(result, scored_tools[i].tool)
+	}
+	return result
+}
+
+// cosineSimilarity computes the cosine similarity between two vectors.
+func cosineSimilarity(a, b []float64) float64 {
+	if len(a) != len(b) || len(a) == 0 {
+		return 0
+	}
+	var dot, normA, normB float64
+	for i := range a {
+		dot += a[i] * b[i]
+		normA += a[i] * a[i]
+		normB += b[i] * b[i]
+	}
+	if normA == 0 || normB == 0 {
+		return 0
+	}
+	return dot / (sqrt(normA) * sqrt(normB))
+}
+
+// sqrt computes square root via Newton's method (avoids math import).
+func sqrt(x float64) float64 {
+	if x <= 0 {
+		return 0
+	}
+	z := x / 2
+	for i := 0; i < 20; i++ {
+		z = z - (z*z-x)/(2*z)
+	}
+	return z
+}

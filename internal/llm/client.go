@@ -15,6 +15,10 @@ import (
 	"roboticus/internal/core"
 )
 
+// MaxAutoPayUSDC is the safety rail for x402 micropayments. Any single payment
+// request exceeding this amount (in USDC) is rejected without user confirmation.
+const MaxAutoPayUSDC = 1.0
+
 // PaymentHandler handles x402 micropayment negotiation when an LLM provider
 // returns HTTP 402. Implementations parse the payment requirements from the
 // response body, validate them (including safety rails), sign the payment,
@@ -35,16 +39,27 @@ type Client struct {
 // NewClient creates a Client for the given provider. It resolves the API key
 // from the environment at construction time, returning an error if the key
 // is required but missing.
-// KeyResolver resolves API keys for providers. When set, the LLM client
-// checks the resolver before falling back to environment variables.
-var KeyResolver func(providerName string) string
+// KeyResolver resolves API keys from the keystore by key name.
+// When set, the LLM client uses this to look up secrets before falling
+// back to environment variables.
+var KeyResolver func(keystoreKey string) string
 
 func NewClient(p *Provider) (*Client, error) {
 	var apiKey string
 	if !p.IsLocal {
-		// Priority: KeyResolver (keystore) → env var → error.
+		// Priority (matching Rust resolve_key_source):
+		// 1. Explicit api_key_ref (keystore reference or "keystore:name")
+		// 2. Conventional keystore name: {provider}_api_key
+		// 3. Environment variable from api_key_env
 		if KeyResolver != nil {
-			apiKey = KeyResolver(p.Name)
+			if p.APIKeyRef != "" {
+				// Strip "keystore:" prefix if present (Rust convention).
+				ref := strings.TrimPrefix(p.APIKeyRef, "keystore:")
+				apiKey = KeyResolver(ref)
+			}
+			if apiKey == "" {
+				apiKey = KeyResolver(p.Name + "_api_key")
+			}
 		}
 		if apiKey == "" && p.APIKeyEnv != "" {
 			apiKey = os.Getenv(p.APIKeyEnv)

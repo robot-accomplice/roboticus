@@ -143,11 +143,11 @@ func GetTaskEvents(store *db.Store) http.HandlerFunc {
 		summaries := make([]map[string]any, 0, len(taskMap))
 		for tid, info := range taskMap {
 			summaries = append(summaries, map[string]any{
-				"task_id":        tid,
-				"current_state":  info.currentState,
-				"event_count":    info.eventCount,
+				"task_id":         tid,
+				"current_state":   info.currentState,
+				"event_count":     info.eventCount,
 				"latest_event_at": info.latestAt,
-				"assigned_to":    info.assignedTo,
+				"assigned_to":     info.assignedTo,
 			})
 		}
 

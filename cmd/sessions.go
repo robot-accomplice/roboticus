@@ -21,14 +21,16 @@ var sessionsListCmd = &cobra.Command{
 		}
 		sessions, _ := data["sessions"].([]any)
 		if len(sessions) == 0 {
-			fmt.Println("No sessions.")
+			outputMessage("No sessions.")
 			return nil
 		}
-		for _, s := range sessions {
-			sm, _ := s.(map[string]any)
-			fmt.Printf("  %v  agent=%v  scope=%v  nickname=%v\n",
-				sm["id"], sm["agent_id"], sm["scope_key"], sm["nickname"])
-		}
+		outputResult(data, func(d any) {
+			for _, s := range sessions {
+				sm, _ := s.(map[string]any)
+				fmt.Printf("  %v  agent=%v  scope=%v  nickname=%v\n",
+					sm["id"], sm["agent_id"], sm["scope_key"], sm["nickname"])
+			}
+		})
 		return nil
 	},
 }

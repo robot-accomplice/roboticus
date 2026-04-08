@@ -38,10 +38,10 @@ func (s TaskState) String() string {
 type TaskClassification int
 
 const (
-	TaskSimple       TaskClassification = iota // single-turn, no decomposition needed
-	TaskComplex                                // may benefit from decomposition
-	TaskMultiStep                              // requires explicit planning
-	TaskSpecialist                             // needs specialist agent creation
+	TaskSimple     TaskClassification = iota // single-turn, no decomposition needed
+	TaskComplex                              // may benefit from decomposition
+	TaskMultiStep                            // requires explicit planning
+	TaskSpecialist                           // needs specialist agent creation
 )
 
 // String returns the classification name.

@@ -16,6 +16,26 @@ type TreasuryPolicy struct {
 	cfg TreasuryConfig
 }
 
+// ValidateTreasuryConfig checks that no limit is negative.
+func ValidateTreasuryConfig(cfg TreasuryConfig) error {
+	if cfg.PerPaymentCap < 0 {
+		return fmt.Errorf("treasury: per_payment_cap must not be negative (got %.2f)", cfg.PerPaymentCap)
+	}
+	if cfg.HourlyTransferLimit < 0 {
+		return fmt.Errorf("treasury: hourly_transfer_limit must not be negative (got %.2f)", cfg.HourlyTransferLimit)
+	}
+	if cfg.DailyTransferLimit < 0 {
+		return fmt.Errorf("treasury: daily_transfer_limit must not be negative (got %.2f)", cfg.DailyTransferLimit)
+	}
+	if cfg.MinimumReserve < 0 {
+		return fmt.Errorf("treasury: minimum_reserve must not be negative (got %.2f)", cfg.MinimumReserve)
+	}
+	if cfg.DailyInferenceBudget < 0 {
+		return fmt.Errorf("treasury: daily_inference_budget must not be negative (got %.2f)", cfg.DailyInferenceBudget)
+	}
+	return nil
+}
+
 // NewTreasuryPolicy creates a treasury policy from config.
 func NewTreasuryPolicy(cfg TreasuryConfig) *TreasuryPolicy {
 	return &TreasuryPolicy{cfg: cfg}

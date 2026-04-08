@@ -59,14 +59,15 @@ func TestApplyFullWithContext_NilContext(t *testing.T) {
 
 func TestFullGuardChain_Length(t *testing.T) {
 	chain := FullGuardChain()
-	if len(chain.guards) != 19 {
-		t.Errorf("full chain has %d guards, want 19", len(chain.guards))
+	if len(chain.guards) != 26 {
+		t.Errorf("full chain has %d guards, want 26", len(chain.guards))
 	}
 }
 
 func TestStreamGuardChain_Length(t *testing.T) {
 	chain := StreamGuardChain()
-	if len(chain.guards) != 5 {
-		t.Errorf("stream chain has %d guards, want 5", len(chain.guards))
+	// Rust parity: 6 guards (EmptyResponse, ExecutionTruth, TaskDeferral, ModelIdentityTruth, InternalJargon, NonRepetition)
+	if len(chain.guards) != 6 {
+		t.Errorf("stream chain has %d guards, want 6", len(chain.guards))
 	}
 }

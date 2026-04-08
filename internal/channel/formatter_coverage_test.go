@@ -6,7 +6,7 @@ import (
 )
 
 func TestFormatFor_AllPlatforms(t *testing.T) {
-	platforms := []string{"telegram", "discord", "whatsapp", "signal", "email", "web", "unknown"}
+	platforms := []string{"telegram", "discord", "whatsapp", "signal", "email", "web", "voice", "matrix", "unknown"}
 	for _, p := range platforms {
 		f := FormatFor(p)
 		if f == nil {

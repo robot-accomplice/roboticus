@@ -342,6 +342,8 @@ func TestGuardChain_Ordering(t *testing.T) {
 		"task_deferral",
 		"internal_jargon",
 		"declared_action",
+		"perspective",       // Wave 8, #78
+		"internal_protocol", // Wave 8, #79
 		// Quality
 		"low_value_parroting",
 		"non_repetition_v2",
@@ -351,8 +353,13 @@ func TestGuardChain_Ordering(t *testing.T) {
 		"model_identity_truth",
 		"current_events_truth",
 		"execution_truth",
+		"execution_block",
+		"delegation_metadata",
+		"filesystem_denial",
 		"financial_action_truth",
 		"personality_integrity",
+		"action_verification",  // Wave 8, #76
+		"literary_quote_retry", // Wave 8, #77
 		// Protection
 		"config_protection",
 	}
@@ -636,12 +643,9 @@ func TestContextualGuard_UsesContext(t *testing.T) {
 				ResolvedModel: "gpt-4-turbo",
 			},
 		},
-		{
-			name:    "CurrentEventsTruthGuard uses Intents",
-			guard:   &CurrentEventsTruthGuard{},
-			content: "As of my last training data, I cannot provide real-time updates on that topic.",
-			ctx:     &GuardContext{Intents: []string{"current_events"}},
-		},
+		// NOTE: CurrentEventsTruthGuard now strips stale markers in both Check()
+		// and CheckWithContext(), so it's tested separately below rather than in
+		// this contextual-only test.
 		{
 			name:    "ExecutionTruthGuard uses ToolResults (claim without tool)",
 			guard:   &ExecutionTruthGuard{},

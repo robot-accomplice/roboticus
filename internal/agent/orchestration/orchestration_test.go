@@ -576,6 +576,91 @@ func TestWorkflowLifecycle_ParallelEnd2End(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Orchestrator: timestamps (#48)
+// ---------------------------------------------------------------------------
+
+func TestWorkflow_CreatedAtSet(t *testing.T) {
+	o := NewOrchestrator()
+	before := time.Now()
+	wfID := o.CreateWorkflow("ts", PatternSequential, []*Subtask{{Description: "t"}})
+	after := time.Now()
+
+	wf := o.GetWorkflow(wfID)
+	if wf.CreatedAt.Before(before) || wf.CreatedAt.After(after) {
+		t.Errorf("workflow CreatedAt %v not in [%v, %v]", wf.CreatedAt, before, after)
+	}
+	if wf.CompletedAt != nil {
+		t.Error("workflow CompletedAt should be nil before completion")
+	}
+}
+
+func TestSubtask_CreatedAtSet(t *testing.T) {
+	o := NewOrchestrator()
+	before := time.Now()
+	wfID := o.CreateWorkflow("ts", PatternSequential, []*Subtask{{Description: "t"}})
+	after := time.Now()
+
+	wf := o.GetWorkflow(wfID)
+	st := wf.Subtasks[0]
+	if st.CreatedAt.Before(before) || st.CreatedAt.After(after) {
+		t.Errorf("subtask CreatedAt %v not in [%v, %v]", st.CreatedAt, before, after)
+	}
+	if st.CompletedAt != nil {
+		t.Error("subtask CompletedAt should be nil before completion")
+	}
+}
+
+func TestSubtask_CompletedAtSetOnComplete(t *testing.T) {
+	o := NewOrchestrator()
+	wfID := o.CreateWorkflow("ts", PatternSequential, []*Subtask{{Description: "t"}})
+	wf := o.GetWorkflow(wfID)
+
+	before := time.Now()
+	_ = o.CompleteTask(wfID, wf.Subtasks[0].ID, "done")
+	after := time.Now()
+
+	wf = o.GetWorkflow(wfID)
+	st := wf.Subtasks[0]
+	if st.CompletedAt == nil {
+		t.Fatal("subtask CompletedAt should be set after completion")
+	}
+	if st.CompletedAt.Before(before) || st.CompletedAt.After(after) {
+		t.Errorf("subtask CompletedAt %v not in [%v, %v]", *st.CompletedAt, before, after)
+	}
+}
+
+func TestSubtask_CompletedAtSetOnFail(t *testing.T) {
+	o := NewOrchestrator()
+	wfID := o.CreateWorkflow("ts", PatternSequential, []*Subtask{{Description: "t"}})
+	wf := o.GetWorkflow(wfID)
+
+	_ = o.FailTask(wfID, wf.Subtasks[0].ID, "err")
+
+	wf = o.GetWorkflow(wfID)
+	if wf.Subtasks[0].CompletedAt == nil {
+		t.Error("subtask CompletedAt should be set after failure")
+	}
+}
+
+func TestWorkflow_CompletedAtSetOnAllDone(t *testing.T) {
+	o := NewOrchestrator()
+	wfID := o.CreateWorkflow("ts", PatternSequential, []*Subtask{{Description: "t"}})
+	wf := o.GetWorkflow(wfID)
+
+	before := time.Now()
+	_ = o.CompleteTask(wfID, wf.Subtasks[0].ID, "done")
+	after := time.Now()
+
+	wf = o.GetWorkflow(wfID)
+	if wf.CompletedAt == nil {
+		t.Fatal("workflow CompletedAt should be set when all done")
+	}
+	if wf.CompletedAt.Before(before) || wf.CompletedAt.After(after) {
+		t.Errorf("workflow CompletedAt %v not in [%v, %v]", *wf.CompletedAt, before, after)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // SubagentManager: additional coverage for gaps
 // ---------------------------------------------------------------------------
 

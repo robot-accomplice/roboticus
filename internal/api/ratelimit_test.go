@@ -226,6 +226,139 @@ func TestCheckBucket_WindowReset(t *testing.T) {
 	}
 }
 
+// --- Wave 11: #97 Global capacity tiers ---
+
+func TestGlobalCapacity(t *testing.T) {
+	tiers := GlobalCapacity()
+	if len(tiers) < 3 {
+		t.Fatalf("expected at least 3 tiers, got %d", len(tiers))
+	}
+	names := map[string]bool{}
+	for _, tier := range tiers {
+		names[tier.Name] = true
+		if tier.MaxRequestsPerSec <= 0 {
+			t.Errorf("tier %q has non-positive MaxRequestsPerSec", tier.Name)
+		}
+	}
+	for _, name := range []string{"free", "standard", "premium"} {
+		if !names[name] {
+			t.Errorf("missing tier %q", name)
+		}
+	}
+}
+
+func TestGlobalCapacityForTier(t *testing.T) {
+	free := GlobalCapacityForTier("free")
+	if free.Name != "free" {
+		t.Errorf("expected free tier, got %q", free.Name)
+	}
+
+	premium := GlobalCapacityForTier("premium")
+	if premium.MaxRequestsPerSec <= free.MaxRequestsPerSec {
+		t.Error("premium should have higher limit than free")
+	}
+
+	// Unknown tier defaults to free.
+	unknown := GlobalCapacityForTier("nonexistent")
+	if unknown.Name != "free" {
+		t.Errorf("unknown tier should default to free, got %q", unknown.Name)
+	}
+}
+
+// --- Wave 11: #98 RFC 6585 response headers ---
+
+func TestWriteRateLimitHeaders(t *testing.T) {
+	rec := httptest.NewRecorder()
+	reset := time.Now().Add(60 * time.Second)
+	writeRateLimitHeaders(rec, 100, 50, reset)
+
+	if got := rec.Header().Get("X-RateLimit-Limit"); got != "100" {
+		t.Errorf("X-RateLimit-Limit = %q, want 100", got)
+	}
+	if got := rec.Header().Get("X-RateLimit-Remaining"); got != "50" {
+		t.Errorf("X-RateLimit-Remaining = %q, want 50", got)
+	}
+	if got := rec.Header().Get("X-RateLimit-Reset"); got == "" {
+		t.Error("X-RateLimit-Reset should be set")
+	}
+	// Should NOT have Retry-After when remaining > 0.
+	if got := rec.Header().Get("Retry-After"); got != "" {
+		t.Errorf("Retry-After should be empty when remaining > 0, got %q", got)
+	}
+}
+
+func TestWriteRateLimitHeaders_Exhausted(t *testing.T) {
+	rec := httptest.NewRecorder()
+	reset := time.Now().Add(30 * time.Second)
+	writeRateLimitHeaders(rec, 100, 0, reset)
+
+	if got := rec.Header().Get("Retry-After"); got == "" {
+		t.Error("Retry-After should be set when remaining = 0")
+	}
+}
+
+// --- Wave 11: #99 Trusted proxy CIDR validation ---
+
+func TestTrustedProxyCIDRs(t *testing.T) {
+	tp := NewTrustedProxyCIDRs()
+	if tp.CIDRCount() != 0 {
+		t.Error("initial count should be 0")
+	}
+
+	err := tp.SetTrustedProxyCIDRs([]string{"10.0.0.0/8", "192.168.0.0/16"})
+	if err != nil {
+		t.Fatalf("valid CIDRs should not error: %v", err)
+	}
+	if tp.CIDRCount() != 2 {
+		t.Errorf("count = %d, want 2", tp.CIDRCount())
+	}
+
+	if !tp.IsTrusted("10.1.2.3") {
+		t.Error("10.1.2.3 should be trusted")
+	}
+	if !tp.IsTrusted("192.168.1.1") {
+		t.Error("192.168.1.1 should be trusted")
+	}
+	if tp.IsTrusted("8.8.8.8") {
+		t.Error("8.8.8.8 should not be trusted")
+	}
+	if tp.IsTrusted("invalid-ip") {
+		t.Error("invalid IP should not be trusted")
+	}
+}
+
+func TestTrustedProxyCIDRs_InvalidCIDR(t *testing.T) {
+	tp := NewTrustedProxyCIDRs()
+	err := tp.SetTrustedProxyCIDRs([]string{"not-a-cidr"})
+	if err == nil {
+		t.Error("invalid CIDR should return error")
+	}
+}
+
+// --- Wave 11: #100 ThrottleSnapshot ---
+
+func TestThrottleSnapshot(t *testing.T) {
+	snap := ThrottleSnapshot{
+		Timestamp:        time.Now(),
+		ActiveBuckets:    42,
+		TotalRequests:    10000,
+		RejectedRequests: 150,
+		TopOffenders:     []string{"10.0.0.1", "10.0.0.2"},
+	}
+	if snap.ActiveBuckets != 42 {
+		t.Errorf("ActiveBuckets = %d", snap.ActiveBuckets)
+	}
+	if snap.TotalRequests != 10000 {
+		t.Errorf("TotalRequests = %d", snap.TotalRequests)
+	}
+	if snap.RejectedRequests != 150 {
+		t.Errorf("RejectedRequests = %d", snap.RejectedRequests)
+	}
+	if len(snap.TopOffenders) != 2 {
+		t.Errorf("TopOffenders = %d", len(snap.TopOffenders))
+	}
+}
+
 func TestCheckBucket_DifferentKeys(t *testing.T) {
 	var buckets sync.Map
 	exceeded := checkBucket(&buckets, "key-a", 1, 60*time.Second)

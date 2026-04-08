@@ -17,8 +17,7 @@ import (
 func GetTurn(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
-		rows, err := store.QueryContext(r.Context(),
-			`SELECT id, role, content, created_at FROM session_messages WHERE id = ? OR session_id = ? LIMIT 10`, id, id)
+		rows, err := db.NewRouteQueries(store).ListTurnMessages(r.Context(), id, 10)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -44,12 +43,7 @@ func GetTurn(store *db.Store) http.HandlerFunc {
 func GetTurnFeedback(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
-		row := store.QueryRowContext(r.Context(),
-			`SELECT id, turn_id, session_id, grade, source, comment, created_at
-			 FROM turn_feedback
-			 WHERE turn_id = ?
-			 ORDER BY created_at DESC
-			 LIMIT 1`, id)
+		row := db.NewRouteQueries(store).GetTurnFeedbackByTurnID(r.Context(), id)
 
 		var feedbackID, turnID, sessionID, source, createdAt string
 		var grade int
@@ -98,17 +92,13 @@ func PostTurnFeedback(store *db.Store) http.HandlerFunc {
 		}
 		if req.SessionID == "" {
 			// Try to look up the session from the turn.
-			row := store.QueryRowContext(r.Context(), `SELECT session_id FROM turns WHERE id = ?`, id)
+			row := db.NewRouteQueries(store).GetSessionIDForTurn(r.Context(), id)
 			if err := row.Scan(&req.SessionID); err != nil {
 				log.Warn().Err(err).Str("turn_id", id).Msg("failed to look up session for turn feedback")
 			}
 		}
 		feedbackID := db.NewID()
-		_, err := store.ExecContext(r.Context(),
-			`INSERT INTO turn_feedback (id, turn_id, session_id, grade, comment)
-			 VALUES (?, ?, ?, ?, ?)`,
-			feedbackID, id, req.SessionID, req.Grade, req.Comment,
-		)
+		err := db.NewRouteQueries(store).InsertTurnFeedback(r.Context(), feedbackID, id, req.SessionID, req.Grade, req.Comment)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -122,9 +112,7 @@ func PostTurnFeedback(store *db.Store) http.HandlerFunc {
 // ListSkills returns loaded skills from the database.
 func ListSkills(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		rows, err := store.QueryContext(r.Context(),
-			`SELECT id, name, kind, description, enabled, version, risk_level, created_at
-			 FROM skills ORDER BY name`)
+		rows, err := db.NewRouteQueries(store).ListSkillsFull(r.Context())
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to query skills")
 			return

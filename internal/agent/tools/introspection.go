@@ -204,3 +204,111 @@ func (t *MemoryStatsTool) Execute(ctx context.Context, params string, tctx *Cont
 	}
 	return &Result{Output: string(data)}, nil
 }
+
+// --- ChannelHealthTool ---
+
+// ChannelHealthTool returns health status for all registered channel adapters.
+// Matches Rust's GetChannelHealthTool.
+type ChannelHealthTool struct{}
+
+func (t *ChannelHealthTool) Name() string { return "get_channel_health" }
+func (t *ChannelHealthTool) Description() string {
+	return "Get health status of all registered channel adapters (Telegram, Discord, Signal, Email, etc.)."
+}
+func (t *ChannelHealthTool) Risk() RiskLevel { return RiskSafe }
+func (t *ChannelHealthTool) ParameterSchema() json.RawMessage {
+	return json.RawMessage(`{"type": "object", "properties": {}}`)
+}
+
+func (t *ChannelHealthTool) Execute(ctx context.Context, _ string, tctx *Context) (*Result, error) {
+	if tctx.Store == nil {
+		return &Result{Output: "no channel data available"}, nil
+	}
+
+	// Query channel status from the channels status table if it exists,
+	// or return basic counts from sessions scoped to each platform.
+	rows, err := tctx.Store.QueryContext(ctx,
+		`SELECT
+			CASE
+				WHEN scope_key LIKE 'telegram:%' OR scope_key LIKE 'peer:telegram:%' THEN 'telegram'
+				WHEN scope_key LIKE 'discord:%' THEN 'discord'
+				WHEN scope_key LIKE 'signal:%' OR scope_key LIKE 'peer:signal:%' THEN 'signal'
+				WHEN scope_key LIKE 'email:%' THEN 'email'
+				WHEN scope_key LIKE 'api:%' THEN 'api'
+				ELSE 'other'
+			END as channel,
+			COUNT(*) as sessions,
+			MAX(updated_at) as last_activity
+		FROM sessions
+		WHERE status = 'active'
+		GROUP BY channel
+		ORDER BY sessions DESC`)
+	if err != nil {
+		return &Result{Output: "failed to query channel health"}, nil
+	}
+	defer func() { _ = rows.Close() }()
+
+	type channelStat struct {
+		Channel      string `json:"channel"`
+		Sessions     int    `json:"active_sessions"`
+		LastActivity string `json:"last_activity"`
+	}
+	var stats []channelStat
+	for rows.Next() {
+		var s channelStat
+		if rows.Scan(&s.Channel, &s.Sessions, &s.LastActivity) == nil {
+			stats = append(stats, s)
+		}
+	}
+	data, _ := json.Marshal(stats)
+	return &Result{Output: string(data)}, nil
+}
+
+// --- SubagentStatusTool ---
+
+// SubagentStatusTool returns the status of all registered subagents.
+// Matches Rust's GetSubagentStatusTool.
+type SubagentStatusTool struct{}
+
+func (t *SubagentStatusTool) Name() string { return "get_subagent_status" }
+func (t *SubagentStatusTool) Description() string {
+	return "Get status of all registered subagents including their model, role, and activity."
+}
+func (t *SubagentStatusTool) Risk() RiskLevel { return RiskSafe }
+func (t *SubagentStatusTool) ParameterSchema() json.RawMessage {
+	return json.RawMessage(`{"type": "object", "properties": {}}`)
+}
+
+func (t *SubagentStatusTool) Execute(ctx context.Context, _ string, tctx *Context) (*Result, error) {
+	if tctx.Store == nil {
+		return &Result{Output: "no subagent data available"}, nil
+	}
+
+	rows, err := tctx.Store.QueryContext(ctx,
+		`SELECT name, COALESCE(display_name, name), model, role, enabled,
+			session_count, COALESCE(last_used_at, 'never')
+		 FROM sub_agents ORDER BY name`)
+	if err != nil {
+		return &Result{Output: "failed to query subagents"}, nil
+	}
+	defer func() { _ = rows.Close() }()
+
+	type agentStatus struct {
+		Name         string `json:"name"`
+		DisplayName  string `json:"display_name"`
+		Model        string `json:"model"`
+		Role         string `json:"role"`
+		Enabled      bool   `json:"enabled"`
+		SessionCount int    `json:"session_count"`
+		LastUsed     string `json:"last_used"`
+	}
+	var agents []agentStatus
+	for rows.Next() {
+		var a agentStatus
+		if rows.Scan(&a.Name, &a.DisplayName, &a.Model, &a.Role, &a.Enabled, &a.SessionCount, &a.LastUsed) == nil {
+			agents = append(agents, a)
+		}
+	}
+	data, _ := json.Marshal(agents)
+	return &Result{Output: string(data)}, nil
+}

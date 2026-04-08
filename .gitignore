@@ -35,3 +35,5 @@ wallet.enc
 # Env
 .env
 .env.local
+
+.serena/**

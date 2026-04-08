@@ -53,7 +53,9 @@ no, business logic has leaked into the connector.
 
 ### Off-pipeline exemptions
 
-The only currently approved off-pipeline API flow is `/api/interview`.
+The approved off-pipeline API flows are:
+
+**Configuration interview** — `/api/interview`:
 
 - `/api/interview/start`
 - `/api/interview/turn`
@@ -64,6 +66,19 @@ agent inference. They may maintain local interview state and format interview
 responses directly, but they must not become a second agent runtime. If the
 interview flow ever needs LLM inference, memory, delegation, or tool execution,
 that behavior must move behind `pipeline.RunPipeline()`.
+
+**Diagnostic analysis** — post-hoc observability endpoints that call
+`llm.Service.Complete()` directly for remediation analysis of historical
+turns/sessions. These are NOT agent-turn behavior — they analyze completed data,
+not execute turns. They still honor pipeline-aligned heuristics via
+`pipeline.ContextAnalyzer`:
+
+- `AnalyzeSession` (`sessions.go`) — LLM-enhanced session analysis
+- `AnalyzeTurn` (`turn_detail.go`) — LLM-enhanced turn analysis
+
+These endpoints MUST NOT evolve into agent-turn execution paths. If they ever
+need tool execution, memory retrieval, or delegation, that behavior must move
+behind `pipeline.RunPipeline()`.
 
 ---
 

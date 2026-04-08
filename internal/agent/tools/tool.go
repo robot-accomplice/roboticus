@@ -75,4 +75,5 @@ func (c *Context) GetRunner() core.ProcessRunner {
 type Result struct {
 	Output   string
 	Metadata json.RawMessage // optional structured data
+	Source   string          // "builtin", "plugin", "mcp" — for flight recorder
 }

@@ -12,9 +12,7 @@ import (
 func GetPolicyAudit(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		turnID := chi.URLParam(r, "turn_id")
-		rows, err := store.QueryContext(r.Context(),
-			`SELECT id, turn_id, tool_name, decision, rule_name, reason, created_at
-			 FROM policy_decisions WHERE turn_id = ? ORDER BY created_at`, turnID)
+		rows, err := db.NewRouteQueries(store).ListPolicyDecisions(r.Context(), turnID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to query policy decisions")
 			return
@@ -49,9 +47,7 @@ func GetPolicyAudit(store *db.Store) http.HandlerFunc {
 func GetToolAudit(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		turnID := chi.URLParam(r, "turn_id")
-		rows, err := store.QueryContext(r.Context(),
-			`SELECT id, tool_name, input, output, status, duration_ms, created_at
-			 FROM tool_calls WHERE turn_id = ? ORDER BY created_at`, turnID)
+		rows, err := db.NewRouteQueries(store).ListToolCallsForAudit(r.Context(), turnID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to query tool audit")
 			return

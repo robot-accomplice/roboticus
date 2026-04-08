@@ -235,6 +235,31 @@ func (cb *CircuitBreaker) HasCapacityPressure() bool {
 	return cb.capacityPressure
 }
 
+// TryPreemptiveHalfOpen attempts to transition a closed breaker under capacity
+// pressure into half-open state. This is a soft degradation mechanism: when a
+// provider is sustained-hot, the caller can proactively reduce traffic by
+// entering half-open (which limits to HalfOpenProbes requests). Returns true
+// if the transition was made, false if conditions were not met.
+func (cb *CircuitBreaker) TryPreemptiveHalfOpen() bool {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
+	// Only transition from closed + capacity pressure.
+	if cb.state != CircuitClosed || !cb.capacityPressure {
+		return false
+	}
+
+	// Don't preempt if forced-open or credit-tripped.
+	if cb.forcedOpen || cb.creditTripped {
+		return false
+	}
+
+	cb.state = CircuitHalfOpen
+	cb.halfOpenUsed = 0
+	cb.lastTripped = time.Now()
+	return true
+}
+
 // BreakerRegistry manages per-provider circuit breakers.
 type BreakerRegistry struct {
 	mu       sync.RWMutex

@@ -357,7 +357,7 @@ func TestRouter_MetascoreOverridesHeuristic(t *testing.T) {
 	qt := NewQualityTracker(32)
 	seedQuality(qt, "small", 0.1, 16)
 	seedQuality(qt, "frontier", 0.95, 16)
-	router.EnableMetascoreRouting(qt, nil, nil)
+	router.EnableMetascoreRouting(qt, nil, nil, nil)
 
 	// "hello" would normally go to TierSmall, but metascore prefers frontier.
 	req := &Request{Messages: []Message{{Role: "user", Content: "hello"}}}
@@ -379,7 +379,7 @@ func TestRouter_BreakerBlockedSkippedInMetascore(t *testing.T) {
 	seedQuality(qt, "best", 0.99, 16)
 	breakers := NewBreakerRegistry(DefaultCircuitBreakerConfig())
 	breakers.Get("best").ForceOpen()
-	router.EnableMetascoreRouting(qt, nil, breakers)
+	router.EnableMetascoreRouting(qt, nil, nil, breakers)
 
 	req := &Request{Messages: []Message{{Role: "user", Content: "hi"}}}
 	got := router.Select(req)
@@ -417,7 +417,7 @@ func TestRouter_TierUpwardFallback(t *testing.T) {
 
 func TestBuildModelProfiles_NilQualityDefaultsToHalf(t *testing.T) {
 	targets := []RouteTarget{{Model: "m1", Provider: "p1"}}
-	profiles := BuildModelProfiles(targets, nil, nil, nil)
+	profiles := BuildModelProfiles(targets, nil, nil, nil, nil)
 	if len(profiles) != 1 {
 		t.Fatalf("expected 1 profile, got %d", len(profiles))
 	}
@@ -428,7 +428,7 @@ func TestBuildModelProfiles_NilQualityDefaultsToHalf(t *testing.T) {
 
 func TestBuildModelProfiles_NilBreakersDefaultsToFullAvailability(t *testing.T) {
 	targets := []RouteTarget{{Model: "m1", Provider: "p1"}}
-	profiles := BuildModelProfiles(targets, nil, nil, nil)
+	profiles := BuildModelProfiles(targets, nil, nil, nil, nil)
 	if profiles[0].Availability != 1.0 {
 		t.Errorf("nil breakers should default to 1.0 availability, got %f", profiles[0].Availability)
 	}
@@ -455,7 +455,7 @@ func TestBuildModelProfiles_CircuitBreakerStates(t *testing.T) {
 			cb := breakers.Get("prov")
 			tc.setup(cb)
 
-			profiles := BuildModelProfiles(targets, nil, nil, breakers)
+			profiles := BuildModelProfiles(targets, nil, nil, nil, breakers)
 			if profiles[0].Availability != tc.wantAvail {
 				t.Errorf("availability = %f, want %f", profiles[0].Availability, tc.wantAvail)
 			}
@@ -477,7 +477,7 @@ func TestBuildModelProfiles_CostNormalization(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			targets := []RouteTarget{{Model: "m", Provider: "p", Cost: tc.cost}}
-			profiles := BuildModelProfiles(targets, nil, nil, nil)
+			profiles := BuildModelProfiles(targets, nil, nil, nil, nil)
 			if math.Abs(profiles[0].Cost-tc.wantCost) > 0.01 {
 				t.Errorf("cost = %f, want %f", profiles[0].Cost, tc.wantCost)
 			}
@@ -505,7 +505,7 @@ func TestBuildModelProfiles_Confidence(t *testing.T) {
 				qt.Record("model", 0.8)
 			}
 			targets := []RouteTarget{{Model: "model", Provider: "p"}}
-			profiles := BuildModelProfiles(targets, qt, nil, nil)
+			profiles := BuildModelProfiles(targets, qt, nil, nil, nil)
 			if math.Abs(profiles[0].Confidence-tc.wantConf) > tc.tolerance {
 				t.Errorf("confidence = %f, want %f (+/- %f)", profiles[0].Confidence, tc.wantConf, tc.tolerance)
 			}
@@ -515,7 +515,7 @@ func TestBuildModelProfiles_Confidence(t *testing.T) {
 
 func TestBuildModelProfiles_NilQualityConfidenceDefault(t *testing.T) {
 	targets := []RouteTarget{{Model: "m", Provider: "p"}}
-	profiles := BuildModelProfiles(targets, nil, nil, nil)
+	profiles := BuildModelProfiles(targets, nil, nil, nil, nil)
 	if profiles[0].Confidence != 0.5 {
 		t.Errorf("nil quality tracker confidence should be 0.5, got %f", profiles[0].Confidence)
 	}
@@ -526,7 +526,7 @@ func TestBuildModelProfiles_LocalityMapping(t *testing.T) {
 		{Model: "local", Provider: "p1", IsLocal: true},
 		{Model: "cloud", Provider: "p2", IsLocal: false},
 	}
-	profiles := BuildModelProfiles(targets, nil, nil, nil)
+	profiles := BuildModelProfiles(targets, nil, nil, nil, nil)
 	if profiles[0].Locality != 1.0 {
 		t.Errorf("local model locality = %f, want 1.0", profiles[0].Locality)
 	}
@@ -563,7 +563,7 @@ func TestRoutingFitness_EndToEnd(t *testing.T) {
 	breakers := NewBreakerRegistry(DefaultCircuitBreakerConfig())
 
 	router := NewRouter(targets, RouterConfig{CostAware: true, LocalFirst: true})
-	router.EnableMetascoreRouting(qt, nil, breakers)
+	router.EnableMetascoreRouting(qt, nil, nil, breakers)
 
 	// Verify that cloud-frontier actually has the highest metascore with
 	// these parameters. Cost normalization is cost / 0.0001:
@@ -627,7 +627,7 @@ func TestRoutingFitness_NeverSelectsZeroAvailability(t *testing.T) {
 	breakers.Get("blocked-prov").ForceOpen()
 
 	router := NewRouter(targets, RouterConfig{CostAware: true})
-	router.EnableMetascoreRouting(qt, nil, breakers)
+	router.EnableMetascoreRouting(qt, nil, nil, breakers)
 
 	req := &Request{Messages: []Message{{Role: "user", Content: "hello"}}}
 	for i := 0; i < 50; i++ {
@@ -649,7 +649,7 @@ func TestRoutingFitness_LocalPreferredWhenQualityCompetitive(t *testing.T) {
 	seedQuality(qt, "cloud", 0.82, 20)
 
 	router := NewRouter(targets, RouterConfig{CostAware: true})
-	router.EnableMetascoreRouting(qt, nil, nil)
+	router.EnableMetascoreRouting(qt, nil, nil, nil)
 
 	req := &Request{Messages: []Message{{Role: "user", Content: "hello"}}}
 	got := router.Select(req)
@@ -668,7 +668,7 @@ func TestRoutingFitness_HighQualityCloudBeatsLowQualityLocal(t *testing.T) {
 	seedQuality(qt, "cloud", 0.95, 20)
 
 	router := NewRouter(targets, RouterConfig{CostAware: true, LocalFirst: true})
-	router.EnableMetascoreRouting(qt, nil, nil)
+	router.EnableMetascoreRouting(qt, nil, nil, nil)
 
 	req := &Request{Messages: []Message{{Role: "user", Content: "explain quantum computing"}}}
 	got := router.Select(req)
@@ -691,7 +691,7 @@ func TestRoutingFitness_RealisticTrafficMix(t *testing.T) {
 	breakers := NewBreakerRegistry(DefaultCircuitBreakerConfig())
 
 	router := NewRouter(targets, RouterConfig{CostAware: true})
-	router.EnableMetascoreRouting(qt, nil, breakers)
+	router.EnableMetascoreRouting(qt, nil, nil, breakers)
 
 	traffic := []*Request{
 		{Messages: []Message{{Role: "user", Content: "hi"}}},

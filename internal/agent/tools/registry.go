@@ -62,6 +62,7 @@ func (r *Registry) ToolDefs() []llm.ToolDef {
 	defs := make([]llm.ToolDef, 0, len(r.tools))
 	for _, t := range r.tools {
 		defs = append(defs, llm.ToolDef{
+			Type: "function",
 			Function: llm.ToolFuncDef{
 				Name:        t.Name(),
 				Description: t.Description(),

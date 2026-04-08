@@ -120,6 +120,16 @@ func (r *DeliveryRepository) CountByStatus(ctx context.Context) (map[string]int,
 	return result, rows.Err()
 }
 
+// ReplayDeadLetter resets a dead-lettered item to pending for retry.
+func (r *DeliveryRepository) ReplayDeadLetter(ctx context.Context, id string) (int64, error) {
+	res, err := r.q.ExecContext(ctx,
+		`UPDATE delivery_queue SET status = 'pending', last_error = NULL WHERE id = ? AND status = 'dead_letter'`, id)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 func scanDeliveryRows(rows *sql.Rows) ([]DeliveryRow, error) {
 	var result []DeliveryRow
 	for rows.Next() {
