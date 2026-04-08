@@ -38,6 +38,11 @@ var staleKnowledgeMarkers = []string{
 	"i don't have access to current",
 	"as of 2023",
 	"as of 2024",
+	"i can't provide real-time updates",
+	"i cannot provide real-time geopolitical analysis",
+	"i can't provide real-time geopolitical analysis",
+	"do not include live news feeds",
+	"no live news feeds",
 }
 
 func (g *CurrentEventsTruthGuard) Name() string { return "current_events_truth" }
@@ -166,6 +171,11 @@ var foreignIdentityMarkers = []string{
 	"i was created by openai",
 	"i was created by anthropic",
 	"i was made by google",
+	"as an ai developed by microsoft",
+	"as an ai text-based interface",
+	"as an ai, i can't",
+	"as an ai, i cannot",
+	"as a language model",
 }
 
 func (g *PersonalityIntegrityGuard) Name() string { return "personality_integrity" }
@@ -365,7 +375,30 @@ func (g *LiteraryQuoteRetryGuard) Check(content string) GuardResult {
 	return GuardResult{Passed: true}
 }
 func (g *LiteraryQuoteRetryGuard) CheckWithContext(content string, _ *GuardContext) GuardResult {
-	return g.Check(content)
+	result := g.Check(content)
+	if !result.Passed {
+		return result
+	}
+
+	// Rust-aligned: detect overbroad refusals to provide literary content.
+	lower := strings.ToLower(content)
+	overbroadRefusalMarkers := []string{
+		"i cannot provide quotes related to",
+		"sensitive geopolitical situations",
+		"helpful and harmless",
+		"avoiding engagement with potentially harmful",
+	}
+	for _, m := range overbroadRefusalMarkers {
+		if strings.Contains(lower, m) {
+			return GuardResult{
+				Passed:  false,
+				Retry:   true,
+				Reason:  "overbroad refusal to provide literary content: " + m,
+				Verdict: GuardRetryRequested,
+			}
+		}
+	}
+	return GuardResult{Passed: true}
 }
 
 // --- Shared utilities ---

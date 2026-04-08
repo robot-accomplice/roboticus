@@ -86,8 +86,9 @@ func (g *EmptyResponseGuard) Check(content string) GuardResult {
 	if strings.TrimSpace(content) == "" {
 		return GuardResult{
 			Passed:  false,
-			Content: "I apologize, but I wasn't able to generate a response. Could you try rephrasing your request?",
+			Retry:   true,
 			Reason:  "empty response",
+			Verdict: GuardRetryRequested,
 		}
 	}
 	return GuardResult{Passed: true, Content: content}

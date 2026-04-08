@@ -100,7 +100,40 @@ func (g *NonRepetitionGuardV2) CheckWithContext(content string, ctx *GuardContex
 		}
 	}
 
+	// Rust-aligned: fresh-delta detection. When the user asks for a status
+	// update but the response repeats prior content, rewrite with a delta message.
+	if ctx.UserPrompt != "" && ctx.PreviousAssistant != "" {
+		if userRequestsFreshDelta(ctx.UserPrompt) {
+			overlap := tokenOverlapRatio(content, ctx.PreviousAssistant)
+			if overlap >= 0.72 {
+				return GuardResult{
+					Passed:  false,
+					Content: "No verified delta since last check. Will report back when something changes.",
+					Reason:  "user requested fresh delta but response repeats prior content",
+					Verdict: GuardRewritten,
+				}
+			}
+		}
+	}
+
 	return GuardResult{Passed: true}
+}
+
+// freshDeltaMarkers are phrases that indicate the user wants new/changed info.
+var freshDeltaMarkers = []string{
+	"status", "update", "what changed", "anything changed",
+	"fresh check", "check again", "still", "latest", "current", "sitrep",
+}
+
+// userRequestsFreshDelta returns true if the user prompt contains delta-request markers.
+func userRequestsFreshDelta(prompt string) bool {
+	lower := strings.ToLower(prompt)
+	for _, m := range freshDeltaMarkers {
+		if strings.Contains(lower, m) {
+			return true
+		}
+	}
+	return false
 }
 
 // findSelfEchoAcrossHistory detects structural self-echo: when the agent

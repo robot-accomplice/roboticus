@@ -10,8 +10,8 @@ func TestEmptyResponseGuard(t *testing.T) {
 	if result.Passed {
 		t.Error("empty response should not pass")
 	}
-	if result.Content == "" {
-		t.Error("guard should provide fallback content")
+	if !result.Retry {
+		t.Error("empty response should request retry (Rust parity)")
 	}
 
 	result = g.Check("Hello!")
@@ -49,14 +49,14 @@ func TestInternalMarkerGuard(t *testing.T) {
 func TestGuardChain(t *testing.T) {
 	chain := DefaultGuardChain()
 
-	// Empty response should be replaced.
-	result := chain.Apply("")
-	if result == "" {
-		t.Error("guard chain should replace empty response")
+	// Empty response should request retry (Rust parity).
+	full := chain.ApplyFull("")
+	if !full.RetryRequested {
+		t.Error("guard chain should request retry for empty response")
 	}
 
 	// Normal response should pass through.
-	result = chain.Apply("Hello, how can I help?")
+	result := chain.Apply("Hello, how can I help?")
 	if result != "Hello, how can I help?" {
 		t.Errorf("normal response should pass through, got %q", result)
 	}
