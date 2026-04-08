@@ -153,8 +153,9 @@ func (t *MemoryStatsTool) Execute(ctx context.Context, params string, tctx *Cont
 	}
 
 	type tierCount struct {
-		Name  string `json:"tier"`
-		Count int    `json:"count"`
+		Name      string  `json:"tier"`
+		Count     int     `json:"count"`
+		BudgetPct float64 `json:"budget_pct,omitempty"`
 	}
 
 	tiers := []struct {
@@ -195,7 +196,11 @@ func (t *MemoryStatsTool) Execute(ctx context.Context, params string, tctx *Cont
 			// Table may not exist yet; treat as zero.
 			count = 0
 		}
-		results = append(results, tierCount{Name: tier.name, Count: count})
+		budgetPct := 0.0
+		if tctx.MemoryBudgets != nil {
+			budgetPct = tctx.MemoryBudgets[tier.name]
+		}
+		results = append(results, tierCount{Name: tier.name, Count: count, BudgetPct: budgetPct})
 	}
 
 	data, err := json.Marshal(results)
@@ -293,14 +298,20 @@ func (t *SubagentStatusTool) Execute(ctx context.Context, _ string, tctx *Contex
 	}
 	defer func() { _ = rows.Close() }()
 
+	type openTask struct {
+		ID     string `json:"id"`
+		Title  string `json:"title"`
+		Status string `json:"status"`
+	}
 	type agentStatus struct {
-		Name         string `json:"name"`
-		DisplayName  string `json:"display_name"`
-		Model        string `json:"model"`
-		Role         string `json:"role"`
-		Enabled      bool   `json:"enabled"`
-		SessionCount int    `json:"session_count"`
-		LastUsed     string `json:"last_used"`
+		Name         string     `json:"name"`
+		DisplayName  string     `json:"display_name"`
+		Model        string     `json:"model"`
+		Role         string     `json:"role"`
+		Enabled      bool       `json:"enabled"`
+		SessionCount int        `json:"session_count"`
+		LastUsed     string     `json:"last_used"`
+		OpenTasks    []openTask `json:"open_tasks,omitempty"`
 	}
 	var agents []agentStatus
 	for rows.Next() {
@@ -309,6 +320,30 @@ func (t *SubagentStatusTool) Execute(ctx context.Context, _ string, tctx *Contex
 			agents = append(agents, a)
 		}
 	}
-	data, _ := json.Marshal(agents)
+
+	// Query open tasks (pending or in_progress).
+	var tasks []openTask
+	taskRows, err := tctx.Store.QueryContext(ctx,
+		`SELECT id, COALESCE(title, ''), status FROM tasks
+		 WHERE status IN ('pending', 'in_progress')
+		 ORDER BY created_at DESC LIMIT 50`)
+	if err == nil {
+		defer func() { _ = taskRows.Close() }()
+		for taskRows.Next() {
+			var t openTask
+			if taskRows.Scan(&t.ID, &t.Title, &t.Status) == nil {
+				tasks = append(tasks, t)
+			}
+		}
+	}
+
+	result := struct {
+		Agents []agentStatus `json:"agents"`
+		Tasks  []openTask    `json:"open_tasks,omitempty"`
+	}{
+		Agents: agents,
+		Tasks:  tasks,
+	}
+	data, _ := json.Marshal(result)
 	return &Result{Output: string(data)}, nil
 }

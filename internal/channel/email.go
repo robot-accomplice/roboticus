@@ -33,6 +33,7 @@ const (
 	DefaultSMTPPort        = 587
 	DefaultIMAPPort        = 993
 	DefaultPollIntervalSec = 30
+	MaxEmailBodyBytes      = 1048576 // 1MB
 )
 
 // EmailAdapter implements Adapter for email (SMTP send, IMAP receive).
@@ -361,6 +362,10 @@ func imapFetch(c *imapConn, uid int) (from, subject, body string, err error) {
 	}
 
 	body = strings.TrimSpace(bodyBuf.String())
+	// Truncate oversized email bodies to prevent memory/processing issues.
+	if len(body) > MaxEmailBodyBytes {
+		body = body[:MaxEmailBodyBytes]
+	}
 	return from, subject, body, nil
 }
 

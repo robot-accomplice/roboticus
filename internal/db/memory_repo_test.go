@@ -105,6 +105,52 @@ func TestMemoryRepository_EpisodicMemory(t *testing.T) {
 	}
 }
 
+func TestMemoryRepository_SemanticUpsertResetsState(t *testing.T) {
+	store := testTempStore(t)
+	repo := NewMemoryRepository(store)
+	ctx := context.Background()
+
+	// Create a semantic entry.
+	if err := repo.StoreSemantic(ctx, "s-state-1", "prefs", "theme", "dark", 0.9); err != nil {
+		t.Fatalf("StoreSemantic: %v", err)
+	}
+
+	// Manually mark it as superseded with a reason.
+	_, err := store.ExecContext(ctx,
+		`UPDATE semantic_memory SET memory_state = 'superseded', state_reason = 'outdated' WHERE category = 'prefs' AND key = 'theme'`)
+	if err != nil {
+		t.Fatalf("manual state update: %v", err)
+	}
+
+	// Verify state was set.
+	var state, reason string
+	err = store.QueryRowContext(ctx,
+		`SELECT memory_state, COALESCE(state_reason, '') FROM semantic_memory WHERE category = 'prefs' AND key = 'theme'`).Scan(&state, &reason)
+	if err != nil {
+		t.Fatalf("verify pre-condition: %v", err)
+	}
+	if state != "superseded" {
+		t.Fatalf("pre-condition: state = %q, want superseded", state)
+	}
+
+	// Upsert the same key — should reset state to active and clear reason.
+	if err := repo.StoreSemantic(ctx, "s-state-2", "prefs", "theme", "light", 0.95); err != nil {
+		t.Fatalf("StoreSemantic upsert: %v", err)
+	}
+
+	err = store.QueryRowContext(ctx,
+		`SELECT memory_state, COALESCE(state_reason, '') FROM semantic_memory WHERE category = 'prefs' AND key = 'theme'`).Scan(&state, &reason)
+	if err != nil {
+		t.Fatalf("verify post-upsert: %v", err)
+	}
+	if state != "active" {
+		t.Errorf("memory_state = %q after upsert, want 'active'", state)
+	}
+	if reason != "" {
+		t.Errorf("state_reason = %q after upsert, want empty", reason)
+	}
+}
+
 func TestMemoryRepository_GetSemantic_NotFound(t *testing.T) {
 	store := testTempStore(t)
 	repo := NewMemoryRepository(store)

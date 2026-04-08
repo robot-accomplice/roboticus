@@ -117,6 +117,7 @@ type RetrievalMetrics struct {
 var historyKeywords = []string{
 	"history", "historical", "previous", "earlier", "before",
 	"past", "old", "resolved", "stale", "archive",
+	"previously", "archived",
 }
 
 // Retrieve fetches relevant memories across all tiers within the total token budget.

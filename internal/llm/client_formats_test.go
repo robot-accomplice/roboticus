@@ -102,6 +102,133 @@ func TestMarshalGoogle(t *testing.T) {
 	}
 }
 
+func TestMarshalGoogle_SystemInstruction(t *testing.T) {
+	c := &Client{provider: &Provider{Format: FormatGoogle}}
+	req := &Request{
+		Model: "gemini-pro",
+		Messages: []Message{
+			{Role: "system", Content: "You are helpful."},
+			{Role: "system", Content: "Be concise."},
+			{Role: "user", Content: "hello"},
+		},
+		MaxTokens: 500,
+	}
+	data, err := c.marshalRequest(req)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var raw map[string]any
+	_ = json.Unmarshal(data, &raw)
+
+	// System messages should be extracted to systemInstruction.
+	si, ok := raw["systemInstruction"].(map[string]any)
+	if !ok {
+		t.Fatal("systemInstruction missing from payload")
+	}
+	parts := si["parts"].([]any)
+	text := parts[0].(map[string]any)["text"].(string)
+	if text != "You are helpful.\nBe concise." {
+		t.Errorf("systemInstruction text = %q", text)
+	}
+
+	// Contents should not include system messages.
+	contents := raw["contents"].([]any)
+	if len(contents) != 1 {
+		t.Errorf("contents count = %d, want 1 (system excluded)", len(contents))
+	}
+}
+
+func TestMarshalGoogle_FunctionDeclarations(t *testing.T) {
+	c := &Client{provider: &Provider{Format: FormatGoogle}}
+	req := &Request{
+		Model:    "gemini-pro",
+		Messages: []Message{{Role: "user", Content: "hello"}},
+		Tools: []ToolDef{{
+			Type: "function",
+			Function: ToolFuncDef{
+				Name:        "get_weather",
+				Description: "Get the weather",
+				Parameters:  json.RawMessage(`{"type":"object","properties":{"city":{"type":"string"}}}`),
+			},
+		}},
+	}
+	data, err := c.marshalRequest(req)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var raw map[string]any
+	_ = json.Unmarshal(data, &raw)
+
+	tools, ok := raw["tools"].([]any)
+	if !ok || len(tools) == 0 {
+		t.Fatal("tools missing from payload")
+	}
+	toolObj := tools[0].(map[string]any)
+	decls, ok := toolObj["functionDeclarations"].([]any)
+	if !ok || len(decls) == 0 {
+		t.Fatal("functionDeclarations missing")
+	}
+	decl := decls[0].(map[string]any)
+	if decl["name"] != "get_weather" {
+		t.Errorf("name = %v", decl["name"])
+	}
+	if decl["description"] != "Get the weather" {
+		t.Errorf("description = %v", decl["description"])
+	}
+	if decl["parameters"] == nil {
+		t.Error("parameters should be present")
+	}
+}
+
+func TestUnmarshalGoogleResponse_ModelField(t *testing.T) {
+	c := &Client{provider: &Provider{Format: FormatGoogle}}
+	body := `{
+		"modelVersion": "gemini-1.5-pro-001",
+		"candidates": [{"content": {"parts": [{"text": "hi"}]}, "finishReason": "STOP"}],
+		"usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 3}
+	}`
+	resp, err := c.unmarshalResponse(io.NopCloser(strings.NewReader(body)))
+	if err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.Model != "gemini-1.5-pro-001" {
+		t.Errorf("Model = %q, want gemini-1.5-pro-001", resp.Model)
+	}
+
+	// Fallback to "model" field when modelVersion is empty.
+	body2 := `{
+		"model": "gemini-pro",
+		"candidates": [{"content": {"parts": [{"text": "hi"}]}, "finishReason": "STOP"}],
+		"usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 3}
+	}`
+	resp2, err := c.unmarshalResponse(io.NopCloser(strings.NewReader(body2)))
+	if err != nil {
+		t.Fatalf("unmarshal fallback: %v", err)
+	}
+	if resp2.Model != "gemini-pro" {
+		t.Errorf("Model fallback = %q, want gemini-pro", resp2.Model)
+	}
+}
+
+func TestUnmarshalGoogleResponse_FunctionCallParsing(t *testing.T) {
+	c := &Client{provider: &Provider{Format: FormatGoogle}}
+	body := `{
+		"modelVersion": "gemini-pro",
+		"candidates": [{"content": {"parts": [{"functionCall": {"name": "get_weather", "args": {"city": "SF"}}}]}, "finishReason": "STOP"}],
+		"usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 3}
+	}`
+	resp, err := c.unmarshalResponse(io.NopCloser(strings.NewReader(body)))
+	if err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(resp.ToolCalls) != 1 {
+		t.Fatalf("tool calls = %d, want 1", len(resp.ToolCalls))
+	}
+	if resp.ToolCalls[0].Function.Name != "get_weather" {
+		t.Errorf("tool name = %q", resp.ToolCalls[0].Function.Name)
+	}
+}
+
 func TestUnmarshalOpenAIResponse(t *testing.T) {
 	c := &Client{provider: &Provider{Format: FormatOpenAI}}
 	body := `{

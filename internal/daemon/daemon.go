@@ -442,6 +442,8 @@ func New(cfg *core.Config) (*Daemon, error) {
 	tools.Register(&agenttools.CreateTableTool{})
 	tools.Register(&agenttools.QueryTableTool{})
 	tools.Register(&agenttools.InsertRowTool{})
+	tools.Register(&agenttools.AlterTableTool{})
+	tools.Register(&agenttools.DropTableTool{})
 
 	log.Info().Int("count", len(tools.Names())).Strs("tools", tools.Names()).Msg("builtin tools registered")
 

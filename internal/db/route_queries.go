@@ -912,6 +912,44 @@ func (rq *RouteQueries) DelegationAvgQuality(ctx context.Context) (float64, erro
 	return avg, err
 }
 
+// AgentDelegationStats holds per-agent delegation success rates.
+type AgentDelegationStats struct {
+	AgentName   string
+	Total       int64
+	Successful  int64
+	SuccessRate float64
+	AvgDuration float64
+}
+
+// PerAgentDelegationStats unpacks assigned_agents_json with json_each()
+// to compute per-agent success rates from delegation_outcomes.
+func (rq *RouteQueries) PerAgentDelegationStats(ctx context.Context) ([]AgentDelegationStats, error) {
+	rows, err := rq.q.QueryContext(ctx,
+		`SELECT
+			j.value AS agent_name,
+			COUNT(*) AS total,
+			COALESCE(SUM(d.success), 0) AS successful,
+			CASE WHEN COUNT(*) > 0 THEN CAST(SUM(d.success) AS REAL) / COUNT(*) ELSE 0 END AS success_rate,
+			COALESCE(AVG(d.duration_ms), 0) AS avg_duration
+		 FROM delegation_outcomes d, json_each(d.assigned_agents_json) j
+		 GROUP BY j.value
+		 ORDER BY total DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var result []AgentDelegationStats
+	for rows.Next() {
+		var s AgentDelegationStats
+		if err := rows.Scan(&s.AgentName, &s.Total, &s.Successful, &s.SuccessRate, &s.AvgDuration); err != nil {
+			return nil, err
+		}
+		result = append(result, s)
+	}
+	return result, rows.Err()
+}
+
 // --- Workspace ---
 
 // ListSubAgentNamesModels returns subagent name/model/enabled for workspace state.

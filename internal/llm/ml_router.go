@@ -5,6 +5,8 @@ import (
 	"math"
 	"os"
 	"sync"
+
+	"github.com/rs/zerolog/log"
 )
 
 // QueryFeatures describes a query for model routing.
@@ -74,11 +76,13 @@ type RoutingExample struct {
 }
 
 // Train updates weights using simple gradient descent.
+// Computes cross-entropy loss and logs it every 100 epochs (Rust parity).
 func (lr *LogisticRouter) Train(dataset []RoutingExample, epochs int, learningRate float64) {
 	if len(dataset) == 0 {
 		return
 	}
 	for e := 0; e < epochs; e++ {
+		epochLoss := 0.0
 		for _, ex := range dataset {
 			fv := ex.Features.featureVector()
 			pred := lr.Route(ex.Features)
@@ -87,6 +91,17 @@ func (lr *LogisticRouter) Train(dataset []RoutingExample, epochs int, learningRa
 				lr.weights[i] += learningRate * err * fv[i]
 			}
 			lr.bias += learningRate * err
+
+			// Cross-entropy loss.
+			label := ex.Outcome
+			epochLoss += -(label*math.Log(pred+1e-10) + (1-label)*math.Log(1-pred+1e-10))
+		}
+		if (e+1)%100 == 0 {
+			avgLoss := epochLoss / float64(len(dataset))
+			log.Debug().
+				Int("epoch", e+1).
+				Float64("cross_entropy_loss", avgLoss).
+				Msg("ml_router: training loss")
 		}
 	}
 }

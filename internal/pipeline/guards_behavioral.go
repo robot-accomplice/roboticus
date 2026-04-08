@@ -90,6 +90,8 @@ func (g *TaskDeferralGuard) CheckWithContext(content string, ctx *GuardContext) 
 	introspectionTools := map[string]bool{
 		"get_memory_stats": true, "get_runtime_context": true,
 		"get_channel_health": true, "get_subagent_status": true,
+		"list-subagent-roster": true, "list-available-skills": true,
+		"task-status": true, "list-open-tasks": true,
 	}
 	for _, tr := range ctx.ToolResults {
 		if !introspectionTools[tr.ToolName] {
@@ -131,6 +133,45 @@ func (g *InternalJargonGuard) CheckWithContext(content string, ctx *GuardContext
 		return GuardResult{Passed: true}
 	}
 	lower := strings.ToLower(content)
+
+	// Tier 0: Line-level stripping for delegation jargon prefixes.
+	delegationPrefixes := []string{"centralized delegation", "delegation gate"}
+	{
+		lines := strings.Split(content, "\n")
+		var kept []string
+		stripped := false
+		for _, line := range lines {
+			lineLower := strings.ToLower(strings.TrimSpace(line))
+			drop := false
+			for _, prefix := range delegationPrefixes {
+				if strings.HasPrefix(lineLower, prefix) {
+					drop = true
+					stripped = true
+					break
+				}
+			}
+			if !drop {
+				kept = append(kept, line)
+			}
+		}
+		if stripped {
+			cleaned := strings.TrimSpace(strings.Join(kept, "\n"))
+			if cleaned == "" {
+				return GuardResult{
+					Passed:  false,
+					Retry:   true,
+					Reason:  "response consisted entirely of delegation jargon",
+					Verdict: GuardRetryRequested,
+				}
+			}
+			return GuardResult{
+				Passed:  false,
+				Content: cleaned,
+				Reason:  "delegation jargon lines stripped",
+				Verdict: GuardRewritten,
+			}
+		}
+	}
 
 	// Tier 1: Infrastructure leak keywords.
 	infraMarkers := []string{
@@ -198,6 +239,8 @@ func (g *DeclaredActionGuard) CheckWithContext(content string, ctx *GuardContext
 		"roll", "d20", "dc ", "check", "succeed", "fail",
 		"attempt", "consequences", "are you sure", "damage",
 		"hit", "miss", "save", "result",
+		"try", "manage", "unable", "before we resolve",
+		"before proceeding", "what would happen",
 	}
 	for _, ind := range resolutionIndicators {
 		if strings.Contains(respLower, ind) {
@@ -261,6 +304,7 @@ func (g *PerspectiveGuard) CheckWithContext(content string, ctx *GuardContext) G
 type InternalProtocolGuard struct{}
 
 var internalProtocolMarkers = []string{
+	// Go-unique XML/bracket markers.
 	"[PROTOCOL:",
 	"[TRACE:",
 	"[DEBUG:",
@@ -278,7 +322,25 @@ var internalProtocolMarkers = []string{
 	"[TURN_ID:",
 	"[MODEL:",
 	"[TOKENS:",
+	// Rust-parity: JSON tool_call patterns.
+	`"tool_call"`,
+	`"toolcall"`,
+	"unexecuted_streaming_tool_call",
+	// Rust-parity: delegation metadata.
+	"delegated_subagent=",
+	"selected_subagent=",
+	"fallback_models=",
+	// Rust-parity: orchestration narrative.
+	"centralized delegation",
+	"decomposition gate decision",
+	"expected_utility_margin=",
+	"delegation decision:",
+	"rationale:",
+	"subtasks:",
 }
+
+// subtaskDigitPattern matches "subtask " followed by a digit (Rust-parity delegation metadata).
+var subtaskDigitPattern = regexp.MustCompile(`(?i)\bsubtask \d`)
 
 func (g *InternalProtocolGuard) Name() string { return "internal_protocol" }
 func (g *InternalProtocolGuard) Check(content string) GuardResult {
@@ -295,6 +357,17 @@ func (g *InternalProtocolGuard) Check(content string) GuardResult {
 			}
 			modified = strings.Join(kept, "\n")
 		}
+	}
+	// Rust-parity: strip lines matching "subtask <digit>" delegation pattern.
+	if subtaskDigitPattern.MatchString(modified) {
+		lines := strings.Split(modified, "\n")
+		var kept []string
+		for _, line := range lines {
+			if !subtaskDigitPattern.MatchString(line) {
+				kept = append(kept, line)
+			}
+		}
+		modified = strings.Join(kept, "\n")
 	}
 	if modified != content {
 		trimmed := strings.TrimSpace(modified)

@@ -53,6 +53,9 @@ type Context struct {
 	Store        *db.Store          // database access; may be nil in tests
 	FS           FileSystem         // file operations; nil defaults to OSFileSystem
 	Runner       core.ProcessRunner // subprocess execution; nil defaults to OSProcessRunner
+
+	// MemoryBudgets holds configured budget percentages per tier (e.g., "working" -> 30).
+	MemoryBudgets map[string]float64
 }
 
 // GetFS returns the filesystem, defaulting to real OS operations.

@@ -54,8 +54,8 @@ func TestFormatNormalizer(t *testing.T) {
 		want  string
 	}{
 		{"trims whitespace", "  hello  ", "hello"},
-		{"collapses newlines", "a\n\n\n\n\nb", "a\n\n\nb"},
-		{"preserves triple newline", "a\n\n\nb", "a\n\n\nb"},
+		{"collapses newlines", "a\n\n\n\n\nb", "a\n\nb"},
+		{"preserves double newline", "a\n\nb", "a\n\nb"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

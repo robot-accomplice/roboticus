@@ -361,9 +361,9 @@ func DefaultConfig() Config {
 		Models: ModelsConfig{
 			Primary: "claude-sonnet-4-20250514",
 			Routing: RoutingConfig{
-				Mode:                   "primary",
+				Mode:                   "auto",
 				ConfidenceThreshold:    0.9,
-				EstimatedOutputTokens:  512,
+				EstimatedOutputTokens:  500,
 				AccuracyFloor:          0.0,
 				AccuracyMinObs:         10,
 				CostAware:              false,
@@ -375,10 +375,10 @@ func DefaultConfig() Config {
 		},
 		Providers: make(map[string]ProviderConfig),
 		Memory: MemoryConfig{
-			WorkingBudget:      40,
+			WorkingBudget:      30,
 			EpisodicBudget:     25,
-			SemanticBudget:     15,
-			ProceduralBudget:   10,
+			SemanticBudget:     20,
+			ProceduralBudget:   15,
 			RelationshipBudget: 10,
 			HybridWeight:       0.5,
 			DecayHalfLifeDays:  7.0,
@@ -386,7 +386,7 @@ func DefaultConfig() Config {
 		Cache: CacheConfig{
 			Enabled:             true,
 			TTLSeconds:          3600,
-			SimilarityThreshold: 0.85,
+			SimilarityThreshold: 0.95,
 			MaxEntries:          10000,
 		},
 		Treasury: TreasuryConfig{
@@ -417,7 +417,7 @@ func DefaultConfig() Config {
 			ScriptTimeoutSeconds: 30,
 			ScriptMaxOutputBytes: 1 << 20, // 1 MiB
 			AllowedInterpreters:  []string{"sh", "bash", "python3", "node", "ruby", "perl"},
-			SandboxEnv:           false,
+			SandboxEnv:           true,
 			HotReload:            true,
 			ScriptMaxMemoryBytes: 256 << 20, // 256 MiB
 			NetworkAllowed:       false,

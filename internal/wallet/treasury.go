@@ -73,5 +73,14 @@ func (p *TreasuryPolicy) CheckMinimumReserve(balance float64) error {
 	return nil
 }
 
+// CheckInferenceBudget validates that daily LLM inference spend is within budget.
+// dailySpend is the total spend so far today in dollars.
+func (p *TreasuryPolicy) CheckInferenceBudget(dailySpend float64) error {
+	if p.cfg.DailyInferenceBudget > 0 && dailySpend > p.cfg.DailyInferenceBudget {
+		return fmt.Errorf("treasury: daily inference spend $%.2f exceeds budget $%.2f", dailySpend, p.cfg.DailyInferenceBudget)
+	}
+	return nil
+}
+
 // Config returns the treasury configuration.
 func (p *TreasuryPolicy) Config() TreasuryConfig { return p.cfg }

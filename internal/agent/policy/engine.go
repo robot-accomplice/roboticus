@@ -62,21 +62,24 @@ func NewEngine(cfg Config) *Engine {
 		&authorityRule{},
 		&commandSafetyRule{},
 		&financialRule{maxAmountCents: cfg.MaxTransferCents},
-		&pathProtectionRule{},
+		&pathProtectionRule{workspaceOnly: cfg.WorkspaceOnly, allowedPaths: cfg.AllowedPaths},
 		&rateLimitRule{
 			maxPerMinute: cfg.RateLimitPerMinute,
 			calls:        make(map[string][]time.Time),
 		},
 		&validationRule{maxParamBytes: cfg.MaxParamBytes},
+		&configProtectionRule{},
 	}
 	return &Engine{rules: rules}
 }
 
 // Config controls policy engine thresholds.
 type Config struct {
-	MaxTransferCents   int64 // max financial transfer in cents (default 10000 = $100)
-	RateLimitPerMinute int   // max tool calls per tool per minute (default 30)
-	MaxParamBytes      int   // max serialized param size (default 102400)
+	MaxTransferCents   int64    // max financial transfer in cents (default 10000 = $100)
+	RateLimitPerMinute int      // max tool calls per tool per minute (default 30)
+	MaxParamBytes      int      // max serialized param size (default 102400)
+	WorkspaceOnly      bool     // if true, deny absolute paths outside allowed paths and /tmp
+	AllowedPaths       []string // paths allowed when WorkspaceOnly is true
 }
 
 // DefaultConfig returns sensible defaults.
@@ -240,7 +243,10 @@ func (r *financialRule) Evaluate(req *ToolCallRequest, _ *tools.Registry) Decisi
 
 // --- Rule: Path Protection ---
 
-type pathProtectionRule struct{}
+type pathProtectionRule struct {
+	workspaceOnly bool
+	allowedPaths  []string
+}
 
 func (r *pathProtectionRule) Name() string  { return "path_protection" }
 func (r *pathProtectionRule) Priority() int { return 4 }
@@ -263,6 +269,43 @@ func (r *pathProtectionRule) Evaluate(req *ToolCallRequest, _ *tools.Registry) D
 	if strings.Contains(req.Arguments, "..") {
 		return Deny("path_protection", "path traversal detected")
 	}
+
+	// Workspace-only enforcement: deny absolute paths not in allowed list and not under /tmp.
+	if r.workspaceOnly {
+		// Extract potential file paths from arguments.
+		var args map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(req.Arguments), &args); err == nil {
+			pathKeys := []string{"path", "file", "filepath", "filename", "directory", "dir"}
+			for _, key := range pathKeys {
+				raw, ok := args[key]
+				if !ok {
+					continue
+				}
+				var pathVal string
+				if err := json.Unmarshal(raw, &pathVal); err != nil {
+					continue
+				}
+				if !strings.HasPrefix(pathVal, "/") {
+					continue // relative paths are OK
+				}
+				if strings.HasPrefix(pathVal, "/tmp") || strings.HasPrefix(pathVal, "/tmp/") {
+					continue // /tmp is always allowed
+				}
+				allowed := false
+				for _, ap := range r.allowedPaths {
+					if strings.HasPrefix(pathVal, ap) {
+						allowed = true
+						break
+					}
+				}
+				if !allowed {
+					return Deny("path_protection",
+						fmt.Sprintf("absolute path %q not in allowed paths (workspace_only mode)", pathVal))
+				}
+			}
+		}
+	}
+
 	return Allow()
 }
 
@@ -397,6 +440,81 @@ func (r *financialDrainRule) Evaluate(req *ToolCallRequest, _ *tools.Registry) D
 		strings.Contains(lowerArgs, `"amount":"all"`) ||
 		strings.Contains(lowerArgs, `"amount": "all"`) {
 		return Deny("financial_drain", "arguments indicate full-balance drain")
+	}
+
+	return Allow()
+}
+
+// --- Rule: Config Protection ---
+
+// configProtectionRule prevents write tools from modifying protected config
+// files that contain sensitive fields (API keys, tokens, secrets, etc.).
+type configProtectionRule struct{}
+
+func (r *configProtectionRule) Name() string  { return "config_protection" }
+func (r *configProtectionRule) Priority() int { return 7 }
+
+// configWriteTools are tools that can modify files.
+var configWriteTools = map[string]bool{
+	"write_file": true,
+	"bash":       true,
+	"run_script": true,
+}
+
+// protectedConfigFiles are filenames that contain critical configuration.
+var protectedConfigFiles = []string{
+	"roboticus.toml",
+	"config-overrides.toml",
+}
+
+// protectedConfigFields are field names/patterns that must not be written via tools.
+// Exact matches and suffix patterns (starting with *) are supported.
+var protectedConfigFields = []string{
+	"scope_mode",
+	"api_key",
+	"admin_token",
+	"keystore",
+	"trusted_proxy",
+	"private_key",
+}
+
+// protectedConfigSuffixes are suffix patterns for fields like *_secret, *_token.
+var protectedConfigSuffixes = []string{
+	"_secret",
+	"_token",
+}
+
+func (r *configProtectionRule) Evaluate(req *ToolCallRequest, _ *tools.Registry) DecisionResult {
+	if !configWriteTools[req.ToolName] {
+		return Allow()
+	}
+
+	lowerArgs := strings.ToLower(req.Arguments)
+
+	// Check if arguments reference a config file.
+	referencesConfig := false
+	for _, cf := range protectedConfigFiles {
+		if strings.Contains(lowerArgs, cf) {
+			referencesConfig = true
+			break
+		}
+	}
+	if !referencesConfig {
+		return Allow()
+	}
+
+	// Check if arguments contain a protected field.
+	for _, field := range protectedConfigFields {
+		if strings.Contains(lowerArgs, field) {
+			return Deny("config_protection",
+				fmt.Sprintf("write to config file references protected field %q", field))
+		}
+	}
+	for _, suffix := range protectedConfigSuffixes {
+		if strings.Contains(lowerArgs, suffix) {
+			return Deny("config_protection",
+				fmt.Sprintf("write to config file references protected field pattern %q", "*"+suffix))
+		}
 	}
 
 	return Allow()

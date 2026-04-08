@@ -36,7 +36,7 @@ func (s *Store) FindOrCreateSession(ctx context.Context, agentID, scopeKey strin
 	id := newID()
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err = s.ExecContext(ctx,
-		`INSERT INTO sessions (id, agent_id, scope_key, status, created_at, updated_at)
+		`INSERT OR IGNORE INTO sessions (id, agent_id, scope_key, status, created_at, updated_at)
 		 VALUES (?, ?, ?, 'active', ?, ?)`,
 		id, agentID, scopeKey, now, now,
 	)
@@ -44,6 +44,8 @@ func (s *Store) FindOrCreateSession(ctx context.Context, agentID, scopeKey strin
 		return nil, core.WrapError(core.ErrDatabase, "failed to create session", err)
 	}
 
+	// Re-query to handle the race: if another instance created the session
+	// between our initial check and the INSERT OR IGNORE, we pick up theirs.
 	return s.FindActiveSession(ctx, agentID, scopeKey)
 }
 

@@ -57,30 +57,62 @@ func (s *DurableScheduler) IsDue(job *CronJob, now time.Time) bool {
 
 // EvaluateCron checks if a 5-field cron expression matches now.
 // Supports optional TZ prefix: "TZ=America/New_York * * * * *"
-// Prevents double-fire within the same 60s slot.
+// Uses backward slot probing (Rust parity): scans backward up to 61s to find
+// the nearest cron slot, then returns true only if now is within [slot, slot+60s).
+// Prevents double-fire within the same slot.
 func (s *DurableScheduler) EvaluateCron(expr string, lastRun *time.Time, now time.Time) bool {
 	tz, cronExpr := parseTZPrefix(expr)
 	if tz != nil {
 		now = now.In(tz)
 	}
 
-	// Prevent double-fire: if we ran in this same minute slot, skip.
+	// Slot probe: scan backward from now minute-by-minute up to 61 seconds
+	// to find the most recent minute that matches the cron expression.
+	slot, found := findNearestCronSlot(cronExpr, now)
+	if !found {
+		return false
+	}
+
+	// Check if now is within [slot, slot+60s).
+	if now.Before(slot) || !now.Before(slot.Add(60*time.Second)) {
+		return false
+	}
+
+	// Prevent double-fire: if we ran in this same slot, skip.
 	if lastRun != nil {
 		last := *lastRun
 		if tz != nil {
 			last = last.In(tz)
 		}
-		if last.Year() == now.Year() && last.YearDay() == now.YearDay() &&
-			last.Hour() == now.Hour() && last.Minute() == now.Minute() {
+		if !last.Before(slot) && last.Before(slot.Add(60*time.Second)) {
 			return false
 		}
 	}
 
-	return matchesCron(cronExpr, now)
+	return true
+}
+
+// findNearestCronSlot scans backward from now up to 61 seconds to find the
+// most recent minute boundary that matches the cron expression.
+func findNearestCronSlot(cronExpr string, now time.Time) (time.Time, bool) {
+	// Start from the current minute boundary.
+	candidate := now.Truncate(time.Minute)
+	earliest := now.Add(-61 * time.Second)
+
+	for !candidate.Before(earliest) {
+		if matchesCron(cronExpr, candidate) {
+			return candidate, true
+		}
+		candidate = candidate.Add(-time.Minute)
+	}
+	return time.Time{}, false
 }
 
 // EvaluateInterval checks if enough time has passed since last run.
 func (s *DurableScheduler) EvaluateInterval(lastRun *time.Time, intervalMs int64, now time.Time) bool {
+	if intervalMs <= 0 {
+		return false // zero or negative interval is invalid
+	}
 	if lastRun == nil {
 		return true // never run, fire immediately
 	}
@@ -132,6 +164,7 @@ func (s *DurableScheduler) CalculateNextRun(job *CronJob, now time.Time) *time.T
 
 // parseTZPrefix extracts an optional TZ= or CRON_TZ= prefix from a cron expression.
 // Supports both forms for Rust parity (Rust accepts both).
+// Also supports fixed-offset timezones: UTC+05:30, UTC-5, UTC+0530, etc.
 func parseTZPrefix(expr string) (*time.Location, string) {
 	// Try both TZ= and CRON_TZ= prefixes.
 	for _, prefix := range []string{"CRON_TZ=", "TZ="} {
@@ -139,7 +172,7 @@ func parseTZPrefix(expr string) (*time.Location, string) {
 			parts := strings.SplitN(expr, " ", 2)
 			if len(parts) == 2 {
 				tzName := strings.TrimPrefix(parts[0], prefix)
-				loc, err := time.LoadLocation(tzName)
+				loc, err := loadLocationWithFixedOffset(tzName)
 				if err == nil {
 					return loc, parts[1]
 				}
@@ -147,6 +180,66 @@ func parseTZPrefix(expr string) (*time.Location, string) {
 		}
 	}
 	return nil, expr
+}
+
+// loadLocationWithFixedOffset tries time.LoadLocation first, then parses
+// fixed-offset formats: UTC±HH:MM, UTC±HHMM, UTC±H, UTC±HH.
+func loadLocationWithFixedOffset(name string) (*time.Location, error) {
+	// Try standard IANA name first.
+	loc, err := time.LoadLocation(name)
+	if err == nil {
+		return loc, nil
+	}
+
+	// Parse fixed-offset: must start with "UTC" followed by + or -.
+	if !strings.HasPrefix(name, "UTC") || len(name) < 4 {
+		return nil, fmt.Errorf("unknown timezone: %s", name)
+	}
+
+	sign := 1
+	rest := name[3:]
+	switch rest[0] {
+	case '+':
+		rest = rest[1:]
+	case '-':
+		sign = -1
+		rest = rest[1:]
+	default:
+		return nil, fmt.Errorf("unknown timezone: %s", name)
+	}
+
+	var hours, minutes int
+	switch {
+	case strings.Contains(rest, ":"):
+		// UTC±HH:MM
+		parts := strings.SplitN(rest, ":", 2)
+		h, err1 := strconv.Atoi(parts[0])
+		m, err2 := strconv.Atoi(parts[1])
+		if err1 != nil || err2 != nil {
+			return nil, fmt.Errorf("invalid fixed offset: %s", name)
+		}
+		hours, minutes = h, m
+	case len(rest) == 4:
+		// UTC±HHMM
+		h, err1 := strconv.Atoi(rest[:2])
+		m, err2 := strconv.Atoi(rest[2:])
+		if err1 != nil || err2 != nil {
+			return nil, fmt.Errorf("invalid fixed offset: %s", name)
+		}
+		hours, minutes = h, m
+	case len(rest) <= 2:
+		// UTC±H or UTC±HH
+		h, err1 := strconv.Atoi(rest)
+		if err1 != nil {
+			return nil, fmt.Errorf("invalid fixed offset: %s", name)
+		}
+		hours = h
+	default:
+		return nil, fmt.Errorf("invalid fixed offset: %s", name)
+	}
+
+	offsetSecs := sign * (hours*3600 + minutes*60)
+	return time.FixedZone(name, offsetSecs), nil
 }
 
 // matchesCron checks if a 5-field cron (min hour dom month dow) matches the given time.

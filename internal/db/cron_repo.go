@@ -35,6 +35,34 @@ func (r *CronRepository) UpdateJob(ctx context.Context, id string, setClauses []
 	return err
 }
 
+// TryAcquireLease attempts to acquire the execution lease for a cron job.
+// Returns true if the lease was acquired (rows affected > 0).
+// The lease is granted only when no other holder owns it or the existing lease has expired.
+func (r *CronRepository) TryAcquireLease(ctx context.Context, jobID, holderID string) (bool, error) {
+	res, err := r.q.ExecContext(ctx,
+		`UPDATE cron_jobs SET lease_holder = ?, lease_expires_at = datetime('now', '+60 seconds')
+		 WHERE id = ? AND (lease_holder IS NULL OR lease_expires_at < datetime('now'))`,
+		holderID, jobID)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+// ReleaseLease releases the execution lease for a cron job, but only if the
+// caller is the current holder.
+func (r *CronRepository) ReleaseLease(ctx context.Context, jobID, holderID string) error {
+	_, err := r.q.ExecContext(ctx,
+		`UPDATE cron_jobs SET lease_holder = NULL, lease_expires_at = NULL
+		 WHERE id = ? AND lease_holder = ?`,
+		jobID, holderID)
+	return err
+}
+
 // DeleteJob removes a cron job and its run history.
 func (r *CronRepository) DeleteJob(ctx context.Context, id string) (int64, error) {
 	_, _ = r.q.ExecContext(ctx, `DELETE FROM cron_runs WHERE job_id = ?`, id)

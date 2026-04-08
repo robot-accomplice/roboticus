@@ -568,8 +568,8 @@ func TestScriptPlugin_Tools_DangerousAndSchema(t *testing.T) {
 	}
 
 	// danger-tool checks
-	if tools[1].RiskLevel != "dangerous" {
-		t.Errorf("danger tool risk = %s", tools[1].RiskLevel)
+	if tools[1].RiskLevel != "high" {
+		t.Errorf("danger tool risk = %s, want high", tools[1].RiskLevel)
 	}
 	// Should have default schema.
 	if !strings.Contains(string(tools[1].Parameters), `"prompt"`) {

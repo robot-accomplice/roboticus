@@ -49,6 +49,26 @@ func (t *TreasuryLoopTask) Run(ctx context.Context, tctx *TickContext) TaskResul
 
 	tctx.USDCBalance = totalBalance
 
+	// Read aToken/yield balance for persistence.
+	var atokenBalance float64
+	aRow := t.Store.QueryRowContext(ctx,
+		`SELECT COALESCE(SUM(balance), 0) FROM wallet_balances WHERE symbol LIKE 'a%' OR symbol LIKE 'st%'`)
+	_ = aRow.Scan(&atokenBalance)
+
+	// Persist treasury state to DB (Rust parity: treasury loop writes state).
+	_, err := t.Store.ExecContext(ctx,
+		`INSERT INTO treasury_state (id, usdc_balance, atoken_balance, survival_tier, updated_at)
+		 VALUES (1, ?, ?, ?, datetime('now'))
+		 ON CONFLICT(id) DO UPDATE SET
+		   usdc_balance = excluded.usdc_balance,
+		   atoken_balance = excluded.atoken_balance,
+		   survival_tier = excluded.survival_tier,
+		   updated_at = datetime('now')`,
+		totalBalance, atokenBalance, tctx.SurvivalTier.String())
+	if err != nil {
+		log.Debug().Err(err).Msg("treasury loop: state persistence failed (table may not exist)")
+	}
+
 	log.Debug().
 		Float64("total_balance", totalBalance).
 		Str("tier", tctx.SurvivalTier.String()).
@@ -196,11 +216,12 @@ func (t *MetricSnapshotTask) Run(ctx context.Context, tctx *TickContext) TaskRes
 type SessionGovernorTask struct {
 	Store         DB
 	MaxSessionAge time.Duration // default 24h
+	ResetSchedule string        // optional cron expression for session rotation
 }
 
 func (t *SessionGovernorTask) Kind() HeartbeatTaskKind { return TaskSessionGovernor }
 
-func (t *SessionGovernorTask) Run(ctx context.Context, _ *TickContext) TaskResult {
+func (t *SessionGovernorTask) Run(ctx context.Context, tctx *TickContext) TaskResult {
 	if t.Store == nil {
 		return TaskResult{Success: false, Message: "no store configured"}
 	}
@@ -225,8 +246,28 @@ func (t *SessionGovernorTask) Run(ctx context.Context, _ *TickContext) TaskResul
 		log.Info().Int64("expired", expired).Msg("session governor: expired stale sessions")
 	}
 
+	// Session rotation via reset_schedule cron expression.
+	rotated := int64(0)
+	if t.ResetSchedule != "" && matchesCron(t.ResetSchedule, tctx.Timestamp) {
+		// Archive the current active session and create a new one.
+		res, err := t.Store.ExecContext(ctx,
+			`UPDATE sessions SET status = 'archived', updated_at = datetime('now')
+			 WHERE status = 'active'
+			 ORDER BY updated_at DESC LIMIT 1`)
+		if err == nil {
+			rotated, _ = res.RowsAffected()
+		}
+		if rotated > 0 {
+			// Create a fresh session.
+			_, _ = t.Store.ExecContext(ctx,
+				`INSERT INTO sessions (id, status, created_at, updated_at)
+				 VALUES (hex(randomblob(16)), 'active', datetime('now'), datetime('now'))`)
+			log.Info().Str("schedule", t.ResetSchedule).Msg("session governor: rotated session via reset_schedule")
+		}
+	}
+
 	return TaskResult{
 		Success: true,
-		Message: fmt.Sprintf("expired=%d", expired),
+		Message: fmt.Sprintf("expired=%d rotated=%d", expired, rotated),
 	}
 }

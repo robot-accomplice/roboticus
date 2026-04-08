@@ -38,9 +38,12 @@ func (g *LowValueParrotingGuard) CheckWithContext(content string, ctx *GuardCont
 	}
 
 	// Check parroting: high token overlap with user prompt.
+	// Requires ALL THREE thresholds: overlap >= 0.88, prefix_ratio >= 0.55, length_ratio <= 1.35.
 	if ctx.UserPrompt != "" && len(content) > 20 {
 		overlap := tokenOverlapRatio(content, ctx.UserPrompt)
-		if overlap >= 0.88 {
+		prefixRatio := commonPrefixRatio(content, ctx.UserPrompt)
+		lengthRatio := float64(len(content)) / float64(len(ctx.UserPrompt))
+		if overlap >= 0.88 && prefixRatio >= 0.55 && lengthRatio <= 1.35 {
 			return GuardResult{
 				Passed: false, Retry: true,
 				Reason: "response parrots user input",

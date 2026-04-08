@@ -56,11 +56,12 @@ func (sp *ScriptPlugin) Tools() []ToolDef {
 			Name:        mt.Name,
 			Description: mt.Description,
 			Permissions: mt.Permissions,
+			PairedSkill: mt.PairedSkill,
 		}
 		if mt.Dangerous {
-			td.RiskLevel = "dangerous"
+			td.RiskLevel = RiskLevelHigh
 		} else {
-			td.RiskLevel = "safe"
+			td.RiskLevel = RiskLevelSafe
 		}
 		if mt.ParametersSchema != "" {
 			td.Parameters = json.RawMessage(mt.ParametersSchema)

@@ -6,6 +6,7 @@ import (
 	"strings"
 )
 
+
 // ParseToolCallsFromText extracts tool calls embedded in LLM text output.
 // This is the fallback parser for models that don't use structured tool calls.
 // Matches Rust's parse_tool_calls: scans for {"tool_call": ...} blocks with
@@ -34,6 +35,21 @@ func ParseToolCallsFromText(content string) []ToolCall {
 			}
 		}
 		if braceStart < 0 {
+			searchFrom = idx + 1
+			continue
+		}
+
+		// False positive check: if there is a closing brace between the
+		// opening brace and the "tool_call" marker, this brace belongs to
+		// a different JSON object — skip it.
+		hasClosingBetween := false
+		for i := braceStart + 1; i < idx; i++ {
+			if content[i] == '}' {
+				hasClosingBetween = true
+				break
+			}
+		}
+		if hasClosingBetween {
 			searchFrom = idx + 1
 			continue
 		}
@@ -202,4 +218,43 @@ func extractParams(m map[string]json.RawMessage) string {
 		}
 	}
 	return "{}"
+}
+
+// ---------- Provider error classification (Rust parity) ----------
+
+// ClassifyProviderError maps a raw error string into one of 8 canonical
+// categories, matching Rust's classify_provider_error().
+func ClassifyProviderError(raw string) string {
+	lower := strings.ToLower(raw)
+
+	switch {
+	case strings.Contains(lower, "circuit breaker"):
+		return "provider temporarily unavailable"
+	case strings.Contains(lower, "no api key") || strings.Contains(lower, "no provider configured"):
+		return "no provider configured for this model"
+	case strings.Contains(lower, "401") || strings.Contains(lower, "403") || strings.Contains(lower, "authentication"):
+		return "provider authentication error"
+	case strings.Contains(lower, "429") || strings.Contains(lower, "rate limit") || strings.Contains(lower, "rate_limit"):
+		return "provider rate limit reached"
+	case strings.Contains(lower, "402") || strings.Contains(lower, "quota") || strings.Contains(lower, "billing") || strings.Contains(lower, "credit"):
+		return "provider quota or billing issue"
+	case strings.Contains(lower, "500") || strings.Contains(lower, "502") || strings.Contains(lower, "503") || strings.Contains(lower, "504"):
+		return "provider server error"
+	case strings.Contains(lower, "request failed") || strings.Contains(lower, "timeout") || strings.Contains(lower, "connection"):
+		return "network error reaching provider"
+	default:
+		return "provider error"
+	}
+}
+
+// ProviderFailureUserMessage generates a user-facing message for a provider
+// failure, matching Rust's provider_failure_user_message().
+// When messageStored is true the user's input was persisted and will be retried;
+// otherwise the user should re-send.
+func ProviderFailureUserMessage(lastError string, messageStored bool) string {
+	classified := ClassifyProviderError(lastError)
+	if messageStored {
+		return fmt.Sprintf("I wasn't able to process your message (%s). Your message has been saved and I'll try again shortly.", classified)
+	}
+	return fmt.Sprintf("I wasn't able to process your message (%s). Could you please try sending it again?", classified)
 }

@@ -119,6 +119,7 @@ type ConsolidationReport struct {
 	DerivableStale    int
 	ObsidianScanned   int
 	TierSynced        int
+	SkillsConfSynced  int
 }
 
 // ConsolidationPipeline runs a multi-phase memory consolidation pipeline.
@@ -160,6 +161,7 @@ func (p *ConsolidationPipeline) Run(ctx context.Context, store *db.Store) Consol
 	report.Promoted = p.phaseEpisodicPromotion(ctx, store)
 	report.ConfidenceDecayed = p.phaseConfidenceDecay(ctx, store)
 	report.TierSynced = p.Phase4_TierStateSync(ctx, store)
+	report.SkillsConfSynced = p.phaseSkillsConfidenceSync(ctx, store)
 	report.ImportanceDecayed = p.phaseImportanceDecay(ctx, store)
 	report.Pruned = p.phasePruning(ctx, store)
 	report.Orphaned = p.phaseOrphanCleanup(ctx, store)
@@ -175,6 +177,7 @@ func (p *ConsolidationPipeline) Run(ctx context.Context, store *db.Store) Consol
 		Int("promoted", report.Promoted).
 		Int("confidence_decayed", report.ConfidenceDecayed).
 		Int("tier_synced", report.TierSynced).
+		Int("skills_conf_synced", report.SkillsConfSynced).
 		Int("importance_decayed", report.ImportanceDecayed).
 		Int("pruned", report.Pruned).
 		Int("orphaned", report.Orphaned).

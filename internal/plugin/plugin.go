@@ -25,12 +25,27 @@ const (
 	StatusError    PluginStatus = "error"
 )
 
+// RiskLevel constants matching Rust's enum.
+const (
+	RiskLevelSafe    = "safe"
+	RiskLevelCaution = "caution"
+	RiskLevelHigh    = "high"
+)
+
+// ValidRiskLevels is the set of accepted risk level values.
+var ValidRiskLevels = map[string]bool{
+	RiskLevelSafe:    true,
+	RiskLevelCaution: true,
+	RiskLevelHigh:    true,
+}
+
 // ToolDef describes a tool provided by a plugin.
 type ToolDef struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
 	Parameters  json.RawMessage `json:"parameters"`
 	RiskLevel   string          `json:"risk_level"`
+	PairedSkill string          `json:"paired_skill,omitempty"`
 	Permissions []string        `json:"permissions,omitempty"`
 }
 
@@ -136,6 +151,13 @@ func (r *Registry) Register(p Plugin) error {
 	}
 	if len(r.allowList) > 0 && !r.allowList[name] {
 		return fmt.Errorf("plugin: %s not in allow list", name)
+	}
+
+	// Validate risk levels against known constants.
+	for _, tool := range p.Tools() {
+		if tool.RiskLevel != "" && !ValidRiskLevels[tool.RiskLevel] {
+			return fmt.Errorf("plugin: %s tool %q has invalid risk_level %q (must be safe, caution, or high)", name, tool.Name, tool.RiskLevel)
+		}
 	}
 
 	// Validate permissions in strict mode.

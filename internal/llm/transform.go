@@ -125,10 +125,10 @@ func (g *ContentGuard) Transform(content string) string {
 // leading/trailing whitespace, broken code fences, and excessive blank lines.
 type FormatNormalizer struct{}
 
-var excessiveNewlines = regexp.MustCompile(`\n{4,}`)
+var excessiveNewlines = regexp.MustCompile(`\n{3,}`)
 
 func (f *FormatNormalizer) Transform(content string) string {
 	content = strings.TrimSpace(content)
-	content = excessiveNewlines.ReplaceAllString(content, "\n\n\n")
+	content = excessiveNewlines.ReplaceAllString(content, "\n\n")
 	return content
 }
