@@ -566,11 +566,20 @@ var modelsBaselineCmd = &cobra.Command{
 	Use:   "baseline",
 	Short: "Flush quality scores and re-exercise all configured models",
 	Long: `Baseline discovers configured models, flushes all quality observations,
-exercises each model across multiple test prompts, and reports pass/fail results.
-This re-establishes the metascore quality baseline from scratch.`,
+exercises each model with the full 20-prompt matrix across multiple iterations,
+and reports per-model, per-intent-class latency scores (Avg/P50/P95).
+This re-establishes the metascore quality baseline from scratch.
+
+Matches the Rust reference: 20 prompts x N iterations per model, with a
+per-intent-class latency scorecard and 6-axis metascore dimension reporting.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		iterations := 1
+		if v, _ := cmd.Flags().GetInt("iterations"); v > 0 {
+			iterations = v
+		}
+
 		// Step 1: Discover configured models.
-		fmt.Println("  Step 1: Discovering configured models...")
+		fmt.Println("\n  Step 1: Discovering configured models...")
 		config, err := apiGet("/api/config")
 		if err != nil {
 			return fmt.Errorf("cannot reach API: %w", err)
@@ -595,6 +604,7 @@ This re-establishes the metascore quality baseline from scratch.`,
 			return nil
 		}
 
+		totalPrompts := len(llm.ExerciseMatrix) * iterations
 		fmt.Printf("\n  Found %d configured model(s):\n\n", len(configured))
 		for i, model := range configured {
 			role := "fallback"
@@ -605,7 +615,8 @@ This re-establishes the metascore quality baseline from scratch.`,
 		}
 
 		// Step 2: Confirm.
-		fmt.Printf("\n  This will flush all quality scores and exercise each model.\n  Proceed? [Y/n] ")
+		fmt.Printf("\n  This will flush all quality scores and exercise each model\n  with %d prompts x %d iteration(s) = %d calls per model.\n  Proceed? [Y/n] ",
+			len(llm.ExerciseMatrix), iterations, totalPrompts)
 		var input string
 		_, _ = fmt.Scanln(&input)
 		if input != "" && input != "y" && input != "Y" && input != "yes" {
@@ -614,7 +625,7 @@ This re-establishes the metascore quality baseline from scratch.`,
 		}
 
 		// Step 3: Flush all scores.
-		fmt.Println("  Step 2: Flushing all quality scores...")
+		fmt.Println("\n  Step 2: Flushing all quality scores...")
 		resetData, err := apiPost("/api/models/reset", nil)
 		if err != nil {
 			return fmt.Errorf("failed to reset scores: %w", err)
@@ -622,56 +633,83 @@ This re-establishes the metascore quality baseline from scratch.`,
 		cleared, _ := resetData["cleared"].(float64)
 		fmt.Printf("  Cleared %.0f observation entries.\n", cleared)
 
-		// Step 4: Exercise each model.
-		fmt.Println()
-		fmt.Println("  Step 3: Exercising models...")
-		type result struct {
-			model string
-			pass  int
-			fail  int
+		// Step 4: Exercise each model with the full matrix.
+		fmt.Printf("\n  Step 3: Exercising models...\n\n")
+
+		type modelResult struct {
+			model     string
+			pass      int
+			fail      int
+			latencies map[string][]int64 // intent_class → latencies in ms
 		}
-		var results []result
-		prompts := []string{
-			"Respond with exactly: OK",
-			"What is 2 + 2?",
-			"Summarize this in one word: The quick brown fox jumps over the lazy dog.",
-		}
+		var results []modelResult
 
 		for _, model := range configured {
 			fmt.Printf("  --- %s ---\n", model)
-			pass, fail := 0, 0
-			for _, prompt := range prompts {
-				resp, err := apiPost("/api/agent/message", map[string]any{
-					"content": prompt,
-					"model":   model,
-				})
-				if err != nil {
-					fail++
-					fmt.Printf("    FAIL: %v\n", err)
-				} else if resp["content"] != nil && resp["content"] != "" {
-					pass++
-					// Truncate response for display.
-					content := fmt.Sprintf("%v", resp["content"])
-					if len(content) > 60 {
-						content = content[:60] + "..."
-					}
-					fmt.Printf("    PASS: %s\n", content)
-				} else if errMsg, ok := resp["error"].(string); ok {
-					fail++
-					fmt.Printf("    FAIL: %s\n", errMsg)
-				} else {
-					fail++
-					fmt.Printf("    FAIL: empty response\n")
+			mr := modelResult{
+				model:     model,
+				latencies: make(map[string][]int64),
+			}
+
+			// Create a dedicated session for exercising.
+			sessionID := ""
+			if resp, err := apiPost("/api/sessions", map[string]any{}); err == nil {
+				if id, ok := resp["session_id"].(string); ok {
+					sessionID = id
+				} else if id, ok := resp["id"].(string); ok {
+					sessionID = id
 				}
 			}
-			results = append(results, result{model, pass, fail})
+
+			n := 0
+			for iter := 0; iter < iterations; iter++ {
+				for _, ep := range llm.ExerciseMatrix {
+					n++
+					label := fmt.Sprintf("[%d/%d] %s:C%d", n, totalPrompts, ep.Intent, ep.Complexity)
+
+					body := map[string]any{
+						"content":        ep.Prompt,
+						"model_override": model,
+					}
+					if sessionID != "" {
+						body["session_id"] = sessionID
+					}
+
+					start := time.Now()
+					resp, err := apiPost("/api/agent/message", body)
+					latencyMs := time.Since(start).Milliseconds()
+
+					if err != nil {
+						mr.fail++
+						fmt.Printf("    %s FAIL: %v\n", label, err)
+						continue
+					}
+
+					content := fmt.Sprintf("%v", resp["content"])
+					if content != "" && content != "<nil>" {
+						mr.pass++
+						mr.latencies[string(ep.Intent)] = append(mr.latencies[string(ep.Intent)], latencyMs)
+						fmt.Printf("    %s PASS %.1fs\n", label, float64(latencyMs)/1000.0)
+					} else if errMsg, ok := resp["error"].(string); ok {
+						mr.fail++
+						fmt.Printf("    %s FAIL: %s\n", label, errMsg)
+					} else {
+						mr.fail++
+						fmt.Printf("    %s FAIL: empty response\n", label)
+					}
+				}
+			}
+
+			// Print per-intent latency scorecard for this model.
+			printLatencyScorecard(mr.latencies)
+			results = append(results, mr)
 			fmt.Println()
 		}
 
-		// Step 5: Summary.
-		fmt.Println("  Baseline Results:")
-		fmt.Printf("  %-35s %-6s %-6s %s\n", "MODEL", "PASS", "FAIL", "STATUS")
-		fmt.Println("  " + "─────────────────────────────────── ────── ────── ──────")
+		// Step 5: Summary with per-model pass/fail + baseline profile.
+		fmt.Printf("  Baseline Results:\n\n")
+		fmt.Printf("  %-35s  %-6s  %-6s  %s\n", "MODEL", "PASS", "FAIL", "STATUS")
+		fmt.Println("  " + strings.Repeat("─", 60))
 		for _, r := range results {
 			status := "PASS"
 			if r.fail > 0 && r.pass == 0 {
@@ -679,11 +717,89 @@ This re-establishes the metascore quality baseline from scratch.`,
 			} else if r.fail > 0 {
 				status = "DEGRADED"
 			}
-			fmt.Printf("  %-35s %-6d %-6d %s\n", r.model, r.pass, r.fail, status)
+			fmt.Printf("  %-35s  %-6d  %-6d  %s\n", r.model, r.pass, r.fail, status)
+
+			// Print 6-axis baseline profile if we have a known baseline.
+			if baseline, ok := llm.LookupBaseline(r.model); ok {
+				fmt.Printf("    Baseline profile: Eff=%.2f Cost=%.2f Avail=%.2f Loc=%.1f Conf=%.1f Spd=%.2f\n",
+					baseline.Efficacy, baseline.Cost, baseline.Availability,
+					baseline.Locality, baseline.Confidence, baseline.Speed)
+			}
 		}
 		fmt.Println()
 		return nil
 	},
+}
+
+func init() {
+	modelsBaselineCmd.Flags().IntP("iterations", "n", 1, "Number of iterations over the 20-prompt matrix per model")
+}
+
+// printLatencyScorecard prints a per-intent-class latency table (Avg/P50/P95).
+// Matches the Rust reference's exercise_single_model_iterations() output.
+func printLatencyScorecard(latencies map[string][]int64) {
+	if len(latencies) == 0 {
+		return
+	}
+
+	fmt.Println()
+	fmt.Println("    ┌──────────────────┬────────┬────────┬────────┐")
+	fmt.Println("    │ Intent Class     │  Avg   │  P50   │  P95   │")
+	fmt.Println("    ├──────────────────┼────────┼────────┼────────┤")
+
+	var allLatencies []int64
+	intents := []string{"execution", "delegation", "introspection", "conversation"}
+	for _, intent := range intents {
+		times, ok := latencies[intent]
+		if !ok || len(times) == 0 {
+			continue
+		}
+		allLatencies = append(allLatencies, times...)
+		sorted := make([]int64, len(times))
+		copy(sorted, times)
+		sortInt64s(sorted)
+
+		avg := float64(sumInt64s(sorted)) / float64(len(sorted)) / 1000.0
+		p50 := float64(sorted[len(sorted)/2]) / 1000.0
+		p95idx := int(float64(len(sorted)) * 0.95)
+		if p95idx >= len(sorted) {
+			p95idx = len(sorted) - 1
+		}
+		p95 := float64(sorted[p95idx]) / 1000.0
+
+		fmt.Printf("    │ %-16s │ %5.1fs │ %5.1fs │ %5.1fs │\n", intent, avg, p50, p95)
+	}
+
+	// All-intents aggregate row.
+	if len(allLatencies) > 0 {
+		sorted := make([]int64, len(allLatencies))
+		copy(sorted, allLatencies)
+		sortInt64s(sorted)
+
+		avg := float64(sumInt64s(sorted)) / float64(len(sorted)) / 1000.0
+		p50 := float64(sorted[len(sorted)/2]) / 1000.0
+		p95idx := int(float64(len(sorted)) * 0.95)
+		if p95idx >= len(sorted) {
+			p95idx = len(sorted) - 1
+		}
+		p95 := float64(sorted[p95idx]) / 1000.0
+
+		fmt.Println("    ├──────────────────┼────────┼────────┼────────┤")
+		fmt.Printf("    │ ALL              │ %5.1fs │ %5.1fs │ %5.1fs │\n", avg, p50, p95)
+	}
+	fmt.Println("    └──────────────────┴────────┴────────┴────────┘")
+}
+
+func sortInt64s(s []int64) {
+	sort.Slice(s, func(i, j int) bool { return s[i] < s[j] })
+}
+
+func sumInt64s(s []int64) int64 {
+	var total int64
+	for _, v := range s {
+		total += v
+	}
+	return total
 }
 
 func init() {
