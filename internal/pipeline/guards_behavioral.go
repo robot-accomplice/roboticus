@@ -265,6 +265,7 @@ func (g *PerspectiveGuard) CheckWithContext(content string, ctx *GuardContext) G
 type InternalProtocolGuard struct{}
 
 var internalProtocolMarkers = []string{
+	// Go-unique XML/bracket markers.
 	"[PROTOCOL:",
 	"[TRACE:",
 	"[DEBUG:",
@@ -282,7 +283,25 @@ var internalProtocolMarkers = []string{
 	"[TURN_ID:",
 	"[MODEL:",
 	"[TOKENS:",
+	// Rust-parity: JSON tool_call patterns.
+	`"tool_call"`,
+	`"toolcall"`,
+	"unexecuted_streaming_tool_call",
+	// Rust-parity: delegation metadata.
+	"delegated_subagent=",
+	"selected_subagent=",
+	"fallback_models=",
+	// Rust-parity: orchestration narrative.
+	"centralized delegation",
+	"decomposition gate decision",
+	"expected_utility_margin=",
+	"delegation decision:",
+	"rationale:",
+	"subtasks:",
 }
+
+// subtaskDigitPattern matches "subtask " followed by a digit (Rust-parity delegation metadata).
+var subtaskDigitPattern = regexp.MustCompile(`(?i)\bsubtask \d`)
 
 func (g *InternalProtocolGuard) Name() string { return "internal_protocol" }
 func (g *InternalProtocolGuard) Check(content string) GuardResult {
@@ -299,6 +318,17 @@ func (g *InternalProtocolGuard) Check(content string) GuardResult {
 			}
 			modified = strings.Join(kept, "\n")
 		}
+	}
+	// Rust-parity: strip lines matching "subtask <digit>" delegation pattern.
+	if subtaskDigitPattern.MatchString(modified) {
+		lines := strings.Split(modified, "\n")
+		var kept []string
+		for _, line := range lines {
+			if !subtaskDigitPattern.MatchString(line) {
+				kept = append(kept, line)
+			}
+		}
+		modified = strings.Join(kept, "\n")
 	}
 	if modified != content {
 		trimmed := strings.TrimSpace(modified)

@@ -534,3 +534,36 @@ func (p *ConsolidationPipeline) Phase4_TierStateSync(ctx context.Context, store 
 
 	return synced
 }
+
+// phaseSkillsConfidenceSync synchronizes confidence scores in procedural_memory
+// and learned_skills tables. Procedural entries with >80% failure rate get
+// confidence floored to 0.1. Learned skills get confidence = max(0.1, priority/100).
+func (p *ConsolidationPipeline) phaseSkillsConfidenceSync(ctx context.Context, store *db.Store) int {
+	synced := 0
+
+	// Procedural memory: if failure_count > success_count * 4 (>80% failure), floor confidence.
+	res, err := store.ExecContext(ctx,
+		`UPDATE procedural_memory SET confidence = 0.1
+		 WHERE memory_state = 'active'
+		 AND failure_count > success_count * 4
+		 AND confidence > 0.1`)
+	if err == nil {
+		n, _ := res.RowsAffected()
+		synced += int(n)
+	} else {
+		log.Debug().Err(err).Msg("consolidation: procedural confidence sync skipped (table may not exist)")
+	}
+
+	// Learned skills: sync confidence = max(0.1, priority / 100.0).
+	res, err = store.ExecContext(ctx,
+		`UPDATE learned_skills SET confidence = MAX(0.1, CAST(priority AS REAL) / 100.0)
+		 WHERE ABS(confidence - MAX(0.1, CAST(priority AS REAL) / 100.0)) > 0.001`)
+	if err == nil {
+		n, _ := res.RowsAffected()
+		synced += int(n)
+	} else {
+		log.Debug().Err(err).Msg("consolidation: learned_skills confidence sync skipped (table may not exist)")
+	}
+
+	return synced
+}
