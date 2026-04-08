@@ -71,24 +71,80 @@ func FormatFirmwareRules(fw FirmwareConfig) string {
 }
 
 // FormatOsPersonality renders the OS personality as a prompt section.
+// Matches Rust's compose_identity_text: includes BOTH the prompt_text AND
+// a structured voice profile section when voice parameters differ from defaults.
+// This ensures the model receives both the narrative identity AND the
+// explicit behavioral parameters (formality, verbosity, humor, etc.).
 func FormatOsPersonality(os OsConfig) string {
-	if os.PromptText != "" {
-		return os.PromptText
+	var sections []string
+
+	// Primary: prompt_text (narrative personality).
+	promptText := os.PromptText
+	if promptText == "" {
+		promptText = os.Voice.PromptText
 	}
-	// Also check voice-level prompt_text (TOML nests it under [voice]).
-	if os.Voice.PromptText != "" {
-		return os.Voice.PromptText
+	if promptText != "" {
+		sections = append(sections, promptText)
 	}
-	// Fallback: generate from voice parameters.
+
+	// Secondary: structured voice profile from non-default parameters.
+	// Matches Rust's voice_summary() — only includes fields that differ from defaults.
+	voiceProfile := formatVoiceProfile(os.Voice)
+	if voiceProfile != "" {
+		sections = append(sections, voiceProfile)
+	}
+
+	if len(sections) == 0 {
+		// Fallback: generate minimal profile from whatever is set.
+		return formatVoiceFallback(os.Voice)
+	}
+
+	return strings.Join(sections, "\n\n")
+}
+
+// formatVoiceProfile renders a structured "## Voice Profile" section from
+// non-default voice parameters. Returns "" if all fields match defaults.
+// Matches Rust's voice_summary() function.
+func formatVoiceProfile(v OsVoice) string {
+	var lines []string
+
+	if v.Formality != "" && v.Formality != "balanced" {
+		lines = append(lines, "- Formality: "+v.Formality)
+	}
+	if v.Proactiveness != "" && v.Proactiveness != "suggest" {
+		lines = append(lines, "- Proactiveness: "+v.Proactiveness)
+	}
+	if v.Verbosity != "" && v.Verbosity != "concise" {
+		lines = append(lines, "- Verbosity: "+v.Verbosity)
+	}
+	if v.Humor != "" && v.Humor != "dry" {
+		lines = append(lines, "- Humor: "+v.Humor)
+	}
+	if v.Warmth != "" {
+		lines = append(lines, "- Warmth: "+v.Warmth)
+	}
+	if v.Domain != "" && v.Domain != "general" {
+		lines = append(lines, "- Domain: "+v.Domain)
+	}
+
+	if len(lines) == 0 {
+		return ""
+	}
+	return "## Voice Profile\n" + strings.Join(lines, "\n")
+}
+
+// formatVoiceFallback generates a minimal personality from whatever voice
+// parameters are available, for when no prompt_text exists.
+func formatVoiceFallback(v OsVoice) string {
 	var parts []string
-	if os.Voice.Formality != "" {
-		parts = append(parts, "Formality: "+os.Voice.Formality)
+	if v.Formality != "" {
+		parts = append(parts, "Formality: "+v.Formality)
 	}
-	if os.Voice.Verbosity != "" {
-		parts = append(parts, "Verbosity: "+os.Voice.Verbosity)
+	if v.Verbosity != "" {
+		parts = append(parts, "Verbosity: "+v.Verbosity)
 	}
-	if os.Voice.Humor != "" {
-		parts = append(parts, "Humor: "+os.Voice.Humor)
+	if v.Humor != "" {
+		parts = append(parts, "Humor: "+v.Humor)
 	}
 	if len(parts) == 0 {
 		return ""
