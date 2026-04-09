@@ -26,6 +26,7 @@ type PromptConfig struct {
 	IsSubagent        bool                // include orchestration workflow block
 	BoundaryKey []byte               // HMAC-SHA256 key for trust boundary signing (nil = no signing)
 	ToolNames   []string             // registered tool names for introspection block
+	ToolDescs   [][2]string          // (name, description) pairs for tool roster in prompt
 	Obsidian    *core.ObsidianConfig // optional Obsidian config for vault directive
 }
 
@@ -98,21 +99,10 @@ func BuildSystemPrompt(cfg PromptConfig) string {
 		sections = append(sections, sb.String())
 	}
 
-	// 6. Tool use instructions — must be directive, not passive.
-	// Smaller models (gpt-4o-mini, local quantized) won't proactively call tools
-	// unless explicitly instructed to do so for specific scenarios.
-	sections = append(sections,
-		"## Tool Use\n"+
-			"You have tools available and MUST use them when appropriate:\n"+
-			"- Use `recall_memory` to check your memories before claiming you don't remember something.\n"+
-			"- Use `get_runtime_context` when asked about your status, capabilities, or configuration.\n"+
-			"- Use `get_memory_stats` when asked about your memory or knowledge.\n"+
-			"- Use filesystem tools (`read_file`, `list_directory`, etc.) when asked about files or workspace content.\n"+
-			"- Use `bash` when asked to execute commands or check system state.\n"+
-			"- Use `cron` for scheduling tasks.\n"+
-			"- NEVER claim you cannot do something without first checking if you have a tool for it.\n"+
-			"- NEVER say 'I don't have memories' or 'I can't access' without first calling the relevant tool.\n"+
-			"- After receiving tool results, integrate them naturally into your response.\n")
+	// 6. Tool use instructions — ported from Rust's tool_use_instructions().
+	// Includes text-based invocation format (for models without native function
+	// calling) and a full tool roster with descriptions.
+	sections = append(sections, buildToolUseBlock(cfg))
 
 	// 7. Safety.
 	sections = append(sections,
@@ -177,6 +167,47 @@ func signBoundary(key []byte, content string) string {
 
 // buildOperationalIntrospectionBlock nudges the agent to inspect memory, tools,
 // and roster before guessing. Helps reduce hallucinated capabilities.
+// buildToolUseBlock generates tool-use instructions with a text-based invocation
+// format and full tool roster. Ported from Rust's tool_use_instructions().
+//
+// The dual-path approach ensures tools work with:
+// 1. Models with native function calling (OpenAI, Anthropic) — use API tool_calls
+// 2. Models without native FC (some local models) — parse JSON from response text
+func buildToolUseBlock(cfg PromptConfig) string {
+	if len(cfg.ToolDescs) == 0 && len(cfg.ToolNames) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("---\n## Tool Use\n")
+	sb.WriteString("You have access to the following tools. To invoke a tool, include a JSON block ")
+	sb.WriteString("in your response with this exact format:\n")
+	sb.WriteString("```\n{\"tool_call\": {\"name\": \"<tool-name>\", \"params\": {<parameters>}}}\n```\n")
+	sb.WriteString("You may invoke multiple tools in a single response. Always use the tool that ")
+	sb.WriteString("best matches the task. Inspect this tool list before claiming a capability is unavailable.\n\n")
+	sb.WriteString("**Important**: You are an autonomous agent with real tool execution capabilities. ")
+	sb.WriteString("When a user asks you to do something that can be accomplished with your tools, ")
+	sb.WriteString("USE THEM. Do not say \"I cannot\" or \"I don't have the ability to\" — if a tool ")
+	sb.WriteString("exists that can accomplish the task, invoke it. You have a real workspace, real ")
+	sb.WriteString("shell access, and real integrations. Act on requests; do not merely describe ")
+	sb.WriteString("what the user could do themselves.\n\n")
+	sb.WriteString("### Available Tools\n")
+
+	if len(cfg.ToolDescs) > 0 {
+		for _, td := range cfg.ToolDescs {
+			fmt.Fprintf(&sb, "- **%s**: %s\n", td[0], td[1])
+		}
+	} else {
+		// Fallback: names only (no descriptions available).
+		for _, name := range cfg.ToolNames {
+			fmt.Fprintf(&sb, "- **%s**\n", name)
+		}
+	}
+
+	sb.WriteString("---\n")
+	return sb.String()
+}
+
 func buildOperationalIntrospectionBlock(cfg PromptConfig) string {
 	var sb strings.Builder
 	sb.WriteString("## Operational Discipline\n")

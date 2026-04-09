@@ -40,6 +40,7 @@ func (c *Client) marshalOpenAI(req *Request) ([]byte, error) {
 	}
 	if len(req.Tools) > 0 {
 		payload["tools"] = req.Tools
+		payload["tool_choice"] = "auto"
 	}
 	if len(req.Stop) > 0 {
 		payload["stop"] = req.Stop
@@ -85,6 +86,7 @@ func (c *Client) marshalAnthropic(req *Request) ([]byte, error) {
 }
 
 func (c *Client) marshalOllama(req *Request) ([]byte, error) {
+	// Ollama's /v1/chat/completions endpoint accepts the same tool format as OpenAI.
 	payload := map[string]any{
 		"model":    req.Model,
 		"messages": req.Messages,
@@ -92,6 +94,10 @@ func (c *Client) marshalOllama(req *Request) ([]byte, error) {
 	}
 	if req.Temperature != nil {
 		payload["options"] = map[string]any{"temperature": *req.Temperature}
+	}
+	if len(req.Tools) > 0 {
+		payload["tools"] = req.Tools
+		payload["tool_choice"] = "auto"
 	}
 	return json.Marshal(payload)
 }
@@ -435,6 +441,7 @@ func (c *Client) marshalOpenAIResponses(req *Request) ([]byte, error) {
 	}
 	if len(req.Tools) > 0 {
 		payload["tools"] = req.Tools
+		payload["tool_choice"] = "auto"
 	}
 	if req.Stream {
 		payload["stream"] = true
