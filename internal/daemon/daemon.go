@@ -491,10 +491,10 @@ func New(cfg *core.Config) (*Daemon, error) {
 
 	log.Info().Int("count", len(tools.Names())).Strs("tools", tools.Names()).Msg("builtin tools registered")
 
-	policyEngine := policy.NewEngine(policy.Config{
-		MaxTransferCents:   int64(cfg.Treasury.PerPaymentCap * 100),
-		RateLimitPerMinute: 30,
-	})
+	policyCfg := policy.DefaultConfig()
+	policyCfg.MaxTransferCents = int64(cfg.Treasury.PerPaymentCap * 100)
+	policyCfg.RateLimitPerMinute = 30
+	policyEngine := policy.NewEngine(policyCfg)
 	memMgr := memory.NewManager(memory.Config{
 		TotalTokenBudget: 2048,
 		Budgets: memory.TierBudget{
