@@ -960,26 +960,6 @@ func (s *Store) runMigrations() error {
 		}
 
 		sql := string(data)
-		// A placeholder migration is one with NO executable SQL — only empty
-		// lines and comments. A file that starts with a comment but contains
-		// CREATE/ALTER/etc. is NOT a placeholder.
-		isPlaceholder := true
-		for _, line := range strings.Split(sql, "\n") {
-			trimmed := strings.TrimSpace(line)
-			if trimmed != "" && !strings.HasPrefix(trimmed, "--") {
-				isPlaceholder = false
-				break
-			}
-		}
-		if isPlaceholder {
-			// Placeholder migration, just record the version.
-			_, err = s.db.Exec("INSERT INTO schema_version (version) VALUES (?)", ver)
-			if err != nil {
-				return core.WrapError(core.ErrDatabase, fmt.Sprintf("failed to record migration %d", ver), err)
-			}
-			continue
-		}
-
 		_, err = s.db.Exec(sql)
 		if err != nil {
 			return core.WrapError(core.ErrDatabase, fmt.Sprintf("migration %s failed", name), err)
