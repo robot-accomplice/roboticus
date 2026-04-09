@@ -206,11 +206,31 @@ type ExerciseResult struct {
 	Error     string
 }
 
+// ExerciseCallback is called after each prompt completes, enabling per-prompt
+// persistence for interrupt resilience. May be nil.
+type ExerciseCallback func(index int, result ExerciseResult)
+
 // RunExercise executes the exercise matrix against a completer and returns results.
-func RunExercise(ctx context.Context, completer Completer, model string, prompts []ExercisePrompt) []ExerciseResult {
+// If onResult is non-nil, it's called after each prompt completes (for persistence).
+func RunExercise(ctx context.Context, completer Completer, model string, prompts []ExercisePrompt, onResult ...ExerciseCallback) []ExerciseResult {
+	var cb ExerciseCallback
+	if len(onResult) > 0 {
+		cb = onResult[0]
+	}
+
 	results := make([]ExerciseResult, 0, len(prompts))
 
-	for _, p := range prompts {
+	for i, p := range prompts {
+		// Check for context cancellation between prompts.
+		if ctx.Err() != nil {
+			result := ExerciseResult{Prompt: p, Error: "context cancelled"}
+			results = append(results, result)
+			if cb != nil {
+				cb(i, result)
+			}
+			continue
+		}
+
 		start := time.Now()
 		req := &Request{
 			Messages:   []Message{{Role: "user", Content: p.Prompt}},
@@ -230,6 +250,9 @@ func RunExercise(ctx context.Context, completer Completer, model string, prompts
 		if err != nil {
 			result.Error = err.Error()
 			results = append(results, result)
+			if cb != nil {
+				cb(i, result)
+			}
 			continue
 		}
 
@@ -237,6 +260,9 @@ func RunExercise(ctx context.Context, completer Completer, model string, prompts
 		result.Quality = scoreExerciseResponse(p, resp.Content)
 		result.Passed = result.Quality >= 0.3 && result.Error == ""
 		results = append(results, result)
+		if cb != nil {
+			cb(i, result)
+		}
 	}
 
 	return results

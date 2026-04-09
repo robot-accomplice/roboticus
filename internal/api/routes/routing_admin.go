@@ -65,10 +65,11 @@ func GetRoutingDataset(store *db.Store) http.HandlerFunc {
 // ExerciseModel runs the exercise matrix against a specific model and returns
 // per-prompt quality scores. This bypasses the pipeline (no session, no guards,
 // no memory) — it's a direct LLM quality measurement for baselining.
-func ExerciseModel(llmSvc *llm.Service) http.HandlerFunc {
+func ExerciseModel(llmSvc *llm.Service, store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Model string `json:"model"`
+			RunID string `json:"run_id,omitempty"` // Caller-provided run ID for grouping results.
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid JSON body")
@@ -78,8 +79,32 @@ func ExerciseModel(llmSvc *llm.Service) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "model is required")
 			return
 		}
+		runID := req.RunID
+		if runID == "" {
+			runID = db.NewID()
+		}
 
-		results := llm.RunExercise(r.Context(), llmSvc, req.Model, llm.ExerciseMatrix)
+		// Persist each result as it completes — survives interrupts.
+		persistResult := llm.ExerciseCallback(func(index int, result llm.ExerciseResult) {
+			if store == nil {
+				return
+			}
+			_ = db.InsertExerciseResult(r.Context(), store, db.ExerciseResultRow{
+				ID:          db.NewID(),
+				RunID:       runID,
+				Model:       req.Model,
+				IntentClass: result.Prompt.Intent.String(),
+				Complexity:  result.Prompt.Complexity.String(),
+				Prompt:      result.Prompt.Prompt,
+				Content:     result.Content,
+				Quality:     result.Quality,
+				LatencyMs:   result.LatencyMs,
+				Passed:      result.Passed,
+				ErrorMsg:    result.Error,
+			})
+		})
+
+		results := llm.RunExercise(r.Context(), llmSvc, req.Model, llm.ExerciseMatrix, persistResult)
 
 		type promptResult struct {
 			Intent     string  `json:"intent"`
@@ -135,12 +160,23 @@ func ExerciseModel(llmSvc *llm.Service) http.HandlerFunc {
 
 		writeJSON(w, http.StatusOK, map[string]any{
 			"model":          req.Model,
+			"run_id":         runID,
 			"total":          len(results),
 			"pass":           pass,
 			"fail":           fail,
 			"avg_quality":    avgQuality,
 			"intent_quality": intentAvg,
 			"results":        promptResults,
+		})
+	}
+}
+
+// GetExerciseStatus returns which models have existing exercise data and how many results.
+func GetExerciseStatus(store *db.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		counts := db.ExerciseResultCountByModel(r.Context(), store)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"models": counts,
 		})
 	}
 }

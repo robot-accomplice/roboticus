@@ -600,6 +600,7 @@ per-intent-class latency scorecard and 6-axis metascore dimension reporting.`,
 		if v, _ := cmd.Flags().GetInt("iterations"); v > 0 {
 			iterations = v
 		}
+		newOnly, _ := cmd.Flags().GetBool("new-only")
 
 		// Step 1: Discover configured models.
 		fmt.Println("\n  Step 1: Discovering configured models...")
@@ -627,8 +628,34 @@ per-intent-class latency scorecard and 6-axis metascore dimension reporting.`,
 			return nil
 		}
 
+		// In --new-only mode, filter out models that already have exercise data.
+		if newOnly {
+			status, err := apiGet("/api/models/exercise/status")
+			if err == nil {
+				if existing, ok := status["models"].(map[string]any); ok && len(existing) > 0 {
+					var filtered []string
+					for _, model := range configured {
+						if count, found := existing[model]; found {
+							c := toFloat(count)
+							if c > 0 {
+								fmt.Printf("  Skipping %s (already has %.0f exercise result(s))\n", model, c)
+								continue
+							}
+						}
+						filtered = append(filtered, model)
+					}
+					configured = filtered
+				}
+			}
+			if len(configured) == 0 {
+				fmt.Println("\n  All models already have exercise data. Nothing to do.")
+				fmt.Println("  Run without --new-only to re-baseline all models.")
+				return nil
+			}
+		}
+
 		totalPrompts := len(llm.ExerciseMatrix) * iterations
-		fmt.Printf("\n  Found %d configured model(s):\n\n", len(configured))
+		fmt.Printf("\n  Found %d model(s) to exercise:\n\n", len(configured))
 		var localCount, cloudCount int
 		for i, model := range configured {
 			role := "fallback"
@@ -673,14 +700,18 @@ per-intent-class latency scorecard and 6-axis metascore dimension reporting.`,
 			return nil
 		}
 
-		// Step 3: Flush all scores.
-		fmt.Println("\n  Step 2: Flushing all quality scores...")
-		resetData, err := apiPost("/api/models/reset", nil)
-		if err != nil {
-			return fmt.Errorf("failed to reset scores: %w", err)
+		// Step 3: Flush all scores (skip in --new-only mode — we're adding, not replacing).
+		if newOnly {
+			fmt.Println("\n  Step 2: Skipping score flush (--new-only mode)")
+		} else {
+			fmt.Println("\n  Step 2: Flushing all quality scores...")
+			resetData, err := apiPost("/api/models/reset", nil)
+			if err != nil {
+				return fmt.Errorf("failed to reset scores: %w", err)
+			}
+			cleared, _ := resetData["cleared"].(float64)
+			fmt.Printf("  Cleared %.0f observation entries.\n", cleared)
 		}
-		cleared, _ := resetData["cleared"].(float64)
-		fmt.Printf("  Cleared %.0f observation entries.\n", cleared)
 
 		// Step 4: Exercise each model via /api/models/exercise (direct LLM quality scoring,
 		// no pipeline overhead). Returns per-prompt quality scores 0-1.
@@ -797,6 +828,7 @@ per-intent-class latency scorecard and 6-axis metascore dimension reporting.`,
 
 func init() {
 	modelsBaselineCmd.Flags().IntP("iterations", "n", 1, "Number of iterations over the 20-prompt matrix per model")
+	modelsBaselineCmd.Flags().Bool("new-only", false, "Only exercise models with no existing baseline data")
 }
 
 // printLatencyScorecard prints a per-intent-class latency table (Avg/P50/P95).
