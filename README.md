@@ -1,4 +1,6 @@
-```
+# Roboticus
+
+```text
         ╔═══╗
         ║◉ ◉║
         ║ ▬ ║
@@ -10,8 +12,6 @@
          ║ ║
         ═╩═╩═
 ```
-
-# Roboticus
 
 > **One binary. One database. One agent that remembers, reasons, and acts.**
 
@@ -62,26 +62,26 @@ Most agent frameworks are libraries you call. Roboticus is a **runtime you deplo
 │  │ Observe       │  │  Procedural (stats)  │  list_directory, cron │
 │  │ Persist       │  │  Relationship        │  introspect, recall   │
 │  │ Policy (7)    │  │  + FTS5 + ANN index  │  alter/drop_table     │
-│  └───────────────┘  │                      │  get_runtime_context   │
+│  └───────────────┘  │                      │  get_runtime_context  │
 ├────────────────────────────────────────────────────────────────────┤
-│  Channels (8)       │  LLM Service          │  Scheduler            │
-│  Telegram           │  Metascore Router     │  Cron (5-field + TZ)  │
-│  Discord            │  Cascade Optimizer    │  Lease-based locking  │
-│  Signal             │  Circuit Breaker      │  Interval + One-shot  │
-│  WhatsApp           │  3-tier Semantic Cache│  Session rotation     │
-│  Voice (STT/TTS)    │  Dedup + Compression  │                       │
-│  Email (IMAP/SMTP)  │  Tiered Inference     │  Wallet               │
-│  Matrix (E2E)       │  ML Router (logistic) │  secp256k1 ECDSA      │
-│  A2A (X25519+AES)   │  10 Bundled Providers │  x402 EIP-3009        │
+│  Channels (8)       │  LLM Service          │  Scheduler           │
+│  Telegram           │  Metascore Router     │  Cron (5-field + TZ) │
+│  Discord            │  Cascade Optimizer    │  Lease-based locking │
+│  Signal             │  Circuit Breaker      │  Interval + One-shot │
+│  WhatsApp           │  3-tier Semantic Cache│  Session rotation    │
+│  Voice (STT/TTS)    │  Dedup + Compression  │                      │
+│  Email (IMAP/SMTP)  │  Tiered Inference     │  Wallet              │
+│  Matrix (E2E)       │  ML Router (logistic) │  secp256k1 ECDSA     │
+│  A2A (X25519+AES)   │  10 Bundled Providers │  x402 EIP-3009       │
 ├────────────────────────────────────────────────────────────────────┤
-│  Personality Layer       │  Security                                │
+│  Personality Layer       │  Security                               │
 │  OS.toml (identity)      │  Claim-based RBAC                       │
-│  FIRMWARE.toml (rules)   │  4-layer injection defense               │
-│  OPERATOR.toml (context) │  7 policy rules + ConfigProtection       │
-│  DIRECTIVES.toml (goals) │  Prompt HMAC-SHA256 trust boundaries     │
+│  FIRMWARE.toml (rules)   │  4-layer injection defense              │
+│  OPERATOR.toml (context) │  7 policy rules + ConfigProtection      │
+│  DIRECTIVES.toml (goals) │  Prompt HMAC-SHA256 trust boundaries    │
 ├────────────────────────────────────────────────────────────────────┤
 │                    SQLite + FTS5 + WAL Mode                        │
-│              30 migrations │ 25+ tables │ Pool(8)                   │
+│              30 migrations │ 25+ tables │ Pool(8)                  │
 └────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -94,7 +94,7 @@ Most agent frameworks are libraries you call. Roboticus is a **runtime you deplo
 Roboticus agents have a layered personality defined in TOML files in the workspace directory:
 
 | Layer | File | Purpose | Example |
-|-------|------|---------|---------|
+| ------- | ------ | --------- | --------- |
 | **OS** | `OS.toml` | Identity, voice, personality | "Be genuinely helpful. Have opinions. Earn trust through competence." |
 | **Firmware** | `FIRMWARE.toml` | Hard rules and guardrails | "MUST: Disclose uncertainty honestly. MUST NOT: Fabricate sources." |
 | **Operator** | `OPERATOR.toml` | Who you serve | "Operator: Jon. Role: Developer. Timezone: Europe/Amsterdam." |
@@ -111,7 +111,7 @@ The personality is injected as the **first section** of the system prompt (befor
 Every configured model gets a real-time **6-axis profile**:
 
 | Axis | Range | Source |
-|------|-------|--------|
+| ------ | ------- | -------- |
 | **Efficacy** | [0, 1] | Per-(model, intent-class) quality observations |
 | **Cost** | [0, 1] | Sigmoid-normalized inverse cost (free=1.0) |
 | **Availability** | [0, 1] | Circuit breaker health x capacity headroom |
@@ -146,7 +146,7 @@ The exercise matrix tests 20 prompts across 4 intent classes (Execution, Delegat
 ## Memory System
 
 | Tier | Storage | Retrieval | Decay |
-|------|---------|-----------|-------|
+| ------ | --------- | ----------- | ------- |
 | **Working** | Per-session goals, notes, summaries | Session-scoped, importance-ranked | None (session-bound) |
 | **Episodic** | Past events with classification | FTS5 + cosine similarity hybrid | `0.5^(age/halflife)`, floor 0.05 |
 | **Semantic** | Category/key/value facts | UNIQUE(category, key) with upsert | Confidence x 0.995 per 24h |
@@ -160,6 +160,7 @@ Hybrid search combining FTS5 full-text matching with cosine similarity of embedd
 ### Consolidation
 
 7-phase background pipeline:
+
 1. Mark derivable tool outputs stale
 2. Index backfill (batched to 500)
 3. Within-tier dedup (Jaccard > 0.85)
@@ -177,7 +178,7 @@ Quiescence gate skips dedup if a session was active in the last 5 seconds.
 25 output guards organized in dependency order, with 3 chain variants:
 
 | Chain | Guards | When |
-|-------|--------|------|
+| ------- | -------- | ------ |
 | **Full** | 25 | Standard inference |
 | **Cached** | 21 | Cache hits (excludes Perspective, DeclaredAction, UserEcho, ActionVerification) |
 | **Streaming** | 6 | SSE (SubagentClaim, CurrentEventsTruth, PersonalityIntegrity, InternalJargon, NonRepetition, InternalProtocol) |
@@ -199,7 +200,7 @@ Each guard can **Pass**, **Rewrite** (deterministic fix), or **RetryRequested** 
 ## Channels
 
 | Channel | Protocol | Send | Receive | Notable |
-|---------|----------|------|---------|---------|
+| --------- | ---------- | ------ | --------- | --------- |
 | **Telegram** | Bot API | MarkdownV2 | Long-poll + webhook | 18-char escape set, media attachments |
 | **Discord** | HTTP (webhooks) | Native Markdown | Webhook ingest | 2000-char chunking |
 | **Signal** | JSON-RPC 2.0 | Plain text | signal-cli daemon | E2E encrypted, rate limited |
@@ -221,7 +222,7 @@ Binary heap (O(log n)) with exponential backoff: 0s, 1s, 5s, 30s, 5m, 15m+. 9 pe
 
 Every message entry point resolves a `SecurityClaim` using the composition algorithm:
 
-```
+```text
 effective_authority = min(max(positive_grants...), min(negative_ceilings...))
 ```
 
@@ -230,6 +231,7 @@ Positive grants OR across authentication layers (any layer can grant). Negative 
 ### Injection Defense
 
 4-layer defense with gradient scoring:
+
 1. **L1**: Input pattern scanning (instruction, encoding, authority, financial — 4 classes, +0.15 multi-class bonus)
 2. **L2**: Content sanitization (7 regex patterns)
 3. **L3**: Homoglyph folding (28 Cyrillic-to-Latin mappings) + HTML entity decoding + NFKC normalization
@@ -238,6 +240,7 @@ Positive grants OR across authentication layers (any layer can grant). Negative 
 ### Policy Engine
 
 7 rules at ascending priority:
+
 1. **Authority** — risk level vs sender authority (Creator/SelfGenerated/Peer/External)
 2. **CommandSafety** — blocks Forbidden risk tools unconditionally
 3. **Financial** — amount thresholds + drain/withdraw_all detection
@@ -327,7 +330,7 @@ Configuration lives at `~/.roboticus/roboticus.toml` with `ROBOTICUS_` environme
 
 ```toml
 [agent]
-name = "Duncan"
+name = "Roboticus"
 workspace = "~/.roboticus/workspace"
 
 [server]
@@ -373,7 +376,7 @@ script_timeout_seconds = 30
 Pre-configured and available without TOML entries:
 
 | Provider | URL | Tier | Format |
-|----------|-----|------|--------|
+| ---------- | ----- | ------ | -------- |
 | Ollama | `localhost:11434` | T1 (local) | OpenAI |
 | sglang | `localhost:30000` | T1 (local) | OpenAI |
 | vLLM | `localhost:8000` | T1 (local) | OpenAI |
@@ -392,7 +395,7 @@ Pre-configured and available without TOML entries:
 ### Core
 
 | Method | Path | Description |
-|--------|------|-------------|
+| -------- | ------ | ------------- |
 | `POST` | `/api/agent/message` | Send message (returns JSON with session_id, content, model, tokens, cost, react_turns) |
 | `POST` | `/api/agent/message/stream` | SSE streaming inference |
 | `GET` | `/api/agent/status` | Agent state, active model, provider health |
@@ -404,7 +407,7 @@ Pre-configured and available without TOML entries:
 ### Sessions & Memory
 
 | Method | Path | Description |
-|--------|------|-------------|
+| -------- | ------ | ------------- |
 | `GET/POST` | `/api/sessions` | List / create sessions |
 | `GET` | `/api/sessions/:id` | Session detail with messages |
 | `GET` | `/api/memory/working` | Working memory (session-scoped) |
@@ -416,7 +419,7 @@ Pre-configured and available without TOML entries:
 ### Scheduling & Administration
 
 | Method | Path | Description |
-|--------|------|-------------|
+| -------- | ------ | ------------- |
 | `GET/POST` | `/api/cron/jobs` | List / create scheduled jobs |
 | `POST` | `/api/cron/jobs/:id/run` | Trigger job immediately |
 | `GET` | `/api/skills` | Loaded skills |
