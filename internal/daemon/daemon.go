@@ -376,6 +376,7 @@ func New(cfg *core.Config) (*Daemon, error) {
 			ExtraHeaders:     pc.ExtraHeaders,
 			TPMLimit:         pc.TPMLimit,
 			RPMLimit:         pc.RPMLimit,
+			TimeoutSecs:      pc.TimeoutSecs,
 		})
 	}
 	bgWorker := core.NewBackgroundWorker(32)

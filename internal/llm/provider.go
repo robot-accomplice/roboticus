@@ -24,6 +24,7 @@ type Provider struct {
 	ExtraHeaders     map[string]string `json:"extra_headers,omitempty"`
 	TPMLimit         uint64            `json:"tpm_limit,omitempty"`
 	RPMLimit         uint64            `json:"rpm_limit,omitempty"`
+	TimeoutSecs      int               `json:"timeout_seconds,omitempty"`
 }
 
 // APIFormat identifies which wire format a provider speaks.

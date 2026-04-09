@@ -194,6 +194,7 @@ type ProviderConfig struct {
 	OAuthClientID       string            `json:"oauth_client_id,omitempty" mapstructure:"oauth_client_id"`
 	OAuthRedirectURI    string            `json:"oauth_redirect_uri,omitempty" mapstructure:"oauth_redirect_uri"`
 	APIKeyRef           string            `json:"api_key_ref,omitempty" mapstructure:"api_key_ref"`
+	TimeoutSecs         int               `json:"timeout_seconds,omitempty" mapstructure:"timeout_seconds"`
 }
 
 // SessionConfig holds session scoping and timeout settings.

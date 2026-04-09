@@ -71,10 +71,20 @@ func NewClient(p *Provider) (*Client, error) {
 		// when some providers are unconfigured.
 	}
 
+	// Per-provider HTTP timeout. Local models (Ollama, llama.cpp) need much
+	// longer timeouts due to cold starts and limited hardware.
+	// Priority: explicit TimeoutSecs > IsLocal default (300s) > cloud default (120s).
+	providerTimeout := 120 * time.Second
+	if p.TimeoutSecs > 0 {
+		providerTimeout = time.Duration(p.TimeoutSecs) * time.Second
+	} else if p.IsLocal {
+		providerTimeout = 300 * time.Second
+	}
+
 	return &Client{
 		provider: p,
 		httpClient: &http.Client{
-			Timeout: 120 * time.Second,
+			Timeout: providerTimeout,
 			Transport: &http.Transport{
 				DialContext:         (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
 				MaxIdleConnsPerHost: 10,
