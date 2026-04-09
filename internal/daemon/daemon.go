@@ -91,7 +91,6 @@ func buildAgentContext(ctx context.Context, sess *session.Session, tools *agent.
 		}()).
 		Int("tool_names_in_prompt", len(cfg.ToolNames)).
 		Bool("has_retriever", retriever != nil).
-		Bool("prompt_has_tool_roster", strings.Contains(systemPrompt, "### Available Tools")).
 		Msg("context built for inference")
 	ctxBuilder.SetSystemPrompt(systemPrompt)
 

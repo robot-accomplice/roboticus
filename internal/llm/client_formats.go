@@ -17,11 +17,11 @@ func (c *Client) marshalRequest(req *Request) ([]byte, error) {
 		return c.marshalAnthropic(req)
 	case FormatGoogle:
 		return c.marshalGoogle(req)
-	case FormatOllama:
-		return c.marshalOllama(req)
 	case FormatOpenAIResponses:
 		return c.marshalOpenAIResponses(req)
 	default:
+		// FormatOpenAI, FormatOllama, and any unknown format all use OpenAI-compatible.
+		// Rust standardizes on OpenAI-compatible for all providers including Ollama.
 		return c.marshalOpenAI(req)
 	}
 }
@@ -85,22 +85,6 @@ func (c *Client) marshalAnthropic(req *Request) ([]byte, error) {
 	return json.Marshal(payload)
 }
 
-func (c *Client) marshalOllama(req *Request) ([]byte, error) {
-	// Ollama's /v1/chat/completions endpoint accepts the same tool format as OpenAI.
-	payload := map[string]any{
-		"model":    req.Model,
-		"messages": req.Messages,
-		"stream":   req.Stream,
-	}
-	if req.Temperature != nil {
-		payload["options"] = map[string]any{"temperature": *req.Temperature}
-	}
-	if len(req.Tools) > 0 {
-		payload["tools"] = req.Tools
-		payload["tool_choice"] = "auto"
-	}
-	return json.Marshal(payload)
-}
 
 func (c *Client) marshalGoogle(req *Request) ([]byte, error) {
 	var systemParts []string
@@ -159,8 +143,6 @@ func (c *Client) unmarshalResponse(body io.Reader) (*Response, error) {
 	switch c.provider.Format {
 	case FormatAnthropic:
 		resp, err = c.unmarshalAnthropicResponse(data)
-	case FormatOllama:
-		resp, err = c.unmarshalOllamaResponse(data)
 	case FormatGoogle:
 		resp, err = c.unmarshalGoogleResponse(data)
 	case FormatOpenAIResponses:
@@ -257,31 +239,6 @@ func (c *Client) unmarshalAnthropicResponse(data []byte) (*Response, error) {
 		FinishReason: raw.StopReason,
 		Usage:        Usage{InputTokens: raw.Usage.InputTokens, OutputTokens: raw.Usage.OutputTokens},
 	}, nil
-}
-
-func (c *Client) unmarshalOllamaResponse(data []byte) (*Response, error) {
-	var raw struct {
-		Model   string `json:"model"`
-		Message struct {
-			Role      string     `json:"role"`
-			Content   string     `json:"content"`
-			ToolCalls []ToolCall `json:"tool_calls,omitempty"`
-		} `json:"message"`
-		DoneReason string `json:"done_reason,omitempty"`
-	}
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return nil, core.WrapError(core.ErrLLM, "failed to parse Ollama response", err)
-	}
-	resp := &Response{
-		Model:        raw.Model,
-		Content:      raw.Message.Content,
-		ToolCalls:    raw.Message.ToolCalls,
-		FinishReason: "stop",
-	}
-	if raw.DoneReason != "" {
-		resp.FinishReason = raw.DoneReason
-	}
-	return resp, nil
 }
 
 func (c *Client) unmarshalGoogleResponse(data []byte) (*Response, error) {

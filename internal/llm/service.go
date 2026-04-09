@@ -267,7 +267,7 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 		inferReq := *req
 		inferReq.Model = pm.model
 
-		log.Info().
+		log.Debug().
 			Str("provider", pm.provider).
 			Str("model", pm.model).
 			Int("tools", len(inferReq.Tools)).

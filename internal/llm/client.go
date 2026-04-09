@@ -301,11 +301,11 @@ func (c *Client) chatURL() string {
 			path = "/v1/messages"
 		case FormatGoogle:
 			path = "/v1/models/"
-		case FormatOllama:
-			path = "/api/chat"
 		case FormatOpenAIResponses:
 			path = "/v1/responses"
 		default:
+			// FormatOpenAI, FormatOllama, and all others use OpenAI-compatible endpoint.
+			// Rust standardizes on /v1/chat/completions for all providers including Ollama.
 			path = "/v1/chat/completions"
 		}
 	}

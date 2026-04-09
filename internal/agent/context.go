@@ -122,7 +122,17 @@ func (cb *ContextBuilder) BuildRequest(session *Session) *llm.Request {
 		result = append(result, indexMsg)
 	}
 
-	remaining := budget - sysTokCount - memTokCount
+	// Account for tool definitions in the token budget. Each tool adds ~100-200
+	// tokens (name, description, parameter schema). Without this, the context
+	// builder overfills the budget and the model gets too much history, drowning
+	// the system prompt's tool instructions.
+	toolTokCount := 0
+	for _, td := range cb.toolDefs {
+		// Rough estimate: function name + description + JSON schema overhead.
+		toolTokCount += cb.estimateTokens(td.Function.Name + td.Function.Description + string(td.Function.Parameters))
+	}
+
+	remaining := budget - sysTokCount - memTokCount - toolTokCount
 
 	// Calculate total message token cost.
 	totalMsgTokens := 0

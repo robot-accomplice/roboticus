@@ -310,7 +310,7 @@ func (l *Loop) think(ctx context.Context, session *Session) (Action, error) {
 	// Build context-aware request.
 	req := l.context.BuildRequest(session)
 
-	log.Info().
+	log.Debug().
 		Int("tools_in_request", len(req.Tools)).
 		Int("messages", len(req.Messages)).
 		Str("model", req.Model).
@@ -325,7 +325,7 @@ func (l *Loop) think(ctx context.Context, session *Session) (Action, error) {
 	// Matches Rust's sanitize_model_output pipeline.
 	resp.Content = SanitizeModelOutput(resp.Content, nil, l.injection)
 
-	log.Info().
+	log.Debug().
 		Int("tool_calls", len(resp.ToolCalls)).
 		Int("content_len", len(resp.Content)).
 		Str("finish_reason", resp.FinishReason).

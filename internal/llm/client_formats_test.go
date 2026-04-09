@@ -59,7 +59,9 @@ func TestMarshalAnthropic(t *testing.T) {
 	}
 }
 
-func TestMarshalOllama(t *testing.T) {
+func TestMarshalOllama_UsesOpenAIFormat(t *testing.T) {
+	// FormatOllama now routes to OpenAI-compatible format (Rust parity).
+	// Temperature is top-level, not in "options".
 	c := &Client{provider: &Provider{Format: FormatOllama}}
 	temp := 0.7
 	req := &Request{
@@ -73,9 +75,11 @@ func TestMarshalOllama(t *testing.T) {
 	}
 	var raw map[string]any
 	_ = json.Unmarshal(data, &raw)
-	opts := raw["options"].(map[string]any)
-	if opts["temperature"].(float64) != 0.7 {
-		t.Errorf("temperature = %v", opts["temperature"])
+	if raw["temperature"].(float64) != 0.7 {
+		t.Errorf("temperature = %v, want 0.7", raw["temperature"])
+	}
+	if _, hasOptions := raw["options"]; hasOptions {
+		t.Error("should not have 'options' field — using OpenAI format")
 	}
 }
 
@@ -273,15 +277,20 @@ func TestUnmarshalAnthropicResponse(t *testing.T) {
 	}
 }
 
-func TestUnmarshalOllamaResponse(t *testing.T) {
+func TestUnmarshalOllamaResponse_UsesOpenAIFormat(t *testing.T) {
+	// FormatOllama now routes to OpenAI-compatible response parsing (Rust parity).
+	// Ollama's /v1/chat/completions returns OpenAI-format responses.
 	c := &Client{provider: &Provider{Format: FormatOllama}}
-	body := `{"model": "llama3", "message": {"role": "assistant", "content": "Ollama says hi"}}`
+	body := `{"id":"chatcmpl-1","model":"llama3","choices":[{"message":{"role":"assistant","content":"Ollama says hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":3}}`
 	resp, err := c.unmarshalResponse(io.NopCloser(strings.NewReader(body)))
 	if err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	if resp.Content != "Ollama says hi" {
 		t.Errorf("content = %s", resp.Content)
+	}
+	if resp.Usage.OutputTokens != 3 {
+		t.Errorf("output tokens = %d, want 3", resp.Usage.OutputTokens)
 	}
 }
 
