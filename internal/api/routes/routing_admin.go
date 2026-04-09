@@ -1,6 +1,7 @@
 package routes
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -57,6 +58,89 @@ func GetRoutingDataset(store *db.Store) http.HandlerFunc {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"rows":    rows,
 			"summary": summary,
+		})
+	}
+}
+
+// ExerciseModel runs the exercise matrix against a specific model and returns
+// per-prompt quality scores. This bypasses the pipeline (no session, no guards,
+// no memory) — it's a direct LLM quality measurement for baselining.
+func ExerciseModel(llmSvc *llm.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Model string `json:"model"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		if req.Model == "" {
+			writeError(w, http.StatusBadRequest, "model is required")
+			return
+		}
+
+		results := llm.RunExercise(r.Context(), llmSvc, req.Model, llm.ExerciseMatrix)
+
+		type promptResult struct {
+			Intent     string  `json:"intent"`
+			Complexity string  `json:"complexity"`
+			Prompt     string  `json:"prompt"`
+			Content    string  `json:"content,omitempty"`
+			Quality    float64 `json:"quality"`
+			LatencyMs  int64   `json:"latency_ms"`
+			Passed     bool    `json:"passed"`
+			Error      string  `json:"error,omitempty"`
+		}
+
+		var pass, fail int
+		var totalQuality float64
+		intentQuality := make(map[string][]float64)
+		promptResults := make([]promptResult, len(results))
+
+		for i, res := range results {
+			intentStr := res.Prompt.Intent.String()
+			promptResults[i] = promptResult{
+				Intent:     intentStr,
+				Complexity: res.Prompt.Complexity.String(),
+				Prompt:     res.Prompt.Prompt,
+				Content:    res.Content,
+				Quality:    res.Quality,
+				LatencyMs:  res.LatencyMs,
+				Passed:     res.Passed,
+				Error:      res.Error,
+			}
+			if res.Passed {
+				pass++
+			} else {
+				fail++
+			}
+			totalQuality += res.Quality
+			intentQuality[intentStr] = append(intentQuality[intentStr], res.Quality)
+		}
+
+		// Compute per-intent averages.
+		intentAvg := make(map[string]float64)
+		for intent, scores := range intentQuality {
+			var sum float64
+			for _, s := range scores {
+				sum += s
+			}
+			intentAvg[intent] = sum / float64(len(scores))
+		}
+
+		avgQuality := 0.0
+		if len(results) > 0 {
+			avgQuality = totalQuality / float64(len(results))
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{
+			"model":          req.Model,
+			"total":          len(results),
+			"pass":           pass,
+			"fail":           fail,
+			"avg_quality":    avgQuality,
+			"intent_quality": intentAvg,
+			"results":        promptResults,
 		})
 	}
 }

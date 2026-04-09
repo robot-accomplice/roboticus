@@ -77,7 +77,8 @@ func NewServer(ctx context.Context, cfg ServerConfig, state *AppState) *http.Ser
 			// models or cold-start local providers. The client controls its
 			// own deadline via http.Client.Timeout.
 			if r.URL.Path == "/ws" || strings.HasSuffix(r.URL.Path, "/stream") ||
-				r.URL.Path == "/api/agent/message" {
+				r.URL.Path == "/api/agent/message" ||
+				r.URL.Path == "/api/models/exercise" {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -243,6 +244,7 @@ func NewServer(ctx context.Context, cfg ServerConfig, state *AppState) *http.Ser
 		r.Get("/api/models/routing-diagnostics", routes.GetRoutingDiagnostics(state.Config))
 		r.Get("/api/models/routing-dataset", routes.GetRoutingDataset(state.Store))
 		r.Post("/api/models/reset", routes.ResetModelScores(state.LLM))
+		r.Post("/api/models/exercise", routes.ExerciseModel(state.LLM))
 		r.Post("/api/models/routing-eval", routes.RunRoutingEval(state.LLM))
 
 		// Recommendations.

@@ -658,101 +658,89 @@ per-intent-class latency scorecard and 6-axis metascore dimension reporting.`,
 		cleared, _ := resetData["cleared"].(float64)
 		fmt.Printf("  Cleared %.0f observation entries.\n", cleared)
 
-		// Step 4: Exercise each model with the full matrix.
+		// Step 4: Exercise each model via /api/models/exercise (direct LLM quality scoring,
+		// no pipeline overhead). Returns per-prompt quality scores 0-1.
 		fmt.Printf("\n  Step 3: Exercising models...\n\n")
 
 		type modelResult struct {
-			model     string
-			pass      int
-			fail      int
-			latencies map[string][]int64 // intent_class → latencies in ms
+			model        string
+			pass         int
+			fail         int
+			avgQuality   float64
+			intentQuality map[string]float64 // intent_class → avg quality 0-1
+			latencies    map[string][]int64  // intent_class → latencies in ms
 		}
 		var results []modelResult
 
 		for _, model := range configured {
 			modelTimeout := resolveModelTimeout(config, model)
 			fmt.Printf("  --- %s (timeout: %s) ---\n", model, modelTimeout)
+
+			resp, err := apiPostSlow("/api/models/exercise", map[string]any{"model": model}, modelTimeout*20)
+			if err != nil {
+				fmt.Printf("    SKIP: exercise failed: %v\n\n", err)
+				results = append(results, modelResult{model: model, fail: len(llm.ExerciseMatrix)})
+				continue
+			}
+
+			// Parse per-prompt results from exercise endpoint.
 			mr := modelResult{
-				model:     model,
-				latencies: make(map[string][]int64),
+				model:         model,
+				intentQuality: make(map[string]float64),
+				latencies:     make(map[string][]int64),
 			}
+			mr.pass = int(toFloat(resp["pass"]))
+			mr.fail = int(toFloat(resp["fail"]))
+			mr.avgQuality = toFloat(resp["avg_quality"])
 
-			// Create a dedicated session for exercising.
-			sessionID := ""
-			if resp, err := apiPost("/api/sessions", map[string]any{}); err == nil {
-				if id, ok := resp["session_id"].(string); ok {
-					sessionID = id
-				} else if id, ok := resp["id"].(string); ok {
-					sessionID = id
+			// Per-intent quality averages.
+			if iq, ok := resp["intent_quality"].(map[string]any); ok {
+				for intent, val := range iq {
+					mr.intentQuality[intent] = toFloat(val)
 				}
 			}
 
-			n := 0
-			for iter := 0; iter < iterations; iter++ {
-				for _, ep := range llm.ExerciseMatrix {
-					n++
-					label := fmt.Sprintf("[%d/%d] %s:C%d", n, totalPrompts, ep.Intent, ep.Complexity)
+			// Print per-prompt details.
+			if promptResults, ok := resp["results"].([]any); ok {
+				for i, pr := range promptResults {
+					if p, ok := pr.(map[string]any); ok {
+						intent := fmt.Sprintf("%v", p["intent"])
+						complexity := fmt.Sprintf("%v", p["complexity"])
+						quality := toFloat(p["quality"])
+						latencyMs := int64(toFloat(p["latency_ms"]))
+						passed, _ := p["passed"].(bool)
+						errStr := fmt.Sprintf("%v", p["error"])
 
-					body := map[string]any{
-						"content": ep.Prompt,
-						"model":   model,
-					}
-					if sessionID != "" {
-						body["session_id"] = sessionID
-					}
+						label := fmt.Sprintf("[%d/%d] %s:%s", i+1, len(promptResults), intent, complexity)
+						mr.latencies[intent] = append(mr.latencies[intent], latencyMs)
 
-					start := time.Now()
-					resp, err := apiPostSlow("/api/agent/message", body, modelTimeout)
-					latencyMs := time.Since(start).Milliseconds()
-
-					if err != nil {
-						mr.fail++
-						fmt.Printf("    %s FAIL: %v\n", label, err)
-						continue
-					}
-
-					content := fmt.Sprintf("%v", resp["content"])
-					respModel := fmt.Sprintf("%v", resp["model"])
-
-					// Detect model mismatch: if a fallback responded instead of the target,
-					// the baseline data is contaminated and this prompt must count as a fail.
-					if respModel != "" && respModel != "<nil>" && respModel != model {
-						// Extract just the model name (strip provider prefix for comparison).
-						_, targetName := splitModelForDisplay(model)
-						if targetName == "" {
-							targetName = model
+						if errStr != "" && errStr != "<nil>" {
+							fmt.Printf("    %s FAIL  Q=%.2f  %s\n", label, quality, errStr)
+						} else if passed {
+							fmt.Printf("    %s PASS  Q=%.2f  %.1fs\n", label, quality, float64(latencyMs)/1000.0)
+						} else {
+							fmt.Printf("    %s FAIL  Q=%.2f  %.1fs\n", label, quality, float64(latencyMs)/1000.0)
 						}
-						if respModel != targetName {
-							mr.fail++
-							fmt.Printf("    %s FAIL: model mismatch (wanted %s, got %s)\n", label, model, respModel)
-							continue
-						}
-					}
-
-					if content != "" && content != "<nil>" {
-						mr.pass++
-						mr.latencies[ep.Intent.String()] = append(mr.latencies[ep.Intent.String()], latencyMs)
-						fmt.Printf("    %s PASS %.1fs\n", label, float64(latencyMs)/1000.0)
-					} else if errMsg, ok := resp["error"].(string); ok {
-						mr.fail++
-						fmt.Printf("    %s FAIL: %s\n", label, errMsg)
-					} else {
-						mr.fail++
-						fmt.Printf("    %s FAIL: empty response\n", label)
 					}
 				}
 			}
 
-			// Print per-intent latency scorecard for this model.
+			// Print per-intent quality + latency scorecard.
+			fmt.Printf("\n    Intent Quality:\n")
+			for _, intent := range []string{"EXECUTION", "DELEGATION", "INTROSPECTION", "CONVERSATION"} {
+				q := mr.intentQuality[intent]
+				bar := qualityBar(q)
+				fmt.Printf("      %-16s %s %.2f\n", intent, bar, q)
+			}
 			printLatencyScorecard(mr.latencies)
 			results = append(results, mr)
 			fmt.Println()
 		}
 
-		// Step 5: Summary with per-model pass/fail + baseline profile.
+		// Step 5: Summary with per-model quality scores + baseline profile.
 		fmt.Printf("  Baseline Results:\n\n")
-		fmt.Printf("  %-35s  %-6s  %-6s  %s\n", "MODEL", "PASS", "FAIL", "STATUS")
-		fmt.Println("  " + strings.Repeat("─", 60))
+		fmt.Printf("  %-35s  %-6s  %-6s  %-10s  %s\n", "MODEL", "PASS", "FAIL", "QUALITY", "STATUS")
+		fmt.Println("  " + strings.Repeat("─", 75))
 		for _, r := range results {
 			status := "PASS"
 			if r.fail > 0 && r.pass == 0 {
@@ -760,7 +748,16 @@ per-intent-class latency scorecard and 6-axis metascore dimension reporting.`,
 			} else if r.fail > 0 {
 				status = "DEGRADED"
 			}
-			fmt.Printf("  %-35s  %-6d  %-6d  %s\n", r.model, r.pass, r.fail, status)
+			qBar := qualityBar(r.avgQuality)
+			fmt.Printf("  %-35s  %-6d  %-6d  %s %.2f  %s\n", r.model, r.pass, r.fail, qBar, r.avgQuality, status)
+
+			// Per-intent quality breakdown.
+			if len(r.intentQuality) > 0 {
+				for _, intent := range []string{"EXECUTION", "DELEGATION", "INTROSPECTION", "CONVERSATION"} {
+					q := r.intentQuality[intent]
+					fmt.Printf("    %-18s %s %.2f\n", intent, qualityBar(q), q)
+				}
+			}
 
 			// Print 6-axis baseline profile if we have a known baseline.
 			if baseline, ok := llm.LookupBaseline(r.model); ok {
@@ -872,6 +869,28 @@ func resolveModelTimeout(config map[string]any, model string) time.Duration {
 	}
 
 	return 120 * time.Second // 2 min for cloud models
+}
+
+// toFloat extracts a float64 from an any value (JSON numbers decode as float64).
+func toFloat(v any) float64 {
+	switch n := v.(type) {
+	case float64:
+		return n
+	case int:
+		return float64(n)
+	default:
+		return 0
+	}
+}
+
+// qualityBar renders a visual quality bar: ████████░░ for 0.8.
+func qualityBar(q float64) string {
+	const width = 10
+	filled := int(q * float64(width))
+	if filled > width {
+		filled = width
+	}
+	return strings.Repeat("█", filled) + strings.Repeat("░", width-filled)
 }
 
 // splitModelForDisplay splits "provider/model" into (provider, model).

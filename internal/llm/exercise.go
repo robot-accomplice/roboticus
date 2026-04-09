@@ -66,6 +66,24 @@ const (
 	ComplexityExpert                          // ~30-60s expected
 )
 
+// String returns the complexity label.
+func (c ComplexityLevel) String() string {
+	switch c {
+	case ComplexityTrivial:
+		return "trivial"
+	case ComplexitySimple:
+		return "simple"
+	case ComplexityModerate:
+		return "moderate"
+	case ComplexityComplex:
+		return "complex"
+	case ComplexityExpert:
+		return "expert"
+	default:
+		return "unknown"
+	}
+}
+
 // ExercisePrompt is a single synthetic prompt in the exercise matrix.
 type ExercisePrompt struct {
 	Prompt     string
@@ -224,6 +242,8 @@ func RunExercise(ctx context.Context, completer Completer, model string, prompts
 }
 
 // scoreExerciseResponse computes a quality score for an exercise response.
+// Combines length adequacy (40%), intent relevance (30%), and structural
+// quality (30%) into a single 0-1 score.
 func scoreExerciseResponse(prompt ExercisePrompt, content string) float64 {
 	if content == "" {
 		return 0.0
@@ -232,58 +252,141 @@ func scoreExerciseResponse(prompt ExercisePrompt, content string) float64 {
 	lower := strings.ToLower(content)
 	length := len(content)
 
-	switch prompt.Complexity {
-	case ComplexityTrivial:
-		// Trivial: just needs to respond with something relevant.
-		if length > 0 {
-			return 0.8
-		}
-		return 0.0
+	// Dimension 1: Length adequacy (0-1) — does the response meet the
+	// minimum length expectation for this complexity level?
+	lengthScore := scoreLengthAdequacy(length, prompt.Complexity)
 
-	case ComplexitySimple:
-		// Simple: needs substantive content (>20 chars).
-		if length > 20 {
-			return 0.8
-		}
-		if length > 0 {
-			return 0.4
-		}
-		return 0.0
+	// Dimension 2: Intent relevance (0-1) — does the response demonstrate
+	// behavior appropriate for the intent class?
+	relevanceScore := scoreIntentRelevance(lower, prompt.Intent)
 
-	case ComplexityModerate:
-		// Moderate: needs decent length and some structure.
-		if length > 100 {
-			return 0.9
-		}
-		if length > 40 {
-			return 0.6
-		}
-		return 0.3
+	// Dimension 3: Structural quality (0-1) — coherence markers.
+	structureScore := scoreStructure(lower, length)
 
-	case ComplexityComplex:
-		// Complex: needs substantial content.
-		if length > 200 {
-			return 0.9
-		}
-		if length > 80 {
-			return 0.6
-		}
-		return 0.3
+	// Weighted combination.
+	return 0.4*lengthScore + 0.3*relevanceScore + 0.3*structureScore
+}
 
-	case ComplexityExpert:
-		// Expert: needs long, structured response.
-		if length > 400 {
-			return 0.95
+// scoreLengthAdequacy scores response length relative to complexity expectations.
+func scoreLengthAdequacy(length int, complexity ComplexityLevel) float64 {
+	// Minimum expected lengths per complexity tier.
+	thresholds := map[ComplexityLevel][2]int{
+		ComplexityTrivial:  {1, 10},
+		ComplexitySimple:   {20, 80},
+		ComplexityModerate: {60, 200},
+		ComplexityComplex:  {120, 400},
+		ComplexityExpert:   {200, 600},
+	}
+	minLen, goodLen := thresholds[complexity][0], thresholds[complexity][1]
+	if length < minLen {
+		return float64(length) / float64(minLen) * 0.3
+	}
+	if length >= goodLen {
+		return 1.0
+	}
+	return 0.5 + 0.5*float64(length-minLen)/float64(goodLen-minLen)
+}
+
+// scoreIntentRelevance checks whether the response contains markers appropriate
+// for the requested intent class (tool calls, delegation language, introspection, etc.).
+func scoreIntentRelevance(lower string, intent IntentClass) float64 {
+	switch intent {
+	case IntentExecution:
+		// Execution responses should mention tool usage, actions, results, or data.
+		markers := []string{"tool", "result", "file", "directory", "output", "command",
+			"executed", "running", "error", "success", "list", "found", "created"}
+		return markerScore(lower, markers, 2)
+
+	case IntentDelegation:
+		// Delegation responses should mention forwarding, checking, or coordination.
+		markers := []string{"check", "health", "status", "integration", "delegate",
+			"forward", "agent", "task", "assigned", "search", "scan"}
+		return markerScore(lower, markers, 2)
+
+	case IntentIntrospection:
+		// Introspection responses should discuss the model's own state/capabilities.
+		markers := []string{"i ", "my ", "i'm", "memory", "tool", "access", "capable",
+			"model", "conversation", "knowledge", "remember"}
+		return markerScore(lower, markers, 2)
+
+	case IntentConversation:
+		// Conversation responses should be warm, natural, and engaged.
+		markers := []string{"!", "glad", "happy", "welcome", "thank", "help",
+			"sure", "of course", "here", "let me", "can "}
+		return markerScore(lower, markers, 1)
+
+	default:
+		return 0.5
+	}
+}
+
+// markerScore computes a score based on how many relevant markers are present.
+// threshold is the number of markers needed for full score.
+func markerScore(lower string, markers []string, threshold int) float64 {
+	hits := 0
+	for _, m := range markers {
+		if strings.Contains(lower, m) {
+			hits++
 		}
-		if length > 150 {
-			return 0.7
-		}
-		return 0.3
+	}
+	if hits >= threshold {
+		return 1.0
+	}
+	if hits > 0 {
+		return 0.5 + 0.5*float64(hits)/float64(threshold)
+	}
+	return 0.2 // Some credit for responding at all.
+}
+
+// scoreStructure evaluates response coherence: sentence structure, absence
+// of degenerate output (repetition, gibberish).
+func scoreStructure(lower string, length int) float64 {
+	score := 0.5 // Base score for any non-empty response.
+
+	// Bonus: contains sentence-ending punctuation (coherent prose).
+	if strings.ContainsAny(lower, ".!?") {
+		score += 0.2
 	}
 
-	// Fallback: score by length relative to complexity.
-	_ = lower // suppress unused warning for future validators
-	return min(1.0, float64(length)/200.0)
+	// Bonus: contains multiple sentences (structured response).
+	sentences := strings.Count(lower, ".") + strings.Count(lower, "!") + strings.Count(lower, "?")
+	if sentences >= 2 {
+		score += 0.15
+	}
+
+	// Penalty: excessive repetition (degenerate output).
+	if length > 100 {
+		// Check if any 20-char substring repeats 3+ times.
+		chunk := lower
+		if len(chunk) > 500 {
+			chunk = chunk[:500]
+		}
+		for i := 0; i+20 < len(chunk); i += 20 {
+			sub := chunk[i : i+20]
+			if strings.Count(chunk, sub) >= 3 {
+				score -= 0.3
+				break
+			}
+		}
+	}
+
+	// Penalty: refusal to answer (common with smaller models).
+	refusals := []string{"i cannot", "i can't", "i'm unable", "i don't have the ability",
+		"as an ai", "as a language model", "i'm not able"}
+	for _, r := range refusals {
+		if strings.Contains(lower, r) {
+			score -= 0.2
+			break
+		}
+	}
+
+	if score < 0 {
+		score = 0
+	}
+	if score > 1 {
+		score = 1
+	}
+	return score
 }
 
 // LookupBaseline finds a pre-computed legacy baseline for a model.
