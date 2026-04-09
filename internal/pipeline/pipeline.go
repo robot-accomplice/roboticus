@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -343,15 +344,26 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 	}
 
 	// ── Stage 8: Authority resolution ──────────────────────────────────────
+	// Full SecurityClaim resolution via core resolvers (Rust parity).
+	// The claim carries source tracking for audit + ceiling enforcement.
 	tr.BeginSpan("authority_resolution")
-	authority := ResolveAuthority(cfg.AuthorityMode, input.Claim)
+	secClaim := ResolveSecurityClaim(cfg.AuthorityMode, input.Claim)
 	// Reduce authority if injection threat was caution-level (Rust parity).
-	if threatCaution && authority == core.AuthorityCreator {
-		authority = core.AuthorityPeer
+	if threatCaution && secClaim.Authority == core.AuthorityCreator {
+		secClaim.Authority = core.AuthorityPeer
+		secClaim.ThreatDowngraded = true
 		log.Warn().Str("session", session.ID).Msg("authority reduced due to injection caution")
 	}
-	session.Authority = authority
-	tr.Annotate("authority", authority.String())
+	session.Authority = secClaim.Authority
+	session.SecurityClaim = &secClaim
+	tr.Annotate("authority", secClaim.Authority.String())
+	if len(secClaim.Sources) > 0 {
+		sourceStrs := make([]string, len(secClaim.Sources))
+		for i, s := range secClaim.Sources {
+			sourceStrs[i] = s.String()
+		}
+		tr.Annotate("claim_sources", strings.Join(sourceStrs, ","))
+	}
 	tr.EndSpan("ok")
 
 	// ── Stage 9: Delegated execution ───────────────────────────────────────
@@ -370,7 +382,7 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 
 	// ── Stage 10: Skill-first fulfillment ──────────────────────────────────
 	tr.BeginSpan("skill_dispatch")
-	if cfg.SkillFirstEnabled && authority == core.AuthorityCreator && p.skills != nil {
+	if cfg.SkillFirstEnabled && secClaim.Authority == core.AuthorityCreator && p.skills != nil {
 		if result := p.skills.TryMatch(ctx, session, content); result != nil {
 			tr.Annotate("matched", true)
 			tr.EndSpan("ok")

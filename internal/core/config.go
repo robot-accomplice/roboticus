@@ -270,6 +270,10 @@ type SecurityConfig struct {
 	InterpreterAllow     []string `json:"interpreter_allow" mapstructure:"interpreter_allow"`
 	ScriptAllowedPaths   []string `json:"script_allowed_paths" mapstructure:"script_allowed_paths"`
 	ThreatCautionCeiling string   `json:"threat_caution_ceiling,omitempty" mapstructure:"threat_caution_ceiling"`
+	// TrustedSenderIDs lists sender/chat IDs that receive Creator authority via
+	// the SecurityClaim resolver's TrustedAuthority grant. Matches Rust's
+	// channels.trusted_sender_ids configuration.
+	TrustedSenderIDs []string `json:"trusted_sender_ids,omitempty" mapstructure:"trusted_sender_ids"`
 	// Filesystem is a nested security section for fine-grained filesystem access control.
 	// Mirrors Rust's security.filesystem configuration.
 	Filesystem FilesystemSecurityConfig `json:"filesystem" mapstructure:"filesystem"`

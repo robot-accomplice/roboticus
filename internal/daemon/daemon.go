@@ -1179,12 +1179,20 @@ func (d *Daemon) handleInbound(ctx context.Context, msg channel.InboundMessage) 
 	// Build channel claim context so the policy engine grants appropriate
 	// tool authority. Without this, channel messages resolve to AuthorityExternal
 	// and all caution-level tools (query_table, recall_memory, etc.) are denied.
+	// Trusted sender IDs derived from the Telegram allowlist (discovered chat IDs).
+	// Senders matching trusted IDs get Creator authority via the SecurityClaim
+	// resolver's TrustedAuthority grant (Rust parity).
+	var trustedIDs []string
+	if d.cfg.Security.TrustedSenderIDs != nil {
+		trustedIDs = d.cfg.Security.TrustedSenderIDs
+	}
 	claim := &pipeline.ChannelClaimContext{
 		SenderID:            msg.SenderID,
 		ChatID:              msg.ChatID,
 		Platform:            msg.Platform,
 		SenderInAllowlist:   d.isSenderAllowed(msg.Platform, msg.SenderID, msg.ChatID),
 		AllowlistConfigured: true,
+		TrustedSenderIDs:    trustedIDs,
 	}
 
 	cfg := pipeline.PresetChannel(msg.Platform)

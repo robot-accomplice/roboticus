@@ -223,26 +223,50 @@ type ChannelClaimContext struct {
 	TrustedSenderIDs    []string
 }
 
-// ResolveAuthority maps AuthorityMode to an AuthorityLevel.
-func ResolveAuthority(mode AuthorityMode, claim *ChannelClaimContext) core.AuthorityLevel {
+// ResolveSecurityClaim resolves a full SecurityClaim using the core resolvers.
+// This replaces the former ResolveAuthority which only returned an AuthorityLevel.
+// The full claim carries source tracking for audit and ceiling enforcement.
+func ResolveSecurityClaim(mode AuthorityMode, claim *ChannelClaimContext) core.SecurityClaim {
+	sec := core.DefaultClaimSecurityConfig()
+
 	switch mode {
 	case AuthorityAPIKey:
-		return core.AuthorityCreator // API keys are fully trusted
+		return core.ResolveAPIClaim(false, "api", sec)
 	case AuthoritySelfGen:
-		return core.AuthoritySelfGenerated
+		return core.SecurityClaim{
+			Authority: core.AuthoritySelfGenerated,
+			Sources:   []core.ClaimSource{},
+			Ceiling:   core.AuthorityCreator,
+			SenderID:  "cron",
+			Channel:   "cron",
+		}
 	case AuthorityChannel:
 		if claim == nil {
-			return core.AuthorityExternal
-		}
-		if claim.SenderInAllowlist {
-			return core.AuthorityCreator
-		}
-		for _, trusted := range claim.TrustedSenderIDs {
-			if trusted == claim.SenderID {
-				return core.AuthorityPeer
+			return core.SecurityClaim{
+				Authority: core.AuthorityExternal,
+				Sources:   []core.ClaimSource{core.ClaimSourceAnonymous},
+				Ceiling:   core.AuthorityCreator,
+				Channel:   "unknown",
 			}
 		}
-		return core.AuthorityExternal
+		return core.ResolveChannelClaim(&core.ChannelClaimContext{
+			SenderID:            claim.SenderID,
+			ChatID:              claim.ChatID,
+			Channel:             claim.Platform,
+			SenderInAllowlist:   claim.SenderInAllowlist,
+			AllowlistConfigured: claim.AllowlistConfigured,
+			TrustedSenderIDs:    claim.TrustedSenderIDs,
+		}, sec)
 	}
-	return core.AuthorityExternal
+	return core.SecurityClaim{
+		Authority: core.AuthorityExternal,
+		Sources:   []core.ClaimSource{core.ClaimSourceAnonymous},
+		Ceiling:   core.AuthorityCreator,
+	}
+}
+
+// ResolveAuthority maps AuthorityMode to an AuthorityLevel.
+// Convenience wrapper over ResolveSecurityClaim for callers that only need the level.
+func ResolveAuthority(mode AuthorityMode, claim *ChannelClaimContext) core.AuthorityLevel {
+	return ResolveSecurityClaim(mode, claim).Authority
 }

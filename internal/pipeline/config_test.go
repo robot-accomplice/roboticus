@@ -75,24 +75,28 @@ func TestResolveAuthority_APIKey(t *testing.T) {
 }
 
 func TestResolveAuthority_Channel_Allowlisted(t *testing.T) {
+	// Allowlisted sender gets Peer (DefaultClaimSecurityConfig.AllowlistAuthority).
+	// Rust default: allowlist → Peer, trusted → Creator.
 	claim := &ChannelClaimContext{
-		SenderID:          "user123",
-		SenderInAllowlist: true,
+		SenderID:            "user123",
+		SenderInAllowlist:   true,
+		AllowlistConfigured: true,
 	}
 	auth := ResolveAuthority(AuthorityChannel, claim)
-	if auth != core.AuthorityCreator {
-		t.Errorf("allowlisted sender should be Creator, got %v", auth)
+	if auth != core.AuthorityPeer {
+		t.Errorf("allowlisted sender should be Peer, got %v", auth)
 	}
 }
 
 func TestResolveAuthority_Channel_Trusted(t *testing.T) {
+	// Trusted sender gets Creator (DefaultClaimSecurityConfig.TrustedAuthority).
 	claim := &ChannelClaimContext{
 		SenderID:         "user456",
 		TrustedSenderIDs: []string{"user456", "user789"},
 	}
 	auth := ResolveAuthority(AuthorityChannel, claim)
-	if auth != core.AuthorityPeer {
-		t.Errorf("trusted sender should be Peer, got %v", auth)
+	if auth != core.AuthorityCreator {
+		t.Errorf("trusted sender should be Creator, got %v", auth)
 	}
 }
 

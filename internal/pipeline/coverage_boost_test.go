@@ -989,24 +989,27 @@ func TestPersonalityIntegrityGuard_CheckWithContext(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestResolveAuthority_WithClaim_Allowlisted(t *testing.T) {
+	// Allowlisted → Peer (DefaultClaimSecurityConfig.AllowlistAuthority)
 	claim := &ChannelClaimContext{
-		SenderID:          "user123",
-		SenderInAllowlist: true,
+		SenderID:            "user123",
+		SenderInAllowlist:   true,
+		AllowlistConfigured: true,
 	}
 	got := ResolveAuthority(AuthorityChannel, claim)
-	if got != core.AuthorityCreator {
-		t.Errorf("allowlisted sender = %v, want creator", got)
+	if got != core.AuthorityPeer {
+		t.Errorf("allowlisted sender = %v, want peer", got)
 	}
 }
 
 func TestResolveAuthority_WithClaim_TrustedSender(t *testing.T) {
+	// Trusted sender → Creator (DefaultClaimSecurityConfig.TrustedAuthority)
 	claim := &ChannelClaimContext{
 		SenderID:         "user456",
 		TrustedSenderIDs: []string{"user456"},
 	}
 	got := ResolveAuthority(AuthorityChannel, claim)
-	if got != core.AuthorityPeer {
-		t.Errorf("trusted sender = %v, want peer", got)
+	if got != core.AuthorityCreator {
+		t.Errorf("trusted sender = %v, want creator", got)
 	}
 }
 
