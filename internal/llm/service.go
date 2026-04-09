@@ -271,11 +271,15 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 		resp, err := client.Complete(ctx, &inferReq)
 		latencyMs := time.Since(start).Milliseconds()
 		if err != nil {
-			// Distinguish credit/billing errors from transient failures.
-			// Credit errors permanently trip the breaker until manual reset.
+			// Distinguish permanent errors from transient failures.
+			// Credit and auth errors permanently trip the breaker — these
+			// won't self-heal between requests.
 			if errors.Is(err, core.ErrCreditExhausted) {
 				cb.RecordCreditError()
 				log.Error().Str("provider", pm.provider).Msg("provider credit exhausted — circuit breaker tripped permanently")
+			} else if errors.Is(err, core.ErrUnauthorized) {
+				cb.RecordCreditError() // Same permanent trip — no key means no recovery.
+				log.Error().Str("provider", pm.provider).Msg("provider unauthorized — circuit breaker tripped permanently (missing or invalid API key)")
 			} else {
 				cb.RecordFailure()
 			}

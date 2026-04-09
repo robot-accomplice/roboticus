@@ -531,6 +531,7 @@ func New(cfg *core.Config) (*Daemon, error) {
 		Workspace:   cfg.Agent.Workspace,
 		Skills:      skillNames,
 		Model:       cfg.Models.Primary,
+		ToolNames:   tools.Names(),
 	}
 	log.Info().
 		Str("agent", cfg.Agent.Name).

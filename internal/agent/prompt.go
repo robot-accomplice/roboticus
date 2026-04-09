@@ -98,12 +98,21 @@ func BuildSystemPrompt(cfg PromptConfig) string {
 		sections = append(sections, sb.String())
 	}
 
-	// 6. Tool use instructions.
+	// 6. Tool use instructions — must be directive, not passive.
+	// Smaller models (gpt-4o-mini, local quantized) won't proactively call tools
+	// unless explicitly instructed to do so for specific scenarios.
 	sections = append(sections,
 		"## Tool Use\n"+
-			"When you need to use a tool, respond with a tool call. "+
-			"Always explain your reasoning before making a tool call. "+
-			"After receiving tool results, integrate them into your response.\n")
+			"You have tools available and MUST use them when appropriate:\n"+
+			"- Use `recall_memory` to check your memories before claiming you don't remember something.\n"+
+			"- Use `get_runtime_context` when asked about your status, capabilities, or configuration.\n"+
+			"- Use `get_memory_stats` when asked about your memory or knowledge.\n"+
+			"- Use filesystem tools (`read_file`, `list_directory`, etc.) when asked about files or workspace content.\n"+
+			"- Use `bash` when asked to execute commands or check system state.\n"+
+			"- Use `cron` for scheduling tasks.\n"+
+			"- NEVER claim you cannot do something without first checking if you have a tool for it.\n"+
+			"- NEVER say 'I don't have memories' or 'I can't access' without first calling the relevant tool.\n"+
+			"- After receiving tool results, integrate them naturally into your response.\n")
 
 	// 7. Safety.
 	sections = append(sections,
@@ -171,14 +180,16 @@ func signBoundary(key []byte, content string) string {
 func buildOperationalIntrospectionBlock(cfg PromptConfig) string {
 	var sb strings.Builder
 	sb.WriteString("## Operational Discipline\n")
-	sb.WriteString("Before answering, inspect what you actually have available:\n")
-	sb.WriteString("- Check your memory for relevant prior context.\n")
-	sb.WriteString("- Review your tool roster before claiming you can or cannot do something.\n")
+	sb.WriteString("BEFORE responding to ANY question, you MUST:\n")
+	sb.WriteString("1. Call `recall_memory` to check if you have relevant memories about this topic.\n")
+	sb.WriteString("2. Review your available tools — if a tool can answer the question, USE IT instead of guessing.\n")
+	sb.WriteString("3. If asked about your status, capabilities, or configuration, call `get_runtime_context`.\n")
 	if len(cfg.ToolNames) > 0 {
-		fmt.Fprintf(&sb, "- You have %d tools registered: %s.\n",
+		fmt.Fprintf(&sb, "\nYou have %d tools registered: %s.\n",
 			len(cfg.ToolNames), strings.Join(cfg.ToolNames, ", "))
 	}
-	sb.WriteString("- If uncertain, say so rather than fabricating an answer.\n")
+	sb.WriteString("\n- NEVER say 'I don't have access to' or 'I can't' without first trying the relevant tool.\n")
+	sb.WriteString("- If uncertain about something, use a tool to find out rather than fabricating an answer.\n")
 	return sb.String()
 }
 
