@@ -300,7 +300,9 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 		// Tiered inference: if the provider is local, evaluate confidence.
 		// If confidence is too low and non-local providers are available, escalate.
 		// Skip during exercise/baseline (NoEscalate) — we need raw model scores.
-		if client.provider.IsLocal && s.Confidence != nil && !req.NoEscalate {
+		// Skip if the model returned tool calls — that's a high-confidence decision
+		// to use a tool, not a low-quality text response with empty content.
+		if client.provider.IsLocal && s.Confidence != nil && !req.NoEscalate && len(resp.ToolCalls) == 0 {
 			latency := time.Duration(latencyMs) * time.Millisecond
 			if !s.Confidence.IsConfident(resp.Content, latency) {
 				s.Escalation.RecordLocalEscalated()
