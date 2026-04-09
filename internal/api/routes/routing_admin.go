@@ -1,6 +1,7 @@
 package routes
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -84,12 +85,14 @@ func ExerciseModel(llmSvc *llm.Service, store *db.Store) http.HandlerFunc {
 			runID = db.NewID()
 		}
 
-		// Persist each result as it completes — survives interrupts.
+		// Persist each result as it completes — survives client disconnects.
+		// Uses background context so DB writes succeed even if the HTTP
+		// connection dies mid-exercise.
 		persistResult := llm.ExerciseCallback(func(index int, result llm.ExerciseResult) {
 			if store == nil {
 				return
 			}
-			_ = db.InsertExerciseResult(r.Context(), store, db.ExerciseResultRow{
+			_ = db.InsertExerciseResult(context.Background(), store, db.ExerciseResultRow{
 				ID:          db.NewID(),
 				RunID:       runID,
 				Model:       req.Model,
