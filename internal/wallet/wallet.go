@@ -199,7 +199,10 @@ func (w *Wallet) decrypt(data []byte) error {
 	}
 
 	// Fallback: try HKDF (legacy Rust format).
-	legacyKey := deriveKeyHKDF(w.cfg.Passphrase, salt)
+	legacyKey, hkdfErr := deriveKeyHKDF(w.cfg.Passphrase, salt)
+	if hkdfErr != nil {
+		return hkdfErr
+	}
 	if plaintext, err := decryptAESGCM(legacyKey, nonce, ciphertext); err == nil {
 		log.Warn().Msg("wallet decrypted with legacy HKDF; consider re-saving to upgrade to Argon2id")
 		return w.fromBytes(plaintext)
@@ -226,11 +229,13 @@ func deriveKeyArgon2id(passphrase string, salt []byte) []byte {
 }
 
 // deriveKeyHKDF matches Rust's derive_key_legacy_hkdf: HKDF-SHA256 with info "roboticus-wallet-encryption".
-func deriveKeyHKDF(passphrase string, salt []byte) []byte {
+func deriveKeyHKDF(passphrase string, salt []byte) ([]byte, error) {
 	h := hkdf.New(sha256.New, []byte(passphrase), salt, []byte("roboticus-wallet-encryption"))
 	key := make([]byte, 32)
-	_, _ = io.ReadFull(h, key)
-	return key
+	if _, err := io.ReadFull(h, key); err != nil {
+		return nil, fmt.Errorf("wallet: HKDF key derivation failed: %w", err)
+	}
+	return key, nil
 }
 
 // GetBalance queries the native balance via JSON-RPC.

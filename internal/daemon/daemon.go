@@ -334,9 +334,11 @@ type Daemon struct {
 	appState *api.AppState
 	eventBus *api.EventBus
 	bgWorker *core.BackgroundWorker
+	errBus   *core.ErrorBus
 
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	errBusCancel context.CancelFunc
+	cancel       context.CancelFunc
+	wg           sync.WaitGroup
 }
 
 // ServiceConfig returns the kardianos service configuration.
@@ -378,6 +380,15 @@ func New(cfg *core.Config) (*Daemon, error) {
 	}
 	bgWorker := core.NewBackgroundWorker(32)
 
+	// Centralized error bus — all subsystems report errors here instead of
+	// silently discarding them. Subscribers log, count, and surface errors.
+	errBusCtx, errBusCancel := context.WithCancel(context.Background())
+	logSub := &core.LogSubscriber{}
+	metricSub := core.NewMetricSubscriber()
+	ringBufSub := core.NewRingBufferSubscriber(1000)
+	errBus := core.NewErrorBus(errBusCtx, 256, logSub, metricSub, ringBufSub)
+	// errBusCancel stored in Daemon struct for shutdown ordering.
+
 	// Open keystore early so LLM providers can resolve API keys from it.
 	ks, ksErr := core.OpenKeystoreMachine()
 	if ksErr != nil {
@@ -398,8 +409,10 @@ func New(cfg *core.Config) (*Daemon, error) {
 		Primary:   cfg.Models.Primary,
 		Fallbacks: cfg.Models.Fallback,
 		BGWorker:  bgWorker,
+		ErrBus:    errBus,
 	}, store)
 	if err != nil {
+		errBusCancel()
 		_ = store.Close()
 		return nil, fmt.Errorf("daemon: init LLM: %w", err)
 	}
@@ -609,6 +622,7 @@ func New(cfg *core.Config) (*Daemon, error) {
 		Guards:     guards,
 		BGWorker:   bgWorker,
 		Embeddings: embedClient,
+		ErrBus:     errBus,
 	})
 
 	// Sync hippocampus schema registry.
@@ -653,14 +667,16 @@ func New(cfg *core.Config) (*Daemon, error) {
 	}
 
 	return &Daemon{
-		cfg:      cfg,
-		store:    store,
-		llm:      llmSvc,
-		pipe:     pipe,
-		router:   router,
-		appState: appState,
-		eventBus: eventBus,
-		bgWorker: bgWorker,
+		cfg:          cfg,
+		store:        store,
+		llm:          llmSvc,
+		pipe:         pipe,
+		router:       router,
+		appState:     appState,
+		eventBus:     eventBus,
+		bgWorker:     bgWorker,
+		errBus:       errBus,
+		errBusCancel: errBusCancel,
 	}, nil
 }
 
@@ -695,6 +711,12 @@ func (d *Daemon) Stop(s service.Service) error {
 	// Drain background worker pool.
 	if d.bgWorker != nil {
 		d.bgWorker.Drain(5 * time.Second)
+	}
+
+	// Drain error bus last — it processes events from all other subsystems,
+	// so it must be the last to shut down.
+	if d.errBus != nil {
+		d.errBus.Drain(3 * time.Second)
 	}
 
 	_ = d.store.Close()
@@ -763,7 +785,7 @@ func (d *Daemon) run() {
 					log.Error().Err(err).Str("job", job.Name).Msg("cron job pipeline failed")
 				}
 				return err
-			}))
+			}), d.errBus)
 		worker.Run(ctx)
 	}()
 

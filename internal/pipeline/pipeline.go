@@ -45,14 +45,15 @@ type Outcome struct {
 
 // Input is the raw request to the pipeline.
 type Input struct {
-	Content   string
-	SessionID string // empty for auto-resolution
-	AgentID   string
-	AgentName string
-	Platform  string // channel platform name
-	SenderID  string // channel sender identifier
-	ChatID    string // channel chat identifier
-	Claim     *ChannelClaimContext
+	Content       string
+	SessionID     string // empty for auto-resolution
+	AgentID       string
+	AgentName     string
+	Platform      string // channel platform name
+	SenderID      string // channel sender identifier
+	ChatID        string // channel chat identifier
+	ModelOverride string // force a specific model, bypassing router
+	Claim         *ChannelClaimContext
 }
 
 // Runner is the interface for executing the pipeline.
@@ -89,6 +90,7 @@ type Pipeline struct {
 	dedup      *DedupTracker
 	tasks      *TaskTracker
 	embeddings *llm.EmbeddingClient
+	errBus     *core.ErrorBus
 }
 
 // PipelineDeps bundles dependencies for the Pipeline.
@@ -105,6 +107,7 @@ type PipelineDeps struct {
 	Guards     *GuardChain
 	BGWorker   *core.BackgroundWorker
 	Embeddings *llm.EmbeddingClient
+	ErrBus     *core.ErrorBus
 }
 
 // New creates the unified pipeline.
@@ -128,6 +131,7 @@ func New(deps PipelineDeps) *Pipeline {
 		dedup:      NewDedupTracker(60 * time.Second),
 		tasks:      NewTaskTracker(),
 		embeddings: deps.Embeddings,
+		errBus:     deps.ErrBus,
 	}
 }
 
@@ -176,6 +180,11 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 	// Cron delegation wrap: prepend subagent directive for non-root cron tasks.
 	if cfg.CronDelegationWrap && input.AgentID != "" && input.AgentID != "default" {
 		input.Content = fmt.Sprintf("[Delegated to %s] %s", input.AgentID, input.Content)
+	}
+
+	// API-level model override takes precedence over config.
+	if input.ModelOverride != "" {
+		cfg.ModelOverride = input.ModelOverride
 	}
 
 	// Prefer local model: scan fallbacks for a local provider and set override.

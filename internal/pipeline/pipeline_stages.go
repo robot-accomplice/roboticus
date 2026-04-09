@@ -32,6 +32,11 @@ func (p *Pipeline) runStandardInference(ctx context.Context, cfg Config, session
 		}
 	}
 
+	// Thread model override into context for the LLM service to read.
+	if cfg.ModelOverride != "" {
+		ctx = core.WithModelOverride(ctx, cfg.ModelOverride)
+	}
+
 	result, turns, err := p.executor.RunLoop(ctx, session)
 	if err != nil {
 		return nil, core.WrapError(core.ErrLLM, "inference failed", err)
@@ -80,10 +85,12 @@ func (p *Pipeline) runStandardInference(ctx context.Context, cfg Config, session
 	}
 
 	// Update turn record with inference metadata.
-	_, _ = p.store.ExecContext(ctx,
+	if _, err := p.store.ExecContext(ctx,
 		`UPDATE turns SET tokens_in = ?, tokens_out = ?, model = ? WHERE id = ?`,
 		0, 0, "", turnID, // tokens are tracked in inference_costs
-	)
+	); err != nil {
+		p.errBus.ReportIfErr(err, "pipeline", "update_turn_metadata", core.SevWarning)
+	}
 
 	// Post-turn ingest (background, tracked by worker pool).
 	if cfg.PostTurnIngest && p.ingestor != nil {

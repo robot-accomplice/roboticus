@@ -44,7 +44,9 @@ func (ts *TicketStore) Issue() string {
 	defer ts.mu.Unlock()
 
 	b := make([]byte, 32) // 256-bit entropy for stronger ticket security
-	_, _ = rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		panic("ws_ticket: crypto/rand failed: " + err.Error())
+	}
 	token := "wst_" + hex.EncodeToString(b)
 	ts.tickets[token] = time.Now().Add(ts.ttl)
 	return token

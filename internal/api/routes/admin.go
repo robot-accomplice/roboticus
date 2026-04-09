@@ -571,7 +571,9 @@ func WebhookWhatsAppVerify(verifyToken string) http.HandlerFunc {
 		}
 
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(challenge))
+		if _, err := w.Write([]byte(challenge)); err != nil {
+			log.Trace().Err(err).Msg("webhook: challenge response write failed")
+		}
 	}
 }
 

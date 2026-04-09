@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/rs/zerolog/log"
 )
 
 // Installer handles skill installation, activation, and filesystem management.
@@ -39,11 +41,13 @@ func (si *Installer) Install(ctx context.Context, name, content string) (string,
 	// Register in database.
 	if si.store != nil {
 		id := NewID()
-		_, _ = si.store.ExecContext(ctx,
+		if _, err := si.store.ExecContext(ctx,
 			`INSERT INTO skills (id, name, kind, source_path, content_hash, enabled, version, risk_level)
 			 VALUES (?, ?, 'instruction', ?, '', 1, '1.0.0', 'Safe')
 			 ON CONFLICT(name) DO UPDATE SET source_path = excluded.source_path`,
-			id, name, path)
+			id, name, path); err != nil {
+			log.Warn().Err(err).Str("skill", name).Msg("skills: failed to register in database")
+		}
 	}
 
 	return path, nil

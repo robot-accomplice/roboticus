@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -160,7 +161,9 @@ var modelsScanCmd = &cobra.Command{
 			// Offer to add to config.
 			fmt.Print("  Add discovered models to your config? [y/N] ")
 			var input string
-			_, _ = fmt.Scanln(&input)
+			if _, err := fmt.Scanln(&input); err != nil && err.Error() != "unexpected newline" {
+				fmt.Fprintf(os.Stderr, "  (stdin read error: %v)\n", err)
+			}
 			if strings.ToLower(input) == "y" || strings.ToLower(input) == "yes" {
 				// Set the first as primary, rest as fallbacks.
 				if len(allDiscovered) > 0 {
@@ -178,7 +181,9 @@ var modelsScanCmd = &cobra.Command{
 				}
 			} else {
 				fmt.Print("  Print TOML snippet instead? [Y/n] ")
-				_, _ = fmt.Scanln(&input)
+				if _, err := fmt.Scanln(&input); err != nil && err.Error() != "unexpected newline" {
+				fmt.Fprintf(os.Stderr, "  (stdin read error: %v)\n", err)
+			}
 				if input == "" || strings.ToLower(input) == "y" || strings.ToLower(input) == "yes" {
 					fmt.Println("  [models]")
 					if len(allDiscovered) > 0 {
@@ -368,15 +373,20 @@ var modelsExerciseCmd = &cobra.Command{
 			model = args[0]
 		}
 
+		// Fetch config for per-model timeout resolution.
+		exerciseCfg, _ := apiGet("/api/config")
+		exerciseTimeout := resolveModelTimeout(exerciseCfg, model)
+
 		fmt.Println()
-		fmt.Printf("  Exercising %s with %d prompts across 4 intent classes...\n\n",
+		fmt.Printf("  Exercising %s with %d prompts across 4 intent classes (timeout: %s)...\n\n",
 			func() string {
 				if model != "" {
 					return model
 				}
 				return "default model"
 			}(),
-			len(llm.ExerciseMatrix))
+			len(llm.ExerciseMatrix),
+			exerciseTimeout)
 
 		// Per-intent-class tracking.
 		type intentStats struct {
@@ -395,7 +405,7 @@ var modelsExerciseCmd = &cobra.Command{
 				body["model"] = model
 			}
 			start := time.Now()
-			resp, err := apiPost("/api/agent/message", body)
+			resp, err := apiPostSlow("/api/agent/message", body, exerciseTimeout)
 			latencyMs := time.Since(start).Milliseconds()
 
 			prefix := fmt.Sprintf("  [%2d/%d] %-15s C%d", i+1, len(llm.ExerciseMatrix), ep.Intent, ep.Complexity)
@@ -631,7 +641,9 @@ per-intent-class latency scorecard and 6-axis metascore dimension reporting.`,
 		fmt.Printf("\n  This will flush all quality scores and exercise each model\n  with %d prompts x %d iteration(s) = %d calls per model.\n  Proceed? [Y/n] ",
 			len(llm.ExerciseMatrix), iterations, totalPrompts)
 		var input string
-		_, _ = fmt.Scanln(&input)
+		if _, err := fmt.Scanln(&input); err != nil && err.Error() != "unexpected newline" {
+			fmt.Fprintf(os.Stderr, "  (stdin read error: %v)\n", err)
+		}
 		if input != "" && input != "y" && input != "Y" && input != "yes" {
 			fmt.Println("  Cancelled.")
 			return nil
@@ -658,7 +670,8 @@ per-intent-class latency scorecard and 6-axis metascore dimension reporting.`,
 		var results []modelResult
 
 		for _, model := range configured {
-			fmt.Printf("  --- %s ---\n", model)
+			modelTimeout := resolveModelTimeout(config, model)
+			fmt.Printf("  --- %s (timeout: %s) ---\n", model, modelTimeout)
 			mr := modelResult{
 				model:     model,
 				latencies: make(map[string][]int64),
@@ -681,15 +694,15 @@ per-intent-class latency scorecard and 6-axis metascore dimension reporting.`,
 					label := fmt.Sprintf("[%d/%d] %s:C%d", n, totalPrompts, ep.Intent, ep.Complexity)
 
 					body := map[string]any{
-						"content":        ep.Prompt,
-						"model_override": model,
+						"content": ep.Prompt,
+						"model":   model,
 					}
 					if sessionID != "" {
 						body["session_id"] = sessionID
 					}
 
 					start := time.Now()
-					resp, err := apiPost("/api/agent/message", body)
+					resp, err := apiPostSlow("/api/agent/message", body, modelTimeout)
 					latencyMs := time.Since(start).Milliseconds()
 
 					if err != nil {
@@ -699,6 +712,23 @@ per-intent-class latency scorecard and 6-axis metascore dimension reporting.`,
 					}
 
 					content := fmt.Sprintf("%v", resp["content"])
+					respModel := fmt.Sprintf("%v", resp["model"])
+
+					// Detect model mismatch: if a fallback responded instead of the target,
+					// the baseline data is contaminated and this prompt must count as a fail.
+					if respModel != "" && respModel != "<nil>" && respModel != model {
+						// Extract just the model name (strip provider prefix for comparison).
+						_, targetName := splitModelForDisplay(model)
+						if targetName == "" {
+							targetName = model
+						}
+						if respModel != targetName {
+							mr.fail++
+							fmt.Printf("    %s FAIL: model mismatch (wanted %s, got %s)\n", label, model, respModel)
+							continue
+						}
+					}
+
 					if content != "" && content != "<nil>" {
 						mr.pass++
 						mr.latencies[ep.Intent.String()] = append(mr.latencies[ep.Intent.String()], latencyMs)
@@ -813,6 +843,44 @@ func sumInt64s(s []int64) int64 {
 		total += v
 	}
 	return total
+}
+
+// resolveModelTimeout determines the HTTP client timeout for a model based on config.
+// Priority: model_overrides[model].timeout_seconds > is_local (300s) > cloud default (120s).
+func resolveModelTimeout(config map[string]any, model string) time.Duration {
+	// Check explicit per-model timeout override.
+	if models, ok := config["models"].(map[string]any); ok {
+		if overrides, ok := models["model_overrides"].(map[string]any); ok {
+			if mo, ok := overrides[model].(map[string]any); ok {
+				if ts, ok := mo["timeout_seconds"].(float64); ok && ts > 0 {
+					return time.Duration(ts) * time.Second
+				}
+			}
+		}
+	}
+
+	// Determine if the model's provider is local.
+	providerName, _ := splitModelForDisplay(model)
+	if providerName != "" {
+		if providers, ok := config["providers"].(map[string]any); ok {
+			if prov, ok := providers[providerName].(map[string]any); ok {
+				if isLocal, ok := prov["is_local"].(bool); ok && isLocal {
+					return 300 * time.Second // 5 min for local models (cold start, limited hardware)
+				}
+			}
+		}
+	}
+
+	return 120 * time.Second // 2 min for cloud models
+}
+
+// splitModelForDisplay splits "provider/model" into (provider, model).
+// Returns ("", input) if no slash present.
+func splitModelForDisplay(spec string) (string, string) {
+	if i := strings.Index(spec, "/"); i >= 0 {
+		return spec[:i], spec[i+1:]
+	}
+	return "", spec
 }
 
 func init() {

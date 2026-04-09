@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
+	"github.com/rs/zerolog/log"
 )
 
 var (
@@ -329,6 +330,7 @@ type ModelOverride struct {
 	Temperature float64 `json:"temperature,omitempty" mapstructure:"temperature"`
 	TopP        float64 `json:"top_p,omitempty" mapstructure:"top_p"`
 	Provider    string  `json:"provider,omitempty" mapstructure:"provider"`
+	TimeoutSecs int     `json:"timeout_seconds,omitempty" mapstructure:"timeout_seconds"`
 }
 
 // DefaultConfig returns a Config with sensible defaults.
@@ -728,11 +730,17 @@ func parseBundledProviders() map[string]ProviderConfig {
 		case "embedding_model":
 			cfg.EmbeddingModel = val
 		case "embedding_dimensions":
-			_, _ = fmt.Sscanf(val, "%d", &cfg.EmbeddingDimensions)
+			if _, err := fmt.Sscanf(val, "%d", &cfg.EmbeddingDimensions); err != nil {
+				log.Warn().Err(err).Str("key", "embedding_dimensions").Str("val", val).Msg("config: invalid integer")
+			}
 		case "cost_per_input_token":
-			_, _ = fmt.Sscanf(val, "%f", &cfg.CostPerInputToken)
+			if _, err := fmt.Sscanf(val, "%f", &cfg.CostPerInputToken); err != nil {
+				log.Warn().Err(err).Str("key", "cost_per_input_token").Str("val", val).Msg("config: invalid float")
+			}
 		case "cost_per_output_token":
-			_, _ = fmt.Sscanf(val, "%f", &cfg.CostPerOutputToken)
+			if _, err := fmt.Sscanf(val, "%f", &cfg.CostPerOutputToken); err != nil {
+				log.Warn().Err(err).Str("key", "cost_per_output_token").Str("val", val).Msg("config: invalid float")
+			}
 		}
 	}
 	if current != "" {

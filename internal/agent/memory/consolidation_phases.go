@@ -235,9 +235,11 @@ func (p *ConsolidationPipeline) phaseEpisodicPromotion(ctx context.Context, stor
 
 		// Mark episodic entries as promoted.
 		for _, idx := range group {
-			_, _ = store.ExecContext(ctx,
+			if _, err := store.ExecContext(ctx,
 				`UPDATE episodic_memory SET memory_state = 'promoted', state_reason = 'consolidated to semantic'
-				 WHERE id = ?`, entries[idx].id)
+				 WHERE id = ?`, entries[idx].id); err != nil {
+				log.Warn().Err(err).Str("id", entries[idx].id).Msg("consolidation: failed to mark episodic as promoted")
+			}
 		}
 		promoted++
 	}
@@ -283,8 +285,10 @@ func (p *ConsolidationPipeline) phaseConfidenceDecay(ctx context.Context, store 
 	_ = rows.Close()
 
 	for _, u := range updates {
-		_, _ = store.ExecContext(ctx,
-			`UPDATE semantic_memory SET confidence = ? WHERE id = ?`, u.newConfidence, u.id)
+		if _, err := store.ExecContext(ctx,
+			`UPDATE semantic_memory SET confidence = ? WHERE id = ?`, u.newConfidence, u.id); err != nil {
+			log.Warn().Err(err).Str("id", u.id).Msg("consolidation: confidence decay write failed")
+		}
 	}
 	return len(updates)
 }
@@ -330,8 +334,10 @@ func (p *ConsolidationPipeline) phaseImportanceDecay(ctx context.Context, store 
 	_ = rows.Close()
 
 	for _, u := range updates {
-		_, _ = store.ExecContext(ctx,
-			`UPDATE episodic_memory SET importance = ? WHERE id = ?`, u.newImportance, u.id)
+		if _, err := store.ExecContext(ctx,
+			`UPDATE episodic_memory SET importance = ? WHERE id = ?`, u.newImportance, u.id); err != nil {
+			log.Warn().Err(err).Str("id", u.id).Msg("consolidation: importance decay write failed")
+		}
 	}
 	return len(updates)
 }

@@ -9,6 +9,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"roboticus/internal/core"
 	"roboticus/internal/db"
 )
 
@@ -357,11 +358,13 @@ func (p *Pipeline) recordShortcutCost(ctx context.Context, turnID, sessionID, ch
 	if p.store == nil {
 		return
 	}
-	_, _ = p.store.ExecContext(ctx,
+	if _, err := p.store.ExecContext(ctx,
 		`INSERT INTO inference_costs (id, model, provider, tokens_in, tokens_out, cost, tier, turn_id, created_at)
 		 VALUES (?, 'shortcut', 'shortcut', 0, 0, 0.0, 'shortcut', ?, datetime('now'))`,
 		db.NewID(), turnID,
-	)
+	); err != nil {
+		p.errBus.ReportIfErr(err, "pipeline", "record_shortcut_cost", core.SevWarning)
+	}
 }
 
 // ── Context Checkpointing ───────────────────────────────────────────────────

@@ -10,6 +10,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"roboticus/internal/core"
 	"roboticus/internal/db"
 )
 
@@ -25,7 +26,8 @@ type Cache struct {
 	order   []string               // LRU eviction order
 	maxSize int
 	ttl     time.Duration
-	store   *db.Store // L2: persistent
+	store  *db.Store // L2: persistent
+	errBus *core.ErrorBus
 }
 
 type cacheEntry struct {
@@ -53,12 +55,13 @@ func DefaultCacheConfig() CacheConfig {
 }
 
 // NewCache creates a two-tier cache.
-func NewCache(cfg CacheConfig, store *db.Store) *Cache {
+func NewCache(cfg CacheConfig, store *db.Store, errBus *core.ErrorBus) *Cache {
 	return &Cache{
 		mem:     make(map[string]*cacheEntry),
 		maxSize: cfg.MaxEntries,
 		ttl:     cfg.TTL,
 		store:   store,
+		errBus:  errBus,
 	}
 }
 
@@ -117,8 +120,10 @@ func (c *Cache) Get(ctx context.Context, req *Request) *Response {
 	c.put(hash, &resp, created)
 
 	// Update hit count.
-	_, _ = c.store.ExecContext(ctx,
-		`UPDATE semantic_cache SET hit_count = hit_count + 1 WHERE prompt_hash = ?`, hash)
+	if _, err := c.store.ExecContext(ctx,
+		`UPDATE semantic_cache SET hit_count = hit_count + 1 WHERE prompt_hash = ?`, hash); err != nil {
+		c.errBus.ReportIfErr(err, "llm", "cache_update_hit_count", core.SevDebug)
+	}
 
 	log.Trace().Str("hash", hash[:12]).Msg("cache hit (L2)")
 	return &resp
@@ -145,12 +150,14 @@ func (c *Cache) Put(ctx context.Context, req *Request, resp *Response) {
 	expires := now.Add(c.ttl).Format(time.RFC3339)
 	tokensSaved := resp.Usage.InputTokens + resp.Usage.OutputTokens
 
-	_, _ = c.store.ExecContext(ctx,
+	if _, err := c.store.ExecContext(ctx,
 		`INSERT OR REPLACE INTO semantic_cache
 		 (id, prompt_hash, response, model, tokens_saved, hit_count, created_at, expires_at)
 		 VALUES (?, ?, ?, ?, ?, 0, datetime('now'), ?)`,
 		id, hash, string(respJSON), resp.Model, tokensSaved, expires,
-	)
+	); err != nil {
+		c.errBus.ReportIfErr(err, "llm", "cache_persist", core.SevWarning)
+	}
 }
 
 // put adds an entry to L1 with LFU eviction (no tools flag).
@@ -230,12 +237,14 @@ func (c *Cache) PutWithEmbedding(ctx context.Context, req *Request, resp *Respon
 	id := hash[:32]
 	expires := now.Add(c.ttl).Format(time.RFC3339)
 	tokensSaved := resp.Usage.InputTokens + resp.Usage.OutputTokens
-	_, _ = c.store.ExecContext(ctx,
+	if _, err := c.store.ExecContext(ctx,
 		`INSERT OR REPLACE INTO semantic_cache
 		 (id, prompt_hash, response, model, tokens_saved, hit_count, created_at, expires_at)
 		 VALUES (?, ?, ?, ?, ?, 0, datetime('now'), ?)`,
 		id, hash, string(respJSON), resp.Model, tokensSaved, expires,
-	)
+	); err != nil {
+		c.errBus.ReportIfErr(err, "llm", "cache_persist", core.SevWarning)
+	}
 }
 
 // GetSemantic searches L1 cache entries by cosine similarity against the given

@@ -31,7 +31,7 @@ func tempStore(t *testing.T) *db.Store {
 
 func TestCache_L2_PutAndGet(t *testing.T) {
 	store := tempStore(t)
-	c := NewCache(CacheConfig{Enabled: true, MaxEntries: 100, TTL: time.Hour}, store)
+	c := NewCache(CacheConfig{Enabled: true, MaxEntries: 100, TTL: time.Hour}, store, nil)
 	ctx := context.Background()
 
 	req := &Request{Model: "gpt-4", Messages: []Message{{Role: "user", Content: "L2 cache test"}}}
@@ -74,7 +74,7 @@ func TestCache_L2_PutAndGet(t *testing.T) {
 func TestCache_L2_Expiry(t *testing.T) {
 	store := tempStore(t)
 	// Very short TTL to test expiry.
-	c := NewCache(CacheConfig{Enabled: true, MaxEntries: 100, TTL: 100 * time.Millisecond}, store)
+	c := NewCache(CacheConfig{Enabled: true, MaxEntries: 100, TTL: 100 * time.Millisecond}, store, nil)
 	ctx := context.Background()
 
 	req := &Request{Model: "m", Messages: []Message{{Role: "user", Content: "expire-test"}}}
@@ -95,7 +95,7 @@ func TestCache_L2_Expiry(t *testing.T) {
 
 func TestCache_L2_PutWithTools(t *testing.T) {
 	store := tempStore(t)
-	c := NewCache(CacheConfig{Enabled: true, MaxEntries: 100, TTL: time.Hour}, store)
+	c := NewCache(CacheConfig{Enabled: true, MaxEntries: 100, TTL: time.Hour}, store, nil)
 	ctx := context.Background()
 
 	req := &Request{

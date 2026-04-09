@@ -40,13 +40,14 @@ func AgentMessage(p pipeline.Runner, agentName string, bus ...EventPublisher) ht
 		}
 
 		input := pipeline.Input{
-			Content:   req.Content,
-			SessionID: req.SessionID,
-			AgentID:   req.AgentID,
-			AgentName: agentName,
-			Platform:  platform,
-			SenderID:  req.SenderID,
-			ChatID:    req.GroupID,
+			Content:       req.Content,
+			SessionID:     req.SessionID,
+			AgentID:       req.AgentID,
+			AgentName:     agentName,
+			Platform:      platform,
+			SenderID:      req.SenderID,
+			ChatID:        req.GroupID,
+			ModelOverride: req.Model,
 		}
 
 		outcome, err := pipeline.RunPipeline(r.Context(), p, pipeline.PresetAPI(), input)
@@ -156,7 +157,10 @@ func AgentMessageStream(p pipeline.Runner, llmSvc *llm.Service, agentName string
 		for chunk := range chunks {
 			fullContent.WriteString(chunk.Delta)
 			data, _ := json.Marshal(map[string]string{"delta": chunk.Delta})
-			_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
+			if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
+				log.Trace().Err(err).Msg("stream: SSE chunk write failed")
+				return
+			}
 			flusher.Flush()
 		}
 
@@ -165,13 +169,17 @@ func AgentMessageStream(p pipeline.Runner, llmSvc *llm.Service, agentName string
 		case streamErr := <-errs:
 			if streamErr != nil {
 				data, _ := json.Marshal(map[string]string{"error": streamErr.Error()})
-				_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
+				if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
+					log.Trace().Err(err).Msg("stream: SSE error write failed")
+				}
 				flusher.Flush()
 			}
 		default:
 		}
 
-		_, _ = fmt.Fprintf(w, "data: [DONE]\n\n")
+		if _, err := fmt.Fprintf(w, "data: [DONE]\n\n"); err != nil {
+			log.Trace().Err(err).Msg("stream: SSE done write failed")
+		}
 		flusher.Flush()
 
 		// Post-stream finalization: run the same post-turn work that standard

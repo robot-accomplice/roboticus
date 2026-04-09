@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -37,6 +38,7 @@ type Service struct {
 	quality       *QualityTracker
 	intentQuality *IntentQualityTracker
 	latency       *LatencyTracker
+	errBus        *core.ErrorBus
 }
 
 // ServiceConfig holds configuration for the LLM service.
@@ -49,6 +51,7 @@ type ServiceConfig struct {
 	Router          RouterConfig
 	ConfidenceFloor float64                // minimum confidence to accept local response (0 = use default)
 	BGWorker        *core.BackgroundWorker // shared worker pool for async tasks
+	ErrBus          *core.ErrorBus         // centralized error reporting
 }
 
 // NewService creates the LLM orchestrator.
@@ -116,7 +119,7 @@ func NewService(cfg ServiceConfig, store *db.Store) (*Service, error) {
 		providers:     clients,
 		router:        NewRouter(targets, cfg.Router),
 		breakers:      NewBreakerRegistry(cfg.Breaker),
-		cache:         NewCache(cfg.Cache, store),
+		cache:         NewCache(cfg.Cache, store, cfg.ErrBus),
 		dedup:         NewDedup(2000), // 2s dedup window
 		transforms:    DefaultTransformPipeline(),
 		primary:       cfg.Primary,
@@ -128,6 +131,7 @@ func NewService(cfg ServiceConfig, store *db.Store) (*Service, error) {
 		quality:       NewQualityTracker(100),
 		intentQuality: NewIntentQualityTracker(100),
 		latency:       NewLatencyTracker(100),
+		errBus:        cfg.ErrBus,
 	}
 
 	// Metascore routing is always enabled when the service has quality/latency
@@ -154,6 +158,11 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 		if cached := s.cache.Get(ctx, req); cached != nil {
 			return cached, nil
 		}
+	}
+
+	// Context-level model override (set by pipeline when API caller specifies a model).
+	if override := core.ModelOverrideFromCtx(ctx); override != "" && req.Model == "" {
+		req.Model = override
 	}
 
 	// Route: select model if not explicitly set.
@@ -261,7 +270,14 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 		resp, err := client.Complete(ctx, &inferReq)
 		latencyMs := time.Since(start).Milliseconds()
 		if err != nil {
-			cb.RecordFailure()
+			// Distinguish credit/billing errors from transient failures.
+			// Credit errors permanently trip the breaker until manual reset.
+			if errors.Is(err, core.ErrCreditExhausted) {
+				cb.RecordCreditError()
+				log.Error().Str("provider", pm.provider).Msg("provider credit exhausted — circuit breaker tripped permanently")
+			} else {
+				cb.RecordFailure()
+			}
 			lastErr = err
 			log.Warn().Err(err).Str("provider", pm.provider).Str("model", pm.model).Msg("provider failed, trying next")
 			continue
@@ -671,7 +687,14 @@ func (s *Service) recordCostWithMeta(ctx context.Context, providerName string, r
 		tier, meta.Latency, meta.Quality, escalated, meta.TurnID, cached,
 	)
 	if err != nil {
-		log.Warn().Err(err).Str("model", resp.Model).Str("provider", providerName).Msg("failed to record inference cost")
+		s.errBus.ReportEvent(core.ErrorEvent{
+			Subsystem: "llm",
+			Op:        "record_cost",
+			Err:       err,
+			Severity:  core.SevWarning,
+			Model:     resp.Model,
+			Metadata:  map[string]string{"provider": providerName, "turn_id": meta.TurnID},
+		})
 	}
 }
 
@@ -706,12 +729,14 @@ func (s *Service) RecordModelSelection(ctx context.Context, turnID, sessionID, a
 	if len(excerpt) > 200 {
 		excerpt = excerpt[:200]
 	}
-	_, _ = s.store.ExecContext(ctx,
+	if _, err := s.store.ExecContext(ctx,
 		`INSERT INTO model_selection_events (id, turn_id, session_id, agent_id, channel, selected_model, strategy, primary_model, user_excerpt, candidates_json, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', datetime('now'))`,
 		fmt.Sprintf("mse-%s", turnID), turnID, sessionID, agentID, channel,
 		selectedModel, strategy, primary, excerpt,
-	)
+	); err != nil {
+		s.errBus.ReportIfErr(err, "llm", "record_selection_event", core.SevDebug)
+	}
 }
 
 // ProviderStatus reports the health of each configured provider.

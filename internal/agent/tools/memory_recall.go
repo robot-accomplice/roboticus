@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/rs/zerolog/log"
+
 	"roboticus/internal/db"
 )
 
@@ -128,9 +130,11 @@ func (t *MemoryRecallTool) Execute(ctx context.Context, argsJSON string, tctx *C
 	content["id"] = sourceID
 
 	// Reinforce confidence — active recall prevents decay (Rust parity).
-	_, _ = t.store.ExecContext(ctx,
+	if _, err := t.store.ExecContext(ctx,
 		`UPDATE memory_index SET confidence = 1.0, last_verified = datetime('now')
-		 WHERE source_table = ? AND source_id = ?`, sourceTable, sourceID)
+		 WHERE source_table = ? AND source_id = ?`, sourceTable, sourceID); err != nil {
+		log.Warn().Err(err).Str("source", sourceTable).Str("id", sourceID).Msg("recall: confidence reinforce failed")
+	}
 
 	b, _ := json.MarshalIndent(content, "", "  ")
 	return &Result{Output: string(b), Source: "builtin"}, nil

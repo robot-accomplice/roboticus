@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rs/zerolog/log"
+
 	"roboticus/internal/db"
 	"roboticus/internal/llm"
 )
@@ -46,7 +48,9 @@ func GetRoutingDataset(store *db.Store) http.HandlerFunc {
 				return
 			}
 			w.Header().Set("Content-Type", "text/tab-separated-values; charset=utf-8")
-			_, _ = fmt.Fprint(w, routingDatasetTSV(rows))
+			if _, err := fmt.Fprint(w, routingDatasetTSV(rows)); err != nil {
+				log.Trace().Err(err).Msg("routing_admin: TSV response write failed")
+			}
 			return
 		}
 
