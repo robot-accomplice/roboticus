@@ -83,13 +83,15 @@ func buildAgentContext(ctx context.Context, sess *session.Session, tools *agent.
 		Int("personality_len", len(cfg.Personality)).
 		Int("firmware_len", len(cfg.Firmware)).
 		Int("prompt_len", len(systemPrompt)).
-		Int("tools", func() int {
+		Int("tool_defs", func() int {
 			if tools != nil {
 				return len(tools.ToolDefs())
 			}
 			return 0
 		}()).
+		Int("tool_names_in_prompt", len(cfg.ToolNames)).
 		Bool("has_retriever", retriever != nil).
+		Bool("prompt_has_must_use", strings.Contains(systemPrompt, "MUST use them")).
 		Msg("context built for inference")
 	ctxBuilder.SetSystemPrompt(systemPrompt)
 
