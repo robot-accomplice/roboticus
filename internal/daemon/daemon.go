@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -82,6 +83,17 @@ func buildAgentContext(ctx context.Context, sess *session.Session, tools *agent.
 		cfg.AgentName = sess.AgentName
 	}
 	systemPrompt := agent.BuildSystemPrompt(cfg)
+
+	// HMAC trust boundary: wrap system prompt so model output verification
+	// can detect forged prompt injections (Rust parity).
+	if len(cfg.BoundaryKey) > 0 {
+		systemPrompt = agent.TagContent(systemPrompt, cfg.BoundaryKey)
+		// Sanity check: verify immediately after injection (matches Rust).
+		if _, ok := agent.VerifyHMACBoundary(systemPrompt, cfg.BoundaryKey); !ok {
+			log.Error().Msg("HMAC boundary verification failed immediately after injection")
+		}
+	}
+
 	log.Info().
 		Str("agent_name", cfg.AgentName).
 		Int("personality_len", len(cfg.Personality)).
@@ -540,6 +552,10 @@ func New(cfg *core.Config) (*Daemon, error) {
 	for _, s := range loadedSkills {
 		skillNames = append(skillNames, s.Name())
 	}
+	// Generate stable HMAC boundary key from agent identity (Rust parity).
+	// Key is deterministic so verification works across restarts.
+	boundaryKey := deriveBoundaryKey(cfg.Agent.Name, cfg.Agent.Workspace)
+
 	basePromptCfg := agent.PromptConfig{
 		AgentName:   cfg.Agent.Name,
 		Firmware:    core.FormatFirmwareRules(fwCfg),
@@ -551,6 +567,7 @@ func New(cfg *core.Config) (*Daemon, error) {
 		Model:       cfg.Models.Primary,
 		ToolNames:   tools.Names(),
 		ToolDescs:   tools.NamesWithDescriptions(),
+		BoundaryKey: boundaryKey,
 	}
 	log.Info().
 		Str("agent", cfg.Agent.Name).
@@ -1221,6 +1238,13 @@ func (d *Daemon) handleInbound(ctx context.Context, msg channel.InboundMessage) 
 	if result.Content != "" {
 		_ = d.router.SendReply(ctx, msg.Platform, msg.ChatID, result.Content)
 	}
+}
+
+// deriveBoundaryKey generates a stable HMAC key from agent identity.
+// Deterministic: same agent+workspace always produces the same key.
+func deriveBoundaryKey(agentName, workspace string) []byte {
+	h := sha256.Sum256([]byte("roboticus-boundary:" + agentName + ":" + workspace))
+	return h[:]
 }
 
 // isSenderAllowed checks whether a channel message sender is trusted.
