@@ -47,6 +47,7 @@ type Message struct {
 	ToolCallID   string          `json:"tool_call_id,omitempty"`
 	Name         string          `json:"name,omitempty"`
 	Metadata     json.RawMessage `json:"metadata,omitempty"`
+	TopicTag     string          `json:"-"` // Set by pipeline; not sent to provider.
 }
 
 // ToolCall represents a tool invocation requested by the model.

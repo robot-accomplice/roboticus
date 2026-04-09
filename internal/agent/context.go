@@ -174,9 +174,39 @@ func (cb *ContextBuilder) BuildRequest(session *Session) *llm.Request {
 
 	remaining := budget - sysTokCount - memTokCount - toolTokCount
 
-	// Calculate total message token cost.
+	// Topic-aware compression (Rust parity): partition messages by topic.
+	// Off-topic blocks get summarized; current-topic messages kept in full.
+	currentTopic := ""
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "user" && messages[i].TopicTag != "" {
+			currentTopic = messages[i].TopicTag
+			break
+		}
+	}
+
+	currentTopicMsgs, offTopicBlocks := PartitionByTopic(messages, currentTopic)
+
+	// Inject off-topic summaries as system notes (cheap, ~20 tokens each).
+	var topicSummaries []llm.Message
+	for _, block := range offTopicBlocks {
+		summary := SummarizeTopicBlock(block)
+		topicSummaries = append(topicSummaries, llm.Message{
+			Role:    "system",
+			Content: summary,
+		})
+	}
+
+	// Use current-topic messages for the main history budget.
+	// Off-topic summaries are prepended (small, fixed cost).
+	summaryTokens := 0
+	for _, s := range topicSummaries {
+		summaryTokens += cb.estimateTokens(s.Content)
+	}
+	remaining -= summaryTokens
+
+	// Calculate total message token cost (current-topic only).
 	totalMsgTokens := 0
-	for _, m := range messages {
+	for _, m := range currentTopicMsgs {
 		totalMsgTokens += cb.estimateTokens(m.Content)
 	}
 
@@ -184,12 +214,12 @@ func (cb *ContextBuilder) BuildRequest(session *Session) *llm.Request {
 	ratio := float64(totalMsgTokens) / float64(max(remaining, 1))
 	stage := stageFromExcess(ratio)
 
-	// Load messages newest-first within budget.
+	// Load current-topic messages newest-first within budget.
 	var historyMessages []llm.Message
 	usedTokens := 0
 
-	for i := len(messages) - 1; i >= 0; i-- {
-		m := messages[i]
+	for i := len(currentTopicMsgs) - 1; i >= 0; i-- {
+		m := currentTopicMsgs[i]
 		content := cb.compact(m, stage)
 		tokens := cb.estimateTokens(content)
 
@@ -229,6 +259,8 @@ func (cb *ContextBuilder) BuildRequest(session *Session) *llm.Request {
 		historyMessages = append(historyMessages[:insertIdx], append([]llm.Message{reminder}, historyMessages[insertIdx:]...)...)
 	}
 
+	// Inject off-topic summaries before current-topic history.
+	result = append(result, topicSummaries...)
 	result = append(result, historyMessages...)
 
 	return &llm.Request{
