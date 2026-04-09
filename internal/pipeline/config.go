@@ -88,6 +88,13 @@ type Config struct {
 }
 
 // PresetAPI returns the standard API preset (full pipeline, standard inference).
+// PresetAPI returns the standard HTTP API preset (full pipeline, creator authority).
+//
+// Stage rationale for non-default values:
+//   SpecialistControls: false  — API clients manage their own specialist UX
+//   SkillFirstEnabled:  false  — skill-first routing only for interactive channels
+//   NicknameRefinement: true   — web sessions display nicknames
+//   InjectDiagnostics:  true   — API clients benefit from diagnostic hints
 func PresetAPI() Config {
 	return Config{
 		InjectionDefense:       true,
@@ -111,7 +118,13 @@ func PresetAPI() Config {
 	}
 }
 
-// PresetStreaming returns the streaming API preset (SSE, reduced guards).
+// PresetStreaming returns the SSE streaming preset (reduced guards, no nickname).
+//
+// Stage rationale for non-default values:
+//   GuardSet:           GuardSetStream (6 guards) — retry-capable guards excluded from streaming
+//   NicknameRefinement: false  — can't update session nickname mid-stream
+//   SkillFirstEnabled:  false  — skill-first routing only for interactive channels
+//   SpecialistControls: false  — API clients manage their own specialist UX
 func PresetStreaming() Config {
 	return Config{
 		InjectionDefense:       true,
@@ -136,6 +149,12 @@ func PresetStreaming() Config {
 }
 
 // PresetChannel returns the channel adapter preset (full pipeline, channel auth).
+//
+// Stage rationale for non-default values:
+//   SpecialistControls: true   — channels have interactive specialist creation UX
+//   SkillFirstEnabled:  true   — trigger-based skills on channel interactions
+//   NicknameRefinement: false  — channels don't show session nicknames
+//   InjectDiagnostics:  false  — diagnostic hints are API-specific
 func PresetChannel(platform string) Config {
 	return Config{
 		InjectionDefense:       true,
@@ -159,7 +178,17 @@ func PresetChannel(platform string) Config {
 	}
 }
 
-// PresetCron returns the cron/scheduled task preset (self-generated authority, no dedup).
+// PresetCron returns the scheduled task preset (self-generated authority, minimal).
+//
+// Stage rationale for non-default values:
+//   DedupTracking:      false  — scheduler guarantees uniqueness
+//   DelegatedExecution: false  — cron tasks are self-contained
+//   SpecialistControls: false  — no interactive specialist creation UX
+//   ShortcutsEnabled:   false  — cron tasks are machine-generated; ack shortcuts don't apply
+//   SkillFirstEnabled:  false  — cron tasks are self-contained
+//   NicknameRefinement: false  — cron sessions are ephemeral
+//   InjectDiagnostics:  false  — no user to see diagnostics
+//   CronDelegationWrap: true   — prepend subagent delegation context
 func PresetCron() Config {
 	return Config{
 		InjectionDefense:       true,

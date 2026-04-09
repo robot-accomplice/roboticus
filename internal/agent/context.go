@@ -105,21 +105,30 @@ func (cb *ContextBuilder) BuildRequest(session *Session) *llm.Request {
 		result = append(result, sysMsg)
 	}
 
-	// Inject memory as second system message if present.
+	// Inject memory (capped at 25% of budget, matching Rust: l0 / 4).
+	// Memory is always present — buildAgentContext guarantees at least an
+	// orientation block even when retrieval returns empty.
 	memTokCount := 0
+	memCap := budget / 4
 	if cb.memory != "" {
-		memMsg := llm.Message{Role: "system", Content: cb.memory}
-		memTokCount = cb.estimateTokens(cb.memory)
-		result = append(result, memMsg)
+		memTokens := cb.estimateTokens(cb.memory)
+		if memTokens > memCap {
+			// Truncate memory to fit within cap (rough char-based truncation).
+			maxChars := memCap * cb.config.CharsPerToken
+			if maxChars < len(cb.memory) {
+				cb.memory = cb.memory[:maxChars] + "\n[...memory truncated to fit budget]"
+			}
+			memTokens = cb.estimateTokens(cb.memory)
+		}
+		memTokCount = memTokens
+		result = append(result, llm.Message{Role: "system", Content: cb.memory})
 	}
 
-	// Inject memory index as third system message if present.
-	// This is the lightweight recall list — the agent can call recall_memory(id)
-	// to fetch full content of any entry.
+	// Inject memory index (lightweight recall list for recall_memory tool).
 	if cb.memoryIndex != "" {
-		indexMsg := llm.Message{Role: "system", Content: cb.memoryIndex}
-		memTokCount += cb.estimateTokens(cb.memoryIndex)
-		result = append(result, indexMsg)
+		indexTokens := cb.estimateTokens(cb.memoryIndex)
+		memTokCount += indexTokens
+		result = append(result, llm.Message{Role: "system", Content: cb.memoryIndex})
 	}
 
 	// Account for tool definitions in the token budget. Each tool adds ~100-200

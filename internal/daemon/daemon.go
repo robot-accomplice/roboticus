@@ -98,26 +98,37 @@ func buildAgentContext(ctx context.Context, sess *session.Session, tools *agent.
 		ctxBuilder.SetTools(tools.ToolDefs())
 	}
 
+	// Memory injection: always provide memory context so the model never
+	// claims "I don't have memories." Rust principle: "Session history, memory
+	// layers, and procedural skills are proactively injected into every turn."
 	if retriever != nil {
 		msgs := sess.Messages()
+		var mem string
 		for i := len(msgs) - 1; i >= 0; i-- {
 			if msgs[i].Role == "user" {
-				mem := retriever.Retrieve(ctx, sess.ID, msgs[i].Content, 2048)
-				if mem != "" {
-					ctxBuilder.SetMemory(mem)
-				}
+				mem = retriever.Retrieve(ctx, sess.ID, msgs[i].Content, 2048)
 				break
 			}
 		}
+		if mem != "" {
+			ctxBuilder.SetMemory(mem)
+		} else {
+			// Empty retrieval: inject orientation block so model knows memory
+			// exists and can be queried via recall_memory tool.
+			ctxBuilder.SetMemory("[Memory: No relevant memories found for this query. " +
+				"Use recall_memory(id) to search by topic. Your memory index is provided separately.]")
+		}
 	}
 
-	// Inject memory index summary — lightweight list of top memories the agent
-	// can recall on demand via recall_memory(id). Matches Rust's two-stage
-	// memory pattern: index always injected, full content fetched on demand.
+	// Memory index: always inject so the model can call recall_memory(id).
+	// Rust: two-stage pattern — index always injected, full content on demand.
 	if store != nil {
 		index := agenttools.BuildMemoryIndex(ctx, store, 20)
 		if index != "" {
 			ctxBuilder.SetMemoryIndex(index)
+		} else {
+			ctxBuilder.SetMemoryIndex("[Memory Index: No memories stored yet. " +
+				"Memories will accumulate as conversations continue.]")
 		}
 	}
 
