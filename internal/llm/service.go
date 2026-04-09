@@ -267,6 +267,13 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 		inferReq := *req
 		inferReq.Model = pm.model
 
+		log.Info().
+			Str("provider", pm.provider).
+			Str("model", pm.model).
+			Int("tools", len(inferReq.Tools)).
+			Str("format", string(client.provider.Format)).
+			Msg("sending inference request")
+
 		start := time.Now()
 		resp, err := client.Complete(ctx, &inferReq)
 		latencyMs := time.Since(start).Milliseconds()

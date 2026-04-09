@@ -310,6 +310,12 @@ func (l *Loop) think(ctx context.Context, session *Session) (Action, error) {
 	// Build context-aware request.
 	req := l.context.BuildRequest(session)
 
+	log.Debug().
+		Int("tools_in_request", len(req.Tools)).
+		Int("messages", len(req.Messages)).
+		Str("model", req.Model).
+		Msg("agent loop: sending LLM request")
+
 	resp, err := l.llm.Complete(ctx, req)
 	if err != nil {
 		return ActionFinish, core.WrapError(core.ErrLLM, "thinking failed", err)
@@ -318,6 +324,13 @@ func (l *Loop) think(ctx context.Context, session *Session) (Action, error) {
 	// Sanitize model output: HMAC boundary verification + L4 injection scan.
 	// Matches Rust's sanitize_model_output pipeline.
 	resp.Content = SanitizeModelOutput(resp.Content, nil, l.injection)
+
+	log.Info().
+		Int("tool_calls", len(resp.ToolCalls)).
+		Int("content_len", len(resp.Content)).
+		Str("finish_reason", resp.FinishReason).
+		Str("model", resp.Model).
+		Msg("agent loop: LLM response received")
 
 	// Add assistant response to session history.
 	session.AddAssistantMessage(resp.Content, resp.ToolCalls)
