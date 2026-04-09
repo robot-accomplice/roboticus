@@ -57,9 +57,55 @@ type ToolCall struct {
 }
 
 // ToolCallFunc holds the function name and arguments for a tool call.
+// Arguments is stored as a JSON string for OpenAI compatibility, but some
+// providers (Ollama native) return it as a JSON object. UnmarshalJSON
+// handles both formats transparently.
 type ToolCallFunc struct {
 	Name      string `json:"name"`
 	Arguments string `json:"arguments"`
+}
+
+// UnmarshalJSON handles both string and object formats for Arguments.
+// OpenAI returns: {"name": "foo", "arguments": "{\"key\": \"val\"}"}
+// Ollama returns: {"name": "foo", "arguments": {"key": "val"}}
+func (f *ToolCallFunc) UnmarshalJSON(data []byte) error {
+	// Try the standard string format first (most common).
+	type plain struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	}
+	var p plain
+	if err := json.Unmarshal(data, &p); err == nil && p.Name != "" {
+		// Check if Arguments looks like it was parsed as empty string
+		// when the JSON actually had an object. This happens when the
+		// json decoder encounters {"arguments": {}} and the target is string.
+		f.Name = p.Name
+		f.Arguments = p.Arguments
+		if f.Arguments != "" {
+			return nil
+		}
+	}
+
+	// Fallback: Arguments might be a raw JSON object (Ollama native format).
+	var raw struct {
+		Name      string          `json:"name"`
+		Arguments json.RawMessage `json:"arguments"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	f.Name = raw.Name
+	if len(raw.Arguments) > 0 && raw.Arguments[0] == '{' {
+		// It's a JSON object — stringify it for uniform handling.
+		f.Arguments = string(raw.Arguments)
+	} else if len(raw.Arguments) > 0 && raw.Arguments[0] == '"' {
+		// It's a JSON string — unquote it.
+		var s string
+		if err := json.Unmarshal(raw.Arguments, &s); err == nil {
+			f.Arguments = s
+		}
+	}
+	return nil
 }
 
 // ToolDef describes a tool available to the model.
