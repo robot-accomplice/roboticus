@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"roboticus/internal/core"
 	"roboticus/internal/llm"
 )
 
@@ -36,22 +37,35 @@ func stageFromExcess(ratio float64) CompactionStage {
 
 // ContextConfig controls context window management.
 type ContextConfig struct {
-	MaxTokens      int     // Token budget for context
-	SoftTrimRatio  float64 // Start trimming at this fraction (default 0.8)
-	HardClearRatio float64 // Emergency clear at this fraction (default 0.95)
-	CharsPerToken  int     // Rough estimation factor (default 4)
-	AntiFadeAfter  int     // Inject reminder after this many non-system turns
+	MaxTokens         int     // Token budget for context (used if BudgetTier not set)
+	BudgetTier        int     // 0=L0, 1=L1, 2=L2, 3=L3 — overrides MaxTokens when BudgetConfig is set
+	BudgetConfig      *core.ContextBudgetConfig // Tier-aware budget config (nil = use MaxTokens)
+	SoulMaxContextPct float64 // Personality cap as fraction of budget (default 0.4)
+	SoftTrimRatio     float64 // Start trimming at this fraction (default 0.8)
+	HardClearRatio    float64 // Emergency clear at this fraction (default 0.95)
+	CharsPerToken     int     // Rough estimation factor (default 4)
+	AntiFadeAfter     int     // Inject reminder after this many non-system turns
 }
 
 // DefaultContextConfig returns sensible defaults.
 func DefaultContextConfig() ContextConfig {
 	return ContextConfig{
-		MaxTokens:      8192,
-		SoftTrimRatio:  0.8,
-		HardClearRatio: 0.95,
-		CharsPerToken:  4,
-		AntiFadeAfter:  10,
+		MaxTokens:         8192,
+		BudgetTier:        1, // L1 default
+		SoulMaxContextPct: 0.4,
+		SoftTrimRatio:     0.8,
+		HardClearRatio:    0.95,
+		CharsPerToken:     4,
+		AntiFadeAfter:     10,
 	}
+}
+
+// effectiveBudget resolves the token budget from tier config or flat MaxTokens.
+func (cc ContextConfig) effectiveBudget() int {
+	if cc.BudgetConfig != nil {
+		return cc.BudgetConfig.BudgetForTier(cc.BudgetTier)
+	}
+	return cc.MaxTokens
 }
 
 // ContextBuilder constructs LLM requests from session state with progressive
@@ -92,7 +106,7 @@ func (cb *ContextBuilder) SetMemoryIndex(index string) {
 // BuildRequest constructs an LLM request from session state, applying
 // context budgeting and compaction as needed.
 func (cb *ContextBuilder) BuildRequest(session *Session) *llm.Request {
-	budget := cb.config.MaxTokens
+	budget := cb.config.effectiveBudget()
 	messages := session.Messages()
 
 	// Always include system prompt.
@@ -100,9 +114,26 @@ func (cb *ContextBuilder) BuildRequest(session *Session) *llm.Request {
 	sysTokCount := 0
 
 	if cb.systemPrompt != "" {
-		sysMsg := llm.Message{Role: "system", Content: cb.systemPrompt}
 		sysTokCount = cb.estimateTokens(cb.systemPrompt)
-		result = append(result, sysMsg)
+
+		// Personality cap: if system prompt exceeds soul_max_pct of budget,
+		// expand budget up to L3 max so history/memory aren't starved.
+		// Matches Rust: soul_max_context_pct enforcement.
+		if cb.config.SoulMaxContextPct > 0 {
+			soulCap := int(float64(budget) * cb.config.SoulMaxContextPct)
+			if sysTokCount > soulCap && cb.config.BudgetConfig != nil {
+				needed := int(float64(sysTokCount) / cb.config.SoulMaxContextPct)
+				l3Max := cb.config.BudgetConfig.L3
+				if needed > l3Max {
+					needed = l3Max
+				}
+				if needed > budget {
+					budget = needed
+				}
+			}
+		}
+
+		result = append(result, llm.Message{Role: "system", Content: cb.systemPrompt})
 	}
 
 	// Inject memory (capped at 25% of budget, matching Rust: l0 / 4).

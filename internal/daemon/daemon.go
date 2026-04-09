@@ -68,8 +68,12 @@ func (a *ingestorAdapter) IngestTurn(ctx context.Context, session *session.Sessi
 
 // buildAgentContext assembles a ContextBuilder with system prompt, tool defs,
 // and memory retrieval. Shared by executorAdapter and streamAdapter.
-func buildAgentContext(ctx context.Context, sess *session.Session, tools *agent.ToolRegistry, retriever *memory.Retriever, store *db.Store, promptCfg agent.PromptConfig) *agent.ContextBuilder {
-	ctxBuilder := agent.NewContextBuilder(agent.DefaultContextConfig())
+func buildAgentContext(ctx context.Context, sess *session.Session, tools *agent.ToolRegistry, retriever *memory.Retriever, store *db.Store, promptCfg agent.PromptConfig, budgetCfg *core.ContextBudgetConfig) *agent.ContextBuilder {
+	ccfg := agent.DefaultContextConfig()
+	if budgetCfg != nil {
+		ccfg.BudgetConfig = budgetCfg
+	}
+	ctxBuilder := agent.NewContextBuilder(ccfg)
 
 	cfg := promptCfg
 	// Use session's agent name only if explicitly set (not "default").
@@ -145,10 +149,11 @@ type executorAdapter struct {
 	retriever    *memory.Retriever
 	store        *db.Store
 	promptConfig agent.PromptConfig
+	budgetCfg    *core.ContextBudgetConfig
 }
 
 func (a *executorAdapter) RunLoop(ctx context.Context, sess *session.Session) (string, int, error) {
-	ctxBuilder := buildAgentContext(ctx, sess, a.tools, a.retriever, a.store, a.promptConfig)
+	ctxBuilder := buildAgentContext(ctx, sess, a.tools, a.retriever, a.store, a.promptConfig, a.budgetCfg)
 
 	loop := agent.NewLoop(agent.DefaultLoopConfig(), agent.LoopDeps{
 		LLM:       a.llmSvc,
@@ -325,10 +330,11 @@ type streamAdapter struct {
 	retriever    *memory.Retriever
 	store        *db.Store
 	promptConfig agent.PromptConfig
+	budgetCfg    *core.ContextBudgetConfig
 }
 
 func (a *streamAdapter) PrepareStream(ctx context.Context, sess *session.Session) (*llm.Request, error) {
-	ctxBuilder := buildAgentContext(ctx, sess, a.tools, a.retriever, a.store, a.promptConfig)
+	ctxBuilder := buildAgentContext(ctx, sess, a.tools, a.retriever, a.store, a.promptConfig, a.budgetCfg)
 	req := ctxBuilder.BuildRequest(sess)
 	req.Stream = true
 	return req, nil
@@ -624,6 +630,7 @@ func New(cfg *core.Config) (*Daemon, error) {
 			retriever:    retriever,
 			store:        store,
 			promptConfig: basePromptCfg,
+			budgetCfg:    &cfg.ContextBudget,
 		},
 		Ingestor: &ingestorAdapter{m: memMgr},
 		Refiner:  &nicknameAdapter{llm: llmSvc, store: store},
@@ -633,6 +640,7 @@ func New(cfg *core.Config) (*Daemon, error) {
 			retriever:    retriever,
 			store:        store,
 			promptConfig: basePromptCfg,
+			budgetCfg:    &cfg.ContextBudget,
 		},
 		Guards:     guards,
 		BGWorker:   bgWorker,

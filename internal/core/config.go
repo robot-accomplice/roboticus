@@ -49,8 +49,8 @@ type Config struct {
 	Themes     ThemesConfig              `json:"themes" mapstructure:"themes"`
 	DKIM       DKIMConfig                `json:"dkim" mapstructure:"dkim"`
 	CORS       CORSConfig                `json:"cors" mapstructure:"cors"`
-	Revenue    RevenueConfig             `json:"revenue" mapstructure:"revenue"`
-	Heartbeat  HeartbeatConfig           `json:"heartbeat" mapstructure:"heartbeat"`
+	Revenue       RevenueConfig             `json:"revenue" mapstructure:"revenue"`
+	Heartbeat     HeartbeatConfig           `json:"heartbeat" mapstructure:"heartbeat"`
 
 	// New roboticus-compatible sections.
 	CircuitBreaker           CircuitBreakerConfig `json:"circuit_breaker" mapstructure:"circuit_breaker"`

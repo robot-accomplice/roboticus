@@ -71,6 +71,10 @@ type Config struct {
 	PostTurnIngest     bool // Background memory ingestion after turn
 	NicknameRefinement bool // Background LLM-driven session naming
 
+	// Context budget tier (L0-L3). Higher tiers allow more history + memory.
+	// Matches Rust's ContextBudgetConfig tiers.
+	BudgetTier int // 0=L0 (minimal), 1=L1 (standard), 2=L2 (extended), 3=L3 (maximum)
+
 	// Model routing overrides.
 	ModelOverride    string // Force a specific model, bypassing router
 	PreferLocalModel bool   // Prefer local models over cloud when quality is comparable
@@ -111,6 +115,7 @@ func PresetAPI() Config {
 		CacheGuardSet:          GuardSetCached,
 		CacheEnabled:           true,
 		AuthorityMode:          AuthorityAPIKey,
+		BudgetTier:             1, // L1: standard
 		PostTurnIngest:         true,
 		NicknameRefinement:     true,
 		InjectDiagnostics:      true,
@@ -141,6 +146,7 @@ func PresetStreaming() Config {
 		CacheGuardSet:          GuardSetNone,
 		CacheEnabled:           true,
 		AuthorityMode:          AuthorityAPIKey,
+		BudgetTier:             1, // L1: standard
 		PostTurnIngest:         true,
 		NicknameRefinement:     false,
 		InjectDiagnostics:      true,
@@ -171,6 +177,7 @@ func PresetChannel(platform string) Config {
 		CacheGuardSet:          GuardSetCached,
 		CacheEnabled:           true,
 		AuthorityMode:          AuthorityChannel,
+		BudgetTier:             1, // L1: channel minimum
 		PostTurnIngest:         true,
 		NicknameRefinement:     false,
 		InjectDiagnostics:      false,
@@ -205,6 +212,7 @@ func PresetCron() Config {
 		CacheGuardSet:          GuardSetCached,
 		CacheEnabled:           true,
 		AuthorityMode:          AuthoritySelfGen,
+		BudgetTier:             0, // L0: minimal (cron tasks are self-contained)
 		PostTurnIngest:         true,
 		NicknameRefinement:     false,
 		InjectDiagnostics:      false,

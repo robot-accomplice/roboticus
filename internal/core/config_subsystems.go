@@ -160,6 +160,22 @@ type ContextBudgetConfig struct {
 	SoulMaxContextPct float64 `json:"soul_max_context_pct" mapstructure:"soul_max_context_pct"`
 }
 
+// BudgetForTier returns the token budget for a given tier (0=L0, 1=L1, 2=L2, 3=L3).
+func (c ContextBudgetConfig) BudgetForTier(tier int) int {
+	switch tier {
+	case 0:
+		return c.L0
+	case 1:
+		return c.L1
+	case 2:
+		return c.L2
+	case 3:
+		return c.L3
+	default:
+		return c.L1
+	}
+}
+
 // SandboxCfg holds OS-level process confinement settings.
 type SandboxCfg struct {
 	Enabled        bool     `json:"enabled" mapstructure:"enabled"`
