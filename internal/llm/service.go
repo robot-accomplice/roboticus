@@ -112,7 +112,7 @@ func NewService(cfg ServiceConfig, store *db.Store) (*Service, error) {
 		bgw = core.NewBackgroundWorker(16)
 	}
 
-	return &Service{
+	svc := &Service{
 		providers:     clients,
 		router:        NewRouter(targets, cfg.Router),
 		breakers:      NewBreakerRegistry(cfg.Breaker),
@@ -128,7 +128,15 @@ func NewService(cfg ServiceConfig, store *db.Store) (*Service, error) {
 		quality:       NewQualityTracker(100),
 		intentQuality: NewIntentQualityTracker(100),
 		latency:       NewLatencyTracker(100),
-	}, nil
+	}
+
+	// Metascore routing is always enabled when the service has quality/latency
+	// tracking (which it always does). This ensures every code path that creates
+	// a Service — daemon, API server, tests — gets metascore routing without
+	// requiring explicit wiring at each call site.
+	svc.router.EnableMetascoreRouting(svc.quality, svc.latency, nil, svc.breakers)
+
+	return svc, nil
 }
 
 // Complete sends a non-streaming request through the full pipeline.
@@ -653,7 +661,7 @@ func (s *Service) recordCostWithMeta(ctx context.Context, providerName string, r
 		tier = "cloud"
 	}
 
-	_, _ = s.store.ExecContext(ctx,
+	_, err := s.store.ExecContext(ctx,
 		`INSERT INTO inference_costs (id, model, provider, tokens_in, tokens_out, cost,
 		 tier, latency_ms, quality_score, escalation, turn_id, cached, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
@@ -662,6 +670,9 @@ func (s *Service) recordCostWithMeta(ctx context.Context, providerName string, r
 		resp.Usage.InputTokens, resp.Usage.OutputTokens, cost,
 		tier, meta.Latency, meta.Quality, escalated, meta.TurnID, cached,
 	)
+	if err != nil {
+		log.Warn().Err(err).Str("model", resp.Model).Str("provider", providerName).Msg("failed to record inference cost")
+	}
 }
 
 func contains(slice []string, s string) bool {
@@ -739,6 +750,17 @@ func (s *Service) Router() *Router {
 // Primary returns the configured primary model name.
 func (s *Service) Primary() string {
 	return s.primary
+}
+
+// Breakers returns the circuit breaker registry for metascore routing.
+func (s *Service) Breakers() *BreakerRegistry {
+	return s.breakers
+}
+
+// CapacityTracker returns nil — capacity is tracked per-provider in the router, not the service.
+// Metascore routing works without capacity data (headroom defaults to 1.0).
+func (s *Service) CapacityTracker() *CapacityTracker {
+	return nil
 }
 
 // Status returns the health of all providers (for /api/health).

@@ -1115,8 +1115,25 @@ func (d *Daemon) handleInbound(ctx context.Context, msg channel.InboundMessage) 
 		Str("chat", msg.ChatID).
 		Msg("processing inbound message")
 
-	// Send typing indicator before pipeline runs so user sees activity.
-	d.router.SendTypingIndicator(ctx, msg.Platform, msg.ChatID)
+	// Send typing indicator on a loop until the pipeline completes.
+	// Telegram's typing action expires after 5s, so we repeat every 4s.
+	// Uses orDone pattern: the goroutine exits when typingDone closes.
+	typingDone := make(chan struct{})
+	go func() {
+		d.router.SendTypingIndicator(ctx, msg.Platform, msg.ChatID)
+		ticker := time.NewTicker(4 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				d.router.SendTypingIndicator(ctx, msg.Platform, msg.ChatID)
+			case <-typingDone:
+				return
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 
 	agentName := d.cfg.Agent.Name
 	if agentName == "" {
@@ -1130,6 +1147,7 @@ func (d *Daemon) handleInbound(ctx context.Context, msg channel.InboundMessage) 
 		ChatID:    msg.ChatID,
 		AgentName: agentName,
 	})
+	close(typingDone) // Stop typing indicator loop (orDone).
 	if err != nil {
 		log.Error().Err(err).Str("platform", msg.Platform).Msg("pipeline error")
 		return
