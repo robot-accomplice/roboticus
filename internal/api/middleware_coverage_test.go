@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -42,7 +43,7 @@ func TestBodyLimit_Enforcement(t *testing.T) {
 }
 
 func TestRateLimitMiddleware_Disabled(t *testing.T) {
-	handler := RateLimitMiddleware(false, 0, 0)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := RateLimitMiddleware(context.Background(), false, 0, 0)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	req := httptest.NewRequest("GET", "/", nil)
@@ -56,7 +57,7 @@ func TestRateLimitMiddleware_Disabled(t *testing.T) {
 }
 
 func TestRateLimitMiddleware_Enabled(t *testing.T) {
-	handler := RateLimitMiddleware(true, 2, 60)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := RateLimitMiddleware(context.Background(), true, 2, 60)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 

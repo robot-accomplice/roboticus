@@ -318,6 +318,7 @@ func TestNicknameAdapter_Refine_NoUserMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("llm service: %v", err)
 	}
+	defer llmSvc.Drain(5 * time.Second)
 
 	a := &nicknameAdapter{llm: llmSvc, store: store}
 	sess := session.New("s1", "a1", "Bot")
@@ -356,6 +357,7 @@ func TestNicknameAdapter_Refine_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("llm service: %v", err)
 	}
+	defer llmSvc.Drain(5 * time.Second)
 
 	a := &nicknameAdapter{llm: llmSvc, store: store}
 	sess := session.New("s1", "a1", "Bot")
@@ -402,6 +404,7 @@ func TestNicknameAdapter_Refine_LongMessage(t *testing.T) {
 		Providers: []llm.Provider{{Name: "test", URL: srv.URL, Format: llm.FormatOpenAI}},
 		Primary:   "test/gpt-test",
 	}, store)
+	defer llmSvc.Drain(5 * time.Second)
 
 	a := &nicknameAdapter{llm: llmSvc, store: store}
 	sess := session.New("s2", "a1", "Bot")
@@ -433,6 +436,7 @@ func TestNicknameAdapter_Refine_EmptyResponse(t *testing.T) {
 		Providers: []llm.Provider{{Name: "test", URL: srv.URL, Format: llm.FormatOpenAI}},
 		Primary:   "test/gpt-test",
 	}, store)
+	defer llmSvc.Drain(5 * time.Second)
 
 	a := &nicknameAdapter{llm: llmSvc, store: store}
 	sess := session.New("s3", "a1", "Bot")
@@ -456,6 +460,7 @@ func TestNicknameAdapter_Refine_TooLongTitle(t *testing.T) {
 		Providers: []llm.Provider{{Name: "test", URL: srv.URL, Format: llm.FormatOpenAI}},
 		Primary:   "test/gpt-test",
 	}, store)
+	defer llmSvc.Drain(5 * time.Second)
 
 	a := &nicknameAdapter{llm: llmSvc, store: store}
 	sess := session.New("s4", "a1", "Bot")
@@ -681,6 +686,7 @@ func TestStreamAdapter_PrepareStream(t *testing.T) {
 	if err != nil {
 		t.Fatalf("llm: %v", err)
 	}
+	defer llmSvc.Drain(5 * time.Second)
 
 	a := &streamAdapter{
 		llmSvc:       llmSvc,

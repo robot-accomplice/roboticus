@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -9,7 +10,7 @@ import (
 )
 
 func TestRateLimitMiddleware_DisabledPassesThrough(t *testing.T) {
-	handler := RateLimitMiddleware(false, 100, 60)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := RateLimitMiddleware(context.Background(), false, 100, 60)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -24,7 +25,7 @@ func TestRateLimitMiddleware_DisabledPassesThrough(t *testing.T) {
 }
 
 func TestRateLimitMiddleware_ZeroRequestsDisables(t *testing.T) {
-	handler := RateLimitMiddleware(true, 0, 60)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := RateLimitMiddleware(context.Background(), true, 0, 60)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -39,7 +40,7 @@ func TestRateLimitMiddleware_ZeroRequestsDisables(t *testing.T) {
 }
 
 func TestRateLimitMiddleware_IPLimitExceeded(t *testing.T) {
-	handler := RateLimitMiddleware(true, 3, 60)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := RateLimitMiddleware(context.Background(), true, 3, 60)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -61,7 +62,7 @@ func TestRateLimitMiddleware_IPLimitExceeded(t *testing.T) {
 func TestRateLimitMiddleware_ActorLimitExceeded(t *testing.T) {
 	// Per-actor limit is actorRequestsPerWindow (5000), which is high.
 	// But per-IP limit of 2 should be hit first.
-	handler := RateLimitMiddleware(true, 2, 60)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := RateLimitMiddleware(context.Background(), true, 2, 60)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -82,7 +83,7 @@ func TestRateLimitMiddleware_ActorLimitExceeded(t *testing.T) {
 }
 
 func TestRateLimitMiddleware_RetryAfterHeader(t *testing.T) {
-	handler := RateLimitMiddleware(true, 1, 60)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := RateLimitMiddleware(context.Background(), true, 1, 60)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -107,7 +108,7 @@ func TestRateLimitMiddleware_RetryAfterHeader(t *testing.T) {
 }
 
 func TestRateLimitMiddleware_DifferentIPsIndependent(t *testing.T) {
-	handler := RateLimitMiddleware(true, 1, 60)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := RateLimitMiddleware(context.Background(), true, 1, 60)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -132,7 +133,7 @@ func TestRateLimitMiddleware_DifferentIPsIndependent(t *testing.T) {
 
 func TestRateLimitMiddleware_ZeroWindow(t *testing.T) {
 	// Window of 0 should default to 60 seconds.
-	handler := RateLimitMiddleware(true, 2, 0)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := RateLimitMiddleware(context.Background(), true, 2, 0)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 

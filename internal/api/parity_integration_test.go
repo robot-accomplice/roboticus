@@ -74,7 +74,7 @@ func parityServer(t *testing.T) (*httptest.Server, *db.Store) {
 		EventBus: NewEventBus(64),
 	}
 
-	srv := NewServer(DefaultServerConfig(), state)
+	srv := NewServer(context.Background(), DefaultServerConfig(), state)
 	ts := httptest.NewServer(srv.Handler)
 	t.Cleanup(ts.Close)
 

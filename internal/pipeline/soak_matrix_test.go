@@ -27,7 +27,7 @@ func TestSoakMatrix_KnownFailureModes(t *testing.T) {
 	pipe := New(PipelineDeps{
 		Store:    store,
 		Executor: &stubExecutor{response: "soak ok"},
-		BGWorker: core.NewBackgroundWorker(4),
+		BGWorker: testutil.BGWorker(t,4),
 	})
 
 	cases := []soakCase{
@@ -176,7 +176,7 @@ func TestSoakMatrix_InjectionBlocked(t *testing.T) {
 		Store:     store,
 		Executor:  &stubExecutor{response: "ok"},
 		Injection: &blockingInjection{},
-		BGWorker:  core.NewBackgroundWorker(2),
+		BGWorker:  testutil.BGWorker(t,2),
 	})
 
 	cfg := PresetAPI()
@@ -194,7 +194,7 @@ func TestSoakMatrix_DedupRejects(t *testing.T) {
 	pipe := New(PipelineDeps{
 		Store:    store,
 		Executor: &stubExecutor{response: "slow"}, // pretend it's slow
-		BGWorker: core.NewBackgroundWorker(2),
+		BGWorker: testutil.BGWorker(t,2),
 	})
 
 	cfg := PresetAPI()
@@ -228,7 +228,7 @@ func TestSoakMatrix_TopicTagDerived(t *testing.T) {
 	pipe := New(PipelineDeps{
 		Store:    store,
 		Executor: &stubExecutor{response: "tagged response"},
-		BGWorker: core.NewBackgroundWorker(2),
+		BGWorker: testutil.BGWorker(t,2),
 	})
 
 	outcome, err := RunPipeline(context.Background(), pipe, PresetAPI(),
@@ -256,7 +256,7 @@ func TestSoakMatrix_TurnCreated(t *testing.T) {
 	pipe := New(PipelineDeps{
 		Store:    store,
 		Executor: &stubExecutor{response: "turn created"},
-		BGWorker: core.NewBackgroundWorker(2),
+		BGWorker: testutil.BGWorker(t,2),
 	})
 
 	outcome, err := RunPipeline(context.Background(), pipe, PresetAPI(),
@@ -287,7 +287,7 @@ func TestSoak_ConcurrentSafety(t *testing.T) {
 	pipe := New(PipelineDeps{
 		Store:    store,
 		Executor: &stubExecutor{response: "concurrent ok"},
-		BGWorker: core.NewBackgroundWorker(8),
+		BGWorker: testutil.BGWorker(t,8),
 	})
 
 	const goroutines = 20
@@ -315,7 +315,7 @@ func TestSoak_ConcurrentSafety(t *testing.T) {
 func TestSoak_NilDepsGraceful(t *testing.T) {
 	pipe := New(PipelineDeps{
 		Executor: &stubExecutor{response: "nil deps ok"},
-		BGWorker: core.NewBackgroundWorker(2),
+		BGWorker: testutil.BGWorker(t,2),
 	})
 
 	_, err := RunPipeline(context.Background(), pipe, PresetAPI(),

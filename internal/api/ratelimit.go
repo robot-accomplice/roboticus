@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -23,7 +24,8 @@ const actorRequestsPerWindow = 5000
 // RateLimitMiddleware returns chi-compatible middleware that enforces per-IP and per-actor rate limits.
 // Uses a fixed-window algorithm: each IP gets RequestsPerWindow requests per WindowSeconds window.
 // If an x-api-key header is present, a separate per-actor bucket with a higher limit is used.
-func RateLimitMiddleware(enabled bool, requestsPerWindow, windowSeconds int) func(http.Handler) http.Handler {
+// The background cleanup goroutine exits when ctx is cancelled.
+func RateLimitMiddleware(ctx context.Context, enabled bool, requestsPerWindow, windowSeconds int) func(http.Handler) http.Handler {
 	cfg := struct {
 		Enabled           bool
 		RequestsPerWindow int
@@ -41,24 +43,29 @@ func RateLimitMiddleware(enabled bool, requestsPerWindow, windowSeconds int) fun
 	var ipBuckets sync.Map    // map[string]*rateBucket — keyed by IP
 	var actorBuckets sync.Map // map[string]*rateBucket — keyed by hashed API key
 
-	// Background cleanup of stale buckets every 5 minutes.
+	// Background cleanup of stale buckets every 5 minutes — exits when context cancels.
 	go func() {
 		ticker := time.NewTicker(5 * time.Minute)
 		defer ticker.Stop()
-		for range ticker.C {
-			cutoff := time.Now().Add(-2 * window)
-			cleanup := func(key, value any) bool {
-				b := value.(*rateBucket)
-				b.mu.Lock()
-				if b.windowStart.Before(cutoff) {
-					ipBuckets.Delete(key)
-					actorBuckets.Delete(key)
+		for {
+			select {
+			case <-ticker.C:
+				cutoff := time.Now().Add(-2 * window)
+				cleanup := func(key, value any) bool {
+					b := value.(*rateBucket)
+					b.mu.Lock()
+					if b.windowStart.Before(cutoff) {
+						ipBuckets.Delete(key)
+						actorBuckets.Delete(key)
+					}
+					b.mu.Unlock()
+					return true
 				}
-				b.mu.Unlock()
-				return true
+				ipBuckets.Range(cleanup)
+				actorBuckets.Range(cleanup)
+			case <-ctx.Done():
+				return
 			}
-			ipBuckets.Range(cleanup)
-			actorBuckets.Range(cleanup)
 		}
 	}()
 

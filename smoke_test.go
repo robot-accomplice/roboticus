@@ -94,7 +94,7 @@ func TestLiveSmokeTest(t *testing.T) {
 		EventBus: eventBus,
 	}
 
-	srv := api.NewServer(api.DefaultServerConfig(), state)
+	srv := api.NewServer(context.Background(), api.DefaultServerConfig(), state)
 	ts := httptest.NewServer(srv.Handler)
 	defer ts.Close()
 

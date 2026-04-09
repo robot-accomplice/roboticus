@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"sort"
 	"strings"
@@ -32,7 +33,7 @@ func TestParity_APIRouteSet(t *testing.T) {
 		LLM:    svc,
 	}
 
-	srv := NewServer(DefaultServerConfig(), state)
+	srv := NewServer(context.Background(), DefaultServerConfig(), state)
 	chiRouter, ok := srv.Handler.(chi.Routes)
 	if !ok {
 		t.Fatal("server handler is not chi.Routes — cannot walk route tree")

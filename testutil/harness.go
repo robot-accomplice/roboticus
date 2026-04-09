@@ -1,10 +1,13 @@
 package testutil
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"roboticus/internal/core"
 	"roboticus/internal/db"
 )
 
@@ -81,6 +84,23 @@ func copyDir(src, dst string) error {
 		}
 		return os.WriteFile(dstPath, data, info.Mode())
 	})
+}
+
+// BGWorker creates a background worker tied to the test's lifecycle.
+// When the test ends, the worker's context is cancelled and Drain is called,
+// preventing goroutine leaks and TempDir cleanup races.
+//
+// This follows the orDone pattern: worker goroutines select on their work
+// and the test context, exiting when either completes.
+func BGWorker(t *testing.T, concurrency int) *core.BackgroundWorker {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	bgw := core.NewBackgroundWorkerWithContext(ctx, concurrency)
+	t.Cleanup(func() {
+		cancel()
+		bgw.Drain(5 * time.Second)
+	})
+	return bgw
 }
 
 // TempDir creates a temporary directory for test artifacts.
