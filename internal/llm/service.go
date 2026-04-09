@@ -153,8 +153,9 @@ func (s *Service) Complete(ctx context.Context, req *Request) (*Response, error)
 }
 
 func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Response, error) {
-	// Cache check.
-	if !req.Stream {
+	// Cache check. Skip during exercise/baseline (NoEscalate) — we need
+	// fresh inference to measure actual model performance.
+	if !req.Stream && !req.NoEscalate {
 		if cached := s.cache.Get(ctx, req); cached != nil {
 			return cached, nil
 		}
@@ -309,8 +310,10 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 			resp.Content = s.transforms.Apply(resp.Content)
 		}
 
-		// Cache the successful response.
-		s.cache.Put(ctx, req, resp)
+		// Cache the successful response (skip during exercise/baseline).
+		if !req.NoEscalate {
+			s.cache.Put(ctx, req, resp)
+		}
 
 		// Record quality and latency observations for model routing feedback.
 		qScore := qualityFromResponse(resp)

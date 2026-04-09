@@ -53,7 +53,9 @@ func DefaultServerConfig() ServerConfig {
 		Port:         core.DefaultServerPort,
 		Bind:         core.DefaultServerBind,
 		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 300 * time.Second,
+		WriteTimeout: 0, // No hard TCP deadline — chi middleware handles fast endpoint timeouts.
+		// Long-running endpoints (inference, exercise) are exempt from chi timeout
+		// and control their own deadline via client timeout + context cancellation.
 	}
 }
 
@@ -70,7 +72,7 @@ func NewServer(ctx context.Context, cfg ServerConfig, state *AppState) *http.Ser
 	// Timeout middleware for non-streaming endpoints. WebSocket and SSE
 	// connections are long-lived and must NOT be killed by this timeout.
 	r.Use(func(next http.Handler) http.Handler {
-		timeout := chimw.Timeout(cfg.WriteTimeout)
+		timeout := chimw.Timeout(60 * time.Second) // Fast endpoint deadline; long-running paths are exempt below.
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Skip timeout for WebSocket upgrades, SSE streaming, and inference
 			// endpoints — inference can legitimately take 30-120s with slow
