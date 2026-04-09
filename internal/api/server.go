@@ -53,7 +53,7 @@ func DefaultServerConfig() ServerConfig {
 		Port:         core.DefaultServerPort,
 		Bind:         core.DefaultServerBind,
 		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 60 * time.Second,
+		WriteTimeout: 300 * time.Second,
 	}
 }
 
@@ -72,8 +72,12 @@ func NewServer(ctx context.Context, cfg ServerConfig, state *AppState) *http.Ser
 	r.Use(func(next http.Handler) http.Handler {
 		timeout := chimw.Timeout(cfg.WriteTimeout)
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Skip timeout for WebSocket upgrades and SSE streaming.
-			if r.URL.Path == "/ws" || strings.HasSuffix(r.URL.Path, "/stream") {
+			// Skip timeout for WebSocket upgrades, SSE streaming, and inference
+			// endpoints — inference can legitimately take 30-120s with slow
+			// models or cold-start local providers. The client controls its
+			// own deadline via http.Client.Timeout.
+			if r.URL.Path == "/ws" || strings.HasSuffix(r.URL.Path, "/stream") ||
+				r.URL.Path == "/api/agent/message" {
 				next.ServeHTTP(w, r)
 				return
 			}

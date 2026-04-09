@@ -496,18 +496,26 @@ func (c *Client) unmarshalOpenAIResponsesResponse(data []byte) (*Response, error
 func (c *Client) parseErrorResponse(resp *http.Response) error {
 	body, _ := io.ReadAll(resp.Body)
 
-	switch resp.StatusCode {
-	case 429:
-		return core.NewError(core.ErrRateLimited,
-			fmt.Sprintf("provider %s: %s", c.provider.Name, string(body)))
-	case 401, 403:
-		return core.NewError(core.ErrUnauthorized,
-			fmt.Sprintf("provider %s: %s", c.provider.Name, string(body)))
-	case 402:
-		return core.NewError(core.ErrCreditExhausted,
-			fmt.Sprintf("provider %s: %s", c.provider.Name, string(body)))
+	bodyStr := string(body)
+	msg := fmt.Sprintf("provider %s: %s", c.provider.Name, bodyStr)
+
+	// Some providers (e.g. Moonshot) return 429 for billing/quota exhaustion
+	// instead of 402. Detect these by inspecting the error body.
+	isBillingError := resp.StatusCode == 402 ||
+		strings.Contains(bodyStr, "insufficient balance") ||
+		strings.Contains(bodyStr, "exceeded_current_quota") ||
+		strings.Contains(bodyStr, "account_suspended") ||
+		strings.Contains(bodyStr, "billing")
+
+	switch {
+	case isBillingError:
+		return core.NewError(core.ErrCreditExhausted, msg)
+	case resp.StatusCode == 429:
+		return core.NewError(core.ErrRateLimited, msg)
+	case resp.StatusCode == 401 || resp.StatusCode == 403:
+		return core.NewError(core.ErrUnauthorized, msg)
 	default:
 		return core.NewError(core.ErrLLM,
-			fmt.Sprintf("provider %s returned %d: %s", c.provider.Name, resp.StatusCode, string(body)))
+			fmt.Sprintf("provider %s returned %d: %s", c.provider.Name, resp.StatusCode, bodyStr))
 	}
 }
