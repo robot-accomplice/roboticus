@@ -629,17 +629,41 @@ per-intent-class latency scorecard and 6-axis metascore dimension reporting.`,
 
 		totalPrompts := len(llm.ExerciseMatrix) * iterations
 		fmt.Printf("\n  Found %d configured model(s):\n\n", len(configured))
+		var localCount, cloudCount int
 		for i, model := range configured {
 			role := "fallback"
 			if i == 0 {
 				role = "primary"
 			}
-			fmt.Printf("    %-10s %s\n", role, model)
+			timeout := resolveModelTimeout(config, model)
+			locality := "cloud"
+			if timeout > 120*time.Second {
+				locality = "local"
+				localCount++
+			} else {
+				cloudCount++
+			}
+			fmt.Printf("    %-10s %-40s  %s\n", role, model, locality)
 		}
 
-		// Step 2: Confirm.
-		fmt.Printf("\n  This will flush all quality scores and exercise each model\n  with %d prompts x %d iteration(s) = %d calls per model.\n  Proceed? [Y/n] ",
-			len(llm.ExerciseMatrix), iterations, totalPrompts)
+		// Estimate total duration. Local models average ~30-60s per prompt,
+		// cloud models ~2-5s. Use conservative midpoints.
+		localEstSec := localCount * totalPrompts * 45  // 45s avg per local prompt
+		cloudEstSec := cloudCount * totalPrompts * 4   // 4s avg per cloud prompt
+		totalEstMin := (localEstSec + cloudEstSec) / 60
+		if totalEstMin < 1 {
+			totalEstMin = 1
+		}
+
+		// Step 2: Confirm with duration warning.
+		fmt.Printf("\n  This will flush all quality scores and exercise each model\n")
+		fmt.Printf("  with %d prompts x %d iteration(s) = %d calls per model.\n\n", len(llm.ExerciseMatrix), iterations, totalPrompts)
+		fmt.Printf("  ⏱  Estimated duration: ~%d minutes (%d local model(s) @ ~45s/prompt, %d cloud @ ~4s/prompt)\n", totalEstMin, localCount, cloudCount)
+		if localCount > 0 {
+			fmt.Printf("     Local models are significantly slower — especially on first run (cold start).\n")
+			fmt.Printf("     Do not interrupt the process or the baseline data will be incomplete.\n")
+		}
+		fmt.Printf("\n  Proceed? [Y/n] ")
 		var input string
 		if _, err := fmt.Scanln(&input); err != nil && err.Error() != "unexpected newline" {
 			fmt.Fprintf(os.Stderr, "  (stdin read error: %v)\n", err)
