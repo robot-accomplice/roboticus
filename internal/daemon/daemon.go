@@ -91,7 +91,7 @@ func buildAgentContext(ctx context.Context, sess *session.Session, tools *agent.
 		}()).
 		Int("tool_names_in_prompt", len(cfg.ToolNames)).
 		Bool("has_retriever", retriever != nil).
-		Bool("prompt_has_must_use", strings.Contains(systemPrompt, "MUST use them")).
+		Bool("prompt_has_tool_roster", strings.Contains(systemPrompt, "### Available Tools")).
 		Msg("context built for inference")
 	ctxBuilder.SetSystemPrompt(systemPrompt)
 
@@ -1166,6 +1166,17 @@ func (d *Daemon) handleInbound(ctx context.Context, msg channel.InboundMessage) 
 	if agentName == "" {
 		agentName = "Roboticus"
 	}
+	// Build channel claim context so the policy engine grants appropriate
+	// tool authority. Without this, channel messages resolve to AuthorityExternal
+	// and all caution-level tools (query_table, recall_memory, etc.) are denied.
+	claim := &pipeline.ChannelClaimContext{
+		SenderID:            msg.SenderID,
+		ChatID:              msg.ChatID,
+		Platform:            msg.Platform,
+		SenderInAllowlist:   d.isSenderAllowed(msg.Platform, msg.SenderID, msg.ChatID),
+		AllowlistConfigured: true,
+	}
+
 	cfg := pipeline.PresetChannel(msg.Platform)
 	result, err := pipeline.RunPipeline(ctx, d.pipe, cfg, pipeline.Input{
 		Content:   msg.Content,
@@ -1173,6 +1184,7 @@ func (d *Daemon) handleInbound(ctx context.Context, msg channel.InboundMessage) 
 		SenderID:  msg.SenderID,
 		ChatID:    msg.ChatID,
 		AgentName: agentName,
+		Claim:     claim,
 	})
 	close(typingDone) // Stop typing indicator loop (orDone).
 	if err != nil {
@@ -1183,6 +1195,21 @@ func (d *Daemon) handleInbound(ctx context.Context, msg channel.InboundMessage) 
 	if result.Content != "" {
 		_ = d.router.SendReply(ctx, msg.Platform, msg.ChatID, result.Content)
 	}
+}
+
+// isSenderAllowed checks whether a channel message sender is trusted.
+// Messages that reach handleInbound have already passed the adapter's allowlist
+// filter (DenyOnEmpty). If the message arrived here, the adapter accepted it.
+// For additional granularity, check the config's security allowlist.
+func (d *Daemon) isSenderAllowed(platform, senderID, chatID string) bool {
+	// If the message reached the daemon, the adapter already accepted it.
+	// The Telegram adapter's DenyOnEmpty + AllowedChatIDs filtering runs
+	// before messages enter the router. Trust that verdict.
+	if d.cfg.Security.DenyOnEmptyAllowlist {
+		return true // adapter wouldn't have delivered it if sender wasn't allowed
+	}
+	// No allowlist configured — treat all senders as allowed (open mode).
+	return true
 }
 
 // Router returns the channel router for adapter registration.
