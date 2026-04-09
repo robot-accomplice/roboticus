@@ -213,9 +213,10 @@ func RunExercise(ctx context.Context, completer Completer, model string, prompts
 	for _, p := range prompts {
 		start := time.Now()
 		req := &Request{
-			Messages:  []Message{{Role: "user", Content: p.Prompt}},
-			MaxTokens: 1024,
-			Model:     model,
+			Messages:   []Message{{Role: "user", Content: p.Prompt}},
+			MaxTokens:  1024,
+			Model:      model,
+			NoEscalate: true, // Measure this model's raw capability, no fallback.
 		}
 
 		resp, err := completer.Complete(ctx, req)

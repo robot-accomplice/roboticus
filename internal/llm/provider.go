@@ -87,6 +87,10 @@ type Request struct {
 	// IntentClass carries the classified intent for per-(model, intent) quality
 	// tracking. Set by the pipeline before inference. Not sent to the provider.
 	IntentClass string `json:"-"`
+	// NoEscalate disables confidence-based escalation from local to cloud.
+	// Set during exercise/baseline runs where we need to measure a specific
+	// model's raw capability without fallback contamination.
+	NoEscalate bool `json:"-"`
 }
 
 // Response is a provider-agnostic inference response.
