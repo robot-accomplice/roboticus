@@ -102,6 +102,10 @@ type Response struct {
 	ToolCalls    []ToolCall `json:"tool_calls,omitempty"`
 	FinishReason string     `json:"finish_reason"`
 	Usage        Usage      `json:"usage"`
+	// Metadata set by the service — not from the provider wire format.
+	Provider  string `json:"-"` // provider name that produced this response
+	IsLocal   bool   `json:"-"` // whether the provider is local
+	LatencyMs int64  `json:"-"` // inference latency in milliseconds
 }
 
 // Usage tracks token consumption for cost accounting.

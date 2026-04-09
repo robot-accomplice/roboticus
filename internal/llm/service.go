@@ -297,26 +297,11 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 
 		cb.RecordSuccess()
 
-		// Tiered inference: if the provider is local, evaluate confidence.
-		// If confidence is too low and non-local providers are available, escalate.
-		// Skip during exercise/baseline (NoEscalate) — we need raw model scores.
-		// Skip if the model returned tool calls — that's a high-confidence decision
-		// to use a tool, not a low-quality text response with empty content.
-		if client.provider.IsLocal && s.Confidence != nil && !req.NoEscalate && len(resp.ToolCalls) == 0 {
-			latency := time.Duration(latencyMs) * time.Millisecond
-			if !s.Confidence.IsConfident(resp.Content, latency) {
-				s.Escalation.RecordLocalEscalated()
-				log.Info().
-					Float64("confidence", s.Confidence.ConfidenceScore(resp.Content, latency)).
-					Str("provider", pm.provider).
-					Msg("local response below confidence floor, escalating to cloud")
-				// Continue to next (non-local) provider.
-				continue
-			}
-			s.Escalation.RecordLocalAccepted()
-		} else {
-			s.Escalation.RecordCloudDirect()
-		}
+		// Tag response with provider metadata so the pipeline can make
+		// routing decisions (confidence evaluation, escalation) at its layer.
+		resp.Provider = pm.provider
+		resp.IsLocal = client.provider.IsLocal
+		resp.LatencyMs = latencyMs
 
 		// Apply response transforms (strip <think> blocks, injection markers, etc.).
 		if s.transforms != nil {
