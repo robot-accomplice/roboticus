@@ -64,15 +64,17 @@ const (
 
 // LoopConfig controls the ReAct loop behavior.
 type LoopConfig struct {
-	MaxTurns      int // Maximum thinking iterations before forced stop
-	IdleThreshold int // Consecutive NoOps before entering Idle state
-	LoopWindow    int // Sliding window size for loop detection
+	MaxTurns        int           // Maximum thinking iterations before forced stop
+	IdleThreshold   int           // Consecutive NoOps before entering Idle state
+	LoopWindow      int           // Sliding window size for loop detection
+	MaxLoopDuration time.Duration // Wall-clock deadline for entire ReAct loop
 }
 
 // DefaultLoopConfig returns sensible defaults.
 func DefaultLoopConfig() LoopConfig {
 	return LoopConfig{
-		MaxTurns:      25,
+		MaxTurns:        25,
+		MaxLoopDuration: 300 * time.Second, // 5 min — local models need 60-80s per call
 		IdleThreshold: 3,
 		LoopWindow:    3,
 	}
@@ -163,21 +165,24 @@ func (l *Loop) TurnCount() int {
 	return l.turnCount
 }
 
-// maxLoopDuration is the wall-clock deadline for the entire ReAct loop.
-// Matches Rust's autonomy_max_turn_duration_seconds (default 120s).
-const maxLoopDuration = 120 * time.Second
+// maxLoopDurationFallback is used only when LoopConfig.MaxLoopDuration is not set.
+const maxLoopDurationFallback = 300 * time.Second
 
 // Run executes the ReAct loop until completion or context cancellation.
 // It returns the final assistant response content and any error.
 func (l *Loop) Run(ctx context.Context, session *Session) (string, error) {
-	deadline := time.Now().Add(maxLoopDuration)
+	loopDuration := l.config.MaxLoopDuration
+	if loopDuration <= 0 {
+		loopDuration = maxLoopDurationFallback
+	}
+	deadline := time.Now().Add(loopDuration)
 	log.Debug().Str("session", session.ID).Int("max_turns", l.config.MaxTurns).Msg("ReAct loop started")
 
 	for {
 		// Wall-clock deadline check (Rust: react_deadline).
 		if time.Now().After(deadline) {
 			l.terminate("wall-clock deadline exceeded")
-			log.Warn().Str("session", session.ID).Dur("limit", maxLoopDuration).Msg("ReAct loop hit wall-clock deadline")
+			log.Warn().Str("session", session.ID).Dur("limit", loopDuration).Msg("ReAct loop hit wall-clock deadline")
 			content := session.LastAssistantContent()
 			if content == "" {
 				content = "I stopped this turn after reaching the autonomy duration limit. Here's what I accomplished so far."

@@ -349,7 +349,7 @@ func DefaultConfig() Config {
 			ID:                          "roboticus-default",
 			Workspace:                   filepath.Join(dataDir, "workspace"),
 			AutonomyMaxReactTurns:       25,
-			AutonomyMaxTurnDurationSecs: 120,
+			AutonomyMaxTurnDurationSecs: 300, // 5 min — local models need 60-80s per inference call
 			LogLevel:                    "info",
 			DelegationEnabled:           true,
 			DelegationMinComplexity:     0.35,

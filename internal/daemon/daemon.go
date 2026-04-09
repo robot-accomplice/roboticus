@@ -153,21 +153,26 @@ func buildAgentContext(ctx context.Context, sess *session.Session, tools *agent.
 
 // executorAdapter wraps the full agent loop deps → pipeline.ToolExecutor.
 type executorAdapter struct {
-	llmSvc       *llm.Service
-	tools        *agent.ToolRegistry
-	policy       *policy.Engine
-	injection    *agent.InjectionDetector
-	memMgr       *memory.Manager
-	retriever    *memory.Retriever
-	store        *db.Store
-	promptConfig agent.PromptConfig
-	budgetCfg    *core.ContextBudgetConfig
+	llmSvc          *llm.Service
+	tools           *agent.ToolRegistry
+	policy          *policy.Engine
+	injection       *agent.InjectionDetector
+	memMgr          *memory.Manager
+	retriever       *memory.Retriever
+	store           *db.Store
+	promptConfig    agent.PromptConfig
+	budgetCfg       *core.ContextBudgetConfig
+	maxTurnDuration time.Duration
 }
 
 func (a *executorAdapter) RunLoop(ctx context.Context, sess *session.Session) (string, int, error) {
 	ctxBuilder := buildAgentContext(ctx, sess, a.tools, a.retriever, a.store, a.promptConfig, a.budgetCfg)
 
-	loop := agent.NewLoop(agent.DefaultLoopConfig(), agent.LoopDeps{
+	loopCfg := agent.DefaultLoopConfig()
+	if a.maxTurnDuration > 0 {
+		loopCfg.MaxLoopDuration = a.maxTurnDuration
+	}
+	loop := agent.NewLoop(loopCfg, agent.LoopDeps{
 		LLM:       a.llmSvc,
 		Tools:     a.tools,
 		Policy:    a.policy,
@@ -639,15 +644,16 @@ func New(cfg *core.Config) (*Daemon, error) {
 		Retriever: &retrieverAdapter{r: retriever},
 		Skills:    &skillAdapter{matcher: skillMatcher, tools: tools},
 		Executor: &executorAdapter{
-			llmSvc:       llmSvc,
-			tools:        tools,
-			policy:       policyEngine,
-			injection:    injection,
-			memMgr:       memMgr,
-			retriever:    retriever,
-			store:        store,
-			promptConfig: basePromptCfg,
-			budgetCfg:    &cfg.ContextBudget,
+			llmSvc:          llmSvc,
+			tools:           tools,
+			policy:          policyEngine,
+			injection:       injection,
+			memMgr:          memMgr,
+			retriever:       retriever,
+			store:           store,
+			promptConfig:    basePromptCfg,
+			budgetCfg:       &cfg.ContextBudget,
+			maxTurnDuration: time.Duration(cfg.Agent.AutonomyMaxTurnDurationSecs) * time.Second,
 		},
 		Ingestor: &ingestorAdapter{m: memMgr},
 		Refiner:  &nicknameAdapter{llm: llmSvc, store: store},
