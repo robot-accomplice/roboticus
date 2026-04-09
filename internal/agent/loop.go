@@ -310,7 +310,7 @@ func (l *Loop) think(ctx context.Context, session *Session) (Action, error) {
 	// Build context-aware request.
 	req := l.context.BuildRequest(session)
 
-	log.Debug().
+	log.Info().
 		Int("tools_in_request", len(req.Tools)).
 		Int("messages", len(req.Messages)).
 		Str("model", req.Model).
