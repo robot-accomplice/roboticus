@@ -178,6 +178,7 @@ func PresetChannel(platform string) Config {
 		CacheEnabled:           true,
 		AuthorityMode:          AuthorityChannel,
 		BudgetTier:             1, // L1: channel minimum
+		BotCommandDispatch:     true, // Channels support /help, /status, /tools, /whoami
 		PostTurnIngest:         true,
 		NicknameRefinement:     false,
 		InjectDiagnostics:      false,
