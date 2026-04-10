@@ -5,6 +5,8 @@ import (
 	"strings"
 )
 
+var mdLinkRe = regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`)
+
 // Formatter converts LLM Markdown output into platform-native syntax.
 type Formatter interface {
 	Platform() string
@@ -54,55 +56,312 @@ func preprocess(content string) string {
 // --- Telegram Formatter ---
 
 // TelegramFormatter converts Markdown to Telegram MarkdownV2.
+// It parses inline formatting (bold, italic, strikethrough, code, links,
+// blockquotes) character-by-character, converting Markdown constructs to
+// their MarkdownV2 equivalents while escaping all other special characters.
 type TelegramFormatter struct{}
 
 func (f *TelegramFormatter) Platform() string { return "telegram" }
 
-var telegramEscapeChars = strings.NewReplacer(
-	"_", "\\_", "*", "\\*", "[", "\\[", "]", "\\]",
-	"(", "\\(", ")", "\\)", "~", "\\~", "`", "\\`",
-	">", "\\>", "#", "\\#", "+", "\\+", "-", "\\-",
-	"=", "\\=", "|", "\\|", "{", "\\{", "}", "\\}",
-	".", "\\.", "!", "\\!",
-)
+// telegramSpecialChars contains all characters that must be escaped in
+// Telegram MarkdownV2 text segments (outside of formatting delimiters).
+const telegramSpecialChars = `_*[]()~` + "`>#+-.=|{}!"
+
+func telegramEscapeText(text string) string {
+	var b strings.Builder
+	b.Grow(len(text) * 2)
+	for _, ch := range text {
+		if strings.ContainsRune(telegramSpecialChars, ch) {
+			b.WriteByte('\\')
+		}
+		b.WriteRune(ch)
+	}
+	return b.String()
+}
 
 func (f *TelegramFormatter) Format(content string) string {
 	content = preprocess(content)
 
-	// Process line by line, preserving code blocks.
-	var b strings.Builder
-	inCode := false
+	var out []string
+	inFence := false
+
 	for _, line := range strings.Split(content, "\n") {
-		if strings.HasPrefix(line, "```") {
-			inCode = !inCode
-			b.WriteString(line)
-			b.WriteByte('\n')
+		trimmed := strings.TrimSpace(line)
+
+		// Code fence boundaries.
+		if strings.HasPrefix(trimmed, "```") {
+			if inFence {
+				out = append(out, "```")
+				inFence = false
+			} else {
+				// Preserve language hint.
+				out = append(out, trimmed)
+				inFence = true
+			}
 			continue
 		}
-		if inCode {
-			b.WriteString(line)
-			b.WriteByte('\n')
+		if inFence {
+			// Inside code block — no escaping, no conversion.
+			out = append(out, line)
 			continue
 		}
 
-		// Headers → bold.
-		if strings.HasPrefix(line, "# ") {
-			b.WriteString("*")
-			b.WriteString(telegramEscapeChars.Replace(strings.TrimPrefix(line, "# ")))
-			b.WriteString("*\n")
-			continue
-		}
-		if strings.HasPrefix(line, "## ") {
-			b.WriteString("*")
-			b.WriteString(telegramEscapeChars.Replace(strings.TrimPrefix(line, "## ")))
-			b.WriteString("*\n")
-			continue
-		}
-
-		b.WriteString(telegramEscapeChars.Replace(line))
-		b.WriteByte('\n')
+		out = append(out, telegramConvertLine(trimmed))
 	}
-	return strings.TrimSpace(b.String())
+
+	// Close unclosed fence.
+	if inFence {
+		out = append(out, "```")
+	}
+
+	return strings.TrimSpace(strings.Join(out, "\n"))
+}
+
+// telegramConvertLine converts a single line of Markdown to Telegram MarkdownV2.
+// Handles: **bold** → *bold*, *italic* → _italic_, ~~strike~~ → ~strike~,
+// `code` → `code`, [text](url) → [text](url), > blockquotes, # headers → bold.
+func telegramConvertLine(line string) string {
+	// Headers → bold.
+	if rest, ok := strings.CutPrefix(line, "### "); ok {
+		return "*" + telegramEscapeText(strings.TrimSpace(rest)) + "*"
+	}
+	if rest, ok := strings.CutPrefix(line, "## "); ok {
+		return "*" + telegramEscapeText(strings.TrimSpace(rest)) + "*"
+	}
+	if rest, ok := strings.CutPrefix(line, "# "); ok {
+		return "*" + telegramEscapeText(strings.TrimSpace(rest)) + "*"
+	}
+
+	// Blockquote: > text → >text (Telegram MarkdownV2 blockquote).
+	if rest, ok := strings.CutPrefix(line, "> "); ok {
+		return ">" + telegramConvertInline(rest)
+	}
+	if line == ">" {
+		return ">"
+	}
+
+	return telegramConvertInline(line)
+}
+
+// telegramConvertInline parses inline Markdown formatting and converts to
+// Telegram MarkdownV2, escaping plain text segments. This is a character-
+// level parser that handles nested/overlapping formatting correctly.
+func telegramConvertInline(text string) string {
+	chars := []rune(text)
+	n := len(chars)
+	var b strings.Builder
+	b.Grow(n * 2)
+	i := 0
+
+	for i < n {
+		// Inline code: `code`
+		if chars[i] == '`' && i+1 < n {
+			if end, ok := findClosing(chars, i+1, '`'); ok {
+				b.WriteByte('`')
+				b.WriteString(string(chars[i+1 : end])) // no escaping inside code
+				b.WriteByte('`')
+				i = end + 1
+				continue
+			}
+		}
+
+		// Bold: **text** → *text*
+		if i+1 < n && chars[i] == '*' && chars[i+1] == '*' {
+			if end, ok := findDoubleClosing(chars, i+2, '*'); ok {
+				inner := string(chars[i+2 : end])
+				b.WriteByte('*')
+				b.WriteString(telegramEscapeText(inner))
+				b.WriteByte('*')
+				i = end + 2
+				continue
+			}
+		}
+
+		// Strikethrough: ~~text~~ → ~text~
+		if i+1 < n && chars[i] == '~' && chars[i+1] == '~' {
+			if end, ok := findDoubleClosing(chars, i+2, '~'); ok {
+				inner := string(chars[i+2 : end])
+				b.WriteByte('~')
+				b.WriteString(telegramEscapeText(inner))
+				b.WriteByte('~')
+				i = end + 2
+				continue
+			}
+		}
+
+		// Single-tilde strikethrough: ~text~ (some LLMs emit this).
+		if chars[i] == '~' && (i == 0 || chars[i-1] != '~') && i+1 < n && chars[i+1] != '~' {
+			if end, ok := findClosingNotDoubled(chars, i+1, '~'); ok {
+				inner := string(chars[i+1 : end])
+				b.WriteByte('~')
+				b.WriteString(telegramEscapeText(inner))
+				b.WriteByte('~')
+				i = end + 1
+				continue
+			}
+		}
+
+		// Italic: *text* (single asterisk) → _text_
+		if chars[i] == '*' && (i == 0 || chars[i-1] != '*') && i+1 < n && chars[i+1] != '*' {
+			if end, ok := findClosingNotDoubled(chars, i+1, '*'); ok {
+				inner := string(chars[i+1 : end])
+				b.WriteByte('_')
+				b.WriteString(telegramEscapeText(inner))
+				b.WriteByte('_')
+				i = end + 1
+				continue
+			}
+		}
+
+		// Italic: __text__ → _text_
+		if i+1 < n && chars[i] == '_' && chars[i+1] == '_' {
+			if end, ok := findDoubleClosing(chars, i+2, '_'); ok {
+				inner := string(chars[i+2 : end])
+				b.WriteByte('_')
+				b.WriteString(telegramEscapeText(inner))
+				b.WriteByte('_')
+				i = end + 2
+				continue
+			}
+		}
+
+		// Italic: _text_ (single underscores).
+		if chars[i] == '_' && (i == 0 || chars[i-1] != '_') && i+1 < n && chars[i+1] != '_' {
+			if end, ok := findClosingNotDoubled(chars, i+1, '_'); ok {
+				inner := string(chars[i+1 : end])
+				b.WriteByte('_')
+				b.WriteString(telegramEscapeText(inner))
+				b.WriteByte('_')
+				i = end + 1
+				continue
+			}
+		}
+
+		// Markdown link: [text](url) → [text](url)
+		if chars[i] == '[' {
+			if linkText, url, endPos, ok := parseMarkdownLink(chars, i); ok {
+				b.WriteByte('[')
+				b.WriteString(telegramEscapeText(linkText))
+				b.WriteString("](")
+				b.WriteString(url) // URLs don't get escaped
+				b.WriteByte(')')
+				i = endPos
+				continue
+			}
+		}
+
+		// Regular character — escape if special.
+		if strings.ContainsRune(telegramSpecialChars, chars[i]) {
+			b.WriteByte('\\')
+		}
+		b.WriteRune(chars[i])
+		i++
+	}
+
+	return b.String()
+}
+
+// findClosing finds the next occurrence of delim starting at start,
+// skipping backslash-escaped characters.
+func findClosing(chars []rune, start int, delim rune) (int, bool) {
+	i := start
+	for i < len(chars) {
+		if chars[i] == '\\' {
+			i += 2
+			continue
+		}
+		if chars[i] == delim {
+			return i, true
+		}
+		i++
+	}
+	return 0, false
+}
+
+// findDoubleClosing finds the next occurrence of two consecutive delim
+// characters starting at start.
+func findDoubleClosing(chars []rune, start int, delim rune) (int, bool) {
+	i := start
+	for i+1 < len(chars) {
+		if chars[i] == '\\' {
+			i += 2
+			continue
+		}
+		if chars[i] == delim && chars[i+1] == delim {
+			return i, true
+		}
+		i++
+	}
+	return 0, false
+}
+
+// findClosingNotDoubled finds the next single occurrence of delim that is
+// NOT immediately followed by another delim (to distinguish * from **).
+func findClosingNotDoubled(chars []rune, start int, delim rune) (int, bool) {
+	i := start
+	for i < len(chars) {
+		if chars[i] == '\\' {
+			i += 2
+			continue
+		}
+		if chars[i] == delim {
+			if i+1 < len(chars) && chars[i+1] == delim {
+				i += 2 // skip doubled
+				continue
+			}
+			return i, true
+		}
+		i++
+	}
+	return 0, false
+}
+
+// parseMarkdownLink parses [text](url) starting at chars[start].
+// Returns (linkText, url, endPosition, ok).
+func parseMarkdownLink(chars []rune, start int) (string, string, int, bool) {
+	if start >= len(chars) || chars[start] != '[' {
+		return "", "", 0, false
+	}
+	i := start + 1
+	depth := 1
+	for i < len(chars) && depth > 0 {
+		if chars[i] == '[' {
+			depth++
+		}
+		if chars[i] == ']' {
+			depth--
+		}
+		if depth > 0 {
+			i++
+		}
+	}
+	if depth != 0 || i >= len(chars) {
+		return "", "", 0, false
+	}
+	linkText := string(chars[start+1 : i])
+	i++ // skip ]
+	if i >= len(chars) || chars[i] != '(' {
+		return "", "", 0, false
+	}
+	i++ // skip (
+	urlStart := i
+	parenDepth := 1
+	for i < len(chars) && parenDepth > 0 {
+		if chars[i] == '(' {
+			parenDepth++
+		}
+		if chars[i] == ')' {
+			parenDepth--
+		}
+		if parenDepth > 0 {
+			i++
+		}
+	}
+	if parenDepth != 0 {
+		return "", "", 0, false
+	}
+	url := string(chars[urlStart:i])
+	return linkText, url, i + 1, true
 }
 
 // --- Discord Formatter ---
@@ -118,77 +377,178 @@ func (f *DiscordFormatter) Format(content string) string {
 // --- WhatsApp Formatter ---
 
 // WhatsAppFormatter converts Markdown to WhatsApp Cloud API syntax.
+// WhatsApp supports: *bold*, _italic_, ~strikethrough~, ```monospace```.
+// Markdown links become bare URLs.
 type WhatsAppFormatter struct{}
 
 func (f *WhatsAppFormatter) Platform() string { return "whatsapp" }
 
-var mdLinkRe = regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`)
-
 func (f *WhatsAppFormatter) Format(content string) string {
 	content = preprocess(content)
 
-	// **bold** → *bold*
-	content = strings.ReplaceAll(content, "**", "*")
+	var out []string
+	inFence := false
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "```") {
+			if inFence {
+				out = append(out, "```")
+				inFence = false
+			} else {
+				out = append(out, "```") // strip language hint
+				inFence = true
+			}
+			continue
+		}
+		if inFence {
+			out = append(out, line)
+			continue
+		}
+		out = append(out, whatsappConvertLine(line))
+	}
+	if inFence {
+		out = append(out, "```")
+	}
+	return strings.TrimSpace(strings.Join(out, "\n"))
+}
+
+func whatsappConvertLine(line string) string {
+	trimmed := strings.TrimSpace(line)
 
 	// Headers → bold.
-	lines := strings.Split(content, "\n")
-	var b strings.Builder
-	for _, line := range lines {
-		if strings.HasPrefix(line, "# ") {
-			b.WriteString("*" + strings.TrimPrefix(line, "# ") + "*\n")
-		} else if strings.HasPrefix(line, "## ") {
-			b.WriteString("*" + strings.TrimPrefix(line, "## ") + "*\n")
-		} else {
-			b.WriteString(line + "\n")
-		}
+	if rest, ok := strings.CutPrefix(trimmed, "### "); ok {
+		return "*" + strings.TrimSpace(rest) + "*"
 	}
-	content = b.String()
+	if rest, ok := strings.CutPrefix(trimmed, "## "); ok {
+		return "*" + strings.TrimSpace(rest) + "*"
+	}
+	if rest, ok := strings.CutPrefix(trimmed, "# "); ok {
+		return "*" + strings.TrimSpace(rest) + "*"
+	}
 
-	// [text](url) → url (WhatsApp doesn't support link syntax).
-	content = mdLinkRe.ReplaceAllString(content, "$2")
+	// Inline conversions via character parsing.
+	chars := []rune(trimmed)
+	n := len(chars)
+	var b strings.Builder
+	b.Grow(n * 2)
+	i := 0
 
-	return strings.TrimSpace(content)
+	for i < n {
+		// Inline code: `code` → ```code``` (WhatsApp monospace).
+		if chars[i] == '`' && i+1 < n {
+			if end, ok := findClosing(chars, i+1, '`'); ok {
+				code := string(chars[i+1 : end])
+				b.WriteString("```")
+				b.WriteString(code)
+				b.WriteString("```")
+				i = end + 1
+				continue
+			}
+		}
+
+		// Bold: **text** → *text*.
+		if i+1 < n && chars[i] == '*' && chars[i+1] == '*' {
+			if end, ok := findDoubleClosing(chars, i+2, '*'); ok {
+				inner := string(chars[i+2 : end])
+				b.WriteByte('*')
+				b.WriteString(inner)
+				b.WriteByte('*')
+				i = end + 2
+				continue
+			}
+		}
+
+		// Markdown link: [text](url) → url (bare link).
+		if chars[i] == '[' {
+			if _, url, endPos, ok := parseMarkdownLink(chars, i); ok {
+				b.WriteString(url)
+				i = endPos
+				continue
+			}
+		}
+
+		b.WriteRune(chars[i])
+		i++
+	}
+
+	return b.String()
 }
 
 // --- Signal Formatter ---
 
 // SignalFormatter strips all Markdown (Signal has no rich text support).
+// Prefixes output with 🤖 to distinguish agent responses in Notes-to-Self
+// threads (Rust parity: format_plain_terminal with robot_prefix=true).
 type SignalFormatter struct{}
 
 func (f *SignalFormatter) Platform() string { return "signal" }
 
 func (f *SignalFormatter) Format(content string) string {
+	body := formatPlainTerminal(content)
+	if body == "" {
+		return body
+	}
+	return "🤖 " + body
+}
+
+// formatPlainTerminal converts Markdown to clean plain text for no-markup
+// channels. Shared by Signal (with prefix) and Voice (without).
+func formatPlainTerminal(content string) string {
 	content = preprocess(content)
 
-	var b strings.Builder
+	var lines []string
 	inCode := false
 	for _, line := range strings.Split(content, "\n") {
-		if strings.HasPrefix(line, "```") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "```") {
 			inCode = !inCode
-			continue
+			continue // drop fence markers
 		}
 		if inCode {
-			b.WriteString("  " + line + "\n")
+			lines = append(lines, "  "+line)
 			continue
 		}
 
-		// Strip markdown characters.
-		line = strings.ReplaceAll(line, "**", "")
-		line = strings.ReplaceAll(line, "__", "")
-		line = strings.ReplaceAll(line, "~~", "")
-		line = strings.ReplaceAll(line, "`", "")
-
 		// Strip headers.
-		for strings.HasPrefix(line, "# ") {
-			line = line[2:]
+		plain := strings.TrimLeft(line, "# ")
+		if line != plain {
+			plain = strings.TrimSpace(plain)
 		}
 
-		// Extract URLs from links.
-		line = mdLinkRe.ReplaceAllString(line, "$2")
+		// Strip inline formatting.
+		plain = strings.ReplaceAll(plain, "**", "")
+		plain = strings.ReplaceAll(plain, "__", "")
+		plain = strings.ReplaceAll(plain, "~~", "")
+		plain = strings.ReplaceAll(plain, "`", "")
 
-		b.WriteString(line + "\n")
+		// Strip markdown links: [text](url) → url.
+		plain = stripMarkdownLinks(plain)
+
+		lines = append(lines, plain)
 	}
-	return strings.TrimSpace(b.String())
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+// stripMarkdownLinks replaces [text](url) with just url (for channels
+// that only support bare links). Uses character-level parsing for
+// correctness with nested brackets.
+func stripMarkdownLinks(text string) string {
+	chars := []rune(text)
+	var b strings.Builder
+	b.Grow(len(text))
+	i := 0
+	for i < len(chars) {
+		if chars[i] == '[' {
+			if _, url, endPos, ok := parseMarkdownLink(chars, i); ok {
+				b.WriteString(url)
+				i = endPos
+				continue
+			}
+		}
+		b.WriteRune(chars[i])
+		i++
+	}
+	return b.String()
 }
 
 // --- Email Formatter ---

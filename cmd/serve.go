@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 
 	"roboticus/internal/daemon"
@@ -50,6 +49,5 @@ func runServe(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to initialize daemon: %w", err)
 	}
 
-	log.Info().Msg("starting roboticus in interactive mode")
 	return d.RunInteractive()
 }

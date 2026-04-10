@@ -74,7 +74,7 @@ func ResolveTheme(mode ColorMode, variant ThemeVariant) *Theme {
 	}
 	return &Theme{
 		enabled: enabled,
-		draw:    enabled,
+		draw:    false, // draw is opt-in via --nerdmode; typewrite adds ~6s to boot
 		variant: variant,
 	}
 }

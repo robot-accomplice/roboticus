@@ -101,6 +101,10 @@ func TestSignalFormatter_StripsMarkdown(t *testing.T) {
 	if strings.Contains(result, "**") || strings.Contains(result, "`") {
 		t.Error("signal should strip all markdown")
 	}
+	// Rust parity: Signal prefixes with 🤖.
+	if !strings.HasPrefix(result, "🤖") {
+		t.Errorf("signal should prefix with robot emoji, got %q", result)
+	}
 }
 
 func TestSignalFormatter_CodeBlockIndent(t *testing.T) {
@@ -108,5 +112,13 @@ func TestSignalFormatter_CodeBlockIndent(t *testing.T) {
 	result := f.Format("text\n```\ncode line\n```\nmore text")
 	if !strings.Contains(result, "  code line") {
 		t.Error("code blocks should be indented with 2 spaces")
+	}
+}
+
+func TestSignalFormatter_EmptyReturnsEmpty(t *testing.T) {
+	f := &SignalFormatter{}
+	result := f.Format("")
+	if result != "" {
+		t.Errorf("empty input should return empty, got %q", result)
 	}
 }
