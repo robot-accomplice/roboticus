@@ -9,14 +9,11 @@
 package pipeline
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"strings"
 
 	"github.com/rs/zerolog/log"
-
-	"roboticus/internal/db"
 )
 
 // CacheHit represents a cached response that passed pipeline quality checks.
@@ -26,14 +23,14 @@ type CacheHit struct {
 	Fingerprint string
 }
 
-// CheckCache looks up a cached response for the given content and session.
+// CheckCache looks up a cached response for the given content.
 // Unlike the LLM-level cache, this applies pipeline-level quality guards:
 //   - Rejects cache hits shorter than 20 chars (low-value)
 //   - Rejects cache hits that parrot the user input (>60% overlap)
 //   - Rejects cache hits that are pure acknowledgements
 //
 // Returns nil if no valid cache hit is found.
-func (p *Pipeline) CheckCache(ctx context.Context, sessionID, content string) *CacheHit {
+func (p *Pipeline) CheckCache(content string) *CacheHit {
 	if p.store == nil {
 		return nil
 	}
@@ -41,11 +38,11 @@ func (p *Pipeline) CheckCache(ctx context.Context, sessionID, content string) *C
 	fp := cacheFingerprint(content)
 
 	var cached, model string
-	row := p.store.QueryRowContext(ctx,
-		`SELECT content, model FROM semantic_cache
-		 WHERE fingerprint = ? AND session_id = ?
+	row := p.store.DB().QueryRow(
+		`SELECT response, model FROM semantic_cache
+		 WHERE prompt_hash = ?
 		 ORDER BY created_at DESC LIMIT 1`,
-		fp, sessionID,
+		fp,
 	)
 	if err := row.Scan(&cached, &model); err != nil {
 		return nil // No cache hit.
@@ -53,14 +50,14 @@ func (p *Pipeline) CheckCache(ctx context.Context, sessionID, content string) *C
 
 	// Low-value guard: reject very short cached responses.
 	if len(strings.TrimSpace(cached)) < 20 {
-		log.Debug().Str("fingerprint", fp).Msg("cache hit rejected: too short")
+		log.Debug().Str("prompt_hash", fp).Msg("cache hit rejected: too short")
 		return nil
 	}
 
 	// Parroting guard: reject if cached response overlaps heavily with input.
 	overlap := textOverlapScore(cached, content)
 	if overlap > 0.6 {
-		log.Debug().Str("fingerprint", fp).Float64("overlap", overlap).Msg("cache hit rejected: parroting user input")
+		log.Debug().Str("prompt_hash", fp).Float64("overlap", overlap).Msg("cache hit rejected: parroting user input")
 		return nil
 	}
 
@@ -68,11 +65,15 @@ func (p *Pipeline) CheckCache(ctx context.Context, sessionID, content string) *C
 	ackCtx := &ShortcutContext{}
 	ackHandler := &AcknowledgementShortcut{}
 	if ackHandler.TryMatch(cached, ackCtx) != nil {
-		log.Debug().Str("fingerprint", fp).Msg("cache hit rejected: acknowledgement response")
+		log.Debug().Str("prompt_hash", fp).Msg("cache hit rejected: acknowledgement response")
 		return nil
 	}
 
-	log.Debug().Str("fingerprint", fp).Str("model", model).Msg("cache hit accepted")
+	// Increment hit count.
+	_, _ = p.store.DB().Exec(
+		`UPDATE semantic_cache SET hit_count = hit_count + 1 WHERE prompt_hash = ?`, fp)
+
+	log.Debug().Str("prompt_hash", fp).Str("model", model).Msg("cache hit accepted")
 	return &CacheHit{
 		Content:     cached,
 		Model:       model,
@@ -82,7 +83,7 @@ func (p *Pipeline) CheckCache(ctx context.Context, sessionID, content string) *C
 
 // StoreInCache persists a response in the pipeline semantic cache.
 // Only stores responses that pass the same quality guards used by CheckCache.
-func (p *Pipeline) StoreInCache(ctx context.Context, sessionID, content, response, model string) {
+func (p *Pipeline) StoreInCache(content, response, model string) {
 	if p.store == nil {
 		return
 	}
@@ -105,13 +106,13 @@ func (p *Pipeline) StoreInCache(ctx context.Context, sessionID, content, respons
 	}
 
 	fp := cacheFingerprint(content)
-	_, err := p.store.ExecContext(ctx,
-		`INSERT OR REPLACE INTO semantic_cache (id, fingerprint, session_id, content, model, created_at)
-		 VALUES (?, ?, ?, ?, ?, datetime('now'))`,
-		db.NewID(), fp, sessionID, response, model,
+	_, err := p.store.DB().Exec(
+		`INSERT OR REPLACE INTO semantic_cache (id, prompt_hash, response, model)
+		 VALUES (hex(randomblob(16)), ?, ?, ?)`,
+		fp, response, model,
 	)
 	if err != nil {
-		log.Warn().Err(err).Str("fingerprint", fp).Msg("cache store failed")
+		log.Warn().Err(err).Str("prompt_hash", fp).Msg("cache store failed")
 	}
 }
 
