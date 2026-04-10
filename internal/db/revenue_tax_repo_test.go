@@ -74,7 +74,7 @@ func TestRevenueTaxClaimRelease(t *testing.T) {
 	id := "rev_tax:claim_001"
 	seedTaxTask(t, store, id, "Claim Test", `{"type":"revenue_tax_payout"}`)
 
-	repo.MarkRevenueTaxInProgress(ctx, id)
+	_, _ = repo.MarkRevenueTaxInProgress(ctx, id)
 
 	// Claim.
 	ok, _ := repo.ClaimRevenueTaxSubmission(ctx, id)

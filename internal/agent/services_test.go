@@ -50,7 +50,7 @@ func TestServiceManager_RejectNegativePrice(t *testing.T) {
 
 func TestServiceManager_FullLifecycle(t *testing.T) {
 	mgr := NewServiceManager()
-	mgr.RegisterService(testServiceDef())
+	_ = mgr.RegisterService(testServiceDef())
 
 	// Create quote.
 	quote, err := mgr.CreateQuote("code-review", "client-1", json.RawMessage("{}"))
@@ -99,7 +99,7 @@ func TestServiceManager_FullLifecycle(t *testing.T) {
 
 func TestServiceManager_InvalidTransitions(t *testing.T) {
 	mgr := NewServiceManager()
-	mgr.RegisterService(testServiceDef())
+	_ = mgr.RegisterService(testServiceDef())
 
 	quote, _ := mgr.CreateQuote("code-review", "client-1", json.RawMessage("{}"))
 
@@ -114,7 +114,7 @@ func TestServiceManager_InvalidTransitions(t *testing.T) {
 	}
 
 	// Can't pay twice.
-	mgr.RecordPayment(quote.ID, "0xabc")
+	_ = mgr.RecordPayment(quote.ID, "0xabc")
 	if err := mgr.RecordPayment(quote.ID, "0xdef"); err == nil {
 		t.Error("expected error: not in quoted state")
 	}
@@ -122,10 +122,10 @@ func TestServiceManager_InvalidTransitions(t *testing.T) {
 
 func TestServiceManager_FailFulfillment(t *testing.T) {
 	mgr := NewServiceManager()
-	mgr.RegisterService(testServiceDef())
+	_ = mgr.RegisterService(testServiceDef())
 	quote, _ := mgr.CreateQuote("code-review", "client-1", json.RawMessage("{}"))
-	mgr.RecordPayment(quote.ID, "0xabc")
-	mgr.StartFulfillment(quote.ID)
+	_ = mgr.RecordPayment(quote.ID, "0xabc")
+	_ = mgr.StartFulfillment(quote.ID)
 
 	if err := mgr.FailFulfillment(quote.ID); err != nil {
 		t.Fatal(err)
@@ -138,9 +138,9 @@ func TestServiceManager_FailFulfillment(t *testing.T) {
 
 func TestServiceManager_RequestsByStatus(t *testing.T) {
 	mgr := NewServiceManager()
-	mgr.RegisterService(testServiceDef())
-	mgr.CreateQuote("code-review", "client-1", json.RawMessage("{}"))
-	mgr.CreateQuote("code-review", "client-2", json.RawMessage("{}"))
+	_ = mgr.RegisterService(testServiceDef())
+	_, _ = mgr.CreateQuote("code-review", "client-1", json.RawMessage("{}"))
+	_, _ = mgr.CreateQuote("code-review", "client-2", json.RawMessage("{}"))
 
 	quoted := mgr.RequestsByStatus(ServiceStatusQuoted)
 	if len(quoted) != 2 {

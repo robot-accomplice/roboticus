@@ -185,8 +185,8 @@ func (h *HippocampusRegistry) SchemaSummary(ctx context.Context) (string, error)
 		if entry.AgentOwned {
 			owner = fmt.Sprintf(" (owned by: %s)", entry.CreatedBy)
 		}
-		sb.WriteString(fmt.Sprintf("### %s%s [%s, %d rows]\n",
-			entry.TableName, owner, entry.AccessLevel, entry.RowCount))
+		fmt.Fprintf(&sb, "### %s%s [%s, %d rows]\n",
+			entry.TableName, owner, entry.AccessLevel, entry.RowCount)
 		sb.WriteString(entry.Description + "\n")
 		for _, col := range entry.Columns {
 			nullStr := ""
@@ -197,7 +197,7 @@ func (h *HippocampusRegistry) SchemaSummary(ctx context.Context) (string, error)
 			if col.Description != "" {
 				desc = " — " + col.Description
 			}
-			sb.WriteString(fmt.Sprintf("- `%s` (%s%s)%s\n", col.Name, col.ColType, nullStr, desc))
+			fmt.Fprintf(&sb, "- `%s` (%s%s)%s\n", col.Name, col.ColType, nullStr, desc)
 		}
 		sb.WriteString("\n")
 	}
@@ -247,8 +247,8 @@ func (h *HippocampusRegistry) CompactSummary(ctx context.Context) (string, error
 		}
 	}
 	if len(systemNames) > 0 {
-		sb.WriteString(fmt.Sprintf("System tables (%d): %s\n",
-			len(systemNames), strings.Join(systemNames, ", ")))
+		fmt.Fprintf(&sb, "System tables (%d): %s\n",
+			len(systemNames), strings.Join(systemNames, ", "))
 	}
 
 	sb.WriteString("Use create_table/alter_table/drop_table tools to manage your tables. ")
@@ -401,7 +401,7 @@ func validateSQLIdentifier(s string) error {
 		return fmt.Errorf("invalid SQL identifier: %s (starts with digit)", s)
 	}
 	for _, c := range s {
-		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_') {
+		if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') && c != '_' {
 			return fmt.Errorf("invalid SQL identifier: %s", s)
 		}
 	}

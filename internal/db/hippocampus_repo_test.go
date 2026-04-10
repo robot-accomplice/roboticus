@@ -60,9 +60,9 @@ func TestHippocampus_ListAgentTables(t *testing.T) {
 	ctx := context.Background()
 
 	// Register system + agent tables.
-	reg.RegisterTableFull(ctx, "system_table", "System", nil, "system", false, "internal", 0)
-	reg.RegisterTableFull(ctx, "agent1_data", "Agent data", nil, "agent1", true, "readwrite", 10)
-	reg.RegisterTableFull(ctx, "agent2_data", "Other agent", nil, "agent2", true, "readwrite", 5)
+	_ = reg.RegisterTableFull(ctx, "system_table", "System", nil, "system", false, "internal", 0)
+	_ = reg.RegisterTableFull(ctx, "agent1_data", "Agent data", nil, "agent1", true, "readwrite", 10)
+	_ = reg.RegisterTableFull(ctx, "agent2_data", "Other agent", nil, "agent2", true, "readwrite", 5)
 
 	tables, err := reg.ListAgentTables(ctx, "agent1")
 	if err != nil {
@@ -128,7 +128,7 @@ func TestHippocampus_DropDeniedForNonOwner(t *testing.T) {
 	reg := NewHippocampusRegistry(store)
 	ctx := context.Background()
 
-	reg.CreateAgentTable(ctx, "bot1", "private", "Private data", nil)
+	_, _ = reg.CreateAgentTable(ctx, "bot1", "private", "Private data", nil)
 
 	// Different agent tries to drop.
 	err := reg.DropAgentTable(ctx, store, "bot2", "bot1_private")

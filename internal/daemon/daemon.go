@@ -673,9 +673,7 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 		allowedChatIDs := discoverTelegramChatIDs(store)
 		pollTimeout := 5
 		if cfg.Channels.Telegram != nil {
-			for _, id := range cfg.Channels.Telegram.AllowedChatIDs {
-				allowedChatIDs = append(allowedChatIDs, id)
-			}
+			allowedChatIDs = append(allowedChatIDs, cfg.Channels.Telegram.AllowedChatIDs...)
 			if cfg.Channels.Telegram.PollTimeoutSeconds > 0 {
 				pollTimeout = cfg.Channels.Telegram.PollTimeoutSeconds
 			}

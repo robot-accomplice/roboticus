@@ -55,10 +55,10 @@ func TestToolEmbeddings_UpsertOnDescriptionChange(t *testing.T) {
 	ctx := context.Background()
 
 	// Save with hash v1.
-	repo.SaveToolEmbedding(ctx, "calculator", "hash_v1", []float32{1.0, 2.0})
+	_ = repo.SaveToolEmbedding(ctx, "calculator", "hash_v1", []float32{1.0, 2.0})
 
 	// Save with hash v2 (description changed).
-	repo.SaveToolEmbedding(ctx, "calculator", "hash_v2", []float32{3.0, 4.0})
+	_ = repo.SaveToolEmbedding(ctx, "calculator", "hash_v2", []float32{3.0, 4.0})
 
 	// Old hash still works.
 	old, _ := repo.GetToolEmbedding(ctx, "calculator", "hash_v1")

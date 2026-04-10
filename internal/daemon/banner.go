@@ -42,10 +42,10 @@ func initBootTheme(opts BootOptions) {
 		core.ParseThemeVariant(opts.Theme),
 	)
 	if opts.NerdMode {
-		t.WithNerdMode(true).WithDraw(false)
+		_ = t.WithNerdMode(true).WithDraw(false)
 	}
 	if opts.NoDraw {
-		t.WithDraw(false)
+		_ = t.WithDraw(false)
 	}
 	bootTheme = t
 }

@@ -78,7 +78,12 @@ func GenerateDeviceIdentity(deviceName string) (*DeviceIdentity, error) {
 		return nil, fmt.Errorf("failed to generate device key: %w", err)
 	}
 
-	pubBytes := elliptic.MarshalCompressed(key.PublicKey.Curve, key.PublicKey.X, key.PublicKey.Y)
+	// Use ECDH conversion to avoid deprecated direct X/Y field access (Go 1.26).
+	ecdhKey, err := key.PublicKey.ECDH()
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert public key: %w", err)
+	}
+	pubBytes := ecdhKey.Bytes()
 	deviceID := "dev_" + randomHex(16)
 
 	return &DeviceIdentity{

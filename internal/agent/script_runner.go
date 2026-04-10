@@ -174,7 +174,7 @@ func (sr *ScriptRunner) checkInterpreter(scriptPath string) (string, error) {
 				interpreter = parseShebang(line)
 			}
 		}
-		f.Close()
+		_ = f.Close()
 	}
 
 	// Fall back to extension inference.

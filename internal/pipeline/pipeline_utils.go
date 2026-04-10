@@ -31,7 +31,7 @@ func SkillRegistryNamesFromDB(store *db.Store) map[string]struct{} {
 		log.Warn().Err(err).Msg("pipeline: failed to query skill names from DB")
 		return names
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	for rows.Next() {
 		var name string

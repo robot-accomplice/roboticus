@@ -129,7 +129,7 @@ func TestRevenueSwapTaskFailed(t *testing.T) {
 	seedSwapTask(t, store, id, "Fail Swap", `{"type":"revenue_swap"}`)
 
 	// Move to in_progress, then fail.
-	repo.MarkRevenueSwapInProgress(ctx, id)
+	_, _ = repo.MarkRevenueSwapInProgress(ctx, id)
 	ok, err := repo.MarkRevenueSwapFailed(ctx, id, "insufficient liquidity")
 	if err != nil {
 		t.Fatalf("MarkRevenueSwapFailed: %v", err)

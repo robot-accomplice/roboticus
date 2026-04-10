@@ -173,9 +173,9 @@ func TestIngestDirectory(t *testing.T) {
 	ctx := context.Background()
 
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "a.md"), []byte("# Doc A\nSome markdown content here."), 0644)
-	os.WriteFile(filepath.Join(dir, "b.txt"), []byte("Plain text content for ingestion."), 0644)
-	os.WriteFile(filepath.Join(dir, "c.png"), []byte("fake image"), 0644) // unsupported, should skip
+	_ = os.WriteFile(filepath.Join(dir, "a.md"), []byte("# Doc A\nSome markdown content here."), 0644)
+	_ = os.WriteFile(filepath.Join(dir, "b.txt"), []byte("Plain text content for ingestion."), 0644)
+	_ = os.WriteFile(filepath.Join(dir, "c.png"), []byte("fake image"), 0644) // unsupported, should skip
 
 	results, err := IngestDirectory(ctx, store, nil, dir)
 	if err != nil {

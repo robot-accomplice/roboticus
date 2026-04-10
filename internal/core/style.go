@@ -270,7 +270,7 @@ func (t *Theme) Typewrite(text string, delayMs int) {
 	w := os.Stderr
 	inEscape := false
 	for _, ch := range text {
-		fmt.Fprintf(w, "%c", ch)
+		_, _ = fmt.Fprintf(w, "%c", ch)
 		if ch == '\x1b' {
 			inEscape = true
 			continue
