@@ -25,6 +25,7 @@ type SkillsConfig struct {
 	HotReload            bool     `json:"hot_reload" mapstructure:"hot_reload"`
 	ScriptMaxMemoryBytes int64    `json:"script_max_memory_bytes" mapstructure:"script_max_memory_bytes"`
 	NetworkAllowed       bool     `json:"network_allowed" mapstructure:"network_allowed"`
+	WorkspaceDir         string   `json:"workspace_dir,omitempty" mapstructure:"workspace_dir"`
 }
 
 // LearningConfig holds pattern learning settings.
@@ -98,6 +99,8 @@ type BrowserConfig struct {
 	CDPPort        int    `json:"cdp_port" mapstructure:"cdp_port"`
 	TimeoutSeconds int    `json:"timeout_seconds" mapstructure:"timeout_seconds"`
 	ProfileDir     string `json:"profile_dir,omitempty" mapstructure:"profile_dir"`
+	ExecutablePath string `json:"executable_path,omitempty" mapstructure:"executable_path"`
+	Headless       bool   `json:"headless" mapstructure:"headless"`
 }
 
 // PersonalityConfig holds personality file paths.
@@ -107,9 +110,34 @@ type PersonalityConfig struct {
 	OperatorPath string `json:"operator_path" mapstructure:"operator_path"`
 }
 
-// TierAdaptConfig holds adaptive tier settings.
+// TierAdaptConfig holds adaptive tier settings for model tiering.
 type TierAdaptConfig struct {
-	Enabled bool `json:"enabled" mapstructure:"enabled"`
+	Enabled          bool   `json:"enabled" mapstructure:"enabled"`
+	T1StripSystem    bool   `json:"t1_strip_system" mapstructure:"t1_strip_system"`
+	T1CondenseTurns  bool   `json:"t1_condense_turns" mapstructure:"t1_condense_turns"`
+	T2DefaultPreamble string `json:"t2_default_preamble" mapstructure:"t2_default_preamble"`
+	T3T4Passthrough  bool   `json:"t3_t4_passthrough" mapstructure:"t3_t4_passthrough"`
+}
+
+// TieredInferenceConfig holds confidence-based model escalation settings.
+type TieredInferenceConfig struct {
+	Enabled                    bool    `json:"enabled" mapstructure:"enabled"`
+	ConfidenceFloor            float64 `json:"confidence_floor" mapstructure:"confidence_floor"`
+	EscalationLatencyBudgetMs  int64   `json:"escalation_latency_budget_ms" mapstructure:"escalation_latency_budget_ms"`
+}
+
+// RevenueSwapConfig holds revenue swap execution settings.
+type RevenueSwapConfig struct {
+	TargetSymbol string                  `json:"target_symbol" mapstructure:"target_symbol"`
+	DefaultChain string                  `json:"default_chain" mapstructure:"default_chain"`
+	Chains       []RevenueSwapChainConfig `json:"chains" mapstructure:"chains"`
+}
+
+// RevenueSwapChainConfig holds per-chain swap settings.
+type RevenueSwapChainConfig struct {
+	Chain                  string `json:"chain" mapstructure:"chain"`
+	TargetContractAddress  string `json:"target_contract_address" mapstructure:"target_contract_address"`
+	SwapContractAddress    string `json:"swap_contract_address,omitempty" mapstructure:"swap_contract_address"`
 }
 
 // UpdateConfig holds auto-update settings.

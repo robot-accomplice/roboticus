@@ -141,13 +141,17 @@ type AgentConfig struct {
 
 // ServerConfig holds HTTP server settings.
 type ServerConfig struct {
-	Port               int      `json:"port" mapstructure:"port"`
-	Bind               string   `json:"bind" mapstructure:"bind"`
-	LogDir             string   `json:"log_dir" mapstructure:"log_dir"`
-	CronMaxConcurrency int      `json:"cron_max_concurrency" mapstructure:"cron_max_concurrency"`
-	APIKey             string   `json:"api_key" mapstructure:"api_key"`
-	LogMaxDays         int      `json:"log_max_days" mapstructure:"log_max_days"`
-	TrustedProxyCIDRs  []string `json:"trusted_proxy_cidrs" mapstructure:"trusted_proxy_cidrs"`
+	Port                      int      `json:"port" mapstructure:"port"`
+	Bind                      string   `json:"bind" mapstructure:"bind"`
+	LogDir                    string   `json:"log_dir" mapstructure:"log_dir"`
+	CronMaxConcurrency        int      `json:"cron_max_concurrency" mapstructure:"cron_max_concurrency"`
+	APIKey                    string   `json:"api_key" mapstructure:"api_key"`
+	LogMaxDays                int      `json:"log_max_days" mapstructure:"log_max_days"`
+	TrustedProxyCIDRs         []string `json:"trusted_proxy_cidrs" mapstructure:"trusted_proxy_cidrs"`
+	RateLimitRequests         int      `json:"rate_limit_requests" mapstructure:"rate_limit_requests"`
+	RateLimitWindowSecs       int      `json:"rate_limit_window_secs" mapstructure:"rate_limit_window_secs"`
+	PerIPRateLimitRequests    int      `json:"per_ip_rate_limit_requests" mapstructure:"per_ip_rate_limit_requests"`
+	PerActorRateLimitRequests int      `json:"per_actor_rate_limit_requests" mapstructure:"per_actor_rate_limit_requests"`
 }
 
 // DatabaseConfig holds SQLite connection settings.
@@ -157,11 +161,12 @@ type DatabaseConfig struct {
 
 // ModelsConfig holds LLM provider and model settings.
 type ModelsConfig struct {
-	Primary         string                   `json:"primary" mapstructure:"primary"`
-	Fallback        []string                 `json:"fallbacks,omitempty" toml:"fallbacks" mapstructure:"fallbacks"`
-	Routing         RoutingConfig            `json:"routing" mapstructure:"routing"`
-	ModelOverrides  map[string]ModelOverride `json:"model_overrides,omitempty" mapstructure:"model_overrides"`
-	StreamByDefault bool                     `json:"stream_by_default" mapstructure:"stream_by_default"`
+	Primary          string                   `json:"primary" mapstructure:"primary"`
+	Fallback         []string                 `json:"fallbacks,omitempty" toml:"fallbacks" mapstructure:"fallbacks"`
+	Routing          RoutingConfig            `json:"routing" mapstructure:"routing"`
+	ModelOverrides   map[string]ModelOverride  `json:"model_overrides,omitempty" mapstructure:"model_overrides"`
+	StreamByDefault  bool                     `json:"stream_by_default" mapstructure:"stream_by_default"`
+	TieredInference  TieredInferenceConfig    `json:"tiered_inference" mapstructure:"tiered_inference"`
 }
 
 // RoutingConfig holds model routing parameters.
@@ -208,40 +213,48 @@ type ProviderConfig struct {
 
 // SessionConfig holds session scoping and timeout settings.
 type SessionConfig struct {
-	ScopeMode  string `json:"scope_mode" mapstructure:"scope_mode"`
-	TTLSeconds int    `json:"ttl_seconds" mapstructure:"ttl_seconds"`
+	ScopeMode     string `json:"scope_mode" mapstructure:"scope_mode"`
+	TTLSeconds    int    `json:"ttl_seconds" mapstructure:"ttl_seconds"`
+	ResetSchedule string `json:"reset_schedule,omitempty" mapstructure:"reset_schedule"`
 }
 
 // MemoryConfig holds memory budget settings as percentages (must sum to 100).
 // WorkingBudgetPct is an alias for WorkingBudget for roboticus compatibility.
 type MemoryConfig struct {
-	WorkingBudget      float64 `json:"working_budget" mapstructure:"working_budget"`
-	WorkingBudgetPct   float64 `json:"working_budget_pct,omitempty" mapstructure:"working_budget_pct"`
-	EpisodicBudget     float64 `json:"episodic_budget" mapstructure:"episodic_budget"`
-	SemanticBudget     float64 `json:"semantic_budget" mapstructure:"semantic_budget"`
-	ProceduralBudget   float64 `json:"procedural_budget" mapstructure:"procedural_budget"`
-	RelationshipBudget float64 `json:"relationship_budget" mapstructure:"relationship_budget"`
-	EmbeddingProvider  string  `json:"embedding_provider,omitempty" mapstructure:"embedding_provider"`
-	EmbeddingModel     string  `json:"embedding_model,omitempty" mapstructure:"embedding_model"`
-	HybridWeight       float64 `json:"hybrid_weight" mapstructure:"hybrid_weight"`
-	AnnIndex           bool    `json:"ann_index" mapstructure:"ann_index"`
-	DecayHalfLifeDays  float64 `json:"decay_half_life_days" mapstructure:"decay_half_life_days"`
+	WorkingBudget            float64 `json:"working_budget" mapstructure:"working_budget"`
+	WorkingBudgetPct         float64 `json:"working_budget_pct,omitempty" mapstructure:"working_budget_pct"`
+	EpisodicBudget           float64 `json:"episodic_budget" mapstructure:"episodic_budget"`
+	SemanticBudget           float64 `json:"semantic_budget" mapstructure:"semantic_budget"`
+	ProceduralBudget         float64 `json:"procedural_budget" mapstructure:"procedural_budget"`
+	RelationshipBudget       float64 `json:"relationship_budget" mapstructure:"relationship_budget"`
+	EmbeddingProvider        string  `json:"embedding_provider,omitempty" mapstructure:"embedding_provider"`
+	EmbeddingModel           string  `json:"embedding_model,omitempty" mapstructure:"embedding_model"`
+	HybridWeight             float64 `json:"hybrid_weight" mapstructure:"hybrid_weight"`
+	AnnIndex                 bool    `json:"ann_index" mapstructure:"ann_index"`
+	DecayHalfLifeDays        float64 `json:"decay_half_life_days" mapstructure:"decay_half_life_days"`
+	SimilarityThreshold      float64 `json:"similarity_threshold" mapstructure:"similarity_threshold"`
+	ANNActivationThreshold   int     `json:"ann_activation_threshold" mapstructure:"ann_activation_threshold"`
 }
 
 // CacheConfig holds semantic cache settings.
 type CacheConfig struct {
-	Enabled             bool    `json:"enabled" mapstructure:"enabled"`
-	TTLSeconds          int     `json:"ttl_seconds" mapstructure:"ttl_seconds"`
-	SimilarityThreshold float64 `json:"similarity_threshold" mapstructure:"similarity_threshold"`
-	MaxEntries          int     `json:"max_entries" mapstructure:"max_entries"`
+	Enabled                 bool    `json:"enabled" mapstructure:"enabled"`
+	TTLSeconds              int     `json:"ttl_seconds" mapstructure:"ttl_seconds"`
+	SimilarityThreshold     float64 `json:"similarity_threshold" mapstructure:"similarity_threshold"`
+	MaxEntries              int     `json:"max_entries" mapstructure:"max_entries"`
+	PromptCompression       bool    `json:"prompt_compression" mapstructure:"prompt_compression"`
+	CompressionTargetRatio  float64 `json:"compression_target_ratio" mapstructure:"compression_target_ratio"`
 }
 
 // TreasuryConfig holds financial policy limits.
 type TreasuryConfig struct {
-	DailyCap       float64 `json:"daily_cap" mapstructure:"daily_cap"`
-	PerPaymentCap  float64 `json:"per_payment_cap" mapstructure:"per_payment_cap"`
-	TransferLimit  float64 `json:"transfer_limit" mapstructure:"transfer_limit"`
-	MinimumReserve float64 `json:"minimum_reserve" mapstructure:"minimum_reserve"`
+	DailyCap              float64           `json:"daily_cap" mapstructure:"daily_cap"`
+	PerPaymentCap         float64           `json:"per_payment_cap" mapstructure:"per_payment_cap"`
+	TransferLimit         float64           `json:"transfer_limit" mapstructure:"transfer_limit"`
+	MinimumReserve        float64           `json:"minimum_reserve" mapstructure:"minimum_reserve"`
+	HourlyTransferLimit   float64           `json:"hourly_transfer_limit" mapstructure:"hourly_transfer_limit"`
+	DailyInferenceBudget  float64           `json:"daily_inference_budget" mapstructure:"daily_inference_budget"`
+	RevenueSwap           RevenueSwapConfig `json:"revenue_swap" mapstructure:"revenue_swap"`
 }
 
 // WalletConfig holds crypto wallet settings.
@@ -276,9 +289,14 @@ type SecurityConfig struct {
 	DenyOnEmptyAllowlist bool     `json:"deny_on_empty_allowlist" mapstructure:"deny_on_empty_allowlist"`
 	AllowedPaths         []string `json:"allowed_paths" mapstructure:"allowed_paths"`
 	ProtectedPaths       []string `json:"protected_paths" mapstructure:"protected_paths"`
+	ExtraProtectedPaths  []string `json:"extra_protected_paths,omitempty" mapstructure:"extra_protected_paths"`
 	InterpreterAllow     []string `json:"interpreter_allow" mapstructure:"interpreter_allow"`
 	ScriptAllowedPaths   []string `json:"script_allowed_paths" mapstructure:"script_allowed_paths"`
 	ThreatCautionCeiling string   `json:"threat_caution_ceiling,omitempty" mapstructure:"threat_caution_ceiling"`
+	AllowlistAuthority   string   `json:"allowlist_authority,omitempty" mapstructure:"allowlist_authority"`
+	TrustedAuthority     string   `json:"trusted_authority,omitempty" mapstructure:"trusted_authority"`
+	APIAuthority         string   `json:"api_authority,omitempty" mapstructure:"api_authority"`
+	SandboxRequired      bool     `json:"sandbox_required" mapstructure:"sandbox_required"`
 	// TrustedSenderIDs lists sender/chat IDs that receive Creator authority via
 	// the SecurityClaim resolver's TrustedAuthority grant. Matches Rust's
 	// channels.trusted_sender_ids configuration.
@@ -373,11 +391,15 @@ func DefaultConfig() Config {
 			RetirementMinDelegations:    10,            // Rust parity
 		},
 		Server: ServerConfig{
-			Port:               DefaultServerPort,
-			Bind:               DefaultServerBind,
-			LogDir:             filepath.Join(dataDir, "logs"),
-			CronMaxConcurrency: 8,
-			LogMaxDays:         7,
+			Port:                      DefaultServerPort,
+			Bind:                      DefaultServerBind,
+			LogDir:                    filepath.Join(dataDir, "logs"),
+			CronMaxConcurrency:        8,
+			LogMaxDays:                7,
+			RateLimitRequests:         100,
+			RateLimitWindowSecs:       60,
+			PerIPRateLimitRequests:    300,
+			PerActorRateLimitRequests: 200,
 		},
 		Database: DatabaseConfig{
 			Path: filepath.Join(dataDir, "roboticus.db"),
@@ -396,27 +418,39 @@ func DefaultConfig() Config {
 				MaxFallbackAttempts:    6,
 				LocalFirst:             true,
 			},
+			TieredInference: TieredInferenceConfig{
+				ConfidenceFloor:           0.6,
+				EscalationLatencyBudgetMs: 3000,
+			},
 		},
 		Providers: make(map[string]ProviderConfig),
 		Memory: MemoryConfig{
-			WorkingBudget:      30,
-			EpisodicBudget:     25,
-			SemanticBudget:     20,
-			ProceduralBudget:   15,
-			RelationshipBudget: 10,
-			HybridWeight:       0.5,
-			DecayHalfLifeDays:  7.0,
+			WorkingBudget:          30,
+			EpisodicBudget:         25,
+			SemanticBudget:         20,
+			ProceduralBudget:       15,
+			RelationshipBudget:     10,
+			HybridWeight:           0.5,
+			DecayHalfLifeDays:      7.0,
+			ANNActivationThreshold: 1000,
 		},
 		Cache: CacheConfig{
-			Enabled:             true,
-			TTLSeconds:          3600,
-			SimilarityThreshold: 0.95,
-			MaxEntries:          10000,
+			Enabled:                true,
+			TTLSeconds:             3600,
+			SimilarityThreshold:    0.95,
+			MaxEntries:             10000,
+			CompressionTargetRatio: 0.5,
 		},
 		Treasury: TreasuryConfig{
-			DailyCap:      5.0,
-			PerPaymentCap: 100.0,
-			TransferLimit: 1.0,
+			DailyCap:             5.0,
+			PerPaymentCap:        100.0,
+			TransferLimit:        1.0,
+			HourlyTransferLimit:  500.0,
+			DailyInferenceBudget: 50.0,
+			RevenueSwap: RevenueSwapConfig{
+				TargetSymbol: "PUSD",
+				DefaultChain: "ETH",
+			},
 		},
 		Session: SessionConfig{
 			ScopeMode:  "peer",
@@ -435,6 +469,9 @@ func DefaultConfig() Config {
 		Security: SecurityConfig{
 			WorkspaceOnly:        true,
 			DenyOnEmptyAllowlist: true,
+			AllowlistAuthority:   "Peer",
+			TrustedAuthority:     "Creator",
+			APIAuthority:         "Creator",
 		},
 		Skills: SkillsConfig{
 			WatchMode:            true,
@@ -494,6 +531,7 @@ func DefaultConfig() Config {
 		Browser: BrowserConfig{
 			CDPPort:        9222,
 			TimeoutSeconds: 30,
+			Headless:       true,
 		},
 		Daemon: DaemonConfig{
 			AutoRestart: false,
@@ -503,7 +541,9 @@ func DefaultConfig() Config {
 			CheckIntervalHours: 24,
 		},
 		TierAdapt: TierAdaptConfig{
-			Enabled: false,
+			Enabled:           false,
+			T2DefaultPreamble: "Be concise and direct. Focus on accuracy.",
+			T3T4Passthrough:   true,
 		},
 		Digest: DigestConfig{
 			Enabled:           true,
