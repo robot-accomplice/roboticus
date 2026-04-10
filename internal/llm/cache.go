@@ -65,11 +65,16 @@ func NewCache(cfg CacheConfig, store *db.Store, errBus *core.ErrorBus) *Cache {
 	}
 }
 
-// Get checks L1 then L2 for a cached response. Returns nil on miss.
+// semanticSimilarityThreshold is the minimum cosine similarity for a semantic
+// cache hit. Matches Rust's default (0.85).
+const semanticSimilarityThreshold = 0.85
+
+// Get checks L1 exact, then L1 semantic (n-gram), then L2 SQLite.
+// Rust parity: lookup() → L1 exact → L3 tool-TTL → L2 semantic.
 func (c *Cache) Get(ctx context.Context, req *Request) *Response {
 	hash := hashRequest(req)
 
-	// L1: in-memory.
+	// L1: exact hash match.
 	c.mu.RLock()
 	if entry, ok := c.mem[hash]; ok {
 		c.mu.RUnlock()
@@ -82,15 +87,25 @@ func (c *Cache) Get(ctx context.Context, req *Request) *Response {
 			c.mu.Lock()
 			entry.Hits++
 			c.mu.Unlock()
-			log.Trace().Str("hash", hash[:12]).Msg("cache hit (L1)")
+			log.Trace().Str("hash", hash[:12]).Msg("cache hit (L1 exact)")
 			return entry.Response
 		}
-		// Expired — fall through to L2 and evict from L1.
+		// Expired — fall through to semantic and L2.
 		c.mu.Lock()
 		delete(c.mem, hash)
 		c.mu.Unlock()
 	} else {
 		c.mu.RUnlock()
+	}
+
+	// L1 semantic: n-gram embedding similarity search across L1 entries.
+	// Rust parity: compute_ngram_embedding(prompt) + cosine scan.
+	promptText := extractPromptText(req)
+	if promptText != "" {
+		queryEmb := ngramEmbedFloat64(promptText)
+		if resp, ok := c.GetSemantic(ctx, queryEmb, semanticSimilarityThreshold); ok {
+			return resp
+		}
 	}
 
 	// L2: SQLite.
@@ -130,11 +145,20 @@ func (c *Cache) Get(ctx context.Context, req *Request) *Response {
 }
 
 // Put stores a response in both L1 and L2.
+// Automatically computes an n-gram embedding for semantic search (Rust parity).
 func (c *Cache) Put(ctx context.Context, req *Request, resp *Response) {
 	hash := hashRequest(req)
 	now := time.Now()
 	involvedTools := len(req.Tools) > 0
-	c.putWithTools(hash, resp, now, involvedTools)
+
+	// Compute n-gram embedding for semantic lookup (Rust parity: store embedding
+	// at Put time so future semantic searches can match).
+	promptText := extractPromptText(req)
+	var embedding []float64
+	if promptText != "" {
+		embedding = ngramEmbedFloat64(promptText)
+	}
+	c.putWithToolsAndEmbed(hash, resp, now, involvedTools, embedding)
 
 	// Persist to L2.
 	if c.store == nil {
@@ -165,8 +189,13 @@ func (c *Cache) put(hash string, resp *Response, created time.Time) {
 	c.putWithTools(hash, resp, created, false)
 }
 
-// putWithTools adds an entry to L1 with LFU eviction.
+// putWithTools adds an entry to L1 with LFU eviction (no embedding).
 func (c *Cache) putWithTools(hash string, resp *Response, created time.Time, involvedTools bool) {
+	c.putWithToolsAndEmbed(hash, resp, created, involvedTools, nil)
+}
+
+// putWithToolsAndEmbed adds an entry to L1 with LFU eviction and optional embedding.
+func (c *Cache) putWithToolsAndEmbed(hash string, resp *Response, created time.Time, involvedTools bool, embedding []float64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -175,6 +204,7 @@ func (c *Cache) putWithTools(hash string, resp *Response, created time.Time, inv
 		CreatedAt:     created,
 		InvolvedTools: involvedTools,
 		Hits:          0,
+		Embedding:     embedding,
 	}
 	c.order = append(c.order, hash)
 
@@ -307,6 +337,28 @@ func sqrt(x float64) float64 {
 		z = (z + x/z) / 2
 	}
 	return z
+}
+
+// extractPromptText returns the user-facing content from a request for semantic matching.
+func extractPromptText(req *Request) string {
+	for i := len(req.Messages) - 1; i >= 0; i-- {
+		if req.Messages[i].Role == "user" && req.Messages[i].Content != "" {
+			return req.Messages[i].Content
+		}
+	}
+	return ""
+}
+
+// ngramEmbedFloat64 computes a 128-dim character n-gram embedding as float64
+// for cosine similarity comparison. Uses the same algorithm as ngramHash but
+// returns float64 to match the cache's embedding storage format.
+func ngramEmbedFloat64(text string) []float64 {
+	f32 := ngramHash(text, ngramDim)
+	result := make([]float64, len(f32))
+	for i, v := range f32 {
+		result[i] = float64(v)
+	}
+	return result
 }
 
 // hashRequest produces a deterministic hash of the request for cache keying.
