@@ -1036,6 +1036,140 @@ func TestFitness_InferenceParamsNilSafety(t *testing.T) {
 	}
 }
 
+// ── Cache Hit Session Persistence Fitness Test ──────────────────────────
+//
+// Regression: cache hit path returned without storing the assistant response
+// in session_messages, breaking context continuity on subsequent turns.
+// The model would lose the cached exchange from its history, causing
+// response looping and context drift.
+
+func TestFitness_CacheHitStoresAssistantMessage(t *testing.T) {
+	store := testutil.TempStore(t)
+	pipe := New(PipelineDeps{
+		Store:    store,
+		Executor: &stubExecutor{response: "This is a substantive cached response for session persistence fitness testing"},
+		BGWorker: testutil.BGWorker(t, 4),
+	})
+
+	cfg := PresetAPI()
+	prompt := "cache hit session persistence fitness test"
+	expectedResponse := "This is a substantive cached response for session persistence fitness testing"
+
+	// First run: generates response and stores in cache.
+	outcome1, err := RunPipeline(context.Background(), pipe, cfg, Input{
+		Content: prompt,
+		AgentID: "default",
+	})
+	if err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+
+	// Wait for background cache store.
+	pipe.bgWorker.Drain(5 * time.Second)
+
+	// Second run: should hit cache.
+	outcome2, err := RunPipeline(context.Background(), pipe, cfg, Input{
+		Content:   prompt,
+		AgentID:   "default",
+		SessionID: outcome1.SessionID, // Same session!
+	})
+	if err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if !outcome2.FromCache {
+		t.Skip("cache miss — skipping persistence check")
+	}
+	if outcome2.Content != expectedResponse {
+		t.Errorf("cached content = %q, want %q", outcome2.Content, expectedResponse)
+	}
+
+	// CRITICAL CHECK: The cached assistant message must exist in session_messages.
+	var assistantCount int
+	err = store.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM session_messages
+		 WHERE session_id = ? AND role = 'assistant'`,
+		outcome1.SessionID).Scan(&assistantCount)
+	if err != nil {
+		t.Fatalf("query assistant messages: %v", err)
+	}
+	// Should have AT LEAST 2 assistant messages: one from first run, one from cache hit.
+	if assistantCount < 2 {
+		t.Errorf("expected >= 2 assistant messages in session_messages, got %d (cache hit not persisted)", assistantCount)
+	}
+}
+
+// ── Personality Reinforcement Fitness Test ──────────────────────────────
+//
+// On early turns (1-3) with no memory, the pipeline injects a personality
+// reinforcement system note so the model doesn't default to generic
+// assistant behavior. This test verifies the reinforcement fires.
+
+func TestFitness_PersonalityReinforcementOnEarlyTurns(t *testing.T) {
+	store := testutil.TempStore(t)
+
+	// Use a stub retriever that always returns empty (simulating cold start).
+	pipe := New(PipelineDeps{
+		Store:    store,
+		Executor: &stubExecutor{response: "Personality reinforcement fitness test response with character-appropriate content"},
+		Retriever: &stubRetriever{result: ""},
+		BGWorker: testutil.BGWorker(t, 4),
+	})
+
+	cfg := PresetAPI()
+	outcome, err := RunPipeline(context.Background(), pipe, cfg, Input{
+		Content: "Hello, who are you?",
+		AgentID: "default",
+	})
+	if err != nil {
+		t.Fatalf("RunPipeline: %v", err)
+	}
+
+	// Check trace for personality_boost annotation.
+	trace := extractFullTrace(t, store, outcome.SessionID)
+	spans := extractSpans(t, trace.StagesJSON)
+	memSpan := findSpan(spans, "memory_retrieval")
+	if memSpan == nil {
+		t.Fatal("missing memory_retrieval span")
+	}
+	if !hasAnnotation(memSpan, "personality_boost") {
+		t.Error("early turn with empty memory should annotate personality_boost=true")
+	}
+}
+
+func TestFitness_PersonalityReinforcementNotOnLaterTurns(t *testing.T) {
+	store := testutil.TempStore(t)
+
+	// Stub retriever that returns actual memory content (simulating established session).
+	pipe := New(PipelineDeps{
+		Store:    store,
+		Executor: &stubExecutor{response: "Later turn fitness test response that should not trigger personality reinforcement"},
+		Retriever: &stubRetriever{
+			result: "[Working Memory]\nUser prefers concise responses.\n---\n[Episodic]\nPrevious discussion about pipeline architecture.",
+		},
+		BGWorker: testutil.BGWorker(t, 4),
+	})
+
+	cfg := PresetAPI()
+	outcome, err := RunPipeline(context.Background(), pipe, cfg, Input{
+		Content: "Tell me more about that",
+		AgentID: "default",
+	})
+	if err != nil {
+		t.Fatalf("RunPipeline: %v", err)
+	}
+
+	// When memory IS available, personality boost should NOT fire.
+	trace := extractFullTrace(t, store, outcome.SessionID)
+	spans := extractSpans(t, trace.StagesJSON)
+	memSpan := findSpan(spans, "memory_retrieval")
+	if memSpan == nil {
+		t.Fatal("missing memory_retrieval span")
+	}
+	if hasAnnotation(memSpan, "personality_boost") {
+		t.Error("personality_boost should NOT fire when memory retrieval returns content")
+	}
+}
+
 // ── Pipeline Trace Persistence Fitness Test ───────────────────────────────
 //
 // Verify that the pipeline actually persists traces to the DB on every run.

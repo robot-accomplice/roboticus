@@ -178,6 +178,10 @@ func (g *InternalJargonGuard) CheckWithContext(content string, ctx *GuardContext
 		"decomposition gate decision", "expected_utility_margin",
 		"active model:", "enabled subagents:", "pipeline stage",
 		"guard chain", "react loop", "inference_costs",
+		"safety layers", "behavioral checks", "behavioral check",
+		"the model responds", "the model's response",
+		"simulate behavioral", "response reliability",
+		"over-refusing", "boilerplate warnings",
 	}
 	for _, m := range infraMarkers {
 		if strings.Contains(lower, m) {

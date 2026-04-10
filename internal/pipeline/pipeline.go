@@ -404,6 +404,24 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 		if memoryBlock != "" {
 			fragmentCount = strings.Count(memoryBlock, "---") + 1
 		}
+
+		// Personality reinforcement on early turns (Rust parity).
+		// On turns 1-3, memory retrieval returns empty because IngestTurn
+		// runs as post-turn background work — no episodic/semantic memories
+		// exist yet. Without reinforcement, the model sees only the system
+		// prompt personality and deprioritizes it as boilerplate. Rust solves
+		// this by seeding an initial memory orientation; we inject a system
+		// note that explicitly directs the model to embody its identity.
+		if memoryBlock == "" && session.TurnCount() <= 3 {
+			personalityBoost := "[Identity Reinforcement] This is an early turn in the conversation. " +
+				"Your personality, voice, and behavioral directives from the system prompt are " +
+				"your PRIMARY guide for tone, style, and approach. Embody them fully — do not " +
+				"fall back to generic AI assistant behavior. Respond as the character defined in " +
+				"your system prompt, not as a generic helpful assistant."
+			session.AddSystemMessage(personalityBoost)
+			tr.Annotate("personality_boost", true)
+		}
+
 		AnnotateRetrievalStrategy(tr, retrievalStrat.Strategy, retrievalStrat.Budget, fragmentCount)
 		tr.EndSpan("ok")
 	}
@@ -492,6 +510,24 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 			if p.guards != nil && cfg.CacheGuardSet != GuardSetNone {
 				cacheOutcome.Content = p.guards.Apply(cacheOutcome.Content)
 			}
+
+			// Persist cached assistant response to session_messages.
+			// Without this, subsequent turns lose the cached exchange from
+			// their history, causing context drift and response looping.
+			assistantMsgID := db.NewID()
+			topicTag := p.deriveTopicTag(session, cacheOutcome.Content)
+			_, cacheStoreErr := p.store.ExecContext(ctx,
+				`INSERT INTO session_messages (id, session_id, role, content, topic_tag)
+				 VALUES (?, ?, 'assistant', ?, ?)`,
+				assistantMsgID, session.ID, cacheOutcome.Content, topicTag,
+			)
+			if cacheStoreErr != nil {
+				log.Error().Err(cacheStoreErr).Str("session", session.ID).Msg("failed to store cached assistant message")
+			}
+			// Also update in-memory session so guard context and dedup
+			// see the cached response within this request lifecycle.
+			session.AddAssistantMessage(cacheOutcome.Content, nil)
+
 			p.storeTraceWithArtifacts(ctx, tr, session.ID, msgID, cfg.ChannelLabel, cacheOutcome)
 			p.tasks.Complete(taskID)
 			return cacheOutcome, nil
@@ -538,6 +574,14 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 		p.bgWorker.Submit("storeCache", func(_ context.Context) {
 			p.StoreInCache(content, outcome.Content, outcome.Model)
 		})
+	}
+
+	// Empty response guard: if inference produced nothing (all models failed,
+	// guard chain stripped everything, or deadline hit), provide a fallback
+	// rather than sending an empty message to the channel.
+	if outcome != nil && strings.TrimSpace(outcome.Content) == "" {
+		outcome.Content = "I wasn't able to formulate a response right now. Could you try again?"
+		log.Warn().Str("session", session.ID).Msg("pipeline produced empty content — injected fallback")
 	}
 
 	p.storeTraceWithArtifacts(ctx, tr, session.ID, msgID, cfg.ChannelLabel, outcome)

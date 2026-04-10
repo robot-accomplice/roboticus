@@ -45,6 +45,18 @@ func (rq *RouteQueries) CountActiveSessions(ctx context.Context) (int, error) {
 	return count, err
 }
 
+// HasRecentActivity checks if there's been a pipeline trace within the last N seconds,
+// indicating the primary agent is actively processing. Used by workspace to derive
+// agent activity status instead of hardcoding "idle".
+func (rq *RouteQueries) HasRecentActivity(ctx context.Context, withinSeconds int) (bool, error) {
+	var count int
+	err := rq.q.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pipeline_traces
+		 WHERE created_at > datetime('now', '-' || ? || ' seconds')`,
+		withinSeconds).Scan(&count)
+	return count > 0, err
+}
+
 // SessionMessages returns messages for a session.
 func (rq *RouteQueries) SessionMessages(ctx context.Context, sessionID string, limit int) (*sql.Rows, error) {
 	return rq.q.QueryContext(ctx,
