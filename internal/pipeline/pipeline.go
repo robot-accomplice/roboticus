@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -45,14 +46,15 @@ type Outcome struct {
 
 // Input is the raw request to the pipeline.
 type Input struct {
-	Content   string
-	SessionID string // empty for auto-resolution
-	AgentID   string
-	AgentName string
-	Platform  string // channel platform name
-	SenderID  string // channel sender identifier
-	ChatID    string // channel chat identifier
-	Claim     *ChannelClaimContext
+	Content       string
+	SessionID     string // empty for auto-resolution
+	AgentID       string
+	AgentName     string
+	Platform      string // channel platform name
+	SenderID      string // channel sender identifier
+	ChatID        string // channel chat identifier
+	ModelOverride string // force a specific model, bypassing router
+	Claim         *ChannelClaimContext
 }
 
 // Runner is the interface for executing the pipeline.
@@ -89,6 +91,7 @@ type Pipeline struct {
 	dedup      *DedupTracker
 	tasks      *TaskTracker
 	embeddings *llm.EmbeddingClient
+	errBus     *core.ErrorBus
 }
 
 // PipelineDeps bundles dependencies for the Pipeline.
@@ -105,6 +108,7 @@ type PipelineDeps struct {
 	Guards     *GuardChain
 	BGWorker   *core.BackgroundWorker
 	Embeddings *llm.EmbeddingClient
+	ErrBus     *core.ErrorBus
 }
 
 // New creates the unified pipeline.
@@ -128,6 +132,7 @@ func New(deps PipelineDeps) *Pipeline {
 		dedup:      NewDedupTracker(60 * time.Second),
 		tasks:      NewTaskTracker(),
 		embeddings: deps.Embeddings,
+		errBus:     deps.ErrBus,
 	}
 }
 
@@ -176,6 +181,11 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 	// Cron delegation wrap: prepend subagent directive for non-root cron tasks.
 	if cfg.CronDelegationWrap && input.AgentID != "" && input.AgentID != "default" {
 		input.Content = fmt.Sprintf("[Delegated to %s] %s", input.AgentID, input.Content)
+	}
+
+	// API-level model override takes precedence over config.
+	if input.ModelOverride != "" {
+		cfg.ModelOverride = input.ModelOverride
 	}
 
 	// Prefer local model: scan fallbacks for a local provider and set override.
@@ -334,15 +344,26 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 	}
 
 	// ── Stage 8: Authority resolution ──────────────────────────────────────
+	// Full SecurityClaim resolution via core resolvers (Rust parity).
+	// The claim carries source tracking for audit + ceiling enforcement.
 	tr.BeginSpan("authority_resolution")
-	authority := ResolveAuthority(cfg.AuthorityMode, input.Claim)
+	secClaim := ResolveSecurityClaim(cfg.AuthorityMode, input.Claim)
 	// Reduce authority if injection threat was caution-level (Rust parity).
-	if threatCaution && authority == core.AuthorityCreator {
-		authority = core.AuthorityPeer
+	if threatCaution && secClaim.Authority == core.AuthorityCreator {
+		secClaim.Authority = core.AuthorityPeer
+		secClaim.ThreatDowngraded = true
 		log.Warn().Str("session", session.ID).Msg("authority reduced due to injection caution")
 	}
-	session.Authority = authority
-	tr.Annotate("authority", authority.String())
+	session.Authority = secClaim.Authority
+	session.SecurityClaim = &secClaim
+	tr.Annotate("authority", secClaim.Authority.String())
+	if len(secClaim.Sources) > 0 {
+		sourceStrs := make([]string, len(secClaim.Sources))
+		for i, s := range secClaim.Sources {
+			sourceStrs[i] = s.String()
+		}
+		tr.Annotate("claim_sources", strings.Join(sourceStrs, ","))
+	}
 	tr.EndSpan("ok")
 
 	// ── Stage 9: Delegated execution ───────────────────────────────────────
@@ -361,7 +382,7 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 
 	// ── Stage 10: Skill-first fulfillment ──────────────────────────────────
 	tr.BeginSpan("skill_dispatch")
-	if cfg.SkillFirstEnabled && authority == core.AuthorityCreator && p.skills != nil {
+	if cfg.SkillFirstEnabled && secClaim.Authority == core.AuthorityCreator && p.skills != nil {
 		if result := p.skills.TryMatch(ctx, session, content); result != nil {
 			tr.Annotate("matched", true)
 			tr.EndSpan("ok")

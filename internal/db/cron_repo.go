@@ -3,6 +3,8 @@ package db
 import (
 	"context"
 	"strings"
+
+	"github.com/rs/zerolog/log"
 )
 
 // CronRepository handles cron job persistence.
@@ -65,7 +67,10 @@ func (r *CronRepository) ReleaseLease(ctx context.Context, jobID, holderID strin
 
 // DeleteJob removes a cron job and its run history.
 func (r *CronRepository) DeleteJob(ctx context.Context, id string) (int64, error) {
-	_, _ = r.q.ExecContext(ctx, `DELETE FROM cron_runs WHERE job_id = ?`, id)
+	// Best-effort: run history is secondary to the job itself.
+	if _, err := r.q.ExecContext(ctx, `DELETE FROM cron_runs WHERE job_id = ?`, id); err != nil {
+		log.Warn().Err(err).Str("job_id", id).Msg("cron: failed to delete run history")
+	}
 	res, err := r.q.ExecContext(ctx, `DELETE FROM cron_jobs WHERE id = ?`, id)
 	if err != nil {
 		return 0, err

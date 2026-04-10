@@ -111,7 +111,7 @@ func TestParity_PresetDifferencesAreExhaustive(t *testing.T) {
 		"NicknameRefinement":     {true, false, false, false},
 		"PreferLocalModel":       {false, false, false, false},
 		"CronDelegationWrap":     {false, false, false, true},
-		"BotCommandDispatch":     {false, false, false, false},
+		"BotCommandDispatch":     {false, false, true, false}, // Channel only (Rust parity)
 		"InjectDiagnostics":      {true, true, false, false},
 	}
 

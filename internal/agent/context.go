@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"roboticus/internal/core"
 	"roboticus/internal/llm"
 )
 
@@ -36,22 +37,35 @@ func stageFromExcess(ratio float64) CompactionStage {
 
 // ContextConfig controls context window management.
 type ContextConfig struct {
-	MaxTokens      int     // Token budget for context
-	SoftTrimRatio  float64 // Start trimming at this fraction (default 0.8)
-	HardClearRatio float64 // Emergency clear at this fraction (default 0.95)
-	CharsPerToken  int     // Rough estimation factor (default 4)
-	AntiFadeAfter  int     // Inject reminder after this many non-system turns
+	MaxTokens         int     // Token budget for context (used if BudgetTier not set)
+	BudgetTier        int     // 0=L0, 1=L1, 2=L2, 3=L3 — overrides MaxTokens when BudgetConfig is set
+	BudgetConfig      *core.ContextBudgetConfig // Tier-aware budget config (nil = use MaxTokens)
+	SoulMaxContextPct float64 // Personality cap as fraction of budget (default 0.4)
+	SoftTrimRatio     float64 // Start trimming at this fraction (default 0.8)
+	HardClearRatio    float64 // Emergency clear at this fraction (default 0.95)
+	CharsPerToken     int     // Rough estimation factor (default 4)
+	AntiFadeAfter     int     // Inject reminder after this many non-system turns
 }
 
 // DefaultContextConfig returns sensible defaults.
 func DefaultContextConfig() ContextConfig {
 	return ContextConfig{
-		MaxTokens:      8192,
-		SoftTrimRatio:  0.8,
-		HardClearRatio: 0.95,
-		CharsPerToken:  4,
-		AntiFadeAfter:  10,
+		MaxTokens:         8192,
+		BudgetTier:        1, // L1 default
+		SoulMaxContextPct: 0.4,
+		SoftTrimRatio:     0.8,
+		HardClearRatio:    0.95,
+		CharsPerToken:     4,
+		AntiFadeAfter:     10,
 	}
+}
+
+// effectiveBudget resolves the token budget from tier config or flat MaxTokens.
+func (cc ContextConfig) effectiveBudget() int {
+	if cc.BudgetConfig != nil {
+		return cc.BudgetConfig.BudgetForTier(cc.BudgetTier)
+	}
+	return cc.MaxTokens
 }
 
 // ContextBuilder constructs LLM requests from session state with progressive
@@ -92,7 +106,7 @@ func (cb *ContextBuilder) SetMemoryIndex(index string) {
 // BuildRequest constructs an LLM request from session state, applying
 // context budgeting and compaction as needed.
 func (cb *ContextBuilder) BuildRequest(session *Session) *llm.Request {
-	budget := cb.config.MaxTokens
+	budget := cb.config.effectiveBudget()
 	messages := session.Messages()
 
 	// Always include system prompt.
@@ -100,33 +114,99 @@ func (cb *ContextBuilder) BuildRequest(session *Session) *llm.Request {
 	sysTokCount := 0
 
 	if cb.systemPrompt != "" {
-		sysMsg := llm.Message{Role: "system", Content: cb.systemPrompt}
 		sysTokCount = cb.estimateTokens(cb.systemPrompt)
-		result = append(result, sysMsg)
+
+		// Personality cap: if system prompt exceeds soul_max_pct of budget,
+		// expand budget up to L3 max so history/memory aren't starved.
+		// Matches Rust: soul_max_context_pct enforcement.
+		if cb.config.SoulMaxContextPct > 0 {
+			soulCap := int(float64(budget) * cb.config.SoulMaxContextPct)
+			if sysTokCount > soulCap && cb.config.BudgetConfig != nil {
+				needed := int(float64(sysTokCount) / cb.config.SoulMaxContextPct)
+				l3Max := cb.config.BudgetConfig.L3
+				if needed > l3Max {
+					needed = l3Max
+				}
+				if needed > budget {
+					budget = needed
+				}
+			}
+		}
+
+		result = append(result, llm.Message{Role: "system", Content: cb.systemPrompt})
 	}
 
-	// Inject memory as second system message if present.
+	// Inject memory (capped at 25% of budget, matching Rust: l0 / 4).
+	// Memory is always present — buildAgentContext guarantees at least an
+	// orientation block even when retrieval returns empty.
 	memTokCount := 0
+	memCap := budget / 4
 	if cb.memory != "" {
-		memMsg := llm.Message{Role: "system", Content: cb.memory}
-		memTokCount = cb.estimateTokens(cb.memory)
-		result = append(result, memMsg)
+		memTokens := cb.estimateTokens(cb.memory)
+		if memTokens > memCap {
+			// Truncate memory to fit within cap (rough char-based truncation).
+			maxChars := memCap * cb.config.CharsPerToken
+			if maxChars < len(cb.memory) {
+				cb.memory = cb.memory[:maxChars] + "\n[...memory truncated to fit budget]"
+			}
+			memTokens = cb.estimateTokens(cb.memory)
+		}
+		memTokCount = memTokens
+		result = append(result, llm.Message{Role: "system", Content: cb.memory})
 	}
 
-	// Inject memory index as third system message if present.
-	// This is the lightweight recall list — the agent can call recall_memory(id)
-	// to fetch full content of any entry.
+	// Inject memory index (lightweight recall list for recall_memory tool).
 	if cb.memoryIndex != "" {
-		indexMsg := llm.Message{Role: "system", Content: cb.memoryIndex}
-		memTokCount += cb.estimateTokens(cb.memoryIndex)
-		result = append(result, indexMsg)
+		indexTokens := cb.estimateTokens(cb.memoryIndex)
+		memTokCount += indexTokens
+		result = append(result, llm.Message{Role: "system", Content: cb.memoryIndex})
 	}
 
-	remaining := budget - sysTokCount - memTokCount
+	// Account for tool definitions in the token budget. Each tool adds ~100-200
+	// tokens (name, description, parameter schema). Without this, the context
+	// builder overfills the budget and the model gets too much history, drowning
+	// the system prompt's tool instructions.
+	toolTokCount := 0
+	for _, td := range cb.toolDefs {
+		// Rough estimate: function name + description + JSON schema overhead.
+		toolTokCount += cb.estimateTokens(td.Function.Name + td.Function.Description + string(td.Function.Parameters))
+	}
 
-	// Calculate total message token cost.
+	remaining := budget - sysTokCount - memTokCount - toolTokCount
+
+	// Topic-aware compression (Rust parity): partition messages by topic.
+	// Off-topic blocks get summarized; current-topic messages kept in full.
+	currentTopic := ""
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "user" && messages[i].TopicTag != "" {
+			currentTopic = messages[i].TopicTag
+			break
+		}
+	}
+
+	currentTopicMsgs, offTopicBlocks := PartitionByTopic(messages, currentTopic)
+
+	// Inject off-topic summaries as system notes (cheap, ~20 tokens each).
+	var topicSummaries []llm.Message
+	for _, block := range offTopicBlocks {
+		summary := SummarizeTopicBlock(block)
+		topicSummaries = append(topicSummaries, llm.Message{
+			Role:    "system",
+			Content: summary,
+		})
+	}
+
+	// Use current-topic messages for the main history budget.
+	// Off-topic summaries are prepended (small, fixed cost).
+	summaryTokens := 0
+	for _, s := range topicSummaries {
+		summaryTokens += cb.estimateTokens(s.Content)
+	}
+	remaining -= summaryTokens
+
+	// Calculate total message token cost (current-topic only).
 	totalMsgTokens := 0
-	for _, m := range messages {
+	for _, m := range currentTopicMsgs {
 		totalMsgTokens += cb.estimateTokens(m.Content)
 	}
 
@@ -134,12 +214,12 @@ func (cb *ContextBuilder) BuildRequest(session *Session) *llm.Request {
 	ratio := float64(totalMsgTokens) / float64(max(remaining, 1))
 	stage := stageFromExcess(ratio)
 
-	// Load messages newest-first within budget.
+	// Load current-topic messages newest-first within budget.
 	var historyMessages []llm.Message
 	usedTokens := 0
 
-	for i := len(messages) - 1; i >= 0; i-- {
-		m := messages[i]
+	for i := len(currentTopicMsgs) - 1; i >= 0; i-- {
+		m := currentTopicMsgs[i]
 		content := cb.compact(m, stage)
 		tokens := cb.estimateTokens(content)
 
@@ -179,6 +259,8 @@ func (cb *ContextBuilder) BuildRequest(session *Session) *llm.Request {
 		historyMessages = append(historyMessages[:insertIdx], append([]llm.Message{reminder}, historyMessages[insertIdx:]...)...)
 	}
 
+	// Inject off-topic summaries before current-topic history.
+	result = append(result, topicSummaries...)
 	result = append(result, historyMessages...)
 
 	return &llm.Request{

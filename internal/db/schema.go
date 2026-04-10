@@ -960,15 +960,6 @@ func (s *Store) runMigrations() error {
 		}
 
 		sql := string(data)
-		if strings.TrimSpace(sql) == "" || strings.HasPrefix(strings.TrimSpace(sql), "--") {
-			// Placeholder migration, just record the version.
-			_, err = s.db.Exec("INSERT INTO schema_version (version) VALUES (?)", ver)
-			if err != nil {
-				return core.WrapError(core.ErrDatabase, fmt.Sprintf("failed to record migration %d", ver), err)
-			}
-			continue
-		}
-
 		_, err = s.db.Exec(sql)
 		if err != nil {
 			return core.WrapError(core.ErrDatabase, fmt.Sprintf("migration %s failed", name), err)

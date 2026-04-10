@@ -8,6 +8,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"roboticus/internal/core"
 	"roboticus/internal/db"
 )
 
@@ -98,17 +99,21 @@ func (p *Pipeline) dispatchToObservers(ctx context.Context, sessionID, turnID, u
 		}
 
 		// Ingest as episodic memory attributed to the observer.
-		_, _ = p.store.ExecContext(ctx,
+		if _, err := p.store.ExecContext(ctx,
 			`INSERT INTO episodic_memory (id, classification, content, importance, owner_id)
 			 VALUES (?, 'observation', ?, 4, ?)`,
 			db.NewID(), summary, observerID,
-		)
+		); err != nil {
+			p.errBus.ReportIfErr(err, "pipeline", "store_observer_memory", core.SevWarning)
+		}
 
 		// Touch last_used_at timestamp.
-		_, _ = p.store.ExecContext(ctx,
+		if _, err := p.store.ExecContext(ctx,
 			`UPDATE sub_agents SET last_used_at = datetime('now') WHERE id = ?`,
 			observerID,
-		)
+		); err != nil {
+			p.errBus.ReportIfErr(err, "pipeline", "touch_observer_timestamp", core.SevDebug)
+		}
 
 		log.Debug().Str("observer", observerName).Str("session", sessionID).Msg("observer subagent received turn summary")
 	}

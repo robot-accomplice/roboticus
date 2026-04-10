@@ -75,7 +75,7 @@ func TestSelectByMetascoreWeighted_Empty(t *testing.T) {
 
 func TestGetSemantic_HitAboveThreshold(t *testing.T) {
 	cfg := DefaultCacheConfig()
-	c := NewCache(cfg, nil)
+	c := NewCache(cfg, nil, nil)
 
 	resp := &Response{Content: "cached answer", Model: "test"}
 	embedding := []float64{1.0, 0.0, 0.0}
@@ -94,7 +94,7 @@ func TestGetSemantic_HitAboveThreshold(t *testing.T) {
 
 func TestGetSemantic_MissBelowThreshold(t *testing.T) {
 	cfg := DefaultCacheConfig()
-	c := NewCache(cfg, nil)
+	c := NewCache(cfg, nil, nil)
 
 	resp := &Response{Content: "cached", Model: "test"}
 	c.PutWithEmbedding(context.Background(), &Request{Model: "test", Messages: []Message{{Role: "user", Content: "q"}}}, resp, []float64{1.0, 0.0, 0.0})

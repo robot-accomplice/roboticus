@@ -7,6 +7,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"roboticus/internal/core"
 	"roboticus/internal/db"
 	"roboticus/internal/llm"
 	"roboticus/internal/session"
@@ -61,12 +62,16 @@ const (
 type Manager struct {
 	config Config
 	store  *db.Store
+	errBus *core.ErrorBus
 }
 
 // NewManager creates a memory manager with the given config.
 func NewManager(cfg Config, store *db.Store) *Manager {
 	return &Manager{config: cfg, store: store}
 }
+
+// SetErrBus wires the centralized error bus (called after construction in daemon).
+func (mm *Manager) SetErrBus(eb *core.ErrorBus) { mm.errBus = eb }
 
 // derivableTools are tools whose output is ephemeral and should NOT be stored
 // as episodic memory (Rust: is_derivable). Storing these leads to stale-fact
@@ -253,19 +258,23 @@ func (mm *Manager) MarkSemanticStale(ctx context.Context, category, keyPrefix, r
 // recordToolStat tracks tool success/failure in the procedural_memory table.
 func (mm *Manager) recordToolStat(ctx context.Context, toolName string, success bool) {
 	if success {
-		_, _ = mm.store.ExecContext(ctx,
+		if _, err := mm.store.ExecContext(ctx,
 			`INSERT INTO procedural_memory (id, name, steps, success_count)
 			 VALUES (?, ?, '', 1)
 			 ON CONFLICT(name) DO UPDATE SET success_count = success_count + 1, updated_at = datetime('now')`,
 			db.NewID(), toolName,
-		)
+		); err != nil {
+			mm.errBus.ReportIfErr(err, "memory", "record_tool_success", core.SevWarning)
+		}
 	} else {
-		_, _ = mm.store.ExecContext(ctx,
+		if _, err := mm.store.ExecContext(ctx,
 			`INSERT INTO procedural_memory (id, name, steps, failure_count)
 			 VALUES (?, ?, '', 1)
 			 ON CONFLICT(name) DO UPDATE SET failure_count = failure_count + 1, updated_at = datetime('now')`,
 			db.NewID(), toolName,
-		)
+		); err != nil {
+			mm.errBus.ReportIfErr(err, "memory", "record_tool_failure", core.SevWarning)
+		}
 	}
 }
 
@@ -285,7 +294,7 @@ func (mm *Manager) ingestRelationshipsWithTrust(ctx context.Context, messages []
 		// Extract @mentions or explicit entity references.
 		entities := extractEntities(m.Content)
 		for _, entity := range entities {
-			_, _ = mm.store.ExecContext(ctx,
+			if _, err := mm.store.ExecContext(ctx,
 				`INSERT INTO relationship_memory (id, entity_id, entity_name, trust_score, interaction_count, last_interaction)
 				 VALUES (?, ?, ?, ?, 1, datetime('now'))
 				 ON CONFLICT(entity_id) DO UPDATE SET
@@ -293,7 +302,9 @@ func (mm *Manager) ingestRelationshipsWithTrust(ctx context.Context, messages []
 				   interaction_count = interaction_count + 1,
 				   last_interaction = datetime('now')`,
 				db.NewID(), entity, entity, trustScore, trustScore,
-			)
+			); err != nil {
+				mm.errBus.ReportIfErr(err, "memory", "ingest_relationship", core.SevWarning)
+			}
 		}
 	}
 }

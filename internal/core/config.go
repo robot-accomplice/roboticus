@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
+	"github.com/rs/zerolog/log"
 )
 
 var (
@@ -48,8 +49,8 @@ type Config struct {
 	Themes     ThemesConfig              `json:"themes" mapstructure:"themes"`
 	DKIM       DKIMConfig                `json:"dkim" mapstructure:"dkim"`
 	CORS       CORSConfig                `json:"cors" mapstructure:"cors"`
-	Revenue    RevenueConfig             `json:"revenue" mapstructure:"revenue"`
-	Heartbeat  HeartbeatConfig           `json:"heartbeat" mapstructure:"heartbeat"`
+	Revenue       RevenueConfig             `json:"revenue" mapstructure:"revenue"`
+	Heartbeat     HeartbeatConfig           `json:"heartbeat" mapstructure:"heartbeat"`
 
 	// New roboticus-compatible sections.
 	CircuitBreaker           CircuitBreakerConfig `json:"circuit_breaker" mapstructure:"circuit_breaker"`
@@ -193,6 +194,7 @@ type ProviderConfig struct {
 	OAuthClientID       string            `json:"oauth_client_id,omitempty" mapstructure:"oauth_client_id"`
 	OAuthRedirectURI    string            `json:"oauth_redirect_uri,omitempty" mapstructure:"oauth_redirect_uri"`
 	APIKeyRef           string            `json:"api_key_ref,omitempty" mapstructure:"api_key_ref"`
+	TimeoutSecs         int               `json:"timeout_seconds,omitempty" mapstructure:"timeout_seconds"`
 }
 
 // SessionConfig holds session scoping and timeout settings.
@@ -268,6 +270,10 @@ type SecurityConfig struct {
 	InterpreterAllow     []string `json:"interpreter_allow" mapstructure:"interpreter_allow"`
 	ScriptAllowedPaths   []string `json:"script_allowed_paths" mapstructure:"script_allowed_paths"`
 	ThreatCautionCeiling string   `json:"threat_caution_ceiling,omitempty" mapstructure:"threat_caution_ceiling"`
+	// TrustedSenderIDs lists sender/chat IDs that receive Creator authority via
+	// the SecurityClaim resolver's TrustedAuthority grant. Matches Rust's
+	// channels.trusted_sender_ids configuration.
+	TrustedSenderIDs []string `json:"trusted_sender_ids,omitempty" mapstructure:"trusted_sender_ids"`
 	// Filesystem is a nested security section for fine-grained filesystem access control.
 	// Mirrors Rust's security.filesystem configuration.
 	Filesystem FilesystemSecurityConfig `json:"filesystem" mapstructure:"filesystem"`
@@ -329,6 +335,7 @@ type ModelOverride struct {
 	Temperature float64 `json:"temperature,omitempty" mapstructure:"temperature"`
 	TopP        float64 `json:"top_p,omitempty" mapstructure:"top_p"`
 	Provider    string  `json:"provider,omitempty" mapstructure:"provider"`
+	TimeoutSecs int     `json:"timeout_seconds,omitempty" mapstructure:"timeout_seconds"`
 }
 
 // DefaultConfig returns a Config with sensible defaults.
@@ -342,7 +349,7 @@ func DefaultConfig() Config {
 			ID:                          "roboticus-default",
 			Workspace:                   filepath.Join(dataDir, "workspace"),
 			AutonomyMaxReactTurns:       25,
-			AutonomyMaxTurnDurationSecs: 120,
+			AutonomyMaxTurnDurationSecs: 300, // 5 min — local models need 60-80s per inference call
 			LogLevel:                    "info",
 			DelegationEnabled:           true,
 			DelegationMinComplexity:     0.35,
@@ -728,11 +735,17 @@ func parseBundledProviders() map[string]ProviderConfig {
 		case "embedding_model":
 			cfg.EmbeddingModel = val
 		case "embedding_dimensions":
-			_, _ = fmt.Sscanf(val, "%d", &cfg.EmbeddingDimensions)
+			if _, err := fmt.Sscanf(val, "%d", &cfg.EmbeddingDimensions); err != nil {
+				log.Warn().Err(err).Str("key", "embedding_dimensions").Str("val", val).Msg("config: invalid integer")
+			}
 		case "cost_per_input_token":
-			_, _ = fmt.Sscanf(val, "%f", &cfg.CostPerInputToken)
+			if _, err := fmt.Sscanf(val, "%f", &cfg.CostPerInputToken); err != nil {
+				log.Warn().Err(err).Str("key", "cost_per_input_token").Str("val", val).Msg("config: invalid float")
+			}
 		case "cost_per_output_token":
-			_, _ = fmt.Sscanf(val, "%f", &cfg.CostPerOutputToken)
+			if _, err := fmt.Sscanf(val, "%f", &cfg.CostPerOutputToken); err != nil {
+				log.Warn().Err(err).Str("key", "cost_per_output_token").Str("val", val).Msg("config: invalid float")
+			}
 		}
 	}
 	if current != "" {

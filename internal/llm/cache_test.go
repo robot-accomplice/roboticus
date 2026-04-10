@@ -7,7 +7,7 @@ import (
 
 func TestCache_PutAndGet(t *testing.T) {
 	cfg := DefaultCacheConfig()
-	cache := NewCache(cfg, nil)
+	cache := NewCache(cfg, nil, nil)
 
 	req := &Request{
 		Model:    "gpt-4",
@@ -33,7 +33,7 @@ func TestCache_PutAndGet(t *testing.T) {
 
 func TestCache_Miss(t *testing.T) {
 	cfg := DefaultCacheConfig()
-	cache := NewCache(cfg, nil)
+	cache := NewCache(cfg, nil, nil)
 
 	req := &Request{
 		Model:    "gpt-4",
@@ -50,7 +50,7 @@ func TestCache_StillWorksWithDisabledFlag(t *testing.T) {
 	// Note: Enabled flag is for the caller to check. Cache itself always works.
 	cfg := DefaultCacheConfig()
 	cfg.Enabled = false
-	cache := NewCache(cfg, nil)
+	cache := NewCache(cfg, nil, nil)
 
 	req := &Request{Model: "gpt-4", Messages: []Message{{Role: "user", Content: "hello"}}}
 	cache.Put(context.Background(), req, &Response{Content: "resp"})
@@ -63,7 +63,7 @@ func TestCache_StillWorksWithDisabledFlag(t *testing.T) {
 
 func TestCache_DifferentRequests(t *testing.T) {
 	cfg := DefaultCacheConfig()
-	cache := NewCache(cfg, nil)
+	cache := NewCache(cfg, nil, nil)
 
 	req1 := &Request{Model: "gpt-4", Messages: []Message{{Role: "user", Content: "hello"}}}
 	req2 := &Request{Model: "gpt-4", Messages: []Message{{Role: "user", Content: "goodbye"}}}

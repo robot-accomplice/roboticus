@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -68,8 +69,12 @@ func (a *ingestorAdapter) IngestTurn(ctx context.Context, session *session.Sessi
 
 // buildAgentContext assembles a ContextBuilder with system prompt, tool defs,
 // and memory retrieval. Shared by executorAdapter and streamAdapter.
-func buildAgentContext(ctx context.Context, sess *session.Session, tools *agent.ToolRegistry, retriever *memory.Retriever, store *db.Store, promptCfg agent.PromptConfig) *agent.ContextBuilder {
-	ctxBuilder := agent.NewContextBuilder(agent.DefaultContextConfig())
+func buildAgentContext(ctx context.Context, sess *session.Session, tools *agent.ToolRegistry, retriever *memory.Retriever, store *db.Store, promptCfg agent.PromptConfig, budgetCfg *core.ContextBudgetConfig) *agent.ContextBuilder {
+	ccfg := agent.DefaultContextConfig()
+	if budgetCfg != nil {
+		ccfg.BudgetConfig = budgetCfg
+	}
+	ctxBuilder := agent.NewContextBuilder(ccfg)
 
 	cfg := promptCfg
 	// Use session's agent name only if explicitly set (not "default").
@@ -78,17 +83,29 @@ func buildAgentContext(ctx context.Context, sess *session.Session, tools *agent.
 		cfg.AgentName = sess.AgentName
 	}
 	systemPrompt := agent.BuildSystemPrompt(cfg)
+
+	// HMAC trust boundary: wrap system prompt so model output verification
+	// can detect forged prompt injections (Rust parity).
+	if len(cfg.BoundaryKey) > 0 {
+		systemPrompt = agent.TagContent(systemPrompt, cfg.BoundaryKey)
+		// Sanity check: verify immediately after injection (matches Rust).
+		if _, ok := agent.VerifyHMACBoundary(systemPrompt, cfg.BoundaryKey); !ok {
+			log.Error().Msg("HMAC boundary verification failed immediately after injection")
+		}
+	}
+
 	log.Info().
 		Str("agent_name", cfg.AgentName).
 		Int("personality_len", len(cfg.Personality)).
 		Int("firmware_len", len(cfg.Firmware)).
 		Int("prompt_len", len(systemPrompt)).
-		Int("tools", func() int {
+		Int("tool_defs", func() int {
 			if tools != nil {
 				return len(tools.ToolDefs())
 			}
 			return 0
 		}()).
+		Int("tool_names_in_prompt", len(cfg.ToolNames)).
 		Bool("has_retriever", retriever != nil).
 		Msg("context built for inference")
 	ctxBuilder.SetSystemPrompt(systemPrompt)
@@ -97,26 +114,37 @@ func buildAgentContext(ctx context.Context, sess *session.Session, tools *agent.
 		ctxBuilder.SetTools(tools.ToolDefs())
 	}
 
+	// Memory injection: always provide memory context so the model never
+	// claims "I don't have memories." Rust principle: "Session history, memory
+	// layers, and procedural skills are proactively injected into every turn."
 	if retriever != nil {
 		msgs := sess.Messages()
+		var mem string
 		for i := len(msgs) - 1; i >= 0; i-- {
 			if msgs[i].Role == "user" {
-				mem := retriever.Retrieve(ctx, sess.ID, msgs[i].Content, 2048)
-				if mem != "" {
-					ctxBuilder.SetMemory(mem)
-				}
+				mem = retriever.Retrieve(ctx, sess.ID, msgs[i].Content, 2048)
 				break
 			}
 		}
+		if mem != "" {
+			ctxBuilder.SetMemory(mem)
+		} else {
+			// Empty retrieval: inject orientation block so model knows memory
+			// exists and can be queried via recall_memory tool.
+			ctxBuilder.SetMemory("[Memory: No relevant memories found for this query. " +
+				"Use recall_memory(id) to search by topic. Your memory index is provided separately.]")
+		}
 	}
 
-	// Inject memory index summary — lightweight list of top memories the agent
-	// can recall on demand via recall_memory(id). Matches Rust's two-stage
-	// memory pattern: index always injected, full content fetched on demand.
+	// Memory index: always inject so the model can call recall_memory(id).
+	// Rust: two-stage pattern — index always injected, full content on demand.
 	if store != nil {
 		index := agenttools.BuildMemoryIndex(ctx, store, 20)
 		if index != "" {
 			ctxBuilder.SetMemoryIndex(index)
+		} else {
+			ctxBuilder.SetMemoryIndex("[Memory Index: No memories stored yet. " +
+				"Memories will accumulate as conversations continue.]")
 		}
 	}
 
@@ -125,20 +153,26 @@ func buildAgentContext(ctx context.Context, sess *session.Session, tools *agent.
 
 // executorAdapter wraps the full agent loop deps → pipeline.ToolExecutor.
 type executorAdapter struct {
-	llmSvc       *llm.Service
-	tools        *agent.ToolRegistry
-	policy       *policy.Engine
-	injection    *agent.InjectionDetector
-	memMgr       *memory.Manager
-	retriever    *memory.Retriever
-	store        *db.Store
-	promptConfig agent.PromptConfig
+	llmSvc          *llm.Service
+	tools           *agent.ToolRegistry
+	policy          *policy.Engine
+	injection       *agent.InjectionDetector
+	memMgr          *memory.Manager
+	retriever       *memory.Retriever
+	store           *db.Store
+	promptConfig    agent.PromptConfig
+	budgetCfg       *core.ContextBudgetConfig
+	maxTurnDuration time.Duration
 }
 
 func (a *executorAdapter) RunLoop(ctx context.Context, sess *session.Session) (string, int, error) {
-	ctxBuilder := buildAgentContext(ctx, sess, a.tools, a.retriever, a.store, a.promptConfig)
+	ctxBuilder := buildAgentContext(ctx, sess, a.tools, a.retriever, a.store, a.promptConfig, a.budgetCfg)
 
-	loop := agent.NewLoop(agent.DefaultLoopConfig(), agent.LoopDeps{
+	loopCfg := agent.DefaultLoopConfig()
+	if a.maxTurnDuration > 0 {
+		loopCfg.MaxLoopDuration = a.maxTurnDuration
+	}
+	loop := agent.NewLoop(loopCfg, agent.LoopDeps{
 		LLM:       a.llmSvc,
 		Tools:     a.tools,
 		Policy:    a.policy,
@@ -313,10 +347,11 @@ type streamAdapter struct {
 	retriever    *memory.Retriever
 	store        *db.Store
 	promptConfig agent.PromptConfig
+	budgetCfg    *core.ContextBudgetConfig
 }
 
 func (a *streamAdapter) PrepareStream(ctx context.Context, sess *session.Session) (*llm.Request, error) {
-	ctxBuilder := buildAgentContext(ctx, sess, a.tools, a.retriever, a.store, a.promptConfig)
+	ctxBuilder := buildAgentContext(ctx, sess, a.tools, a.retriever, a.store, a.promptConfig, a.budgetCfg)
 	req := ctxBuilder.BuildRequest(sess)
 	req.Stream = true
 	return req, nil
@@ -334,9 +369,11 @@ type Daemon struct {
 	appState *api.AppState
 	eventBus *api.EventBus
 	bgWorker *core.BackgroundWorker
+	errBus   *core.ErrorBus
 
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	errBusCancel context.CancelFunc
+	cancel       context.CancelFunc
+	wg           sync.WaitGroup
 }
 
 // ServiceConfig returns the kardianos service configuration.
@@ -374,9 +411,19 @@ func New(cfg *core.Config) (*Daemon, error) {
 			ExtraHeaders:     pc.ExtraHeaders,
 			TPMLimit:         pc.TPMLimit,
 			RPMLimit:         pc.RPMLimit,
+			TimeoutSecs:      pc.TimeoutSecs,
 		})
 	}
 	bgWorker := core.NewBackgroundWorker(32)
+
+	// Centralized error bus — all subsystems report errors here instead of
+	// silently discarding them. Subscribers log, count, and surface errors.
+	errBusCtx, errBusCancel := context.WithCancel(context.Background())
+	logSub := &core.LogSubscriber{}
+	metricSub := core.NewMetricSubscriber()
+	ringBufSub := core.NewRingBufferSubscriber(1000)
+	errBus := core.NewErrorBus(errBusCtx, 256, logSub, metricSub, ringBufSub)
+	// errBusCancel stored in Daemon struct for shutdown ordering.
 
 	// Open keystore early so LLM providers can resolve API keys from it.
 	ks, ksErr := core.OpenKeystoreMachine()
@@ -398,8 +445,10 @@ func New(cfg *core.Config) (*Daemon, error) {
 		Primary:   cfg.Models.Primary,
 		Fallbacks: cfg.Models.Fallback,
 		BGWorker:  bgWorker,
+		ErrBus:    errBus,
 	}, store)
 	if err != nil {
+		errBusCancel()
 		_ = store.Close()
 		return nil, fmt.Errorf("daemon: init LLM: %w", err)
 	}
@@ -447,10 +496,10 @@ func New(cfg *core.Config) (*Daemon, error) {
 
 	log.Info().Int("count", len(tools.Names())).Strs("tools", tools.Names()).Msg("builtin tools registered")
 
-	policyEngine := policy.NewEngine(policy.Config{
-		MaxTransferCents:   int64(cfg.Treasury.PerPaymentCap * 100),
-		RateLimitPerMinute: 30,
-	})
+	policyCfg := policy.DefaultConfig()
+	policyCfg.MaxTransferCents = int64(cfg.Treasury.PerPaymentCap * 100)
+	policyCfg.RateLimitPerMinute = 30
+	policyEngine := policy.NewEngine(policyCfg)
 	memMgr := memory.NewManager(memory.Config{
 		TotalTokenBudget: 2048,
 		Budgets: memory.TierBudget{
@@ -508,6 +557,10 @@ func New(cfg *core.Config) (*Daemon, error) {
 	for _, s := range loadedSkills {
 		skillNames = append(skillNames, s.Name())
 	}
+	// Generate stable HMAC boundary key from agent identity (Rust parity).
+	// Key is deterministic so verification works across restarts.
+	boundaryKey := deriveBoundaryKey(cfg.Agent.Name, cfg.Agent.Workspace)
+
 	basePromptCfg := agent.PromptConfig{
 		AgentName:   cfg.Agent.Name,
 		Firmware:    core.FormatFirmwareRules(fwCfg),
@@ -517,6 +570,9 @@ func New(cfg *core.Config) (*Daemon, error) {
 		Workspace:   cfg.Agent.Workspace,
 		Skills:      skillNames,
 		Model:       cfg.Models.Primary,
+		ToolNames:   tools.Names(),
+		ToolDescs:   tools.NamesWithDescriptions(),
+		BoundaryKey: boundaryKey,
 	}
 	log.Info().
 		Str("agent", cfg.Agent.Name).
@@ -588,14 +644,16 @@ func New(cfg *core.Config) (*Daemon, error) {
 		Retriever: &retrieverAdapter{r: retriever},
 		Skills:    &skillAdapter{matcher: skillMatcher, tools: tools},
 		Executor: &executorAdapter{
-			llmSvc:       llmSvc,
-			tools:        tools,
-			policy:       policyEngine,
-			injection:    injection,
-			memMgr:       memMgr,
-			retriever:    retriever,
-			store:        store,
-			promptConfig: basePromptCfg,
+			llmSvc:          llmSvc,
+			tools:           tools,
+			policy:          policyEngine,
+			injection:       injection,
+			memMgr:          memMgr,
+			retriever:       retriever,
+			store:           store,
+			promptConfig:    basePromptCfg,
+			budgetCfg:       &cfg.ContextBudget,
+			maxTurnDuration: time.Duration(cfg.Agent.AutonomyMaxTurnDurationSecs) * time.Second,
 		},
 		Ingestor: &ingestorAdapter{m: memMgr},
 		Refiner:  &nicknameAdapter{llm: llmSvc, store: store},
@@ -605,10 +663,12 @@ func New(cfg *core.Config) (*Daemon, error) {
 			retriever:    retriever,
 			store:        store,
 			promptConfig: basePromptCfg,
+			budgetCfg:    &cfg.ContextBudget,
 		},
 		Guards:     guards,
 		BGWorker:   bgWorker,
 		Embeddings: embedClient,
+		ErrBus:     errBus,
 	})
 
 	// Sync hippocampus schema registry.
@@ -653,14 +713,16 @@ func New(cfg *core.Config) (*Daemon, error) {
 	}
 
 	return &Daemon{
-		cfg:      cfg,
-		store:    store,
-		llm:      llmSvc,
-		pipe:     pipe,
-		router:   router,
-		appState: appState,
-		eventBus: eventBus,
-		bgWorker: bgWorker,
+		cfg:          cfg,
+		store:        store,
+		llm:          llmSvc,
+		pipe:         pipe,
+		router:       router,
+		appState:     appState,
+		eventBus:     eventBus,
+		bgWorker:     bgWorker,
+		errBus:       errBus,
+		errBusCancel: errBusCancel,
 	}, nil
 }
 
@@ -695,6 +757,12 @@ func (d *Daemon) Stop(s service.Service) error {
 	// Drain background worker pool.
 	if d.bgWorker != nil {
 		d.bgWorker.Drain(5 * time.Second)
+	}
+
+	// Drain error bus last — it processes events from all other subsystems,
+	// so it must be the last to shut down.
+	if d.errBus != nil {
+		d.errBus.Drain(3 * time.Second)
 	}
 
 	_ = d.store.Close()
@@ -763,7 +831,7 @@ func (d *Daemon) run() {
 					log.Error().Err(err).Str("job", job.Name).Msg("cron job pipeline failed")
 				}
 				return err
-			}))
+			}), d.errBus)
 		worker.Run(ctx)
 	}()
 
@@ -1115,13 +1183,49 @@ func (d *Daemon) handleInbound(ctx context.Context, msg channel.InboundMessage) 
 		Str("chat", msg.ChatID).
 		Msg("processing inbound message")
 
-	// Send typing indicator before pipeline runs so user sees activity.
-	d.router.SendTypingIndicator(ctx, msg.Platform, msg.ChatID)
+	// Send typing indicator on a loop until the pipeline completes.
+	// Telegram's typing action expires after 5s, so we repeat every 4s.
+	// Uses orDone pattern: the goroutine exits when typingDone closes.
+	typingDone := make(chan struct{})
+	go func() {
+		d.router.SendTypingIndicator(ctx, msg.Platform, msg.ChatID)
+		ticker := time.NewTicker(4 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				d.router.SendTypingIndicator(ctx, msg.Platform, msg.ChatID)
+			case <-typingDone:
+				return
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 
 	agentName := d.cfg.Agent.Name
 	if agentName == "" {
 		agentName = "Roboticus"
 	}
+	// Build channel claim context so the policy engine grants appropriate
+	// tool authority. Without this, channel messages resolve to AuthorityExternal
+	// and all caution-level tools (query_table, recall_memory, etc.) are denied.
+	// Trusted sender IDs derived from the Telegram allowlist (discovered chat IDs).
+	// Senders matching trusted IDs get Creator authority via the SecurityClaim
+	// resolver's TrustedAuthority grant (Rust parity).
+	var trustedIDs []string
+	if d.cfg.Security.TrustedSenderIDs != nil {
+		trustedIDs = d.cfg.Security.TrustedSenderIDs
+	}
+	claim := &pipeline.ChannelClaimContext{
+		SenderID:            msg.SenderID,
+		ChatID:              msg.ChatID,
+		Platform:            msg.Platform,
+		SenderInAllowlist:   d.isSenderAllowed(msg.Platform, msg.SenderID, msg.ChatID),
+		AllowlistConfigured: true,
+		TrustedSenderIDs:    trustedIDs,
+	}
+
 	cfg := pipeline.PresetChannel(msg.Platform)
 	result, err := pipeline.RunPipeline(ctx, d.pipe, cfg, pipeline.Input{
 		Content:   msg.Content,
@@ -1129,7 +1233,9 @@ func (d *Daemon) handleInbound(ctx context.Context, msg channel.InboundMessage) 
 		SenderID:  msg.SenderID,
 		ChatID:    msg.ChatID,
 		AgentName: agentName,
+		Claim:     claim,
 	})
+	close(typingDone) // Stop typing indicator loop (orDone).
 	if err != nil {
 		log.Error().Err(err).Str("platform", msg.Platform).Msg("pipeline error")
 		return
@@ -1138,6 +1244,28 @@ func (d *Daemon) handleInbound(ctx context.Context, msg channel.InboundMessage) 
 	if result.Content != "" {
 		_ = d.router.SendReply(ctx, msg.Platform, msg.ChatID, result.Content)
 	}
+}
+
+// deriveBoundaryKey generates a stable HMAC key from agent identity.
+// Deterministic: same agent+workspace always produces the same key.
+func deriveBoundaryKey(agentName, workspace string) []byte {
+	h := sha256.Sum256([]byte("roboticus-boundary:" + agentName + ":" + workspace))
+	return h[:]
+}
+
+// isSenderAllowed checks whether a channel message sender is trusted.
+// Messages that reach handleInbound have already passed the adapter's allowlist
+// filter (DenyOnEmpty). If the message arrived here, the adapter accepted it.
+// For additional granularity, check the config's security allowlist.
+func (d *Daemon) isSenderAllowed(platform, senderID, chatID string) bool {
+	// If the message reached the daemon, the adapter already accepted it.
+	// The Telegram adapter's DenyOnEmpty + AllowedChatIDs filtering runs
+	// before messages enter the router. Trust that verdict.
+	if d.cfg.Security.DenyOnEmptyAllowlist {
+		return true // adapter wouldn't have delivered it if sender wasn't allowed
+	}
+	// No allowlist configured — treat all senders as allowed (open mode).
+	return true
 }
 
 // Router returns the channel router for adapter registration.

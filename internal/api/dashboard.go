@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"net/http"
 	"strings"
+
+	"github.com/rs/zerolog/log"
 )
 
 //go:embed dashboard_spa.html
@@ -39,7 +41,9 @@ func DashboardHandler() http.HandlerFunc {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
-		_, _ = w.Write([]byte(html))
+		if _, err := w.Write([]byte(html)); err != nil {
+			log.Trace().Err(err).Msg("dashboard: response write failed")
+		}
 	}
 }
 

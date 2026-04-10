@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -37,6 +38,7 @@ type Service struct {
 	quality       *QualityTracker
 	intentQuality *IntentQualityTracker
 	latency       *LatencyTracker
+	errBus        *core.ErrorBus
 }
 
 // ServiceConfig holds configuration for the LLM service.
@@ -49,6 +51,7 @@ type ServiceConfig struct {
 	Router          RouterConfig
 	ConfidenceFloor float64                // minimum confidence to accept local response (0 = use default)
 	BGWorker        *core.BackgroundWorker // shared worker pool for async tasks
+	ErrBus          *core.ErrorBus         // centralized error reporting
 }
 
 // NewService creates the LLM orchestrator.
@@ -112,11 +115,11 @@ func NewService(cfg ServiceConfig, store *db.Store) (*Service, error) {
 		bgw = core.NewBackgroundWorker(16)
 	}
 
-	return &Service{
+	svc := &Service{
 		providers:     clients,
 		router:        NewRouter(targets, cfg.Router),
 		breakers:      NewBreakerRegistry(cfg.Breaker),
-		cache:         NewCache(cfg.Cache, store),
+		cache:         NewCache(cfg.Cache, store, cfg.ErrBus),
 		dedup:         NewDedup(2000), // 2s dedup window
 		transforms:    DefaultTransformPipeline(),
 		primary:       cfg.Primary,
@@ -128,7 +131,16 @@ func NewService(cfg ServiceConfig, store *db.Store) (*Service, error) {
 		quality:       NewQualityTracker(100),
 		intentQuality: NewIntentQualityTracker(100),
 		latency:       NewLatencyTracker(100),
-	}, nil
+		errBus:        cfg.ErrBus,
+	}
+
+	// Metascore routing is always enabled when the service has quality/latency
+	// tracking (which it always does). This ensures every code path that creates
+	// a Service — daemon, API server, tests — gets metascore routing without
+	// requiring explicit wiring at each call site.
+	svc.router.EnableMetascoreRouting(svc.quality, svc.latency, nil, svc.breakers)
+
+	return svc, nil
 }
 
 // Complete sends a non-streaming request through the full pipeline.
@@ -141,11 +153,17 @@ func (s *Service) Complete(ctx context.Context, req *Request) (*Response, error)
 }
 
 func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Response, error) {
-	// Cache check.
-	if !req.Stream {
+	// Cache check. Skip during exercise/baseline (NoEscalate) — we need
+	// fresh inference to measure actual model performance.
+	if !req.Stream && !req.NoEscalate {
 		if cached := s.cache.Get(ctx, req); cached != nil {
 			return cached, nil
 		}
+	}
+
+	// Context-level model override (set by pipeline when API caller specifies a model).
+	if override := core.ModelOverrideFromCtx(ctx); override != "" && req.Model == "" {
+		req.Model = override
 	}
 
 	// Route: select model if not explicitly set.
@@ -249,11 +267,29 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 		inferReq := *req
 		inferReq.Model = pm.model
 
+		log.Debug().
+			Str("provider", pm.provider).
+			Str("model", pm.model).
+			Int("tools", len(inferReq.Tools)).
+			Str("format", string(client.provider.Format)).
+			Msg("sending inference request")
+
 		start := time.Now()
 		resp, err := client.Complete(ctx, &inferReq)
 		latencyMs := time.Since(start).Milliseconds()
 		if err != nil {
-			cb.RecordFailure()
+			// Distinguish permanent errors from transient failures.
+			// Credit and auth errors permanently trip the breaker — these
+			// won't self-heal between requests.
+			if errors.Is(err, core.ErrCreditExhausted) {
+				cb.RecordCreditError()
+				log.Error().Str("provider", pm.provider).Msg("provider credit exhausted — circuit breaker tripped permanently")
+			} else if errors.Is(err, core.ErrUnauthorized) {
+				cb.RecordCreditError() // Same permanent trip — no key means no recovery.
+				log.Error().Str("provider", pm.provider).Msg("provider unauthorized — circuit breaker tripped permanently (missing or invalid API key)")
+			} else {
+				cb.RecordFailure()
+			}
 			lastErr = err
 			log.Warn().Err(err).Str("provider", pm.provider).Str("model", pm.model).Msg("provider failed, trying next")
 			continue
@@ -261,31 +297,21 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 
 		cb.RecordSuccess()
 
-		// Tiered inference: if the provider is local, evaluate confidence.
-		// If confidence is too low and non-local providers are available, escalate.
-		if client.provider.IsLocal && s.Confidence != nil {
-			latency := time.Duration(latencyMs) * time.Millisecond
-			if !s.Confidence.IsConfident(resp.Content, latency) {
-				s.Escalation.RecordLocalEscalated()
-				log.Info().
-					Float64("confidence", s.Confidence.ConfidenceScore(resp.Content, latency)).
-					Str("provider", pm.provider).
-					Msg("local response below confidence floor, escalating to cloud")
-				// Continue to next (non-local) provider.
-				continue
-			}
-			s.Escalation.RecordLocalAccepted()
-		} else {
-			s.Escalation.RecordCloudDirect()
-		}
+		// Tag response with provider metadata so the pipeline can make
+		// routing decisions (confidence evaluation, escalation) at its layer.
+		resp.Provider = pm.provider
+		resp.IsLocal = client.provider.IsLocal
+		resp.LatencyMs = latencyMs
 
 		// Apply response transforms (strip <think> blocks, injection markers, etc.).
 		if s.transforms != nil {
 			resp.Content = s.transforms.Apply(resp.Content)
 		}
 
-		// Cache the successful response.
-		s.cache.Put(ctx, req, resp)
+		// Cache the successful response (skip during exercise/baseline).
+		if !req.NoEscalate {
+			s.cache.Put(ctx, req, resp)
+		}
 
 		// Record quality and latency observations for model routing feedback.
 		qScore := qualityFromResponse(resp)
@@ -653,7 +679,7 @@ func (s *Service) recordCostWithMeta(ctx context.Context, providerName string, r
 		tier = "cloud"
 	}
 
-	_, _ = s.store.ExecContext(ctx,
+	_, err := s.store.ExecContext(ctx,
 		`INSERT INTO inference_costs (id, model, provider, tokens_in, tokens_out, cost,
 		 tier, latency_ms, quality_score, escalation, turn_id, cached, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
@@ -662,6 +688,16 @@ func (s *Service) recordCostWithMeta(ctx context.Context, providerName string, r
 		resp.Usage.InputTokens, resp.Usage.OutputTokens, cost,
 		tier, meta.Latency, meta.Quality, escalated, meta.TurnID, cached,
 	)
+	if err != nil {
+		s.errBus.ReportEvent(core.ErrorEvent{
+			Subsystem: "llm",
+			Op:        "record_cost",
+			Err:       err,
+			Severity:  core.SevWarning,
+			Model:     resp.Model,
+			Metadata:  map[string]string{"provider": providerName, "turn_id": meta.TurnID},
+		})
+	}
 }
 
 func contains(slice []string, s string) bool {
@@ -695,12 +731,14 @@ func (s *Service) RecordModelSelection(ctx context.Context, turnID, sessionID, a
 	if len(excerpt) > 200 {
 		excerpt = excerpt[:200]
 	}
-	_, _ = s.store.ExecContext(ctx,
+	if _, err := s.store.ExecContext(ctx,
 		`INSERT INTO model_selection_events (id, turn_id, session_id, agent_id, channel, selected_model, strategy, primary_model, user_excerpt, candidates_json, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', datetime('now'))`,
 		fmt.Sprintf("mse-%s", turnID), turnID, sessionID, agentID, channel,
 		selectedModel, strategy, primary, excerpt,
-	)
+	); err != nil {
+		s.errBus.ReportIfErr(err, "llm", "record_selection_event", core.SevDebug)
+	}
 }
 
 // ProviderStatus reports the health of each configured provider.
@@ -739,6 +777,17 @@ func (s *Service) Router() *Router {
 // Primary returns the configured primary model name.
 func (s *Service) Primary() string {
 	return s.primary
+}
+
+// Breakers returns the circuit breaker registry for metascore routing.
+func (s *Service) Breakers() *BreakerRegistry {
+	return s.breakers
+}
+
+// CapacityTracker returns nil — capacity is tracked per-provider in the router, not the service.
+// Metascore routing works without capacity data (headroom defaults to 1.0).
+func (s *Service) CapacityTracker() *CapacityTracker {
+	return nil
 }
 
 // Status returns the health of all providers (for /api/health).

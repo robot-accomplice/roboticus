@@ -74,6 +74,18 @@ func GetWorkspaceState(store *db.Store, cfg *core.Config) http.HandlerFunc {
 			}
 		}
 
+		// Systems/workstations for workspace canvas (Rust parity).
+		systems := []map[string]any{
+			{"id": "llm", "name": "LLM Inference", "kind": "Inference", "x": 0.18, "y": 0.22},
+			{"id": "memory", "name": "Memory", "kind": "Storage", "x": 0.82, "y": 0.22},
+			{"id": "exec", "name": "Code Execution", "kind": "Execution", "x": 0.18, "y": 0.78},
+			{"id": "blockchain", "name": "Blockchain", "kind": "Blockchain", "x": 0.82, "y": 0.78},
+			{"id": "web", "name": "Web / APIs", "kind": "Tool", "x": 0.50, "y": 0.12},
+			{"id": "files", "name": "File System", "kind": "Tool", "x": 0.50, "y": 0.88},
+			{"id": "tools_plugins", "name": "Tools / Plugins", "kind": "Plugin", "x": 0.965, "y": 0.50},
+			{"id": "shelter", "name": "Idle Agents", "kind": "Shelter", "x": 0.035, "y": 0.50},
+		}
+
 		writeJSON(w, http.StatusOK, map[string]any{
 			"uptime":          time.Since(processStartTime).Seconds(),
 			"goroutines":      runtime.NumGoroutine(),
@@ -83,6 +95,7 @@ func GetWorkspaceState(store *db.Store, cfg *core.Config) http.HandlerFunc {
 			"db_idle":         dbStats.Idle,
 			"status":          "running",
 			"agents":          agents,
+			"systems":         systems,
 		})
 	}
 }

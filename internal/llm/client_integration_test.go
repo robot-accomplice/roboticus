@@ -87,9 +87,10 @@ func TestClient_Complete_Anthropic(t *testing.T) {
 }
 
 func TestClient_Complete_Ollama(t *testing.T) {
+	// FormatOllama now uses OpenAI-compatible /v1/chat/completions format (Rust parity).
 	mock := &mockHTTP{
 		statusCode: 200,
-		body:       `{"model": "llama3", "message": {"role": "assistant", "content": "Ollama response"}}`,
+		body:       `{"id":"1","model":"llama3","choices":[{"message":{"role":"assistant","content":"Ollama response"},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":2}}`,
 	}
 	client, _ := NewClientWithHTTP(&Provider{
 		Name: "test-ollama", URL: "http://mock.test", Format: FormatOllama, IsLocal: true,
@@ -178,7 +179,7 @@ func TestClient_ChatURL(t *testing.T) {
 	}{
 		{FormatOpenAI, "/v1/chat/completions"},
 		{FormatAnthropic, "/v1/messages"},
-		{FormatOllama, "/api/chat"},
+		{FormatOllama, "/v1/chat/completions"}, // Now routes to OpenAI-compatible (Rust parity)
 		{FormatGoogle, "/v1/models/"},
 	}
 	for _, tt := range tests {

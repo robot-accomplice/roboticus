@@ -7,6 +7,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+
+	"github.com/rs/zerolog/log"
 )
 
 // DeviceIdentity holds the agent's persistent device keypair and ID.
@@ -44,9 +46,11 @@ func GetOrCreateDeviceIdentity(ctx context.Context, store DBExecer) (*DeviceIden
 		{"device_public_key", publicKeyHex},
 		{"device_private_key", privateKeyHex},
 	} {
-		_, _ = store.ExecContext(ctx,
+		if _, err := store.ExecContext(ctx,
 			`INSERT OR IGNORE INTO identity (key, value) VALUES (?, ?)`,
-			kv[0], kv[1])
+			kv[0], kv[1]); err != nil {
+			log.Warn().Err(err).Str("key", kv[0]).Msg("device_identity: persist failed")
+		}
 	}
 
 	return &DeviceIdentity{

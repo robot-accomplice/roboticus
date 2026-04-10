@@ -60,6 +60,35 @@ func apiGet(path string) (map[string]any, error) {
 	return data, nil
 }
 
+// apiPostSlow performs a POST request with a longer timeout for inference calls.
+func apiPostSlow(path string, payload map[string]any, timeout time.Duration) (map[string]any, error) {
+	client := &http.Client{Timeout: timeout}
+	b, _ := json.Marshal(payload)
+	resp, err := client.Post(apiBaseURL()+path, "application/json", strings.NewReader(string(b)))
+	if err != nil {
+		return nil, fmt.Errorf("connection failed (is roboticus running?): %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	var data map[string]any
+	if err := json.Unmarshal(body, &data); err != nil {
+		return nil, fmt.Errorf("invalid JSON response: %s", string(body))
+	}
+
+	if resp.StatusCode >= 400 {
+		if msg, ok := data["error"]; ok {
+			return nil, fmt.Errorf("API error: %v", msg)
+		}
+	}
+
+	return data, nil
+}
+
 // apiPost performs a POST request with JSON body.
 func apiPost(path string, payload map[string]any) (map[string]any, error) {
 	client := &http.Client{Timeout: 10 * time.Second}

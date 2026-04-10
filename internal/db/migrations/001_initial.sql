@@ -1,2 +1,0 @@
--- Initial schema is embedded in schema.rs; this migration is a placeholder.
--- Version 1 is already recorded when the base schema is created.

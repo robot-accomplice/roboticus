@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/rs/zerolog/log"
+
 	"roboticus/internal/core"
 )
 
@@ -22,7 +24,9 @@ func GetConfigRaw() http.HandlerFunc {
 		}
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(data)
+		if _, err := w.Write(data); err != nil {
+			log.Trace().Err(err).Msg("config_raw: response write failed")
+		}
 	}
 }
 

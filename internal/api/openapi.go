@@ -3,6 +3,8 @@ package api
 import (
 	_ "embed"
 	"net/http"
+
+	"github.com/rs/zerolog/log"
 )
 
 //go:embed openapi.yaml
@@ -13,7 +15,9 @@ func OpenAPIHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/yaml")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		_, _ = w.Write(openapiSpec)
+		if _, err := w.Write(openapiSpec); err != nil {
+			log.Trace().Err(err).Msg("openapi: response write failed")
+		}
 	}
 }
 
@@ -21,13 +25,15 @@ func OpenAPIHandler() http.HandlerFunc {
 func DocsHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
-		_, _ = w.Write([]byte(`<!DOCTYPE html>
+		if _, err := w.Write([]byte(`<!DOCTYPE html>
 <html><head><title>Roboticus API Docs</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css">
 </head><body>
 <div id="swagger-ui"></div>
 <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
 <script>SwaggerUIBundle({url:"/openapi.yaml",dom_id:"#swagger-ui"})</script>
-</body></html>`))
+</body></html>`)); err != nil {
+			log.Trace().Err(err).Msg("docs: response write failed")
+		}
 	}
 }

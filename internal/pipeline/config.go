@@ -71,6 +71,10 @@ type Config struct {
 	PostTurnIngest     bool // Background memory ingestion after turn
 	NicknameRefinement bool // Background LLM-driven session naming
 
+	// Context budget tier (L0-L3). Higher tiers allow more history + memory.
+	// Matches Rust's ContextBudgetConfig tiers.
+	BudgetTier int // 0=L0 (minimal), 1=L1 (standard), 2=L2 (extended), 3=L3 (maximum)
+
 	// Model routing overrides.
 	ModelOverride    string // Force a specific model, bypassing router
 	PreferLocalModel bool   // Prefer local models over cloud when quality is comparable
@@ -88,6 +92,13 @@ type Config struct {
 }
 
 // PresetAPI returns the standard API preset (full pipeline, standard inference).
+// PresetAPI returns the standard HTTP API preset (full pipeline, creator authority).
+//
+// Stage rationale for non-default values:
+//   SpecialistControls: false  — API clients manage their own specialist UX
+//   SkillFirstEnabled:  false  — skill-first routing only for interactive channels
+//   NicknameRefinement: true   — web sessions display nicknames
+//   InjectDiagnostics:  true   — API clients benefit from diagnostic hints
 func PresetAPI() Config {
 	return Config{
 		InjectionDefense:       true,
@@ -104,6 +115,7 @@ func PresetAPI() Config {
 		CacheGuardSet:          GuardSetCached,
 		CacheEnabled:           true,
 		AuthorityMode:          AuthorityAPIKey,
+		BudgetTier:             1, // L1: standard
 		PostTurnIngest:         true,
 		NicknameRefinement:     true,
 		InjectDiagnostics:      true,
@@ -111,7 +123,13 @@ func PresetAPI() Config {
 	}
 }
 
-// PresetStreaming returns the streaming API preset (SSE, reduced guards).
+// PresetStreaming returns the SSE streaming preset (reduced guards, no nickname).
+//
+// Stage rationale for non-default values:
+//   GuardSet:           GuardSetStream (6 guards) — retry-capable guards excluded from streaming
+//   NicknameRefinement: false  — can't update session nickname mid-stream
+//   SkillFirstEnabled:  false  — skill-first routing only for interactive channels
+//   SpecialistControls: false  — API clients manage their own specialist UX
 func PresetStreaming() Config {
 	return Config{
 		InjectionDefense:       true,
@@ -128,6 +146,7 @@ func PresetStreaming() Config {
 		CacheGuardSet:          GuardSetNone,
 		CacheEnabled:           true,
 		AuthorityMode:          AuthorityAPIKey,
+		BudgetTier:             1, // L1: standard
 		PostTurnIngest:         true,
 		NicknameRefinement:     false,
 		InjectDiagnostics:      true,
@@ -136,6 +155,12 @@ func PresetStreaming() Config {
 }
 
 // PresetChannel returns the channel adapter preset (full pipeline, channel auth).
+//
+// Stage rationale for non-default values:
+//   SpecialistControls: true   — channels have interactive specialist creation UX
+//   SkillFirstEnabled:  true   — trigger-based skills on channel interactions
+//   NicknameRefinement: false  — channels don't show session nicknames
+//   InjectDiagnostics:  false  — diagnostic hints are API-specific
 func PresetChannel(platform string) Config {
 	return Config{
 		InjectionDefense:       true,
@@ -152,6 +177,8 @@ func PresetChannel(platform string) Config {
 		CacheGuardSet:          GuardSetCached,
 		CacheEnabled:           true,
 		AuthorityMode:          AuthorityChannel,
+		BudgetTier:             1, // L1: channel minimum
+		BotCommandDispatch:     true, // Channels support /help, /status, /tools, /whoami
 		PostTurnIngest:         true,
 		NicknameRefinement:     false,
 		InjectDiagnostics:      false,
@@ -159,7 +186,17 @@ func PresetChannel(platform string) Config {
 	}
 }
 
-// PresetCron returns the cron/scheduled task preset (self-generated authority, no dedup).
+// PresetCron returns the scheduled task preset (self-generated authority, minimal).
+//
+// Stage rationale for non-default values:
+//   DedupTracking:      false  — scheduler guarantees uniqueness
+//   DelegatedExecution: false  — cron tasks are self-contained
+//   SpecialistControls: false  — no interactive specialist creation UX
+//   ShortcutsEnabled:   false  — cron tasks are machine-generated; ack shortcuts don't apply
+//   SkillFirstEnabled:  false  — cron tasks are self-contained
+//   NicknameRefinement: false  — cron sessions are ephemeral
+//   InjectDiagnostics:  false  — no user to see diagnostics
+//   CronDelegationWrap: true   — prepend subagent delegation context
 func PresetCron() Config {
 	return Config{
 		InjectionDefense:       true,
@@ -176,6 +213,7 @@ func PresetCron() Config {
 		CacheGuardSet:          GuardSetCached,
 		CacheEnabled:           true,
 		AuthorityMode:          AuthoritySelfGen,
+		BudgetTier:             0, // L0: minimal (cron tasks are self-contained)
 		PostTurnIngest:         true,
 		NicknameRefinement:     false,
 		InjectDiagnostics:      false,
@@ -194,26 +232,50 @@ type ChannelClaimContext struct {
 	TrustedSenderIDs    []string
 }
 
-// ResolveAuthority maps AuthorityMode to an AuthorityLevel.
-func ResolveAuthority(mode AuthorityMode, claim *ChannelClaimContext) core.AuthorityLevel {
+// ResolveSecurityClaim resolves a full SecurityClaim using the core resolvers.
+// This replaces the former ResolveAuthority which only returned an AuthorityLevel.
+// The full claim carries source tracking for audit and ceiling enforcement.
+func ResolveSecurityClaim(mode AuthorityMode, claim *ChannelClaimContext) core.SecurityClaim {
+	sec := core.DefaultClaimSecurityConfig()
+
 	switch mode {
 	case AuthorityAPIKey:
-		return core.AuthorityCreator // API keys are fully trusted
+		return core.ResolveAPIClaim(false, "api", sec)
 	case AuthoritySelfGen:
-		return core.AuthoritySelfGenerated
+		return core.SecurityClaim{
+			Authority: core.AuthoritySelfGenerated,
+			Sources:   []core.ClaimSource{},
+			Ceiling:   core.AuthorityCreator,
+			SenderID:  "cron",
+			Channel:   "cron",
+		}
 	case AuthorityChannel:
 		if claim == nil {
-			return core.AuthorityExternal
-		}
-		if claim.SenderInAllowlist {
-			return core.AuthorityCreator
-		}
-		for _, trusted := range claim.TrustedSenderIDs {
-			if trusted == claim.SenderID {
-				return core.AuthorityPeer
+			return core.SecurityClaim{
+				Authority: core.AuthorityExternal,
+				Sources:   []core.ClaimSource{core.ClaimSourceAnonymous},
+				Ceiling:   core.AuthorityCreator,
+				Channel:   "unknown",
 			}
 		}
-		return core.AuthorityExternal
+		return core.ResolveChannelClaim(&core.ChannelClaimContext{
+			SenderID:            claim.SenderID,
+			ChatID:              claim.ChatID,
+			Channel:             claim.Platform,
+			SenderInAllowlist:   claim.SenderInAllowlist,
+			AllowlistConfigured: claim.AllowlistConfigured,
+			TrustedSenderIDs:    claim.TrustedSenderIDs,
+		}, sec)
 	}
-	return core.AuthorityExternal
+	return core.SecurityClaim{
+		Authority: core.AuthorityExternal,
+		Sources:   []core.ClaimSource{core.ClaimSourceAnonymous},
+		Ceiling:   core.AuthorityCreator,
+	}
+}
+
+// ResolveAuthority maps AuthorityMode to an AuthorityLevel.
+// Convenience wrapper over ResolveSecurityClaim for callers that only need the level.
+func ResolveAuthority(mode AuthorityMode, claim *ChannelClaimContext) core.AuthorityLevel {
+	return ResolveSecurityClaim(mode, claim).Authority
 }

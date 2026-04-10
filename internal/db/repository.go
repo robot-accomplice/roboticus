@@ -3,6 +3,8 @@ package db
 import (
 	"context"
 	"database/sql"
+
+	"github.com/rs/zerolog/log"
 )
 
 // Querier is the minimal interface for database read/write operations.
@@ -44,7 +46,9 @@ func (r *SessionRepository) ArchiveSession(ctx context.Context, sessionID string
 
 // DeleteSession removes a session and its messages.
 func (r *SessionRepository) DeleteSession(ctx context.Context, sessionID string) error {
-	_, _ = r.q.ExecContext(ctx, `DELETE FROM session_messages WHERE session_id = ?`, sessionID)
+	if _, err := r.q.ExecContext(ctx, `DELETE FROM session_messages WHERE session_id = ?`, sessionID); err != nil {
+		log.Warn().Err(err).Str("session", sessionID).Msg("db: failed to delete session messages")
+	}
 	_, err := r.q.ExecContext(ctx, `DELETE FROM sessions WHERE id = ?`, sessionID)
 	return err
 }

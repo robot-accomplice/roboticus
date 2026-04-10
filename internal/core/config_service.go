@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+
+	"github.com/rs/zerolog/log"
 )
 
 // DBExecer is the narrow interface for database writes needed by config service.
@@ -64,9 +66,11 @@ func ApplyConfigPatch(ctx context.Context, store DBExecer, patch map[string]any)
 	// Persist patch to identity table for audit trail.
 	if store != nil {
 		auditJSON, _ := json.Marshal(patch)
-		_, _ = store.ExecContext(ctx,
+		if _, err := store.ExecContext(ctx,
 			`INSERT INTO identity (key, value) VALUES ('config_patch:latest', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-			string(auditJSON))
+			string(auditJSON)); err != nil {
+			log.Warn().Err(err).Msg("config_service: audit trail persist failed")
+		}
 	}
 
 	// Write the validated config as TOML.

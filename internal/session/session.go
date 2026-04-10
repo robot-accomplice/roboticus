@@ -10,13 +10,14 @@ import (
 
 // Session holds the state of an ongoing conversation.
 type Session struct {
-	ID           string
-	AgentID      string
-	AgentName    string
-	Authority    core.AuthorityLevel
-	Workspace    string
-	AllowedPaths []string
-	Channel      string
+	ID            string
+	AgentID       string
+	AgentName     string
+	Authority     core.AuthorityLevel
+	SecurityClaim *core.SecurityClaim // Full claim for audit — set by pipeline stage 8.
+	Workspace     string
+	AllowedPaths  []string
+	Channel       string
 	ScopeKey     string // "platform:chatid" — used for cross-channel consent
 
 	messages     []llm.Message

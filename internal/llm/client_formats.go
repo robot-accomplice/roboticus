@@ -17,11 +17,11 @@ func (c *Client) marshalRequest(req *Request) ([]byte, error) {
 		return c.marshalAnthropic(req)
 	case FormatGoogle:
 		return c.marshalGoogle(req)
-	case FormatOllama:
-		return c.marshalOllama(req)
 	case FormatOpenAIResponses:
 		return c.marshalOpenAIResponses(req)
 	default:
+		// FormatOpenAI, FormatOllama, and any unknown format all use OpenAI-compatible.
+		// Rust standardizes on OpenAI-compatible for all providers including Ollama.
 		return c.marshalOpenAI(req)
 	}
 }
@@ -40,6 +40,7 @@ func (c *Client) marshalOpenAI(req *Request) ([]byte, error) {
 	}
 	if len(req.Tools) > 0 {
 		payload["tools"] = req.Tools
+		payload["tool_choice"] = "auto"
 	}
 	if len(req.Stop) > 0 {
 		payload["stop"] = req.Stop
@@ -84,17 +85,6 @@ func (c *Client) marshalAnthropic(req *Request) ([]byte, error) {
 	return json.Marshal(payload)
 }
 
-func (c *Client) marshalOllama(req *Request) ([]byte, error) {
-	payload := map[string]any{
-		"model":    req.Model,
-		"messages": req.Messages,
-		"stream":   req.Stream,
-	}
-	if req.Temperature != nil {
-		payload["options"] = map[string]any{"temperature": *req.Temperature}
-	}
-	return json.Marshal(payload)
-}
 
 func (c *Client) marshalGoogle(req *Request) ([]byte, error) {
 	var systemParts []string
@@ -153,8 +143,6 @@ func (c *Client) unmarshalResponse(body io.Reader) (*Response, error) {
 	switch c.provider.Format {
 	case FormatAnthropic:
 		resp, err = c.unmarshalAnthropicResponse(data)
-	case FormatOllama:
-		resp, err = c.unmarshalOllamaResponse(data)
 	case FormatGoogle:
 		resp, err = c.unmarshalGoogleResponse(data)
 	case FormatOpenAIResponses:
@@ -251,31 +239,6 @@ func (c *Client) unmarshalAnthropicResponse(data []byte) (*Response, error) {
 		FinishReason: raw.StopReason,
 		Usage:        Usage{InputTokens: raw.Usage.InputTokens, OutputTokens: raw.Usage.OutputTokens},
 	}, nil
-}
-
-func (c *Client) unmarshalOllamaResponse(data []byte) (*Response, error) {
-	var raw struct {
-		Model   string `json:"model"`
-		Message struct {
-			Role      string     `json:"role"`
-			Content   string     `json:"content"`
-			ToolCalls []ToolCall `json:"tool_calls,omitempty"`
-		} `json:"message"`
-		DoneReason string `json:"done_reason,omitempty"`
-	}
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return nil, core.WrapError(core.ErrLLM, "failed to parse Ollama response", err)
-	}
-	resp := &Response{
-		Model:        raw.Model,
-		Content:      raw.Message.Content,
-		ToolCalls:    raw.Message.ToolCalls,
-		FinishReason: "stop",
-	}
-	if raw.DoneReason != "" {
-		resp.FinishReason = raw.DoneReason
-	}
-	return resp, nil
 }
 
 func (c *Client) unmarshalGoogleResponse(data []byte) (*Response, error) {
@@ -435,6 +398,7 @@ func (c *Client) marshalOpenAIResponses(req *Request) ([]byte, error) {
 	}
 	if len(req.Tools) > 0 {
 		payload["tools"] = req.Tools
+		payload["tool_choice"] = "auto"
 	}
 	if req.Stream {
 		payload["stream"] = true
@@ -496,18 +460,26 @@ func (c *Client) unmarshalOpenAIResponsesResponse(data []byte) (*Response, error
 func (c *Client) parseErrorResponse(resp *http.Response) error {
 	body, _ := io.ReadAll(resp.Body)
 
-	switch resp.StatusCode {
-	case 429:
-		return core.NewError(core.ErrRateLimited,
-			fmt.Sprintf("provider %s: %s", c.provider.Name, string(body)))
-	case 401, 403:
-		return core.NewError(core.ErrUnauthorized,
-			fmt.Sprintf("provider %s: %s", c.provider.Name, string(body)))
-	case 402:
-		return core.NewError(core.ErrCreditExhausted,
-			fmt.Sprintf("provider %s: %s", c.provider.Name, string(body)))
+	bodyStr := string(body)
+	msg := fmt.Sprintf("provider %s: %s", c.provider.Name, bodyStr)
+
+	// Some providers (e.g. Moonshot) return 429 for billing/quota exhaustion
+	// instead of 402. Detect these by inspecting the error body.
+	isBillingError := resp.StatusCode == 402 ||
+		strings.Contains(bodyStr, "insufficient balance") ||
+		strings.Contains(bodyStr, "exceeded_current_quota") ||
+		strings.Contains(bodyStr, "account_suspended") ||
+		strings.Contains(bodyStr, "billing")
+
+	switch {
+	case isBillingError:
+		return core.NewError(core.ErrCreditExhausted, msg)
+	case resp.StatusCode == 429:
+		return core.NewError(core.ErrRateLimited, msg)
+	case resp.StatusCode == 401 || resp.StatusCode == 403:
+		return core.NewError(core.ErrUnauthorized, msg)
 	default:
 		return core.NewError(core.ErrLLM,
-			fmt.Sprintf("provider %s returned %d: %s", c.provider.Name, resp.StatusCode, string(body)))
+			fmt.Sprintf("provider %s returned %d: %s", c.provider.Name, resp.StatusCode, bodyStr))
 	}
 }

@@ -194,13 +194,17 @@ func PersistLearnedSkill(ctx context.Context, store *db.Store, proc Procedure) {
 // ReinforceLearning adjusts learned skill priorities based on outcomes.
 func ReinforceLearning(ctx context.Context, store *db.Store, skillName string, success bool) {
 	if success {
-		_, _ = store.ExecContext(ctx,
+		if _, err := store.ExecContext(ctx,
 			`UPDATE learned_skills SET success_count = success_count + 1,
-			 priority = min(100, priority + 2) WHERE name = ?`, skillName)
+			 priority = min(100, priority + 2) WHERE name = ?`, skillName); err != nil {
+			log.Warn().Err(err).Str("skill", skillName).Msg("failed to reinforce skill success")
+		}
 	} else {
-		_, _ = store.ExecContext(ctx,
+		if _, err := store.ExecContext(ctx,
 			`UPDATE learned_skills SET failure_count = failure_count + 1,
-			 priority = max(0, priority - 5) WHERE name = ?`, skillName)
+			 priority = max(0, priority - 5) WHERE name = ?`, skillName); err != nil {
+			log.Warn().Err(err).Str("skill", skillName).Msg("failed to reinforce skill failure")
+		}
 	}
 }
 

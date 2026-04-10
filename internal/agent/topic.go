@@ -1,6 +1,11 @@
 package agent
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+
+	"roboticus/internal/llm"
+)
 
 type TopicCategory string
 
@@ -81,4 +86,70 @@ func countKeywords(text string, keywords []string) int {
 		}
 	}
 	return count
+}
+
+// --- Topic-Aware History Compression (Rust parity) ---
+
+// TopicBlock is a contiguous group of off-topic messages to be summarized.
+type TopicBlock struct {
+	Tag              string
+	Messages         []llm.Message
+	FirstUserContent string
+}
+
+// PartitionByTopic splits messages into current-topic (kept in full) and
+// off-topic blocks (summarized). Matches Rust's partition_by_topic().
+//
+// Messages without a TopicTag are treated as current-topic.
+func PartitionByTopic(messages []llm.Message, currentTopic string) (currentMsgs []llm.Message, offTopicBlocks []TopicBlock) {
+	if currentTopic == "" {
+		return messages, nil
+	}
+
+	var currentBlock *TopicBlock
+
+	for _, m := range messages {
+		tag := m.TopicTag
+		isCurrent := tag == "" || tag == currentTopic
+
+		if isCurrent {
+			// Flush any accumulated off-topic block.
+			if currentBlock != nil {
+				offTopicBlocks = append(offTopicBlocks, *currentBlock)
+				currentBlock = nil
+			}
+			currentMsgs = append(currentMsgs, m)
+		} else {
+			// Accumulate into off-topic block.
+			if currentBlock == nil || currentBlock.Tag != tag {
+				if currentBlock != nil {
+					offTopicBlocks = append(offTopicBlocks, *currentBlock)
+				}
+				currentBlock = &TopicBlock{Tag: tag}
+			}
+			currentBlock.Messages = append(currentBlock.Messages, m)
+			if m.Role == "user" && currentBlock.FirstUserContent == "" {
+				currentBlock.FirstUserContent = m.Content
+			}
+		}
+	}
+	if currentBlock != nil {
+		offTopicBlocks = append(offTopicBlocks, *currentBlock)
+	}
+
+	return currentMsgs, offTopicBlocks
+}
+
+// SummarizeTopicBlock produces a compact summary for an off-topic message block.
+// Format matches Rust: [Earlier topic ({tag}, {N} messages): "{snippet}..."]
+func SummarizeTopicBlock(block TopicBlock) string {
+	snippet := block.FirstUserContent
+	if len(snippet) > 80 {
+		snippet = snippet[:80]
+	}
+	if snippet == "" {
+		snippet = "(no user message)"
+	}
+	return fmt.Sprintf("[Earlier topic (%s, %d messages): \"%s...\"]",
+		block.Tag, len(block.Messages), snippet)
 }
