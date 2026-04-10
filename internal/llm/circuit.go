@@ -295,6 +295,62 @@ func (r *BreakerRegistry) Get(providerName string) *CircuitBreaker {
 	return cb
 }
 
+// ResetProvider resets a specific provider's circuit breaker, clearing
+// all state including credit-tripped and force-open flags.
+func (r *BreakerRegistry) ResetProvider(providerName string) bool {
+	r.mu.RLock()
+	cb, ok := r.breakers[providerName]
+	r.mu.RUnlock()
+	if !ok {
+		return false
+	}
+	cb.Reset()
+	return true
+}
+
+// ResetAll resets all circuit breakers in the registry.
+func (r *BreakerRegistry) ResetAll() int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	count := 0
+	for _, cb := range r.breakers {
+		cb.Reset()
+		count++
+	}
+	return count
+}
+
+// Status returns a snapshot of all breaker states for observability.
+func (r *BreakerRegistry) Status() map[string]map[string]any {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	result := make(map[string]map[string]any, len(r.breakers))
+	for name, cb := range r.breakers {
+		cb.mu.Lock()
+		state := cb.state
+		credit := cb.creditTripped
+		forced := cb.forcedOpen
+		pressure := cb.capacityPressure
+		failCount := len(cb.failures)
+		cb.mu.Unlock()
+		stateStr := "closed"
+		if state == CircuitOpen {
+			stateStr = "open"
+		} else if state == CircuitHalfOpen {
+			stateStr = "half_open"
+		}
+		result[name] = map[string]any{
+			"state":             stateStr,
+			"credit_tripped":    credit,
+			"forced_open":       forced,
+			"capacity_pressure": pressure,
+			"recent_failures":   failCount,
+			"allowed":           !credit && !forced && state != CircuitOpen,
+		}
+	}
+	return result
+}
+
 // WithBreaker wraps a Completer with circuit breaker protection.
 func WithBreaker(c Completer, cb *CircuitBreaker) Completer {
 	return &breakerCompleter{inner: c, cb: cb}

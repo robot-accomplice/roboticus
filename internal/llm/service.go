@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -140,7 +141,32 @@ func NewService(cfg ServiceConfig, store *db.Store) (*Service, error) {
 	// requiring explicit wiring at each call site.
 	svc.router.EnableMetascoreRouting(svc.quality, svc.latency, nil, svc.breakers)
 
+	// Load persisted routing weights so spider-graph settings survive restarts.
+	if store != nil {
+		svc.loadPersistedRoutingWeights(store)
+	}
+
 	return svc, nil
+}
+
+// loadPersistedRoutingWeights reads the user-configured routing profile from
+// the runtime_settings table and applies it to the router. If no profile is
+// saved (or the read fails), the router keeps its default weights.
+func (s *Service) loadPersistedRoutingWeights(store *db.Store) {
+	row := db.NewRouteQueries(store).GetRuntimeSetting(context.Background(), "routing_profile")
+	var raw string
+	if err := row.Scan(&raw); err != nil {
+		return // no saved profile — defaults are fine
+	}
+	var w RoutingWeights
+	if json.Unmarshal([]byte(raw), &w) == nil {
+		s.router.SetRoutingWeights(&w)
+		log.Info().
+			Float64("efficacy", w.Efficacy).
+			Float64("cost", w.Cost).
+			Float64("speed", w.Speed).
+			Msg("loaded persisted routing weights")
+	}
 }
 
 // Complete sends a non-streaming request through the full pipeline.
@@ -286,14 +312,16 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 		latencyMs := time.Since(start).Milliseconds()
 		if err != nil {
 			// Distinguish permanent errors from transient failures.
-			// Credit and auth errors permanently trip the breaker — these
-			// won't self-heal between requests.
+			// Credit exhaustion permanently trips the breaker — 402 means
+			// the account genuinely can't pay.
+			// Auth errors (401) use normal failure recording — API keys can
+			// be added or rotated, so these should auto-recover via cooldown.
 			if errors.Is(err, core.ErrCreditExhausted) {
 				cb.RecordCreditError()
 				log.Error().Str("provider", pm.provider).Msg("provider credit exhausted — circuit breaker tripped permanently")
 			} else if errors.Is(err, core.ErrUnauthorized) {
-				cb.RecordCreditError() // Same permanent trip — no key means no recovery.
-				log.Error().Str("provider", pm.provider).Msg("provider unauthorized — circuit breaker tripped permanently (missing or invalid API key)")
+				cb.RecordFailure()
+				log.Warn().Str("provider", pm.provider).Msg("provider unauthorized — breaker recording failure (will auto-recover after cooldown)")
 			} else {
 				cb.RecordFailure()
 			}
@@ -334,9 +362,15 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 		}
 
 		// Record cost asynchronously via tracked worker pool.
+		// Pass quality score and latency through CostMetadata so they're
+		// persisted to inference_costs (previously always empty).
 		pName := pm.provider
+		costMeta := CostMetadata{
+			Latency: latencyMs,
+			Quality: qScore,
+		}
 		s.bgWorker.Submit("recordCost", func(ctx context.Context) {
-			s.recordCost(ctx, pName, resp)
+			s.recordCostWithMeta(ctx, pName, resp, costMeta)
 		})
 
 		log.Info().Str("provider", pm.provider).Str("model", resp.Model).Int("tokens_in", resp.Usage.InputTokens).Int("tokens_out", resp.Usage.OutputTokens).Int64("latency_ms", latencyMs).Msg("inference completed")

@@ -211,6 +211,27 @@ func GetEfficiency(store *db.Store) http.HandlerFunc {
 			})
 		}
 
+		// Fetch per-model quality metrics (grade, escalations, latency).
+		qualityByModel := map[string]map[string]any{}
+		qualityRows, qErr := rq.ModelQualityBreakdown(ctx, offset)
+		if qErr == nil {
+			defer func() { _ = qualityRows.Close() }()
+			for qualityRows.Next() {
+				var qModel string
+				var avgGrade float64
+				var gradeCount, escalationCount int64
+				var avgLatency float64
+				if qualityRows.Scan(&qModel, &avgGrade, &gradeCount, &escalationCount, &avgLatency) == nil {
+					qualityByModel[qModel] = map[string]any{
+						"avg_quality_score": avgGrade,
+						"graded_turns":     gradeCount,
+						"escalation_count": escalationCount,
+						"avg_latency_ms":   avgLatency,
+					}
+				}
+			}
+		}
+
 		// Convert models array to object keyed by model name (JS expects Object.keys(models)).
 		modelsMap := make(map[string]any, len(models))
 		var mostExpensiveModel, mostEfficientModel string
@@ -218,13 +239,17 @@ func GetEfficiency(store *db.Store) http.HandlerFunc {
 		var minCostPerTurn float64 = -1
 		for _, m := range models {
 			name := m["model"].(string)
-			modelsMap[name] = map[string]any{
+			entry := map[string]any{
 				"total_turns":        m["total_turns"],
 				"cache_hit_rate":     m["cache_hit_rate"],
 				"avg_output_tokens":  m["avg_output_tokens"],
 				"avg_output_density": m["avg_output_density"],
 				"cost":               m["cost"],
 			}
+			if q, ok := qualityByModel[name]; ok {
+				entry["quality"] = q
+			}
+			modelsMap[name] = entry
 			costObj := m["cost"].(map[string]any)
 			total := costObj["total"].(float64)
 			ept := costObj["effective_per_turn"].(float64)

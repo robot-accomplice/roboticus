@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/rs/zerolog/log"
 )
@@ -49,6 +50,10 @@ func ApplyConfigPatch(ctx context.Context, store DBExecer, patch map[string]any)
 		baseMap[k] = v
 	}
 
+	// Coerce string values to []string for known array fields that the
+	// frontend may send as flat strings (e.g., "path1\npath2" or "path1").
+	coerceArrayFields(baseMap)
+
 	patchedJSON, err := json.Marshal(baseMap)
 	if err != nil {
 		return path, fmt.Errorf("failed to marshal patched config: %w", err)
@@ -87,6 +92,69 @@ func ApplyConfigPatch(ctx context.Context, store DBExecer, patch map[string]any)
 	}
 
 	return path, nil
+}
+
+// coerceArrayFields walks a config map and converts string values to []string
+// for fields that the Config struct declares as []string. This prevents JSON
+// unmarshal failures when the frontend sends a flat string instead of an array.
+func coerceArrayFields(m map[string]any) {
+	// Known array field paths (section → field names).
+	arrayFields := map[string][]string{
+		"security": {"allowed_paths", "protected_paths", "extra_protected_paths",
+			"interpreter_allow", "script_allowed_paths", "trusted_sender_ids"},
+		"skills": {"allowed_interpreters"},
+		"models": {"fallback"},
+	}
+	for section, fields := range arrayFields {
+		sub, ok := m[section].(map[string]any)
+		if !ok {
+			continue
+		}
+		for _, f := range fields {
+			v, exists := sub[f]
+			if !exists {
+				continue
+			}
+			if s, isStr := v.(string); isStr {
+				// Split newline-separated or comma-separated strings into arrays.
+				parts := strings.Split(s, "\n")
+				var result []string
+				for _, p := range parts {
+					p = strings.TrimSpace(p)
+					if p != "" {
+						result = append(result, p)
+					}
+				}
+				if len(result) == 0 {
+					sub[f] = []string{}
+				} else {
+					sub[f] = result
+				}
+			}
+		}
+	}
+	// Also handle nested security.filesystem array fields.
+	if sec, ok := m["security"].(map[string]any); ok {
+		if fs, ok := sec["filesystem"].(map[string]any); ok {
+			for _, f := range []string{"tool_allowed_paths", "script_allowed_paths"} {
+				if s, isStr := fs[f].(string); isStr {
+					parts := strings.Split(s, "\n")
+					var result []string
+					for _, p := range parts {
+						p = strings.TrimSpace(p)
+						if p != "" {
+							result = append(result, p)
+						}
+					}
+					if len(result) == 0 {
+						fs[f] = []string{}
+					} else {
+						fs[f] = result
+					}
+				}
+			}
+		}
+	}
 }
 
 // ReadConfigRaw reads the raw TOML config file content.

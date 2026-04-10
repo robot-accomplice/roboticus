@@ -196,6 +196,68 @@ var CommonIntentBaselines = []IntentBaseline{
 // Derived from CommonIntentBaselines by averaging intent-class quality scores.
 var CommonModelBaselines = buildLegacyBaselines()
 
+// BaselineQualityInfo holds aggregated quality data for a model from baselines.
+type BaselineQualityInfo struct {
+	Known       bool               // true if model has baseline data
+	AvgQuality  float64            // average across all intent classes
+	ByIntent    map[string]float64 // per-intent quality scores
+	BestIntent  string             // intent class with highest quality
+	WorstIntent string             // intent class with lowest quality
+}
+
+// LookupBaselineQuality returns aggregated quality info for a model from
+// CommonIntentBaselines. Tries exact match first, then bare model name
+// (without provider prefix). Returns Known=false if no baseline data exists.
+func LookupBaselineQuality(model string) BaselineQualityInfo {
+	byIntent := make(map[string]float64)
+	for _, b := range CommonIntentBaselines {
+		if b.Model == model {
+			byIntent[b.IntentClass] = b.Quality
+		}
+	}
+	// Fallback: try bare model name (strip provider/).
+	if len(byIntent) == 0 {
+		bare := model
+		if idx := strings.Index(model, "/"); idx >= 0 {
+			bare = model[idx+1:]
+		}
+		for _, b := range CommonIntentBaselines {
+			bBare := b.Model
+			if idx := strings.Index(b.Model, "/"); idx >= 0 {
+				bBare = b.Model[idx+1:]
+			}
+			if bBare == bare {
+				byIntent[b.IntentClass] = b.Quality
+			}
+		}
+	}
+	if len(byIntent) == 0 {
+		return BaselineQualityInfo{Known: false, AvgQuality: 0}
+	}
+
+	sum := 0.0
+	bestQ, worstQ := 0.0, 1.0
+	var bestI, worstI string
+	for intent, q := range byIntent {
+		sum += q
+		if q >= bestQ {
+			bestQ = q
+			bestI = intent
+		}
+		if q <= worstQ {
+			worstQ = q
+			worstI = intent
+		}
+	}
+	return BaselineQualityInfo{
+		Known:       true,
+		AvgQuality:  sum / float64(len(byIntent)),
+		ByIntent:    byIntent,
+		BestIntent:  bestI,
+		WorstIntent: worstI,
+	}
+}
+
 // ExerciseResult holds the outcome of a single exercise prompt.
 type ExerciseResult struct {
 	Prompt    ExercisePrompt

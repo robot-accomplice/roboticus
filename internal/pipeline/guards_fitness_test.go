@@ -345,6 +345,7 @@ func TestGuardChain_Ordering(t *testing.T) {
 		"perspective",       // Wave 8, #78
 		"internal_protocol", // Wave 8, #79
 		// Quality
+		"placeholder_content",
 		"low_value_parroting",
 		"non_repetition_v2",
 		"output_contract",

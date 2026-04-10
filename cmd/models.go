@@ -452,10 +452,11 @@ var modelsExerciseCmd = &cobra.Command{
 
 var modelsSuggestCmd = &cobra.Command{
 	Use:   "suggest",
-	Short: "Scan providers and suggest an optimal fallback chain configuration",
-	Long: `Suggest probes all configured providers for available models, ranks them
-by locality (local first) and cost (cheapest first), then outputs a
-suggested primary + fallback chain with ready-to-paste TOML config.`,
+	Short: "Scan providers and recommend an optimal model chain with quality rationale",
+	Long: `Suggest probes all configured providers for available models, scores them
+using quality baselines, locality, and cost, then presents an interactive
+recommendation with rationale for each model. You can apply the suggestion
+directly to your config, merge it with existing fallbacks, or copy a TOML snippet.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		fmt.Println()
 		fmt.Println("  Scanning for available models...")
@@ -474,11 +475,15 @@ suggested primary + fallback chain with ready-to-paste TOML config.`,
 		type modelEntry struct {
 			name     string
 			local    bool
-			costRate float64 // cost_per_output_token (0 = unknown/free)
+			costRate float64
+			quality  llm.BaselineQualityInfo
+			score    float64 // composite ranking score
 		}
 		var available []modelEntry
+		providerNames := make([]string, 0, len(providers))
 
 		for provName, provURL := range providers {
+			providerNames = append(providerNames, provName)
 			models := probeProvider(provName, provURL)
 			isLocal := false
 			costRate := 0.0
@@ -491,10 +496,13 @@ suggested primary + fallback chain with ready-to-paste TOML config.`,
 				}
 			}
 			for _, m := range models {
+				fullName := provName + "/" + m
+				qi := llm.LookupBaselineQuality(fullName)
 				available = append(available, modelEntry{
-					name:     provName + "/" + m,
+					name:     fullName,
 					local:    isLocal,
 					costRate: costRate,
+					quality:  qi,
 				})
 			}
 		}
@@ -504,53 +512,208 @@ suggested primary + fallback chain with ready-to-paste TOML config.`,
 			return nil
 		}
 
-		// Rank: local first, then cheapest first, then by name.
-		sort.Slice(available, func(i, j int) bool {
-			if available[i].local != available[j].local {
-				return available[i].local
+		fmt.Printf("  Found %d models across %s\n\n",
+			len(available), strings.Join(providerNames, ", "))
+
+		// Compute composite score: quality baseline + locality bonus - cost penalty.
+		maxCost := 0.0
+		for _, m := range available {
+			if m.costRate > maxCost {
+				maxCost = m.costRate
 			}
-			if available[i].costRate != available[j].costRate {
-				return available[i].costRate < available[j].costRate
+		}
+		for i := range available {
+			m := &available[i]
+			// Base quality: known baseline or unknown penalty.
+			if m.quality.Known {
+				m.score = m.quality.AvgQuality
+			} else {
+				m.score = 0.30 // unknown model penalty
+			}
+			// Locality bonus: local models are free and private.
+			if m.local {
+				m.score += 0.15
+			}
+			// Cost penalty: normalize to 0-0.2 range.
+			if maxCost > 0 && m.costRate > 0 {
+				m.score -= (m.costRate / maxCost) * 0.20
+			}
+		}
+
+		// Sort by composite score descending.
+		sort.Slice(available, func(i, j int) bool {
+			if available[i].score != available[j].score {
+				return available[i].score > available[j].score
 			}
 			return available[i].name < available[j].name
 		})
 
-		// Take top 6 for the suggested chain.
-		chain := available
-		if len(chain) > 6 {
-			chain = chain[:6]
+		// Recommend top models, ensuring at least one cloud model for resilience.
+		maxChain := 6
+		if len(available) < maxChain {
+			maxChain = len(available)
+		}
+		chain := available[:maxChain]
+
+		// Check diversity: if all are local, swap the last for the best cloud model.
+		allLocal := true
+		for _, m := range chain {
+			if !m.local {
+				allLocal = false
+				break
+			}
+		}
+		if allLocal && len(available) > maxChain {
+			for _, m := range available[maxChain:] {
+				if !m.local {
+					chain[maxChain-1] = m
+					break
+				}
+			}
 		}
 
-		fmt.Println("  Suggested fallback chain:")
+		// Display recommendations.
+		fmt.Println("  ━━━ Recommended Fallback Chain ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+		fmt.Println()
 		for i, m := range chain {
-			role := fmt.Sprintf("fallback%d", i)
+			role := "  FALLBACK"
 			if i == 0 {
-				role = "primary  "
+				role = "  PRIMARY "
 			}
-			locality := "cloud"
+			locality := "Cloud"
 			if m.local {
-				locality = "local"
+				locality = "Local"
 			}
-			costLabel := "free"
+			costLabel := "Free"
 			if m.costRate > 0 {
 				costLabel = fmt.Sprintf("$%.6f/tok", m.costRate)
 			}
-			fmt.Printf("  %-10s %s  (%s, %s)\n", role, m.name, locality, costLabel)
+
+			qualityLabel := "No baseline"
+			bar := "░░░░░░░░░░"
+			if m.quality.Known {
+				bar = qualityBar(m.quality.AvgQuality)
+				qualityLabel = fmt.Sprintf("%.2f", m.quality.AvgQuality)
+			}
+
+			fmt.Printf("%s  %s\n", role, m.name)
+			fmt.Printf("            %s · %s · Quality: %s %s\n", locality, costLabel, bar, qualityLabel)
+
+			// Rationale.
+			if m.quality.Known {
+				best := strings.ToLower(m.quality.BestIntent)
+				worst := strings.ToLower(m.quality.WorstIntent)
+				if best == worst {
+					fmt.Printf("            Even performance across intent classes.\n")
+				} else {
+					bestQ := m.quality.ByIntent[m.quality.BestIntent]
+					worstQ := m.quality.ByIntent[m.quality.WorstIntent]
+					fmt.Printf("            Strongest at %s (%.0f%%). Weakest at %s (%.0f%%).\n",
+						best, bestQ*100, worst, worstQ*100)
+				}
+			} else {
+				fmt.Printf("            No evaluation data. Run 'roboticus models exercise %s' to benchmark.\n", m.name)
+			}
+			fmt.Println()
 		}
 
-		// Print TOML snippet.
+		remaining := len(available) - len(chain)
+		if remaining > 0 {
+			fmt.Printf("  %d more model(s) available but not recommended\n", remaining)
+			fmt.Printf("  (lower quality baselines or no evaluation data)\n")
+		}
 		fmt.Println()
-		fmt.Println("  TOML:")
-		if len(chain) > 0 {
-			fmt.Printf("  [models]\n")
-			fmt.Printf("  primary = %q\n", chain[0].name)
-			if len(chain) > 1 {
+		fmt.Println("  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+		fmt.Println()
+
+		// Interactive menu.
+		fmt.Println("  [A] Apply to config (replace current primary + fallbacks)")
+		fmt.Println("  [M] Merge with config (keep current primary, add as fallbacks)")
+		fmt.Println("  [T] Show TOML snippet only")
+		fmt.Println("  [N] Cancel")
+		fmt.Println()
+		fmt.Print("  Choice [A/M/T/N]: ")
+
+		var input string
+		if _, err := fmt.Scanln(&input); err != nil && err.Error() != "unexpected newline" {
+			input = "n"
+		}
+		choice := strings.ToLower(strings.TrimSpace(input))
+
+		chainNames := make([]string, len(chain))
+		for i, m := range chain {
+			chainNames[i] = m.name
+		}
+
+		switch choice {
+		case "a", "apply":
+			body := map[string]any{
+				"models": map[string]any{
+					"primary":   chainNames[0],
+					"fallbacks": chainNames[1:],
+				},
+			}
+			if _, err := apiPut("/api/config", body); err != nil {
+				fmt.Printf("  Failed to update config: %v\n", err)
+			} else {
+				fmt.Printf("  Config updated: primary=%s, %d fallback(s)\n", chainNames[0], len(chainNames)-1)
+				fmt.Println("  Restart roboticus to pick up the new model chain.")
+			}
+
+		case "m", "merge":
+			// Fetch current config to preserve existing primary.
+			currentModels, _ := config["models"].(map[string]any)
+			currentPrimary, _ := currentModels["primary"].(string)
+			currentFallbacks := []string{}
+			if fb, ok := currentModels["fallbacks"].([]any); ok {
+				for _, f := range fb {
+					if s, ok := f.(string); ok {
+						currentFallbacks = append(currentFallbacks, s)
+					}
+				}
+			}
+			if currentPrimary == "" {
+				currentPrimary = chainNames[0]
+			}
+			// Append new models that aren't already in the chain.
+			existing := map[string]bool{currentPrimary: true}
+			for _, f := range currentFallbacks {
+				existing[f] = true
+			}
+			merged := append([]string{}, currentFallbacks...)
+			for _, name := range chainNames {
+				if !existing[name] {
+					merged = append(merged, name)
+					existing[name] = true
+				}
+			}
+			body := map[string]any{
+				"models": map[string]any{
+					"primary":   currentPrimary,
+					"fallbacks": merged,
+				},
+			}
+			if _, err := apiPut("/api/config", body); err != nil {
+				fmt.Printf("  Failed to update config: %v\n", err)
+			} else {
+				fmt.Printf("  Config merged: primary=%s (kept), %d total fallback(s)\n", currentPrimary, len(merged))
+				fmt.Println("  Restart roboticus to pick up the new model chain.")
+			}
+
+		case "t", "toml":
+			fmt.Println()
+			fmt.Println("  [models]")
+			fmt.Printf("  primary = %q\n", chainNames[0])
+			if len(chainNames) > 1 {
 				var fbs []string
-				for _, m := range chain[1:] {
-					fbs = append(fbs, fmt.Sprintf("%q", m.name))
+				for _, name := range chainNames[1:] {
+					fbs = append(fbs, fmt.Sprintf("%q", name))
 				}
 				fmt.Printf("  fallbacks = [%s]\n", strings.Join(fbs, ", "))
 			}
+
+		default:
+			fmt.Println("  Cancelled.")
 		}
 		fmt.Println()
 		return nil
@@ -629,20 +792,43 @@ per-intent-class latency scorecard and 6-axis metascore dimension reporting.`,
 		}
 
 		// In --new-only mode, filter out models that already have exercise data.
+		// Match by both full name (provider/model) and bare model name since
+		// the exercise status API may store names with or without the provider prefix.
 		if newOnly {
 			status, err := apiGet("/api/models/exercise/status")
 			if err == nil {
 				if existing, ok := status["models"].(map[string]any); ok && len(existing) > 0 {
 					var filtered []string
 					for _, model := range configured {
-						if count, found := existing[model]; found {
-							c := toFloat(count)
-							if c > 0 {
-								fmt.Printf("  Skipping %s (already has %.0f exercise result(s))\n", model, c)
-								continue
+						found := false
+						// Try exact match first.
+						if count, ok := existing[model]; ok {
+							if toFloat(count) > 0 {
+								fmt.Printf("  Skipping %s (already has %.0f exercise result(s))\n", model, toFloat(count))
+								found = true
 							}
 						}
-						filtered = append(filtered, model)
+						// Try bare model name (strip provider/).
+						if !found {
+							bare := model
+							if idx := strings.Index(model, "/"); idx >= 0 {
+								bare = model[idx+1:]
+							}
+							for k, v := range existing {
+								kBare := k
+								if idx := strings.Index(k, "/"); idx >= 0 {
+									kBare = k[idx+1:]
+								}
+								if kBare == bare && toFloat(v) > 0 {
+									fmt.Printf("  Skipping %s (already has %.0f exercise result(s) as %s)\n", model, toFloat(v), k)
+									found = true
+									break
+								}
+							}
+						}
+						if !found {
+							filtered = append(filtered, model)
+						}
 					}
 					configured = filtered
 				}
@@ -683,8 +869,12 @@ per-intent-class latency scorecard and 6-axis metascore dimension reporting.`,
 		}
 
 		// Step 2: Confirm with duration warning.
-		fmt.Printf("\n  This will flush all quality scores and exercise each model\n")
-		fmt.Printf("  with %d prompts x %d iteration(s) = %d calls per model.\n\n", len(llm.ExerciseMatrix), iterations, totalPrompts)
+		if newOnly {
+			fmt.Printf("\n  This will exercise %d new model(s) without flushing existing scores.\n", len(configured))
+		} else {
+			fmt.Printf("\n  This will flush all quality scores and re-exercise each model.\n")
+		}
+		fmt.Printf("  %d prompts x %d iteration(s) = %d calls per model.\n\n", len(llm.ExerciseMatrix), iterations, totalPrompts)
 		fmt.Printf("  ⏱  Estimated duration: ~%d minutes (%d local model(s) @ ~45s/prompt, %d cloud @ ~4s/prompt)\n", totalEstMin, localCount, cloudCount)
 		if localCount > 0 {
 			fmt.Printf("     Local models are significantly slower — especially on first run (cold start).\n")
