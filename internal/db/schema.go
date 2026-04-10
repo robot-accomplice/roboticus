@@ -439,6 +439,15 @@ CREATE TABLE IF NOT EXISTS embeddings (
 );
 CREATE INDEX IF NOT EXISTS idx_embeddings_source ON embeddings(source_table, source_id);
 
+CREATE TABLE IF NOT EXISTS tool_embeddings (
+    tool_name TEXT NOT NULL,
+    description_hash TEXT NOT NULL,
+    embedding BLOB NOT NULL,
+    dimensions INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (tool_name, description_hash)
+);
+
 CREATE TABLE IF NOT EXISTS sub_agents (
     id TEXT PRIMARY KEY,
     agent_id TEXT NOT NULL DEFAULT '',
@@ -960,15 +969,6 @@ func (s *Store) runMigrations() error {
 		}
 
 		sql := string(data)
-		if strings.TrimSpace(sql) == "" || strings.HasPrefix(strings.TrimSpace(sql), "--") {
-			// Placeholder migration, just record the version.
-			_, err = s.db.Exec("INSERT INTO schema_version (version) VALUES (?)", ver)
-			if err != nil {
-				return core.WrapError(core.ErrDatabase, fmt.Sprintf("failed to record migration %d", ver), err)
-			}
-			continue
-		}
-
 		_, err = s.db.Exec(sql)
 		if err != nil {
 			return core.WrapError(core.ErrDatabase, fmt.Sprintf("migration %s failed", name), err)

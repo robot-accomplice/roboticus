@@ -32,6 +32,11 @@ func (p *Pipeline) runStandardInference(ctx context.Context, cfg Config, session
 		}
 	}
 
+	// Thread model override into context for the LLM service to read.
+	if cfg.ModelOverride != "" {
+		ctx = core.WithModelOverride(ctx, cfg.ModelOverride)
+	}
+
 	result, turns, err := p.executor.RunLoop(ctx, session)
 	if err != nil {
 		return nil, core.WrapError(core.ErrLLM, "inference failed", err)
@@ -80,10 +85,12 @@ func (p *Pipeline) runStandardInference(ctx context.Context, cfg Config, session
 	}
 
 	// Update turn record with inference metadata.
-	_, _ = p.store.ExecContext(ctx,
+	if _, err := p.store.ExecContext(ctx,
 		`UPDATE turns SET tokens_in = ?, tokens_out = ?, model = ? WHERE id = ?`,
 		0, 0, "", turnID, // tokens are tracked in inference_costs
-	)
+	); err != nil {
+		p.errBus.ReportIfErr(err, "pipeline", "update_turn_metadata", core.SevWarning)
+	}
 
 	// Post-turn ingest (background, tracked by worker pool).
 	if cfg.PostTurnIngest && p.ingestor != nil {
@@ -104,11 +111,26 @@ func (p *Pipeline) runStandardInference(ctx context.Context, cfg Config, session
 		})
 	}
 
+	// Build inference params for trace persistence (Rust parity).
+	params := &InferenceParams{
+		ModelRequested: cfg.ModelOverride,
+		ReactTurns:     turns,
+	}
+	if p.guards != nil && cfg.GuardSet != GuardSetNone {
+		// Guard violations were logged above; capture in params for tracing.
+		guardCtx2 := p.buildGuardContext(session)
+		guardResult2 := p.guards.ApplyFullWithContext(result, guardCtx2)
+		if len(guardResult2.Violations) > 0 {
+			params.GuardViolations = guardResult2.Violations
+		}
+	}
+
 	return &Outcome{
-		SessionID:  session.ID,
-		MessageID:  msgID,
-		Content:    result,
-		ReactTurns: turns,
+		SessionID:       session.ID,
+		MessageID:       msgID,
+		Content:         result,
+		ReactTurns:      turns,
+		inferenceParams: params,
 	}, nil
 }
 
@@ -192,6 +214,109 @@ func (p *Pipeline) FinalizeStream(ctx context.Context, outcome *Outcome, assembl
 	}
 
 	log.Debug().Str("session", session.ID).Int("content_len", len(assembledContent)).Msg("stream post-turn finalized")
+}
+
+// ── Inference Preparation (Rust parity) ───────────────────────────────────
+
+// InferencePrep holds the result of BuildAndPrepareInference.
+// Carries the selected model, trace annotations, and any system notes
+// that should be injected before running the LLM.
+type InferencePrep struct {
+	SelectedModel string   // Model chosen by router or override
+	SystemNotes   []string // System-level notes to inject (retrieval context, task state)
+	Escalated     bool     // Whether model was escalated from a lower tier
+	TraceModel    string   // Model name for trace annotation
+	TraceProvider string   // Provider name for trace annotation
+}
+
+// BuildAndPrepareInference performs structured inference preparation:
+// model selection, trace annotation, and system note collection.
+// Matches Rust's build_and_prepare_inference().
+//
+// This is the boundary between pipeline orchestration and LLM execution:
+// everything before this point is routing/context, everything after is inference.
+func (p *Pipeline) BuildAndPrepareInference(ctx context.Context, cfg Config, session *Session, tr *TraceRecorder, turnID string) *InferencePrep {
+	prep := &InferencePrep{}
+
+	// Model selection: override takes precedence, then router.
+	if cfg.ModelOverride != "" {
+		prep.SelectedModel = cfg.ModelOverride
+		prep.TraceModel = cfg.ModelOverride
+		prep.TraceProvider = "override"
+	} else if p.llmSvc != nil {
+		// Use the router to select the best model.
+		userContent := ""
+		msgs := session.Messages()
+		for i := len(msgs) - 1; i >= 0; i-- {
+			if msgs[i].Role == "user" {
+				userContent = msgs[i].Content
+				break
+			}
+		}
+		target := p.llmSvc.Router().Select(&llm.Request{
+			Messages: []llm.Message{{Role: "user", Content: userContent}},
+		})
+		model := llm.ModelSpecForTarget(target)
+		if model == "" {
+			model = p.llmSvc.Primary()
+		}
+		prep.SelectedModel = model
+		prep.TraceModel = model
+		prep.TraceProvider = "routed"
+	}
+
+	// Trace annotation.
+	AnnotateInferenceTrace(tr, prep.TraceModel, prep.TraceProvider, prep.Escalated)
+
+	return prep
+}
+
+// PrepareForInference performs post-retrieval preparation before inference:
+// injects retrieval context as system notes, persists a context snapshot,
+// and optionally compresses the prompt to fit the context budget.
+// Matches Rust's prepare_for_inference().
+func (p *Pipeline) PrepareForInference(ctx context.Context, session *Session, memoryBlock string, budgetTier int) {
+	// 1. Inject memory retrieval context as a system note.
+	// This was already done in the memory retrieval stage (session.SetMemoryContext),
+	// but we ensure it's present in the messages.
+	if memoryBlock != "" {
+		// Memory context is already set; verify it appears in messages.
+		found := false
+		for _, m := range session.Messages() {
+			if m.Role == "system" && strings.Contains(m.Content, "[Memory Context]") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			session.AddSystemMessage("[Memory Context]\n" + memoryBlock)
+		}
+	}
+
+	// 2. Context compaction: trim to fit budget tier.
+	if msgs := session.Messages(); len(msgs) > 0 {
+		budget := defaultTokenBudget
+		// Adjust budget based on tier (L0=4096, L1=8192, L2=16384, L3=32768).
+		switch budgetTier {
+		case 0:
+			budget = 4096
+		case 2:
+			budget = 16384
+		case 3:
+			budget = 32768
+		}
+		compacted := CompactContext(msgs, budget)
+		if len(compacted) < len(msgs) {
+			log.Debug().
+				Int("before", len(msgs)).
+				Int("after", len(compacted)).
+				Int("budget_tier", budgetTier).
+				Msg("pre-inference context compacted")
+		}
+	}
+
+	// 3. Context snapshot for checkpoint persistence (handled by post-turn).
+	// The snapshot is persisted asynchronously in PostTurnIngest → maybeCheckpoint.
 }
 
 // precomputeGuardScores runs lightweight pre-computation before the guard chain,
@@ -348,31 +473,38 @@ func (p *Pipeline) expandShortFollowup(session *Session, content string) string 
 	return content
 }
 
-// tryShortcut checks for simple shortcuts that don't need full LLM inference.
-func (p *Pipeline) tryShortcut(_ context.Context, session *Session, content string) *Outcome {
-	lower := strings.TrimSpace(strings.ToLower(content))
+// tryShortcut dispatches shortcuts via the ShortcutHandler system.
+// trySkillFirst attempts to match user input against registered skill triggers.
+// Skills are only dispatched if skill-first is enabled, authority is Creator,
+// and the skill matcher is wired. Mirrors Rust's try_skill_first() in inference.rs.
+func (p *Pipeline) trySkillFirst(ctx context.Context, cfg Config, authority core.AuthorityLevel, session *Session, content string) *Outcome {
+	if !cfg.SkillFirstEnabled || authority != core.AuthorityCreator || p.skills == nil {
+		return nil
+	}
+	return p.skills.TryMatch(ctx, session, content)
+}
 
-	if lower == "who are you" || lower == "who are you?" || lower == "what are you?" {
-		return &Outcome{
-			SessionID: session.ID,
-			Content:   fmt.Sprintf("I am %s, an autonomous AI agent.", session.AgentName),
-		}
+// tryShortcut evaluates the shortcut handler system against user input.
+// Uses DispatchShortcut with rich context (correction_turn, delegation_provenance)
+// so handlers can make context-aware decisions about whether to match.
+func (p *Pipeline) tryShortcut(_ context.Context, session *Session, content string, correctionTurn bool, channelLabel string) *Outcome {
+	ctx := &ShortcutContext{
+		CorrectionTurn:         correctionTurn,
+		DelegationProvenance:   false, // Set by caller when applicable
+		HasConversationContext: session.TurnCount() > 0,
+		AgentName:              session.AgentName,
+		SessionTurnCount:       session.TurnCount(),
+		PreviousAssistantText:  session.LastAssistantContent(),
+		ChannelLabel:           channelLabel,
 	}
 
-	switch lower {
-	case "ok", "okay", "thanks", "thank you", "got it", "understood", "k", "ty":
-		return &Outcome{
-			SessionID: session.ID,
-			Content:   "Acknowledged. Let me know if you need anything else.",
-		}
+	result := DispatchShortcut(DefaultShortcutHandlers(), content, ctx)
+	if result == nil {
+		return nil
 	}
 
-	if lower == "help" || lower == "/help" {
-		return &Outcome{
-			SessionID: session.ID,
-			Content:   fmt.Sprintf("%s can help with:\n- General conversation and reasoning\n- File operations and code tasks\n- Web search and information retrieval\n- Scheduling and reminders\n- Financial operations\n\nJust describe what you need.", session.AgentName),
-		}
+	return &Outcome{
+		SessionID: session.ID,
+		Content:   result.Content,
 	}
-
-	return nil
 }

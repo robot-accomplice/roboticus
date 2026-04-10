@@ -10,17 +10,19 @@ import (
 
 // Session holds the state of an ongoing conversation.
 type Session struct {
-	ID           string
-	AgentID      string
-	AgentName    string
-	Authority    core.AuthorityLevel
-	Workspace    string
-	AllowedPaths []string
-	Channel      string
+	ID            string
+	AgentID       string
+	AgentName     string
+	Authority     core.AuthorityLevel
+	SecurityClaim *core.SecurityClaim // Full claim for audit — set by pipeline stage 8.
+	Workspace     string
+	AllowedPaths  []string
+	Channel       string
 	ScopeKey     string // "platform:chatid" — used for cross-channel consent
 
-	messages     []llm.Message
-	pendingCalls []llm.ToolCall
+	messages      []llm.Message
+	pendingCalls  []llm.ToolCall
+	memoryContext string // Pre-retrieved memory block for cognitive scaffold (ARCHITECTURE.md §4).
 }
 
 // New creates a session with the given identity.
@@ -45,6 +47,14 @@ func (s *Session) AddUserMessage(content string) {
 func (s *Session) AddSystemMessage(content string) {
 	s.messages = append(s.messages, llm.Message{Role: "system", Content: content})
 }
+
+// SetMemoryContext stores pre-retrieved memory for cognitive scaffold injection.
+// Called by the pipeline before delegation/skill-first so early-exit paths
+// still have full cognitive context (ARCHITECTURE.md §4).
+func (s *Session) SetMemoryContext(block string) { s.memoryContext = block }
+
+// MemoryContext returns the pre-retrieved memory block, if any.
+func (s *Session) MemoryContext() string { return s.memoryContext }
 
 // AddAssistantMessage appends an assistant message with optional tool calls.
 func (s *Session) AddAssistantMessage(content string, toolCalls []llm.ToolCall) {

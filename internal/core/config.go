@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
+	"github.com/rs/zerolog/log"
 )
 
 var (
@@ -48,8 +49,8 @@ type Config struct {
 	Themes     ThemesConfig              `json:"themes" mapstructure:"themes"`
 	DKIM       DKIMConfig                `json:"dkim" mapstructure:"dkim"`
 	CORS       CORSConfig                `json:"cors" mapstructure:"cors"`
-	Revenue    RevenueConfig             `json:"revenue" mapstructure:"revenue"`
-	Heartbeat  HeartbeatConfig           `json:"heartbeat" mapstructure:"heartbeat"`
+	Revenue       RevenueConfig             `json:"revenue" mapstructure:"revenue"`
+	Heartbeat     HeartbeatConfig           `json:"heartbeat" mapstructure:"heartbeat"`
 
 	// New roboticus-compatible sections.
 	CircuitBreaker           CircuitBreakerConfig `json:"circuit_breaker" mapstructure:"circuit_breaker"`
@@ -117,6 +118,7 @@ type RateLimitConfig struct {
 }
 
 // AgentConfig holds agent identity and workspace settings.
+// Rust parity: crates/roboticus-core/src/config/agent_paths.rs
 type AgentConfig struct {
 	Name                        string  `json:"name" mapstructure:"name"`
 	ID                          string  `json:"id" mapstructure:"id"`
@@ -126,18 +128,30 @@ type AgentConfig struct {
 	LogLevel                    string  `json:"log_level" mapstructure:"log_level"`
 	DelegationEnabled           bool    `json:"delegation_enabled" mapstructure:"delegation_enabled"`
 	DelegationMinComplexity     float64 `json:"delegation_min_complexity" mapstructure:"delegation_min_complexity"`
+	DelegationMinUtilityMargin  float64 `json:"delegation_min_utility_margin" mapstructure:"delegation_min_utility_margin"`     // Rust parity: 0.15 default
+	SpecialistRequiresApproval  bool    `json:"specialist_creation_requires_approval" mapstructure:"specialist_creation_requires_approval"` // Rust parity: true
 	CompositionPolicy           string  `json:"composition_policy" mapstructure:"composition_policy"`
+	SkillCreationRigor          string  `json:"skill_creation_rigor" mapstructure:"skill_creation_rigor"`                       // generate|validate|full (Rust parity)
+	OutputValidationPolicy      string  `json:"output_validation_policy" mapstructure:"output_validation_policy"`               // strict|sample|off (Rust parity)
+	OutputValidationSampleRate  float64 `json:"output_validation_sample_rate" mapstructure:"output_validation_sample_rate"`     // Rust parity: 0.1 default
+	MaxOutputRetries            int     `json:"max_output_retries" mapstructure:"max_output_retries"`                           // Rust parity: 2 default
+	RetirementSuccessThreshold  float64 `json:"retirement_success_threshold" mapstructure:"retirement_success_threshold"`       // Rust parity: 0.7 default
+	RetirementMinDelegations    int     `json:"retirement_min_delegations" mapstructure:"retirement_min_delegations"`           // Rust parity: 10 default
 }
 
 // ServerConfig holds HTTP server settings.
 type ServerConfig struct {
-	Port               int      `json:"port" mapstructure:"port"`
-	Bind               string   `json:"bind" mapstructure:"bind"`
-	LogDir             string   `json:"log_dir" mapstructure:"log_dir"`
-	CronMaxConcurrency int      `json:"cron_max_concurrency" mapstructure:"cron_max_concurrency"`
-	APIKey             string   `json:"api_key" mapstructure:"api_key"`
-	LogMaxDays         int      `json:"log_max_days" mapstructure:"log_max_days"`
-	TrustedProxyCIDRs  []string `json:"trusted_proxy_cidrs" mapstructure:"trusted_proxy_cidrs"`
+	Port                      int      `json:"port" mapstructure:"port"`
+	Bind                      string   `json:"bind" mapstructure:"bind"`
+	LogDir                    string   `json:"log_dir" mapstructure:"log_dir"`
+	CronMaxConcurrency        int      `json:"cron_max_concurrency" mapstructure:"cron_max_concurrency"`
+	APIKey                    string   `json:"api_key" mapstructure:"api_key"`
+	LogMaxDays                int      `json:"log_max_days" mapstructure:"log_max_days"`
+	TrustedProxyCIDRs         []string `json:"trusted_proxy_cidrs" mapstructure:"trusted_proxy_cidrs"`
+	RateLimitRequests         int      `json:"rate_limit_requests" mapstructure:"rate_limit_requests"`
+	RateLimitWindowSecs       int      `json:"rate_limit_window_secs" mapstructure:"rate_limit_window_secs"`
+	PerIPRateLimitRequests    int      `json:"per_ip_rate_limit_requests" mapstructure:"per_ip_rate_limit_requests"`
+	PerActorRateLimitRequests int      `json:"per_actor_rate_limit_requests" mapstructure:"per_actor_rate_limit_requests"`
 }
 
 // DatabaseConfig holds SQLite connection settings.
@@ -147,11 +161,12 @@ type DatabaseConfig struct {
 
 // ModelsConfig holds LLM provider and model settings.
 type ModelsConfig struct {
-	Primary         string                   `json:"primary" mapstructure:"primary"`
-	Fallback        []string                 `json:"fallbacks,omitempty" toml:"fallbacks" mapstructure:"fallbacks"`
-	Routing         RoutingConfig            `json:"routing" mapstructure:"routing"`
-	ModelOverrides  map[string]ModelOverride `json:"model_overrides,omitempty" mapstructure:"model_overrides"`
-	StreamByDefault bool                     `json:"stream_by_default" mapstructure:"stream_by_default"`
+	Primary          string                   `json:"primary" mapstructure:"primary"`
+	Fallback         []string                 `json:"fallbacks,omitempty" toml:"fallbacks" mapstructure:"fallbacks"`
+	Routing          RoutingConfig            `json:"routing" mapstructure:"routing"`
+	ModelOverrides   map[string]ModelOverride  `json:"model_overrides,omitempty" mapstructure:"model_overrides"`
+	StreamByDefault  bool                     `json:"stream_by_default" mapstructure:"stream_by_default"`
+	TieredInference  TieredInferenceConfig    `json:"tiered_inference" mapstructure:"tiered_inference"`
 }
 
 // RoutingConfig holds model routing parameters.
@@ -193,44 +208,54 @@ type ProviderConfig struct {
 	OAuthClientID       string            `json:"oauth_client_id,omitempty" mapstructure:"oauth_client_id"`
 	OAuthRedirectURI    string            `json:"oauth_redirect_uri,omitempty" mapstructure:"oauth_redirect_uri"`
 	APIKeyRef           string            `json:"api_key_ref,omitempty" mapstructure:"api_key_ref"`
+	TimeoutSecs         int               `json:"timeout_seconds,omitempty" mapstructure:"timeout_seconds"`
 }
 
 // SessionConfig holds session scoping and timeout settings.
 type SessionConfig struct {
-	ScopeMode  string `json:"scope_mode" mapstructure:"scope_mode"`
-	TTLSeconds int    `json:"ttl_seconds" mapstructure:"ttl_seconds"`
+	ScopeMode     string `json:"scope_mode" mapstructure:"scope_mode"`
+	TTLSeconds    int    `json:"ttl_seconds" mapstructure:"ttl_seconds"`
+	ResetSchedule string `json:"reset_schedule,omitempty" mapstructure:"reset_schedule"`
 }
 
 // MemoryConfig holds memory budget settings as percentages (must sum to 100).
 // WorkingBudgetPct is an alias for WorkingBudget for roboticus compatibility.
 type MemoryConfig struct {
-	WorkingBudget      float64 `json:"working_budget" mapstructure:"working_budget"`
-	WorkingBudgetPct   float64 `json:"working_budget_pct,omitempty" mapstructure:"working_budget_pct"`
-	EpisodicBudget     float64 `json:"episodic_budget" mapstructure:"episodic_budget"`
-	SemanticBudget     float64 `json:"semantic_budget" mapstructure:"semantic_budget"`
-	ProceduralBudget   float64 `json:"procedural_budget" mapstructure:"procedural_budget"`
-	RelationshipBudget float64 `json:"relationship_budget" mapstructure:"relationship_budget"`
-	EmbeddingProvider  string  `json:"embedding_provider,omitempty" mapstructure:"embedding_provider"`
-	EmbeddingModel     string  `json:"embedding_model,omitempty" mapstructure:"embedding_model"`
-	HybridWeight       float64 `json:"hybrid_weight" mapstructure:"hybrid_weight"`
-	AnnIndex           bool    `json:"ann_index" mapstructure:"ann_index"`
-	DecayHalfLifeDays  float64 `json:"decay_half_life_days" mapstructure:"decay_half_life_days"`
+	WorkingBudget            float64 `json:"working_budget" mapstructure:"working_budget"`
+	WorkingBudgetPct         float64 `json:"working_budget_pct,omitempty" mapstructure:"working_budget_pct"`
+	EpisodicBudget           float64 `json:"episodic_budget" mapstructure:"episodic_budget"`
+	SemanticBudget           float64 `json:"semantic_budget" mapstructure:"semantic_budget"`
+	ProceduralBudget         float64 `json:"procedural_budget" mapstructure:"procedural_budget"`
+	RelationshipBudget       float64 `json:"relationship_budget" mapstructure:"relationship_budget"`
+	EmbeddingProvider        string  `json:"embedding_provider,omitempty" mapstructure:"embedding_provider"`
+	EmbeddingModel           string  `json:"embedding_model,omitempty" mapstructure:"embedding_model"`
+	HybridWeight             float64 `json:"hybrid_weight" mapstructure:"hybrid_weight"`
+	AnnIndex                 bool    `json:"ann_index" mapstructure:"ann_index"`
+	DecayHalfLifeDays        float64 `json:"decay_half_life_days" mapstructure:"decay_half_life_days"`
+	SimilarityThreshold      float64 `json:"similarity_threshold" mapstructure:"similarity_threshold"`
+	ANNActivationThreshold   int     `json:"ann_activation_threshold" mapstructure:"ann_activation_threshold"`
 }
 
 // CacheConfig holds semantic cache settings.
 type CacheConfig struct {
-	Enabled             bool    `json:"enabled" mapstructure:"enabled"`
-	TTLSeconds          int     `json:"ttl_seconds" mapstructure:"ttl_seconds"`
-	SimilarityThreshold float64 `json:"similarity_threshold" mapstructure:"similarity_threshold"`
-	MaxEntries          int     `json:"max_entries" mapstructure:"max_entries"`
+	Enabled                 bool    `json:"enabled" mapstructure:"enabled"`
+	TTLSeconds              int     `json:"ttl_seconds" mapstructure:"ttl_seconds"`
+	SimilarityThreshold     float64 `json:"similarity_threshold" mapstructure:"similarity_threshold"`
+	MaxEntries              int     `json:"max_entries" mapstructure:"max_entries"`
+	PromptCompression       bool    `json:"prompt_compression" mapstructure:"prompt_compression"`
+	CompressionTargetRatio  float64 `json:"compression_target_ratio" mapstructure:"compression_target_ratio"`
 }
 
 // TreasuryConfig holds financial policy limits.
 type TreasuryConfig struct {
-	DailyCap       float64 `json:"daily_cap" mapstructure:"daily_cap"`
-	PerPaymentCap  float64 `json:"per_payment_cap" mapstructure:"per_payment_cap"`
-	TransferLimit  float64 `json:"transfer_limit" mapstructure:"transfer_limit"`
-	MinimumReserve float64 `json:"minimum_reserve" mapstructure:"minimum_reserve"`
+	DailyCap              float64           `json:"daily_cap" mapstructure:"daily_cap"`
+	PerPaymentCap         float64           `json:"per_payment_cap" mapstructure:"per_payment_cap"`
+	TransferLimit         float64           `json:"transfer_limit" mapstructure:"transfer_limit"`
+	MinimumReserve        float64           `json:"minimum_reserve" mapstructure:"minimum_reserve"`
+	HourlyTransferLimit   float64           `json:"hourly_transfer_limit" mapstructure:"hourly_transfer_limit"`
+	DailyTransferLimit    float64           `json:"daily_transfer_limit" mapstructure:"daily_transfer_limit"`
+	DailyInferenceBudget  float64           `json:"daily_inference_budget" mapstructure:"daily_inference_budget"`
+	RevenueSwap           RevenueSwapConfig `json:"revenue_swap" mapstructure:"revenue_swap"`
 }
 
 // WalletConfig holds crypto wallet settings.
@@ -249,8 +274,20 @@ type PluginsConfig struct {
 	StrictPermissions bool     `json:"strict_permissions" mapstructure:"strict_permissions"`
 }
 
-// ChannelsConfig holds channel adapter token references.
+// ChannelsConfig holds channel adapter settings.
+// Rust parity: each channel has its own rich sub-struct with full configuration.
+// Legacy flat fields are preserved for backwards compatibility.
 type ChannelsConfig struct {
+	// Rich per-channel configs (Rust parity: runtime_core.rs).
+	Telegram *TelegramConfig `json:"telegram,omitempty" mapstructure:"telegram"`
+	WhatsApp *WhatsAppConfig `json:"whatsapp,omitempty" mapstructure:"whatsapp"`
+	Discord  *DiscordConfig  `json:"discord,omitempty" mapstructure:"discord"`
+	Signal   *SignalConfig   `json:"signal,omitempty" mapstructure:"signal"`
+	Email    *EmailConfig    `json:"email,omitempty" mapstructure:"email"`
+	Voice    *VoiceConfig    `json:"voice,omitempty" mapstructure:"voice"`
+
+	// Legacy flat fields — kept for backwards compatibility.
+	// When rich sub-configs are present, they take precedence.
 	TelegramTokenEnv string `json:"telegram_token_env" mapstructure:"telegram_token_env"`
 	WhatsAppTokenEnv string `json:"whatsapp_token_env" mapstructure:"whatsapp_token_env"`
 	DiscordTokenEnv  string `json:"discord_token_env" mapstructure:"discord_token_env"`
@@ -259,15 +296,90 @@ type ChannelsConfig struct {
 	EmailFromAddress string `json:"email_from_address" mapstructure:"email_from_address"`
 }
 
+// TelegramConfig holds Telegram bot adapter settings.
+type TelegramConfig struct {
+	Enabled            bool    `json:"enabled" mapstructure:"enabled"`
+	TokenEnv           string  `json:"token_env" mapstructure:"token_env"`
+	TokenRef           string  `json:"token_ref,omitempty" mapstructure:"token_ref"`
+	AllowedChatIDs     []int64 `json:"allowed_chat_ids,omitempty" mapstructure:"allowed_chat_ids"`
+	PollTimeoutSeconds int     `json:"poll_timeout_seconds" mapstructure:"poll_timeout_seconds"`
+	WebhookMode        bool    `json:"webhook_mode" mapstructure:"webhook_mode"`
+	WebhookPath        string  `json:"webhook_path,omitempty" mapstructure:"webhook_path"`
+	WebhookSecret      string  `json:"webhook_secret,omitempty" mapstructure:"webhook_secret"`
+}
+
+// WhatsAppConfig holds WhatsApp Cloud API adapter settings.
+type WhatsAppConfig struct {
+	Enabled        bool     `json:"enabled" mapstructure:"enabled"`
+	TokenEnv       string   `json:"token_env" mapstructure:"token_env"`
+	TokenRef       string   `json:"token_ref,omitempty" mapstructure:"token_ref"`
+	PhoneNumberID  string   `json:"phone_number_id" mapstructure:"phone_number_id"`
+	VerifyToken    string   `json:"verify_token" mapstructure:"verify_token"`
+	AllowedNumbers []string `json:"allowed_numbers,omitempty" mapstructure:"allowed_numbers"`
+	AppSecret      string   `json:"app_secret,omitempty" mapstructure:"app_secret"`
+}
+
+// DiscordConfig holds Discord bot adapter settings.
+type DiscordConfig struct {
+	Enabled         bool     `json:"enabled" mapstructure:"enabled"`
+	TokenEnv        string   `json:"token_env" mapstructure:"token_env"`
+	TokenRef        string   `json:"token_ref,omitempty" mapstructure:"token_ref"`
+	ApplicationID   string   `json:"application_id" mapstructure:"application_id"`
+	AllowedGuildIDs []string `json:"allowed_guild_ids,omitempty" mapstructure:"allowed_guild_ids"`
+}
+
+// SignalConfig holds Signal messenger adapter settings.
+type SignalConfig struct {
+	Enabled        bool     `json:"enabled" mapstructure:"enabled"`
+	PhoneNumber    string   `json:"phone_number" mapstructure:"phone_number"`
+	DaemonURL      string   `json:"daemon_url" mapstructure:"daemon_url"`
+	AllowedNumbers []string `json:"allowed_numbers,omitempty" mapstructure:"allowed_numbers"`
+}
+
+// EmailConfig holds email (IMAP/SMTP) adapter settings.
+type EmailConfig struct {
+	Enabled            bool     `json:"enabled" mapstructure:"enabled"`
+	IMAPHost           string   `json:"imap_host" mapstructure:"imap_host"`
+	IMAPPort           int      `json:"imap_port" mapstructure:"imap_port"`
+	SMTPHost           string   `json:"smtp_host" mapstructure:"smtp_host"`
+	SMTPPort           int      `json:"smtp_port" mapstructure:"smtp_port"`
+	Username           string   `json:"username" mapstructure:"username"`
+	PasswordEnv        string   `json:"password_env" mapstructure:"password_env"`
+	FromAddress        string   `json:"from_address" mapstructure:"from_address"`
+	AllowedSenders     []string `json:"allowed_senders,omitempty" mapstructure:"allowed_senders"`
+	PollIntervalSecs   int      `json:"poll_interval_seconds" mapstructure:"poll_interval_seconds"`
+	OAuth2TokenEnv     string   `json:"oauth2_token_env,omitempty" mapstructure:"oauth2_token_env"`
+	UseOAuth2          bool     `json:"use_oauth2" mapstructure:"use_oauth2"`
+	IMAPIdleEnabled    bool     `json:"imap_idle_enabled" mapstructure:"imap_idle_enabled"`
+}
+
+// VoiceConfig holds voice channel adapter settings.
+type VoiceConfig struct {
+	Enabled  bool   `json:"enabled" mapstructure:"enabled"`
+	STTModel string `json:"stt_model,omitempty" mapstructure:"stt_model"`
+	TTSModel string `json:"tts_model,omitempty" mapstructure:"tts_model"`
+	TTSVoice string `json:"tts_voice,omitempty" mapstructure:"tts_voice"`
+}
+
 // SecurityConfig holds filesystem and sandbox settings.
 type SecurityConfig struct {
 	WorkspaceOnly        bool     `json:"workspace_only" mapstructure:"workspace_only"`
 	DenyOnEmptyAllowlist bool     `json:"deny_on_empty_allowlist" mapstructure:"deny_on_empty_allowlist"`
 	AllowedPaths         []string `json:"allowed_paths" mapstructure:"allowed_paths"`
 	ProtectedPaths       []string `json:"protected_paths" mapstructure:"protected_paths"`
+	ExtraProtectedPaths  []string `json:"extra_protected_paths,omitempty" mapstructure:"extra_protected_paths"`
 	InterpreterAllow     []string `json:"interpreter_allow" mapstructure:"interpreter_allow"`
 	ScriptAllowedPaths   []string `json:"script_allowed_paths" mapstructure:"script_allowed_paths"`
 	ThreatCautionCeiling string   `json:"threat_caution_ceiling,omitempty" mapstructure:"threat_caution_ceiling"`
+	AllowlistAuthority   string   `json:"allowlist_authority,omitempty" mapstructure:"allowlist_authority"`
+	TrustedAuthority     string   `json:"trusted_authority,omitempty" mapstructure:"trusted_authority"`
+	APIAuthority         string   `json:"api_authority,omitempty" mapstructure:"api_authority"`
+	SandboxRequired      bool     `json:"sandbox_required" mapstructure:"sandbox_required"`
+	ScriptFsConfinement  bool     `json:"script_fs_confinement" mapstructure:"script_fs_confinement"` // Confine scripts to workspace directory
+	// TrustedSenderIDs lists sender/chat IDs that receive Creator authority via
+	// the SecurityClaim resolver's TrustedAuthority grant. Matches Rust's
+	// channels.trusted_sender_ids configuration.
+	TrustedSenderIDs []string `json:"trusted_sender_ids,omitempty" mapstructure:"trusted_sender_ids"`
 	// Filesystem is a nested security section for fine-grained filesystem access control.
 	// Mirrors Rust's security.filesystem configuration.
 	Filesystem FilesystemSecurityConfig `json:"filesystem" mapstructure:"filesystem"`
@@ -329,6 +441,7 @@ type ModelOverride struct {
 	Temperature float64 `json:"temperature,omitempty" mapstructure:"temperature"`
 	TopP        float64 `json:"top_p,omitempty" mapstructure:"top_p"`
 	Provider    string  `json:"provider,omitempty" mapstructure:"provider"`
+	TimeoutSecs int     `json:"timeout_seconds,omitempty" mapstructure:"timeout_seconds"`
 }
 
 // DefaultConfig returns a Config with sensible defaults.
@@ -341,19 +454,31 @@ func DefaultConfig() Config {
 			Name:                        "roboticus",
 			ID:                          "roboticus-default",
 			Workspace:                   filepath.Join(dataDir, "workspace"),
-			AutonomyMaxReactTurns:       25,
-			AutonomyMaxTurnDurationSecs: 120,
+			AutonomyMaxReactTurns:       10,  // Rust parity: 10 turns (was 25)
+			AutonomyMaxTurnDurationSecs: 90,  // Rust parity: 90s (was 300)
 			LogLevel:                    "info",
 			DelegationEnabled:           true,
 			DelegationMinComplexity:     0.35,
+			DelegationMinUtilityMargin:  0.15,   // Rust parity
+			SpecialistRequiresApproval:  true,    // Rust parity
 			CompositionPolicy:           "propose",
+			SkillCreationRigor:          "validate",  // Rust parity: generate|validate|full
+			OutputValidationPolicy:      "sample",    // Rust parity: strict|sample|off
+			OutputValidationSampleRate:  0.1,         // Rust parity
+			MaxOutputRetries:            2,            // Rust parity
+			RetirementSuccessThreshold:  0.7,          // Rust parity
+			RetirementMinDelegations:    10,            // Rust parity
 		},
 		Server: ServerConfig{
-			Port:               DefaultServerPort,
-			Bind:               DefaultServerBind,
-			LogDir:             filepath.Join(dataDir, "logs"),
-			CronMaxConcurrency: 8,
-			LogMaxDays:         7,
+			Port:                      DefaultServerPort,
+			Bind:                      DefaultServerBind,
+			LogDir:                    filepath.Join(dataDir, "logs"),
+			CronMaxConcurrency:        8,
+			LogMaxDays:                7,
+			RateLimitRequests:         100,
+			RateLimitWindowSecs:       60,
+			PerIPRateLimitRequests:    300,
+			PerActorRateLimitRequests: 200,
 		},
 		Database: DatabaseConfig{
 			Path: filepath.Join(dataDir, "roboticus.db"),
@@ -372,27 +497,39 @@ func DefaultConfig() Config {
 				MaxFallbackAttempts:    6,
 				LocalFirst:             true,
 			},
+			TieredInference: TieredInferenceConfig{
+				ConfidenceFloor:           0.6,
+				EscalationLatencyBudgetMs: 3000,
+			},
 		},
 		Providers: make(map[string]ProviderConfig),
 		Memory: MemoryConfig{
-			WorkingBudget:      30,
-			EpisodicBudget:     25,
-			SemanticBudget:     20,
-			ProceduralBudget:   15,
-			RelationshipBudget: 10,
-			HybridWeight:       0.5,
-			DecayHalfLifeDays:  7.0,
+			WorkingBudget:          30,
+			EpisodicBudget:         25,
+			SemanticBudget:         20,
+			ProceduralBudget:       15,
+			RelationshipBudget:     10,
+			HybridWeight:           0.5,
+			DecayHalfLifeDays:      7.0,
+			ANNActivationThreshold: 1000,
 		},
 		Cache: CacheConfig{
-			Enabled:             true,
-			TTLSeconds:          3600,
-			SimilarityThreshold: 0.95,
-			MaxEntries:          10000,
+			Enabled:                true,
+			TTLSeconds:             3600,
+			SimilarityThreshold:    0.95,
+			MaxEntries:             10000,
+			CompressionTargetRatio: 0.5,
 		},
 		Treasury: TreasuryConfig{
-			DailyCap:      5.0,
-			PerPaymentCap: 100.0,
-			TransferLimit: 1.0,
+			DailyCap:             5.0,
+			PerPaymentCap:        100.0,
+			TransferLimit:        1.0,
+			HourlyTransferLimit:  500.0,
+			DailyInferenceBudget: 50.0,
+			RevenueSwap: RevenueSwapConfig{
+				TargetSymbol: "PUSD",
+				DefaultChain: "ETH",
+			},
 		},
 		Session: SessionConfig{
 			ScopeMode:  "peer",
@@ -411,6 +548,9 @@ func DefaultConfig() Config {
 		Security: SecurityConfig{
 			WorkspaceOnly:        true,
 			DenyOnEmptyAllowlist: true,
+			AllowlistAuthority:   "Peer",
+			TrustedAuthority:     "Creator",
+			APIAuthority:         "Creator",
 		},
 		Skills: SkillsConfig{
 			WatchMode:            true,
@@ -470,6 +610,7 @@ func DefaultConfig() Config {
 		Browser: BrowserConfig{
 			CDPPort:        9222,
 			TimeoutSeconds: 30,
+			Headless:       true,
 		},
 		Daemon: DaemonConfig{
 			AutoRestart: false,
@@ -479,7 +620,9 @@ func DefaultConfig() Config {
 			CheckIntervalHours: 24,
 		},
 		TierAdapt: TierAdaptConfig{
-			Enabled: false,
+			Enabled:           false,
+			T2DefaultPreamble: "Be concise and direct. Focus on accuracy.",
+			T3T4Passthrough:   true,
 		},
 		Digest: DigestConfig{
 			Enabled:           true,
@@ -728,11 +871,17 @@ func parseBundledProviders() map[string]ProviderConfig {
 		case "embedding_model":
 			cfg.EmbeddingModel = val
 		case "embedding_dimensions":
-			_, _ = fmt.Sscanf(val, "%d", &cfg.EmbeddingDimensions)
+			if _, err := fmt.Sscanf(val, "%d", &cfg.EmbeddingDimensions); err != nil {
+				log.Warn().Err(err).Str("key", "embedding_dimensions").Str("val", val).Msg("config: invalid integer")
+			}
 		case "cost_per_input_token":
-			_, _ = fmt.Sscanf(val, "%f", &cfg.CostPerInputToken)
+			if _, err := fmt.Sscanf(val, "%f", &cfg.CostPerInputToken); err != nil {
+				log.Warn().Err(err).Str("key", "cost_per_input_token").Str("val", val).Msg("config: invalid float")
+			}
 		case "cost_per_output_token":
-			_, _ = fmt.Sscanf(val, "%f", &cfg.CostPerOutputToken)
+			if _, err := fmt.Sscanf(val, "%f", &cfg.CostPerOutputToken); err != nil {
+				log.Warn().Err(err).Str("key", "cost_per_output_token").Str("val", val).Msg("config: invalid float")
+			}
 		}
 	}
 	if current != "" {

@@ -8285,8 +8285,7 @@
     var sorted = this.bots.slice().sort(function(a, b) { return b.y - a.y; });
     for (var i = 0; i < sorted.length; i++) {
       var bot = sorted[i];
-      var isAgent = bot.role === 'agent';
-      var radius = isAgent ? 34 : 28;
+      var radius = (bot.role === 'agent' || bot.role === 'orchestrator') ? 34 : 28;
       var dx = x - (bot.x * this.W);
       var dy = y - (bot.y * this.H);
       if ((dx * dx + dy * dy) <= radius * radius) return bot;
@@ -8657,9 +8656,9 @@
     }
     var tc = this._themeColors || { surface: '#081329', muted: '#9baad6', text: '#dee5ff', aR: 193, aG: 128, aB: 255 };
     var px = bot.x * W, py = bot.y * H, t = this.time, frame = bot.animFrame;
-    var isAgent = (bot.role === 'agent');
-    var scale = isAgent ? 1.0 : 0.7;
-    var bodyW = isAgent ? 20 : 14, bodyH = isAgent ? 24 : 18;
+    var sizing = { orchestrator: { scale: 1.0, w: 20, h: 24 }, agent: { scale: 1.0, w: 20, h: 24 } };
+    var s = sizing[bot.role] || { scale: 0.7, w: 14, h: 18 };
+    var scale = s.scale, bodyW = s.w, bodyH = s.h;
     var walkBob = (bot.animState === 'walking') ? Math.sin(t * 12) * 2 : 0;
     ctx.save(); ctx.translate(px, py + walkBob); ctx.scale(scale, scale);
     if (this.selectedBotId === bot.id) {

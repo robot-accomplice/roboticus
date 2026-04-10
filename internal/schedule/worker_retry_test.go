@@ -22,7 +22,7 @@ func TestCronWorker_RetryIncrementsOnFailure(t *testing.T) {
 		return errors.New("simulated failure")
 	})
 
-	worker := NewCronWorker(store, "test-instance", time.Minute, failExec)
+	worker := NewCronWorker(store, "test-instance", time.Minute, failExec, nil)
 	worker.tick(ctx)
 
 	// Check retry count was incremented.
@@ -49,7 +49,7 @@ func TestCronWorker_RetryResetsOnSuccess(t *testing.T) {
 		return nil
 	})
 
-	worker := NewCronWorker(store, "test-instance", time.Minute, successExec)
+	worker := NewCronWorker(store, "test-instance", time.Minute, successExec, nil)
 	worker.tick(ctx)
 
 	var retryCount int
@@ -75,7 +75,7 @@ func TestCronWorker_RetryExhaustion(t *testing.T) {
 		return errors.New("persistent failure")
 	})
 
-	worker := NewCronWorker(store, "test-instance", time.Minute, failExec)
+	worker := NewCronWorker(store, "test-instance", time.Minute, failExec, nil)
 	worker.tick(ctx)
 
 	// After exhaustion, retry_count should be reset to 0.

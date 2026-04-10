@@ -259,9 +259,11 @@ func (t *SessionGovernorTask) Run(ctx context.Context, tctx *TickContext) TaskRe
 		}
 		if rotated > 0 {
 			// Create a fresh session.
-			_, _ = t.Store.ExecContext(ctx,
+			if _, err := t.Store.ExecContext(ctx,
 				`INSERT INTO sessions (id, status, created_at, updated_at)
-				 VALUES (hex(randomblob(16)), 'active', datetime('now'), datetime('now'))`)
+				 VALUES (hex(randomblob(16)), 'active', datetime('now'), datetime('now'))`); err != nil {
+				log.Warn().Err(err).Msg("session governor: failed to create rotated session")
+			}
 			log.Info().Str("schedule", t.ResetSchedule).Msg("session governor: rotated session via reset_schedule")
 		}
 	}

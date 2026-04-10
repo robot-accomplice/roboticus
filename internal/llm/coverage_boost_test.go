@@ -987,7 +987,7 @@ func TestClassifier_EmbedText_NilEmbedder(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCache_PutEviction(t *testing.T) {
-	c := NewCache(CacheConfig{Enabled: true, MaxEntries: 2, TTL: time.Hour}, nil)
+	c := NewCache(CacheConfig{Enabled: true, MaxEntries: 2, TTL: time.Hour}, nil, nil)
 	ctx := context.Background()
 
 	r1 := &Request{Model: "m", Messages: []Message{{Role: "user", Content: "one"}}}
@@ -1018,7 +1018,7 @@ func TestCache_PutEviction(t *testing.T) {
 }
 
 func TestCache_ToolAwareTTL(t *testing.T) {
-	c := NewCache(CacheConfig{MaxEntries: 100, TTL: 400 * time.Millisecond}, nil)
+	c := NewCache(CacheConfig{MaxEntries: 100, TTL: 400 * time.Millisecond}, nil, nil)
 	ctx := context.Background()
 
 	// Request with tools should have TTL/4 = 100ms.

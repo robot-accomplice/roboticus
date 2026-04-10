@@ -265,8 +265,12 @@ func imapCommand(c *imapConn, cmd string) error {
 	c.tag++
 	tag := fmt.Sprintf("A%03d", c.tag)
 	line := fmt.Sprintf("%s %s\r\n", tag, cmd)
-	_, _ = c.writer.WriteString(line)
-	_ = c.writer.Flush()
+	if _, err := c.writer.WriteString(line); err != nil {
+		return fmt.Errorf("imap: write failed: %w", err)
+	}
+	if err := c.writer.Flush(); err != nil {
+		return fmt.Errorf("imap: flush failed: %w", err)
+	}
 
 	// Read until tagged response.
 	for c.scanner.Scan() {
@@ -284,8 +288,12 @@ func imapCommand(c *imapConn, cmd string) error {
 func imapSearchUnseen(c *imapConn) ([]int, error) {
 	c.tag++
 	tag := fmt.Sprintf("A%03d", c.tag)
-	_, _ = c.writer.WriteString(fmt.Sprintf("%s SEARCH UNSEEN\r\n", tag))
-	_ = c.writer.Flush()
+	if _, err := c.writer.WriteString(fmt.Sprintf("%s SEARCH UNSEEN\r\n", tag)); err != nil {
+		return nil, fmt.Errorf("imap: write failed: %w", err)
+	}
+	if err := c.writer.Flush(); err != nil {
+		return nil, fmt.Errorf("imap: flush failed: %w", err)
+	}
 
 	var uids []int
 	for c.scanner.Scan() {
@@ -312,8 +320,12 @@ func imapSearchUnseen(c *imapConn) ([]int, error) {
 func imapFetch(c *imapConn, uid int) (from, subject, body string, err error) {
 	c.tag++
 	tag := fmt.Sprintf("A%03d", c.tag)
-	_, _ = c.writer.WriteString(fmt.Sprintf("%s FETCH %d (BODY[HEADER.FIELDS (FROM SUBJECT)] BODY[TEXT])\r\n", tag, uid))
-	_ = c.writer.Flush()
+	if _, err := c.writer.WriteString(fmt.Sprintf("%s FETCH %d (BODY[HEADER.FIELDS (FROM SUBJECT)] BODY[TEXT])\r\n", tag, uid)); err != nil {
+		return "", "", "", fmt.Errorf("imap: write failed: %w", err)
+	}
+	if err := c.writer.Flush(); err != nil {
+		return "", "", "", fmt.Errorf("imap: flush failed: %w", err)
+	}
 
 	var inHeader, inBody bool
 	var headerBuf, bodyBuf strings.Builder

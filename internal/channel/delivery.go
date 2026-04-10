@@ -313,7 +313,7 @@ func (dq *DeliveryQueue) persistItem(item *DeliveryItem) {
 	if dq.store == nil {
 		return
 	}
-	_, _ = dq.store.ExecContext(context.Background(),
+	if _, err := dq.store.ExecContext(context.Background(),
 		`INSERT OR REPLACE INTO delivery_queue (id, channel, recipient_id, content, status, attempts, max_attempts, next_retry_at, created_at, last_error)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		item.ID, item.Channel, item.RecipientID, item.Content,
@@ -321,7 +321,9 @@ func (dq *DeliveryQueue) persistItem(item *DeliveryItem) {
 		item.NextRetryAt.UTC().Format(time.RFC3339),
 		item.CreatedAt.UTC().Format(time.RFC3339),
 		item.LastError,
-	)
+	); err != nil {
+		log.Warn().Err(err).Str("id", item.ID).Msg("delivery: persist item failed")
+	}
 }
 
 // updateItemStatus updates the status in the database.
@@ -329,12 +331,14 @@ func (dq *DeliveryQueue) updateItemStatus(item *DeliveryItem) {
 	if dq.store == nil {
 		return
 	}
-	_, _ = dq.store.ExecContext(context.Background(),
+	if _, err := dq.store.ExecContext(context.Background(),
 		`UPDATE delivery_queue SET status = ?, attempts = ?, next_retry_at = ?, last_error = ? WHERE id = ?`,
 		item.Status, item.Attempts,
 		item.NextRetryAt.UTC().Format(time.RFC3339),
 		item.LastError, item.ID,
-	)
+	); err != nil {
+		log.Warn().Err(err).Str("id", item.ID).Msg("delivery: update status failed")
+	}
 }
 
 // recoverFromStore reloads pending/in-flight items on startup.

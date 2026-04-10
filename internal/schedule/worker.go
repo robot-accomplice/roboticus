@@ -6,6 +6,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"roboticus/internal/core"
 	"roboticus/internal/db"
 )
 
@@ -16,6 +17,7 @@ type CronWorker struct {
 	instanceID string
 	interval   time.Duration
 	executor   CronExecutor
+	errBus     *core.ErrorBus
 }
 
 // CronExecutor defines how a cron job is executed.
@@ -29,13 +31,14 @@ type CronExecutorFunc func(ctx context.Context, job *CronJob) error
 func (f CronExecutorFunc) Execute(ctx context.Context, job *CronJob) error { return f(ctx, job) }
 
 // NewCronWorker creates a cron worker.
-func NewCronWorker(store *db.Store, instanceID string, interval time.Duration, executor CronExecutor) *CronWorker {
+func NewCronWorker(store *db.Store, instanceID string, interval time.Duration, executor CronExecutor, errBus *core.ErrorBus) *CronWorker {
 	return &CronWorker{
 		store:      store,
 		scheduler:  NewDurableScheduler(),
 		instanceID: instanceID,
 		interval:   interval,
 		executor:   executor,
+		errBus:     errBus,
 	}
 }
 
@@ -153,18 +156,22 @@ func (w *CronWorker) acquireLease(ctx context.Context, jobID string) bool {
 }
 
 func (w *CronWorker) releaseLease(ctx context.Context, jobID string) {
-	_, _ = w.store.ExecContext(ctx,
+	if _, err := w.store.ExecContext(ctx,
 		`UPDATE cron_jobs SET lease_holder = NULL, lease_expires_at = NULL
 		 WHERE id = ? AND lease_holder = ?`,
-		jobID, w.instanceID)
+		jobID, w.instanceID); err != nil {
+		w.errBus.ReportIfErr(err, "scheduler", "release_lease", core.SevWarning)
+	}
 }
 
 func (w *CronWorker) recordRun(ctx context.Context, run *CronRun) {
-	_, _ = w.store.ExecContext(ctx,
+	if _, err := w.store.ExecContext(ctx,
 		`INSERT INTO cron_runs (job_id, status, duration_ms, error_msg, timestamp)
 		 VALUES (?, ?, ?, ?, ?)`,
 		run.JobID, run.Status, run.DurationMs, run.ErrorMsg,
-		run.Timestamp.UTC().Format(time.RFC3339))
+		run.Timestamp.UTC().Format(time.RFC3339)); err != nil {
+		w.errBus.ReportIfErr(err, "scheduler", "record_run", core.SevWarning)
+	}
 }
 
 func (w *CronWorker) updateLastRun(ctx context.Context, job *CronJob, now time.Time) {
@@ -174,9 +181,11 @@ func (w *CronWorker) updateLastRun(ctx context.Context, job *CronJob, now time.T
 		s := nextRun.UTC().Format(time.RFC3339)
 		nextRunStr = &s
 	}
-	_, _ = w.store.ExecContext(ctx,
+	if _, err := w.store.ExecContext(ctx,
 		`UPDATE cron_jobs SET last_run_at = ?, next_run_at = ? WHERE id = ?`,
-		now.UTC().Format(time.RFC3339), nextRunStr, job.ID)
+		now.UTC().Format(time.RFC3339), nextRunStr, job.ID); err != nil {
+		w.errBus.ReportIfErr(err, "scheduler", "update_last_run", core.SevWarning)
+	}
 }
 
 // handleRetry increments the retry counter and schedules a retry with
@@ -214,15 +223,19 @@ func (w *CronWorker) handleRetry(ctx context.Context, job *CronJob, now time.Tim
 	retryAt := now.Add(time.Duration(backoff) * time.Millisecond)
 	retryStr := retryAt.UTC().Format(time.RFC3339)
 
-	_, _ = w.store.ExecContext(ctx,
+	if _, err := w.store.ExecContext(ctx,
 		`UPDATE cron_jobs SET retry_count = ?, next_run_at = ?, last_run_at = ? WHERE id = ?`,
-		newCount, retryStr, now.UTC().Format(time.RFC3339), job.ID)
+		newCount, retryStr, now.UTC().Format(time.RFC3339), job.ID); err != nil {
+		w.errBus.ReportIfErr(err, "scheduler", "handle_retry", core.SevWarning)
+	}
 
 	log.Info().Str("job", job.Name).Int("retry", newCount).Time("retry_at", retryAt).Msg("cron job scheduled for retry")
 }
 
 // resetRetry resets the retry counter on successful execution.
 func (w *CronWorker) resetRetry(ctx context.Context, jobID string) {
-	_, _ = w.store.ExecContext(ctx,
-		`UPDATE cron_jobs SET retry_count = 0 WHERE id = ?`, jobID)
+	if _, err := w.store.ExecContext(ctx,
+		`UPDATE cron_jobs SET retry_count = 0 WHERE id = ?`, jobID); err != nil {
+		w.errBus.ReportIfErr(err, "scheduler", "reset_retry", core.SevWarning)
+	}
 }

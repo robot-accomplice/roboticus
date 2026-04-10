@@ -25,6 +25,7 @@ type SkillsConfig struct {
 	HotReload            bool     `json:"hot_reload" mapstructure:"hot_reload"`
 	ScriptMaxMemoryBytes int64    `json:"script_max_memory_bytes" mapstructure:"script_max_memory_bytes"`
 	NetworkAllowed       bool     `json:"network_allowed" mapstructure:"network_allowed"`
+	WorkspaceDir         string   `json:"workspace_dir,omitempty" mapstructure:"workspace_dir"`
 }
 
 // LearningConfig holds pattern learning settings.
@@ -98,6 +99,8 @@ type BrowserConfig struct {
 	CDPPort        int    `json:"cdp_port" mapstructure:"cdp_port"`
 	TimeoutSeconds int    `json:"timeout_seconds" mapstructure:"timeout_seconds"`
 	ProfileDir     string `json:"profile_dir,omitempty" mapstructure:"profile_dir"`
+	ExecutablePath string `json:"executable_path,omitempty" mapstructure:"executable_path"`
+	Headless       bool   `json:"headless" mapstructure:"headless"`
 }
 
 // PersonalityConfig holds personality file paths.
@@ -107,9 +110,34 @@ type PersonalityConfig struct {
 	OperatorPath string `json:"operator_path" mapstructure:"operator_path"`
 }
 
-// TierAdaptConfig holds adaptive tier settings.
+// TierAdaptConfig holds adaptive tier settings for model tiering.
 type TierAdaptConfig struct {
-	Enabled bool `json:"enabled" mapstructure:"enabled"`
+	Enabled          bool   `json:"enabled" mapstructure:"enabled"`
+	T1StripSystem    bool   `json:"t1_strip_system" mapstructure:"t1_strip_system"`
+	T1CondenseTurns  bool   `json:"t1_condense_turns" mapstructure:"t1_condense_turns"`
+	T2DefaultPreamble string `json:"t2_default_preamble" mapstructure:"t2_default_preamble"`
+	T3T4Passthrough  bool   `json:"t3_t4_passthrough" mapstructure:"t3_t4_passthrough"`
+}
+
+// TieredInferenceConfig holds confidence-based model escalation settings.
+type TieredInferenceConfig struct {
+	Enabled                    bool    `json:"enabled" mapstructure:"enabled"`
+	ConfidenceFloor            float64 `json:"confidence_floor" mapstructure:"confidence_floor"`
+	EscalationLatencyBudgetMs  int64   `json:"escalation_latency_budget_ms" mapstructure:"escalation_latency_budget_ms"`
+}
+
+// RevenueSwapConfig holds revenue swap execution settings.
+type RevenueSwapConfig struct {
+	TargetSymbol string                  `json:"target_symbol" mapstructure:"target_symbol"`
+	DefaultChain string                  `json:"default_chain" mapstructure:"default_chain"`
+	Chains       []RevenueSwapChainConfig `json:"chains" mapstructure:"chains"`
+}
+
+// RevenueSwapChainConfig holds per-chain swap settings.
+type RevenueSwapChainConfig struct {
+	Chain                  string `json:"chain" mapstructure:"chain"`
+	TargetContractAddress  string `json:"target_contract_address" mapstructure:"target_contract_address"`
+	SwapContractAddress    string `json:"swap_contract_address,omitempty" mapstructure:"swap_contract_address"`
 }
 
 // UpdateConfig holds auto-update settings.
@@ -160,6 +188,22 @@ type ContextBudgetConfig struct {
 	SoulMaxContextPct float64 `json:"soul_max_context_pct" mapstructure:"soul_max_context_pct"`
 }
 
+// BudgetForTier returns the token budget for a given tier (0=L0, 1=L1, 2=L2, 3=L3).
+func (c ContextBudgetConfig) BudgetForTier(tier int) int {
+	switch tier {
+	case 0:
+		return c.L0
+	case 1:
+		return c.L1
+	case 2:
+		return c.L2
+	case 3:
+		return c.L3
+	default:
+		return c.L1
+	}
+}
+
 // SandboxCfg holds OS-level process confinement settings.
 type SandboxCfg struct {
 	Enabled        bool     `json:"enabled" mapstructure:"enabled"`
@@ -197,14 +241,19 @@ type CORSConfig struct {
 }
 
 // MatrixChannelConfig holds Matrix homeserver connection settings.
+// Rust parity: runtime_core.rs MatrixConfig.
 type MatrixChannelConfig struct {
-	Enabled       bool     `json:"enabled" mapstructure:"enabled"`
-	HomeserverURL string   `json:"homeserver_url" mapstructure:"homeserver_url"`
-	AccessToken   string   `json:"access_token" mapstructure:"access_token"`
-	DeviceID      string   `json:"device_id" mapstructure:"device_id"`
-	AllowedRooms  []string `json:"allowed_rooms" mapstructure:"allowed_rooms"`
-	AutoJoin      bool     `json:"auto_join" mapstructure:"auto_join"`
-	E2EEEnabled   bool     `json:"e2ee_enabled" mapstructure:"e2ee_enabled"`
+	Enabled            bool     `json:"enabled" mapstructure:"enabled"`
+	HomeserverURL      string   `json:"homeserver_url" mapstructure:"homeserver_url"`
+	AccessTokenEnv     string   `json:"access_token_env" mapstructure:"access_token_env"`
+	AccessToken        string   `json:"access_token" mapstructure:"access_token"`
+	DeviceID           string   `json:"device_id" mapstructure:"device_id"`
+	AllowedRooms       []string `json:"allowed_rooms" mapstructure:"allowed_rooms"`
+	AutoJoin           bool     `json:"auto_join" mapstructure:"auto_join"`
+	SyncTimeoutSeconds int      `json:"sync_timeout_seconds" mapstructure:"sync_timeout_seconds"`
+	E2EEEnabled        bool     `json:"e2ee_enabled" mapstructure:"e2ee_enabled"`
+	DeviceStorePath    string   `json:"device_store_path,omitempty" mapstructure:"device_store_path"`
+	DeviceDisplayName  string   `json:"device_display_name" mapstructure:"device_display_name"`
 }
 
 // FilesystemSecurityConfig holds fine-grained filesystem access control settings.

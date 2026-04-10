@@ -9,6 +9,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"roboticus/internal/core"
 	"roboticus/internal/db"
 )
 
@@ -189,10 +190,30 @@ func (p *Pipeline) tryBotCommand(ctx context.Context, input Input) *Outcome {
 // ── Delegation Execution ────────────────────────────────────────────────────
 // Matches Rust's execute_delegation: orchestrate-subagents tool execution.
 
+// DelegationOutcome captures the result of a delegation attempt, including
+// partial results that should be threaded back to inference.
+// Matches Rust's DelegatedExecutionResult.
+type DelegationOutcome struct {
+	// Content is the delegation result text. May be empty on failure.
+	Content string
+	// Turns is the number of ReAct loop turns used.
+	Turns int
+	// Complete indicates the delegation fully satisfied the request.
+	// When false, the result should be threaded back to inference as
+	// an initial tool observation (Rust: tool_results_acc seeding).
+	Complete bool
+	// Quality holds the output quality evaluation.
+	Quality QualityResult
+}
+
 // executeDelegation attempts to execute delegated subtasks through the tool
-// executor. Returns an Outcome if delegation succeeds, or nil to fall through
-// to standard inference.
-func (p *Pipeline) executeDelegation(ctx context.Context, session *Session, decomp *DecompositionResult, turnID string) *Outcome {
+// executor. Returns the delegation outcome with threading guidance.
+//
+// Rust parity (H8): On failure or partial success, the delegation result is
+// NOT returned directly to the user. Instead, it's threaded back into the
+// inference context as an initial "orchestrate-subagents" tool observation,
+// so the main agent can incorporate delegation results into its response.
+func (p *Pipeline) executeDelegation(ctx context.Context, session *Session, decomp *DecompositionResult, turnID string) *DelegationOutcome {
 	if p.executor == nil || decomp == nil || len(decomp.Subtasks) == 0 {
 		return nil
 	}
@@ -211,8 +232,14 @@ func (p *Pipeline) executeDelegation(ctx context.Context, session *Session, deco
 	// orchestrate-subagents if registered).
 	result, turns, err := p.executor.RunLoop(ctx, session)
 	if err != nil {
-		log.Warn().Err(err).Str("session", session.ID).Msg("delegation execution failed, falling through to standard inference")
-		return nil
+		log.Warn().Err(err).Str("session", session.ID).Msg("delegation execution failed, threading error context to inference")
+		// Thread the failure context back to inference rather than silently dropping.
+		errNote := fmt.Sprintf("Delegation attempted for %d subtasks but failed: %s", len(decomp.Subtasks), err.Error())
+		return &DelegationOutcome{
+			Content:  errNote,
+			Complete: false, // Thread back to inference.
+			Quality:  QualityResult{Verdict: QualityRetry, Score: 0, Reason: "delegation failed"},
+		}
 	}
 
 	// Evaluate delegation output quality (Rust: evaluate_output_heuristic).
@@ -224,6 +251,7 @@ func (p *Pipeline) executeDelegation(ctx context.Context, session *Session, deco
 		if retryErr == nil {
 			result = retryResult
 			turns += retryTurns
+			quality = evaluateOutputQuality(result, strings.Join(decomp.Subtasks, " "))
 		}
 	}
 
@@ -236,10 +264,11 @@ func (p *Pipeline) executeDelegation(ctx context.Context, session *Session, deco
 		})
 	}
 
-	return &Outcome{
-		SessionID:  session.ID,
-		Content:    result,
-		ReactTurns: turns,
+	return &DelegationOutcome{
+		Content:  result,
+		Turns:    turns,
+		Complete: quality.Score >= 50, // Rust: complete when quality passes threshold.
+		Quality:  quality,
 	}
 }
 
@@ -357,11 +386,13 @@ func (p *Pipeline) recordShortcutCost(ctx context.Context, turnID, sessionID, ch
 	if p.store == nil {
 		return
 	}
-	_, _ = p.store.ExecContext(ctx,
+	if _, err := p.store.ExecContext(ctx,
 		`INSERT INTO inference_costs (id, model, provider, tokens_in, tokens_out, cost, tier, turn_id, created_at)
 		 VALUES (?, 'shortcut', 'shortcut', 0, 0, 0.0, 'shortcut', ?, datetime('now'))`,
 		db.NewID(), turnID,
-	)
+	); err != nil {
+		p.errBus.ReportIfErr(err, "pipeline", "record_shortcut_cost", core.SevWarning)
+	}
 }
 
 // ── Context Checkpointing ───────────────────────────────────────────────────

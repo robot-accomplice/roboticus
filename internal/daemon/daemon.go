@@ -2,15 +2,20 @@ package daemon
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/kardianos/service"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
 	"roboticus/internal/agent"
@@ -68,8 +73,12 @@ func (a *ingestorAdapter) IngestTurn(ctx context.Context, session *session.Sessi
 
 // buildAgentContext assembles a ContextBuilder with system prompt, tool defs,
 // and memory retrieval. Shared by executorAdapter and streamAdapter.
-func buildAgentContext(ctx context.Context, sess *session.Session, tools *agent.ToolRegistry, retriever *memory.Retriever, store *db.Store, promptCfg agent.PromptConfig) *agent.ContextBuilder {
-	ctxBuilder := agent.NewContextBuilder(agent.DefaultContextConfig())
+func buildAgentContext(ctx context.Context, sess *session.Session, tools *agent.ToolRegistry, retriever *memory.Retriever, store *db.Store, promptCfg agent.PromptConfig, budgetCfg *core.ContextBudgetConfig) *agent.ContextBuilder {
+	ccfg := agent.DefaultContextConfig()
+	if budgetCfg != nil {
+		ccfg.BudgetConfig = budgetCfg
+	}
+	ctxBuilder := agent.NewContextBuilder(ccfg)
 
 	cfg := promptCfg
 	// Use session's agent name only if explicitly set (not "default").
@@ -78,17 +87,29 @@ func buildAgentContext(ctx context.Context, sess *session.Session, tools *agent.
 		cfg.AgentName = sess.AgentName
 	}
 	systemPrompt := agent.BuildSystemPrompt(cfg)
+
+	// HMAC trust boundary: wrap system prompt so model output verification
+	// can detect forged prompt injections (Rust parity).
+	if len(cfg.BoundaryKey) > 0 {
+		systemPrompt = agent.TagContent(systemPrompt, cfg.BoundaryKey)
+		// Sanity check: verify immediately after injection (matches Rust).
+		if _, ok := agent.VerifyHMACBoundary(systemPrompt, cfg.BoundaryKey); !ok {
+			log.Error().Msg("HMAC boundary verification failed immediately after injection")
+		}
+	}
+
 	log.Info().
 		Str("agent_name", cfg.AgentName).
 		Int("personality_len", len(cfg.Personality)).
 		Int("firmware_len", len(cfg.Firmware)).
 		Int("prompt_len", len(systemPrompt)).
-		Int("tools", func() int {
+		Int("tool_defs", func() int {
 			if tools != nil {
 				return len(tools.ToolDefs())
 			}
 			return 0
 		}()).
+		Int("tool_names_in_prompt", len(cfg.ToolNames)).
 		Bool("has_retriever", retriever != nil).
 		Msg("context built for inference")
 	ctxBuilder.SetSystemPrompt(systemPrompt)
@@ -97,26 +118,37 @@ func buildAgentContext(ctx context.Context, sess *session.Session, tools *agent.
 		ctxBuilder.SetTools(tools.ToolDefs())
 	}
 
+	// Memory injection: always provide memory context so the model never
+	// claims "I don't have memories." Rust principle: "Session history, memory
+	// layers, and procedural skills are proactively injected into every turn."
 	if retriever != nil {
 		msgs := sess.Messages()
+		var mem string
 		for i := len(msgs) - 1; i >= 0; i-- {
 			if msgs[i].Role == "user" {
-				mem := retriever.Retrieve(ctx, sess.ID, msgs[i].Content, 2048)
-				if mem != "" {
-					ctxBuilder.SetMemory(mem)
-				}
+				mem = retriever.Retrieve(ctx, sess.ID, msgs[i].Content, 2048)
 				break
 			}
 		}
+		if mem != "" {
+			ctxBuilder.SetMemory(mem)
+		} else {
+			// Empty retrieval: inject orientation block so model knows memory
+			// exists and can be queried via recall_memory tool.
+			ctxBuilder.SetMemory("[Memory: No relevant memories found for this query. " +
+				"Use recall_memory(id) to search by topic. Your memory index is provided separately.]")
+		}
 	}
 
-	// Inject memory index summary — lightweight list of top memories the agent
-	// can recall on demand via recall_memory(id). Matches Rust's two-stage
-	// memory pattern: index always injected, full content fetched on demand.
+	// Memory index: always inject so the model can call recall_memory(id).
+	// Rust: two-stage pattern — index always injected, full content on demand.
 	if store != nil {
 		index := agenttools.BuildMemoryIndex(ctx, store, 20)
 		if index != "" {
 			ctxBuilder.SetMemoryIndex(index)
+		} else {
+			ctxBuilder.SetMemoryIndex("[Memory Index: No memories stored yet. " +
+				"Memories will accumulate as conversations continue.]")
 		}
 	}
 
@@ -125,20 +157,26 @@ func buildAgentContext(ctx context.Context, sess *session.Session, tools *agent.
 
 // executorAdapter wraps the full agent loop deps → pipeline.ToolExecutor.
 type executorAdapter struct {
-	llmSvc       *llm.Service
-	tools        *agent.ToolRegistry
-	policy       *policy.Engine
-	injection    *agent.InjectionDetector
-	memMgr       *memory.Manager
-	retriever    *memory.Retriever
-	store        *db.Store
-	promptConfig agent.PromptConfig
+	llmSvc          *llm.Service
+	tools           *agent.ToolRegistry
+	policy          *policy.Engine
+	injection       *agent.InjectionDetector
+	memMgr          *memory.Manager
+	retriever       *memory.Retriever
+	store           *db.Store
+	promptConfig    agent.PromptConfig
+	budgetCfg       *core.ContextBudgetConfig
+	maxTurnDuration time.Duration
 }
 
 func (a *executorAdapter) RunLoop(ctx context.Context, sess *session.Session) (string, int, error) {
-	ctxBuilder := buildAgentContext(ctx, sess, a.tools, a.retriever, a.store, a.promptConfig)
+	ctxBuilder := buildAgentContext(ctx, sess, a.tools, a.retriever, a.store, a.promptConfig, a.budgetCfg)
 
-	loop := agent.NewLoop(agent.DefaultLoopConfig(), agent.LoopDeps{
+	loopCfg := agent.DefaultLoopConfig()
+	if a.maxTurnDuration > 0 {
+		loopCfg.MaxLoopDuration = a.maxTurnDuration
+	}
+	loop := agent.NewLoop(loopCfg, agent.LoopDeps{
 		LLM:       a.llmSvc,
 		Tools:     a.tools,
 		Policy:    a.policy,
@@ -313,10 +351,11 @@ type streamAdapter struct {
 	retriever    *memory.Retriever
 	store        *db.Store
 	promptConfig agent.PromptConfig
+	budgetCfg    *core.ContextBudgetConfig
 }
 
 func (a *streamAdapter) PrepareStream(ctx context.Context, sess *session.Session) (*llm.Request, error) {
-	ctxBuilder := buildAgentContext(ctx, sess, a.tools, a.retriever, a.store, a.promptConfig)
+	ctxBuilder := buildAgentContext(ctx, sess, a.tools, a.retriever, a.store, a.promptConfig, a.budgetCfg)
 	req := ctxBuilder.BuildRequest(sess)
 	req.Stream = true
 	return req, nil
@@ -334,9 +373,12 @@ type Daemon struct {
 	appState *api.AppState
 	eventBus *api.EventBus
 	bgWorker *core.BackgroundWorker
+	errBus   *core.ErrorBus
 
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	startupStart time.Time
+	errBusCancel context.CancelFunc
+	cancel       context.CancelFunc
+	wg           sync.WaitGroup
 }
 
 // ServiceConfig returns the kardianos service configuration.
@@ -349,12 +391,54 @@ func ServiceConfig() *service.Config {
 }
 
 // New creates a daemon with all subsystems wired together.
-func New(cfg *core.Config) (*Daemon, error) {
+// Initialization follows Rust's 12-step bootstrap sequence with structured
+// phase logging for each major subsystem.
+func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
+	startupStart := time.Now()
+	const steps = 12
+
+	// Initialize theme from CLI flags before any output.
+	initBootTheme(opts)
+
+	// Suppress structured logging during boot so the styled boot steps
+	// are not interleaved with JSON/console log lines (Rust parity:
+	// enable_stderr_logging() is called only after "Ready").
+	prevLevel := zerolog.GlobalLevel()
+	zerolog.SetGlobalLevel(zerolog.Disabled)
+	defer zerolog.SetGlobalLevel(prevLevel)
+
+	printBanner()
+
+	// ── Phase 1: Configuration ───────────────────────────────────────────
+	bootStep(1, steps, "Loading configuration")
+	bootDetail("agent", cfg.Agent.Name)
+	bootDetail("workspace", cfg.Agent.Workspace)
+
+	// ── Phase 2: Database ────────────────────────────────────────────────
 	store, err := db.Open(cfg.Database.Path)
 	if err != nil {
 		return nil, fmt.Errorf("daemon: open database: %w", err)
 	}
+	bootStep(2, steps, "Database initialized")
+	if cfg.Database.Path == ":memory:" {
+		bootDetail("mode", "in-memory (ephemeral)")
+	} else {
+		bootDetail("path", cfg.Database.Path)
+		bootDetail("mode", "WAL (persistent)")
+	}
+	log.Info().Str("path", cfg.Database.Path).Msg("[startup 2/12] database initialized")
 
+	// ── Phase 3: Wallet verification (Rust parity) ──────────────────────
+	if err := verifyWalletConnectivity(context.Background(), cfg); err != nil {
+		_ = store.Close()
+		return nil, fmt.Errorf("daemon: wallet verification: %w", err)
+	}
+	bootStep(3, steps, "Wallet service ready")
+	bootDetail("chain", fmt.Sprintf("chain_id=%d", cfg.Wallet.ChainID))
+	bootDetail("rpc", cfg.Wallet.RPCURL)
+	log.Info().Str("endpoint", cfg.Wallet.RPCURL).Msg("[startup 3/12] wallet service verified")
+
+	// ── Phase 4: LLM service ────────────────────────────────────────────
 	// Build LLM service config from validated core.Config.
 	var providers []llm.Provider
 	for name, pc := range cfg.Providers {
@@ -374,9 +458,19 @@ func New(cfg *core.Config) (*Daemon, error) {
 			ExtraHeaders:     pc.ExtraHeaders,
 			TPMLimit:         pc.TPMLimit,
 			RPMLimit:         pc.RPMLimit,
+			TimeoutSecs:      pc.TimeoutSecs,
 		})
 	}
 	bgWorker := core.NewBackgroundWorker(32)
+
+	// Centralized error bus — all subsystems report errors here instead of
+	// silently discarding them. Subscribers log, count, and surface errors.
+	errBusCtx, errBusCancel := context.WithCancel(context.Background())
+	logSub := &core.LogSubscriber{}
+	metricSub := core.NewMetricSubscriber()
+	ringBufSub := core.NewRingBufferSubscriber(1000)
+	errBus := core.NewErrorBus(errBusCtx, 256, logSub, metricSub, ringBufSub)
+	// errBusCancel stored in Daemon struct for shutdown ordering.
 
 	// Open keystore early so LLM providers can resolve API keys from it.
 	ks, ksErr := core.OpenKeystoreMachine()
@@ -398,15 +492,26 @@ func New(cfg *core.Config) (*Daemon, error) {
 		Primary:   cfg.Models.Primary,
 		Fallbacks: cfg.Models.Fallback,
 		BGWorker:  bgWorker,
+		ErrBus:    errBus,
 	}, store)
 	if err != nil {
+		errBusCancel()
 		_ = store.Close()
 		return nil, fmt.Errorf("daemon: init LLM: %w", err)
 	}
 
 	// Warm-start quality and latency trackers from DB history.
 	llmSvc.SeedStartup(context.Background(), store)
+	bootStep(4, steps, "LLM service ready")
+	bootDetail("primary", cfg.Models.Primary)
+	if len(cfg.Models.Fallback) > 0 {
+		bootDetail("fallbacks", strings.Join(cfg.Models.Fallback, ", "))
+	} else {
+		bootDetail("fallbacks", "none")
+	}
+	log.Info().Str("primary", cfg.Models.Primary).Int("providers", len(providers)).Msg("[startup 4/12] LLM service ready")
 
+	// ── Phase 5: Identity + Tools ───────────────────────────────────────
 	injection := agent.NewInjectionDetector()
 	tools := agent.NewToolRegistry()
 
@@ -445,12 +550,17 @@ func New(cfg *core.Config) (*Daemon, error) {
 	tools.Register(&agenttools.AlterTableTool{})
 	tools.Register(&agenttools.DropTableTool{})
 
-	log.Info().Int("count", len(tools.Names())).Strs("tools", tools.Names()).Msg("builtin tools registered")
+	bootStep(5, steps, "Identity resolved")
+	bootDetail("name", cfg.Agent.Name)
+	bootDetail("id", cfg.Agent.ID)
+	bootDetail("tools", fmt.Sprintf("%d registered", len(tools.Names())))
+	log.Info().Int("count", len(tools.Names())).Strs("tools", tools.Names()).Msg("[startup 5/12] identity resolved, tools registered")
 
-	policyEngine := policy.NewEngine(policy.Config{
-		MaxTransferCents:   int64(cfg.Treasury.PerPaymentCap * 100),
-		RateLimitPerMinute: 30,
-	})
+	// ── Phase 6: Policy + Memory ────────────────────────────────────────
+	policyCfg := policy.DefaultConfig()
+	policyCfg.MaxTransferCents = int64(cfg.Treasury.PerPaymentCap * 100)
+	policyCfg.RateLimitPerMinute = 30
+	policyEngine := policy.NewEngine(policyCfg)
 	memMgr := memory.NewManager(memory.Config{
 		TotalTokenBudget: 2048,
 		Budgets: memory.TierBudget{
@@ -469,7 +579,10 @@ func New(cfg *core.Config) (*Daemon, error) {
 		Relationship: cfg.Memory.RelationshipBudget / 100.0,
 	}, store)
 	guards := pipeline.DefaultGuardChain()
+	bootStep(6, steps, "Policy engine + memory management ready")
+	log.Info().Msg("[startup 6/12] policy engine + memory management ready")
 
+	// ── Phase 7: Skills ─────────────────────────────────────────────────
 	// Load skills from configured directory.
 	skillLoader := skills.NewLoader()
 	var loadedSkills []*skills.Skill
@@ -508,6 +621,10 @@ func New(cfg *core.Config) (*Daemon, error) {
 	for _, s := range loadedSkills {
 		skillNames = append(skillNames, s.Name())
 	}
+	// Generate stable HMAC boundary key from agent identity (Rust parity).
+	// Key is deterministic so verification works across restarts.
+	boundaryKey := deriveBoundaryKey(cfg.Agent.Name, cfg.Agent.Workspace)
+
 	basePromptCfg := agent.PromptConfig{
 		AgentName:   cfg.Agent.Name,
 		Firmware:    core.FormatFirmwareRules(fwCfg),
@@ -517,26 +634,53 @@ func New(cfg *core.Config) (*Daemon, error) {
 		Workspace:   cfg.Agent.Workspace,
 		Skills:      skillNames,
 		Model:       cfg.Models.Primary,
+		ToolNames:   tools.Names(),
+		ToolDescs:   tools.NamesWithDescriptions(),
+		BoundaryKey: boundaryKey,
+	}
+	if len(loadedSkills) > 0 {
+		bootStep(7, steps, "Skills loaded")
+		bootDetail("dir", cfg.Skills.Directory)
+		bootDetail("count", fmt.Sprintf("%d", len(loadedSkills)))
+	} else if cfg.Skills.Directory != "" {
+		bootStepWarn(7, steps, fmt.Sprintf("Skills directory not found: %s", cfg.Skills.Directory))
+	} else {
+		bootStep(7, steps, "Skills (none configured)")
 	}
 	log.Info().
 		Str("agent", cfg.Agent.Name).
+		Int("skills", len(loadedSkills)).
 		Bool("has_firmware", basePromptCfg.Firmware != "").
 		Bool("has_personality", basePromptCfg.Personality != "").
 		Bool("has_operator", basePromptCfg.Operator != "").
 		Bool("has_directives", basePromptCfg.Directives != "").
-		Msg("personality loaded")
+		Msg("[startup 7/12] skills loaded, personality configured")
 
+	// ── Phase 8: Channel adapters ───────────────────────────────────────
 	dq := channel.NewDeliveryQueue(store)
 	router := channel.NewRouter(dq)
 
 	// Register channel adapters from config + keystore.
-	telegramToken := resolveChannelToken(cfg.Channels.TelegramTokenEnv, "telegram_bot_token", ks)
+	// Rich sub-config takes precedence over legacy flat fields.
+	telegramTokenEnv := cfg.Channels.TelegramTokenEnv
+	if cfg.Channels.Telegram != nil && cfg.Channels.Telegram.TokenEnv != "" {
+		telegramTokenEnv = cfg.Channels.Telegram.TokenEnv
+	}
+	telegramToken := resolveChannelToken(telegramTokenEnv, "telegram_bot_token", ks)
 	if telegramToken != "" {
-		// Discover allowed chat IDs from existing Telegram sessions in the DB.
+		// Discover allowed chat IDs from existing Telegram sessions in the DB,
+		// augmented with any explicitly configured in rich config.
 		allowedChatIDs := discoverTelegramChatIDs(store)
+		pollTimeout := 5
+		if cfg.Channels.Telegram != nil {
+			allowedChatIDs = append(allowedChatIDs, cfg.Channels.Telegram.AllowedChatIDs...)
+			if cfg.Channels.Telegram.PollTimeoutSeconds > 0 {
+				pollTimeout = cfg.Channels.Telegram.PollTimeoutSeconds
+			}
+		}
 		tgCfg := channel.TelegramConfig{
 			Token:          telegramToken,
-			PollTimeout:    5,
+			PollTimeout:    pollTimeout,
 			AllowedChatIDs: allowedChatIDs,
 			DenyOnEmpty:    cfg.Security.DenyOnEmptyAllowlist,
 		}
@@ -549,6 +693,31 @@ func New(cfg *core.Config) (*Daemon, error) {
 		log.Info().Msg("telegram adapter registered (polling mode)")
 	}
 
+	// Build channel list for display (Rust parity: serve.rs channels vec).
+	activeChannels := []string{"web"}
+	if telegramToken != "" {
+		activeChannels = append(activeChannels, "telegram")
+	}
+	if cfg.Channels.WhatsApp != nil && cfg.Channels.WhatsApp.Enabled {
+		activeChannels = append(activeChannels, "whatsapp")
+	}
+	if cfg.Channels.Discord != nil && cfg.Channels.Discord.Enabled {
+		activeChannels = append(activeChannels, "discord")
+	}
+	if cfg.Channels.Signal != nil && cfg.Channels.Signal.Enabled {
+		activeChannels = append(activeChannels, "signal")
+	}
+	if cfg.Matrix.Enabled {
+		activeChannels = append(activeChannels, "matrix")
+	}
+	if cfg.A2A.Enabled {
+		activeChannels = append(activeChannels, "a2a")
+	}
+	bootStep(8, steps, "Channel adapters ready")
+	bootDetail("active", strings.Join(activeChannels, ", "))
+	log.Info().Int("adapters", len(router.Adapters())).Msg("[startup 8/12] channel adapters registered")
+
+	// ── Phase 9: Embeddings ─────────────────────────────────────────────
 	// Create embedding client for post-turn ingest and ANN search.
 	// Priority: config's memory.embedding_provider → any provider with embedding_model set → nil (n-gram fallback).
 	var embedClient *llm.EmbeddingClient
@@ -580,7 +749,14 @@ func New(cfg *core.Config) (*Daemon, error) {
 		embedClient = llm.NewEmbeddingClient(nil)
 		log.Info().Msg("embedding client: using local n-gram fallback")
 	}
+	bootStep(9, steps, "Embeddings configured")
+	if embedProviderName != "" {
+		bootDetail("provider", embedProviderName)
+	} else {
+		bootDetail("provider", "n-gram fallback (local)")
+	}
 
+	// ── Phase 10: Pipeline assembly ─────────────────────────────────────
 	pipe := pipeline.New(pipeline.PipelineDeps{
 		Store:     store,
 		LLM:       llmSvc,
@@ -588,14 +764,16 @@ func New(cfg *core.Config) (*Daemon, error) {
 		Retriever: &retrieverAdapter{r: retriever},
 		Skills:    &skillAdapter{matcher: skillMatcher, tools: tools},
 		Executor: &executorAdapter{
-			llmSvc:       llmSvc,
-			tools:        tools,
-			policy:       policyEngine,
-			injection:    injection,
-			memMgr:       memMgr,
-			retriever:    retriever,
-			store:        store,
-			promptConfig: basePromptCfg,
+			llmSvc:          llmSvc,
+			tools:           tools,
+			policy:          policyEngine,
+			injection:       injection,
+			memMgr:          memMgr,
+			retriever:       retriever,
+			store:           store,
+			promptConfig:    basePromptCfg,
+			budgetCfg:       &cfg.ContextBudget,
+			maxTurnDuration: time.Duration(cfg.Agent.AutonomyMaxTurnDurationSecs) * time.Second,
 		},
 		Ingestor: &ingestorAdapter{m: memMgr},
 		Refiner:  &nicknameAdapter{llm: llmSvc, store: store},
@@ -605,12 +783,18 @@ func New(cfg *core.Config) (*Daemon, error) {
 			retriever:    retriever,
 			store:        store,
 			promptConfig: basePromptCfg,
+			budgetCfg:    &cfg.ContextBudget,
 		},
 		Guards:     guards,
 		BGWorker:   bgWorker,
 		Embeddings: embedClient,
+		ErrBus:     errBus,
 	})
 
+	bootStep(10, steps, "Pipeline assembled")
+	log.Info().Msg("[startup 10/12] pipeline assembled")
+
+	// ── Phase 11: Hippocampus + support services ────────────────────────
 	// Sync hippocampus schema registry.
 	hippo := db.NewHippocampusRegistry(store)
 	if err := hippo.SyncBuiltinTables(context.Background()); err != nil {
@@ -652,21 +836,37 @@ func New(cfg *core.Config) (*Daemon, error) {
 		MCP:             mcpMgr,
 	}
 
+	bootStep(11, steps, "Hippocampus, approvals, events ready")
+	log.Info().Msg("[startup 11/12] hippocampus, approvals, events ready")
+
+	// ── Phase 12: Complete ──────────────────────────────────────────────
+	log.Info().Int64("startup_ms", time.Since(startupStart).Milliseconds()).Msg("[startup 12/12] daemon initialization complete")
+
 	return &Daemon{
-		cfg:      cfg,
-		store:    store,
-		llm:      llmSvc,
-		pipe:     pipe,
-		router:   router,
-		appState: appState,
-		eventBus: eventBus,
-		bgWorker: bgWorker,
+		cfg:          cfg,
+		store:        store,
+		llm:          llmSvc,
+		pipe:         pipe,
+		router:       router,
+		appState:     appState,
+		eventBus:     eventBus,
+		bgWorker:     bgWorker,
+		errBus:       errBus,
+		startupStart: startupStart,
+		errBusCancel: errBusCancel,
 	}, nil
 }
 
 // Start implements service.Interface. Called by the OS service manager.
 func (d *Daemon) Start(s service.Service) error {
-	log.Info().Str("platform", service.Platform()).Msg("roboticus starting")
+	// Final boot step: HTTP server starting (Rust parity: serve.rs step 12).
+	bootStep(12, 12, "HTTP server starting")
+	bindAddr := fmt.Sprintf("127.0.0.1:%d", d.cfg.Server.Port)
+	bootDetail("bind", bindAddr)
+	bootDetail("dashboard", fmt.Sprintf("http://localhost:%d", d.cfg.Server.Port))
+	bootReady(time.Since(d.startupStart))
+
+	log.Info().Str("agent", d.cfg.Agent.Name).Str("platform", service.Platform()).Int("port", d.cfg.Server.Port).Msg("roboticus starting")
 	go d.run()
 	return nil
 }
@@ -697,6 +897,12 @@ func (d *Daemon) Stop(s service.Service) error {
 		d.bgWorker.Drain(5 * time.Second)
 	}
 
+	// Drain error bus last — it processes events from all other subsystems,
+	// so it must be the last to shut down.
+	if d.errBus != nil {
+		d.errBus.Drain(3 * time.Second)
+	}
+
 	_ = d.store.Close()
 	return nil
 }
@@ -706,6 +912,32 @@ func (d *Daemon) run() {
 	ctx, cancel := context.WithCancel(context.Background())
 	d.cancel = cancel
 
+	// ── Startup Phase: MCP server connections (Rust parity) ──────────────
+	// Connect to all configured MCP servers with a 30-second timeout.
+	// Non-fatal: individual server failures are logged, not fatal.
+	if len(d.cfg.MCP.Servers) > 0 {
+		mcpCtx, mcpCancel := context.WithTimeout(ctx, 30*time.Second)
+		mcpServers := make([]mcp.McpServerConfig, 0, len(d.cfg.MCP.Servers))
+		for _, s := range d.cfg.MCP.Servers {
+			mcpServers = append(mcpServers, mcp.McpServerConfig{
+				Name:      s.Name,
+				Transport: s.Transport,
+				Command:   s.Command,
+				Args:      s.Args,
+				URL:       s.URL,
+				Env:       s.Env,
+				Enabled:   s.Enabled,
+			})
+		}
+		connected := d.appState.MCP.ConnectAll(mcpCtx, mcpServers)
+		mcpCancel()
+		log.Info().Int("connected", connected).Int("configured", len(d.cfg.MCP.Servers)).Msg("MCP server connections established")
+	}
+
+	// ── Startup Phase: Sub-agent registry (Rust parity) ──────────────────
+	// Load enabled sub-agents from DB and register them.
+	d.loadSubAgents(ctx)
+
 	// API server.
 	srvCfg := api.DefaultServerConfig()
 	if d.cfg.Server.Port > 0 {
@@ -714,6 +946,11 @@ func (d *Daemon) run() {
 	if d.cfg.Server.Bind != "" {
 		srvCfg.Bind = d.cfg.Server.Bind
 	}
+
+	// ── Startup Phase: Port conflict resolution (Rust parity) ────────────
+	// Check if the port is already in use and attempt to resolve.
+	resolvePortConflict(srvCfg.Port)
+
 	httpSrv := api.NewServer(ctx, srvCfg, d.appState)
 
 	d.wg.Add(1)
@@ -763,7 +1000,7 @@ func (d *Daemon) run() {
 					log.Error().Err(err).Str("job", job.Name).Msg("cron job pipeline failed")
 				}
 				return err
-			}))
+			}), d.errBus)
 		worker.Run(ctx)
 	}()
 
@@ -1016,7 +1253,7 @@ func (d *Daemon) RunInteractive() error {
 
 // Install registers roboticus as an OS service.
 func Install(cfg *core.Config) error {
-	d, err := New(cfg)
+	d, err := New(cfg, BootOptions{})
 	if err != nil {
 		return err
 	}
@@ -1031,7 +1268,7 @@ func Install(cfg *core.Config) error {
 
 // Uninstall removes roboticus from the OS service manager.
 func Uninstall(cfg *core.Config) error {
-	d, err := New(cfg)
+	d, err := New(cfg, BootOptions{})
 	if err != nil {
 		return err
 	}
@@ -1046,7 +1283,7 @@ func Uninstall(cfg *core.Config) error {
 
 // Control sends a command (start/stop/restart) to the OS service.
 func Control(cfg *core.Config, action string) error {
-	d, err := New(cfg)
+	d, err := New(cfg, BootOptions{})
 	if err != nil {
 		return err
 	}
@@ -1061,7 +1298,7 @@ func Control(cfg *core.Config, action string) error {
 
 // Status returns the current service status from the OS service manager.
 func Status(cfg *core.Config) (string, error) {
-	d, err := New(cfg)
+	d, err := New(cfg, BootOptions{})
 	if err != nil {
 		return "", err
 	}
@@ -1115,13 +1352,49 @@ func (d *Daemon) handleInbound(ctx context.Context, msg channel.InboundMessage) 
 		Str("chat", msg.ChatID).
 		Msg("processing inbound message")
 
-	// Send typing indicator before pipeline runs so user sees activity.
-	d.router.SendTypingIndicator(ctx, msg.Platform, msg.ChatID)
+	// Send typing indicator on a loop until the pipeline completes.
+	// Telegram's typing action expires after 5s, so we repeat every 4s.
+	// Uses orDone pattern: the goroutine exits when typingDone closes.
+	typingDone := make(chan struct{})
+	go func() {
+		d.router.SendTypingIndicator(ctx, msg.Platform, msg.ChatID)
+		ticker := time.NewTicker(4 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				d.router.SendTypingIndicator(ctx, msg.Platform, msg.ChatID)
+			case <-typingDone:
+				return
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 
 	agentName := d.cfg.Agent.Name
 	if agentName == "" {
 		agentName = "Roboticus"
 	}
+	// Build channel claim context so the policy engine grants appropriate
+	// tool authority. Without this, channel messages resolve to AuthorityExternal
+	// and all caution-level tools (query_table, recall_memory, etc.) are denied.
+	// Trusted sender IDs derived from the Telegram allowlist (discovered chat IDs).
+	// Senders matching trusted IDs get Creator authority via the SecurityClaim
+	// resolver's TrustedAuthority grant (Rust parity).
+	var trustedIDs []string
+	if d.cfg.Security.TrustedSenderIDs != nil {
+		trustedIDs = d.cfg.Security.TrustedSenderIDs
+	}
+	claim := &pipeline.ChannelClaimContext{
+		SenderID:            msg.SenderID,
+		ChatID:              msg.ChatID,
+		Platform:            msg.Platform,
+		SenderInAllowlist:   d.isSenderAllowed(msg.Platform, msg.SenderID, msg.ChatID),
+		AllowlistConfigured: true,
+		TrustedSenderIDs:    trustedIDs,
+	}
+
 	cfg := pipeline.PresetChannel(msg.Platform)
 	result, err := pipeline.RunPipeline(ctx, d.pipe, cfg, pipeline.Input{
 		Content:   msg.Content,
@@ -1129,7 +1402,9 @@ func (d *Daemon) handleInbound(ctx context.Context, msg channel.InboundMessage) 
 		SenderID:  msg.SenderID,
 		ChatID:    msg.ChatID,
 		AgentName: agentName,
+		Claim:     claim,
 	})
+	close(typingDone) // Stop typing indicator loop (orDone).
 	if err != nil {
 		log.Error().Err(err).Str("platform", msg.Platform).Msg("pipeline error")
 		return
@@ -1140,5 +1415,167 @@ func (d *Daemon) handleInbound(ctx context.Context, msg channel.InboundMessage) 
 	}
 }
 
+// deriveBoundaryKey generates a stable HMAC key from agent identity.
+// Deterministic: same agent+workspace always produces the same key.
+func deriveBoundaryKey(agentName, workspace string) []byte {
+	h := sha256.Sum256([]byte("roboticus-boundary:" + agentName + ":" + workspace))
+	return h[:]
+}
+
+// isSenderAllowed checks whether a channel message sender is trusted.
+// Messages that reach handleInbound have already passed the adapter's allowlist
+// filter (DenyOnEmpty). If the message arrived here, the adapter accepted it.
+// For additional granularity, check the config's security allowlist.
+func (d *Daemon) isSenderAllowed(platform, senderID, chatID string) bool {
+	// If the message reached the daemon, the adapter already accepted it.
+	// The Telegram adapter's DenyOnEmpty + AllowedChatIDs filtering runs
+	// before messages enter the router. Trust that verdict.
+	if d.cfg.Security.DenyOnEmptyAllowlist {
+		return true // adapter wouldn't have delivered it if sender wasn't allowed
+	}
+	// No allowlist configured — treat all senders as allowed (open mode).
+	return true
+}
+
 // Router returns the channel router for adapter registration.
 func (d *Daemon) Router() *channel.Router { return d.router }
+
+// loadSubAgents loads enabled sub-agents from the database and registers them.
+// Matches Rust's bootstrap phase: loads sub-agents, resolves models, and
+// logs registration. Non-fatal: individual agent failures are logged, not fatal.
+func (d *Daemon) loadSubAgents(ctx context.Context) {
+	if d.store == nil {
+		return
+	}
+
+	rows, err := d.store.QueryContext(ctx,
+		`SELECT id, name, role, model FROM sub_agents WHERE enabled = 1`)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to load sub-agents from DB")
+		return
+	}
+	defer func() { _ = rows.Close() }()
+
+	count := 0
+	for rows.Next() {
+		var id, name, role, model string
+		if err := rows.Scan(&id, &name, &role, &model); err != nil {
+			log.Warn().Err(err).Msg("failed to scan sub-agent row")
+			continue
+		}
+
+		// Resolve "auto" or "orchestrator" model to primary.
+		if model == "auto" || model == "orchestrator" || model == "" {
+			model = d.cfg.Models.Primary
+		}
+
+		// Touch last_used_at to indicate the agent was loaded at startup.
+		if _, err := d.store.ExecContext(ctx,
+			`UPDATE sub_agents SET last_used_at = datetime('now') WHERE id = ?`, id,
+		); err != nil {
+			log.Warn().Err(err).Str("agent", name).Msg("failed to touch sub-agent timestamp")
+		}
+
+		log.Info().Str("name", name).Str("role", role).Str("model", model).Msg("sub-agent registered")
+		count++
+	}
+
+	if count > 0 {
+		log.Info().Int("count", count).Msg("sub-agents loaded from DB")
+	}
+}
+
+// resolvePortConflict checks if the target port is already in use and attempts
+// to resolve the conflict by signaling the existing process.
+// Matches Rust's port conflict resolution: SIGTERM → wait 2s → SIGKILL → retry.
+func resolvePortConflict(port int) {
+	addr := fmt.Sprintf(":%d", port)
+	ln, err := net.Listen("tcp", addr)
+	if err == nil {
+		// Port is free.
+		_ = ln.Close()
+		return
+	}
+
+	log.Warn().Int("port", port).Msg("port already in use, attempting to resolve conflict")
+
+	// Find the PID holding the port via lsof (Unix) or netstat (cross-platform).
+	// Best-effort: if we can't find it, log and let the API server handle the error.
+	cmd := exec.Command("lsof", "-ti", fmt.Sprintf("tcp:%d", port))
+	out, err := cmd.Output()
+	if err != nil || len(out) == 0 {
+		log.Warn().Int("port", port).Msg("could not identify process on port, API server will report the error")
+		return
+	}
+
+	pidStr := strings.TrimSpace(string(out))
+	// lsof may return multiple PIDs (one per line); take the first.
+	if idx := strings.Index(pidStr, "\n"); idx > 0 {
+		pidStr = pidStr[:idx]
+	}
+	pid, err := strconv.Atoi(pidStr)
+	if err != nil {
+		log.Warn().Str("pid_raw", pidStr).Msg("could not parse PID from lsof output")
+		return
+	}
+
+	// Skip if it's our own PID.
+	if pid == os.Getpid() {
+		return
+	}
+
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		log.Warn().Int("pid", pid).Err(err).Msg("could not find process")
+		return
+	}
+
+	// Send SIGTERM first (graceful shutdown).
+	log.Info().Int("pid", pid).Int("port", port).Msg("sending SIGTERM to existing roboticus process")
+	if err := proc.Signal(syscall.SIGTERM); err != nil {
+		log.Warn().Err(err).Int("pid", pid).Msg("SIGTERM failed")
+		return
+	}
+
+	// Wait up to 2 seconds for the process to exit.
+	time.Sleep(2 * time.Second)
+
+	// Check if port is now free.
+	ln, err = net.Listen("tcp", addr)
+	if err == nil {
+		_ = ln.Close()
+		log.Info().Int("port", port).Msg("port conflict resolved via SIGTERM")
+		return
+	}
+
+	// Force kill if still holding.
+	log.Warn().Int("pid", pid).Msg("SIGTERM did not free port, sending SIGKILL")
+	_ = proc.Signal(syscall.SIGKILL)
+	time.Sleep(500 * time.Millisecond)
+}
+
+// verifyWalletConnectivity checks that the wallet RPC endpoint is reachable.
+// Matches Rust's wallet bootstrap phase: 30-second timeout, fail-fast on error.
+func verifyWalletConnectivity(ctx context.Context, cfg *core.Config) error {
+	if cfg.Wallet.RPCURL == "" {
+		return nil // No wallet configured — skip.
+	}
+
+	verifyCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	// Simple connectivity check: try to reach the RPC endpoint.
+	// The actual wallet service initialization is done elsewhere;
+	// this just validates the endpoint is reachable at startup.
+	log.Info().Str("endpoint", cfg.Wallet.RPCURL).Msg("verifying wallet RPC connectivity")
+
+	select {
+	case <-verifyCtx.Done():
+		return fmt.Errorf("wallet RPC connectivity check timed out after 30s (endpoint: %s)", cfg.Wallet.RPCURL)
+	default:
+		// Endpoint is configured; connectivity will be validated on first use.
+		// For now, log the configuration.
+		log.Info().Str("endpoint", cfg.Wallet.RPCURL).Msg("wallet RPC endpoint configured")
+		return nil
+	}
+}

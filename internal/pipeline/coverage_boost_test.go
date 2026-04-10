@@ -17,8 +17,8 @@ import (
 
 func TestDefaultLoopConfig(t *testing.T) {
 	lc := DefaultLoopConfig()
-	if lc.MaxTurns != 25 {
-		t.Errorf("MaxTurns = %d, want 25", lc.MaxTurns)
+	if lc.MaxTurns != 10 { // Rust parity: 10 turns
+		t.Errorf("MaxTurns = %d, want 10", lc.MaxTurns)
 	}
 	if lc.IdleThreshold != 3 {
 		t.Errorf("IdleThreshold = %d, want 3", lc.IdleThreshold)
@@ -479,7 +479,7 @@ func TestTryShortcut_WhoAreYou(t *testing.T) {
 	sess := NewSession("s1", "a1", "TestBot")
 
 	for _, input := range []string{"who are you", "who are you?", "what are you?"} {
-		result := pipe.tryShortcut(context.Background(), sess, input)
+		result := pipe.tryShortcut(context.Background(), sess, input, false, "test")
 		if result == nil {
 			t.Errorf("tryShortcut(%q) should match", input)
 			continue
@@ -496,7 +496,7 @@ func TestTryShortcut_Acknowledgments(t *testing.T) {
 
 	acks := []string{"ok", "okay", "thanks", "thank you", "got it", "understood", "k", "ty"}
 	for _, ack := range acks {
-		result := pipe.tryShortcut(context.Background(), sess, ack)
+		result := pipe.tryShortcut(context.Background(), sess, ack, false, "test")
 		if result == nil {
 			t.Errorf("tryShortcut(%q) should match acknowledgment", ack)
 		}
@@ -508,7 +508,7 @@ func TestTryShortcut_Help(t *testing.T) {
 	sess := NewSession("s1", "a1", "Bot")
 
 	for _, h := range []string{"help", "/help"} {
-		result := pipe.tryShortcut(context.Background(), sess, h)
+		result := pipe.tryShortcut(context.Background(), sess, h, false, "test")
 		if result == nil {
 			t.Errorf("tryShortcut(%q) should match help", h)
 		}
@@ -519,7 +519,7 @@ func TestTryShortcut_NoMatch(t *testing.T) {
 	pipe := &Pipeline{}
 	sess := NewSession("s1", "a1", "Bot")
 
-	result := pipe.tryShortcut(context.Background(), sess, "Tell me about quantum physics")
+	result := pipe.tryShortcut(context.Background(), sess, "Tell me about quantum physics", false, "test")
 	if result != nil {
 		t.Error("should not match non-shortcut")
 	}
@@ -989,24 +989,27 @@ func TestPersonalityIntegrityGuard_CheckWithContext(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestResolveAuthority_WithClaim_Allowlisted(t *testing.T) {
+	// Allowlisted → Peer (DefaultClaimSecurityConfig.AllowlistAuthority)
 	claim := &ChannelClaimContext{
-		SenderID:          "user123",
-		SenderInAllowlist: true,
+		SenderID:            "user123",
+		SenderInAllowlist:   true,
+		AllowlistConfigured: true,
 	}
 	got := ResolveAuthority(AuthorityChannel, claim)
-	if got != core.AuthorityCreator {
-		t.Errorf("allowlisted sender = %v, want creator", got)
+	if got != core.AuthorityPeer {
+		t.Errorf("allowlisted sender = %v, want peer", got)
 	}
 }
 
 func TestResolveAuthority_WithClaim_TrustedSender(t *testing.T) {
+	// Trusted sender → Creator (DefaultClaimSecurityConfig.TrustedAuthority)
 	claim := &ChannelClaimContext{
 		SenderID:         "user456",
 		TrustedSenderIDs: []string{"user456"},
 	}
 	got := ResolveAuthority(AuthorityChannel, claim)
-	if got != core.AuthorityPeer {
-		t.Errorf("trusted sender = %v, want peer", got)
+	if got != core.AuthorityCreator {
+		t.Errorf("trusted sender = %v, want creator", got)
 	}
 }
 

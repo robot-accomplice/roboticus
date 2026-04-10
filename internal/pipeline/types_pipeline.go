@@ -23,7 +23,7 @@ type LoopConfig struct {
 
 // DefaultLoopConfig returns sensible defaults.
 func DefaultLoopConfig() LoopConfig {
-	return LoopConfig{MaxTurns: 25, IdleThreshold: 3, LoopWindow: 3}
+	return LoopConfig{MaxTurns: 10, IdleThreshold: 3, LoopWindow: 3} // Rust parity: 10 turns
 }
 
 // ToolDef describes a tool for token budgeting in tool pruning.

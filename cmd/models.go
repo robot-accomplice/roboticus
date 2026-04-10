@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -160,7 +161,9 @@ var modelsScanCmd = &cobra.Command{
 			// Offer to add to config.
 			fmt.Print("  Add discovered models to your config? [y/N] ")
 			var input string
-			_, _ = fmt.Scanln(&input)
+			if _, err := fmt.Scanln(&input); err != nil && err.Error() != "unexpected newline" {
+				fmt.Fprintf(os.Stderr, "  (stdin read error: %v)\n", err)
+			}
 			if strings.ToLower(input) == "y" || strings.ToLower(input) == "yes" {
 				// Set the first as primary, rest as fallbacks.
 				if len(allDiscovered) > 0 {
@@ -178,7 +181,9 @@ var modelsScanCmd = &cobra.Command{
 				}
 			} else {
 				fmt.Print("  Print TOML snippet instead? [Y/n] ")
-				_, _ = fmt.Scanln(&input)
+				if _, err := fmt.Scanln(&input); err != nil && err.Error() != "unexpected newline" {
+				fmt.Fprintf(os.Stderr, "  (stdin read error: %v)\n", err)
+			}
 				if input == "" || strings.ToLower(input) == "y" || strings.ToLower(input) == "yes" {
 					fmt.Println("  [models]")
 					if len(allDiscovered) > 0 {
@@ -368,15 +373,20 @@ var modelsExerciseCmd = &cobra.Command{
 			model = args[0]
 		}
 
+		// Fetch config for per-model timeout resolution.
+		exerciseCfg, _ := apiGet("/api/config")
+		exerciseTimeout := resolveModelTimeout(exerciseCfg, model)
+
 		fmt.Println()
-		fmt.Printf("  Exercising %s with %d prompts across 4 intent classes...\n\n",
+		fmt.Printf("  Exercising %s with %d prompts across 4 intent classes (timeout: %s)...\n\n",
 			func() string {
 				if model != "" {
 					return model
 				}
 				return "default model"
 			}(),
-			len(llm.ExerciseMatrix))
+			len(llm.ExerciseMatrix),
+			exerciseTimeout)
 
 		// Per-intent-class tracking.
 		type intentStats struct {
@@ -395,7 +405,7 @@ var modelsExerciseCmd = &cobra.Command{
 				body["model"] = model
 			}
 			start := time.Now()
-			resp, err := apiPost("/api/agent/message", body)
+			resp, err := apiPostSlow("/api/agent/message", body, exerciseTimeout)
 			latencyMs := time.Since(start).Milliseconds()
 
 			prefix := fmt.Sprintf("  [%2d/%d] %-15s C%d", i+1, len(llm.ExerciseMatrix), ep.Intent, ep.Complexity)
@@ -590,6 +600,7 @@ per-intent-class latency scorecard and 6-axis metascore dimension reporting.`,
 		if v, _ := cmd.Flags().GetInt("iterations"); v > 0 {
 			iterations = v
 		}
+		newOnly, _ := cmd.Flags().GetBool("new-only")
 
 		// Step 1: Discover configured models.
 		fmt.Println("\n  Step 1: Discovering configured models...")
@@ -617,112 +628,174 @@ per-intent-class latency scorecard and 6-axis metascore dimension reporting.`,
 			return nil
 		}
 
+		// In --new-only mode, filter out models that already have exercise data.
+		if newOnly {
+			status, err := apiGet("/api/models/exercise/status")
+			if err == nil {
+				if existing, ok := status["models"].(map[string]any); ok && len(existing) > 0 {
+					var filtered []string
+					for _, model := range configured {
+						if count, found := existing[model]; found {
+							c := toFloat(count)
+							if c > 0 {
+								fmt.Printf("  Skipping %s (already has %.0f exercise result(s))\n", model, c)
+								continue
+							}
+						}
+						filtered = append(filtered, model)
+					}
+					configured = filtered
+				}
+			}
+			if len(configured) == 0 {
+				fmt.Println("\n  All models already have exercise data. Nothing to do.")
+				fmt.Println("  Run without --new-only to re-baseline all models.")
+				return nil
+			}
+		}
+
 		totalPrompts := len(llm.ExerciseMatrix) * iterations
-		fmt.Printf("\n  Found %d configured model(s):\n\n", len(configured))
+		fmt.Printf("\n  Found %d model(s) to exercise:\n\n", len(configured))
+		var localCount, cloudCount int
 		for i, model := range configured {
 			role := "fallback"
 			if i == 0 {
 				role = "primary"
 			}
-			fmt.Printf("    %-10s %s\n", role, model)
+			timeout := resolveModelTimeout(config, model)
+			locality := "cloud"
+			if timeout > 120*time.Second {
+				locality = "local"
+				localCount++
+			} else {
+				cloudCount++
+			}
+			fmt.Printf("    %-10s %-40s  %s\n", role, model, locality)
 		}
 
-		// Step 2: Confirm.
-		fmt.Printf("\n  This will flush all quality scores and exercise each model\n  with %d prompts x %d iteration(s) = %d calls per model.\n  Proceed? [Y/n] ",
-			len(llm.ExerciseMatrix), iterations, totalPrompts)
+		// Estimate total duration. Local models average ~30-60s per prompt,
+		// cloud models ~2-5s. Use conservative midpoints.
+		localEstSec := localCount * totalPrompts * 45  // 45s avg per local prompt
+		cloudEstSec := cloudCount * totalPrompts * 4   // 4s avg per cloud prompt
+		totalEstMin := (localEstSec + cloudEstSec) / 60
+		if totalEstMin < 1 {
+			totalEstMin = 1
+		}
+
+		// Step 2: Confirm with duration warning.
+		fmt.Printf("\n  This will flush all quality scores and exercise each model\n")
+		fmt.Printf("  with %d prompts x %d iteration(s) = %d calls per model.\n\n", len(llm.ExerciseMatrix), iterations, totalPrompts)
+		fmt.Printf("  ⏱  Estimated duration: ~%d minutes (%d local model(s) @ ~45s/prompt, %d cloud @ ~4s/prompt)\n", totalEstMin, localCount, cloudCount)
+		if localCount > 0 {
+			fmt.Printf("     Local models are significantly slower — especially on first run (cold start).\n")
+			fmt.Printf("     Do not interrupt the process or the baseline data will be incomplete.\n")
+		}
+		fmt.Printf("\n  Proceed? [Y/n] ")
 		var input string
-		_, _ = fmt.Scanln(&input)
+		if _, err := fmt.Scanln(&input); err != nil && err.Error() != "unexpected newline" {
+			fmt.Fprintf(os.Stderr, "  (stdin read error: %v)\n", err)
+		}
 		if input != "" && input != "y" && input != "Y" && input != "yes" {
 			fmt.Println("  Cancelled.")
 			return nil
 		}
 
-		// Step 3: Flush all scores.
-		fmt.Println("\n  Step 2: Flushing all quality scores...")
-		resetData, err := apiPost("/api/models/reset", nil)
-		if err != nil {
-			return fmt.Errorf("failed to reset scores: %w", err)
+		// Step 3: Flush all scores (skip in --new-only mode — we're adding, not replacing).
+		if newOnly {
+			fmt.Println("\n  Step 2: Skipping score flush (--new-only mode)")
+		} else {
+			fmt.Println("\n  Step 2: Flushing all quality scores...")
+			resetData, err := apiPost("/api/models/reset", nil)
+			if err != nil {
+				return fmt.Errorf("failed to reset scores: %w", err)
+			}
+			cleared, _ := resetData["cleared"].(float64)
+			fmt.Printf("  Cleared %.0f observation entries.\n", cleared)
 		}
-		cleared, _ := resetData["cleared"].(float64)
-		fmt.Printf("  Cleared %.0f observation entries.\n", cleared)
 
-		// Step 4: Exercise each model with the full matrix.
+		// Step 4: Exercise each model via /api/models/exercise (direct LLM quality scoring,
+		// no pipeline overhead). Returns per-prompt quality scores 0-1.
 		fmt.Printf("\n  Step 3: Exercising models...\n\n")
 
 		type modelResult struct {
-			model     string
-			pass      int
-			fail      int
-			latencies map[string][]int64 // intent_class → latencies in ms
+			model        string
+			pass         int
+			fail         int
+			avgQuality   float64
+			intentQuality map[string]float64 // intent_class → avg quality 0-1
+			latencies    map[string][]int64  // intent_class → latencies in ms
 		}
 		var results []modelResult
 
 		for _, model := range configured {
-			fmt.Printf("  --- %s ---\n", model)
+			modelTimeout := resolveModelTimeout(config, model)
+			fmt.Printf("  --- %s (timeout: %s) ---\n", model, modelTimeout)
+
+			resp, err := apiPostSlow("/api/models/exercise", map[string]any{"model": model}, modelTimeout*20)
+			if err != nil {
+				fmt.Printf("    SKIP: exercise failed: %v\n\n", err)
+				results = append(results, modelResult{model: model, fail: len(llm.ExerciseMatrix)})
+				continue
+			}
+
+			// Parse per-prompt results from exercise endpoint.
 			mr := modelResult{
-				model:     model,
-				latencies: make(map[string][]int64),
+				model:         model,
+				intentQuality: make(map[string]float64),
+				latencies:     make(map[string][]int64),
 			}
+			mr.pass = int(toFloat(resp["pass"]))
+			mr.fail = int(toFloat(resp["fail"]))
+			mr.avgQuality = toFloat(resp["avg_quality"])
 
-			// Create a dedicated session for exercising.
-			sessionID := ""
-			if resp, err := apiPost("/api/sessions", map[string]any{}); err == nil {
-				if id, ok := resp["session_id"].(string); ok {
-					sessionID = id
-				} else if id, ok := resp["id"].(string); ok {
-					sessionID = id
+			// Per-intent quality averages.
+			if iq, ok := resp["intent_quality"].(map[string]any); ok {
+				for intent, val := range iq {
+					mr.intentQuality[intent] = toFloat(val)
 				}
 			}
 
-			n := 0
-			for iter := 0; iter < iterations; iter++ {
-				for _, ep := range llm.ExerciseMatrix {
-					n++
-					label := fmt.Sprintf("[%d/%d] %s:C%d", n, totalPrompts, ep.Intent, ep.Complexity)
+			// Print per-prompt details.
+			if promptResults, ok := resp["results"].([]any); ok {
+				for i, pr := range promptResults {
+					if p, ok := pr.(map[string]any); ok {
+						intent := fmt.Sprintf("%v", p["intent"])
+						complexity := fmt.Sprintf("%v", p["complexity"])
+						quality := toFloat(p["quality"])
+						latencyMs := int64(toFloat(p["latency_ms"]))
+						passed, _ := p["passed"].(bool)
+						errStr := fmt.Sprintf("%v", p["error"])
 
-					body := map[string]any{
-						"content":        ep.Prompt,
-						"model_override": model,
-					}
-					if sessionID != "" {
-						body["session_id"] = sessionID
-					}
+						label := fmt.Sprintf("[%d/%d] %s:%s", i+1, len(promptResults), intent, complexity)
+						mr.latencies[intent] = append(mr.latencies[intent], latencyMs)
 
-					start := time.Now()
-					resp, err := apiPost("/api/agent/message", body)
-					latencyMs := time.Since(start).Milliseconds()
-
-					if err != nil {
-						mr.fail++
-						fmt.Printf("    %s FAIL: %v\n", label, err)
-						continue
-					}
-
-					content := fmt.Sprintf("%v", resp["content"])
-					if content != "" && content != "<nil>" {
-						mr.pass++
-						mr.latencies[ep.Intent.String()] = append(mr.latencies[ep.Intent.String()], latencyMs)
-						fmt.Printf("    %s PASS %.1fs\n", label, float64(latencyMs)/1000.0)
-					} else if errMsg, ok := resp["error"].(string); ok {
-						mr.fail++
-						fmt.Printf("    %s FAIL: %s\n", label, errMsg)
-					} else {
-						mr.fail++
-						fmt.Printf("    %s FAIL: empty response\n", label)
+						if errStr != "" && errStr != "<nil>" {
+							fmt.Printf("    %s FAIL  Q=%.2f  %s\n", label, quality, errStr)
+						} else if passed {
+							fmt.Printf("    %s PASS  Q=%.2f  %.1fs\n", label, quality, float64(latencyMs)/1000.0)
+						} else {
+							fmt.Printf("    %s FAIL  Q=%.2f  %.1fs\n", label, quality, float64(latencyMs)/1000.0)
+						}
 					}
 				}
 			}
 
-			// Print per-intent latency scorecard for this model.
+			// Print per-intent quality + latency scorecard.
+			fmt.Printf("\n    Intent Quality:\n")
+			for _, intent := range []string{"EXECUTION", "DELEGATION", "INTROSPECTION", "CONVERSATION"} {
+				q := mr.intentQuality[intent]
+				bar := qualityBar(q)
+				fmt.Printf("      %-16s %s %.2f\n", intent, bar, q)
+			}
 			printLatencyScorecard(mr.latencies)
 			results = append(results, mr)
 			fmt.Println()
 		}
 
-		// Step 5: Summary with per-model pass/fail + baseline profile.
+		// Step 5: Summary with per-model quality scores + baseline profile.
 		fmt.Printf("  Baseline Results:\n\n")
-		fmt.Printf("  %-35s  %-6s  %-6s  %s\n", "MODEL", "PASS", "FAIL", "STATUS")
-		fmt.Println("  " + strings.Repeat("─", 60))
+		fmt.Printf("  %-35s  %-6s  %-6s  %-10s  %s\n", "MODEL", "PASS", "FAIL", "QUALITY", "STATUS")
+		fmt.Println("  " + strings.Repeat("─", 75))
 		for _, r := range results {
 			status := "PASS"
 			if r.fail > 0 && r.pass == 0 {
@@ -730,7 +803,16 @@ per-intent-class latency scorecard and 6-axis metascore dimension reporting.`,
 			} else if r.fail > 0 {
 				status = "DEGRADED"
 			}
-			fmt.Printf("  %-35s  %-6d  %-6d  %s\n", r.model, r.pass, r.fail, status)
+			qBar := qualityBar(r.avgQuality)
+			fmt.Printf("  %-35s  %-6d  %-6d  %s %.2f  %s\n", r.model, r.pass, r.fail, qBar, r.avgQuality, status)
+
+			// Per-intent quality breakdown.
+			if len(r.intentQuality) > 0 {
+				for _, intent := range []string{"EXECUTION", "DELEGATION", "INTROSPECTION", "CONVERSATION"} {
+					q := r.intentQuality[intent]
+					fmt.Printf("    %-18s %s %.2f\n", intent, qualityBar(q), q)
+				}
+			}
 
 			// Print 6-axis baseline profile if we have a known baseline.
 			if baseline, ok := llm.LookupBaseline(r.model); ok {
@@ -746,6 +828,7 @@ per-intent-class latency scorecard and 6-axis metascore dimension reporting.`,
 
 func init() {
 	modelsBaselineCmd.Flags().IntP("iterations", "n", 1, "Number of iterations over the 20-prompt matrix per model")
+	modelsBaselineCmd.Flags().Bool("new-only", false, "Only exercise models with no existing baseline data")
 }
 
 // printLatencyScorecard prints a per-intent-class latency table (Avg/P50/P95).
@@ -813,6 +896,66 @@ func sumInt64s(s []int64) int64 {
 		total += v
 	}
 	return total
+}
+
+// resolveModelTimeout determines the HTTP client timeout for a model based on config.
+// Priority: model_overrides[model].timeout_seconds > is_local (300s) > cloud default (120s).
+func resolveModelTimeout(config map[string]any, model string) time.Duration {
+	// Check explicit per-model timeout override.
+	if models, ok := config["models"].(map[string]any); ok {
+		if overrides, ok := models["model_overrides"].(map[string]any); ok {
+			if mo, ok := overrides[model].(map[string]any); ok {
+				if ts, ok := mo["timeout_seconds"].(float64); ok && ts > 0 {
+					return time.Duration(ts) * time.Second
+				}
+			}
+		}
+	}
+
+	// Determine if the model's provider is local.
+	providerName, _ := splitModelForDisplay(model)
+	if providerName != "" {
+		if providers, ok := config["providers"].(map[string]any); ok {
+			if prov, ok := providers[providerName].(map[string]any); ok {
+				if isLocal, ok := prov["is_local"].(bool); ok && isLocal {
+					return 300 * time.Second // 5 min for local models (cold start, limited hardware)
+				}
+			}
+		}
+	}
+
+	return 120 * time.Second // 2 min for cloud models
+}
+
+// toFloat extracts a float64 from an any value (JSON numbers decode as float64).
+func toFloat(v any) float64 {
+	switch n := v.(type) {
+	case float64:
+		return n
+	case int:
+		return float64(n)
+	default:
+		return 0
+	}
+}
+
+// qualityBar renders a visual quality bar: ████████░░ for 0.8.
+func qualityBar(q float64) string {
+	const width = 10
+	filled := int(q * float64(width))
+	if filled > width {
+		filled = width
+	}
+	return strings.Repeat("█", filled) + strings.Repeat("░", width-filled)
+}
+
+// splitModelForDisplay splits "provider/model" into (provider, model).
+// Returns ("", input) if no slash present.
+func splitModelForDisplay(spec string) (string, string) {
+	if i := strings.Index(spec, "/"); i >= 0 {
+		return spec[:i], spec[i+1:]
+	}
+	return "", spec
 }
 
 func init() {

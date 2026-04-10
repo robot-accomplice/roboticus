@@ -76,6 +76,41 @@ func (gc *GuardChain) ApplyFull(content string) ApplyResult {
 	return result
 }
 
+// ApplyFrom runs guards starting from the given index, skipping guards that
+// were already applied before a retry. This implements Rust's apply_from()
+// for post-retry guard chain resumption — guards that already passed don't
+// need to re-evaluate the retried content.
+func (gc *GuardChain) ApplyFrom(content string, fromIndex int) ApplyResult {
+	result := ApplyResult{Content: content}
+
+	for i := fromIndex; i < len(gc.guards); i++ {
+		g := gc.guards[i]
+		gr := g.Check(content)
+		if !gr.Passed {
+			result.Violations = append(result.Violations, g.Name()+": "+gr.Reason)
+			if gr.Content != "" {
+				content = gr.Content
+				result.Content = content
+			}
+			if gr.Retry {
+				result.RetryRequested = true
+				result.RetryReason = gr.Reason
+			}
+		}
+	}
+	return result
+}
+
+// GuardIndex returns the index of a guard by name, or -1 if not found.
+func (gc *GuardChain) GuardIndex(name string) int {
+	for i, g := range gc.guards {
+		if g.Name() == name {
+			return i
+		}
+	}
+	return -1
+}
+
 // --- Built-in Guards ---
 
 // EmptyResponseGuard catches empty or whitespace-only responses.

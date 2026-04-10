@@ -28,7 +28,7 @@ func TestDefaultServerConfig(t *testing.T) {
 	if cfg.ReadTimeout != 30*time.Second {
 		t.Errorf("ReadTimeout = %v", cfg.ReadTimeout)
 	}
-	if cfg.WriteTimeout != 60*time.Second {
+	if cfg.WriteTimeout != 0 {
 		t.Errorf("WriteTimeout = %v", cfg.WriteTimeout)
 	}
 	if cfg.APIKey != "" {
@@ -64,7 +64,7 @@ func TestNewServer_ReturnsNonNil(t *testing.T) {
 	if srv.ReadTimeout != 30*time.Second {
 		t.Errorf("ReadTimeout = %v", srv.ReadTimeout)
 	}
-	if srv.WriteTimeout != 60*time.Second {
+	if srv.WriteTimeout != 0 {
 		t.Errorf("WriteTimeout = %v", srv.WriteTimeout)
 	}
 }

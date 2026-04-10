@@ -26,6 +26,15 @@ func (s *stubExecutor) RunLoop(_ context.Context, session *Session) (string, int
 	return content, 1, nil
 }
 
+// stubRetriever is a minimal MemoryRetriever for pipeline tests.
+type stubRetriever struct {
+	result string
+}
+
+func (s *stubRetriever) Retrieve(_ context.Context, _, _ string, _ int) string {
+	return s.result
+}
+
 func TestPipeline_Run_SimpleMessage(t *testing.T) {
 	store := testutil.TempStore(t)
 

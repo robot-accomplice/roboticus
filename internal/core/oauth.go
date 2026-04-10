@@ -13,6 +13,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 // OAuthPKCEConfig holds the parameters for an OAuth 2.0 PKCE flow.
@@ -99,7 +101,9 @@ func RunOAuthPKCEFlow(ctx context.Context, cfg OAuthPKCEConfig) (*OAuthToken, er
 	}
 	// Generate state parameter for CSRF protection.
 	stateBytes := make([]byte, 16)
-	_, _ = rand.Read(stateBytes)
+	if _, err := rand.Read(stateBytes); err != nil {
+		return nil, fmt.Errorf("oauth: crypto/rand failed: %w", err)
+	}
 	state := base64.RawURLEncoding.EncodeToString(stateBytes)
 	params.Set("state", state)
 
@@ -128,7 +132,9 @@ func RunOAuthPKCEFlow(ctx context.Context, cfg OAuthPKCEConfig) (*OAuthToken, er
 			http.Error(w, "No code", http.StatusBadRequest)
 			return
 		}
-		_, _ = fmt.Fprintf(w, "<html><body><h2>Authorization successful!</h2><p>You can close this tab and return to the terminal.</p></body></html>")
+		if _, err := fmt.Fprintf(w, "<html><body><h2>Authorization successful!</h2><p>You can close this tab and return to the terminal.</p></body></html>"); err != nil {
+			log.Trace().Err(err).Msg("oauth: callback response write failed")
+		}
 		codeCh <- code
 	})
 

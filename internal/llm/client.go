@@ -71,10 +71,20 @@ func NewClient(p *Provider) (*Client, error) {
 		// when some providers are unconfigured.
 	}
 
+	// Per-provider HTTP timeout. Local models (Ollama, llama.cpp) need much
+	// longer timeouts due to cold starts and limited hardware.
+	// Priority: explicit TimeoutSecs > IsLocal default (300s) > cloud default (120s).
+	providerTimeout := 120 * time.Second
+	if p.TimeoutSecs > 0 {
+		providerTimeout = time.Duration(p.TimeoutSecs) * time.Second
+	} else if p.IsLocal {
+		providerTimeout = 300 * time.Second
+	}
+
 	return &Client{
 		provider: p,
 		httpClient: &http.Client{
-			Timeout: 120 * time.Second,
+			Timeout: providerTimeout,
 			Transport: &http.Transport{
 				DialContext:         (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
 				MaxIdleConnsPerHost: 10,
@@ -291,11 +301,11 @@ func (c *Client) chatURL() string {
 			path = "/v1/messages"
 		case FormatGoogle:
 			path = "/v1/models/"
-		case FormatOllama:
-			path = "/api/chat"
 		case FormatOpenAIResponses:
 			path = "/v1/responses"
 		default:
+			// FormatOpenAI, FormatOllama, and all others use OpenAI-compatible endpoint.
+			// Rust standardizes on /v1/chat/completions for all providers including Ollama.
 			path = "/v1/chat/completions"
 		}
 	}

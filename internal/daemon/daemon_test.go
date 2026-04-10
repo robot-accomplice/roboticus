@@ -27,7 +27,7 @@ func TestServiceConfig(t *testing.T) {
 func TestNew_InvalidDB(t *testing.T) {
 	cfg := core.DefaultConfig()
 	cfg.Database.Path = "/nonexistent/path/test.db"
-	_, err := New(&cfg)
+	_, err := New(&cfg, BootOptions{})
 	if err == nil {
 		t.Error("should fail with invalid DB path")
 	}
@@ -38,7 +38,7 @@ func TestNew_ValidConfig(t *testing.T) {
 	cfg := core.DefaultConfig()
 	cfg.Database.Path = dir + "/test.db"
 
-	d, err := New(&cfg)
+	d, err := New(&cfg, BootOptions{})
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}

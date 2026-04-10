@@ -76,6 +76,24 @@ func TestWhatsAppFormatter_BoldConversion(t *testing.T) {
 	}
 }
 
+// TestWhatsAppFormatter_InlineCode verifies `code` → ```code``` (WhatsApp monospace).
+func TestWhatsAppFormatter_InlineCode(t *testing.T) {
+	f := FormatFor("whatsapp")
+	result := f.Format("Use the `print()` function")
+	if !strings.Contains(result, "```print()```") {
+		t.Errorf("inline code should become triple-backtick monospace, got %q", result)
+	}
+}
+
+// TestWhatsAppFormatter_HeaderH3 verifies ### header conversion.
+func TestWhatsAppFormatter_HeaderH3(t *testing.T) {
+	f := FormatFor("whatsapp")
+	result := f.Format("### Section Title")
+	if !strings.Contains(result, "*Section Title*") {
+		t.Errorf("h3 not converted to bold: got %q", result)
+	}
+}
+
 // TestVoiceFormatter_StripsEverything verifies TTS-clean output.
 func TestVoiceFormatter_StripsEverything(t *testing.T) {
 	f := FormatFor("voice")
@@ -155,5 +173,122 @@ func TestFormatter_BracketCitationsStripped(t *testing.T) {
 	result := f.Format(input)
 	if strings.Contains(result, "[1]") || strings.Contains(result, "[23]") {
 		t.Error("should strip bracket citations")
+	}
+}
+
+// --- Telegram inline formatting parity tests (Rust formatter.rs) ---
+
+// TestTelegramFormatter_BoldConversion verifies **bold** → *bold* with escaped content.
+func TestTelegramFormatter_BoldConversion(t *testing.T) {
+	f := FormatFor("telegram")
+	result := f.Format("This is **important** text")
+	// **bold** should become *bold* (Telegram MarkdownV2 bold).
+	if !strings.Contains(result, "*important*") {
+		t.Errorf("bold not converted: got %q", result)
+	}
+	// Must NOT contain double asterisks.
+	if strings.Contains(result, "**") {
+		t.Errorf("double asterisks should be converted to single: got %q", result)
+	}
+}
+
+// TestTelegramFormatter_ItalicConversion verifies *italic* → _italic_.
+func TestTelegramFormatter_ItalicConversion(t *testing.T) {
+	f := FormatFor("telegram")
+	result := f.Format("This is *subtle* emphasis")
+	// *italic* should become _italic_ (Telegram MarkdownV2 italic).
+	if !strings.Contains(result, "_subtle_") {
+		t.Errorf("italic not converted: got %q", result)
+	}
+}
+
+// TestTelegramFormatter_Strikethrough verifies ~~strike~~ → ~strike~.
+func TestTelegramFormatter_Strikethrough(t *testing.T) {
+	f := FormatFor("telegram")
+	result := f.Format("This is ~~removed~~ text")
+	if !strings.Contains(result, "~removed~") {
+		t.Errorf("strikethrough not converted: got %q", result)
+	}
+	if strings.Contains(result, "~~") {
+		t.Errorf("double tildes should be converted to single: got %q", result)
+	}
+}
+
+// TestTelegramFormatter_InlineCode verifies `code` passes through.
+func TestTelegramFormatter_InlineCode(t *testing.T) {
+	f := FormatFor("telegram")
+	result := f.Format("Use the `fmt.Println()` function")
+	// Inline code should be preserved with backticks, content NOT escaped.
+	if !strings.Contains(result, "`fmt.Println()`") {
+		t.Errorf("inline code not preserved: got %q", result)
+	}
+}
+
+// TestTelegramFormatter_Blockquote verifies > text → >text.
+func TestTelegramFormatter_Blockquote(t *testing.T) {
+	f := FormatFor("telegram")
+	result := f.Format("> This is a quote")
+	// Blockquote should start with > (no space) in MarkdownV2.
+	if !strings.HasPrefix(result, ">") {
+		t.Errorf("blockquote prefix missing: got %q", result)
+	}
+	if strings.Contains(result, "\\>") {
+		t.Errorf("blockquote > should not be escaped: got %q", result)
+	}
+}
+
+// TestTelegramFormatter_Link verifies [text](url) → [escaped text](url).
+func TestTelegramFormatter_Link(t *testing.T) {
+	f := FormatFor("telegram")
+	result := f.Format("Check [this link](https://example.com) out")
+	if !strings.Contains(result, "[this link](https://example.com)") {
+		t.Errorf("link not properly formatted: got %q", result)
+	}
+}
+
+// TestTelegramFormatter_MixedFormatting verifies a realistic LLM response.
+func TestTelegramFormatter_MixedFormatting(t *testing.T) {
+	f := FormatFor("telegram")
+	input := "**The Interpretation:**\n\n*   **The Struggle:** It strips away the layers.\n*   **The Need:** It boils down to survival.\n\n> \"The desert does not care.\"\n\nHow does that *feel*?"
+	result := f.Format(input)
+
+	// Bold headers should render as *text* not \*\*text\*\*.
+	if strings.Contains(result, "\\*\\*") {
+		t.Errorf("bold should be converted, not escaped: got %q", result)
+	}
+
+	// Blockquote should be preserved.
+	if !strings.Contains(result, ">") {
+		t.Errorf("blockquote lost: got %q", result)
+	}
+
+	// Italic should convert to underscores.
+	if !strings.Contains(result, "_feel_") {
+		t.Errorf("italic not converted: got %q", result)
+	}
+}
+
+// TestTelegramFormatter_SpecialCharsInPlainText verifies escaping of non-formatting chars.
+func TestTelegramFormatter_SpecialCharsInPlainText(t *testing.T) {
+	f := FormatFor("telegram")
+	result := f.Format("Hello (world). Test!")
+	// Parens, period, and exclamation must be escaped in plain text.
+	if !strings.Contains(result, "\\(world\\)") {
+		t.Errorf("parentheses not escaped: got %q", result)
+	}
+	if !strings.Contains(result, "\\.") {
+		t.Errorf("period not escaped: got %q", result)
+	}
+	if !strings.Contains(result, "\\!") {
+		t.Errorf("exclamation not escaped: got %q", result)
+	}
+}
+
+// TestTelegramFormatter_HeaderH3 verifies ### header handling.
+func TestTelegramFormatter_HeaderH3(t *testing.T) {
+	f := FormatFor("telegram")
+	result := f.Format("### Subsection Title")
+	if !strings.Contains(result, "*Subsection Title*") {
+		t.Errorf("h3 not converted to bold: got %q", result)
 	}
 }

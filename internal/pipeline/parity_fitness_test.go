@@ -103,7 +103,7 @@ func TestParity_PresetDifferencesAreExhaustive(t *testing.T) {
 		"DecompositionGate":      {true, true, true, true},
 		"DelegatedExecution":     {true, true, true, false},
 		"SpecialistControls":     {false, false, true, false},
-		"ShortcutsEnabled":       {true, true, true, true},
+		"ShortcutsEnabled":       {true, true, true, false}, // Rust parity: cron tasks are machine-generated
 		"SkillFirstEnabled":      {false, false, true, false},
 		"ShortFollowupExpansion": {true, true, true, false},
 		"CacheEnabled":           {true, true, true, true},
@@ -111,7 +111,7 @@ func TestParity_PresetDifferencesAreExhaustive(t *testing.T) {
 		"NicknameRefinement":     {true, false, false, false},
 		"PreferLocalModel":       {false, false, false, false},
 		"CronDelegationWrap":     {false, false, false, true},
-		"BotCommandDispatch":     {false, false, false, false},
+		"BotCommandDispatch":     {false, false, true, false}, // Channel only (Rust parity)
 		"InjectDiagnostics":      {true, true, false, false},
 	}
 

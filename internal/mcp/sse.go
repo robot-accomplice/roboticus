@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+
+	"github.com/rs/zerolog/log"
 )
 
 // SSETransport communicates with an MCP server over HTTP SSE (Server-Sent Events).
@@ -91,7 +93,9 @@ func (t *SSETransport) Send(ctx context.Context, msg json.RawMessage) error {
 		return fmt.Errorf("mcp sse: send: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	_, _ = io.Copy(io.Discard, resp.Body)
+	if _, err := io.Copy(io.Discard, resp.Body); err != nil {
+		log.Trace().Err(err).Msg("mcp sse: body drain failed")
+	}
 
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("mcp sse: server returned %d", resp.StatusCode)

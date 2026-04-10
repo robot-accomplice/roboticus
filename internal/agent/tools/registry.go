@@ -55,6 +55,17 @@ func (r *Registry) Names() []string {
 	return names
 }
 
+// NamesWithDescriptions returns (name, description) pairs for all registered tools.
+func (r *Registry) NamesWithDescriptions() [][2]string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	pairs := make([][2]string, 0, len(r.tools))
+	for _, t := range r.tools {
+		pairs = append(pairs, [2]string{t.Name(), t.Description()})
+	}
+	return pairs
+}
+
 // ToolDefs returns LLM-compatible tool definitions for all registered tools.
 func (r *Registry) ToolDefs() []llm.ToolDef {
 	r.mu.RLock()

@@ -167,6 +167,139 @@ func capabilityTokens(content string) []string {
 	return tokens
 }
 
+// PlannedActionKind enumerates the possible planned actions from task synthesis.
+// Matches Rust's PlannedAction enum.
+type PlannedActionKind int
+
+const (
+	PlannedActionExecuteDirectly      PlannedActionKind = iota // Handle in current agent
+	PlannedActionDelegateToSpecialist                          // Route to a specialist subagent
+	PlannedActionComposeSubagent                               // Create a new subagent on the fly
+)
+
+// FormatPlannedAction converts a PlannedAction string (from SynthesizeTaskState) to
+// a human-readable label. Matches Rust's format_planned_action().
+func FormatPlannedAction(action string) string {
+	switch action {
+	case "execute_directly":
+		return "Execute Directly"
+	case "delegate_to_specialist":
+		return "Delegate to Specialist"
+	case "compose_subagent":
+		return "Compose Sub-Agent"
+	default:
+		return "Execute Directly"
+	}
+}
+
+// PlannedActionToKind parses a planned action string into a typed enum.
+func PlannedActionToKind(action string) PlannedActionKind {
+	switch action {
+	case "delegate_to_specialist":
+		return PlannedActionDelegateToSpecialist
+	case "compose_subagent":
+		return PlannedActionComposeSubagent
+	default:
+		return PlannedActionExecuteDirectly
+	}
+}
+
+// ActionGateDecision is the result of MapPlannedAction — tells the pipeline
+// whether to continue with standard inference or reroute.
+type ActionGateDecision int
+
+const (
+	ActionGateContinue          ActionGateDecision = iota // Proceed with standard inference
+	ActionGateDelegate                                    // Reroute to delegation path
+	ActionGateSpecialistPropose                           // Propose specialist creation
+)
+
+// MapPlannedAction maps a PlannedAction + decomposition result into a gate decision.
+// Matches Rust's map_planned_action(): integrates task synthesis with the
+// decomposition gate to decide whether standard inference, delegation, or
+// specialist creation is the right path.
+//
+// The decision is conservative: delegation/specialist only fires when both the
+// planner AND the decomposition gate agree (or when the planner has high confidence
+// and the decomposition gate didn't explicitly centralize).
+func MapPlannedAction(synthesis TaskSynthesis, decomp *DecompositionResult) ActionGateDecision {
+	kind := PlannedActionToKind(synthesis.PlannedAction)
+
+	switch kind {
+	case PlannedActionDelegateToSpecialist:
+		// Planner wants delegation. Accept if decomp agrees or is at least not centralized.
+		if decomp != nil && decomp.Decision == DecompDelegated {
+			return ActionGateDelegate
+		}
+		// High-confidence planner overrides neutral decomposition.
+		if synthesis.Confidence >= 0.7 && (decomp == nil || decomp.Decision != DecompCentralized) {
+			return ActionGateDelegate
+		}
+		// Low-confidence planner: fall through to standard inference.
+		return ActionGateContinue
+
+	case PlannedActionComposeSubagent:
+		// Subagent composition requires both planner confidence and capability gap.
+		if synthesis.CapabilityFit < 0.3 && synthesis.Confidence >= 0.6 {
+			return ActionGateSpecialistPropose
+		}
+		// If decomp explicitly proposed a specialist, honor it.
+		if decomp != nil && decomp.Decision == DecompSpecialistProposal {
+			return ActionGateSpecialistPropose
+		}
+		return ActionGateContinue
+
+	default:
+		// PlannedActionExecuteDirectly — always continue.
+		return ActionGateContinue
+	}
+}
+
+// RetrievalStrategy describes the memory retrieval approach for a turn.
+// Matches Rust's decide_retrieval_strategy() output.
+type RetrievalStrategy struct {
+	Strategy string // "semantic", "recency", "hybrid", "none"
+	Budget   int    // Token budget for retrieval
+	Reason   string // Why this strategy was chosen
+}
+
+// DecideRetrievalStrategy determines the optimal memory retrieval approach
+// based on task synthesis results and session context.
+// Matches Rust's decide_retrieval_strategy(): a separate decision function
+// that decouples retrieval policy from retrieval execution (H10 stage separation).
+func DecideRetrievalStrategy(synthesis TaskSynthesis, sessionTurns int, defaultBudget int) RetrievalStrategy {
+	// No retrieval for simple conversational turns without history.
+	if !synthesis.RetrievalNeeded && sessionTurns <= 1 {
+		return RetrievalStrategy{Strategy: "none", Budget: 0, Reason: "simple conversational turn, no history"}
+	}
+
+	// Questions benefit from semantic retrieval (find relevant memories).
+	if synthesis.Intent == "question" {
+		budget := defaultBudget
+		if synthesis.Complexity == "complex" {
+			budget = defaultBudget * 2 // Double budget for complex questions.
+		}
+		return RetrievalStrategy{Strategy: "semantic", Budget: budget, Reason: "question intent benefits from semantic search"}
+	}
+
+	// Code and task intents need hybrid retrieval (recent context + semantic).
+	if synthesis.Intent == "code" || synthesis.Intent == "task" {
+		return RetrievalStrategy{Strategy: "hybrid", Budget: defaultBudget, Reason: "task/code intent needs recent + semantic context"}
+	}
+
+	// Long conversations need recency retrieval to maintain coherence.
+	if sessionTurns > 10 {
+		return RetrievalStrategy{Strategy: "recency", Budget: defaultBudget / 2, Reason: "long conversation, prioritize recent context"}
+	}
+
+	// Default: semantic for anything with retrieval need.
+	if synthesis.RetrievalNeeded {
+		return RetrievalStrategy{Strategy: "semantic", Budget: defaultBudget, Reason: "retrieval needed based on task analysis"}
+	}
+
+	return RetrievalStrategy{Strategy: "none", Budget: 0, Reason: "no retrieval benefit detected"}
+}
+
 // matchCapabilities compares capability tokens against available skills.
 // Returns (fit_ratio, missing_skills).
 func matchCapabilities(capTokens, skills []string) (float64, []string) {

@@ -176,10 +176,11 @@ func (s *Store) InsertMessage(ctx context.Context, sessionID, role, content stri
 	return id, nil
 }
 
-// newID generates a unique ID. Uses a simple timestamp + random approach.
+// newID generates a unique ID using crypto/rand.
 func newID() string {
-	// Use crypto/rand for proper uniqueness.
 	b := make([]byte, 16)
-	_, _ = readRandom(b)
+	if _, err := readRandom(b); err != nil {
+		panic("db.newID: crypto/rand failed: " + err.Error())
+	}
 	return encodeHex(b)
 }

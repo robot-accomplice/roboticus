@@ -1,11 +1,15 @@
 package routes
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/rs/zerolog/log"
 
 	"roboticus/internal/db"
 	"roboticus/internal/llm"
@@ -46,13 +50,136 @@ func GetRoutingDataset(store *db.Store) http.HandlerFunc {
 				return
 			}
 			w.Header().Set("Content-Type", "text/tab-separated-values; charset=utf-8")
-			_, _ = fmt.Fprint(w, routingDatasetTSV(rows))
+			if _, err := fmt.Fprint(w, routingDatasetTSV(rows)); err != nil {
+				log.Trace().Err(err).Msg("routing_admin: TSV response write failed")
+			}
 			return
 		}
 
 		writeJSON(w, http.StatusOK, map[string]any{
 			"rows":    rows,
 			"summary": summary,
+		})
+	}
+}
+
+// ExerciseModel runs the exercise matrix against a specific model and returns
+// per-prompt quality scores. This bypasses the pipeline (no session, no guards,
+// no memory) — it's a direct LLM quality measurement for baselining.
+func ExerciseModel(llmSvc *llm.Service, store *db.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Model string `json:"model"`
+			RunID string `json:"run_id,omitempty"` // Caller-provided run ID for grouping results.
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		if req.Model == "" {
+			writeError(w, http.StatusBadRequest, "model is required")
+			return
+		}
+		runID := req.RunID
+		if runID == "" {
+			runID = db.NewID()
+		}
+
+		// Persist each result as it completes — survives client disconnects.
+		// Uses background context so DB writes succeed even if the HTTP
+		// connection dies mid-exercise.
+		persistResult := llm.ExerciseCallback(func(index int, result llm.ExerciseResult) {
+			if store == nil {
+				return
+			}
+			_ = db.InsertExerciseResult(context.Background(), store, db.ExerciseResultRow{
+				ID:          db.NewID(),
+				RunID:       runID,
+				Model:       req.Model,
+				IntentClass: result.Prompt.Intent.String(),
+				Complexity:  result.Prompt.Complexity.String(),
+				Prompt:      result.Prompt.Prompt,
+				Content:     result.Content,
+				Quality:     result.Quality,
+				LatencyMs:   result.LatencyMs,
+				Passed:      result.Passed,
+				ErrorMsg:    result.Error,
+			})
+		})
+
+		results := llm.RunExercise(r.Context(), llmSvc, req.Model, llm.ExerciseMatrix, persistResult)
+
+		type promptResult struct {
+			Intent     string  `json:"intent"`
+			Complexity string  `json:"complexity"`
+			Prompt     string  `json:"prompt"`
+			Content    string  `json:"content,omitempty"`
+			Quality    float64 `json:"quality"`
+			LatencyMs  int64   `json:"latency_ms"`
+			Passed     bool    `json:"passed"`
+			Error      string  `json:"error,omitempty"`
+		}
+
+		var pass, fail int
+		var totalQuality float64
+		intentQuality := make(map[string][]float64)
+		promptResults := make([]promptResult, len(results))
+
+		for i, res := range results {
+			intentStr := res.Prompt.Intent.String()
+			promptResults[i] = promptResult{
+				Intent:     intentStr,
+				Complexity: res.Prompt.Complexity.String(),
+				Prompt:     res.Prompt.Prompt,
+				Content:    res.Content,
+				Quality:    res.Quality,
+				LatencyMs:  res.LatencyMs,
+				Passed:     res.Passed,
+				Error:      res.Error,
+			}
+			if res.Passed {
+				pass++
+			} else {
+				fail++
+			}
+			totalQuality += res.Quality
+			intentQuality[intentStr] = append(intentQuality[intentStr], res.Quality)
+		}
+
+		// Compute per-intent averages.
+		intentAvg := make(map[string]float64)
+		for intent, scores := range intentQuality {
+			var sum float64
+			for _, s := range scores {
+				sum += s
+			}
+			intentAvg[intent] = sum / float64(len(scores))
+		}
+
+		avgQuality := 0.0
+		if len(results) > 0 {
+			avgQuality = totalQuality / float64(len(results))
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{
+			"model":          req.Model,
+			"run_id":         runID,
+			"total":          len(results),
+			"pass":           pass,
+			"fail":           fail,
+			"avg_quality":    avgQuality,
+			"intent_quality": intentAvg,
+			"results":        promptResults,
+		})
+	}
+}
+
+// GetExerciseStatus returns which models have existing exercise data and how many results.
+func GetExerciseStatus(store *db.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		counts := db.ExerciseResultCountByModel(r.Context(), store)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"models": counts,
 		})
 	}
 }
