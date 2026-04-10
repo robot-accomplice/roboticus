@@ -205,7 +205,7 @@ func PresetCron() Config {
 		DecompositionGate:      true,
 		DelegatedExecution:     false,
 		SpecialistControls:     false,
-		ShortcutsEnabled:       true,
+		ShortcutsEnabled:       false, // Cron tasks are machine-generated; ack shortcuts don't apply (Rust parity)
 		SkillFirstEnabled:      false,
 		ShortFollowupExpansion: false,
 		InferenceMode:          InferenceStandard,

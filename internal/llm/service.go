@@ -120,7 +120,7 @@ func NewService(cfg ServiceConfig, store *db.Store) (*Service, error) {
 		router:        NewRouter(targets, cfg.Router),
 		breakers:      NewBreakerRegistry(cfg.Breaker),
 		cache:         NewCache(cfg.Cache, store, cfg.ErrBus),
-		dedup:         NewDedup(2000), // 2s dedup window
+		dedup:         NewDedup(120 * time.Second), // Rust parity: 120s dedup window
 		transforms:    DefaultTransformPipeline(),
 		primary:       cfg.Primary,
 		fallbacks:     cfg.Fallbacks,

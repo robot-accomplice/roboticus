@@ -119,7 +119,7 @@ func (mm *Manager) IngestTurn(ctx context.Context, session *session.Session) {
 					log.Debug().Str("tool", m.Name).Msg("skipping derivable tool in memory ingestion")
 					continue
 				}
-				event := m.Name + ": " + safeUTF8Truncate(m.Content, 300)
+				event := m.Name + ": " + safeUTF8Truncate(m.Content, 150) // Rust parity: 150 char tool result preview
 				// Dedup check: don't store if identical episodic content exists.
 				if !mm.episodicContentExists(ctx, event) {
 					mm.storeEpisodicMemoryWithImportance(ctx, "tool_event", event, 7)

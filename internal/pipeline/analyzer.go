@@ -339,7 +339,65 @@ func (a *ContextAnalyzer) AnalyzeSession(sd *SessionData) []Tip {
 		})
 	}
 
-	// 8. LowCoverageWarning: sparse evaluation data
+	// 8. FrequentEscalation: >40% of turns at L2/L3 complexity (Rust parity)
+	if n > 0 {
+		highComplexity := 0
+		for _, turn := range sd.Turns {
+			if turn.ComplexityLevel == "L2" || turn.ComplexityLevel == "L3" {
+				highComplexity++
+			}
+		}
+		pct := float64(highComplexity) / float64(n)
+		if pct > 0.40 {
+			tips = append(tips, Tip{
+				Severity:   "warning",
+				Category:   "quality",
+				RuleName:   "FrequentEscalation",
+				Message:    fmt.Sprintf("%.0f%% of turns (%d/%d) at L2/L3 complexity.", pct*100, highComplexity, n),
+				Suggestion: "Frequent complexity escalation drives up cost. Evaluate whether escalation triggers are too sensitive or the base model could handle more queries.",
+			})
+		}
+	}
+
+	// 9. MemoryHelps: quality improves with memory retrieval (Rust parity)
+	if len(sd.Grades) >= 4 {
+		var withMemGrades, withoutMemGrades []float64
+		for _, g := range sd.Grades {
+			for _, turn := range sd.Turns {
+				if turn.TurnID == g.TurnID {
+					if turn.MemoryTokens > 0 {
+						withMemGrades = append(withMemGrades, float64(g.Grade))
+					} else {
+						withoutMemGrades = append(withoutMemGrades, float64(g.Grade))
+					}
+					break
+				}
+			}
+		}
+		if len(withMemGrades) >= 2 && len(withoutMemGrades) >= 2 {
+			withAvg := 0.0
+			for _, g := range withMemGrades {
+				withAvg += g
+			}
+			withAvg /= float64(len(withMemGrades))
+			withoutAvg := 0.0
+			for _, g := range withoutMemGrades {
+				withoutAvg += g
+			}
+			withoutAvg /= float64(len(withoutMemGrades))
+			if withAvg > withoutAvg+0.5 {
+				tips = append(tips, Tip{
+					Severity:   "info",
+					Category:   "memory",
+					RuleName:   "MemoryHelps",
+					Message:    fmt.Sprintf("Quality is %.1f with memory vs %.1f without — memory retrieval is helping.", withAvg, withoutAvg),
+					Suggestion: "Memory retrieval is positively correlated with quality. Consider increasing memory budgets.",
+				})
+			}
+		}
+	}
+
+	// 10. LowCoverageWarning: sparse evaluation data
 	if n > 10 && len(sd.Grades) < n/3 {
 		tips = append(tips, Tip{
 			Severity:   "info",

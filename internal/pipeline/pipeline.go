@@ -366,6 +366,20 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 	}
 	tr.EndSpan("ok")
 
+	// ── Stage 8.5: Memory retrieval (Rust parity: ARCHITECTURE.md §4) ────
+	// Memory must be proactively injected BEFORE delegation and skill-first
+	// so early-exit paths still have full cognitive context. "The model should
+	// never have to guess at something the framework already knows."
+	var memoryBlock string
+	if p.retriever != nil {
+		tr.BeginSpan("memory_retrieval")
+		memoryBlock = p.retriever.Retrieve(ctx, session.ID, content, 2048)
+		if memoryBlock != "" {
+			session.SetMemoryContext(memoryBlock)
+		}
+		tr.EndSpan("ok")
+	}
+
 	// ── Stage 9: Delegated execution ───────────────────────────────────────
 	if cfg.DelegatedExecution && decomp.Decision == DecompDelegated && len(decomp.Subtasks) > 0 {
 		tr.BeginSpan("delegated_execution")

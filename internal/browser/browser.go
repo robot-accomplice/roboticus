@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os/exec"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -401,8 +402,24 @@ func (b *Browser) recover() error {
 	return b.Start()
 }
 
+// isRecoverable checks if the error indicates a session disconnect that
+// warrants a recovery attempt. Rust parity: 6 error patterns.
 func isRecoverable(errMsg string) bool {
-	return errMsg == "websocket closed" || errMsg == "broken pipe" || errMsg == "connection refused"
+	if errMsg == "" {
+		return false
+	}
+	lower := strings.ToLower(errMsg)
+	// Don't attempt recovery for "not started" — that's a precondition, not a disconnect.
+	if strings.Contains(lower, "not started") || strings.Contains(lower, "not running") {
+		return false
+	}
+	return strings.Contains(lower, "websocket") ||
+		strings.Contains(lower, "closed") ||
+		strings.Contains(lower, "connection reset") ||
+		strings.Contains(lower, "broken pipe") ||
+		strings.Contains(lower, "cdp read error") ||
+		strings.Contains(lower, "cdp send failed") ||
+		strings.Contains(lower, "connection refused")
 }
 
 func isIdempotent(kind ActionKind) bool {
