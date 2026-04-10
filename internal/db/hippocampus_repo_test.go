@@ -145,7 +145,9 @@ func TestHippocampus_SchemaSummary(t *testing.T) {
 	cols := []ColumnDef{
 		{Name: "id", ColType: "TEXT", Nullable: false, Description: "Primary key"},
 	}
-	reg.RegisterTableFull(ctx, "test_t", "Test table", cols, "system", false, "read", 100)
+	if err := reg.RegisterTableFull(ctx, "test_t", "Test table", cols, "system", false, "read", 100); err != nil {
+		t.Fatalf("RegisterTableFull: %v", err)
+	}
 
 	summary, err := reg.SchemaSummary(ctx)
 	if err != nil {
@@ -167,8 +169,12 @@ func TestHippocampus_CompactSummary(t *testing.T) {
 	reg := NewHippocampusRegistry(store)
 	ctx := context.Background()
 
-	reg.RegisterTableFull(ctx, "sessions", "User sessions", nil, "system", false, "read", 50)
-	reg.RegisterTableFull(ctx, "bot1_data", "Bot data", nil, "bot1", true, "readwrite", 10)
+	if err := reg.RegisterTableFull(ctx, "sessions", "User sessions", nil, "system", false, "read", 50); err != nil {
+		t.Fatalf("RegisterTableFull sessions: %v", err)
+	}
+	if err := reg.RegisterTableFull(ctx, "bot1_data", "Bot data", nil, "bot1", true, "readwrite", 10); err != nil {
+		t.Fatalf("RegisterTableFull bot1_data: %v", err)
+	}
 
 	summary, err := reg.CompactSummary(ctx)
 	if err != nil {
