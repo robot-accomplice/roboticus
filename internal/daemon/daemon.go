@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/kardianos/service"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
 	"roboticus/internal/agent"
@@ -396,13 +397,19 @@ func New(cfg *core.Config) (*Daemon, error) {
 	startupStart := time.Now()
 	const steps = 12
 
+	// Suppress structured logging during boot so the styled boot steps
+	// are not interleaved with JSON/console log lines (Rust parity:
+	// enable_stderr_logging() is called only after "Ready").
+	prevLevel := zerolog.GlobalLevel()
+	zerolog.SetGlobalLevel(zerolog.Disabled)
+	defer zerolog.SetGlobalLevel(prevLevel)
+
 	printBanner()
 
 	// ── Phase 1: Configuration ───────────────────────────────────────────
 	bootStep(1, steps, "Loading configuration")
 	bootDetail("agent", cfg.Agent.Name)
 	bootDetail("workspace", cfg.Agent.Workspace)
-	log.Info().Str("agent", cfg.Agent.Name).Str("workspace", cfg.Agent.Workspace).Msg("[startup 1/12] configuration loaded")
 
 	// ── Phase 2: Database ────────────────────────────────────────────────
 	store, err := db.Open(cfg.Database.Path)
