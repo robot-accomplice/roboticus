@@ -91,16 +91,24 @@ func TestBuildSystemPrompt_EmptyKeyNoMarkers(t *testing.T) {
 }
 
 func TestBuildSystemPrompt_OperationalIntrospectionBlock(t *testing.T) {
+	// L1 (default) uses compact introspection.
 	cfg := PromptConfig{
 		AgentName: "Bot",
 		ToolNames: []string{"search", "read_file", "shell"},
 	}
 	prompt := BuildSystemPrompt(cfg)
-	if !strings.Contains(prompt, "Operational Discipline") {
-		t.Error("should contain operational introspection block")
+	if !strings.Contains(prompt, "Introspection") {
+		t.Error("should contain introspection block")
 	}
-	if !strings.Contains(prompt, "3 tools registered") {
-		t.Error("should list tool count")
+
+	// L2+ uses full introspection with tool listing.
+	cfg.BudgetTier = 2
+	prompt = BuildSystemPrompt(cfg)
+	if !strings.Contains(prompt, "Operational Introspection") {
+		t.Error("L2 should contain full operational introspection block")
+	}
+	if !strings.Contains(prompt, "3 tools") {
+		t.Error("L2 should list tool count")
 	}
 }
 
