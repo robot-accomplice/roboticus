@@ -17,8 +17,8 @@ import (
 
 func TestDefaultLoopConfig(t *testing.T) {
 	lc := DefaultLoopConfig()
-	if lc.MaxTurns != 25 {
-		t.Errorf("MaxTurns = %d, want 25", lc.MaxTurns)
+	if lc.MaxTurns != 10 { // Rust parity: 10 turns
+		t.Errorf("MaxTurns = %d, want 10", lc.MaxTurns)
 	}
 	if lc.IdleThreshold != 3 {
 		t.Errorf("IdleThreshold = %d, want 3", lc.IdleThreshold)

@@ -118,6 +118,7 @@ type RateLimitConfig struct {
 }
 
 // AgentConfig holds agent identity and workspace settings.
+// Rust parity: crates/roboticus-core/src/config/agent_paths.rs
 type AgentConfig struct {
 	Name                        string  `json:"name" mapstructure:"name"`
 	ID                          string  `json:"id" mapstructure:"id"`
@@ -127,7 +128,15 @@ type AgentConfig struct {
 	LogLevel                    string  `json:"log_level" mapstructure:"log_level"`
 	DelegationEnabled           bool    `json:"delegation_enabled" mapstructure:"delegation_enabled"`
 	DelegationMinComplexity     float64 `json:"delegation_min_complexity" mapstructure:"delegation_min_complexity"`
+	DelegationMinUtilityMargin  float64 `json:"delegation_min_utility_margin" mapstructure:"delegation_min_utility_margin"`     // Rust parity: 0.15 default
+	SpecialistRequiresApproval  bool    `json:"specialist_creation_requires_approval" mapstructure:"specialist_creation_requires_approval"` // Rust parity: true
 	CompositionPolicy           string  `json:"composition_policy" mapstructure:"composition_policy"`
+	SkillCreationRigor          string  `json:"skill_creation_rigor" mapstructure:"skill_creation_rigor"`                       // generate|validate|full (Rust parity)
+	OutputValidationPolicy      string  `json:"output_validation_policy" mapstructure:"output_validation_policy"`               // strict|sample|off (Rust parity)
+	OutputValidationSampleRate  float64 `json:"output_validation_sample_rate" mapstructure:"output_validation_sample_rate"`     // Rust parity: 0.1 default
+	MaxOutputRetries            int     `json:"max_output_retries" mapstructure:"max_output_retries"`                           // Rust parity: 2 default
+	RetirementSuccessThreshold  float64 `json:"retirement_success_threshold" mapstructure:"retirement_success_threshold"`       // Rust parity: 0.7 default
+	RetirementMinDelegations    int     `json:"retirement_min_delegations" mapstructure:"retirement_min_delegations"`           // Rust parity: 10 default
 }
 
 // ServerConfig holds HTTP server settings.
@@ -348,12 +357,20 @@ func DefaultConfig() Config {
 			Name:                        "roboticus",
 			ID:                          "roboticus-default",
 			Workspace:                   filepath.Join(dataDir, "workspace"),
-			AutonomyMaxReactTurns:       25,
-			AutonomyMaxTurnDurationSecs: 300, // 5 min — local models need 60-80s per inference call
+			AutonomyMaxReactTurns:       10,  // Rust parity: 10 turns (was 25)
+			AutonomyMaxTurnDurationSecs: 90,  // Rust parity: 90s (was 300)
 			LogLevel:                    "info",
 			DelegationEnabled:           true,
 			DelegationMinComplexity:     0.35,
+			DelegationMinUtilityMargin:  0.15,   // Rust parity
+			SpecialistRequiresApproval:  true,    // Rust parity
 			CompositionPolicy:           "propose",
+			SkillCreationRigor:          "validate",  // Rust parity: generate|validate|full
+			OutputValidationPolicy:      "sample",    // Rust parity: strict|sample|off
+			OutputValidationSampleRate:  0.1,         // Rust parity
+			MaxOutputRetries:            2,            // Rust parity
+			RetirementSuccessThreshold:  0.7,          // Rust parity
+			RetirementMinDelegations:    10,            // Rust parity
 		},
 		Server: ServerConfig{
 			Port:               DefaultServerPort,

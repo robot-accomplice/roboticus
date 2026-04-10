@@ -263,10 +263,14 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 		// No consent action needed — proceed.
 	}
 
-	// Short-followup expansion (Rust: contextualize_short_followup).
+	// Short-followup expansion (Rust parity: contextualize_short_followup).
+	// Detects sarcasm, contradiction, and quote-back reactions and expands them
+	// with prior context so the LLM understands the reference. Also sets
+	// correctionTurn to bypass shortcut dispatch for corrections.
 	content := input.Content
+	var correctionTurn bool
 	if cfg.ShortFollowupExpansion {
-		content = p.expandShortFollowup(session, content)
+		content, correctionTurn = ContextualizeShortFollowup(session, content)
 	}
 
 	// ── Stage 5: User message storage (with topic tag) ─────────────────────
@@ -408,8 +412,10 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 	tr.EndSpan("skipped")
 
 	// ── Stage 11: Shortcut dispatch ────────────────────────────────────────
+	// Rust parity: skip shortcuts on correction turns (sarcasm/contradiction
+	// should not match acknowledgement shortcuts).
 	tr.BeginSpan("shortcut_dispatch")
-	if cfg.ShortcutsEnabled {
+	if cfg.ShortcutsEnabled && !correctionTurn {
 		if result := p.tryShortcut(ctx, session, content); result != nil {
 			tr.Annotate("matched", true)
 			tr.EndSpan("ok")
