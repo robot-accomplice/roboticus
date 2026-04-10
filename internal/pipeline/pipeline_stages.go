@@ -111,11 +111,26 @@ func (p *Pipeline) runStandardInference(ctx context.Context, cfg Config, session
 		})
 	}
 
+	// Build inference params for trace persistence (Rust parity).
+	params := &InferenceParams{
+		ModelRequested: cfg.ModelOverride,
+		ReactTurns:     turns,
+	}
+	if p.guards != nil && cfg.GuardSet != GuardSetNone {
+		// Guard violations were logged above; capture in params for tracing.
+		guardCtx2 := p.buildGuardContext(session)
+		guardResult2 := p.guards.ApplyFullWithContext(result, guardCtx2)
+		if len(guardResult2.Violations) > 0 {
+			params.GuardViolations = guardResult2.Violations
+		}
+	}
+
 	return &Outcome{
-		SessionID:  session.ID,
-		MessageID:  msgID,
-		Content:    result,
-		ReactTurns: turns,
+		SessionID:       session.ID,
+		MessageID:       msgID,
+		Content:         result,
+		ReactTurns:      turns,
+		inferenceParams: params,
 	}, nil
 }
 

@@ -253,6 +253,7 @@ type TreasuryConfig struct {
 	TransferLimit         float64           `json:"transfer_limit" mapstructure:"transfer_limit"`
 	MinimumReserve        float64           `json:"minimum_reserve" mapstructure:"minimum_reserve"`
 	HourlyTransferLimit   float64           `json:"hourly_transfer_limit" mapstructure:"hourly_transfer_limit"`
+	DailyTransferLimit    float64           `json:"daily_transfer_limit" mapstructure:"daily_transfer_limit"`
 	DailyInferenceBudget  float64           `json:"daily_inference_budget" mapstructure:"daily_inference_budget"`
 	RevenueSwap           RevenueSwapConfig `json:"revenue_swap" mapstructure:"revenue_swap"`
 }
@@ -374,6 +375,7 @@ type SecurityConfig struct {
 	TrustedAuthority     string   `json:"trusted_authority,omitempty" mapstructure:"trusted_authority"`
 	APIAuthority         string   `json:"api_authority,omitempty" mapstructure:"api_authority"`
 	SandboxRequired      bool     `json:"sandbox_required" mapstructure:"sandbox_required"`
+	ScriptFsConfinement  bool     `json:"script_fs_confinement" mapstructure:"script_fs_confinement"` // Confine scripts to workspace directory
 	// TrustedSenderIDs lists sender/chat IDs that receive Creator authority via
 	// the SecurityClaim resolver's TrustedAuthority grant. Matches Rust's
 	// channels.trusted_sender_ids configuration.

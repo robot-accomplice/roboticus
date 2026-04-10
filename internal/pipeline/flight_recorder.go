@@ -1,6 +1,9 @@
 package pipeline
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 const maxStepFieldLen = 500
 
@@ -59,6 +62,15 @@ func (rt *ReactTrace) RecordStep(s ReactStep) {
 // Finish marks the trace complete and records total duration.
 func (rt *ReactTrace) Finish() {
 	rt.TotalMs = time.Since(rt.StartedAt).Milliseconds()
+}
+
+// JSON returns the ReactTrace as a JSON string for DB persistence.
+func (rt *ReactTrace) JSON() string {
+	if rt == nil {
+		return ""
+	}
+	b, _ := json.Marshal(rt)
+	return string(b)
 }
 
 // truncate is defined in guards_truthfulness.go (shared utility).

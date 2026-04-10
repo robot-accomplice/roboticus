@@ -25,6 +25,10 @@ type Outcome struct {
 	FromCache  bool   `json:"from_cache,omitempty"`
 	Stream     bool   `json:"stream,omitempty"`
 
+	// Trace artifacts (not serialized to clients — used for pipeline-internal persistence).
+	reactTrace      *ReactTrace      `json:"-"`
+	inferenceParams *InferenceParams `json:"-"`
+
 	// StreamRequest is the fully-prepared LLM request for streaming inference.
 	// Set when InferenceMode is InferenceStreaming and the pipeline has prepared
 	// full context (session history, memory, tools, system prompt). The SSE handler
@@ -480,11 +484,15 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 				Content:   hit.Content,
 				Model:     hit.Model,
 				FromCache: true,
+				inferenceParams: &InferenceParams{
+					FromCache:    true,
+					ModelActual:  hit.Model,
+				},
 			}
 			if p.guards != nil && cfg.CacheGuardSet != GuardSetNone {
 				cacheOutcome.Content = p.guards.Apply(cacheOutcome.Content)
 			}
-			p.storeTrace(ctx, tr, session.ID, msgID, cfg.ChannelLabel)
+			p.storeTraceWithArtifacts(ctx, tr, session.ID, msgID, cfg.ChannelLabel, cacheOutcome)
 			p.tasks.Complete(taskID)
 			return cacheOutcome, nil
 		}
@@ -532,7 +540,7 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 		})
 	}
 
-	p.storeTrace(ctx, tr, session.ID, msgID, cfg.ChannelLabel)
+	p.storeTraceWithArtifacts(ctx, tr, session.ID, msgID, cfg.ChannelLabel, outcome)
 
 	// Mark task completed.
 	p.tasks.Complete(taskID)
@@ -608,15 +616,35 @@ func (p *Pipeline) embeddingClient() *llm.EmbeddingClient {
 }
 
 // storeTrace persists a pipeline trace to the database (best-effort).
+// If outcome is provided, also persists react_trace_json and inference_params_json.
 func (p *Pipeline) storeTrace(ctx context.Context, tr *TraceRecorder, sessionID, msgID, channel string) {
+	p.storeTraceWithArtifacts(ctx, tr, sessionID, msgID, channel, nil)
+}
+
+// storeTraceWithArtifacts persists a pipeline trace along with optional
+// ReactTrace and InferenceParams artifacts from the inference stage.
+func (p *Pipeline) storeTraceWithArtifacts(ctx context.Context, tr *TraceRecorder, sessionID, msgID, channel string, outcome *Outcome) {
 	if p.store == nil {
 		return
 	}
 	trace := tr.Finish(msgID, channel)
+
+	var reactJSON, paramsJSON *string
+	if outcome != nil {
+		if outcome.reactTrace != nil {
+			s := outcome.reactTrace.JSON()
+			reactJSON = &s
+		}
+		if outcome.inferenceParams != nil {
+			s := outcome.inferenceParams.JSON()
+			paramsJSON = &s
+		}
+	}
+
 	_, err := p.store.ExecContext(ctx,
-		`INSERT INTO pipeline_traces (id, turn_id, session_id, channel, total_ms, stages_json)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		db.NewID(), trace.TurnID, sessionID, trace.Channel, trace.TotalMs, trace.StagesJSON())
+		`INSERT INTO pipeline_traces (id, turn_id, session_id, channel, total_ms, stages_json, react_trace_json, inference_params_json)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		db.NewID(), trace.TurnID, sessionID, trace.Channel, trace.TotalMs, trace.StagesJSON(), reactJSON, paramsJSON)
 	if err != nil {
 		log.Warn().Err(err).Str("session", sessionID).Str("turn", msgID).Msg("failed to store pipeline trace")
 	}
