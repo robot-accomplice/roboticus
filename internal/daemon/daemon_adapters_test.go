@@ -478,7 +478,7 @@ func TestDaemon_StartAndStop(t *testing.T) {
 	cfg.Database.Path = dir + "/lifecycle.db"
 	cfg.Server.Port = 0 // use default
 
-	d, err := New(&cfg)
+	d, err := New(&cfg, BootOptions{})
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
@@ -504,7 +504,7 @@ func TestDaemon_Router(t *testing.T) {
 	cfg := core.DefaultConfig()
 	cfg.Database.Path = dir + "/router.db"
 
-	d, err := New(&cfg)
+	d, err := New(&cfg, BootOptions{})
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
@@ -521,7 +521,7 @@ func TestDaemon_StopTimeout(t *testing.T) {
 	cfg := core.DefaultConfig()
 	cfg.Database.Path = dir + "/timeout.db"
 
-	d, err := New(&cfg)
+	d, err := New(&cfg, BootOptions{})
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
@@ -557,7 +557,7 @@ func TestDaemon_NewWithCustomPort(t *testing.T) {
 	cfg.Server.Port = 18888
 	cfg.Server.Bind = "127.0.0.1"
 
-	d, err := New(&cfg)
+	d, err := New(&cfg, BootOptions{})
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
@@ -745,7 +745,7 @@ func TestDaemon_RunWithSignalChannel(t *testing.T) {
 	cfg.Database.Path = dir + "/signal.db"
 	cfg.Channels.SignalAccount = "+1234567890" // Enables signal poller path.
 
-	d, err := New(&cfg)
+	d, err := New(&cfg, BootOptions{})
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
@@ -770,7 +770,7 @@ func TestDaemon_RunWithEmailChannel(t *testing.T) {
 	cfg.Database.Path = dir + "/email.db"
 	cfg.Channels.EmailFromAddress = "bot@example.com" // Enables email poller path.
 
-	d, err := New(&cfg)
+	d, err := New(&cfg, BootOptions{})
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
@@ -917,7 +917,7 @@ func TestNew_WithProviders(t *testing.T) {
 		Format: "openai",
 	}
 
-	d, err := New(&cfg)
+	d, err := New(&cfg, BootOptions{})
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
@@ -938,7 +938,7 @@ func TestNew_WithSkillsDir(t *testing.T) {
 	cfg.Database.Path = dir + "/skills.db"
 	cfg.Skills.Directory = dir // empty dir, no skills loaded
 
-	d, err := New(&cfg)
+	d, err := New(&cfg, BootOptions{})
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}

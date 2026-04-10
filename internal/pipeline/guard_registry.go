@@ -58,12 +58,12 @@ func (r *GuardRegistry) Get(name string) (Guard, bool) {
 }
 
 // guardsExcludedFromCache lists guards that should not run on cached responses.
-// These guards either depend on fresh tool context or are too expensive for cache hits.
+// Rust cached chain excludes only: PerspectiveGuard, DeclaredActionGuard, UserEchoGuard.
+// ActionVerificationGuard IS included in the Rust cached chain and must remain here.
 var guardsExcludedFromCache = map[string]bool{
-	"perspective":         true,
-	"declared_action":     true,
-	"user_echo":           true,
-	"action_verification": true,
+	"perspective":     true,
+	"declared_action": true,
+	"user_echo":       true,
 }
 
 // Chain materializes a guard chain for the given preset.

@@ -54,11 +54,11 @@ const defaultConfigTOML = `# Roboticus configuration file
 [agent]
 name = "roboticus"
 workspace = "~/.roboticus/workspace"
-autonomy_max_react_turns = 25
-autonomy_max_turn_duration_seconds = 120
+autonomy_max_react_turns = 10
+autonomy_max_turn_duration_seconds = 90
 
 [server]
-port = 3577
+port = 18789
 bind = "127.0.0.1"
 
 [database]

@@ -1,6 +1,7 @@
 package routes
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -644,6 +645,56 @@ func TestDeleteSession_CascadesMessages(t *testing.T) {
 	_ = row.Scan(&count)
 	if count != 0 {
 		t.Errorf("session_messages still exist after delete")
+	}
+}
+
+// TestDeleteSession_CascadesAllChildren verifies that deleting a session
+// removes all dependent records (turns, tool_calls, pipeline_traces, etc.)
+// without triggering FK constraint violations.
+func TestDeleteSession_CascadesAllChildren(t *testing.T) {
+	store := testutil.TempStore(t)
+	sid := "cascade-test-session"
+
+	// Create session with full dependency chain:
+	// session → messages, turns → tool_calls, pipeline_traces → react_traces
+	_, _ = store.ExecContext(bgCtx,
+		`INSERT INTO sessions (id, agent_id, scope_key) VALUES (?, 'agent1', 'test')`, sid)
+	_, _ = store.ExecContext(bgCtx,
+		`INSERT INTO session_messages (id, session_id, role, content) VALUES ('cm1', ?, 'user', 'hello')`, sid)
+	_, _ = store.ExecContext(bgCtx,
+		`INSERT INTO turns (id, session_id) VALUES ('ct1', ?)`, sid)
+	_, _ = store.ExecContext(bgCtx,
+		`INSERT INTO tool_calls (id, turn_id, tool_name, input, status) VALUES ('ctc1', 'ct1', 'search', '{}', 'success')`)
+	_, _ = store.ExecContext(bgCtx,
+		`INSERT INTO pipeline_traces (id, turn_id, session_id, channel, total_ms, stages_json) VALUES ('cpt1', 'ct1', ?, 'test', 100, '[]')`, sid)
+
+	r := chi.NewRouter()
+	r.Delete("/sessions/{id}", DeleteSession(store))
+
+	req := httptest.NewRequest("DELETE", "/sessions/"+sid, nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", rec.Code, rec.Body.String())
+	}
+
+	// Verify all records are gone.
+	tables := []string{"sessions", "session_messages", "turns", "tool_calls", "pipeline_traces"}
+	for _, table := range tables {
+		var count int64
+		query := fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE session_id = ?`, table)
+		if table == "tool_calls" {
+			query = `SELECT COUNT(*) FROM tool_calls WHERE turn_id = 'ct1'`
+		}
+		row := store.QueryRowContext(bgCtx, query, sid)
+		if table == "tool_calls" {
+			row = store.QueryRowContext(bgCtx, query)
+		}
+		_ = row.Scan(&count)
+		if count != 0 {
+			t.Errorf("%s: %d rows remain after cascade delete", table, count)
+		}
 	}
 }
 

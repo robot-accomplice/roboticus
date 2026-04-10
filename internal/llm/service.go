@@ -120,7 +120,7 @@ func NewService(cfg ServiceConfig, store *db.Store) (*Service, error) {
 		router:        NewRouter(targets, cfg.Router),
 		breakers:      NewBreakerRegistry(cfg.Breaker),
 		cache:         NewCache(cfg.Cache, store, cfg.ErrBus),
-		dedup:         NewDedup(2000), // 2s dedup window
+		dedup:         NewDedup(120 * time.Second), // Rust parity: 120s dedup window
 		transforms:    DefaultTransformPipeline(),
 		primary:       cfg.Primary,
 		fallbacks:     cfg.Fallbacks,
@@ -260,6 +260,13 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 		cb := s.breakers.Get(pm.provider)
 		if !cb.Allow() {
 			log.Warn().Str("provider", pm.provider).Msg("circuit breaker open, trying next")
+			continue
+		}
+
+		// Skip models known to not support tools when tools are present.
+		// Avoids wasting fallback slots and latency on guaranteed 400s.
+		if len(req.Tools) > 0 && !modelSupportsTools(pm.model) {
+			log.Debug().Str("model", pm.model).Str("provider", pm.provider).Msg("skipping model: does not support tools")
 			continue
 		}
 
@@ -788,6 +795,23 @@ func (s *Service) Breakers() *BreakerRegistry {
 // Metascore routing works without capacity data (headroom defaults to 1.0).
 func (s *Service) CapacityTracker() *CapacityTracker {
 	return nil
+}
+
+// modelSupportsTools returns false for models known to reject tool-use requests.
+// This prevents wasting fallback slots and latency on guaranteed 400 errors
+// when the inference request includes tool definitions.
+func modelSupportsTools(model string) bool {
+	lower := strings.ToLower(model)
+	noToolModels := []string{
+		"phi4-reasoning", "gemma3:", "gemma2:", "llama-guard",
+		"nomic-embed", "mxbai-embed", "all-minilm",
+	}
+	for _, prefix := range noToolModels {
+		if strings.Contains(lower, prefix) {
+			return false
+		}
+	}
+	return true
 }
 
 // Status returns the health of all providers (for /api/health).

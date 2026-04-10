@@ -24,7 +24,7 @@ func TestDefaultConfigTOML_Contents(t *testing.T) {
 	if !strings.Contains(defaultConfigTOML, "[security]") {
 		t.Error("default config should contain [security] section")
 	}
-	if !strings.Contains(defaultConfigTOML, "port = 3577") {
-		t.Error("default config should have port 3577")
+	if !strings.Contains(defaultConfigTOML, "port = 18789") {
+		t.Error("default config should have port 18789 (Rust parity)")
 	}
 }

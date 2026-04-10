@@ -10,7 +10,7 @@ func TestGuardRegistry_Chain(t *testing.T) {
 	}{
 		{"full set", GuardSetFull, 25},
 		{"stream set", GuardSetStream, 6},
-		{"cached set", GuardSetCached, 21},
+		{"cached set", GuardSetCached, 22}, // Rust parity: ActionVerificationGuard included in cached chain
 		{"none set", GuardSetNone, 0},
 	}
 	for _, tt := range tests {

@@ -11,7 +11,7 @@ func TestNew_FullBootstrap(t *testing.T) {
 	cfg := core.DefaultConfig()
 	cfg.Database.Path = dir + "/daemon_test.db"
 
-	d, err := New(&cfg)
+	d, err := New(&cfg, BootOptions{})
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
@@ -51,7 +51,7 @@ func TestNew_CustomConfig(t *testing.T) {
 	cfg.Server.Port = 9999
 	cfg.Agent.Name = "TestBot"
 
-	d, err := New(&cfg)
+	d, err := New(&cfg, BootOptions{})
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestDaemon_StopIdempotent(t *testing.T) {
 	cfg := core.DefaultConfig()
 	cfg.Database.Path = dir + "/idem.db"
 
-	d, _ := New(&cfg)
+	d, _ := New(&cfg, BootOptions{})
 	_ = d.Stop(nil)
 	_ = d.Stop(nil) // should not panic
 }

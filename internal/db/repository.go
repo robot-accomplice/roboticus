@@ -44,13 +44,70 @@ func (r *SessionRepository) ArchiveSession(ctx context.Context, sessionID string
 	return err
 }
 
-// DeleteSession removes a session and its messages.
+// DeleteSession removes a session and all dependent records.
+// Must delete child rows in dependency order before the parent session,
+// because SQLite enforces FK constraints when foreign_keys=ON.
 func (r *SessionRepository) DeleteSession(ctx context.Context, sessionID string) error {
-	if _, err := r.q.ExecContext(ctx, `DELETE FROM session_messages WHERE session_id = ?`, sessionID); err != nil {
-		log.Warn().Err(err).Str("session", sessionID).Msg("db: failed to delete session messages")
+	// Dependency graph (children → parent):
+	//   tool_calls → turns → sessions
+	//   turn_feedback → turns, sessions
+	//   context_snapshots → turns
+	//   delegation_outcomes → turns, sessions
+	//   consent_requests → sessions
+	//   context_checkpoints → sessions
+	//   pipeline_traces → sessions (+ react_traces → pipeline_traces)
+	//   session_messages → sessions
+
+	// 1. Get turn IDs for this session (needed for grandchild cleanup).
+	turnIDs, err := r.collectTurnIDs(ctx, sessionID)
+	if err != nil {
+		log.Warn().Err(err).Str("session", sessionID).Msg("db: failed to collect turn IDs for cascade delete")
 	}
-	_, err := r.q.ExecContext(ctx, `DELETE FROM sessions WHERE id = ?`, sessionID)
+
+	// 2. Delete grandchild records (reference turns).
+	for _, turnID := range turnIDs {
+		_, _ = r.q.ExecContext(ctx, `DELETE FROM tool_calls WHERE turn_id = ?`, turnID)
+		_, _ = r.q.ExecContext(ctx, `DELETE FROM context_snapshots WHERE turn_id = ?`, turnID)
+	}
+
+	// 3. Delete child records referencing turns or sessions.
+	_, _ = r.q.ExecContext(ctx, `DELETE FROM turn_feedback WHERE session_id = ?`, sessionID)
+	_, _ = r.q.ExecContext(ctx, `DELETE FROM delegation_outcomes WHERE session_id = ?`, sessionID)
+	_, _ = r.q.ExecContext(ctx, `DELETE FROM turns WHERE session_id = ?`, sessionID)
+
+	// 4. Delete child records referencing only sessions.
+	_, _ = r.q.ExecContext(ctx, `DELETE FROM session_messages WHERE session_id = ?`, sessionID)
+	_, _ = r.q.ExecContext(ctx, `DELETE FROM context_checkpoints WHERE session_id = ?`, sessionID)
+	_, _ = r.q.ExecContext(ctx, `DELETE FROM consent_requests WHERE session_id = ?`, sessionID)
+
+	// 5. Delete pipeline traces and their react_traces.
+	_, _ = r.q.ExecContext(ctx,
+		`DELETE FROM react_traces WHERE trace_id IN (SELECT id FROM pipeline_traces WHERE session_id = ?)`,
+		sessionID)
+	_, _ = r.q.ExecContext(ctx, `DELETE FROM pipeline_traces WHERE session_id = ?`, sessionID)
+
+	// 6. Finally delete the session itself.
+	_, err = r.q.ExecContext(ctx, `DELETE FROM sessions WHERE id = ?`, sessionID)
 	return err
+}
+
+// collectTurnIDs returns all turn IDs for a session (for grandchild cleanup).
+func (r *SessionRepository) collectTurnIDs(ctx context.Context, sessionID string) ([]string, error) {
+	rows, err := r.q.QueryContext(ctx, `SELECT id FROM turns WHERE session_id = ?`, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
 
 // SetNickname updates a session's nickname.

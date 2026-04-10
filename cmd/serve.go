@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 
 	"roboticus/internal/daemon"
@@ -34,11 +33,21 @@ func runServe(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to create database directory: %w", err)
 	}
 
-	d, err := daemon.New(&cfg)
+	// Resolve display flags for the boot sequence.
+	colorFlag, _ := cmd.Flags().GetString("color")
+	themeFlag, _ := cmd.Flags().GetString("theme")
+	nerdmode, _ := cmd.Flags().GetBool("nerdmode")
+	noDraw, _ := cmd.Flags().GetBool("no-draw")
+
+	d, err := daemon.New(&cfg, daemon.BootOptions{
+		ColorMode: colorFlag,
+		Theme:     themeFlag,
+		NerdMode:  nerdmode,
+		NoDraw:    noDraw,
+	})
 	if err != nil {
 		return fmt.Errorf("failed to initialize daemon: %w", err)
 	}
 
-	log.Info().Msg("starting roboticus in interactive mode")
 	return d.RunInteractive()
 }

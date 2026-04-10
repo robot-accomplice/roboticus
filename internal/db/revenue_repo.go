@@ -260,6 +260,136 @@ func (r *RevenueRepository) CountByStatus(ctx context.Context) ([]StatusCount, e
 	return result, rows.Err()
 }
 
+// ── Rust-parity lifecycle methods ─────────────────────────────────────────
+// These provide semantic lifecycle transitions matching Rust's
+// qualify(), plan(), mark_fulfilled() methods. They enforce domain
+// invariants (required scores, plan JSON, settlement data) that the
+// generic UpdateOpportunityStatus does not.
+
+// QualificationInput carries the data needed to qualify an opportunity.
+type QualificationInput struct {
+	ID                  string
+	Source              string
+	Strategy            string
+	PayloadJSON         string
+	ExpectedRevenueUSDC float64
+	QualificationReason string
+	ConfidenceScore     float64
+	EffortScore         float64
+	RiskScore           float64
+	PriorityScore       float64
+	ScoreReason         string
+	RequestID           string
+}
+
+// Qualify creates a new opportunity in "qualified" status with scoring data.
+// Rust parity: crates/roboticus-revenue/src/repo.rs qualify()
+func (r *RevenueRepository) Qualify(ctx context.Context, input QualificationInput) error {
+	return r.CreateOpportunity(ctx, RevenueOpportunityRow{
+		ID:                  input.ID,
+		Source:              input.Source,
+		Strategy:            input.Strategy,
+		PayloadJSON:         input.PayloadJSON,
+		ExpectedRevenueUSDC: input.ExpectedRevenueUSDC,
+		Status:              "qualified",
+		QualificationReason: input.QualificationReason,
+		ConfidenceScore:     input.ConfidenceScore,
+		EffortScore:         input.EffortScore,
+		RiskScore:           input.RiskScore,
+		PriorityScore:       input.PriorityScore,
+		ScoreReason:         input.ScoreReason,
+		RequestID:           input.RequestID,
+	})
+}
+
+// Plan attaches a plan to a qualified opportunity, transitioning to "planned".
+// Rust parity: crates/roboticus-revenue/src/repo.rs plan()
+func (r *RevenueRepository) Plan(ctx context.Context, id, planJSON string) error {
+	res, err := r.q.ExecContext(ctx,
+		`UPDATE revenue_opportunities
+		 SET status = 'planned', plan_json = ?, updated_at = datetime('now')
+		 WHERE id = ? AND status = 'qualified'`,
+		planJSON, id,
+	)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrNoRowsAffected
+	}
+	return nil
+}
+
+// SettlementInput carries the data needed to mark an opportunity fulfilled.
+type SettlementInput struct {
+	SettlementRef         string
+	SettledAmountUSDC     float64
+	AttributableCostsUSDC float64
+	NetProfitUSDC         float64
+	TaxRate               float64
+	TaxAmountUSDC         float64
+	RetainedEarningsUSDC  float64
+	TaxDestinationWallet  string
+	EvidenceJSON          string
+}
+
+// MarkFulfilled transitions an opportunity to "fulfilled" with settlement data.
+// Rust parity: crates/roboticus-revenue/src/repo.rs mark_fulfilled()
+func (r *RevenueRepository) MarkFulfilled(ctx context.Context, id string, settlement SettlementInput) error {
+	res, err := r.q.ExecContext(ctx,
+		`UPDATE revenue_opportunities
+		 SET status = 'fulfilled',
+		     settlement_ref = ?, settled_amount_usdc = ?,
+		     attributable_costs_usdc = ?, net_profit_usdc = ?,
+		     tax_rate = ?, tax_amount_usdc = ?, retained_earnings_usdc = ?,
+		     tax_destination_wallet = ?, evidence_json = ?,
+		     settled_at = datetime('now'), updated_at = datetime('now')
+		 WHERE id = ? AND status IN ('planned', 'executing')`,
+		settlement.SettlementRef, settlement.SettledAmountUSDC,
+		settlement.AttributableCostsUSDC, settlement.NetProfitUSDC,
+		settlement.TaxRate, settlement.TaxAmountUSDC, settlement.RetainedEarningsUSDC,
+		settlement.TaxDestinationWallet, settlement.EvidenceJSON,
+		id,
+	)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrNoRowsAffected
+	}
+	return nil
+}
+
+// QualifyRevenueOpportunity bridges a service request into a revenue opportunity.
+// Reads the service request, creates a qualified opportunity linked via request_id.
+// Rust parity: crates/roboticus-revenue/src/service.rs qualify_revenue_opportunity()
+func (r *RevenueRepository) QualifyRevenueOpportunity(ctx context.Context, svcRepo *ServiceRequestsRepository, serviceRequestID string, strategy string, confidence, effort, risk float64, reason string) error {
+	// Verify the service request exists.
+	svcReq, err := svcRepo.Get(ctx, serviceRequestID)
+	if err != nil {
+		return err
+	}
+
+	expectedRevenue, _ := svcReq["quoted_amount"].(float64)
+	priority := confidence * (1.0 - effort) * (1.0 - risk)
+
+	return r.Qualify(ctx, QualificationInput{
+		ID:                  NewID(),
+		Source:              "service_request",
+		Strategy:            strategy,
+		ExpectedRevenueUSDC: expectedRevenue,
+		QualificationReason: reason,
+		ConfidenceScore:     confidence,
+		EffortScore:         effort,
+		RiskScore:           risk,
+		PriorityScore:       priority,
+		ScoreReason:         "auto-qualified from service request",
+		RequestID:           serviceRequestID,
+	})
+}
+
 // nullString returns a sql.NullString for empty strings.
 func nullString(s string) sql.NullString {
 	return sql.NullString{String: s, Valid: s != ""}
