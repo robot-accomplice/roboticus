@@ -273,14 +273,91 @@ type PluginsConfig struct {
 	StrictPermissions bool     `json:"strict_permissions" mapstructure:"strict_permissions"`
 }
 
-// ChannelsConfig holds channel adapter token references.
+// ChannelsConfig holds channel adapter settings.
+// Rust parity: each channel has its own rich sub-struct with full configuration.
+// Legacy flat fields are preserved for backwards compatibility.
 type ChannelsConfig struct {
+	// Rich per-channel configs (Rust parity: runtime_core.rs).
+	Telegram *TelegramConfig `json:"telegram,omitempty" mapstructure:"telegram"`
+	WhatsApp *WhatsAppConfig `json:"whatsapp,omitempty" mapstructure:"whatsapp"`
+	Discord  *DiscordConfig  `json:"discord,omitempty" mapstructure:"discord"`
+	Signal   *SignalConfig   `json:"signal,omitempty" mapstructure:"signal"`
+	Email    *EmailConfig    `json:"email,omitempty" mapstructure:"email"`
+	Voice    *VoiceConfig    `json:"voice,omitempty" mapstructure:"voice"`
+
+	// Legacy flat fields — kept for backwards compatibility.
+	// When rich sub-configs are present, they take precedence.
 	TelegramTokenEnv string `json:"telegram_token_env" mapstructure:"telegram_token_env"`
 	WhatsAppTokenEnv string `json:"whatsapp_token_env" mapstructure:"whatsapp_token_env"`
 	DiscordTokenEnv  string `json:"discord_token_env" mapstructure:"discord_token_env"`
 	SignalAccount    string `json:"signal_account" mapstructure:"signal_account"`
 	SignalDaemonURL  string `json:"signal_daemon_url" mapstructure:"signal_daemon_url"`
 	EmailFromAddress string `json:"email_from_address" mapstructure:"email_from_address"`
+}
+
+// TelegramConfig holds Telegram bot adapter settings.
+type TelegramConfig struct {
+	Enabled            bool    `json:"enabled" mapstructure:"enabled"`
+	TokenEnv           string  `json:"token_env" mapstructure:"token_env"`
+	TokenRef           string  `json:"token_ref,omitempty" mapstructure:"token_ref"`
+	AllowedChatIDs     []int64 `json:"allowed_chat_ids,omitempty" mapstructure:"allowed_chat_ids"`
+	PollTimeoutSeconds int     `json:"poll_timeout_seconds" mapstructure:"poll_timeout_seconds"`
+	WebhookMode        bool    `json:"webhook_mode" mapstructure:"webhook_mode"`
+	WebhookPath        string  `json:"webhook_path,omitempty" mapstructure:"webhook_path"`
+	WebhookSecret      string  `json:"webhook_secret,omitempty" mapstructure:"webhook_secret"`
+}
+
+// WhatsAppConfig holds WhatsApp Cloud API adapter settings.
+type WhatsAppConfig struct {
+	Enabled        bool     `json:"enabled" mapstructure:"enabled"`
+	TokenEnv       string   `json:"token_env" mapstructure:"token_env"`
+	TokenRef       string   `json:"token_ref,omitempty" mapstructure:"token_ref"`
+	PhoneNumberID  string   `json:"phone_number_id" mapstructure:"phone_number_id"`
+	VerifyToken    string   `json:"verify_token" mapstructure:"verify_token"`
+	AllowedNumbers []string `json:"allowed_numbers,omitempty" mapstructure:"allowed_numbers"`
+	AppSecret      string   `json:"app_secret,omitempty" mapstructure:"app_secret"`
+}
+
+// DiscordConfig holds Discord bot adapter settings.
+type DiscordConfig struct {
+	Enabled         bool     `json:"enabled" mapstructure:"enabled"`
+	TokenEnv        string   `json:"token_env" mapstructure:"token_env"`
+	TokenRef        string   `json:"token_ref,omitempty" mapstructure:"token_ref"`
+	ApplicationID   string   `json:"application_id" mapstructure:"application_id"`
+	AllowedGuildIDs []string `json:"allowed_guild_ids,omitempty" mapstructure:"allowed_guild_ids"`
+}
+
+// SignalConfig holds Signal messenger adapter settings.
+type SignalConfig struct {
+	Enabled        bool     `json:"enabled" mapstructure:"enabled"`
+	PhoneNumber    string   `json:"phone_number" mapstructure:"phone_number"`
+	DaemonURL      string   `json:"daemon_url" mapstructure:"daemon_url"`
+	AllowedNumbers []string `json:"allowed_numbers,omitempty" mapstructure:"allowed_numbers"`
+}
+
+// EmailConfig holds email (IMAP/SMTP) adapter settings.
+type EmailConfig struct {
+	Enabled            bool     `json:"enabled" mapstructure:"enabled"`
+	IMAPHost           string   `json:"imap_host" mapstructure:"imap_host"`
+	IMAPPort           int      `json:"imap_port" mapstructure:"imap_port"`
+	SMTPHost           string   `json:"smtp_host" mapstructure:"smtp_host"`
+	SMTPPort           int      `json:"smtp_port" mapstructure:"smtp_port"`
+	Username           string   `json:"username" mapstructure:"username"`
+	PasswordEnv        string   `json:"password_env" mapstructure:"password_env"`
+	FromAddress        string   `json:"from_address" mapstructure:"from_address"`
+	AllowedSenders     []string `json:"allowed_senders,omitempty" mapstructure:"allowed_senders"`
+	PollIntervalSecs   int      `json:"poll_interval_seconds" mapstructure:"poll_interval_seconds"`
+	OAuth2TokenEnv     string   `json:"oauth2_token_env,omitempty" mapstructure:"oauth2_token_env"`
+	UseOAuth2          bool     `json:"use_oauth2" mapstructure:"use_oauth2"`
+	IMAPIdleEnabled    bool     `json:"imap_idle_enabled" mapstructure:"imap_idle_enabled"`
+}
+
+// VoiceConfig holds voice channel adapter settings.
+type VoiceConfig struct {
+	Enabled  bool   `json:"enabled" mapstructure:"enabled"`
+	STTModel string `json:"stt_model,omitempty" mapstructure:"stt_model"`
+	TTSModel string `json:"tts_model,omitempty" mapstructure:"tts_model"`
+	TTSVoice string `json:"tts_voice,omitempty" mapstructure:"tts_voice"`
 }
 
 // SecurityConfig holds filesystem and sandbox settings.

@@ -459,6 +459,17 @@ func (p *Pipeline) expandShortFollowup(session *Session, content string) string 
 }
 
 // tryShortcut dispatches shortcuts via the ShortcutHandler system.
+// trySkillFirst attempts to match user input against registered skill triggers.
+// Skills are only dispatched if skill-first is enabled, authority is Creator,
+// and the skill matcher is wired. Mirrors Rust's try_skill_first() in inference.rs.
+func (p *Pipeline) trySkillFirst(ctx context.Context, cfg Config, authority core.AuthorityLevel, session *Session, content string) *Outcome {
+	if !cfg.SkillFirstEnabled || authority != core.AuthorityCreator || p.skills == nil {
+		return nil
+	}
+	return p.skills.TryMatch(ctx, session, content)
+}
+
+// tryShortcut evaluates the shortcut handler system against user input.
 // Uses DispatchShortcut with rich context (correction_turn, delegation_provenance)
 // so handlers can make context-aware decisions about whether to match.
 func (p *Pipeline) tryShortcut(_ context.Context, session *Session, content string, correctionTurn bool, channelLabel string) *Outcome {

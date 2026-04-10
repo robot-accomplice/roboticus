@@ -439,14 +439,12 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 
 	// ── Stage 10: Skill-first fulfillment ──────────────────────────────────
 	tr.BeginSpan("skill_dispatch")
-	if cfg.SkillFirstEnabled && secClaim.Authority == core.AuthorityCreator && p.skills != nil {
-		if result := p.skills.TryMatch(ctx, session, content); result != nil {
-			tr.Annotate("matched", true)
-			tr.EndSpan("ok")
-			p.storeTrace(ctx, tr, session.ID, msgID, cfg.ChannelLabel)
-			p.tasks.Complete(taskID)
-			return p.guardOutcome(cfg, result), nil
-		}
+	if skillResult := p.trySkillFirst(ctx, cfg, secClaim.Authority, session, content); skillResult != nil {
+		tr.Annotate("matched", true)
+		tr.EndSpan("ok")
+		p.storeTrace(ctx, tr, session.ID, msgID, cfg.ChannelLabel)
+		p.tasks.Complete(taskID)
+		return p.guardOutcome(cfg, skillResult), nil
 	}
 	tr.EndSpan("skipped")
 

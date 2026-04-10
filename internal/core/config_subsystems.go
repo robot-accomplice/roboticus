@@ -241,14 +241,19 @@ type CORSConfig struct {
 }
 
 // MatrixChannelConfig holds Matrix homeserver connection settings.
+// Rust parity: runtime_core.rs MatrixConfig.
 type MatrixChannelConfig struct {
-	Enabled       bool     `json:"enabled" mapstructure:"enabled"`
-	HomeserverURL string   `json:"homeserver_url" mapstructure:"homeserver_url"`
-	AccessToken   string   `json:"access_token" mapstructure:"access_token"`
-	DeviceID      string   `json:"device_id" mapstructure:"device_id"`
-	AllowedRooms  []string `json:"allowed_rooms" mapstructure:"allowed_rooms"`
-	AutoJoin      bool     `json:"auto_join" mapstructure:"auto_join"`
-	E2EEEnabled   bool     `json:"e2ee_enabled" mapstructure:"e2ee_enabled"`
+	Enabled            bool     `json:"enabled" mapstructure:"enabled"`
+	HomeserverURL      string   `json:"homeserver_url" mapstructure:"homeserver_url"`
+	AccessTokenEnv     string   `json:"access_token_env" mapstructure:"access_token_env"`
+	AccessToken        string   `json:"access_token" mapstructure:"access_token"`
+	DeviceID           string   `json:"device_id" mapstructure:"device_id"`
+	AllowedRooms       []string `json:"allowed_rooms" mapstructure:"allowed_rooms"`
+	AutoJoin           bool     `json:"auto_join" mapstructure:"auto_join"`
+	SyncTimeoutSeconds int      `json:"sync_timeout_seconds" mapstructure:"sync_timeout_seconds"`
+	E2EEEnabled        bool     `json:"e2ee_enabled" mapstructure:"e2ee_enabled"`
+	DeviceStorePath    string   `json:"device_store_path,omitempty" mapstructure:"device_store_path"`
+	DeviceDisplayName  string   `json:"device_display_name" mapstructure:"device_display_name"`
 }
 
 // FilesystemSecurityConfig holds fine-grained filesystem access control settings.

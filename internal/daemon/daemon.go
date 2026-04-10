@@ -374,6 +374,7 @@ type Daemon struct {
 	bgWorker *core.BackgroundWorker
 	errBus   *core.ErrorBus
 
+	startupStart time.Time
 	errBusCancel context.CancelFunc
 	cancel       context.CancelFunc
 	wg           sync.WaitGroup
@@ -393,14 +394,27 @@ func ServiceConfig() *service.Config {
 // phase logging for each major subsystem.
 func New(cfg *core.Config) (*Daemon, error) {
 	startupStart := time.Now()
+	const steps = 12
+
+	printBanner()
 
 	// ── Phase 1: Configuration ───────────────────────────────────────────
+	bootStep(1, steps, "Loading configuration")
+	bootDetail("agent", cfg.Agent.Name)
+	bootDetail("workspace", cfg.Agent.Workspace)
 	log.Info().Str("agent", cfg.Agent.Name).Str("workspace", cfg.Agent.Workspace).Msg("[startup 1/12] configuration loaded")
 
 	// ── Phase 2: Database ────────────────────────────────────────────────
 	store, err := db.Open(cfg.Database.Path)
 	if err != nil {
 		return nil, fmt.Errorf("daemon: open database: %w", err)
+	}
+	bootStep(2, steps, "Database initialized")
+	if cfg.Database.Path == ":memory:" {
+		bootDetail("mode", "in-memory (ephemeral)")
+	} else {
+		bootDetail("path", cfg.Database.Path)
+		bootDetail("mode", "WAL (persistent)")
 	}
 	log.Info().Str("path", cfg.Database.Path).Msg("[startup 2/12] database initialized")
 
@@ -409,6 +423,9 @@ func New(cfg *core.Config) (*Daemon, error) {
 		_ = store.Close()
 		return nil, fmt.Errorf("daemon: wallet verification: %w", err)
 	}
+	bootStep(3, steps, "Wallet service ready")
+	bootDetail("chain", fmt.Sprintf("chain_id=%d", cfg.Wallet.ChainID))
+	bootDetail("rpc", cfg.Wallet.RPCURL)
 	log.Info().Str("endpoint", cfg.Wallet.RPCURL).Msg("[startup 3/12] wallet service verified")
 
 	// ── Phase 4: LLM service ────────────────────────────────────────────
@@ -475,6 +492,13 @@ func New(cfg *core.Config) (*Daemon, error) {
 
 	// Warm-start quality and latency trackers from DB history.
 	llmSvc.SeedStartup(context.Background(), store)
+	bootStep(4, steps, "LLM service ready")
+	bootDetail("primary", cfg.Models.Primary)
+	if len(cfg.Models.Fallback) > 0 {
+		bootDetail("fallbacks", strings.Join(cfg.Models.Fallback, ", "))
+	} else {
+		bootDetail("fallbacks", "none")
+	}
 	log.Info().Str("primary", cfg.Models.Primary).Int("providers", len(providers)).Msg("[startup 4/12] LLM service ready")
 
 	// ── Phase 5: Identity + Tools ───────────────────────────────────────
@@ -516,6 +540,10 @@ func New(cfg *core.Config) (*Daemon, error) {
 	tools.Register(&agenttools.AlterTableTool{})
 	tools.Register(&agenttools.DropTableTool{})
 
+	bootStep(5, steps, "Identity resolved")
+	bootDetail("name", cfg.Agent.Name)
+	bootDetail("id", cfg.Agent.ID)
+	bootDetail("tools", fmt.Sprintf("%d registered", len(tools.Names())))
 	log.Info().Int("count", len(tools.Names())).Strs("tools", tools.Names()).Msg("[startup 5/12] identity resolved, tools registered")
 
 	// ── Phase 6: Policy + Memory ────────────────────────────────────────
@@ -541,6 +569,7 @@ func New(cfg *core.Config) (*Daemon, error) {
 		Relationship: cfg.Memory.RelationshipBudget / 100.0,
 	}, store)
 	guards := pipeline.DefaultGuardChain()
+	bootStep(6, steps, "Policy engine + memory management ready")
 	log.Info().Msg("[startup 6/12] policy engine + memory management ready")
 
 	// ── Phase 7: Skills ─────────────────────────────────────────────────
@@ -599,6 +628,15 @@ func New(cfg *core.Config) (*Daemon, error) {
 		ToolDescs:   tools.NamesWithDescriptions(),
 		BoundaryKey: boundaryKey,
 	}
+	if len(loadedSkills) > 0 {
+		bootStep(7, steps, "Skills loaded")
+		bootDetail("dir", cfg.Skills.Directory)
+		bootDetail("count", fmt.Sprintf("%d", len(loadedSkills)))
+	} else if cfg.Skills.Directory != "" {
+		bootStepWarn(7, steps, fmt.Sprintf("Skills directory not found: %s", cfg.Skills.Directory))
+	} else {
+		bootStep(7, steps, "Skills (none configured)")
+	}
 	log.Info().
 		Str("agent", cfg.Agent.Name).
 		Int("skills", len(loadedSkills)).
@@ -613,13 +651,28 @@ func New(cfg *core.Config) (*Daemon, error) {
 	router := channel.NewRouter(dq)
 
 	// Register channel adapters from config + keystore.
-	telegramToken := resolveChannelToken(cfg.Channels.TelegramTokenEnv, "telegram_bot_token", ks)
+	// Rich sub-config takes precedence over legacy flat fields.
+	telegramTokenEnv := cfg.Channels.TelegramTokenEnv
+	if cfg.Channels.Telegram != nil && cfg.Channels.Telegram.TokenEnv != "" {
+		telegramTokenEnv = cfg.Channels.Telegram.TokenEnv
+	}
+	telegramToken := resolveChannelToken(telegramTokenEnv, "telegram_bot_token", ks)
 	if telegramToken != "" {
-		// Discover allowed chat IDs from existing Telegram sessions in the DB.
+		// Discover allowed chat IDs from existing Telegram sessions in the DB,
+		// augmented with any explicitly configured in rich config.
 		allowedChatIDs := discoverTelegramChatIDs(store)
+		pollTimeout := 5
+		if cfg.Channels.Telegram != nil {
+			for _, id := range cfg.Channels.Telegram.AllowedChatIDs {
+				allowedChatIDs = append(allowedChatIDs, id)
+			}
+			if cfg.Channels.Telegram.PollTimeoutSeconds > 0 {
+				pollTimeout = cfg.Channels.Telegram.PollTimeoutSeconds
+			}
+		}
 		tgCfg := channel.TelegramConfig{
 			Token:          telegramToken,
-			PollTimeout:    5,
+			PollTimeout:    pollTimeout,
 			AllowedChatIDs: allowedChatIDs,
 			DenyOnEmpty:    cfg.Security.DenyOnEmptyAllowlist,
 		}
@@ -632,6 +685,28 @@ func New(cfg *core.Config) (*Daemon, error) {
 		log.Info().Msg("telegram adapter registered (polling mode)")
 	}
 
+	// Build channel list for display (Rust parity: serve.rs channels vec).
+	activeChannels := []string{"web"}
+	if telegramToken != "" {
+		activeChannels = append(activeChannels, "telegram")
+	}
+	if cfg.Channels.WhatsApp != nil && cfg.Channels.WhatsApp.Enabled {
+		activeChannels = append(activeChannels, "whatsapp")
+	}
+	if cfg.Channels.Discord != nil && cfg.Channels.Discord.Enabled {
+		activeChannels = append(activeChannels, "discord")
+	}
+	if cfg.Channels.Signal != nil && cfg.Channels.Signal.Enabled {
+		activeChannels = append(activeChannels, "signal")
+	}
+	if cfg.Matrix.Enabled {
+		activeChannels = append(activeChannels, "matrix")
+	}
+	if cfg.A2A.Enabled {
+		activeChannels = append(activeChannels, "a2a")
+	}
+	bootStep(8, steps, "Channel adapters ready")
+	bootDetail("active", strings.Join(activeChannels, ", "))
 	log.Info().Int("adapters", len(router.Adapters())).Msg("[startup 8/12] channel adapters registered")
 
 	// ── Phase 9: Embeddings ─────────────────────────────────────────────
@@ -665,6 +740,12 @@ func New(cfg *core.Config) (*Daemon, error) {
 		// Fallback: n-gram hashing (no API calls, works offline).
 		embedClient = llm.NewEmbeddingClient(nil)
 		log.Info().Msg("embedding client: using local n-gram fallback")
+	}
+	bootStep(9, steps, "Embeddings configured")
+	if embedProviderName != "" {
+		bootDetail("provider", embedProviderName)
+	} else {
+		bootDetail("provider", "n-gram fallback (local)")
 	}
 
 	// ── Phase 10: Pipeline assembly ─────────────────────────────────────
@@ -702,6 +783,7 @@ func New(cfg *core.Config) (*Daemon, error) {
 		ErrBus:     errBus,
 	})
 
+	bootStep(10, steps, "Pipeline assembled")
 	log.Info().Msg("[startup 10/12] pipeline assembled")
 
 	// ── Phase 11: Hippocampus + support services ────────────────────────
@@ -746,6 +828,7 @@ func New(cfg *core.Config) (*Daemon, error) {
 		MCP:             mcpMgr,
 	}
 
+	bootStep(11, steps, "Hippocampus, approvals, events ready")
 	log.Info().Msg("[startup 11/12] hippocampus, approvals, events ready")
 
 	// ── Phase 12: Complete ──────────────────────────────────────────────
@@ -761,19 +844,19 @@ func New(cfg *core.Config) (*Daemon, error) {
 		eventBus:     eventBus,
 		bgWorker:     bgWorker,
 		errBus:       errBus,
+		startupStart: startupStart,
 		errBusCancel: errBusCancel,
 	}, nil
 }
 
 // Start implements service.Interface. Called by the OS service manager.
 func (d *Daemon) Start(s service.Service) error {
-	// Startup banner (Rust parity: visible system identification on boot).
-	fmt.Println()
-	fmt.Println("  ╔══════════════════════════════════════════╗")
-	fmt.Printf("  ║  ROBOTICUS — %s\n", d.cfg.Agent.Name)
-	fmt.Printf("  ║  Port: %d  │  Platform: %s\n", d.cfg.Server.Port, service.Platform())
-	fmt.Println("  ╚══════════════════════════════════════════╝")
-	fmt.Println()
+	// Final boot step: HTTP server starting (Rust parity: serve.rs step 12).
+	bootStep(12, 12, "HTTP server starting")
+	bindAddr := fmt.Sprintf("127.0.0.1:%d", d.cfg.Server.Port)
+	bootDetail("bind", bindAddr)
+	bootDetail("dashboard", fmt.Sprintf("http://localhost:%d", d.cfg.Server.Port))
+	bootReady(time.Since(d.startupStart))
 
 	log.Info().Str("agent", d.cfg.Agent.Name).Str("platform", service.Platform()).Int("port", d.cfg.Server.Port).Msg("roboticus starting")
 	go d.run()
