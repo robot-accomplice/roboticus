@@ -61,6 +61,26 @@ func (m *ConnectionManager) Connect(ctx context.Context, cfg McpServerConfig) er
 	return nil
 }
 
+// ConnectAll connects to all enabled MCP servers from the config list.
+// Non-fatal: individual server failures are logged as warnings and do not
+// block startup. Returns the count of successfully connected servers.
+// Matches Rust's connect_all() with per-server error isolation.
+func (m *ConnectionManager) ConnectAll(ctx context.Context, servers []McpServerConfig) int {
+	connected := 0
+	for _, srv := range servers {
+		if !srv.Enabled {
+			log.Debug().Str("server", srv.Name).Msg("MCP server disabled, skipping")
+			continue
+		}
+		if err := m.Connect(ctx, srv); err != nil {
+			log.Warn().Err(err).Str("server", srv.Name).Msg("MCP server connection failed, continuing without it")
+			continue
+		}
+		connected++
+	}
+	return connected
+}
+
 // Disconnect terminates a connection by name.
 func (m *ConnectionManager) Disconnect(name string) error {
 	m.mu.Lock()

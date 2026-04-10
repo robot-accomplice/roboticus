@@ -461,13 +461,15 @@ func (p *Pipeline) expandShortFollowup(session *Session, content string) string 
 // tryShortcut dispatches shortcuts via the ShortcutHandler system.
 // Uses DispatchShortcut with rich context (correction_turn, delegation_provenance)
 // so handlers can make context-aware decisions about whether to match.
-func (p *Pipeline) tryShortcut(_ context.Context, session *Session, content string, correctionTurn bool) *Outcome {
+func (p *Pipeline) tryShortcut(_ context.Context, session *Session, content string, correctionTurn bool, channelLabel string) *Outcome {
 	ctx := &ShortcutContext{
-		CorrectionTurn:        correctionTurn,
-		DelegationProvenance:  false, // Set by caller when applicable
-		AgentName:             session.AgentName,
-		SessionTurnCount:      session.TurnCount(),
-		PreviousAssistantText: session.LastAssistantContent(),
+		CorrectionTurn:         correctionTurn,
+		DelegationProvenance:   false, // Set by caller when applicable
+		HasConversationContext: session.TurnCount() > 0,
+		AgentName:              session.AgentName,
+		SessionTurnCount:       session.TurnCount(),
+		PreviousAssistantText:  session.LastAssistantContent(),
+		ChannelLabel:           channelLabel,
 	}
 
 	result := DispatchShortcut(DefaultShortcutHandlers(), content, ctx)

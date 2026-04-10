@@ -324,6 +324,9 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 	tr.EndSpan("ok")
 
 	// ── Stage 7.5: Task state synthesis (Rust: synthesize_task_state + plan) ──
+	// synthesis is hoisted out of the if-block so DecideRetrievalStrategy
+	// can use it in Stage 8.5 (H10: stage separation).
+	var synthesis TaskSynthesis
 	if cfg.TaskOperatingState != "" || cfg.DecompositionGate {
 		tr.BeginSpan("task_synthesis")
 		// Gather agent skills for capability matching.
@@ -333,7 +336,7 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 			// The synthesis still works — it just reports 0% capability fit.
 			_ = agentSkills // SA9003: populated when skills list method is added
 		}
-		synthesis := SynthesizeTaskState(content, session.TurnCount(), agentSkills)
+		synthesis = SynthesizeTaskState(content, session.TurnCount(), agentSkills)
 
 		// Structured trace annotations (Rust: annotate_task_state_trace).
 		AnnotateTaskStateTrace(tr, synthesis)
@@ -382,36 +385,54 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 	// Memory must be proactively injected BEFORE delegation and skill-first
 	// so early-exit paths still have full cognitive context. "The model should
 	// never have to guess at something the framework already knows."
+	//
+	// H10: Retrieval strategy is decided as a separate function, decoupling
+	// retrieval policy from retrieval execution.
 	var memoryBlock string
-	if p.retriever != nil {
+	retrievalStrat := DecideRetrievalStrategy(synthesis, session.TurnCount(), 2048)
+	if p.retriever != nil && retrievalStrat.Strategy != "none" {
 		tr.BeginSpan("memory_retrieval")
-		memoryBlock = p.retriever.Retrieve(ctx, session.ID, content, 2048)
+		memoryBlock = p.retriever.Retrieve(ctx, session.ID, content, retrievalStrat.Budget)
 		if memoryBlock != "" {
 			session.SetMemoryContext(memoryBlock)
-		}
-		// Structured retrieval trace annotation (Rust: annotate_retrieval_strategy).
-		strategy := "semantic"
-		if memoryBlock == "" {
-			strategy = "none"
 		}
 		fragmentCount := 0
 		if memoryBlock != "" {
 			fragmentCount = strings.Count(memoryBlock, "---") + 1
 		}
-		AnnotateRetrievalStrategy(tr, strategy, 2048, fragmentCount)
+		AnnotateRetrievalStrategy(tr, retrievalStrat.Strategy, retrievalStrat.Budget, fragmentCount)
 		tr.EndSpan("ok")
 	}
 
 	// ── Stage 9: Delegated execution ───────────────────────────────────────
+	// Rust parity (H8): delegation results are either returned directly
+	// (when complete) or threaded back into the inference context as an
+	// initial tool observation so the main agent can incorporate them.
+	var delegationResult string // Threaded to inference if non-empty.
 	if cfg.DelegatedExecution && decomp.Decision == DecompDelegated && len(decomp.Subtasks) > 0 {
 		tr.BeginSpan("delegated_execution")
-		delegResult := p.executeDelegation(ctx, session, decomp, turnID)
-		if delegResult != nil {
-			tr.Annotate("delegation_ok", true)
-			tr.EndSpan("ok")
-			p.storeTrace(ctx, tr, session.ID, msgID, cfg.ChannelLabel)
-			p.tasks.Complete(taskID)
-			return delegResult, nil
+		delegOutcome := p.executeDelegation(ctx, session, decomp, turnID)
+		if delegOutcome != nil {
+			AnnotateDelegationTrace(tr, input.AgentID, len(decomp.Subtasks), "decomposition_gate")
+			if delegOutcome.Complete {
+				// Delegation fully satisfied the request — return directly.
+				tr.Annotate("delegation_complete", true)
+				tr.EndSpan("ok")
+				p.storeTrace(ctx, tr, session.ID, msgID, cfg.ChannelLabel)
+				p.tasks.Complete(taskID)
+				return &Outcome{
+					SessionID:  session.ID,
+					MessageID:  msgID,
+					Content:    delegOutcome.Content,
+					ReactTurns: delegOutcome.Turns,
+				}, nil
+			}
+			// Partial/failed delegation — thread result back to inference.
+			// Rust: seeds tool_results_acc with ("orchestrate-subagents", result).
+			delegationResult = delegOutcome.Content
+			tr.Annotate("delegation_complete", false)
+			tr.Annotate("delegation_threaded", true)
+			log.Info().Str("session", session.ID).Int("quality", delegOutcome.Quality.Score).Msg("delegation incomplete, threading to inference")
 		}
 		tr.EndSpan("fallthrough")
 	}
@@ -435,7 +456,7 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 	// skips on correction turns, IdentityShortcut does not).
 	tr.BeginSpan("shortcut_dispatch")
 	if cfg.ShortcutsEnabled {
-		if result := p.tryShortcut(ctx, session, content, correctionTurn); result != nil {
+		if result := p.tryShortcut(ctx, session, content, correctionTurn, cfg.ChannelLabel); result != nil {
 			tr.Annotate("matched", true)
 			tr.EndSpan("ok")
 			p.recordShortcutCost(ctx, turnID, session.ID, cfg.ChannelLabel)
@@ -474,6 +495,18 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 
 	// ── Stage 11.75: Prepare for inference (Rust: prepare_for_inference) ──
 	p.PrepareForInference(ctx, session, memoryBlock, cfg.BudgetTier)
+
+	// Thread delegation result into inference context (Rust parity H8).
+	// Rust seeds tool_results_acc with ("orchestrate-subagents", result)
+	// so the LLM sees prior delegation work as an initial observation.
+	if delegationResult != "" {
+		session.AddSystemMessage(fmt.Sprintf(
+			"[Prior delegation result from orchestrate-subagents]\n%s\n"+
+				"[Incorporate the above delegation output into your response. "+
+				"If it's incomplete, supplement with your own reasoning.]",
+			delegationResult,
+		))
+	}
 
 	// ── Stage 12: Inference ────────────────────────────────────────────────
 	tr.BeginSpan("inference")

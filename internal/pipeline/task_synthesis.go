@@ -255,6 +255,51 @@ func MapPlannedAction(synthesis TaskSynthesis, decomp *DecompositionResult) Acti
 	}
 }
 
+// RetrievalStrategy describes the memory retrieval approach for a turn.
+// Matches Rust's decide_retrieval_strategy() output.
+type RetrievalStrategy struct {
+	Strategy string // "semantic", "recency", "hybrid", "none"
+	Budget   int    // Token budget for retrieval
+	Reason   string // Why this strategy was chosen
+}
+
+// DecideRetrievalStrategy determines the optimal memory retrieval approach
+// based on task synthesis results and session context.
+// Matches Rust's decide_retrieval_strategy(): a separate decision function
+// that decouples retrieval policy from retrieval execution (H10 stage separation).
+func DecideRetrievalStrategy(synthesis TaskSynthesis, sessionTurns int, defaultBudget int) RetrievalStrategy {
+	// No retrieval for simple conversational turns without history.
+	if !synthesis.RetrievalNeeded && sessionTurns <= 1 {
+		return RetrievalStrategy{Strategy: "none", Budget: 0, Reason: "simple conversational turn, no history"}
+	}
+
+	// Questions benefit from semantic retrieval (find relevant memories).
+	if synthesis.Intent == "question" {
+		budget := defaultBudget
+		if synthesis.Complexity == "complex" {
+			budget = defaultBudget * 2 // Double budget for complex questions.
+		}
+		return RetrievalStrategy{Strategy: "semantic", Budget: budget, Reason: "question intent benefits from semantic search"}
+	}
+
+	// Code and task intents need hybrid retrieval (recent context + semantic).
+	if synthesis.Intent == "code" || synthesis.Intent == "task" {
+		return RetrievalStrategy{Strategy: "hybrid", Budget: defaultBudget, Reason: "task/code intent needs recent + semantic context"}
+	}
+
+	// Long conversations need recency retrieval to maintain coherence.
+	if sessionTurns > 10 {
+		return RetrievalStrategy{Strategy: "recency", Budget: defaultBudget / 2, Reason: "long conversation, prioritize recent context"}
+	}
+
+	// Default: semantic for anything with retrieval need.
+	if synthesis.RetrievalNeeded {
+		return RetrievalStrategy{Strategy: "semantic", Budget: defaultBudget, Reason: "retrieval needed based on task analysis"}
+	}
+
+	return RetrievalStrategy{Strategy: "none", Budget: 0, Reason: "no retrieval benefit detected"}
+}
+
 // matchCapabilities compares capability tokens against available skills.
 // Returns (fit_ratio, missing_skills).
 func matchCapabilities(capTokens, skills []string) (float64, []string) {

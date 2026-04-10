@@ -15,13 +15,16 @@ import (
 )
 
 // ShortcutContext carries pipeline state that shortcuts need for decisions.
-// Matches Rust's ShortcutContext (correction_turn, delegation_provenance, authority).
+// Matches Rust's ShortcutContext with all fields for context-aware dispatch.
 type ShortcutContext struct {
-	CorrectionTurn        bool   // True if sarcasm/contradiction was detected
-	DelegationProvenance  bool   // True if this turn was delegated from another agent
-	AgentName             string // Agent identity for identity shortcuts
-	SessionTurnCount      int    // Number of turns in the session
-	PreviousAssistantText string // Last assistant response for context
+	CorrectionTurn         bool   // True if sarcasm/contradiction was detected
+	DelegationProvenance   bool   // True if this turn was delegated from another agent
+	HasConversationContext bool   // True if session has prior turns (turn > 0)
+	AgentName              string // Agent identity for identity shortcuts
+	SessionTurnCount       int    // Number of turns in the session
+	PreviousAssistantText  string // Last assistant response for context
+	ChannelLabel           string // Channel this turn arrived on
+	PreparedModel          string // Model selected for inference
 }
 
 // ShortcutResult holds a matched shortcut response with metadata.
@@ -152,6 +155,13 @@ func DispatchShortcut(handlers []ShortcutHandler, content string, ctx *ShortcutC
 		ctx = &ShortcutContext{}
 	}
 
+	// Confidence threshold: higher bar for active conversations to prevent
+	// misfires on ambiguous short messages. Rust: 0.8 for conversations, 0.4 for stateless.
+	threshold := 0.4
+	if ctx.HasConversationContext {
+		threshold = 0.8
+	}
+
 	var bestMatch *ShortcutMatch
 	var bestHandler ShortcutHandler
 
@@ -159,6 +169,9 @@ func DispatchShortcut(handlers []ShortcutHandler, content string, ctx *ShortcutC
 		m := h.TryMatch(content, ctx)
 		if m == nil {
 			continue
+		}
+		if m.Confidence < threshold {
+			continue // Below context-adjusted threshold.
 		}
 		if bestMatch == nil || m.Confidence > bestMatch.Confidence {
 			bestMatch = m
