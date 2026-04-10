@@ -167,6 +167,94 @@ func capabilityTokens(content string) []string {
 	return tokens
 }
 
+// PlannedActionKind enumerates the possible planned actions from task synthesis.
+// Matches Rust's PlannedAction enum.
+type PlannedActionKind int
+
+const (
+	PlannedActionExecuteDirectly      PlannedActionKind = iota // Handle in current agent
+	PlannedActionDelegateToSpecialist                          // Route to a specialist subagent
+	PlannedActionComposeSubagent                               // Create a new subagent on the fly
+)
+
+// FormatPlannedAction converts a PlannedAction string (from SynthesizeTaskState) to
+// a human-readable label. Matches Rust's format_planned_action().
+func FormatPlannedAction(action string) string {
+	switch action {
+	case "execute_directly":
+		return "Execute Directly"
+	case "delegate_to_specialist":
+		return "Delegate to Specialist"
+	case "compose_subagent":
+		return "Compose Sub-Agent"
+	default:
+		return "Execute Directly"
+	}
+}
+
+// PlannedActionToKind parses a planned action string into a typed enum.
+func PlannedActionToKind(action string) PlannedActionKind {
+	switch action {
+	case "delegate_to_specialist":
+		return PlannedActionDelegateToSpecialist
+	case "compose_subagent":
+		return PlannedActionComposeSubagent
+	default:
+		return PlannedActionExecuteDirectly
+	}
+}
+
+// ActionGateDecision is the result of MapPlannedAction — tells the pipeline
+// whether to continue with standard inference or reroute.
+type ActionGateDecision int
+
+const (
+	ActionGateContinue          ActionGateDecision = iota // Proceed with standard inference
+	ActionGateDelegate                                    // Reroute to delegation path
+	ActionGateSpecialistPropose                           // Propose specialist creation
+)
+
+// MapPlannedAction maps a PlannedAction + decomposition result into a gate decision.
+// Matches Rust's map_planned_action(): integrates task synthesis with the
+// decomposition gate to decide whether standard inference, delegation, or
+// specialist creation is the right path.
+//
+// The decision is conservative: delegation/specialist only fires when both the
+// planner AND the decomposition gate agree (or when the planner has high confidence
+// and the decomposition gate didn't explicitly centralize).
+func MapPlannedAction(synthesis TaskSynthesis, decomp *DecompositionResult) ActionGateDecision {
+	kind := PlannedActionToKind(synthesis.PlannedAction)
+
+	switch kind {
+	case PlannedActionDelegateToSpecialist:
+		// Planner wants delegation. Accept if decomp agrees or is at least not centralized.
+		if decomp != nil && decomp.Decision == DecompDelegated {
+			return ActionGateDelegate
+		}
+		// High-confidence planner overrides neutral decomposition.
+		if synthesis.Confidence >= 0.7 && (decomp == nil || decomp.Decision != DecompCentralized) {
+			return ActionGateDelegate
+		}
+		// Low-confidence planner: fall through to standard inference.
+		return ActionGateContinue
+
+	case PlannedActionComposeSubagent:
+		// Subagent composition requires both planner confidence and capability gap.
+		if synthesis.CapabilityFit < 0.3 && synthesis.Confidence >= 0.6 {
+			return ActionGateSpecialistPropose
+		}
+		// If decomp explicitly proposed a specialist, honor it.
+		if decomp != nil && decomp.Decision == DecompSpecialistProposal {
+			return ActionGateSpecialistPropose
+		}
+		return ActionGateContinue
+
+	default:
+		// PlannedActionExecuteDirectly — always continue.
+		return ActionGateContinue
+	}
+}
+
 // matchCapabilities compares capability tokens against available skills.
 // Returns (fit_ratio, missing_skills).
 func matchCapabilities(capTokens, skills []string) (float64, []string) {

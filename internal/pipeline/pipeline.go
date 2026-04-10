@@ -334,16 +334,24 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 			_ = agentSkills // SA9003: populated when skills list method is added
 		}
 		synthesis := SynthesizeTaskState(content, session.TurnCount(), agentSkills)
-		tr.Annotate("intent", synthesis.Intent)
-		tr.Annotate("complexity", synthesis.Complexity)
-		tr.Annotate("planned_action", synthesis.PlannedAction)
-		tr.Annotate("capability_fit", synthesis.CapabilityFit)
+
+		// Structured trace annotations (Rust: annotate_task_state_trace).
+		AnnotateTaskStateTrace(tr, synthesis)
 		tr.EndSpan("ok")
 
-		// Override decomposition decision based on planner action.
-		if synthesis.PlannedAction == "delegate_to_specialist" && decomp.Decision == DecompCentralized {
-			decomp.Decision = DecompDelegated
-			log.Info().Str("session", session.ID).Msg("planner upgraded decision to delegation")
+		// Map planned action to gate decision (Rust: map_planned_action).
+		gateDecision := MapPlannedAction(synthesis, decomp)
+		switch gateDecision {
+		case ActionGateDelegate:
+			if decomp.Decision == DecompCentralized {
+				decomp.Decision = DecompDelegated
+				log.Info().Str("session", session.ID).Msg("planner upgraded decision to delegation")
+			}
+		case ActionGateSpecialistPropose:
+			if decomp.Decision == DecompCentralized {
+				decomp.Decision = DecompSpecialistProposal
+				log.Info().Str("session", session.ID).Msg("planner upgraded decision to specialist proposal")
+			}
 		}
 	}
 
@@ -381,6 +389,16 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 		if memoryBlock != "" {
 			session.SetMemoryContext(memoryBlock)
 		}
+		// Structured retrieval trace annotation (Rust: annotate_retrieval_strategy).
+		strategy := "semantic"
+		if memoryBlock == "" {
+			strategy = "none"
+		}
+		fragmentCount := 0
+		if memoryBlock != "" {
+			fragmentCount = strings.Count(memoryBlock, "---") + 1
+		}
+		AnnotateRetrievalStrategy(tr, strategy, 2048, fragmentCount)
 		tr.EndSpan("ok")
 	}
 
@@ -412,11 +430,12 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 	tr.EndSpan("skipped")
 
 	// ── Stage 11: Shortcut dispatch ────────────────────────────────────────
-	// Rust parity: skip shortcuts on correction turns (sarcasm/contradiction
-	// should not match acknowledgement shortcuts).
+	// Rust parity: correction_turn is passed through to the shortcut handler
+	// system so individual handlers can decide (e.g., AcknowledgementShortcut
+	// skips on correction turns, IdentityShortcut does not).
 	tr.BeginSpan("shortcut_dispatch")
-	if cfg.ShortcutsEnabled && !correctionTurn {
-		if result := p.tryShortcut(ctx, session, content); result != nil {
+	if cfg.ShortcutsEnabled {
+		if result := p.tryShortcut(ctx, session, content, correctionTurn); result != nil {
 			tr.Annotate("matched", true)
 			tr.EndSpan("ok")
 			p.recordShortcutCost(ctx, turnID, session.ID, cfg.ChannelLabel)
@@ -426,6 +445,35 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 		}
 	}
 	tr.EndSpan("skipped")
+
+	// ── Stage 11.5: Cache check (Rust: check_cache) ──────────────────────
+	if cfg.CacheEnabled {
+		tr.BeginSpan("cache_check")
+		if hit := p.CheckCache(ctx, session.ID, content); hit != nil {
+			tr.Annotate("cache_hit", true)
+			tr.Annotate("cache_model", hit.Model)
+			tr.EndSpan("ok")
+
+			// Apply cache-specific guards (reduced set).
+			cacheOutcome := &Outcome{
+				SessionID: session.ID,
+				MessageID: msgID,
+				Content:   hit.Content,
+				Model:     hit.Model,
+				FromCache: true,
+			}
+			if p.guards != nil && cfg.CacheGuardSet != GuardSetNone {
+				cacheOutcome.Content = p.guards.Apply(cacheOutcome.Content)
+			}
+			p.storeTrace(ctx, tr, session.ID, msgID, cfg.ChannelLabel)
+			p.tasks.Complete(taskID)
+			return cacheOutcome, nil
+		}
+		tr.EndSpan("miss")
+	}
+
+	// ── Stage 11.75: Prepare for inference (Rust: prepare_for_inference) ──
+	p.PrepareForInference(ctx, session, memoryBlock, cfg.BudgetTier)
 
 	// ── Stage 12: Inference ────────────────────────────────────────────────
 	tr.BeginSpan("inference")
@@ -445,6 +493,13 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 		return nil, err
 	}
 	tr.EndSpan("ok")
+
+	// ── Stage 12.5: Cache store (Rust: store_in_cache) ────────────────────
+	if cfg.CacheEnabled && outcome != nil && !outcome.Stream && outcome.Content != "" {
+		p.bgWorker.Submit("storeCache", func(bgCtx context.Context) {
+			p.StoreInCache(bgCtx, session.ID, content, outcome.Content, outcome.Model)
+		})
+	}
 
 	p.storeTrace(ctx, tr, session.ID, msgID, cfg.ChannelLabel)
 

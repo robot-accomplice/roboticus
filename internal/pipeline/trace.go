@@ -108,3 +108,60 @@ func (t *PipelineTrace) StagesJSON() string {
 	b, _ := json.Marshal(t.Stages)
 	return string(b)
 }
+
+// ── Structured Trace Annotation Helpers ────────────────────────────────────
+// These functions write trace annotations under consistent namespace prefixes,
+// matching Rust's annotate_task_state_trace(), annotate_delegation_trace(), and
+// annotate_retrieval_strategy().
+
+// AnnotateTaskStateTrace writes task synthesis results as namespaced trace
+// annotations. Groups annotations under the "task_state" namespace.
+func AnnotateTaskStateTrace(tr *TraceRecorder, synthesis TaskSynthesis) {
+	if tr == nil {
+		return
+	}
+	tr.Annotate(TraceNSTaskState+".intent", synthesis.Intent)
+	tr.Annotate(TraceNSTaskState+".complexity", synthesis.Complexity)
+	tr.Annotate(TraceNSTaskState+".planned_action", synthesis.PlannedAction)
+	tr.Annotate(TraceNSTaskState+".confidence", synthesis.Confidence)
+	tr.Annotate(TraceNSTaskState+".capability_fit", synthesis.CapabilityFit)
+	tr.Annotate(TraceNSTaskState+".retrieval_needed", synthesis.RetrievalNeeded)
+	if len(synthesis.MissingSkills) > 0 {
+		tr.Annotate(TraceNSTaskState+".missing_skills", synthesis.MissingSkills)
+	}
+}
+
+// AnnotateDelegationTrace writes delegation decision metadata as namespaced
+// trace annotations. Groups under the "delegation" namespace.
+func AnnotateDelegationTrace(tr *TraceRecorder, agentName string, subtaskCount int, provenance string) {
+	if tr == nil {
+		return
+	}
+	tr.Annotate(TraceNSDelegation+".agent", agentName)
+	tr.Annotate(TraceNSDelegation+".subtask_count", subtaskCount)
+	if provenance != "" {
+		tr.Annotate(TraceNSDelegation+".provenance", provenance)
+	}
+}
+
+// AnnotateRetrievalStrategy writes memory retrieval decision metadata.
+// Groups under the "retrieval" namespace.
+func AnnotateRetrievalStrategy(tr *TraceRecorder, strategy string, budget int, fragmentCount int) {
+	if tr == nil {
+		return
+	}
+	tr.Annotate(TraceNSRetrieval+".strategy", strategy)
+	tr.Annotate(TraceNSRetrieval+".budget", budget)
+	tr.Annotate(TraceNSRetrieval+".fragments", fragmentCount)
+}
+
+// AnnotateInferenceTrace writes inference metadata (model selection, escalation).
+// Groups under the "inference" namespace.
+func AnnotateInferenceTrace(tr *TraceRecorder, model, provider string, escalated bool) {
+	if tr == nil {
+		return
+	}
+	tr.Annotate(TraceNSInference+".model", model)
+	tr.Annotate(TraceNSInference+".provider", provider)
+	tr.Annotate(TraceNSInference+".escalated", escalated)
+}

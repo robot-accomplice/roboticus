@@ -479,7 +479,7 @@ func TestTryShortcut_WhoAreYou(t *testing.T) {
 	sess := NewSession("s1", "a1", "TestBot")
 
 	for _, input := range []string{"who are you", "who are you?", "what are you?"} {
-		result := pipe.tryShortcut(context.Background(), sess, input)
+		result := pipe.tryShortcut(context.Background(), sess, input, false)
 		if result == nil {
 			t.Errorf("tryShortcut(%q) should match", input)
 			continue
@@ -496,7 +496,7 @@ func TestTryShortcut_Acknowledgments(t *testing.T) {
 
 	acks := []string{"ok", "okay", "thanks", "thank you", "got it", "understood", "k", "ty"}
 	for _, ack := range acks {
-		result := pipe.tryShortcut(context.Background(), sess, ack)
+		result := pipe.tryShortcut(context.Background(), sess, ack, false)
 		if result == nil {
 			t.Errorf("tryShortcut(%q) should match acknowledgment", ack)
 		}
@@ -508,7 +508,7 @@ func TestTryShortcut_Help(t *testing.T) {
 	sess := NewSession("s1", "a1", "Bot")
 
 	for _, h := range []string{"help", "/help"} {
-		result := pipe.tryShortcut(context.Background(), sess, h)
+		result := pipe.tryShortcut(context.Background(), sess, h, false)
 		if result == nil {
 			t.Errorf("tryShortcut(%q) should match help", h)
 		}
@@ -519,7 +519,7 @@ func TestTryShortcut_NoMatch(t *testing.T) {
 	pipe := &Pipeline{}
 	sess := NewSession("s1", "a1", "Bot")
 
-	result := pipe.tryShortcut(context.Background(), sess, "Tell me about quantum physics")
+	result := pipe.tryShortcut(context.Background(), sess, "Tell me about quantum physics", false)
 	if result != nil {
 		t.Error("should not match non-shortcut")
 	}
