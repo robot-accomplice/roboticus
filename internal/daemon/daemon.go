@@ -393,9 +393,12 @@ func ServiceConfig() *service.Config {
 // New creates a daemon with all subsystems wired together.
 // Initialization follows Rust's 12-step bootstrap sequence with structured
 // phase logging for each major subsystem.
-func New(cfg *core.Config) (*Daemon, error) {
+func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 	startupStart := time.Now()
 	const steps = 12
+
+	// Initialize theme from CLI flags before any output.
+	initBootTheme(opts)
 
 	// Suppress structured logging during boot so the styled boot steps
 	// are not interleaved with JSON/console log lines (Rust parity:
@@ -1252,7 +1255,7 @@ func (d *Daemon) RunInteractive() error {
 
 // Install registers roboticus as an OS service.
 func Install(cfg *core.Config) error {
-	d, err := New(cfg)
+	d, err := New(cfg, BootOptions{})
 	if err != nil {
 		return err
 	}
@@ -1267,7 +1270,7 @@ func Install(cfg *core.Config) error {
 
 // Uninstall removes roboticus from the OS service manager.
 func Uninstall(cfg *core.Config) error {
-	d, err := New(cfg)
+	d, err := New(cfg, BootOptions{})
 	if err != nil {
 		return err
 	}
@@ -1282,7 +1285,7 @@ func Uninstall(cfg *core.Config) error {
 
 // Control sends a command (start/stop/restart) to the OS service.
 func Control(cfg *core.Config, action string) error {
-	d, err := New(cfg)
+	d, err := New(cfg, BootOptions{})
 	if err != nil {
 		return err
 	}
@@ -1297,7 +1300,7 @@ func Control(cfg *core.Config, action string) error {
 
 // Status returns the current service status from the OS service manager.
 func Status(cfg *core.Config) (string, error) {
-	d, err := New(cfg)
+	d, err := New(cfg, BootOptions{})
 	if err != nil {
 		return "", err
 	}
