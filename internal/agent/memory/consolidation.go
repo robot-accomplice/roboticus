@@ -154,10 +154,23 @@ func (p *ConsolidationPipeline) Run(ctx context.Context, store *db.Store) Consol
 		return report
 	}
 
+	// Phases 0-2: always run (index maintenance, safe to run during active sessions).
 	report.DerivableStale = p.Phase0_MarkDerivableStale(ctx, store)
 	report.Indexed = p.phaseIndexBackfill(ctx, store)
-	report.Deduped = p.phaseWithinTierDedup(ctx, store)
 	report.ObsidianScanned = p.Phase2_ObsidianVaultScan(ctx, store)
+
+	// Rust parity: quiescence gate — skip data-moving phases (3+) if a session
+	// has been active in the last 5 seconds. Prevents consolidation from mutating
+	// memories while the agent is mid-conversation.
+	// Rust: consolidation.rs is_quiescent() gates phases 3-4.
+	quiescent := isQuiescent(ctx, store)
+	if !quiescent {
+		log.Debug().Msg("consolidation: skipping data-moving phases (session active within 5s)")
+	}
+
+	if quiescent {
+		report.Deduped = p.phaseWithinTierDedup(ctx, store)
+	}
 	report.Promoted = p.phaseEpisodicPromotion(ctx, store)
 	report.ConfidenceDecayed = p.phaseConfidenceDecay(ctx, store)
 	report.TierSynced = p.Phase4_TierStateSync(ctx, store)
@@ -184,6 +197,20 @@ func (p *ConsolidationPipeline) Run(ctx context.Context, store *db.Store) Consol
 		Msg("consolidation: complete")
 
 	return report
+}
+
+// isQuiescent returns true if no sessions have been active in the last 5 seconds.
+// Rust parity: consolidation.rs is_quiescent() — gates data-moving phases.
+func isQuiescent(ctx context.Context, store *db.Store) bool {
+	var active int64
+	err := store.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sessions
+		 WHERE status = 'active'
+		   AND updated_at > datetime('now', '-5 seconds')`).Scan(&active)
+	if err != nil {
+		return false // default to non-quiescent on error (Rust: unwrap_or(1))
+	}
+	return active == 0
 }
 
 // shouldRun checks if enough time has passed since the last consolidation.

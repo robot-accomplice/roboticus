@@ -2,7 +2,6 @@ package pipeline
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 	"unicode"
 
@@ -141,17 +140,13 @@ func (p *Pipeline) storeChunkEmbedding(ctx context.Context, sessionID, turnID, c
 		return
 	}
 
-	vecJSON, err := json.Marshal(vec)
-	if err != nil {
-		log.Warn().Err(err).Msg("embedding serialization failed")
-		return
-	}
+	blob := db.EmbeddingToBlob(vec)
 
 	id := db.NewID()
 	_, err = p.store.ExecContext(ctx,
 		`INSERT INTO embeddings (id, source_table, source_id, content_preview, embedding_blob, dimensions)
 		 VALUES (?, 'session_messages', ?, ?, ?, ?)`,
-		id, turnID, truncatePreview(chunk, 200), vecJSON, len(vec),
+		id, turnID, truncatePreview(chunk, 200), blob, len(vec),
 	)
 	if err != nil {
 		log.Warn().Err(err).Str("session", sessionID).Msg("embedding storage failed")

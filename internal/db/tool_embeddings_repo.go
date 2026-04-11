@@ -28,7 +28,7 @@ func (r *ToolEmbeddingsRepository) SaveToolEmbedding(
 	toolName, descHash string,
 	embedding []float32,
 ) error {
-	blob := embeddingToBlob(embedding)
+	blob := EmbeddingToBlob(embedding)
 	_, err := r.q.ExecContext(ctx,
 		`INSERT OR REPLACE INTO tool_embeddings (tool_name, description_hash, embedding, dimensions)
 		 VALUES (?, ?, ?, ?)`,
@@ -53,11 +53,12 @@ func (r *ToolEmbeddingsRepository) GetToolEmbedding(
 	if err != nil {
 		return nil, err
 	}
-	return blobToEmbedding(blob), nil
+	return BlobToEmbedding(blob), nil
 }
 
-// embeddingToBlob serializes []float32 to compact little-endian bytes.
-func embeddingToBlob(embedding []float32) []byte {
+// EmbeddingToBlob serializes []float32 to compact little-endian bytes.
+// Rust parity: embeddings.rs embedding_to_blob() — 4-byte LE IEEE 754 per f32.
+func EmbeddingToBlob(embedding []float32) []byte {
 	buf := make([]byte, len(embedding)*4)
 	for i, v := range embedding {
 		binary.LittleEndian.PutUint32(buf[i*4:], math.Float32bits(v))
@@ -65,8 +66,9 @@ func embeddingToBlob(embedding []float32) []byte {
 	return buf
 }
 
-// blobToEmbedding deserializes a BLOB back to []float32.
-func blobToEmbedding(blob []byte) []float32 {
+// BlobToEmbedding deserializes a BLOB back to []float32.
+// Rust parity: embeddings.rs blob_to_embedding().
+func BlobToEmbedding(blob []byte) []float32 {
 	n := len(blob) / 4
 	result := make([]float32, n)
 	for i := 0; i < n; i++ {

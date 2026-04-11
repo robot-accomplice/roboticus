@@ -45,20 +45,18 @@ func BuildSystemPrompt(cfg PromptConfig) string {
 	// 1. Agent name header.
 	sections = append(sections, fmt.Sprintf("You are %s, an autonomous AI agent.\n", cfg.AgentName))
 
-	// 2. Personality/identity — placed BEFORE firmware so the model sees
-	// who it IS before learning what rules it follows. This matches the
-	// Rust reference's prompt ordering and gives personality text the
-	// highest positional weight after the name.
-	if cfg.Personality != "" {
-		sections = append(sections, "## Identity & Personality\n"+
-			"The following defines your core identity. This is WHO YOU ARE, not optional guidance.\n"+
-			"Embody this personality in every response.\n\n"+
-			cfg.Personality+"\n")
-	}
-
-	// 3. Firmware/platform instructions (rules and constraints).
+	// 2. Firmware/platform instructions (rules and constraints).
+	// Rust parity: firmware comes BEFORE personality so the model is grounded
+	// in hard constraints before seeing the malleable identity layer.
+	// Rust: prompt.rs lines 19-23 — firmware is section 2.
 	if cfg.Firmware != "" {
 		sections = append(sections, "## Platform Instructions\n"+cfg.Firmware+"\n")
+	}
+
+	// 3. Personality/identity.
+	// Rust parity: prompt.rs lines 25-27 — personality is section 3 ("## Identity").
+	if cfg.Personality != "" {
+		sections = append(sections, "## Identity\n"+cfg.Personality+"\n")
 	}
 
 	// 3a. Operator context (OPERATOR.toml).
@@ -71,11 +69,20 @@ func BuildSystemPrompt(cfg PromptConfig) string {
 		sections = append(sections, "## Active Directives\n"+cfg.Directives+"\n")
 	}
 
-	// 4. Skills are NOT included in the system prompt (Rust parity).
-	// Skills are a pre-inference routing mechanism — matched by trigger keywords
-	// and executed before the LLM is called. The model never needs to see skill
-	// text because: if a skill matches → it executes and the LLM never runs;
-	// if no skill matches → the LLM runs with tools, no skill text needed.
+	// 4. Active skills — Rust parity: prompt.rs lines 29-33.
+	// Rust uses nested subsections: "### Skill N\n{instruction}\n".
+	if len(cfg.Skills) > 0 {
+		skillBlock := "## Active Skills\n"
+		for i, name := range cfg.Skills {
+			desc := cfg.SkillDescriptions[name]
+			if desc != "" {
+				skillBlock += fmt.Sprintf("### Skill %d\n%s\n\n", i+1, desc)
+			} else {
+				skillBlock += fmt.Sprintf("### Skill %d\n%s\n\n", i+1, name)
+			}
+		}
+		sections = append(sections, skillBlock)
+	}
 
 	// 5. Behavioral contract (Rust parity: behavioral_contract_block).
 	// Prevents the model from claiming capabilities it hasn't verified,

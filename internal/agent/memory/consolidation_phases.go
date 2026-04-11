@@ -9,6 +9,26 @@ import (
 	"roboticus/internal/db"
 )
 
+// Consolidation thresholds — Rust parity (consolidation.rs).
+const (
+	// DedupJaccardThreshold is the minimum Jaccard similarity for within-tier dedup.
+	// Rust: run_dedup(db, 0.85) in consolidation.rs.
+	DedupJaccardThreshold = 0.85
+
+	// PromotionGroupThreshold is the minimum Jaccard similarity for grouping
+	// episodic entries before promotion to semantic.
+	// Rust: groups entries with similarity > 0.5 before merging into semantic.
+	PromotionGroupThreshold = 0.5
+
+	// DecayFactor is the per-consolidation-pass multiplier applied to confidence.
+	// Rust: 0.995 constant multiplier per 24h gate.
+	DecayFactor = 0.995
+
+	// DecayFloor is the minimum confidence after decay.
+	// Rust: WHERE confidence > 0.1.
+	DecayFloor = 0.1
+)
+
 // Phase 1: Index backfill — scan episodic and semantic entries missing from memory_index.
 func (p *ConsolidationPipeline) phaseIndexBackfill(ctx context.Context, store *db.Store) int {
 	count := 0
@@ -127,7 +147,7 @@ func (p *ConsolidationPipeline) dedupWithinTier(ctx context.Context, store *db.S
 				continue
 			}
 			sim := jaccardSimilarity(entries[i].content, entries[j].content)
-			if sim < 0.85 {
+			if sim < DedupJaccardThreshold {
 				continue
 			}
 			// Keep the higher-scored entry, mark the other as deduped.
@@ -184,7 +204,7 @@ func (p *ConsolidationPipeline) phaseEpisodicPromotion(ctx context.Context, stor
 	}
 	_ = rows.Close()
 
-	// Find groups of 3+ similar entries (Jaccard > 0.5).
+	// Find groups of 3+ similar entries (Jaccard > PromotionGroupThreshold).
 	promoted := 0
 	used := make(map[int]bool)
 	for i := 0; i < len(entries); i++ {
@@ -196,7 +216,7 @@ func (p *ConsolidationPipeline) phaseEpisodicPromotion(ctx context.Context, stor
 			if used[j] {
 				continue
 			}
-			if jaccardSimilarity(entries[i].content, entries[j].content) > 0.5 {
+			if jaccardSimilarity(entries[i].content, entries[j].content) > PromotionGroupThreshold {
 				group = append(group, j)
 			}
 		}
@@ -274,9 +294,9 @@ func (p *ConsolidationPipeline) phaseConfidenceDecay(ctx context.Context, store 
 		// Rust parity: constant multiplier 0.995 applied once per 24h sentinel gate,
 		// not exponential per-day decay. Each consolidation pass applies one decay step
 		// for entries that haven't been updated in >= 24h.
-		newConf := confidence * 0.995
-		if newConf < 0.1 {
-			newConf = 0.1
+		newConf := confidence * DecayFactor
+		if newConf < DecayFloor {
+			newConf = DecayFloor
 		}
 		if newConf < confidence {
 			updates = append(updates, decayEntry{id: id, newConfidence: newConf})

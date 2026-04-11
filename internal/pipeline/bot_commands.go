@@ -25,7 +25,7 @@ func NewBotCommandHandler(store ...*db.Store) *BotCommandHandler {
 		h.store = store[0]
 	}
 	h.Register("help", cmdHelp)
-	h.Register("status", cmdStatus)
+	h.Register("status", h.cmdStatus)
 	h.Register("tools", cmdTools)
 	h.Register("skills", cmdSkills)
 	h.Register("memory", h.cmdMemory)
@@ -75,10 +75,93 @@ func cmdHelp(_ context.Context, _ string, s *Session) (*Outcome, error) {
 	}, nil
 }
 
-func cmdStatus(_ context.Context, _ string, s *Session) (*Outcome, error) {
+// cmdStatus returns rich operational status matching the CLI `status` command.
+// Rust parity: in-chat /status must show the same data as the CLI status output.
+func (h *BotCommandHandler) cmdStatus(ctx context.Context, _ string, s *Session) (*Outcome, error) {
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("**%s** — online\n", s.AgentName))
+	b.WriteString(fmt.Sprintf("Session: `%s` · Messages: %d\n", s.ID, s.MessageCount()))
+
+	if h.store != nil {
+		// Sessions count.
+		var sessionCount int
+		if err := h.store.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM sessions WHERE status = 'active'`).Scan(&sessionCount); err == nil {
+			b.WriteString(fmt.Sprintf("Sessions: %d active\n", sessionCount))
+		}
+
+		// Skills.
+		var skillsEnabled, skillsTotal int
+		rows, err := h.store.QueryContext(ctx, `SELECT enabled FROM skills`)
+		if err == nil {
+			defer func() { _ = rows.Close() }()
+			for rows.Next() {
+				var enabled bool
+				if rows.Scan(&enabled) == nil {
+					skillsTotal++
+					if enabled {
+						skillsEnabled++
+					}
+				}
+			}
+			if skillsTotal > 0 {
+				b.WriteString(fmt.Sprintf("Skills: %d/%d enabled\n", skillsEnabled, skillsTotal))
+			}
+		}
+
+		// Cron jobs.
+		var cronTotal, cronFailed int
+		if err := h.store.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM cron_jobs`).Scan(&cronTotal); err == nil {
+			_ = h.store.QueryRowContext(ctx,
+				`SELECT COUNT(*) FROM cron_runs WHERE status = 'failed'
+				 AND created_at > datetime('now', '-24 hours')`).Scan(&cronFailed)
+			b.WriteString(fmt.Sprintf("Cron: %d jobs (%d failed/24h)\n", cronTotal, cronFailed))
+		}
+
+		// Cache hit rate.
+		var hits, misses int64
+		if err := h.store.QueryRowContext(ctx,
+			`SELECT COALESCE(SUM(hit_count), 0) FROM semantic_cache`).Scan(&hits); err == nil {
+			_ = h.store.QueryRowContext(ctx,
+				`SELECT COUNT(*) FROM semantic_cache`).Scan(&misses)
+			total := hits + misses
+			if total > 0 {
+				rate := float64(hits) / float64(total) * 100
+				b.WriteString(fmt.Sprintf("Cache: %.1f%% hit rate (%d entries)\n", rate, misses))
+			}
+		}
+
+		// Wallet balance.
+		var balance string
+		if err := h.store.QueryRowContext(ctx,
+			`SELECT COALESCE(total_balance, '0.00') FROM treasury_state
+			 ORDER BY updated_at DESC LIMIT 1`).Scan(&balance); err == nil {
+			b.WriteString(fmt.Sprintf("Wallet: $%s\n", balance))
+		}
+
+		// Memory tier counts.
+		tiers := []struct{ name, table string }{
+			{"working", "working_memory"},
+			{"episodic", "episodic_memory"},
+			{"semantic", "semantic_memory"},
+		}
+		var tierParts []string
+		for _, t := range tiers {
+			var count int
+			if err := h.store.QueryRowContext(ctx,
+				fmt.Sprintf(`SELECT COUNT(*) FROM %s`, t.table)).Scan(&count); err == nil {
+				tierParts = append(tierParts, fmt.Sprintf("%s=%d", t.name, count))
+			}
+		}
+		if len(tierParts) > 0 {
+			b.WriteString(fmt.Sprintf("Memory: %s\n", strings.Join(tierParts, ", ")))
+		}
+	}
+
 	return &Outcome{
 		SessionID: s.ID,
-		Content:   fmt.Sprintf("Status: Agent %s is online. Session: %s, Messages: %d", s.AgentName, s.ID, s.MessageCount()),
+		Content:   b.String(),
 	}, nil
 }
 

@@ -26,21 +26,30 @@ func TestReasoningExtractor(t *testing.T) {
 }
 
 func TestContentGuard(t *testing.T) {
+	// Rust parity: ContentGuard replaces ENTIRE content with filtered message
+	// when any injection marker is detected. Does NOT strip markers individually.
 	g := &ContentGuard{}
 	tests := []struct {
-		input string
-		want  string
+		name    string
+		input   string
+		want    string
+		flagged bool
 	}{
-		{"safe content", "safe content"},
-		{"has [SYSTEM] marker", "has  marker"},
-		{"has <|im_start|> tag", "has  tag"},
-		{"multiple [INST] and [/INST]", "multiple  and "},
+		{"safe content", "safe content", "safe content", false},
+		{"[SYSTEM] marker", "has [SYSTEM] marker", filteredMessage, true},
+		{"[INST] marker", "something [INST] malicious", filteredMessage, true},
+		{"<|im_start|> tag", "has <|im_start|> tag", filteredMessage, true},
+		{"<s> marker", "text with <s> inside", filteredMessage, true},
+		{"</s> marker", "text with </s> inside", filteredMessage, true},
 	}
 	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			got := g.Transform(tt.input)
 			if got != tt.want {
-				t.Errorf("got %q, want %q", got, tt.want)
+				t.Errorf("Transform() = %q, want %q", got, tt.want)
+			}
+			if g.HasInjection(tt.input) != tt.flagged {
+				t.Errorf("HasInjection() = %v, want %v", g.HasInjection(tt.input), tt.flagged)
 			}
 		})
 	}
@@ -69,10 +78,18 @@ func TestFormatNormalizer(t *testing.T) {
 
 func TestTransformPipeline(t *testing.T) {
 	p := DefaultTransformPipeline()
-	input := "<think>reasoning</think>\n\n\n\n\nHello [SYSTEM] world  "
-	got := p.Apply(input)
-	want := "Hello  world"
+	// Safe content: reasoning stripped, whitespace normalized.
+	safe := "<think>reasoning</think>\n\n\n\n\nHello world  "
+	got := p.Apply(safe)
+	want := "Hello world"
 	if got != want {
-		t.Errorf("got %q, want %q", got, want)
+		t.Errorf("safe: got %q, want %q", got, want)
+	}
+
+	// Injection content: entire response replaced (Rust parity).
+	injected := "<think>reasoning</think>\n\nHello [SYSTEM] world"
+	got2 := p.Apply(injected)
+	if got2 != filteredMessage {
+		t.Errorf("injected: got %q, want %q", got2, filteredMessage)
 	}
 }

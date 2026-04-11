@@ -27,10 +27,18 @@ type Connection struct {
 	transport     Transport
 }
 
-// jsonRPCRequest is a JSON-RPC 2.0 request.
+// jsonRPCRequest is a JSON-RPC 2.0 request (with mandatory id).
 type jsonRPCRequest struct {
 	JSONRPC string `json:"jsonrpc"`
 	ID      int64  `json:"id"`
+	Method  string `json:"method"`
+	Params  any    `json:"params,omitempty"`
+}
+
+// jsonRPCNotification is a JSON-RPC 2.0 notification (no id field).
+// MCP spec: notifications MUST NOT include an "id" member.
+type jsonRPCNotification struct {
+	JSONRPC string `json:"jsonrpc"`
 	Method  string `json:"method"`
 	Params  any    `json:"params,omitempty"`
 }
@@ -181,8 +189,8 @@ func (c *Connection) initialize(ctx context.Context) error {
 		c.ServerVersion = info.ServerInfo.Version
 	}
 
-	// Send initialized notification.
-	notif := jsonRPCRequest{JSONRPC: "2.0", Method: "notifications/initialized"}
+	// Send initialized notification (no id — MCP spec requirement).
+	notif := jsonRPCNotification{JSONRPC: "2.0", Method: "notifications/initialized"}
 	data, _ := json.Marshal(notif)
 	_ = c.transport.Send(ctx, data)
 

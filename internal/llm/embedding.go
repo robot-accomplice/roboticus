@@ -10,7 +10,6 @@ import (
 	"os"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/rs/zerolog/log"
 )
@@ -225,44 +224,39 @@ func (ec *EmbeddingClient) fallbackNgram(texts []string) [][]float32 {
 }
 
 // ngramHash produces a fixed-length embedding from character trigrams.
+// Rust parity: embedding.rs fallback_ngram() — lowercase, rune-level char windows(3),
+// rolling hash acc.wrapping_mul(31).wrapping_add(c as u32), positive accumulation only,
+// L2 normalization. No character filtering — all runes participate.
 func ngramHash(text string, dim int) []float32 {
-	vec := make([]float64, dim)
+	vec := make([]float32, dim)
 	lower := strings.ToLower(text)
-
-	// Remove non-alphanumeric characters.
-	var cleaned strings.Builder
-	for _, r := range lower {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == ' ' {
-			cleaned.WriteRune(r)
-		}
+	chars := []rune(lower)
+	if len(chars) < 3 {
+		return vec
 	}
-	s := cleaned.String()
 
-	// Character trigrams.
-	for i := 0; i+3 <= len(s); i++ {
-		tri := s[i : i+3]
-		h := rollingHash(tri)
-		idx := h % uint32(dim)
-		if (h>>16)&1 == 0 {
-			vec[idx] += 1.0
-		} else {
-			vec[idx] -= 1.0
+	// Character trigram windows (rune-level, matching Rust chars.windows(3)).
+	for i := 0; i+3 <= len(chars); i++ {
+		window := chars[i : i+3]
+		var hash uint32
+		for _, c := range window {
+			hash = hash*31 + uint32(c) // Rust: acc.wrapping_mul(31).wrapping_add(c as u32)
 		}
+		vec[hash%uint32(dim)] += 1.0 // Rust: positive accumulation only
 	}
 
 	// L2 normalize.
-	var norm float64
+	var norm float32
 	for _, v := range vec {
 		norm += v * v
 	}
-	norm = math.Sqrt(norm)
-	result := make([]float32, dim)
+	norm = float32(math.Sqrt(float64(norm)))
 	if norm > 0 {
-		for j, v := range vec {
-			result[j] = float32(v / norm)
+		for i := range vec {
+			vec[i] /= norm
 		}
 	}
-	return result
+	return vec
 }
 
 // rollingHash produces a deterministic hash matching Rust's (acc * 31) + char_as_u32.

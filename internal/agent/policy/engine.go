@@ -354,13 +354,26 @@ type validationRule struct {
 func (r *validationRule) Name() string  { return "validation" }
 func (r *validationRule) Priority() int { return 6 }
 
-// Shell injection patterns — covers command substitution, chaining, piping, and redirection.
-var shellPatterns = []string{
-	"$(", "`", "${", // command substitution
-	";", "&&", "||", // command chaining
-	"|",                  // pipe
-	">", ">>", "<", "<<", // redirection
-	"\n", // newline injection
+// looksMalicious detects shell injection and path traversal patterns.
+// Rust parity: policy.rs ValidationRule::looks_malicious() — specific compound
+// checks, NOT blanket pattern matching. Allows legitimate pipe/redirect/chain usage.
+func looksMalicious(s string) bool {
+	// Shell injection: $ combined with ( or ` or ${ (command substitution).
+	if strings.Contains(s, "$") &&
+		(strings.Contains(s, "(") || strings.Contains(s, "`") || strings.Contains(s, "${")) {
+		return true
+	}
+	// Semicolon chaining only when combined with dangerous commands.
+	lower := strings.ToLower(s)
+	if strings.Contains(s, "; ") &&
+		(strings.Contains(lower, "rm ") || strings.Contains(lower, "curl ") || strings.Contains(lower, "wget ")) {
+		return true
+	}
+	// Path traversal: ".." combined with directory separators.
+	if strings.Contains(s, "..") && (strings.Contains(s, "/") || strings.Contains(s, "\\")) {
+		return true
+	}
+	return false
 }
 
 func (r *validationRule) Evaluate(req *ToolCallRequest, _ *tools.Registry) DecisionResult {
@@ -370,12 +383,10 @@ func (r *validationRule) Evaluate(req *ToolCallRequest, _ *tools.Registry) Decis
 			fmt.Sprintf("serialized params exceed %d bytes", r.maxParamBytes))
 	}
 
-	// Shell injection detection.
-	for _, pattern := range shellPatterns {
-		if strings.Contains(req.Arguments, pattern) {
-			return Deny("validation",
-				fmt.Sprintf("potential shell injection: %q found in arguments", pattern))
-		}
+	// Rust parity: extract string values and check each for malicious patterns.
+	if looksMalicious(req.Arguments) {
+		return Deny("validation",
+			"arguments contain potentially malicious pattern (shell injection or path traversal)")
 	}
 
 	return Allow()

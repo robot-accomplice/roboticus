@@ -526,7 +526,7 @@ func TestGuardChain_StressCorpus(t *testing.T) {
 		{"My specialist will handle the deployment.", &GuardContext{DelegationProvenance: DelegationProvenance{}}, "subagent_claim"},
 		// Task deferral
 		{"Stats look good. I need to check the scheduler next.", &GuardContext{ToolResults: []ToolResultEntry{{ToolName: "get_runtime_context", Output: "{}"}}}, "task_deferral"},
-		{"All healthy. I should run diagnostics now.", &GuardContext{ToolResults: []ToolResultEntry{{ToolName: "get_channel_health", Output: "{}"}}}, "task_deferral"},
+		{"All healthy. I should run diagnostics now.", &GuardContext{ToolResults: []ToolResultEntry{{ToolName: "get_memory_stats", Output: "{}"}}}, "task_deferral"},
 		// Internal jargon
 		{"The expected_utility_margin was above threshold.", &GuardContext{}, "internal_jargon"},
 		{"Active model: gpt-4-turbo is being used.", &GuardContext{}, "internal_jargon"},
