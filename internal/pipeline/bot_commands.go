@@ -79,15 +79,15 @@ func cmdHelp(_ context.Context, _ string, s *Session) (*Outcome, error) {
 // Rust parity: in-chat /status must show the same data as the CLI status output.
 func (h *BotCommandHandler) cmdStatus(ctx context.Context, _ string, s *Session) (*Outcome, error) {
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("**%s** — online\n", s.AgentName))
-	b.WriteString(fmt.Sprintf("Session: `%s` · Messages: %d\n", s.ID, s.MessageCount()))
+	fmt.Fprintf(&b, "**%s** — online\n", s.AgentName)
+	fmt.Fprintf(&b, "Session: `%s` · Messages: %d\n", s.ID, s.MessageCount())
 
 	if h.store != nil {
 		// Sessions count.
 		var sessionCount int
 		if err := h.store.QueryRowContext(ctx,
 			`SELECT COUNT(*) FROM sessions WHERE status = 'active'`).Scan(&sessionCount); err == nil {
-			b.WriteString(fmt.Sprintf("Sessions: %d active\n", sessionCount))
+			fmt.Fprintf(&b, "Sessions: %d active\n", sessionCount)
 		}
 
 		// Skills.
@@ -105,7 +105,7 @@ func (h *BotCommandHandler) cmdStatus(ctx context.Context, _ string, s *Session)
 				}
 			}
 			if skillsTotal > 0 {
-				b.WriteString(fmt.Sprintf("Skills: %d/%d enabled\n", skillsEnabled, skillsTotal))
+				fmt.Fprintf(&b, "Skills: %d/%d enabled\n", skillsEnabled, skillsTotal)
 			}
 		}
 
@@ -116,7 +116,7 @@ func (h *BotCommandHandler) cmdStatus(ctx context.Context, _ string, s *Session)
 			_ = h.store.QueryRowContext(ctx,
 				`SELECT COUNT(*) FROM cron_runs WHERE status = 'failed'
 				 AND created_at > datetime('now', '-24 hours')`).Scan(&cronFailed)
-			b.WriteString(fmt.Sprintf("Cron: %d jobs (%d failed/24h)\n", cronTotal, cronFailed))
+			fmt.Fprintf(&b, "Cron: %d jobs (%d failed/24h)\n", cronTotal, cronFailed)
 		}
 
 		// Cache hit rate.
@@ -128,7 +128,7 @@ func (h *BotCommandHandler) cmdStatus(ctx context.Context, _ string, s *Session)
 			total := hits + misses
 			if total > 0 {
 				rate := float64(hits) / float64(total) * 100
-				b.WriteString(fmt.Sprintf("Cache: %.1f%% hit rate (%d entries)\n", rate, misses))
+				fmt.Fprintf(&b, "Cache: %.1f%% hit rate (%d entries)\n", rate, misses)
 			}
 		}
 
@@ -137,7 +137,7 @@ func (h *BotCommandHandler) cmdStatus(ctx context.Context, _ string, s *Session)
 		if err := h.store.QueryRowContext(ctx,
 			`SELECT COALESCE(total_balance, '0.00') FROM treasury_state
 			 ORDER BY updated_at DESC LIMIT 1`).Scan(&balance); err == nil {
-			b.WriteString(fmt.Sprintf("Wallet: $%s\n", balance))
+			fmt.Fprintf(&b, "Wallet: $%s\n", balance)
 		}
 
 		// Memory tier counts.
@@ -155,7 +155,7 @@ func (h *BotCommandHandler) cmdStatus(ctx context.Context, _ string, s *Session)
 			}
 		}
 		if len(tierParts) > 0 {
-			b.WriteString(fmt.Sprintf("Memory: %s\n", strings.Join(tierParts, ", ")))
+			fmt.Fprintf(&b, "Memory: %s\n", strings.Join(tierParts, ", "))
 		}
 	}
 

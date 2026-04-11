@@ -156,7 +156,7 @@ func (a *DiscordAdapter) runSession(ctx context.Context, url string, state *gate
 	if err != nil {
 		return gatewayReconnect, fmt.Errorf("ws connect: %w", err)
 	}
-	defer conn.CloseNow()
+	defer func() { _ = conn.CloseNow() }()
 	conn.SetReadLimit(1 << 20) // 1 MiB
 
 	// 1. Read Hello (op 10).

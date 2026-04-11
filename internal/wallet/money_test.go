@@ -66,7 +66,7 @@ func TestMoney_Arithmetic(t *testing.T) {
 	if (a.Sub(b)).Dollars() != 4.50 {
 		t.Errorf("10 - 5.50 = %f, want 4.50", a.Sub(b).Dollars())
 	}
-	if !(MoneyZero().Add(a).Cents() == a.Cents()) {
+	if MoneyZero().Add(a).Cents() != a.Cents() {
 		t.Error("zero + a should equal a")
 	}
 	if !(a.Sub(a).IsZero()) {
