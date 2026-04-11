@@ -8859,6 +8859,7 @@
     var sizing = { orchestrator: { scale: 1.0, w: 20, h: 24 }, agent: { scale: 1.0, w: 20, h: 24 } };
     var s = sizing[bot.role] || { scale: 0.7, w: 14, h: 18 };
     var scale = s.scale, bodyW = s.w, bodyH = s.h;
+    var isAgent = bot.role === 'agent' || bot.role === 'orchestrator';
     var walkBob = (bot.animState === 'walking') ? Math.sin(t * 12) * 2 : 0;
     ctx.save(); ctx.translate(px, py + walkBob); ctx.scale(scale, scale);
     if (this.selectedBotId === bot.id) {
