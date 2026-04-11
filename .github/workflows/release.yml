@@ -144,8 +144,8 @@ jobs:
       - name: Generate SHA-256 checksums
         working-directory: dist
         run: |
-          sha256sum roboticus-* > checksums-sha256.txt
-          cat checksums-sha256.txt
+          sha256sum roboticus-* > SHA256SUMS.txt
+          cat SHA256SUMS.txt
 
       - name: Generate changelog from commits
         id: changelog
