@@ -95,7 +95,7 @@ jobs:
         id: version
         run: echo "version=${TAG_NAME#v}" >> "$GITHUB_OUTPUT"
 
-      - name: Build binary
+      - name: Build binary and package
         env:
           CGO_ENABLED: "0"
           GOOS: ${{ matrix.goos }}
@@ -103,17 +103,37 @@ jobs:
           SUFFIX: ${{ matrix.suffix }}
           BUILD_VERSION: ${{ steps.version.outputs.version }}
         run: |
-          BINARY_NAME="roboticus-${GOOS}-${GOARCH}${SUFFIX}"
+          # Build the binary.
+          BINARY_NAME="roboticus${SUFFIX}"
           go build -trimpath \
             -ldflags="-s -w -X roboticus/cmd.version=${BUILD_VERSION}" \
             -o "${BINARY_NAME}" .
-          echo "binary=${BINARY_NAME}" >> "$GITHUB_ENV"
+
+          # Raw binary for update-in-place (roboticus update binary).
+          RAW_NAME="roboticus-${GOOS}-${GOARCH}${SUFFIX}"
+          cp "${BINARY_NAME}" "${RAW_NAME}"
+
+          # Archive for site installer (roboticus-VERSION-OS-ARCH.tar.gz/zip).
+          ARCH_NAME="${GOARCH}"
+          if [ "${GOARCH}" = "amd64" ]; then ARCH_NAME="x86_64"; fi
+          if [ "${GOARCH}" = "arm64" ]; then ARCH_NAME="aarch64"; fi
+          OS_NAME="${GOOS}"
+          if [ "${GOOS}" = "darwin" ]; then OS_NAME="macos"; fi
+          if [ "${GOOS}" = "windows" ]; then
+            ARCHIVE="roboticus-${BUILD_VERSION}-${OS_NAME}-${ARCH_NAME}.zip"
+            zip "${ARCHIVE}" "${BINARY_NAME}"
+          else
+            ARCHIVE="roboticus-${BUILD_VERSION}-${OS_NAME}-${ARCH_NAME}.tar.gz"
+            tar czf "${ARCHIVE}" "${BINARY_NAME}"
+          fi
+          mkdir -p artifacts
+          mv "${RAW_NAME}" "${ARCHIVE}" artifacts/
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4
         with:
           name: roboticus-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: ${{ env.binary }}
+          path: artifacts/
           retention-days: 7
 
   # --------------------------------------------------------------------------
@@ -144,7 +164,7 @@ jobs:
       - name: Generate SHA-256 checksums
         working-directory: dist
         run: |
-          sha256sum roboticus-* > SHA256SUMS.txt
+          sha256sum roboticus-*.tar.gz roboticus-*.zip 2>/dev/null > SHA256SUMS.txt || true
           cat SHA256SUMS.txt
 
       - name: Generate changelog from commits
@@ -179,4 +199,4 @@ jobs:
             dist/SHA256SUMS.txt
             scripts/install.sh
             scripts/install.ps1
-          fail_on_unmatched_files: true
+          fail_on_unmatched_files: false

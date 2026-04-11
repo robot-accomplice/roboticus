@@ -10,7 +10,7 @@
 
 set -eu
 
-REPO="roboticus/roboticus"
+REPO="robot-accomplice/roboticus"
 INSTALL_DIR="/usr/local/bin"
 BINARY_NAME="roboticus"
 PINNED_VERSION=""
