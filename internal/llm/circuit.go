@@ -333,11 +333,14 @@ func (r *BreakerRegistry) Status() map[string]map[string]any {
 		pressure := cb.capacityPressure
 		failCount := len(cb.failures)
 		cb.mu.Unlock()
-		stateStr := "closed"
-		if state == CircuitOpen {
+		var stateStr string
+		switch state {
+		case CircuitOpen:
 			stateStr = "open"
-		} else if state == CircuitHalfOpen {
+		case CircuitHalfOpen:
 			stateStr = "half_open"
+		default:
+			stateStr = "closed"
 		}
 		result[name] = map[string]any{
 			"state":             stateStr,
