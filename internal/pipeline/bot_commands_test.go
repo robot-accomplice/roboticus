@@ -16,7 +16,7 @@ func TestBotCommandHandler_Match(t *testing.T) {
 		wantIn    string // substring expected in response
 	}{
 		{"help command", "/help", true, "can help with"},
-		{"status command", "/status", true, "status"},
+		{"status command", "/status", true, "online"},
 		{"tools command", "/tools", true, "tools"},
 		{"skills command", "/skills", true, "skills"},
 		{"unknown command", "/nonexistent", false, ""},

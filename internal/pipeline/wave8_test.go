@@ -211,11 +211,14 @@ func TestPerspectiveGuard(t *testing.T) {
 // --- #79 InternalProtocolGuard Tests ---
 
 func TestInternalProtocolGuard(t *testing.T) {
+	// Rust parity: detects delegation metadata, orchestration narrative,
+	// and tool protocol markers — NOT Go-unique bracket markers.
 	g := &InternalProtocolGuard{}
 
-	result := g.Check("Hello [PROTOCOL: test] world")
+	// Delegation metadata (Rust: is_internal_delegation_metadata_line).
+	result := g.Check("Hello delegated_subagent=bot2 world")
 	if result.Passed {
-		t.Error("should strip protocol markers")
+		t.Error("should strip delegation metadata markers")
 	}
 
 	result2 := g.Check("Normal response text.")
@@ -223,9 +226,10 @@ func TestInternalProtocolGuard(t *testing.T) {
 		t.Error("should pass clean text")
 	}
 
-	result3 := g.Check("[TRACE: abc123]")
+	// Orchestration narrative (Rust: is_internal_orchestration_narrative_line).
+	result3 := g.Check("decomposition gate decision")
 	if result3.Passed {
-		t.Error("should fail on trace-only content")
+		t.Error("should fail on orchestration narrative")
 	}
 	if !result3.Retry {
 		t.Error("should request retry when content is all metadata")

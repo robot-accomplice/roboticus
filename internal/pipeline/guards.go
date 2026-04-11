@@ -281,6 +281,7 @@ func FullGuardChain() *GuardChain {
 		&PerspectiveGuard{},      // Wave 8, #78
 		&InternalProtocolGuard{}, // Wave 8, #79
 		// Quality guards.
+		&PlaceholderContentGuard{},
 		&LowValueParrotingGuard{},
 		&NonRepetitionGuardV2{},
 		&OutputContractGuard{},

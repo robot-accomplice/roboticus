@@ -1,7 +1,6 @@
 package db
 
 import (
-	"encoding/json"
 	"math"
 	"sort"
 	"sync"
@@ -52,10 +51,11 @@ func NewHNSWIndex(cfg HNSWConfig) *HNSWIndex {
 }
 
 // BuildFromStore loads all embeddings from the database and builds the index.
+// Rust parity: reads embedding_blob (4-byte LE IEEE 754 BLOB), not JSON text.
 func (h *HNSWIndex) BuildFromStore(store *Store) error {
 	rows, err := store.db.Query(
-		`SELECT source_table, source_id, content_preview, embedding_json
-		 FROM embeddings WHERE embedding_json IS NOT NULL`)
+		`SELECT source_table, source_id, content_preview, embedding_blob
+		 FROM embeddings WHERE embedding_blob IS NOT NULL`)
 	if err != nil {
 		return err
 	}
@@ -67,12 +67,18 @@ func (h *HNSWIndex) BuildFromStore(store *Store) error {
 	h.entries = nil
 	for rows.Next() {
 		var entry HNSWEntry
-		var embJSON string
-		if err := rows.Scan(&entry.SourceTable, &entry.SourceID, &entry.ContentPreview, &embJSON); err != nil {
+		var blob []byte
+		if err := rows.Scan(&entry.SourceTable, &entry.SourceID, &entry.ContentPreview, &blob); err != nil {
 			continue
 		}
-		if err := json.Unmarshal([]byte(embJSON), &entry.Embedding); err != nil {
+		f32s := BlobToEmbedding(blob)
+		if len(f32s) == 0 {
 			continue
+		}
+		// Convert float32 to float64 for cosine similarity.
+		entry.Embedding = make([]float64, len(f32s))
+		for i, v := range f32s {
+			entry.Embedding[i] = float64(v)
 		}
 		h.entries = append(h.entries, entry)
 	}

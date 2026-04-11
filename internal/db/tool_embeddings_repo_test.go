@@ -78,11 +78,11 @@ func TestToolEmbeddings_UpsertOnDescriptionChange(t *testing.T) {
 
 func TestEmbeddingBlobRoundtrip(t *testing.T) {
 	original := []float32{0.0, -1.5, 3.14159, math.MaxFloat32, math.SmallestNonzeroFloat32}
-	blob := embeddingToBlob(original)
+	blob := EmbeddingToBlob(original)
 	if len(blob) != len(original)*4 {
 		t.Fatalf("blob size = %d, want %d", len(blob), len(original)*4)
 	}
-	result := blobToEmbedding(blob)
+	result := BlobToEmbedding(blob)
 	for i, v := range original {
 		if result[i] != v {
 			t.Errorf("[%d] = %f, want %f", i, result[i], v)

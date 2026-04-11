@@ -23,6 +23,7 @@ type EmailConfig struct {
 	IMAPPort       int      `mapstructure:"imap_port"`
 	Username       string   `mapstructure:"username"`
 	Password       string   `mapstructure:"password"`
+	OAuth2Token    string   `mapstructure:"oauth2_token"` // Rust parity: XOAUTH2 access token for Gmail
 	AllowedSenders []string `mapstructure:"allowed_senders"`
 	DenyOnEmpty    bool     `mapstructure:"deny_on_empty"`
 	PollInterval   int      `mapstructure:"poll_interval"` // seconds, default 30
@@ -174,9 +175,17 @@ func (e *EmailAdapter) pollIMAP(ctx context.Context) error {
 	}
 	defer func() { _ = conn.Close() }()
 
-	// Login.
-	if err := imapCommand(conn, fmt.Sprintf("LOGIN %q %q", e.cfg.Username, e.cfg.Password)); err != nil {
-		return fmt.Errorf("imap login: %w", err)
+	// Authenticate: XOAUTH2 if token configured, otherwise password LOGIN.
+	// Rust parity: email.rs lines 493-509 — XOAUTH2 vs password login.
+	if e.cfg.OAuth2Token != "" {
+		xoauth2 := BuildXOAuth2Token(e.cfg.Username, e.cfg.OAuth2Token)
+		if err := imapCommand(conn, fmt.Sprintf("AUTHENTICATE XOAUTH2 %s", xoauth2)); err != nil {
+			return fmt.Errorf("imap xoauth2 auth: %w", err)
+		}
+	} else {
+		if err := imapCommand(conn, fmt.Sprintf("LOGIN %q %q", e.cfg.Username, e.cfg.Password)); err != nil {
+			return fmt.Errorf("imap login: %w", err)
+		}
 	}
 
 	// Select INBOX.
@@ -392,4 +401,32 @@ func (e *EmailAdapter) isSenderAllowed(sender string) bool {
 		}
 	}
 	return false
+}
+
+// BuildXOAuth2Token builds the SASL XOAUTH2 token for Gmail authentication.
+// Rust parity: email.rs build_xoauth2_token() — base64("user=<user>\x01auth=Bearer <token>\x01\x01").
+func BuildXOAuth2Token(username, accessToken string) string {
+	sasl := fmt.Sprintf("user=%s\x01auth=Bearer %s\x01\x01", username, accessToken)
+	return base64Encode([]byte(sasl))
+}
+
+func base64Encode(data []byte) string {
+	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+	var result []byte
+	for i := 0; i < len(data); i += 3 {
+		var n uint32
+		remaining := len(data) - i
+		switch {
+		case remaining >= 3:
+			n = uint32(data[i])<<16 | uint32(data[i+1])<<8 | uint32(data[i+2])
+			result = append(result, alphabet[n>>18], alphabet[(n>>12)&0x3F], alphabet[(n>>6)&0x3F], alphabet[n&0x3F])
+		case remaining == 2:
+			n = uint32(data[i])<<16 | uint32(data[i+1])<<8
+			result = append(result, alphabet[n>>18], alphabet[(n>>12)&0x3F], alphabet[(n>>6)&0x3F], '=')
+		case remaining == 1:
+			n = uint32(data[i]) << 16
+			result = append(result, alphabet[n>>18], alphabet[(n>>12)&0x3F], '=', '=')
+		}
+	}
+	return string(result)
 }

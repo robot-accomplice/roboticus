@@ -229,7 +229,7 @@ func (m *MatrixAdapter) syncOnce(ctx context.Context) error {
 				SenderID:  event.Sender,
 				ChatID:    roomID,
 				Content:   content,
-				Timestamp: time.Unix(int64(event.OriginServerTS/1000), 0),
+				Timestamp: time.Now(), // Rust parity: Utc::now() — use agent's local clock, not server TS
 			}
 		}
 	}

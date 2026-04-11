@@ -1557,7 +1557,7 @@
     var pts = []; for (var i = 0; i < count; i++) pts.push(value); return pts;
   }
 
-  var PROVIDER_COLORS = { anthropic: '#f59e0b', openai: '#22c55e', google: '#06b6d4', moonshot: '#a78bfa', openrouter: '#ec4899', ollama: '#8b5cf6', 'ollama-gpu': '#7c3aed', mistral: '#f97316', deepseek: '#14b8a6', groq: '#ef4444', xai: '#64748b', together: '#84cc16', 'docker-model-runner': '#6366f1', 'llama-cpp': '#d946ef' };
+  var PROVIDER_COLORS = { anthropic: '#f59e0b', openai: '#22c55e', google: '#06b6d4', moonshot: '#eab308', openrouter: '#ec4899', ollama: '#8b5cf6', 'ollama-gpu': '#7c3aed', mistral: '#f97316', deepseek: '#14b8a6', groq: '#ef4444', xai: '#64748b', together: '#84cc16', 'docker-model-runner': '#6366f1', 'llama-cpp': '#d946ef' };
   var PROVIDERS = ['anthropic', 'openai', 'google'];
 
   var sparklineId = 0;
@@ -3511,7 +3511,14 @@
         var configData = arr[3] || {};
         var persistedRoutingConfig = (configData && configData.models && configData.models.routing) ? configData.models.routing : {};
         var routingConfig = Object.assign({}, (arr[2] && arr[2].config) ? arr[2].config : {}, persistedRoutingConfig);
-        var routingProfile = deriveRoutingProfile(routingConfig);
+        // Prefer persisted 6-axis profile (lossless) over derived profile (lossy).
+        var persistedProfile = persistedRoutingConfig && persistedRoutingConfig.profile;
+        var routingProfile;
+        if (persistedProfile && typeof persistedProfile === 'object' && persistedProfile.efficacy != null) {
+          routingProfile = normalizeRoutingProfile(persistedProfile);
+        } else {
+          routingProfile = deriveRoutingProfile(routingConfig);
+        }
         App._routingProfileDefaults = normalizeRoutingProfile(routingProfile);
         if (!App._routingProfileDraft) App._routingProfileDraft = normalizeRoutingProfile({ efficacy: routingProfile.efficacy, cost: routingProfile.cost, availability: routingProfile.availability, locality: routingProfile.locality, confidence: routingProfile.confidence, speed: routingProfile.speed });
         App._routingProfileDraft = normalizeRoutingProfile(App._routingProfileDraft);
@@ -3580,6 +3587,46 @@
           + '<div class="routing-profile-actions"><button class="btn" id="budget-apply" style="font-size:0.6875rem;padding:0.3rem 0.7rem">Apply budget</button><button class="btn secondary" id="budget-reset" style="font-size:0.6875rem;padding:0.3rem 0.7rem">Reset</button></div>'
           + budgetPersistedLabel
           + '</div>';
+
+        // Circuit breaker status panel — compact card grid.
+        var breakerCard = '<div id="breaker-status-card" class="card" style="margin-bottom:1rem">'
+          + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem"><div class="card-title" style="margin:0">Circuit Breakers</div>'
+          + '<button class="btn secondary" id="btn-reset-all-breakers" style="font-size:0.6875rem;padding:0.25rem 0.75rem">Reset All</button></div>'
+          + '<div id="breaker-status-body" style="font-size:0.8125rem;color:var(--muted)">Loading...</div>'
+          + '</div>';
+        api('/api/routing/breakers').catch(function() { return { breakers: {} }; }).then(function(data) {
+          var body = document.getElementById('breaker-status-body');
+          if (!body) return;
+          var breakers = data.breakers || {};
+          var names = Object.keys(breakers).sort();
+          if (names.length === 0) { setHtml(body, '<span style="color:var(--muted)">No provider breakers registered.</span>'); return; }
+          var grid = '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:0.5rem">';
+          names.forEach(function(name) {
+            var b = breakers[name];
+            var ok = b.state === 'closed';
+            var half = b.state === 'half_open';
+            var borderColor = ok ? 'var(--success)' : half ? 'var(--warning)' : 'var(--error)';
+            var stateLabel = ok ? 'healthy' : half ? 'recovering' : 'blocked';
+            var stateIcon = ok ? '\u2713' : half ? '\u21bb' : '\u2717';
+            var bgTint = ok ? 'rgba(34,197,94,0.04)' : half ? 'rgba(234,179,8,0.06)' : 'rgba(239,68,68,0.06)';
+            var badges = '';
+            if (b.credit_tripped) badges += '<div style="font-size:0.5625rem;color:var(--error);margin-top:0.2rem">credit exhausted</div>';
+            if (b.forced_open) badges += '<div style="font-size:0.5625rem;color:var(--error);margin-top:0.2rem">operator kill-switch</div>';
+            if (b.capacity_pressure) badges += '<div style="font-size:0.5625rem;color:var(--warning);margin-top:0.2rem">capacity throttled</div>';
+            if (b.recent_failures > 0) badges += '<div style="font-size:0.5625rem;color:var(--muted);margin-top:0.15rem">' + b.recent_failures + ' recent failure(s)</div>';
+            grid += '<div style="padding:0.5rem 0.65rem;border-radius:var(--radius);border:1px solid ' + borderColor + ';background:' + bgTint + '">'
+              + '<div style="display:flex;align-items:center;gap:0.4rem;margin-bottom:0.2rem">'
+              + '<span style="font-size:0.75rem;color:' + borderColor + '">' + stateIcon + '</span>'
+              + '<span style="font-weight:600;font-size:0.8125rem">' + esc(name) + '</span>'
+              + '</div>'
+              + '<div style="font-size:0.6875rem;color:' + borderColor + ';text-transform:uppercase;letter-spacing:0.06em">' + stateLabel + '</div>'
+              + badges
+              + (!ok ? '<button class="btn secondary breaker-reset-btn" data-breaker-provider="' + esc(name) + '" style="margin-top:0.4rem;font-size:0.5625rem;padding:0.15rem 0.5rem;width:100%">Reset</button>' : '')
+              + '</div>';
+          });
+          grid += '</div>';
+          setHtml(body, grid);
+        });
 
         var decisionGraph = renderModelDecisionGraph(modelSelections, App._modelGraphFocusTurn);
 
@@ -3721,21 +3768,29 @@
         if (modelNames.length > 0) {
           table = '<div class="card" style="margin-bottom:1.25rem"><div style="font-weight:600;margin-bottom:0.75rem">Model Comparison</div>'
             + '<div class="table-wrap"><table><thead><tr>'
-            + '<th>Model</th><th>Turns</th><th>Output Density</th><th>Cache Hit %</th>'
-            + '<th>Cost/Turn</th><th>Total Cost</th><th>Cache Savings</th><th>Cost Trend</th>'
+            + '<th>Model</th><th>Turns</th><th>Quality</th><th>Escalations</th><th>Avg Latency</th>'
+            + '<th>Output Density</th><th>Cache Hit %</th>'
+            + '<th>Cost/Turn</th><th>Total Cost</th><th>Cost Trend</th>'
             + '</tr></thead><tbody>';
           modelNames.forEach(function(name) {
             var m = models[name];
             var c = m.cost || {};
             var t = m.trend || {};
+            var q = m.quality || {};
+            var qualityScore = q.avg_quality_score || 0;
+            var qualityColor = qualityScore >= 0.7 ? 'var(--success)' : qualityScore >= 0.4 ? 'var(--warning)' : qualityScore > 0 ? 'var(--error)' : 'var(--muted)';
+            var escalations = q.escalation_count || 0;
+            var avgLatency = q.avg_latency_ms || 0;
             table += '<tr>'
               + '<td class="card-mono">' + esc(name) + '</td>'
               + '<td>' + m.total_turns.toLocaleString() + '</td>'
+              + '<td style="color:' + qualityColor + ';font-weight:600">' + (qualityScore > 0 ? (qualityScore * 100).toFixed(0) + '%' : '\u2014') + '</td>'
+              + '<td style="color:' + (escalations > 0 ? 'var(--warning)' : 'var(--muted)') + '">' + escalations + '</td>'
+              + '<td>' + (avgLatency > 0 ? avgLatency.toFixed(0) + 'ms' : '\u2014') + '</td>'
               + '<td>' + m.avg_output_density.toFixed(3) + '</td>'
               + '<td>' + (m.cache_hit_rate * 100).toFixed(1) + '%</td>'
               + '<td>$' + c.effective_per_turn.toFixed(4) + '</td>'
               + '<td>$' + c.total.toFixed(4) + '</td>'
-              + '<td style="color:var(--success)">$' + c.cache_savings.toFixed(4) + '</td>'
               + '<td>' + trendArrow(c.cumulative_trend) + ' ' + esc(c.cumulative_trend) + '</td>'
               + '</tr>';
           });
@@ -3803,7 +3858,7 @@
 
         // Store tips for use in Recommendations tab
         self._quickTipsHtml = tips;
-        return tabBar + profileCard + budgetCard + decisionGraph + periodBar + banner + cards + tsChart + table + assignmentSection;
+        return tabBar + profileCard + budgetCard + breakerCard + decisionGraph + periodBar + banner + cards + tsChart + table + assignmentSection;
       });
     },
 
@@ -5490,7 +5545,26 @@
               var chData = sectionData[ch];
               var configured = chData && typeof chData === 'object';
 
+              // Web and TUI are always-on channels with no config entries.
+              if (ch === 'web' || ch === 'tui') {
+                html += '<div class="channel-subsection">'
+                  + '<div class="channel-subsection-title">' + esc(ch) + ' <span class="badge success">always on</span></div>'
+                  + '<div style="font-size:0.72rem;color:var(--muted);padding:0.25rem 0">Built-in channel \u2014 no configuration required.</div>'
+                  + '</div>';
+                return;
+              }
+
+              // Check for legacy flat-field config if rich sub-config is absent.
               if (!configured) {
+                var legacyTokenKey = ch + '_token_env';
+                var legacyToken = sectionData[legacyTokenKey];
+                if (legacyToken) {
+                  html += '<div class="channel-subsection">'
+                    + '<div class="channel-subsection-title">' + esc(ch) + ' <span class="badge success">active (legacy config)</span></div>'
+                    + '<div class="settings-row"><div class="settings-label">token_env</div><input class="settings-input" type="text" data-settings-path="channels.' + esc(legacyTokenKey) + '" value="' + esc(String(legacyToken)) + '"></div>'
+                    + '</div>';
+                  return;
+                }
                 html += '<div class="channel-subsection disabled">'
                   + '<div class="channel-subsection-title">' + esc(ch) + ' <span class="badge muted">not configured</span></div>'
                   + '<button class="btn secondary channel-enable-btn" data-enable-channel="' + esc(ch) + '" style="font-size:0.72rem">Enable ' + esc(ch.charAt(0).toUpperCase() + ch.slice(1)) + '</button>'
@@ -5603,25 +5677,61 @@
             return;
           }
 
-          html += '<div class="settings-section"><div class="settings-section-title">' + esc(section) + '</div>';
-          Object.keys(sectionData).forEach(function(key) {
-            var val = sectionData[key];
-            var path = section + '.' + key;
-            var tooltipHtml = fieldTooltips[key] ? ' <span title="' + esc(fieldTooltips[key]) + '" style="cursor:help;color:var(--muted);font-size:0.65rem">(?)</span>' : '';
+          // MCP Servers: render as cards with per-server fields.
+          if (section === 'mcp') {
+            html += '<div class="settings-section"><div class="settings-section-title">MCP Servers</div>';
+            var servers = sectionData.servers || [];
+            if (!Array.isArray(servers) || servers.length === 0) {
+              html += '<div style="padding:1rem 0;color:var(--muted);font-size:0.8125rem">'
+                + 'No MCP servers configured. Add servers in your <code>config.toml</code> under <code>[mcp]</code>.'
+                + '</div>';
+            } else {
+              servers.forEach(function(srv, idx) {
+                var badge = srv.enabled ? '<span class="badge success">enabled</span>' : '<span class="badge muted">disabled</span>';
+                html += '<div class="card" style="margin-bottom:0.75rem;border-left:3px solid ' + (srv.enabled ? 'var(--success)' : 'var(--border)') + '">'
+                  + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem"><strong>' + esc(srv.name || 'server-' + idx) + '</strong> ' + badge + '</div>'
+                  + '<div style="display:grid;grid-template-columns:auto 1fr;gap:0.25rem 0.75rem;font-size:0.8125rem">';
+                if (srv.transport) html += '<span style="color:var(--muted)">Transport</span><span class="card-mono">' + esc(srv.transport) + '</span>';
+                if (srv.command) html += '<span style="color:var(--muted)">Command</span><span class="card-mono">' + esc(srv.command) + '</span>';
+                if (srv.args && srv.args.length) html += '<span style="color:var(--muted)">Args</span><span class="card-mono">' + esc(srv.args.join(' ')) + '</span>';
+                if (srv.url) html += '<span style="color:var(--muted)">URL</span><span class="card-mono">' + esc(srv.url) + '</span>';
+                if (srv.auth_token_env) html += '<span style="color:var(--muted)">Auth Token Env</span><span class="card-mono">' + esc(srv.auth_token_env) + '</span>';
+                html += '</div></div>';
+              });
+            }
+            html += '</div>';
+            return;
+          }
+
+          // Enum fields: render as dropdowns instead of text inputs.
+          var ENUM_FIELDS = {
+            'session.scope_mode': ['agent', 'peer', 'group'],
+            'security.allowlist_authority': ['owner', 'admin', 'user', 'none'],
+            'security.trusted_authority': ['owner', 'admin', 'user', 'none'],
+            'security.api_authority': ['owner', 'admin', 'user', 'none'],
+            'security.threat_caution_ceiling': ['low', 'medium', 'high', 'critical'],
+            'models.routing.mode': ['metascore', 'round_robin', 'cost_aware', 'local_first']
+          };
+          var _renderSettingsField = function(key, val, path, tooltipHtml) {
             if (typeof val === 'boolean') {
               html += '<div class="settings-row"><div class="settings-label">' + esc(key) + tooltipHtml + '</div><div class="settings-toggle-wrap"><label class="toggle"><input type="checkbox" data-settings-path="' + esc(path) + '"' + (val ? ' checked' : '') + '><span class="toggle-track"></span></label><span class="settings-toggle-label">' + (val ? 'On' : 'Off') + '</span></div></div>';
+            } else if (ENUM_FIELDS[path]) {
+              var opts = ENUM_FIELDS[path];
+              var selHtml = '<select class="settings-input" data-settings-path="' + esc(path) + '" style="min-width:160px">';
+              opts.forEach(function(o) { selHtml += '<option value="' + esc(o) + '"' + (String(val) === o ? ' selected' : '') + '>' + esc(o) + '</option>'; });
+              selHtml += '</select>';
+              html += '<div class="settings-row"><div class="settings-label">' + esc(key) + tooltipHtml + '</div>' + selHtml + '</div>';
+            } else if (Array.isArray(val)) {
+              var joined = val.join('\n');
+              html += '<div class="settings-row"><div class="settings-label">' + esc(key) + tooltipHtml + '</div>'
+                + '<textarea class="settings-input" data-settings-path="' + esc(path) + '" data-settings-array="1" '
+                + 'rows="' + Math.max(2, Math.min(6, val.length + 1)) + '" placeholder="One entry per line" style="font-family:var(--font-mono);font-size:0.75rem">' + esc(joined) + '</textarea></div>';
             } else if (typeof val === 'object' && val !== null) {
               html += '<div class="settings-nested"><div style="font-size:0.625rem;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted);margin-bottom:0.5rem">' + esc(key) + '</div>';
               Object.keys(val).forEach(function(subKey) {
                 var subVal = val[subKey]; var subPath = path + '.' + subKey;
-                var type = typeof subVal === 'number' ? 'number' : 'text';
                 var subTooltipHtml = fieldTooltips[subKey] ? ' <span title="' + esc(fieldTooltips[subKey]) + '" style="cursor:help;color:var(--muted);font-size:0.65rem">(?)</span>' : '';
-                if (typeof subVal === 'boolean') {
-                  html += '<div class="settings-row"><div class="settings-label">' + esc(subKey) + subTooltipHtml + '</div><div class="settings-toggle-wrap"><label class="toggle"><input type="checkbox" data-settings-path="' + esc(subPath) + '"' + (subVal ? ' checked' : '') + '><span class="toggle-track"></span></label><span class="settings-toggle-label">' + (subVal ? 'On' : 'Off') + '</span></div></div>';
-                } else {
-                  var ssv = (subVal == null || subVal === '') ? '' : esc(String(subVal));
-                  html += '<div class="settings-row"><div class="settings-label">' + esc(subKey) + subTooltipHtml + '</div><input class="settings-input" type="' + type + '" data-settings-path="' + esc(subPath) + '" value="' + ssv + '" placeholder="none"></div>';
-                }
+                _renderSettingsField(subKey, subVal, subPath, subTooltipHtml);
               });
               html += '</div>';
             } else {
@@ -5629,6 +5739,19 @@
               var sv = (val == null || val === '') ? '' : esc(String(val));
               html += '<div class="settings-row"><div class="settings-label">' + esc(key) + tooltipHtml + '</div><input class="settings-input" type="' + type + '" data-settings-path="' + esc(path) + '" value="' + sv + '" placeholder="none"></div>';
             }
+          };
+          // Display-friendly labels for config sections whose JSON key is misleading.
+          var sectionDisplayLabels = {
+            skills: 'Script Runtime',
+            mcp: 'MCP Servers'
+          };
+          var sectionTitle = sectionDisplayLabels[section] || section;
+          html += '<div class="settings-section"><div class="settings-section-title">' + esc(sectionTitle) + '</div>';
+          Object.keys(sectionData).forEach(function(key) {
+            var val = sectionData[key];
+            var path = section + '.' + key;
+            var tooltipHtml = fieldTooltips[key] ? ' <span title="' + esc(fieldTooltips[key]) + '" style="cursor:help;color:var(--muted);font-size:0.65rem">(?)</span>' : '';
+            _renderSettingsField(key, val, path, tooltipHtml);
           });
           html += '</div>';
         });
@@ -5643,8 +5766,8 @@
     renderWorkspace: function() {
       return api('/api/workspace/state').then(function(data) {
         _cachedWorkspace = data;
-        return '<div style="display:flex;flex-direction:column;height:100%;min-height:0;gap:0">'
-          + '<div id="ws-wrap" style="position:relative;flex:1;min-height:0;overflow:hidden"><canvas id="ws-canvas" style="display:block;border-radius:var(--radius)"></canvas></div>'
+        return '<div style="display:flex;flex-direction:column;height:calc(100vh - 8rem);min-height:400px;gap:0">'
+          + '<div id="ws-wrap" style="position:relative;flex:1;min-height:300px;overflow:hidden"><canvas id="ws-canvas" style="display:block;width:100%;height:100%;border-radius:var(--radius)"></canvas></div>'
           + '<div id="ws-status-panel" style="flex-shrink:0;padding:0.5rem 0.75rem;background:var(--surface);border-top:1px solid var(--border-ghost);display:flex;flex-wrap:wrap;align-items:center;gap:0.5rem 1rem;min-height:2.5rem"></div>'
           + '</div>';
       });
@@ -6180,11 +6303,15 @@
     if (e.target.closest('#routing-profile-apply')) {
       var applyBtn = e.target.closest('#routing-profile-apply');
       if (applyBtn) { applyBtn.disabled = true; applyBtn.textContent = 'Applying...'; }
-      var patch = projectRoutingPatchFromProfile(App._routingProfileDraft || App._routingProfileDefaults || { correctness: 0, cost: 0, speed: 0 });
+      var draft = App._routingProfileDraft || App._routingProfileDefaults || {};
+      var configPatch = projectRoutingPatchFromProfile(draft);
+      // Also persist the raw 6-axis profile so reload is lossless.
+      configPatch.models.routing.profile = {};
+      ROUTING_KEYS.forEach(function(k) { configPatch.models.routing.profile[k] = round2(draft[k] || 0); });
       api('/api/config', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(patch)
+        body: JSON.stringify(configPatch)
       }).then(function(resp) {
         App._routingProfileDefaults = normalizeRoutingProfile(App._routingProfileDraft || App._routingProfileDefaults || { correctness: 0, cost: 0, speed: 0 });
         App._routingProfileDraft = normalizeRoutingProfile(App._routingProfileDefaults);
@@ -6196,6 +6323,21 @@
         if (applyBtn) { applyBtn.disabled = false; applyBtn.textContent = 'Apply profile'; }
         toast(err.message || 'Failed to apply routing profile');
       });
+      return;
+    }
+    if (e.target.closest('#btn-reset-all-breakers')) {
+      api('/api/routing/breakers/reset', { method: 'POST' }).then(function(resp) {
+        toast('All circuit breakers reset (' + (resp.count || 0) + ' providers)');
+        App.navigate('efficiency');
+      }).catch(function(err) { toast(err.message || 'Failed to reset breakers'); });
+      return;
+    }
+    if (e.target.closest('.breaker-reset-btn')) {
+      var provider = e.target.closest('.breaker-reset-btn').getAttribute('data-breaker-provider');
+      api('/api/routing/breakers/' + encodeURIComponent(provider) + '/reset', { method: 'POST' }).then(function() {
+        toast('Breaker reset for ' + provider);
+        App.navigate('efficiency');
+      }).catch(function(err) { toast(err.message || 'Failed to reset breaker'); });
       return;
     }
     if (e.target.closest('#budget-reset')) {
@@ -7087,16 +7229,49 @@
         var html = '<svg width="100%" height="' + svgH + '" style="display:block">';
         stages.forEach(function(s, i) {
           var w = Math.max(((s.duration_ms || 0) / maxMs) * 75, 2);
-          var color = s.outcome === 'Ok' ? '#22c55e' : s.outcome === 'Skipped' ? '#6b7280' : '#ef4444';
+          var oc = (s.outcome || '').toLowerCase();
+          var color = oc === 'ok' ? '#22c55e' : oc === 'skipped' ? '#6b7280' : '#ef4444';
           var y = i * 28 + 5;
+          html += '<g class="wf-stage-row" data-stage-idx="' + i + '" style="cursor:pointer">';
           html += '<rect x="20%" y="' + y + '" width="' + w + '%" height="22" rx="3" fill="' + color + '" opacity="0.8"/>';
           html += '<text x="2%" y="' + (y + 15) + '" font-size="11" fill="var(--text)" font-family="var(--mono)">' + esc(s.name || '') + '</text>';
           html += '<text x="' + (22 + w) + '%" y="' + (y + 15) + '" font-size="10" fill="var(--muted)" font-family="var(--mono)">' + (s.duration_ms || 0) + 'ms</text>';
+          html += '</g>';
         });
         html += '</svg>';
+        // Inline stage detail card (populated on click).
+        html += '<div id="wf-stage-detail-' + esc(tId) + '" style="display:none;margin:0.5rem 0;padding:0.65rem;background:var(--surface-2);border:1px solid var(--border-ghost);border-radius:var(--radius);font-size:0.75rem"></div>';
+        // Store stages data for click handler.
+        setTimeout(function() {
+          var svg = wfContent && wfContent.querySelector('svg');
+          if (!svg) return;
+          svg.querySelectorAll('.wf-stage-row').forEach(function(g) {
+            g.addEventListener('click', function() {
+              var idx = parseInt(g.getAttribute('data-stage-idx'), 10);
+              var s = stages[idx]; if (!s) return;
+              var detail = document.getElementById('wf-stage-detail-' + tId);
+              if (!detail) return;
+              var meta = s.metadata || {};
+              var metaKeys = Object.keys(meta);
+              var metaHtml = '<div style="font-weight:600;margin-bottom:0.35rem;color:var(--accent)">' + esc(s.name || 'Stage ' + idx) + '</div>'
+                + '<div style="display:grid;grid-template-columns:auto 1fr;gap:0.2rem 0.75rem">'
+                + '<span style="color:var(--muted)">Duration</span><span>' + (s.duration_ms || 0) + 'ms</span>'
+                + '<span style="color:var(--muted)">Outcome</span><span style="color:' + (oc === 'ok' ? 'var(--success)' : oc === 'skipped' ? 'var(--muted)' : 'var(--error)') + '">' + esc(s.outcome || 'unknown') + '</span>';
+              metaKeys.forEach(function(k) {
+                metaHtml += '<span style="color:var(--muted);font-family:var(--font-mono);font-size:0.6875rem">' + esc(k) + '</span><span style="font-family:var(--font-mono);font-size:0.6875rem">' + esc(String(meta[k])) + '</span>';
+              });
+              metaHtml += '</div>';
+              if (metaKeys.length === 0) {
+                metaHtml += '<div style="color:var(--muted);font-style:italic;margin-top:0.25rem">No metadata annotations for this stage.</div>';
+              }
+              setHtml(detail, metaHtml);
+              detail.style.display = '';
+            });
+          });
+        }, 50);
         // ── Flow View Button ──────────────────────────────────────────────────
         html += '<div style="margin:0.5rem 0;display:flex;gap:0.5rem">'
-          + '<button class="btn secondary" style="font-size:0.6875rem;padding:0.25rem 0.75rem" data-flow-turn="' + esc(tId) + '">&varr; Flow</button>'
+          + '<button class="btn" style="font-size:0.6875rem;padding:0.3rem 1rem;background:var(--accent);color:#fff;border:none;border-radius:var(--radius);font-weight:600;letter-spacing:0.04em;cursor:pointer" data-flow-turn="' + esc(tId) + '">&#9670; Decision Flow</button>'
           + '</div>';
         // ── Planner Decision Card ─────────────────────────────────────────────
         // Collect task_state.* and delegation.* annotations across all stages.
@@ -7146,20 +7321,56 @@
         header.style.cssText = 'font-family:var(--font-headline);font-size:0.5625rem;font-weight:700;letter-spacing:0.15em;text-transform:uppercase;color:var(--accent);margin-bottom:0.5rem';
         header.textContent = 'Decision Flow';
         frag.appendChild(header);
+        // Detail card for clicked flow nodes.
+        var flowDetail = document.createElement('div');
+        flowDetail.style.cssText = 'display:none;margin:0.5rem 0;padding:0.65rem;background:var(--surface);border:1px solid var(--border-ghost);border-radius:var(--radius);font-size:0.75rem';
         nodes.forEach(function(n, i) {
           var row = document.createElement('div');
-          row.style.cssText = 'display:flex;align-items:center;gap:0.5rem;padding:0.2rem 0;font-size:0.75rem';
+          row.style.cssText = 'display:flex;align-items:center;gap:0.5rem;padding:0.3rem 0.25rem;font-size:0.75rem;cursor:pointer;border-radius:4px;transition:background 0.1s';
+          row.addEventListener('mouseenter', function() { row.style.background = 'rgba(193,128,255,0.06)'; });
+          row.addEventListener('mouseleave', function() { row.style.background = ''; });
           if (i > 0) { var arrow = document.createElement('span'); arrow.style.color = 'var(--muted)'; arrow.textContent = '\u2192'; row.appendChild(arrow); }
           var dot = document.createElement('span');
-          dot.style.cssText = 'display:inline-block;width:8px;height:8px;border-radius:50%;background:' + (n.status === 'pass' ? '#22c55e' : n.status === 'skip' ? '#6b7280' : '#ef4444');
+          var outcome = (n.outcome || n.status || '').toLowerCase();
+          dot.style.cssText = 'display:inline-block;width:8px;height:8px;border-radius:50%;flex-shrink:0;background:' + (outcome === 'ok' || outcome === 'pass' ? '#22c55e' : outcome === 'skipped' || outcome === 'skip' ? '#6b7280' : '#ef4444');
           row.appendChild(dot);
-          var name = document.createElement('span');
-          name.style.cssText = 'color:var(--text);font-family:var(--font-mono)';
-          name.textContent = n.name || '';
-          row.appendChild(name);
-          if (n.duration_ms) { var dur = document.createElement('span'); dur.style.cssText = 'color:var(--muted);font-size:0.625rem'; dur.textContent = n.duration_ms + 'ms'; row.appendChild(dur); }
+          var nameEl = document.createElement('span');
+          nameEl.style.cssText = 'color:var(--text);font-family:var(--font-mono)';
+          nameEl.textContent = n.name || '';
+          row.appendChild(nameEl);
+          // Always show duration.
+          var dur = document.createElement('span');
+          dur.style.cssText = 'color:var(--muted);font-size:0.625rem';
+          dur.textContent = (n.duration_ms != null ? n.duration_ms : 0) + 'ms';
+          row.appendChild(dur);
+          // Model selection tag from trace metadata.
+          var meta = n.metadata || {};
+          var model = meta['inference.model'] || '';
+          var provider = meta['inference.provider'] || '';
+          if (model) {
+            var modelTag = document.createElement('span');
+            modelTag.style.cssText = 'font-size:0.5625rem;padding:0.1rem 0.4rem;border-radius:3px;background:rgba(139,92,246,0.15);color:#a78bfa;font-family:var(--font-mono);white-space:nowrap';
+            modelTag.textContent = (provider ? provider + '/' : '') + model;
+            row.appendChild(modelTag);
+          }
+          // Click to expand metadata card.
+          row.addEventListener('click', function() {
+            var metaKeys = Object.keys(meta);
+            var html = '<div style="font-weight:600;margin-bottom:0.35rem;color:var(--accent)">' + esc(n.name || 'Stage ' + i) + '</div>'
+              + '<div style="display:grid;grid-template-columns:auto 1fr;gap:0.2rem 0.75rem">'
+              + '<span style="color:var(--muted)">Duration</span><span>' + (n.duration_ms || 0) + 'ms</span>'
+              + '<span style="color:var(--muted)">Outcome</span><span style="color:' + (outcome === 'ok' ? 'var(--success)' : outcome === 'skipped' ? 'var(--muted)' : 'var(--error)') + '">' + esc(n.outcome || n.status || 'unknown') + '</span>';
+            metaKeys.forEach(function(k) {
+              html += '<span style="color:var(--muted);font-family:var(--font-mono);font-size:0.6875rem">' + esc(k) + '</span><span style="font-family:var(--font-mono);font-size:0.6875rem">' + esc(String(meta[k])) + '</span>';
+            });
+            html += '</div>';
+            if (metaKeys.length === 0) html += '<div style="color:var(--muted);font-style:italic;margin-top:0.25rem">No metadata for this stage.</div>';
+            setHtml(flowDetail, html);
+            flowDetail.style.display = '';
+          });
           frag.appendChild(row);
         });
+        frag.appendChild(flowDetail);
         var existing = document.getElementById('flow-' + flowTurn);
         if (existing) { existing.parentNode.removeChild(existing); }
         var wfRow = document.getElementById('wf-' + flowTurn);

@@ -177,65 +177,17 @@ func pubKeyToAddress(pub *ecdsa.PublicKey) string {
 	return "0x" + hex.EncodeToString(digest[12:])
 }
 
-// --- Money type (fixed-point, cents) ---
+// Money type is defined in money.go (Rust parity: i64 cents, saturating arithmetic).
 
-// Money represents a monetary amount in cents (hundredths of a dollar).
-type Money struct {
-	cents int64
-}
-
-// FromDollars converts a dollar amount to Money.
+// FromDollars is a convenience wrapper for MoneyFromDollars that panics on error.
+// For production code, prefer MoneyFromDollars which returns an error.
 func FromDollars(dollars float64) Money {
-	return Money{cents: int64(dollars * 100)}
-}
-
-// Dollars returns the money amount in dollars.
-func (m Money) Dollars() float64 {
-	return float64(m.cents) / 100
-}
-
-// Cents returns the raw cent value.
-func (m Money) Cents() int64 { return m.cents }
-
-// Add returns the sum of two Money values (saturating).
-func (m Money) Add(other Money) Money {
-	result := m.cents + other.cents
-	if (other.cents > 0 && result < m.cents) || (other.cents < 0 && result > m.cents) {
-		if other.cents > 0 {
-			return Money{cents: maxInt64}
-		}
-		return Money{cents: minInt64}
+	m, err := MoneyFromDollars(dollars)
+	if err != nil {
+		return MoneyZero()
 	}
-	return Money{cents: result}
+	return m
 }
-
-// Sub returns the difference of two Money values (saturating).
-func (m Money) Sub(other Money) Money {
-	return m.Add(Money{cents: -other.cents})
-}
-
-// String returns a formatted dollar string.
-func (m Money) String() string {
-	sign := ""
-	c := m.cents
-	if c < 0 {
-		sign = "-"
-		c = -c
-	}
-	return sign + "$" + big.NewInt(c/100).String() + "." + padTwo(c%100)
-}
-
-func padTwo(n int64) string {
-	if n < 10 {
-		return "0" + big.NewInt(n).String()
-	}
-	return big.NewInt(n).String()
-}
-
-const (
-	maxInt64 = int64(^uint64(0) >> 1)
-	minInt64 = -maxInt64 - 1
-)
 
 // ZeroizePrivateKey overwrites the private key's secret scalar with zeros.
 // This provides defense-in-depth for key material cleanup, matching the Rust

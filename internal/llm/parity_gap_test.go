@@ -148,8 +148,9 @@ func TestSmartCompress_PreservesOrder(t *testing.T) {
 }
 
 func TestStopWordsCount(t *testing.T) {
-	if len(stopWords) != 63 {
-		t.Errorf("stopWords has %d entries, want 63", len(stopWords))
+	// Rust parity: compression.rs STOP_WORDS contains 77 entries.
+	if len(stopWords) != 77 {
+		t.Errorf("stopWords has %d entries, want 77 (Rust parity)", len(stopWords))
 	}
 }
 

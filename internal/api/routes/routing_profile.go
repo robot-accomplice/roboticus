@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"roboticus/internal/db"
+	"roboticus/internal/llm"
 )
 
 // routingProfile holds the six normalized weights for metascore routing,
@@ -50,7 +51,8 @@ func GetRoutingProfile(store *db.Store) http.HandlerFunc {
 }
 
 // PutRoutingProfile validates, normalizes, and persists routing profile weights.
-func PutRoutingProfile(store *db.Store) http.HandlerFunc {
+// When router is non-nil, the weights are applied to the live router immediately.
+func PutRoutingProfile(store *db.Store, router ...*llm.Router) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var profile routingProfile
 		if err := json.NewDecoder(r.Body).Decode(&profile); err != nil {
@@ -111,6 +113,19 @@ func PutRoutingProfile(store *db.Store) http.HandlerFunc {
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
+		}
+
+		// Push weights to live router so changes take effect immediately.
+		if len(router) > 0 && router[0] != nil {
+			w := llm.RoutingWeights{
+				Efficacy:     profile.Efficacy,
+				Cost:         profile.Cost,
+				Availability: profile.Availability,
+				Locality:     profile.Locality,
+				Confidence:   profile.Confidence,
+				Speed:        profile.Speed,
+			}
+			router[0].SetRoutingWeights(&w)
 		}
 
 		writeJSON(w, http.StatusOK, profile)

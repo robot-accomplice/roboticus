@@ -74,20 +74,30 @@ func estimateMessageTokens(msgs []Message) int {
 
 // ---------- Smart compression (Rust parity: entropy-based scoring) ----------
 
-// stopWords is the canonical 63-word stop list matching Rust's STOP_WORDS.
+// stopWords is the canonical stop list matching Rust's compression.rs STOP_WORDS exactly.
+// Rust parity: 78 words from is_stop_word() in compression.rs.
 var stopWords = map[string]bool{
-	"a": true, "an": true, "the": true, "and": true, "or": true, "but": true,
-	"in": true, "on": true, "at": true, "to": true, "for": true, "of": true,
-	"with": true, "by": true, "from": true, "as": true, "is": true, "was": true,
-	"are": true, "were": true, "been": true, "be": true, "have": true, "has": true,
-	"had": true, "do": true, "does": true, "did": true, "will": true, "would": true,
-	"could": true, "should": true, "may": true, "might": true, "shall": true,
-	"can": true,
-	"it": true, "its": true, "he": true, "she": true, "they": true, "we": true,
-	"you": true, "i": true, "me": true, "him": true, "her": true, "us": true,
-	"them": true, "my": true, "your": true, "his": true, "our": true, "their": true,
-	"this": true, "that": true, "these": true, "those": true, "not": true,
-	"no": true, "if": true, "then": true, "so": true,
+	// Rust line 1: verbs
+	"the": true, "a": true, "an": true, "is": true, "are": true, "was": true,
+	"were": true, "be": true, "been": true, "being": true, "have": true, "has": true, "had": true,
+	// Rust line 2: modal verbs
+	"do": true, "does": true, "did": true, "will": true, "would": true, "could": true,
+	"should": true, "may": true, "might": true, "shall": true, "can": true,
+	// Rust line 3: prepositions
+	"to": true, "of": true, "in": true, "for": true, "on": true, "with": true,
+	"at": true, "by": true, "from": true, "as": true, "into": true, "through": true,
+	// Rust line 4: more prepositions and conjunctions
+	"during": true, "before": true, "after": true, "above": true, "below": true,
+	"between": true, "but": true, "and": true, "or": true, "nor": true, "not": true,
+	// Rust line 5: quantifiers and determiners
+	"so": true, "yet": true, "both": true, "either": true, "neither": true,
+	"each": true, "every": true, "all": true, "any": true, "few": true, "more": true,
+	// Rust line 6: more determiners and adverbs
+	"most": true, "other": true, "some": true, "such": true, "no": true, "only": true,
+	"own": true, "same": true, "than": true, "too": true, "very": true,
+	// Rust line 7: adverbs and demonstratives
+	"just": true, "also": true, "that": true, "this": true, "these": true,
+	"those": true, "it": true, "its": true,
 }
 
 // isContentWord returns true for alphabetic tokens longer than 3 characters

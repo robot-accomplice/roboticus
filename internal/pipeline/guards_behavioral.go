@@ -86,12 +86,16 @@ func (g *TaskDeferralGuard) CheckWithContext(content string, ctx *GuardContext) 
 	if ctx == nil || len(ctx.ToolResults) == 0 {
 		return GuardResult{Passed: true}
 	}
+	// Rust parity: behavioral.rs INTROSPECTION_TOOLS — 7 tools (no get_channel_health).
 	introspectionOnly := true
 	introspectionTools := map[string]bool{
-		"get_memory_stats": true, "get_runtime_context": true,
-		"get_channel_health": true, "get_subagent_status": true,
-		"list-subagent-roster": true, "list-available-skills": true,
-		"task-status": true, "list-open-tasks": true,
+		"get_memory_stats":    true,
+		"get_runtime_context": true,
+		"get_subagent_status": true,
+		"list-subagent-roster": true,
+		"list-available-skills": true,
+		"task-status":         true,
+		"list-open-tasks":     true,
 	}
 	for _, tr := range ctx.ToolResults {
 		if !introspectionTools[tr.ToolName] {
@@ -102,6 +106,18 @@ func (g *TaskDeferralGuard) CheckWithContext(content string, ctx *GuardContext) 
 	if !introspectionOnly {
 		return GuardResult{Passed: true}
 	}
+
+	// Rust parity: semantic TASK_DEFERRAL score > 0.7 (primary detection).
+	if ctx.SemanticScores != nil {
+		if GuardScoreAboveThreshold(ctx.SemanticScores, "TASK_DEFERRAL") {
+			return GuardResult{
+				Passed: false, Retry: true,
+				Reason: "introspection-only turn narrated deferred action (semantic TASK_DEFERRAL)",
+			}
+		}
+	}
+
+	// Lexical fallback — Rust also checks lexical patterns as secondary.
 	lower := strings.ToLower(content)
 	deferralPatterns := []string{
 		"let me ", "i'll ", "i will ", "i need to ",
@@ -134,7 +150,21 @@ func (g *InternalJargonGuard) CheckWithContext(content string, ctx *GuardContext
 	}
 	lower := strings.ToLower(content)
 
-	// Tier 0: Line-level stripping for delegation jargon prefixes.
+	// Rust parity: semantic check (primary).
+	// behavioral.rs: NARRATED_DELEGATION score > 0.8 → RetryRequested.
+	if ctx.SemanticScores != nil {
+		score := ctx.SemanticScores["NARRATED_DELEGATION"]
+		if score > 0.8 {
+			return GuardResult{
+				Passed:  false,
+				Retry:   true,
+				Reason:  "semantic NARRATED_DELEGATION score exceeded threshold (0.8)",
+				Verdict: GuardRetryRequested,
+			}
+		}
+	}
+
+	// Rust parity: line-level stripping for delegation jargon prefixes.
 	delegationPrefixes := []string{"centralized delegation", "delegation gate"}
 	{
 		lines := strings.Split(content, "\n")
@@ -173,7 +203,8 @@ func (g *InternalJargonGuard) CheckWithContext(content string, ctx *GuardContext
 		}
 	}
 
-	// Tier 1: Infrastructure leak keywords.
+	// Lexical fallback: infrastructure terminology markers.
+	// These serve as a safety net when semantic scores are unavailable.
 	infraMarkers := []string{
 		"decomposition gate decision", "expected_utility_margin",
 		"active model:", "enabled subagents:", "pipeline stage",
@@ -192,7 +223,7 @@ func (g *InternalJargonGuard) CheckWithContext(content string, ctx *GuardContext
 		}
 	}
 
-	// Tier 2: Subagent name leak.
+	// Subagent name leak.
 	for _, name := range ctx.SubagentNames {
 		if strings.Contains(lower, strings.ToLower(name)) {
 			return GuardResult{
@@ -239,12 +270,13 @@ func (g *DeclaredActionGuard) CheckWithContext(content string, ctx *GuardContext
 	}
 	// Check if response resolves the action.
 	respLower := strings.ToLower(content)
+	// Rust parity: behavioral.rs lines 512-532 — 17 resolution indicators.
+	// Removed Go-unique "damage" and "save" (not in Rust).
 	resolutionIndicators := []string{
 		"roll", "d20", "dc ", "check", "succeed", "fail",
-		"attempt", "consequences", "are you sure", "damage",
-		"hit", "miss", "save", "result",
-		"try", "manage", "unable", "before we resolve",
-		"before proceeding", "what would happen",
+		"miss", "hit", "attempt", "try", "manage", "unable",
+		"result", "before we resolve", "before proceeding",
+		"are you sure", "consequences", "what would happen",
 	}
 	for _, ind := range resolutionIndicators {
 		if strings.Contains(respLower, ind) {
@@ -307,41 +339,45 @@ func (g *PerspectiveGuard) CheckWithContext(content string, ctx *GuardContext) G
 // system-level metadata that should never appear in user-facing output.
 type InternalProtocolGuard struct{}
 
-var internalProtocolMarkers = []string{
-	// Go-unique XML/bracket markers.
-	"[PROTOCOL:",
-	"[TRACE:",
-	"[DEBUG:",
-	"[GUARD:",
-	"[PIPELINE:",
-	"[METRIC:",
-	"[CACHE:",
-	"[ROUTING:",
-	"<system>",
-	"</system>",
-	"<internal>",
-	"</internal>",
-	"```system",
-	"[SESSION_ID:",
-	"[TURN_ID:",
-	"[MODEL:",
-	"[TOKENS:",
-	// Rust-parity: JSON tool_call patterns.
-	`"tool_call"`,
-	`"toolcall"`,
-	"unexecuted_streaming_tool_call",
-	// Rust-parity: delegation metadata.
+// Rust parity: protocol.rs — 3 detection categories, NO Go-unique bracket markers.
+// Removed: [PROTOCOL:], [TRACE:], [DEBUG:], [GUARD:], [PIPELINE:], [METRIC:],
+// [CACHE:], [ROUTING:], <system>, </system>, <internal>, </internal>,
+// ```system, [SESSION_ID:], [TURN_ID:], [MODEL:], [TOKENS:] — none exist in Rust.
+
+// delegationMetadataMarkers — Rust: is_internal_delegation_metadata_line()
+var delegationMetadataMarkers = []string{
 	"delegated_subagent=",
 	"selected_subagent=",
 	"fallback_models=",
-	// Rust-parity: orchestration narrative.
+	"notes=",
+}
+
+// orchestrationNarrativeMarkers — Rust: is_internal_orchestration_narrative_line()
+var orchestrationNarrativeMarkers = []string{
+	"centralized delegation is sensible",
 	"centralized delegation",
 	"decomposition gate decision",
 	"expected_utility_margin=",
+	"expected utility margin",
 	"delegation decision:",
 	"rationale:",
 	"subtasks:",
 }
+
+// toolProtocolMarkers — Rust: is_internal_tool_protocol_line()
+var toolProtocolMarkers = []string{
+	`"tool_call"`,
+	"unexecuted_streaming_tool_call:",
+}
+
+// internalProtocolMarkers is the combined set of all three Rust detection categories.
+var internalProtocolMarkers = func() []string {
+	all := make([]string, 0, len(delegationMetadataMarkers)+len(orchestrationNarrativeMarkers)+len(toolProtocolMarkers))
+	all = append(all, delegationMetadataMarkers...)
+	all = append(all, orchestrationNarrativeMarkers...)
+	all = append(all, toolProtocolMarkers...)
+	return all
+}()
 
 // subtaskDigitPattern matches "subtask " followed by a digit (Rust-parity delegation metadata).
 var subtaskDigitPattern = regexp.MustCompile(`(?i)\bsubtask \d`)
@@ -395,3 +431,69 @@ func (g *InternalProtocolGuard) Check(content string) GuardResult {
 func (g *InternalProtocolGuard) CheckWithContext(content string, _ *GuardContext) GuardResult {
 	return g.Check(content)
 }
+
+// --- PlaceholderContentGuard ---
+
+// PlaceholderContentGuard detects template/placeholder regurgitation where the
+// model returns unfilled template text instead of a genuine response. This
+// catches patterns like "[Insert topic here]", "[Your name]", etc.
+type PlaceholderContentGuard struct{}
+
+func (g *PlaceholderContentGuard) Name() string { return "placeholder_content" }
+func (g *PlaceholderContentGuard) Check(content string) GuardResult {
+	lower := strings.ToLower(content)
+
+	// Bracket-delimited placeholders (the exact failure mode observed).
+	placeholderPatterns := []string{
+		"[insert ", "[your ", "[add ", "[fill in",
+		"[enter ", "[replace ", "[describe ",
+		"[name", "[topic", "[subject",
+		"[relevant ", "[specific ", "[appropriate ",
+	}
+	for _, p := range placeholderPatterns {
+		if strings.Contains(lower, p) {
+			return GuardResult{
+				Passed:  false,
+				Retry:   true,
+				Reason:  "response contains unfilled template placeholder: " + p,
+				Verdict: GuardRetryRequested,
+			}
+		}
+	}
+
+	// Common template boilerplate that signals the model regurgitated a template
+	// instead of doing the actual work requested.
+	templateSignals := []string{
+		"lorem ipsum",
+		"placeholder text",
+		"example here",
+		"insert the main topic",
+		"insert topic",
+		"insert a ",
+		"here is a template",
+	}
+	for _, sig := range templateSignals {
+		if strings.Contains(lower, sig) {
+			return GuardResult{
+				Passed:  false,
+				Retry:   true,
+				Reason:  "response appears to be template boilerplate: " + sig,
+				Verdict: GuardRetryRequested,
+			}
+		}
+	}
+
+	// Asterisk/bold-delimited placeholders like **Insert X here**.
+	if placeholderBoldRe.MatchString(content) {
+		return GuardResult{
+			Passed:  false,
+			Retry:   true,
+			Reason:  "response contains bold-formatted placeholder directive",
+			Verdict: GuardRetryRequested,
+		}
+	}
+
+	return GuardResult{Passed: true}
+}
+
+var placeholderBoldRe = regexp.MustCompile(`\*\*[Ii]nsert\b[^*]{3,60}\*\*`)
