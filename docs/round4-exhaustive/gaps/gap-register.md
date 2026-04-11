@@ -254,3 +254,111 @@
 - Remaining channel adapters: ALL audited ✓
 
 ## MAPPING IS COMPLETE — NO AREAS REMAIN UNEXAMINED
+
+---
+
+## PARITY CLOSURE LOG (v1.0.0 release work, 2026-04-11)
+
+### Wave 0: Verified as already resolved
+| ID | Status | Evidence |
+|----|--------|----------|
+| G003 | RESOLVED | client_formats.go:108 — systemInstruction extracted |
+| G004 | RESOLVED | client_formats.go:130 — functionDeclarations wrapped |
+| G021 | RESOLVED | consolidation_phases.go:277 — 0.995 decay factor |
+| G033 | RESOLVED | All 6 tools exist: echo, edit_file, alter_table, drop_table, get_runtime_context, recall_memory |
+| G041 | RESOLVED | a2a.go:252 — bytes.Compare (byte-level, not hex-string) |
+| G052 | RESOLVED | scheduler.go:187 — loadLocationWithFixedOffset handles UTC±HH:MM + IANA |
+| G053 | RESOLVED | scheduler.go:69-100 — 61-second backward probe |
+| G063 | RESOLVED | mcp/sse.go:127 — ConnectSSE transport exists |
+| G083 | RESOLVED | config.go — memory budgets 30/25/20/15/10 match Rust |
+
+### Wave 1: Data layer fixes
+| ID | Status | Change |
+|----|--------|--------|
+| G002 | FIXED | hnsw.go reads embedding_blob (binary LE), post_turn.go writes binary LE, killed embedding_json ghost column |
+| G005 | FIXED | ngramHash: removed char filtering, byte→rune trigrams, removed signed projection. Matches Rust fallback_ngram() |
+| G006 | FIXED | Stop word list: Go's 63 (wrong mix) → Rust's 77 (exact match). Scoring logic was already correct |
+| G020 | RESOLVED | Already 0.85 — extracted magic numbers to named constants |
+| G042 | FIXED | USDCMoney (microdollars) → Money (cents). Saturating arithmetic, checked ops, error on NaN/Inf |
+| G084 | RESOLVED | Already "auto" |
+| G085 | RESOLVED | Already 0.95 |
+| G086 | FIXED | Treasury: DailyTransferLimit=2000, MinimumReserve=5 added |
+| G087 | RESOLVED | Already "localhost" |
+| G088 | RESOLVED | Already SandboxEnv=true |
+| G090 | RESOLVED | Already 500 tokens |
+
+### Wave 2: Guards & prompt integrity
+| ID | Status | Change |
+|----|--------|--------|
+| G034 | RESOLVED | ConfigProtectionGuard already matches Rust (same fields, priority 7) |
+| G064 | FIXED | TaskDeferralGuard: 8→7 tools (removed get_channel_health), added semantic TASK_DEFERRAL scoring |
+| G065 | FIXED | ExecutionTruthGuard: 3→11 intents, added semantic FALSE_COMPLETION > 0.7 |
+| G066 | FIXED | InternalJargonGuard: added semantic NARRATED_DELEGATION > 0.8 as primary check |
+| G067 | FIXED | InternalProtocolGuard: removed 17 Go-unique bracket markers, restructured to Rust 3-category detection |
+| G070 | FIXED | DeclaredActionGuard: removed Go-unique "damage", "save" indicators |
+| G074 | FIXED | Skill formatting: flat list → Rust's ### Skill N nested subsections |
+| — | FIXED | Prompt ordering: firmware before personality (Rust prompt.rs:19-27) |
+| — | FIXED | Injection markers: 10→5, silent strip → full replacement + Flagged field |
+| — | FIXED | Shell validation: blanket patterns → Rust's specific compound checks (looksMalicious) |
+| — | NEW | Semantic classifier: PrecomputeGuardScores() with 5 Rust-parity exemplar categories |
+
+### Wave 3: Wallet, A2A, scheduler
+| ID | Status | Evidence |
+|----|--------|----------|
+| G001 | RESOLVED | cron_repo.go:43-46 — atomic UPDATE with lease_holder IS NULL OR expired |
+| G043 | NOTE | Go has full EIP-712; Rust uses simpler message signing. Structural difference, both correct. |
+| G044 | RESOLVED | a2a.go:80 — NonceTTL = 2 * SessionTimeout |
+| G045 | FIXED | Rate limit: <= 0 → < 0 (Rust: 0 = unlimited) |
+| G046 | RESOLVED | ValidateTimestamp exists at a2a.go:348-357 |
+| G050 | RESOLVED | evictStaleNonces at a2a.go:361 with 1000 cap |
+| G054 | RESOLVED | scheduler.go:113 — returns false for intervalMs <= 0 |
+| G055 | RESOLVED | SessionGovernorTask with ResetSchedule cron at tasks.go:212-269 |
+| G056 | RESOLVED | TreasuryLoopTask writes to treasury_state DB at tasks.go:56-67 |
+| G057 | RESOLVED | RevenueSwapConfig exists with TargetSymbol, DefaultChain, Chains |
+| — | RESOLVED | Cron pipeline arch debt: daemon.go:1000 uses pipeline.RunPipeline |
+
+### Wave 4: Agent intelligence & LLM
+| ID | Status | Evidence |
+|----|--------|----------|
+| G007 | RESOLVED | INSERT OR IGNORE + re-query in sessions.go:39-49 |
+| G008 | RESOLVED | ON CONFLICT resets memory_state='active', state_reason=NULL in memory_repo.go |
+| G009 | RESOLVED | pctEncodeQueryValue() in client.go:360-372 |
+| G010-G011 | RESOLVED | ClassifyProviderError + ProviderFailureUserMessage in tool_parsing.go |
+| G014 | RESOLVED | FormatNormalizer uses \n{3,} (matches Rust) |
+| G015 | RESOLVED | False positive rejection exists in tool_parsing.go |
+| G016 | RESOLVED | 10s DialContext timeout in client.go:89 |
+| G017 | RESOLVED | unmarshalGoogleResponse extracts model field |
+| G022-G023 | RESOLVED | 12 history keywords in retrieval.go (matches Rust) |
+| G024 | FIXED | Added isQuiescent() gate — skips data-moving phases if session active within 5s |
+| G025 | RESOLVED | phaseSkillsConfidenceSync checks >80% failure → 0.1 confidence |
+| G027-G028 | RESOLVED | Cross-entropy loss + JSON persistence in ml_router.go |
+| G035 | RESOLVED | WorkspaceOnly enforced in policy/engine.go |
+| G036 | RESOLVED | create_table auto-adds created_at |
+| G037-G038 | RESOLVED | Memory stats + subagent status include budget % and open tasks |
+
+### Wave 5: Discord gateway, revenue, email
+| ID | Status | Change |
+|----|--------|--------|
+| G062 | RESOLVED | All 9 revenue DB repos exist with queries (accounting, feedback, introspection, scoring, strategy, swap, tax, efficiency) |
+| G071-G072 | FIXED | New revenue_scoring.go: 3-component scoring (confidence/effort/risk) with exact Rust strategy calibrations, feedback signal, priority formula, recommendation gate |
+| G075 | FIXED | New discord_gateway.go (~420 lines): WebSocket gateway with Hello/Identify/Resume handshake, heartbeat loop, MESSAGE_CREATE dispatch, reconnection with backoff, fatal/resumable close code handling |
+| G091 | RESOLVED | CLI models exercise/reset/baseline all implemented in cmd/models.go |
+| G094 | FIXED | Email OAuth2: added OAuth2Token config field, BuildXOAuth2Token() SASL builder, AUTHENTICATE XOAUTH2 in IMAP login path |
+
+### Wave 6: Dashboard, /status, remaining medium/low
+| ID | Status | Change |
+|----|--------|--------|
+| — | FIXED | In-chat /status overhaul: rich operational data (sessions, skills, cron, cache, wallet, memory tiers) |
+| — | FIXED | Routing profile persistence: 6-axis profile persisted directly via RoutingProfileData, load prefers persisted over derived |
+| G013 | FIXED | New hybrid_search.go: FTS5 MATCH + vector cosine with weighted merge (Rust hybrid_search parity) |
+| G097 | FIXED | Matrix timestamp: server TS → time.Now() (Rust parity: Utc::now()) |
+| G095 | RESOLVED | Email body limit: MaxEmailBodyBytes=1048576 already enforced at email.go:387 |
+| G012 | RESOLVED | Per-agent delegation stats with json_each() in route_queries.go |
+| G047 | RESOLVED | VoiceFormatter strips markdown for TTS in formatter.go:204-251 |
+| G048 | RESOLVED | MatrixFormatter converts to HTML subset in formatter.go:253-317 |
+| G049 | RESOLVED | CheckInferenceBudget() at treasury.go:78 |
+| G076 | RESOLVED | RiskLevel is string in plugins, int enum in builtins (dual representation) |
+| G077 | RESOLVED | ToolDef has PairedSkill field at plugin.go:48 |
+| G078 | RESOLVED | Standard .zip archives (documented difference from Rust .ic.zip) |
+| G087 | RESOLVED | Server bind "localhost" at limits.go:30 |
+| G098 | RESOLVED | Matrix transaction ID uses UUID v4 at matrix.go:107 |

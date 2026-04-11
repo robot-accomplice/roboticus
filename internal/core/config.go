@@ -184,7 +184,19 @@ type RoutingConfig struct {
 	PerProviderTimeoutSecs int      `json:"per_provider_timeout_seconds" mapstructure:"per_provider_timeout_seconds"`
 	MaxTotalInferenceSecs  int      `json:"max_total_inference_seconds" mapstructure:"max_total_inference_seconds"`
 	MaxFallbackAttempts    int      `json:"max_fallback_attempts" mapstructure:"max_fallback_attempts"`
-	LocalFirst             bool     `json:"local_first" mapstructure:"local_first"`
+	LocalFirst             bool                `json:"local_first" mapstructure:"local_first"`
+	Profile                *RoutingProfileData `json:"profile,omitempty" mapstructure:"profile"` // persisted 6-axis profile (lossless)
+}
+
+// RoutingProfileData holds the 6-axis metascore profile for direct persistence.
+// Avoids lossy round-trip through derived config fields.
+type RoutingProfileData struct {
+	Efficacy     float64 `json:"efficacy" mapstructure:"efficacy"`
+	Cost         float64 `json:"cost" mapstructure:"cost"`
+	Availability float64 `json:"availability" mapstructure:"availability"`
+	Locality     float64 `json:"locality" mapstructure:"locality"`
+	Confidence   float64 `json:"confidence" mapstructure:"confidence"`
+	Speed        float64 `json:"speed" mapstructure:"speed"`
 }
 
 // ProviderConfig describes a single LLM provider endpoint.
@@ -521,11 +533,13 @@ func DefaultConfig() Config {
 			CompressionTargetRatio: 0.5,
 		},
 		Treasury: TreasuryConfig{
-			DailyCap:             5.0,
-			PerPaymentCap:        100.0,
-			TransferLimit:        1.0,
-			HourlyTransferLimit:  500.0,
-			DailyInferenceBudget: 50.0,
+			PerPaymentCap:        100.0,  // Rust parity: default_per_payment_cap() = 100.0
+			HourlyTransferLimit:  500.0,  // Rust parity: default_hourly_limit() = 500.0
+			DailyTransferLimit:   2000.0, // Rust parity: default_daily_limit() = 2000.0
+			MinimumReserve:       5.0,    // Rust parity: default_min_reserve() = 5.0
+			DailyInferenceBudget: 50.0,   // Rust parity: default_inference_budget() = 50.0
+			DailyCap:             2000.0, // Go-unique alias — mirrors DailyTransferLimit
+			TransferLimit:        500.0,  // Go-unique alias — mirrors HourlyTransferLimit
 			RevenueSwap: RevenueSwapConfig{
 				TargetSymbol: "PUSD",
 				DefaultChain: "ETH",

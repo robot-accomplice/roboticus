@@ -3511,7 +3511,14 @@
         var configData = arr[3] || {};
         var persistedRoutingConfig = (configData && configData.models && configData.models.routing) ? configData.models.routing : {};
         var routingConfig = Object.assign({}, (arr[2] && arr[2].config) ? arr[2].config : {}, persistedRoutingConfig);
-        var routingProfile = deriveRoutingProfile(routingConfig);
+        // Prefer persisted 6-axis profile (lossless) over derived profile (lossy).
+        var persistedProfile = persistedRoutingConfig && persistedRoutingConfig.profile;
+        var routingProfile;
+        if (persistedProfile && typeof persistedProfile === 'object' && persistedProfile.efficacy != null) {
+          routingProfile = normalizeRoutingProfile(persistedProfile);
+        } else {
+          routingProfile = deriveRoutingProfile(routingConfig);
+        }
         App._routingProfileDefaults = normalizeRoutingProfile(routingProfile);
         if (!App._routingProfileDraft) App._routingProfileDraft = normalizeRoutingProfile({ efficacy: routingProfile.efficacy, cost: routingProfile.cost, availability: routingProfile.availability, locality: routingProfile.locality, confidence: routingProfile.confidence, speed: routingProfile.speed });
         App._routingProfileDraft = normalizeRoutingProfile(App._routingProfileDraft);
@@ -6296,11 +6303,15 @@
     if (e.target.closest('#routing-profile-apply')) {
       var applyBtn = e.target.closest('#routing-profile-apply');
       if (applyBtn) { applyBtn.disabled = true; applyBtn.textContent = 'Applying...'; }
-      var patch = projectRoutingPatchFromProfile(App._routingProfileDraft || App._routingProfileDefaults || { correctness: 0, cost: 0, speed: 0 });
+      var draft = App._routingProfileDraft || App._routingProfileDefaults || {};
+      var configPatch = projectRoutingPatchFromProfile(draft);
+      // Also persist the raw 6-axis profile so reload is lossless.
+      configPatch.models.routing.profile = {};
+      ROUTING_KEYS.forEach(function(k) { configPatch.models.routing.profile[k] = round2(draft[k] || 0); });
       api('/api/config', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(patch)
+        body: JSON.stringify(configPatch)
       }).then(function(resp) {
         App._routingProfileDefaults = normalizeRoutingProfile(App._routingProfileDraft || App._routingProfileDefaults || { correctness: 0, cost: 0, speed: 0 });
         App._routingProfileDraft = normalizeRoutingProfile(App._routingProfileDefaults);

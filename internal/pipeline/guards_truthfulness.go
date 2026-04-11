@@ -117,19 +117,31 @@ func (g *ExecutionTruthGuard) CheckWithContext(content string, ctx *GuardContext
 		return GuardResult{Passed: true}
 	}
 
-	// Intent gate: only fire for execution/task/delegation intents when intent
-	// classification is available. If no intents are populated, fall through
-	// to the existing lexical checks for backward compatibility.
+	// Rust parity: truthfulness.rs — 11 relevant intents (not 3).
 	if len(ctx.Intents) > 0 {
 		relevant := false
 		for _, intent := range ctx.Intents {
 			switch intent {
-			case "execution", "task", "delegation":
+			case "execution", "task", "delegation", "cron",
+				"file_distribution", "folder_scan",
+				"wallet_address_scan", "image_count_scan",
+				"markdown_count_scan", "obsidian_insights",
+				"email_triage":
 				relevant = true
 			}
 		}
 		if !relevant {
 			return GuardResult{Passed: true}
+		}
+	}
+
+	// Rust parity: semantic FALSE_COMPLETION > 0.7 check.
+	if ctx.SemanticScores != nil {
+		if GuardScoreAboveThreshold(ctx.SemanticScores, "FALSE_COMPLETION") {
+			return GuardResult{
+				Passed: false, Retry: true,
+				Reason: "semantic FALSE_COMPLETION detected — claimed action without tool evidence",
+			}
 		}
 	}
 

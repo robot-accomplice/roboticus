@@ -42,6 +42,7 @@ type TransformOutput struct {
 	Content            string `json:"content"`
 	ReasoningExtracted string `json:"reasoning_extracted,omitempty"`
 	Modified           bool   `json:"modified"`
+	Flagged            bool   `json:"flagged,omitempty"` // Rust parity: set when injection markers detected
 }
 
 // ApplyWithOutput runs all transforms and returns a TransformOutput with metadata
@@ -50,10 +51,16 @@ type TransformOutput struct {
 func (p *TransformPipeline) ApplyWithOutput(content string) TransformOutput {
 	original := content
 	var reasoning string
+	var flagged bool
 
 	for _, t := range p.transforms {
 		if re, ok := t.(*ReasoningExtractor); ok {
 			reasoning = re.ExtractReasoning(content)
+		}
+		if cg, ok := t.(*ContentGuard); ok {
+			if cg.HasInjection(content) {
+				flagged = true
+			}
 		}
 		content = t.Transform(content)
 	}
@@ -62,6 +69,7 @@ func (p *TransformPipeline) ApplyWithOutput(content string) TransformOutput {
 		Content:            content,
 		ReasoningExtracted: reasoning,
 		Modified:           content != original,
+		Flagged:            flagged,
 	}
 }
 
@@ -96,27 +104,37 @@ func (r *ReasoningExtractor) ExtractReasoning(content string) string {
 	return strings.Join(parts, "\n\n")
 }
 
-// ContentGuard detects and redacts prompt injection markers that may have
-// leaked through the LLM output. These markers are used by various models
-// to delineate system/user/assistant boundaries.
+// ContentGuard detects prompt injection markers in LLM output and replaces
+// the entire response with a safety message.
+// Rust parity: transform.rs INJECTION_MARKERS — 5 markers, full replacement, flagged=true.
 type ContentGuard struct{}
 
+// injectionMarkers matches Rust's INJECTION_MARKERS exactly (5 markers).
 var injectionMarkers = []string{
 	"[SYSTEM]",
 	"[INST]",
-	"[/INST]",
 	"<|im_start|>",
-	"<|im_end|>",
-	"<|system|>",
-	"<|user|>",
-	"<|assistant|>",
-	"<<SYS>>",
-	"<</SYS>>",
+	"<s>",
+	"</s>",
 }
 
-func (g *ContentGuard) Transform(content string) string {
+const filteredMessage = "[Content filtered for safety]"
+
+// HasInjection returns true if any injection marker is present.
+func (g *ContentGuard) HasInjection(content string) bool {
 	for _, marker := range injectionMarkers {
-		content = strings.ReplaceAll(content, marker, "")
+		if strings.Contains(content, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// Transform replaces the entire content if injection markers are found.
+// Rust parity: ContentGuard replaces with FILTERED_MESSAGE, does NOT strip markers.
+func (g *ContentGuard) Transform(content string) string {
+	if g.HasInjection(content) {
+		return filteredMessage
 	}
 	return content
 }

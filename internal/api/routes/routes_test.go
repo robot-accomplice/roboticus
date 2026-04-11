@@ -482,14 +482,12 @@ func TestTriggerConsolidation(t *testing.T) {
 
 func TestTriggerReindex(t *testing.T) {
 	store := testutil.TempStore(t)
-	if _, err := store.ExecContext(bgCtx, `ALTER TABLE embeddings ADD COLUMN embedding_json TEXT`); err != nil {
-		t.Fatalf("add embedding_json: %v", err)
-	}
-	embeddingJSON := `[0.12,0.34,0.56]`
+	// G002 fix: use binary BLOB format (Rust parity), not JSON text.
+	blob := db.EmbeddingToBlob([]float32{0.12, 0.34, 0.56})
 	_, err := store.ExecContext(bgCtx,
-		`INSERT INTO embeddings (id, source_table, source_id, content_preview, embedding_json, dimensions)
+		`INSERT INTO embeddings (id, source_table, source_id, content_preview, embedding_blob, dimensions)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
-		db.NewID(), "semantic", db.NewID(), "launch playbook", embeddingJSON, 3)
+		db.NewID(), "semantic", db.NewID(), "launch playbook", blob, 3)
 	if err != nil {
 		t.Fatalf("seed embeddings: %v", err)
 	}

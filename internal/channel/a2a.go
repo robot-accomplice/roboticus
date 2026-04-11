@@ -73,7 +73,8 @@ func NewA2AAdapter(cfg A2AConfig) (*A2AAdapter, error) {
 	if cfg.SessionTimeout <= 0 {
 		cfg.SessionTimeout = DefaultA2ASessionTimeout
 	}
-	if cfg.RateLimitPerPeer <= 0 {
+	// Rust parity: 0 = unlimited (no rate limit). Only default when negative.
+	if cfg.RateLimitPerPeer < 0 {
 		cfg.RateLimitPerPeer = DefaultA2ARateLimitPerPeer
 	}
 	if cfg.NonceTTL <= 0 {

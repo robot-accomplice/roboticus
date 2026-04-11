@@ -535,8 +535,8 @@ func TestMoney_NegativeAmount(t *testing.T) {
 		t.Errorf("cents = %d, want -550", m.Cents())
 	}
 	s := m.String()
-	if s != "-$5.50" {
-		t.Errorf("String() = %q, want '-$5.50'", s)
+	if s != "$-5.50" {
+		t.Errorf("String() = %q, want '$-5.50' (Rust parity: ${:.2} format)", s)
 	}
 }
 
@@ -553,18 +553,18 @@ func TestMoney_SmallCents(t *testing.T) {
 }
 
 func TestMoney_AddOverflow(t *testing.T) {
-	m := Money{cents: maxInt64 - 10}
+	m := Money{cents: math.MaxInt64 - 10}
 	result := m.Add(Money{cents: 100}) // would overflow
-	if result.Cents() != maxInt64 {
-		t.Errorf("overflow add: cents = %d, want %d", result.Cents(), maxInt64)
+	if result.Cents() != math.MaxInt64 {
+		t.Errorf("overflow add: cents = %d, want %d", result.Cents(), math.MaxInt64)
 	}
 }
 
 func TestMoney_AddNegativeOverflow(t *testing.T) {
-	m := Money{cents: minInt64 + 10}
+	m := Money{cents: math.MinInt64 + 10}
 	result := m.Add(Money{cents: -100}) // would underflow
-	if result.Cents() != minInt64 {
-		t.Errorf("underflow add: cents = %d, want %d", result.Cents(), minInt64)
+	if result.Cents() != math.MinInt64 {
+		t.Errorf("underflow add: cents = %d, want %d", result.Cents(), math.MinInt64)
 	}
 }
 

@@ -962,13 +962,7 @@ func TestHNSWIndex_BuildFromStore(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()
 
-	// The embeddings table has embedding_blob, but BuildFromStore uses embedding_json.
-	// We need to add the column or verify behavior when no matching rows.
-	// Since the schema has embedding_blob but BuildFromStore queries embedding_json,
-	// the query may fail. Let's test the empty case first to verify it at least doesn't crash.
-
-	// Ensure embedding_json column exists (it may not be in base schema).
-	_, _ = store.ExecContext(ctx, `ALTER TABLE embeddings ADD COLUMN embedding_json TEXT`)
+	// G002 fix: BuildFromStore now reads from embedding_blob (binary LE), not embedding_json.
 
 	idx := NewHNSWIndex(HNSWConfig{MinEntries: 1})
 	err := idx.BuildFromStore(store)
@@ -980,10 +974,11 @@ func TestHNSWIndex_BuildFromStore(t *testing.T) {
 		t.Errorf("expected 0 entries from empty store, got %d", idx.EntryCount())
 	}
 
-	// Insert an embedding and rebuild.
+	// Insert an embedding using binary BLOB format (Rust parity).
+	blob := EmbeddingToBlob([]float32{1.0, 0.0, 0.0})
 	_, _ = store.ExecContext(ctx,
-		`INSERT INTO embeddings (id, source_table, source_id, content_preview, embedding_json, dimensions)
-		 VALUES ('emb-1', 'episodic_memory', 'e1', 'test content', '[1.0, 0.0, 0.0]', 3)`)
+		`INSERT INTO embeddings (id, source_table, source_id, content_preview, embedding_blob, dimensions)
+		 VALUES ('emb-1', 'episodic_memory', 'e1', 'test content', ?, 3)`, blob)
 
 	err = idx.BuildFromStore(store)
 	if err != nil {
