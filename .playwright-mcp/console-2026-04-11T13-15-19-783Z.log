@@ -1,0 +1,13 @@
+[   94313ms] [ERROR] WebSocket connection to 'ws://127.0.0.1:18789/ws' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:18789/:9119
+[   96316ms] [ERROR] WebSocket connection to 'ws://127.0.0.1:18789/ws' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:18789/:9119
+[  367679ms] [ERROR] WebSocket connection to 'ws://127.0.0.1:18789/ws' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:18789/:9119
+[  369681ms] [ERROR] WebSocket connection to 'ws://127.0.0.1:18789/ws' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:18789/:9119
+[  567447ms] ReferenceError: isAgent is not defined
+    at WorkspaceEngine.drawBot (http://127.0.0.1:18789/:8875:76)
+    at http://127.0.0.1:18789/:8838:45
+    at Array.forEach (<anonymous>)
+    at WorkspaceEngine.render (http://127.0.0.1:18789/:8838:16)
+    at loop (http://127.0.0.1:18789/:8472:29)
+    at WorkspaceEngine.start (http://127.0.0.1:18789/:8474:7)
+    at startWorkspaceEngine (http://127.0.0.1:18789/:8283:225)
+    at http://127.0.0.1:18789/:2004:61
