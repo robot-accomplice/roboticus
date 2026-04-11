@@ -114,11 +114,9 @@ jobs:
           cp "${BINARY_NAME}" "${RAW_NAME}"
 
           # Archive for site installer (roboticus-VERSION-OS-ARCH.tar.gz/zip).
+          # Use Go-native names to match site installer's arch mapping.
           ARCH_NAME="${GOARCH}"
-          if [ "${GOARCH}" = "amd64" ]; then ARCH_NAME="x86_64"; fi
-          if [ "${GOARCH}" = "arm64" ]; then ARCH_NAME="aarch64"; fi
           OS_NAME="${GOOS}"
-          if [ "${GOOS}" = "darwin" ]; then OS_NAME="macos"; fi
           if [ "${GOOS}" = "windows" ]; then
             ARCHIVE="roboticus-${BUILD_VERSION}-${OS_NAME}-${ARCH_NAME}.zip"
             zip "${ARCHIVE}" "${BINARY_NAME}"
