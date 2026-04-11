@@ -164,7 +164,7 @@ jobs:
       - name: Generate SHA-256 checksums
         working-directory: dist
         run: |
-          sha256sum roboticus-*.tar.gz roboticus-*.zip 2>/dev/null > SHA256SUMS.txt || true
+          sha256sum roboticus-* > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
       - name: Generate changelog from commits
