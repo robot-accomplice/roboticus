@@ -395,3 +395,69 @@ func (g *InternalProtocolGuard) Check(content string) GuardResult {
 func (g *InternalProtocolGuard) CheckWithContext(content string, _ *GuardContext) GuardResult {
 	return g.Check(content)
 }
+
+// --- PlaceholderContentGuard ---
+
+// PlaceholderContentGuard detects template/placeholder regurgitation where the
+// model returns unfilled template text instead of a genuine response. This
+// catches patterns like "[Insert topic here]", "[Your name]", etc.
+type PlaceholderContentGuard struct{}
+
+func (g *PlaceholderContentGuard) Name() string { return "placeholder_content" }
+func (g *PlaceholderContentGuard) Check(content string) GuardResult {
+	lower := strings.ToLower(content)
+
+	// Bracket-delimited placeholders (the exact failure mode observed).
+	placeholderPatterns := []string{
+		"[insert ", "[your ", "[add ", "[fill in",
+		"[enter ", "[replace ", "[describe ",
+		"[name", "[topic", "[subject",
+		"[relevant ", "[specific ", "[appropriate ",
+	}
+	for _, p := range placeholderPatterns {
+		if strings.Contains(lower, p) {
+			return GuardResult{
+				Passed:  false,
+				Retry:   true,
+				Reason:  "response contains unfilled template placeholder: " + p,
+				Verdict: GuardRetryRequested,
+			}
+		}
+	}
+
+	// Common template boilerplate that signals the model regurgitated a template
+	// instead of doing the actual work requested.
+	templateSignals := []string{
+		"lorem ipsum",
+		"placeholder text",
+		"example here",
+		"insert the main topic",
+		"insert topic",
+		"insert a ",
+		"here is a template",
+	}
+	for _, sig := range templateSignals {
+		if strings.Contains(lower, sig) {
+			return GuardResult{
+				Passed:  false,
+				Retry:   true,
+				Reason:  "response appears to be template boilerplate: " + sig,
+				Verdict: GuardRetryRequested,
+			}
+		}
+	}
+
+	// Asterisk/bold-delimited placeholders like **Insert X here**.
+	if placeholderBoldRe.MatchString(content) {
+		return GuardResult{
+			Passed:  false,
+			Retry:   true,
+			Reason:  "response contains bold-formatted placeholder directive",
+			Verdict: GuardRetryRequested,
+		}
+	}
+
+	return GuardResult{Passed: true}
+}
+
+var placeholderBoldRe = regexp.MustCompile(`\*\*[Ii]nsert\b[^*]{3,60}\*\*`)

@@ -556,7 +556,7 @@ func DefaultConfig() Config {
 			WatchMode:            true,
 			ScriptTimeoutSeconds: 30,
 			ScriptMaxOutputBytes: 1 << 20, // 1 MiB
-			AllowedInterpreters:  []string{"sh", "bash", "python3", "node", "ruby", "perl"},
+			AllowedInterpreters:  []string{"sh", "bash", "python3", "node", "ruby", "perl", "pwsh", "gosh"},
 			SandboxEnv:           true,
 			HotReload:            true,
 			ScriptMaxMemoryBytes: 256 << 20, // 256 MiB

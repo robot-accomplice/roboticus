@@ -185,7 +185,16 @@ func NewServer(ctx context.Context, cfg ServerConfig, state *AppState) *http.Ser
 
 		// Routing profile.
 		r.Get("/api/routing/profile", routes.GetRoutingProfile(state.Store))
-		r.Put("/api/routing/profile", routes.PutRoutingProfile(state.Store))
+		var llmRouter *llm.Router
+		if state.LLM != nil {
+			llmRouter = state.LLM.Router()
+		}
+		r.Put("/api/routing/profile", routes.PutRoutingProfile(state.Store, llmRouter))
+
+		// Circuit breaker observability and reset.
+		r.Get("/api/routing/breakers", routes.GetBreakers(state.LLM))
+		r.Post("/api/routing/breakers/reset", routes.ResetBreakers(state.LLM))
+		r.Post("/api/routing/breakers/{provider}/reset", routes.ResetBreakerProvider(state.LLM))
 
 		// Cron.
 		r.Get("/api/cron/jobs", routes.ListCronJobs(state.Store))

@@ -279,6 +279,32 @@ func SelectByMetascore(profiles []ModelProfile, breakers *BreakerRegistry) *Mode
 	return best
 }
 
+// selectByMetascoreWeightedWithBreakers picks the highest-scoring model using
+// custom weights while also consulting circuit breakers and availability.
+func selectByMetascoreWeightedWithBreakers(profiles []ModelProfile, weights RoutingWeights, breakers *BreakerRegistry) *ModelProfile {
+	var best *ModelProfile
+	var bestScore float64
+
+	for i := range profiles {
+		p := &profiles[i]
+		if p.Availability <= 0 {
+			continue
+		}
+		if breakers != nil {
+			cb := breakers.Get(p.Provider)
+			if !cb.Allow() {
+				continue
+			}
+		}
+		score := p.MetascoreWith(weights)
+		if best == nil || score > bestScore {
+			best = p
+			bestScore = score
+		}
+	}
+	return best
+}
+
 // SelectByMetascoreWeighted picks the highest-scoring model using custom weights.
 // Unlike SelectByMetascore, this variant does not consult circuit breakers — the
 // caller is responsible for filtering unavailable providers beforehand.

@@ -37,6 +37,10 @@ type Router struct {
 	// MetascoreSelector, when non-nil, is used instead of heuristic routing.
 	// Set via Router.EnableMetascoreRouting.
 	MetascoreSelector func(targets []RouteTarget) *ModelProfile
+
+	// routingWeights holds user-configured axis weights for metascore routing.
+	// Protected by overrideMu (reused to avoid a second mutex).
+	routingWeights *RoutingWeights
 }
 
 // RouteTarget pairs a model name with its provider and tier.
@@ -80,11 +84,32 @@ func (r *Router) ClearOverride() {
 	r.overrideMu.Unlock()
 }
 
+// SetRoutingWeights updates the user-configured axis weights used by metascore
+// routing. Pass nil to revert to DefaultRoutingWeights. Thread-safe.
+func (r *Router) SetRoutingWeights(w *RoutingWeights) {
+	r.overrideMu.Lock()
+	r.routingWeights = w
+	r.overrideMu.Unlock()
+}
+
+// GetRoutingWeights returns a copy of the current routing weights. Thread-safe.
+func (r *Router) GetRoutingWeights() RoutingWeights {
+	r.overrideMu.RLock()
+	defer r.overrideMu.RUnlock()
+	if r.routingWeights != nil {
+		return *r.routingWeights
+	}
+	return DefaultRoutingWeights()
+}
+
 // EnableMetascoreRouting activates runtime-feedback-driven model selection.
+// The selector reads user-configured routing weights (set via SetRoutingWeights)
+// at each invocation so that dashboard changes take effect immediately.
 func (r *Router) EnableMetascoreRouting(quality *QualityTracker, latency *LatencyTracker, capacity *CapacityTracker, breakers *BreakerRegistry) {
 	r.MetascoreSelector = func(targets []RouteTarget) *ModelProfile {
 		profiles := BuildModelProfiles(targets, quality, latency, capacity, breakers)
-		return SelectByMetascore(profiles, breakers)
+		w := r.GetRoutingWeights()
+		return selectByMetascoreWeightedWithBreakers(profiles, w, breakers)
 	}
 }
 

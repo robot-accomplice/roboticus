@@ -139,7 +139,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 // and a masked generic response for server errors (5xx).
 func writeError(w http.ResponseWriter, status int, msg string) {
 	if status >= 500 {
-		log.Warn().Str("error", msg).Msg("health check found degraded component")
+		log.Warn().Str("error", msg).Int("status", status).Msg("internal server error")
 		w.Header().Set("Content-Type", "application/problem+json")
 		w.WriteHeader(status)
 		_ = json.NewEncoder(w).Encode(map[string]any{

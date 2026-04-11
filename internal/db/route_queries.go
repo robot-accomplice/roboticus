@@ -742,6 +742,19 @@ func (rq *RouteQueries) ModelCostBreakdown(ctx context.Context, offset string) (
 		 GROUP BY model ORDER BY COUNT(*) DESC`, offset)
 }
 
+// ModelQualityBreakdown returns per-model quality/efficacy aggregates.
+func (rq *RouteQueries) ModelQualityBreakdown(ctx context.Context, offset string) (*sql.Rows, error) {
+	return rq.q.QueryContext(ctx,
+		`SELECT model,
+		        COALESCE(AVG(quality_score), 0),
+		        SUM(CASE WHEN quality_score IS NOT NULL THEN 1 ELSE 0 END),
+		        SUM(CASE WHEN escalation = 1 THEN 1 ELSE 0 END),
+		        COALESCE(AVG(latency_ms), 0)
+		 FROM inference_costs
+		 WHERE created_at >= datetime('now', ? || ' hours')
+		 GROUP BY model`, offset)
+}
+
 // ListModelSelectionEvents returns recent model selection events with candidates.
 func (rq *RouteQueries) ListModelSelectionEvents(ctx context.Context, limit int) (*sql.Rows, error) {
 	return rq.q.QueryContext(ctx,

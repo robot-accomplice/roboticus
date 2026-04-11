@@ -119,8 +119,8 @@ func TestConfig_DefaultValues_NewFields(t *testing.T) {
 	if cfg.Skills.ScriptMaxOutputBytes != 1<<20 {
 		t.Errorf("expected ScriptMaxOutputBytes=1MiB, got %d", cfg.Skills.ScriptMaxOutputBytes)
 	}
-	if len(cfg.Skills.AllowedInterpreters) != 6 {
-		t.Errorf("expected 6 allowed interpreters, got %d", len(cfg.Skills.AllowedInterpreters))
+	if len(cfg.Skills.AllowedInterpreters) != 8 {
+		t.Errorf("expected 8 allowed interpreters, got %d", len(cfg.Skills.AllowedInterpreters))
 	}
 	if cfg.Skills.ScriptMaxMemoryBytes != 256<<20 {
 		t.Errorf("expected ScriptMaxMemoryBytes=256MiB, got %d", cfg.Skills.ScriptMaxMemoryBytes)
