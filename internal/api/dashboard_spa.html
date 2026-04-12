@@ -2789,37 +2789,24 @@
                 ? '<span class="badge" style="font-size:0.62rem;padding:0.08rem 0.35rem;background:var(--accent-dim);color:var(--text)">catalog</span>'
                 : '';
             var vars = th.variables || {};
-            var bgC = vars['--bg'] || '#111';
-            var sfC = vars['--surface'] || vars['--surface-2'] || '#222';
-            var acC = vars['--accent'] || swatch || '#888';
-            var txC = vars['--text'] || '#ccc';
-            var mtC = vars['--muted'] || '#666';
-            var preview = '<div style="width:80px;height:50px;border-radius:4px;flex-shrink:0;overflow:hidden;border:1px solid var(--border-ghost);display:flex;background:' + esc(bgC) + '">'
-              + '<div style="width:14px;background:' + esc(sfC) + ';display:flex;flex-direction:column;padding:3px 2px;gap:2px">'
-              + '<div style="width:8px;height:2px;border-radius:1px;background:' + esc(acC) + '"></div>'
-              + '<div style="width:6px;height:1px;border-radius:1px;background:' + esc(mtC) + '"></div>'
-              + '<div style="width:7px;height:1px;border-radius:1px;background:' + esc(mtC) + '"></div>'
-              + '<div style="width:5px;height:1px;border-radius:1px;background:' + esc(mtC) + '"></div>'
-              + '</div>'
-              + '<div style="flex:1;padding:3px 4px;display:flex;flex-direction:column;gap:2px">'
-              + '<div style="height:3px;border-radius:1px;background:' + esc(sfC) + ';border-bottom:1px solid ' + esc(acC) + '"></div>'
-              + '<div style="flex:1;display:flex;gap:2px">'
-              + '<div style="flex:1;border-radius:2px;background:' + esc(sfC) + '"></div>'
-              + '<div style="flex:1;border-radius:2px;background:' + esc(sfC) + '"></div>'
-              + '</div>'
-              + '<div style="height:6px;border-radius:2px;background:' + esc(sfC) + ';display:flex;align-items:center;padding:0 3px">'
-              + '<div style="width:12px;height:2px;border-radius:1px;background:' + esc(txC) + ';opacity:0.5"></div>'
-              + '</div>'
-              + '</div>'
-              + '</div>';
+            var textures = th.textures || {};
+            var textureNames = Object.keys(textures);
+            var textureHint = textureNames.length > 0
+              ? '<div style="margin-top:0.15rem;font-size:0.62rem;color:var(--accent-dim);text-transform:uppercase;letter-spacing:0.05em">\u2728 ' + textureNames.join(', ') + ' texture' + (textureNames.length > 1 ? 's' : '') + '</div>'
+              : '';
+            var fonts = th.fonts || [];
+            var fontHint = fonts.length > 0
+              ? '<div style="margin-top:0.1rem;font-size:0.62rem;color:var(--text-dim)">Font: ' + esc(fonts[0].split('family=')[1] || '').split('&')[0].split(':')[0].replace(/\+/g, ' ') + '</div>'
+              : '';
             return '<div style="display:flex;align-items:center;gap:0.6rem;padding:0.6rem 0.65rem;border:1px solid var(--border-soft);border-radius:6px;background:rgba(255,255,255,0.01)">'
-              + preview
+              + '<div class="catalog-theme-preview" data-theme-vars=\'' + esc(JSON.stringify(vars)) + '\' style="flex-shrink:0"></div>'
               + '<div style="min-width:0;flex:1">'
               + '<div style="display:flex;align-items:center;gap:0.4rem;flex-wrap:wrap">'
               + '<span style="font-family:var(--font-mono);font-size:0.82rem;color:var(--text)">' + esc(name) + '</span>'
               + sourceBadge + installedBadge
               + '</div>'
               + '<div style="margin-top:0.18rem;font-size:0.75rem;color:var(--muted);line-height:1.35">' + esc(desc) + '</div>'
+              + textureHint + fontHint
               + (author ? '<div style="margin-top:0.15rem;font-size:0.68rem;color:var(--text-dim)">by ' + esc(author) + '</div>' : '')
               + '</div>'
               + '</div>';
@@ -2829,6 +2816,16 @@
             + '  <div><div class="card-title">themes</div><div style="font-size:0.75rem;color:var(--muted)">available themes (' + themeItems.length + ')</div></div>'
             + '  <div style="margin-top:0.75rem;display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:0.55rem">' + themeRows + '</div>'
             + '</div>';
+          // Post-render: populate theme previews using buildThemePreview
+          setTimeout(function() {
+            document.querySelectorAll('.catalog-theme-preview').forEach(function(el) {
+              try {
+                var v = JSON.parse(el.getAttribute('data-theme-vars') || '{}');
+                var preview = buildThemePreview(v);
+                el.appendChild(preview);
+              } catch(_) {}
+            });
+          }, 0);
         }
 
         if (tab === 'catalog') {
@@ -9890,6 +9887,7 @@
       // still walking back — keep drawing at reduced opacity
     }
     var tc = this._themeColors || { surface: '#081329', muted: '#9baad6', text: '#dee5ff', aR: 193, aG: 128, aB: 255 };
+    var isAgent = (bot.role === 'orchestrator' || bot.role === 'agent');
     var px = bot.x * W, py = bot.y * H, t = this.time, frame = bot.animFrame;
     var sizing = { orchestrator: { scale: 1.0, w: 20, h: 24 }, agent: { scale: 1.0, w: 20, h: 24 } };
     var s = sizing[bot.role] || { scale: 0.7, w: 14, h: 18 };
