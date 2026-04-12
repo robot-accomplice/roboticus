@@ -2788,8 +2788,32 @@
               : source === 'catalog'
                 ? '<span class="badge" style="font-size:0.62rem;padding:0.08rem 0.35rem;background:var(--accent-dim);color:var(--text)">catalog</span>'
                 : '';
+            var vars = th.variables || {};
+            var bgC = vars['--bg'] || '#111';
+            var sfC = vars['--surface'] || vars['--surface-2'] || '#222';
+            var acC = vars['--accent'] || swatch || '#888';
+            var txC = vars['--text'] || '#ccc';
+            var mtC = vars['--muted'] || '#666';
+            var preview = '<div style="width:80px;height:50px;border-radius:4px;flex-shrink:0;overflow:hidden;border:1px solid var(--border-ghost);display:flex;background:' + esc(bgC) + '">'
+              + '<div style="width:14px;background:' + esc(sfC) + ';display:flex;flex-direction:column;padding:3px 2px;gap:2px">'
+              + '<div style="width:8px;height:2px;border-radius:1px;background:' + esc(acC) + '"></div>'
+              + '<div style="width:6px;height:1px;border-radius:1px;background:' + esc(mtC) + '"></div>'
+              + '<div style="width:7px;height:1px;border-radius:1px;background:' + esc(mtC) + '"></div>'
+              + '<div style="width:5px;height:1px;border-radius:1px;background:' + esc(mtC) + '"></div>'
+              + '</div>'
+              + '<div style="flex:1;padding:3px 4px;display:flex;flex-direction:column;gap:2px">'
+              + '<div style="height:3px;border-radius:1px;background:' + esc(sfC) + ';border-bottom:1px solid ' + esc(acC) + '"></div>'
+              + '<div style="flex:1;display:flex;gap:2px">'
+              + '<div style="flex:1;border-radius:2px;background:' + esc(sfC) + '"></div>'
+              + '<div style="flex:1;border-radius:2px;background:' + esc(sfC) + '"></div>'
+              + '</div>'
+              + '<div style="height:6px;border-radius:2px;background:' + esc(sfC) + ';display:flex;align-items:center;padding:0 3px">'
+              + '<div style="width:12px;height:2px;border-radius:1px;background:' + esc(txC) + ';opacity:0.5"></div>'
+              + '</div>'
+              + '</div>'
+              + '</div>';
             return '<div style="display:flex;align-items:center;gap:0.6rem;padding:0.6rem 0.65rem;border:1px solid var(--border-soft);border-radius:6px;background:rgba(255,255,255,0.01)">'
-              + '<div style="width:24px;height:24px;border-radius:4px;background:' + esc(swatch) + ';flex-shrink:0;border:1px solid var(--border-ghost)"></div>'
+              + preview
               + '<div style="min-width:0;flex:1">'
               + '<div style="display:flex;align-items:center;gap:0.4rem;flex-wrap:wrap">'
               + '<span style="font-family:var(--font-mono);font-size:0.82rem;color:var(--text)">' + esc(name) + '</span>'
@@ -6643,7 +6667,7 @@
       return api('/api/workspace/state').then(function(data) {
         _cachedWorkspace = data;
         return '<div style="display:flex;flex-direction:column;height:calc(100vh - 8rem);min-height:400px;gap:0">'
-          + '<div id="ws-wrap" style="position:relative;flex:1;min-height:0;overflow:hidden"><canvas id="ws-canvas" style="display:block;border-radius:var(--radius)"></canvas></div>'
+          + '<div id="ws-wrap" style="position:relative;flex:1;min-height:300px;overflow:hidden"><canvas id="ws-canvas" style="display:block;width:100%;height:100%;border-radius:var(--radius)"></canvas></div>'
           + '<div id="ws-status-panel" style="flex-shrink:0;padding:0.5rem 0.75rem;background:var(--surface);border-top:1px solid var(--border-ghost);display:flex;flex-wrap:wrap;align-items:center;gap:0.5rem 1rem;min-height:2.5rem"></div>'
           + '</div>';
       });
