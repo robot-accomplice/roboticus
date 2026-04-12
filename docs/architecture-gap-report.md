@@ -9,7 +9,7 @@
 
 ## Executive Summary
 
-The Go implementation achieves **strong structural compliance** with the connector-factory pattern. The pipeline is the single source of truth for business logic, all 8 entry points use `RunPipeline()`, and architecture tests enforce connector thinness. However, there are **7 systemic gaps** where the Go code diverges from the Rust reference architecture's principles.
+The Go implementation achieves **strong structural compliance** with the connector-factory pattern. The pipeline is the single source of truth for business logic, all 8 entry points use `RunPipeline()`, and architecture tests enforce connector thinness. Of the original 7 systemic gaps, **4 are now closed** (v1.0.1 + v1.0.2).
 
 | Category | Compliant | Gaps |
 |----------|-----------|------|
@@ -17,9 +17,9 @@ The Go implementation achieves **strong structural compliance** with the connect
 | Pipeline Stage Gating | 13/13 flags checked | 0 |
 | Guard Chain | 25 full / 6 stream | 0 |
 | Post-Turn Parity (standard/stream) | Enforced by test | 0 |
-| Security Claim Composition | Code exists | **Not wired** |
-| HMAC Trust Boundaries | Code exists | **Not active** |
-| Context Budget (tool overhead) | Fixed this session | Verify |
+| Security Claim Composition | Wired (v1.0.2) | **CLOSED** |
+| HMAC Trust Boundaries | Active (v1.0.2) | **CLOSED** |
+| Context Budget (tool overhead) | Fixed | Verify |
 | Memory Injection Guarantee | Two-stage (v1.0.1) | **CLOSED** |
 | Feature Parity Across Channels | Mostly | **2 gaps** |
 | Off-Pipeline Surfaces | 3 documented | 0 |

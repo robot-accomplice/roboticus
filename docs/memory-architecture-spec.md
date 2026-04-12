@@ -580,22 +580,20 @@ Rust starts all entries at 1.0 and recall resets to 1.0.
 **Go fix**: Default 0.8, recall reinforces +0.1 (capped at 1.0). Creates
 organic differentiation over time.
 
-### 7.4 FTS Coverage Gaps (OPEN)
+### 7.4 ~~FTS Coverage Gaps~~ FIXED (Go v1.0.2)
 
-Only episodic, semantic, and working memories are in `memory_fts`. Procedural
-and relationship memories rely on LIKE fallback.
+All 5 tiers now have FTS triggers: episodic, semantic, working (pre-existing),
+procedural and relationship (added in v1.0.2 via migration 037).
 
 ### 7.5 No UPDATE Trigger on Episodic FTS (OPEN)
 
 If episodic content is updated, the FTS entry becomes stale.
 
-### 7.6 Table Name Mismatch (MITIGATED)
+### 7.6 ~~Table Name Mismatch~~ FIXED (Go v1.0.2)
 
-`memory_fts.source_table` stores short names (`'episodic'`), while
-`memory_index.source_table` stores full names (`'episodic_memory'`).
-
-**Go mitigation**: Dual-match JOIN:
-`mi.source_table = fts.source_table || '_memory' OR mi.source_table = fts.source_table`
+Migration 037 normalizes all existing `memory_fts` and `memory_index` rows to
+full table names. Triggers recreated with full names. `normalizeTableName()`
+retained for legacy data safety. JOIN simplified to direct match.
 
 ### 7.7 Episodic-to-Semantic Promotion (OPEN)
 
@@ -624,11 +622,11 @@ tier-native index sync, not promotion.
 
 | Priority | Gap | Notes |
 |----------|-----|-------|
-| **P1** | Model tool-calling reliability | `gemma4` doesn't reliably call `search_memories` -- framework works, model is the bottleneck |
-| **P1** | FTS table name mismatch | Dual-match JOIN mitigates but root cause unfixed |
+| **P1** | Model tool-calling reliability | `gemma4` doesn't reliably call `search_memories` -- addressed by IntentMemoryRecall baselining (router escalates) |
+| ~~P1~~ | ~~FTS table name mismatch~~ | **CLOSED v1.0.2** -- migration 037 normalizes to full names |
 | **P2** | Episodic-to-semantic promotion | Consolidation Phase 4 |
-| **P2** | No FTS for procedural/relationship | LIKE fallback only |
-| **P2** | Auto-indexing in ingest path | Rust does `auto_index()` at ingestion; Go only indexes during consolidation backfill |
+| ~~P2~~ | ~~No FTS for procedural/relationship~~ | **CLOSED v1.0.2** -- triggers added |
+| ~~P2~~ | ~~Auto-indexing in ingest path~~ | **CLOSED v1.0.2** -- autoIndex() after every store_* |
 | **P3** | No UPDATE trigger on episodic FTS | Stale FTS on content change |
 
 ### 8.3 Testing Results (2026-04-12)
