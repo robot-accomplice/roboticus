@@ -142,8 +142,29 @@ The workspace status panel doesn't stick to the viewport bottom. Multiple calc a
 
 Fix: use `height: 100%` on the workspace wrapper (not viewport-relative calc) since the `#content` element already fills the available space via `flex: 1`. The Rust version uses `height: 100%` (see workspace.js line 4).
 
+## Dashboard WebSocket-First Architecture (Security)
+
+**Problem**: The dashboard currently makes 50+ authenticated HTTP API calls. Every one of these endpoints is accessible to any process on the machine (localhost). A malicious local process can sniff the API key from any request and gain full access to config, memory, sessions, wallet — everything.
+
+**Fix**: Move the dashboard to a WebSocket-first architecture:
+
+1. **Single authenticated connection**: Dashboard connects via `/ws` with a one-time ticket (already implemented via `/api/ws-ticket`). After that, no API key is sent in HTTP headers.
+
+2. **Server-push for all read data**: Instead of the dashboard fetching `/api/sessions`, `/api/memory/episodic`, `/api/stats/costs`, etc., the server pushes state updates over the WebSocket channel. The dashboard subscribes to topics it needs.
+
+3. **Mutations via WebSocket messages**: Config changes, cron management, skill toggling — send as typed WebSocket messages instead of HTTP PUT/POST. This eliminates authenticated HTTP endpoints that local processes can abuse.
+
+4. **Minimal API surface**: Only keep HTTP endpoints that external integrations genuinely need (agent message, A2A, health, webhooks). Dashboard-only endpoints should be WebSocket-only.
+
+5. **Ticket expiry**: The WS ticket already expires after use. Strengthen by binding the ticket to the WebSocket session — if the connection drops, a new ticket is required.
+
+**Why this matters**: On a shared machine, any process can `curl http://127.0.0.1:18789/api/config` with the API key (which is visible in the dashboard's network traffic). Moving to WebSocket means the API key is only used once for the ticket exchange, and all subsequent communication is over a persistent connection that can't be replayed.
+
+**Migration path**: This is a v1.0.4 architectural change, not a quick fix. The EventBus already supports pub/sub — extend it with typed message routing so the dashboard can subscribe to specific data channels and send mutations.
+
 ## Files to Modify
 
 - `internal/api/dashboard_spa.html` — settings renderer (primary work)
 - `internal/api/routes/config_schema.go` — may need section ordering metadata
-- No backend changes needed — schema endpoint is complete
+- No backend changes needed for settings — schema endpoint is complete
+- WebSocket-first migration is a separate v1.0.4 track
