@@ -956,7 +956,6 @@ per-intent-class latency scorecard and 6-axis metascore dimension reporting.`,
 			model         string
 			pass          int
 			fail          int
-			totalMs       int64
 			avgQuality    float64
 			intentQuality map[string]float64 // intent_class → avg quality 0-1
 			latencies     map[string][]int64  // intent_class → latencies in ms
