@@ -9,15 +9,25 @@ import (
 	"roboticus/internal/db"
 )
 
+// ThemeTexture describes a CSS texture or pattern overlay.
+type ThemeTexture struct {
+	Kind  string `json:"kind"`  // "css" or "url"
+	Value string `json:"value"` // CSS gradient/pattern string or URL
+}
+
 // ThemeManifest describes a UI theme.
 type ThemeManifest struct {
-	ID          string            `json:"id"`
-	Name        string            `json:"name"`
-	Description string            `json:"description"`
-	Author      string            `json:"author"`
-	Swatch      string            `json:"swatch"`    // primary color hex
-	Variables   map[string]string `json:"variables"` // CSS custom properties
-	Source      string            `json:"source"`    // "builtin", "catalog", "custom"
+	ID          string                  `json:"id"`
+	Name        string                  `json:"name"`
+	Description string                  `json:"description"`
+	Author      string                  `json:"author"`
+	Swatch      string                  `json:"swatch"`              // primary color hex
+	Variables   map[string]string       `json:"variables"`           // CSS custom properties
+	Source      string                  `json:"source"`              // "builtin", "catalog", "custom"
+	Textures    map[string]ThemeTexture `json:"textures,omitempty"`  // CSS gradients/patterns
+	Fonts       []string                `json:"fonts,omitempty"`     // Google Fonts URLs
+	Thumbnail   string                  `json:"thumbnail,omitempty"` // preview image data URI or URL
+	Version     string                  `json:"version,omitempty"`   // semver
 }
 
 var (
@@ -36,6 +46,33 @@ var builtinThemes = []ThemeManifest{
 		Variables: map[string]string{"--bg": "#002b36", "--surface": "#073642", "--accent": "#b58900", "--text": "#839496"}, Source: "builtin"},
 	{ID: "nord", Name: "Nord", Description: "Arctic color palette", Author: "roboticus", Swatch: "#88c0d0",
 		Variables: map[string]string{"--bg": "#2e3440", "--surface": "#3b4252", "--accent": "#88c0d0", "--text": "#d8dee9"}, Source: "builtin"},
+	{ID: "solarized", Name: "Solarized", Description: "Ethan Schoonover's precision-engineered color scheme", Author: "roboticus", Swatch: "#2aa198",
+		Variables: map[string]string{
+			"--bg": "#002b36", "--surface": "#073642", "--accent": "#2aa198",
+			"--text": "#839496", "--highlight": "#b58900", "--secondary": "#268bd2",
+		},
+		Textures: map[string]ThemeTexture{
+			"noise": {Kind: "css", Value: "url(data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='4' height='4'%3E%3Crect width='4' height='4' fill='%23002b36'/%3E%3Crect width='1' height='1' fill='%23073642' opacity='0.3'/%3E%3C/svg%3E)"},
+		},
+		Fonts:   []string{"https://fonts.googleapis.com/css2?family=Source+Code+Pro:wght@400;600&display=swap"},
+		Version: "1.0.0", Source: "builtin"},
+	{ID: "cyberpunk", Name: "Cyberpunk", Description: "Neon-soaked dystopian interface with scanline overlay", Author: "roboticus", Swatch: "#ff2a6d",
+		Variables: map[string]string{
+			"--bg": "#0d0221", "--surface": "#1a0a2e", "--accent": "#ff2a6d",
+			"--text": "#05d9e8", "--highlight": "#01ff70", "--secondary": "#05d9e8",
+		},
+		Textures: map[string]ThemeTexture{
+			"scanlines": {Kind: "css", Value: "repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.15) 2px, rgba(0,0,0,0.15) 4px)"},
+		},
+		Fonts:   []string{"https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap"},
+		Version: "1.0.0", Source: "builtin"},
+	{ID: "minimal", Name: "Minimal", Description: "High-contrast grayscale with no distractions", Author: "roboticus", Swatch: "#ffffff",
+		Variables: map[string]string{
+			"--bg": "#1a1a1a", "--surface": "#2a2a2a", "--accent": "#ffffff",
+			"--text": "#cccccc", "--highlight": "#e0e0e0", "--secondary": "#999999",
+		},
+		Fonts:   []string{},
+		Version: "1.0.0", Source: "builtin"},
 }
 
 var catalogThemes = []ThemeManifest{

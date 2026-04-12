@@ -12,6 +12,7 @@ import (
 	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/rs/zerolog/log"
 
+	"roboticus/internal/agent/tools"
 	"roboticus/internal/api/routes"
 	"roboticus/internal/browser"
 	"roboticus/internal/core"
@@ -32,6 +33,7 @@ type AppState struct {
 	Keystore        *core.Keystore
 	EventBus        *EventBus
 	Approvals       routes.ApprovalService
+	Tools           *tools.Registry
 	MCP             *mcp.ConnectionManager
 	MCPGateway      *mcp.Gateway // serves the agent's tools to external MCP clients
 	Plugins         *plugin.Registry

@@ -499,6 +499,7 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 		Keystore:        ks,
 		EventBus:        eventBus,
 		Approvals:       approvalMgr,
+		Tools:           tools,
 		MCP:             mcpMgr,
 	}
 

@@ -10,6 +10,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	agenttools "roboticus/internal/agent/tools"
 	"roboticus/internal/api"
 	"roboticus/internal/channel"
 	"roboticus/internal/core"
@@ -44,6 +45,13 @@ func (d *Daemon) run() {
 		connected := d.appState.MCP.ConnectAll(mcpCtx, mcpServers)
 		mcpCancel()
 		log.Info().Int("connected", connected).Int("configured", len(d.cfg.MCP.Servers)).Msg("MCP server connections established")
+
+		// Register MCP-discovered tools in the agent's ToolRegistry so they
+		// appear alongside builtins during inference.
+		if d.appState.Tools != nil && connected > 0 {
+			mcpTools := agenttools.RegisterMCPTools(d.appState.Tools, d.appState.MCP)
+			log.Info().Int("mcp_tools", mcpTools).Msg("MCP tools registered in agent tool registry")
+		}
 	}
 
 	// ── Startup Phase: Sub-agent registry (Rust parity) ──────────────────

@@ -25,6 +25,12 @@ const (
 	ThemeCrtOrange
 	// ThemeTerminal uses bold-only styling for maximum compatibility.
 	ThemeTerminal
+	// ThemeSolarized uses Ethan Schoonover's Solarized palette (dark variant).
+	ThemeSolarized
+	// ThemeCyberpunk uses neon pink/cyan/green on deep purple.
+	ThemeCyberpunk
+	// ThemeMinimal uses bold-only styling with no ANSI colors or nerdfonts.
+	ThemeMinimal
 )
 
 // ColorMode controls how color enablement is determined.
@@ -111,7 +117,7 @@ func (t *Theme) Variant() ThemeVariant { return t.variant }
 
 // IconOk returns the success icon.
 func (t *Theme) IconOk() string {
-	if t.nerdmode {
+	if t.nerdmode || t.variant == ThemeMinimal {
 		return "[OK]"
 	}
 	return "✓"
@@ -119,7 +125,7 @@ func (t *Theme) IconOk() string {
 
 // IconAction returns the action/progress icon.
 func (t *Theme) IconAction() string {
-	if t.nerdmode {
+	if t.nerdmode || t.variant == ThemeMinimal {
 		return "[>>]"
 	}
 	return "→"
@@ -127,7 +133,7 @@ func (t *Theme) IconAction() string {
 
 // IconWarn returns the warning icon.
 func (t *Theme) IconWarn() string {
-	if t.nerdmode {
+	if t.nerdmode || t.variant == ThemeMinimal {
 		return "[!!]"
 	}
 	return "⚠"
@@ -135,7 +141,7 @@ func (t *Theme) IconWarn() string {
 
 // IconError returns the error icon.
 func (t *Theme) IconError() string {
-	if t.nerdmode {
+	if t.nerdmode || t.variant == ThemeMinimal {
 		return "[XX]"
 	}
 	return "✗"
@@ -143,7 +149,7 @@ func (t *Theme) IconError() string {
 
 // IconDetail returns the detail/sub-item icon.
 func (t *Theme) IconDetail() string {
-	if t.nerdmode {
+	if t.nerdmode || t.variant == ThemeMinimal {
 		return ">"
 	}
 	return "→"
@@ -167,6 +173,12 @@ func (t *Theme) Accent() string {
 		return "\x1b[38;5;208m"
 	case ThemeTerminal:
 		return "\x1b[1m"
+	case ThemeSolarized:
+		return "\x1b[38;2;42;161;152m" // #2aa198 cyan
+	case ThemeCyberpunk:
+		return "\x1b[38;2;255;42;109m" // #ff2a6d hot pink
+	case ThemeMinimal:
+		return "\x1b[1m"
 	}
 	return ""
 }
@@ -184,6 +196,12 @@ func (t *Theme) Dim() string {
 	case ThemeCrtOrange:
 		return "\x1b[38;5;172m"
 	case ThemeTerminal:
+		return ""
+	case ThemeSolarized:
+		return "\x1b[38;2;131;148;150m" // #839496 base0
+	case ThemeCyberpunk:
+		return "\x1b[38;2;5;217;232m" // #05d9e8 cyan
+	case ThemeMinimal:
 		return ""
 	}
 	return ""
@@ -210,6 +228,12 @@ func (t *Theme) Reset() string {
 	case ThemeCrtOrange:
 		return "\x1b[0m\x1b[38;5;172m"
 	case ThemeTerminal:
+		return "\x1b[0m"
+	case ThemeSolarized:
+		return "\x1b[0m\x1b[38;2;131;148;150m"
+	case ThemeCyberpunk:
+		return "\x1b[0m\x1b[38;2;5;217;232m"
+	case ThemeMinimal:
 		return "\x1b[0m"
 	}
 	return "\x1b[0m"
@@ -327,6 +351,12 @@ func ParseThemeVariant(s string) ThemeVariant {
 		return ThemeCrtOrange
 	case "terminal", "plain":
 		return ThemeTerminal
+	case "solarized":
+		return ThemeSolarized
+	case "cyberpunk":
+		return ThemeCyberpunk
+	case "minimal":
+		return ThemeMinimal
 	default:
 		return ThemeAiPurple
 	}

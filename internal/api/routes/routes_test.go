@@ -230,8 +230,8 @@ func TestGetThemeCatalog(t *testing.T) {
 
 	body := jsonBody(t, rec)
 	themes := body["themes"].([]any)
-	if len(themes) != 7 {
-		t.Errorf("got %d themes, want 7", len(themes))
+	if len(themes) != 10 {
+		t.Errorf("got %d themes, want 10", len(themes))
 	}
 }
 
