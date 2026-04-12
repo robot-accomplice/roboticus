@@ -27,9 +27,53 @@ func (c *Client) marshalRequest(req *Request) ([]byte, error) {
 }
 
 func (c *Client) marshalOpenAI(req *Request) ([]byte, error) {
+	// Normalize messages for OpenAI-compatible wire format.
+	// Key fix: assistant messages with tool_calls MUST include "content": null
+	// (not omit the field). Go's omitempty on empty strings drops the field,
+	// which causes tool_call_id correlation failures on the next turn.
+	msgs := make([]map[string]any, 0, len(req.Messages))
+	for _, m := range req.Messages {
+		msg := map[string]any{"role": m.Role}
+
+		// Tool result messages.
+		if m.ToolCallID != "" {
+			msg["tool_call_id"] = m.ToolCallID
+			msg["content"] = m.Content
+			if m.Name != "" {
+				msg["name"] = m.Name
+			}
+			msgs = append(msgs, msg)
+			continue
+		}
+
+		// Assistant messages with tool calls: content must be present (not omitted).
+		// Providers disagree on null vs empty string:
+		//   - Moonshot/Kimi rejects null AND empty (wants non-empty)
+		//   - OpenAI rejects null (wants string, accepts empty)
+		// Compromise: use empty string "" — accepted by both.
+		if m.Role == "assistant" && len(m.ToolCalls) > 0 {
+			msg["content"] = m.Content // "" is fine for both
+			msg["tool_calls"] = m.ToolCalls
+			msgs = append(msgs, msg)
+			continue
+		}
+
+		// All other messages: include content, optional fields.
+		if m.Content != "" {
+			msg["content"] = m.Content
+		}
+		if len(m.ToolCalls) > 0 {
+			msg["tool_calls"] = m.ToolCalls
+		}
+		if m.Name != "" {
+			msg["name"] = m.Name
+		}
+		msgs = append(msgs, msg)
+	}
+
 	payload := map[string]any{
 		"model":    req.Model,
-		"messages": req.Messages,
+		"messages": msgs,
 		"stream":   req.Stream,
 	}
 	if req.MaxTokens > 0 {

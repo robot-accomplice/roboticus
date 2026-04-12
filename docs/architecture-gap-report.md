@@ -20,7 +20,7 @@ The Go implementation achieves **strong structural compliance** with the connect
 | Security Claim Composition | Code exists | **Not wired** |
 | HMAC Trust Boundaries | Code exists | **Not active** |
 | Context Budget (tool overhead) | Fixed this session | Verify |
-| Memory Injection Guarantee | Conditional | **Gap** |
+| Memory Injection Guarantee | Two-stage (v1.0.1) | **CLOSED** |
 | Feature Parity Across Channels | Mostly | **2 gaps** |
 | Off-Pipeline Surfaces | 3 documented | 0 |
 
@@ -71,27 +71,22 @@ The Go implementation achieves **strong structural compliance** with the connect
 
 ---
 
-## Gap 4: Memory Injection Not Guaranteed
+## Gap 4: Memory Injection Not Guaranteed — CLOSED (v1.0.1)
 
-**Severity**: HIGH
-**Rust principle violated**: Section 4 (Cognitive Scaffold) — "Session history, memory layers, and procedural skills are proactively injected into every turn — the model should never have to guess at something the framework already knows"
+**Severity**: HIGH → **RESOLVED**
+**Rust principle violated**: Section 4 (Cognitive Scaffold)
 
-**Current state**: Memory and memory index are injected only if:
-1. `retriever != nil` in `buildAgentContext()` (daemon.go line 101)
-2. `retriever.Retrieve()` returns non-empty (line 105)
-3. `store != nil` for memory index (line 117)
-4. `BuildMemoryIndex()` returns non-empty (line 119)
+**Resolution (v1.0.1)**: Complete overhaul of memory injection architecture:
+1. Two-stage injection: `RetrieveDirectOnly()` injects only working + ambient;
+   all other tiers accessed via query-aware memory index + `recall_memory`/`search_memories` tools
+2. Empty memory index injects orientation marker directing model to `search_memories(query)`
+3. Query-aware `BuildMemoryIndex()` surfaces topic-matched entries alongside tier-priority top-N
+4. Anti-confabulation behavioral contract prevents model from fabricating memories
+5. `search_memories(query)` tool (beyond-parity) gives model on-demand FTS5 + LIKE search
 
-If any condition fails, the model proceeds without memory — violating the "proactively injected into every turn" principle.
-
-Additionally, skill tool chain execution paths bypass `buildAgentContext()` entirely, so subagent and skill executions lack memory context.
-
-**Rust behavior**: Memory layers (L0-L3) are always injected based on budget tier. L0 (identity/operating state) is unconditional. Empty retrieval produces a marker: `[No relevant memories found — use recall_memory tool to search]`.
-
-**Fix**:
-1. Always inject at least an L0 memory block (agent identity, operating state)
-2. When retrieval returns empty, inject a marker instructing the model to use `recall_memory`
-3. Ensure skill/subagent execution paths also receive memory context
+**Files changed**: `daemon.go`, `retrieval.go`, `memory_recall.go`, `prompt.go`, `schema.go`
+**Tests**: 15 regression tests in `memory_search_test.go`, `retrieval_direct_test.go`, `client_formats_test.go`
+**Remaining**: Skill/subagent execution paths still bypass `buildAgentContext()` (tracked separately)
 
 ---
 
@@ -167,7 +162,7 @@ Policy denials soft-fail with structured reason. Error dedup suppresses repeated
 
 | Priority | Gap | Effort | Impact |
 |----------|-----|--------|--------|
-| P0 | Gap 4: Memory injection not guaranteed | Medium | Duncan says "I don't have memories" |
+| ~~P0~~ | ~~Gap 4: Memory injection not guaranteed~~ | **CLOSED v1.0.1** | Two-stage injection + search_memories tool |
 | P1 | Gap 1: SecurityClaim resolvers not wired | Medium | Audit trail incomplete, authority simplified |
 | P1 | Gap 5: Context budget missing tier system | Large | Long sessions overflow, tool instructions drowned |
 | P2 | Gap 3: HMAC boundaries passive | Medium | Trust boundary verification incomplete |

@@ -351,6 +351,93 @@ func TestParseErrorResponse_429(t *testing.T) {
 	}
 }
 
+// Regression: assistant messages with tool_calls must serialize "content" as empty string,
+// not omit the field (which Go's omitempty does for empty strings).
+// Before fix: providers rejected the second ReAct turn because tool_call_id couldn't
+// correlate to the previous assistant message (malformed serialization).
+
+func TestMarshalOpenAI_AssistantToolCallsContentPresent(t *testing.T) {
+	c := &Client{provider: &Provider{Format: FormatOpenAI}}
+	req := &Request{
+		Model: "gpt-4",
+		Messages: []Message{
+			{Role: "user", Content: "search for palm"},
+			{Role: "assistant", Content: "", ToolCalls: []ToolCall{
+				{ID: "call_123", Type: "function", Function: ToolCallFunc{Name: "search_memories", Arguments: `{"query":"palm"}`}},
+			}},
+			{Role: "tool", Content: `{"results": []}`, ToolCallID: "call_123", Name: "search_memories"},
+		},
+	}
+	data, err := c.marshalRequest(req)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	msgs := raw["messages"].([]any)
+	if len(msgs) != 3 {
+		t.Fatalf("message count = %d, want 3", len(msgs))
+	}
+
+	// Assistant message must have "content" field present (not omitted).
+	assistantMsg := msgs[1].(map[string]any)
+	if _, hasContent := assistantMsg["content"]; !hasContent {
+		t.Error("assistant message with tool_calls must include 'content' field — regression: was omitted by omitempty")
+	}
+	// Content should be empty string, not null.
+	content := assistantMsg["content"]
+	if content != "" {
+		t.Errorf("assistant content should be empty string, got %v", content)
+	}
+
+	// Must have tool_calls.
+	if _, hasTC := assistantMsg["tool_calls"]; !hasTC {
+		t.Error("assistant message should have tool_calls")
+	}
+
+	// Tool result message must have tool_call_id.
+	toolMsg := msgs[2].(map[string]any)
+	if toolMsg["tool_call_id"] != "call_123" {
+		t.Errorf("tool_call_id = %v, want call_123", toolMsg["tool_call_id"])
+	}
+}
+
+func TestMarshalOpenAI_ToolResultContentPresent(t *testing.T) {
+	c := &Client{provider: &Provider{Format: FormatOpenAI}}
+	req := &Request{
+		Model: "gpt-4",
+		Messages: []Message{
+			{Role: "tool", Content: "result data", ToolCallID: "call_abc", Name: "recall_memory"},
+		},
+	}
+	data, err := c.marshalRequest(req)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var raw map[string]any
+	_ = json.Unmarshal(data, &raw)
+	msgs := raw["messages"].([]any)
+	toolMsg := msgs[0].(map[string]any)
+
+	if toolMsg["role"] != "tool" {
+		t.Errorf("role = %v", toolMsg["role"])
+	}
+	if toolMsg["tool_call_id"] != "call_abc" {
+		t.Errorf("tool_call_id = %v", toolMsg["tool_call_id"])
+	}
+	if toolMsg["content"] != "result data" {
+		t.Errorf("content = %v", toolMsg["content"])
+	}
+	if toolMsg["name"] != "recall_memory" {
+		t.Errorf("name = %v", toolMsg["name"])
+	}
+}
+
 func TestParseErrorResponse_401(t *testing.T) {
 	c := &Client{provider: &Provider{Name: "test"}}
 	resp := &http.Response{
