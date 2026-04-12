@@ -709,7 +709,7 @@ func TestRunStandardInference_ExecutorError(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCmdMemory_NoArgs(t *testing.T) {
-	h := NewBotCommandHandler()
+	h := NewBotCommandHandler(nil, nil)
 	sess := NewSession("s1", "a1", "Bot")
 	result, _ := h.cmdMemory(context.Background(), "", sess)
 	if result == nil || result.Content == "" {
@@ -718,7 +718,7 @@ func TestCmdMemory_NoArgs(t *testing.T) {
 }
 
 func TestCmdMemory_NoStore(t *testing.T) {
-	h := NewBotCommandHandler() // no store
+	h := NewBotCommandHandler(nil, nil) // no store
 	sess := NewSession("s1", "a1", "Bot")
 	result, _ := h.cmdMemory(context.Background(), "stats", sess)
 	if result == nil {
@@ -731,7 +731,7 @@ func TestCmdMemory_NoStore(t *testing.T) {
 
 func TestCmdMemory_UnknownSubcommand(t *testing.T) {
 	store := testutil.TempStore(t)
-	h := NewBotCommandHandler(store)
+	h := NewBotCommandHandler(nil, store)
 	sess := NewSession("s1", "a1", "Bot")
 	result, _ := h.cmdMemory(context.Background(), "foobar", sess)
 	if result == nil {
@@ -741,7 +741,7 @@ func TestCmdMemory_UnknownSubcommand(t *testing.T) {
 
 func TestCmdMemory_SearchNoQuery(t *testing.T) {
 	store := testutil.TempStore(t)
-	h := NewBotCommandHandler(store)
+	h := NewBotCommandHandler(nil, store)
 	sess := NewSession("s1", "a1", "Bot")
 	result, _ := h.cmdMemory(context.Background(), "search", sess)
 	if result == nil {
@@ -751,7 +751,7 @@ func TestCmdMemory_SearchNoQuery(t *testing.T) {
 
 func TestCmdMemory_SearchEmpty(t *testing.T) {
 	store := testutil.TempStore(t)
-	h := NewBotCommandHandler(store)
+	h := NewBotCommandHandler(nil, store)
 	sess := NewSession("s1", "a1", "Bot")
 	result, _ := h.cmdMemory(context.Background(), "search   ", sess)
 	if result == nil {
@@ -761,7 +761,7 @@ func TestCmdMemory_SearchEmpty(t *testing.T) {
 
 func TestCmdMemoryStats(t *testing.T) {
 	store := testutil.TempStore(t)
-	h := NewBotCommandHandler(store)
+	h := NewBotCommandHandler(nil, store)
 	sess := NewSession("s1", "a1", "Bot")
 	result, err := h.cmdMemoryStats(context.Background(), sess)
 	if err != nil {
@@ -774,7 +774,7 @@ func TestCmdMemoryStats(t *testing.T) {
 
 func TestCmdMemorySearch(t *testing.T) {
 	store := testutil.TempStore(t)
-	h := NewBotCommandHandler(store)
+	h := NewBotCommandHandler(nil, store)
 	sess := NewSession("s1", "a1", "Bot")
 
 	// Insert some test data.
@@ -794,7 +794,7 @@ func TestCmdMemorySearch(t *testing.T) {
 
 func TestCmdMemorySearch_NoResults(t *testing.T) {
 	store := testutil.TempStore(t)
-	h := NewBotCommandHandler(store)
+	h := NewBotCommandHandler(nil, store)
 	sess := NewSession("s1", "a1", "Bot")
 	result, err := h.cmdMemorySearch(context.Background(), "xyznonexistent", sess)
 	if err != nil {
@@ -808,7 +808,7 @@ func TestCmdMemorySearch_NoResults(t *testing.T) {
 // Test the /memory command through TryHandle to cover the full dispatch path.
 func TestBotCommand_MemoryStats_ViaTryHandle(t *testing.T) {
 	store := testutil.TempStore(t)
-	h := NewBotCommandHandler(store)
+	h := NewBotCommandHandler(nil, store)
 	sess := NewSession("s1", "a1", "Bot")
 	result, ok := h.TryHandle(context.Background(), "/memory stats", sess)
 	if !ok {
@@ -821,7 +821,7 @@ func TestBotCommand_MemoryStats_ViaTryHandle(t *testing.T) {
 
 func TestBotCommand_MemorySearch_ViaTryHandle(t *testing.T) {
 	store := testutil.TempStore(t)
-	h := NewBotCommandHandler(store)
+	h := NewBotCommandHandler(nil, store)
 	sess := NewSession("s1", "a1", "Bot")
 	result, ok := h.TryHandle(context.Background(), "/memory search hello", sess)
 	if !ok {

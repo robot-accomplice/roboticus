@@ -215,19 +215,23 @@ func (mm *Manager) storeEpisodicMemory(ctx context.Context, classification, cont
 
 // storeEpisodicMemoryWithImportance writes with explicit importance (Rust parity).
 func (mm *Manager) storeEpisodicMemoryWithImportance(ctx context.Context, classification, content string, importance int) {
+	entryID := db.NewID()
 	_, err := mm.store.ExecContext(ctx,
 		`INSERT INTO episodic_memory (id, classification, content, importance)
 		 VALUES (?, ?, ?, ?)`,
-		db.NewID(), classification, content, importance,
+		entryID, classification, content, importance,
 	)
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to store episodic memory")
+		return
 	}
+	mm.autoIndex(ctx, "episodic_memory", entryID, content)
 }
 
 // storeSemanticMemory writes to the semantic_memory table with UPSERT.
 // When a key is superseded, the old entry is marked stale rather than deleted.
 func (mm *Manager) storeSemanticMemory(ctx context.Context, category, key, value string) {
+	entryID := db.NewID()
 	_, err := mm.store.ExecContext(ctx,
 		`INSERT INTO semantic_memory (id, category, key, value)
 		 VALUES (?, ?, ?, ?)
@@ -236,11 +240,13 @@ func (mm *Manager) storeSemanticMemory(ctx context.Context, category, key, value
 		     updated_at = datetime('now'),
 		     memory_state = 'active',
 		     state_reason = NULL`,
-		db.NewID(), category, key, value,
+		entryID, category, key, value,
 	)
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to store semantic memory")
+		return
 	}
+	mm.autoIndex(ctx, "semantic_memory", entryID, key+": "+value)
 }
 
 // MarkSemanticStale marks semantic entries as stale by category and key prefix.
@@ -415,4 +421,21 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// autoIndex creates a memory_index entry for a newly stored memory.
+// Rust parity: auto_index() is called after every store_* function during ingestion.
+// Uses INSERT OR IGNORE so consolidation backfill won't create duplicates.
+func (mm *Manager) autoIndex(ctx context.Context, sourceTable, sourceID, content string) {
+	summary := content
+	if len(summary) > 200 {
+		summary = summary[:200]
+	}
+	_, err := mm.store.ExecContext(ctx,
+		`INSERT OR IGNORE INTO memory_index (id, source_table, source_id, summary)
+		 VALUES (?, ?, ?, ?)`,
+		db.NewID(), sourceTable, sourceID, summary)
+	if err != nil {
+		log.Debug().Err(err).Str("source", sourceTable).Msg("auto-index: insert failed")
+	}
 }

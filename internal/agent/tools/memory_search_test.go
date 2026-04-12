@@ -107,7 +107,7 @@ func TestMemorySearchTool_ConfidenceReinforce(t *testing.T) {
 		 VALUES ('ep-test', 'test', 'Palm project timeline review', 5, 'active')`)
 	_, _ = store.ExecContext(ctx,
 		`INSERT INTO memory_index (id, source_table, source_id, summary, confidence)
-		 VALUES ('idx-ep-test', 'episodic', 'ep-test', 'Palm project timeline', 0.5)`)
+		 VALUES ('idx-ep-test', 'episodic_memory', 'ep-test', 'Palm project timeline', 0.5)`)
 
 	tool := NewMemorySearchTool(store)
 	_, _ = tool.Execute(ctx, `{"query": "palm"}`, nil)

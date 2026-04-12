@@ -9,7 +9,7 @@
 
 ## Executive Summary
 
-The Go implementation achieves **strong structural compliance** with the connector-factory pattern. The pipeline is the single source of truth for business logic, all 8 entry points use `RunPipeline()`, and architecture tests enforce connector thinness. However, there are **7 systemic gaps** where the Go code diverges from the Rust reference architecture's principles.
+The Go implementation achieves **strong structural compliance** with the connector-factory pattern. The pipeline is the single source of truth for business logic, all 8 entry points use `RunPipeline()`, and architecture tests enforce connector thinness. Of the original 7 systemic gaps, **4 are now closed** (v1.0.1 + v1.0.2).
 
 | Category | Compliant | Gaps |
 |----------|-----------|------|
@@ -17,9 +17,9 @@ The Go implementation achieves **strong structural compliance** with the connect
 | Pipeline Stage Gating | 13/13 flags checked | 0 |
 | Guard Chain | 25 full / 6 stream | 0 |
 | Post-Turn Parity (standard/stream) | Enforced by test | 0 |
-| Security Claim Composition | Code exists | **Not wired** |
-| HMAC Trust Boundaries | Code exists | **Not active** |
-| Context Budget (tool overhead) | Fixed this session | Verify |
+| Security Claim Composition | Wired (v1.0.2) | **CLOSED** |
+| HMAC Trust Boundaries | Active (v1.0.2) | **CLOSED** |
+| Context Budget (tool overhead) | Fixed | Verify |
 | Memory Injection Guarantee | Two-stage (v1.0.1) | **CLOSED** |
 | Feature Parity Across Channels | Mostly | **2 gaps** |
 | Off-Pipeline Surfaces | 3 documented | 0 |
@@ -163,9 +163,9 @@ Policy denials soft-fail with structured reason. Error dedup suppresses repeated
 | Priority | Gap | Effort | Impact |
 |----------|-----|--------|--------|
 | ~~P0~~ | ~~Gap 4: Memory injection not guaranteed~~ | **CLOSED v1.0.1** | Two-stage injection + search_memories tool |
-| P1 | Gap 1: SecurityClaim resolvers not wired | Medium | Audit trail incomplete, authority simplified |
+| ~~P1~~ | ~~Gap 1: SecurityClaim resolvers not wired~~ | **CLOSED v1.0.2** | Resolvers called at stage 8, claim stored on session + trace |
 | P1 | Gap 5: Context budget missing tier system | Large | Long sessions overflow, tool instructions drowned |
-| P2 | Gap 3: HMAC boundaries passive | Medium | Trust boundary verification incomplete |
+| ~~P2~~ | ~~Gap 3: HMAC boundaries passive~~ | **CLOSED v1.0.2** | Prompt now includes boundary instructions |
 | P2 | Gap 6: Topic-aware compression missing | Large | Off-topic history wastes budget |
-| P3 | Gap 2: API routes never set Claim | Small | Consistency, not functionality |
+| ~~P3~~ | ~~Gap 2: API routes never set Claim~~ | **CLOSED v1.0.2** | Both API routes now construct ChannelClaimContext |
 | P3 | Gap 7: Preset doc comments missing | Small | Documentation, not code |

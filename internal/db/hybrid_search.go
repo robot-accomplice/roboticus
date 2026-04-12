@@ -113,6 +113,9 @@ func SanitizeFTSQuery(query string) string {
 	return "\"" + strings.Join(words, "\" \"") + "\""
 }
 
+// normalizeTableName converts legacy short FTS names to full table names.
+// After migration 037, all new FTS entries use full names. This handles
+// any unmigrated rows or in-flight data.
 func normalizeTableName(name string) string {
 	switch name {
 	case "working":
@@ -121,6 +124,10 @@ func normalizeTableName(name string) string {
 		return "episodic_memory"
 	case "semantic":
 		return "semantic_memory"
+	case "procedural":
+		return "procedural_memory"
+	case "relationship":
+		return "relationship_memory"
 	default:
 		return name
 	}

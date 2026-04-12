@@ -94,6 +94,7 @@ type Pipeline struct {
 	bgWorker   *core.BackgroundWorker
 	dedup      *DedupTracker
 	tasks      *TaskTracker
+	botCmds    *BotCommandHandler
 	embeddings *llm.EmbeddingClient
 	errBus     *core.ErrorBus
 }
@@ -137,6 +138,7 @@ func New(deps PipelineDeps) *Pipeline {
 		tasks:      NewTaskTracker(),
 		embeddings: deps.Embeddings,
 		errBus:     deps.ErrBus,
+		botCmds:    NewBotCommandHandler(deps.LLM, deps.Store),
 	}
 }
 
@@ -173,14 +175,8 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 	// ── Stage 1: Input validation ──────────────────────────────────────────
 	tr.BeginSpan("validation")
 
-	// Bot command dispatch: handle /commands before any processing.
-	if cfg.BotCommandDispatch && len(input.Content) > 0 && input.Content[0] == '/' {
-		if result := p.tryBotCommand(ctx, input); result != nil {
-			tr.Annotate("bot_command", true)
-			tr.EndSpan("ok")
-			return result, nil
-		}
-	}
+	// Bot command early-exit marker: checked after session resolution (Stage 4b).
+	isBotCommand := cfg.BotCommandDispatch && len(input.Content) > 0 && input.Content[0] == '/'
 
 	// Cron delegation wrap: prepend subagent directive for non-root cron tasks.
 	if cfg.CronDelegationWrap && input.AgentID != "" && input.AgentID != "default" {
@@ -265,6 +261,17 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 		return nil, core.NewError(core.ErrUnauthorized, consentMsg)
 	case ConsentContinue:
 		// No consent action needed — proceed.
+	}
+
+	// ── Stage 4b: Bot command dispatch ─────────────────────────────────────
+	// Runs AFTER session resolution so authority gating works.
+	// Bot commands bypass inference, message storage, and guards — they're lightweight.
+	if isBotCommand && p.botCmds != nil {
+		if result, matched := p.botCmds.TryHandle(ctx, input.Content, session); matched {
+			tr.Annotate("bot_command", true)
+			p.storeTrace(ctx, tr, session.ID, "", cfg.ChannelLabel)
+			return result, nil
+		}
 	}
 
 	// Short-followup expansion (Rust parity: contextualize_short_followup).

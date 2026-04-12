@@ -106,7 +106,7 @@ jobs:
           # Build the binary.
           BINARY_NAME="roboticus${SUFFIX}"
           go build -trimpath \
-            -ldflags="-s -w -X roboticus/cmd.version=${BUILD_VERSION}" \
+            -ldflags="-s -w -X roboticus/cmd.version=${BUILD_VERSION} -X roboticus/internal/daemon.version=${BUILD_VERSION}" \
             -o "${BINARY_NAME}" .
 
           # Raw binary for update-in-place (roboticus update binary).

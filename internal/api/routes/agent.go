@@ -48,6 +48,15 @@ func AgentMessage(p pipeline.Runner, agentName string, bus ...EventPublisher) ht
 			SenderID:      req.SenderID,
 			ChatID:        req.GroupID,
 			ModelOverride: req.Model,
+			// API requests get a proper claim for audit consistency (Gap 2 fix).
+			// API keys are fully trusted — SenderInAllowlist is true.
+			Claim: &pipeline.ChannelClaimContext{
+				SenderID:            req.SenderID,
+				ChatID:              req.GroupID,
+				Platform:            platform,
+				SenderInAllowlist:   true,
+				AllowlistConfigured: true,
+			},
 		}
 
 		outcome, err := pipeline.RunPipeline(r.Context(), p, pipeline.PresetAPI(), input)
@@ -108,6 +117,12 @@ func AgentMessageStream(p pipeline.Runner, llmSvc *llm.Service, agentName string
 			AgentID:   req.AgentID,
 			AgentName: agentName,
 			Platform:  "api",
+			Claim: &pipeline.ChannelClaimContext{
+				SenderID:            req.SenderID,
+				Platform:            "api",
+				SenderInAllowlist:   true,
+				AllowlistConfigured: true,
+			},
 		}
 
 		// Run pipeline: validates input, resolves session, runs injection defense,

@@ -17,8 +17,9 @@ import (
 )
 
 var pluginsCmd = &cobra.Command{
-	Use:   "plugins",
-	Short: "Manage plugins",
+	Use:     "plugins",
+	Aliases: []string{"apps"}, // Rust parity: `apps` is an alias for `plugins`
+	Short:   "Manage plugins (alias: apps)",
 }
 
 var pluginsListCmd = &cobra.Command{

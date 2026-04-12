@@ -820,6 +820,11 @@ func (s *Service) Primary() string {
 	return s.primary
 }
 
+// Fallbacks returns the ordered fallback model list.
+func (s *Service) Fallbacks() []string {
+	return s.fallbacks
+}
+
 // Breakers returns the circuit breaker registry for metascore routing.
 func (s *Service) Breakers() *BreakerRegistry {
 	return s.breakers
