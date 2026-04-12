@@ -5384,12 +5384,19 @@
         api('/api/config'),
         api('/api/config/capabilities').catch(function() { return { immutable_sections: ['server', 'a2a', 'wallet'] }; }),
         mode === 'raw' ? api('/api/config/raw').catch(function() { return ''; }) : Promise.resolve(null),
-        api('/api/keystore/status').catch(function() { return { unlocked: true }; })
+        api('/api/keystore/status').catch(function() { return { unlocked: true }; }),
+        api('/api/config/schema').catch(function() { return { fields: [] }; })
       ]).then(function(arr) {
         var cfg = arr[0] || {};
         var caps = arr[1] || {};
         var rawToml = arr[2];
         var keystoreStatus = arr[3] || {};
+        var schemaData = arr[4] || {};
+        // Build a lookup index: dotted path -> schema field info.
+        var _schemaIndex = {};
+        (schemaData.fields || []).forEach(function(f) { _schemaIndex[f.name] = f; });
+        self._schemaIndex = _schemaIndex;
+        self._schemaFields = schemaData.fields || [];
         cfg._keystore_locked = !keystoreStatus.unlocked;
         self._configCapabilities = caps;
         var immutableSet = {};
@@ -5585,20 +5592,32 @@
           return tabs + '<div class="settings-form">' + accHtml + '</div>' + actions;
         }
 
-        // Ensure all known config sections appear in the form even when not yet configured.
-        var CONFIG_SCHEMA = {
-          agent: { name: '', id: '', workspace: '', log_level: 'info' },
-          server: { bind: 'localhost', port: 18789 },
-          database: { path: '' },
-          models: { primary: '', fallbacks: [] },
-          providers: {},
-          channels: { telegram: null, discord: null, whatsapp: null, signal: null, email: null, web: null, voice: null },
-          personality: { tone: '', greeting: '' },
-          skills: { enabled: true },
-          wallet: {},
-          treasury: {},
-          context_budget: { l0: 4000, l1: 8000, l2: 16000, l3: 32000, channel_minimum: 'L1' }
-        };
+        // Build CONFIG_SCHEMA from the struct-driven /api/config/schema endpoint.
+        // This ensures every field from the Go Config struct appears in the form,
+        // even if the live config has no value for it yet.
+        var CONFIG_SCHEMA = {};
+        (self._schemaFields || []).forEach(function(f) {
+          var parts = f.name.split('.');
+          var topSection = parts[0];
+          if (!CONFIG_SCHEMA[topSection]) CONFIG_SCHEMA[topSection] = {};
+          // Build nested structure from dotted path.
+          var obj = CONFIG_SCHEMA[topSection];
+          for (var pi = 1; pi < parts.length - 1; pi++) {
+            if (!obj[parts[pi]] || typeof obj[parts[pi]] !== 'object') obj[parts[pi]] = {};
+            obj = obj[parts[pi]];
+          }
+          if (parts.length > 1) {
+            var leaf = parts[parts.length - 1];
+            if (obj[leaf] === undefined) obj[leaf] = f['default'];
+          }
+        });
+        // Ensure channels sub-configs exist for the channel UI.
+        if (!CONFIG_SCHEMA.channels) CONFIG_SCHEMA.channels = {};
+        ['telegram','discord','whatsapp','signal','email','web','voice'].forEach(function(ch) {
+          if (CONFIG_SCHEMA.channels[ch] === undefined) CONFIG_SCHEMA.channels[ch] = null;
+        });
+        // Ensure providers exists as empty object for provider UI.
+        if (!CONFIG_SCHEMA.providers) CONFIG_SCHEMA.providers = {};
         Object.keys(CONFIG_SCHEMA).forEach(function(k) {
           if (draft[k] === undefined || draft[k] === null) draft[k] = JSON.parse(JSON.stringify(CONFIG_SCHEMA[k]));
         });
@@ -6263,29 +6282,39 @@
             return;
           }
 
-          // Enum fields: render as dropdowns instead of text inputs.
-          var ENUM_FIELDS = {
-            'session.scope_mode': ['agent', 'peer', 'group'],
-            'security.allowlist_authority': ['owner', 'admin', 'user', 'none'],
-            'security.trusted_authority': ['owner', 'admin', 'user', 'none'],
-            'security.api_authority': ['owner', 'admin', 'user', 'none'],
-            'security.threat_caution_ceiling': ['low', 'medium', 'high', 'critical'],
-            'models.routing.mode': ['metascore', 'round_robin', 'cost_aware', 'local_first']
-          };
+          // Schema-driven field renderer. Uses _schemaIndex for enums, descriptions, defaults, immutability.
+          var _schemaIdx = self._schemaIndex || {};
           var _renderSettingsField = function(key, val, path, tooltipHtml) {
+            var sf = _schemaIdx[path];
+            // Build tooltip from schema description if no static tooltip exists.
+            if (sf && sf.description && !fieldTooltips[key]) {
+              tooltipHtml = ' <span class="settings-help-trigger" onclick="showSettingsTooltip(this, \'' + sf.description.replace(/'/g, "\\'") + '\'); event.stopPropagation();">(?)</span>';
+            }
+            // Immutable field hint.
+            var immutableHint = (sf && sf.immutable) ? ' <span class="badge muted" style="font-size:0.55rem;vertical-align:middle">restart</span>' : '';
+            var isDisabled = sf && sf.immutable;
+            var disabledAttr = isDisabled ? ' disabled style="opacity:0.6;cursor:not-allowed"' : '';
+            // Placeholder from schema default.
+            var placeholder = 'none';
+            if (sf && sf['default'] != null && sf['default'] !== '') {
+              placeholder = String(sf['default']);
+            }
+            // Enum from schema.
+            var enumValues = (sf && sf['enum'] && sf['enum'].length) ? sf['enum'] : null;
+
             if (typeof val === 'boolean') {
-              html += '<div class="settings-row"><div class="settings-label">' + esc(key) + tooltipHtml + '</div><div class="settings-toggle-wrap"><label class="toggle"><input type="checkbox" data-settings-path="' + esc(path) + '"' + (val ? ' checked' : '') + '><span class="toggle-track"></span></label><span class="settings-toggle-label">' + (val ? 'On' : 'Off') + '</span></div></div>';
-            } else if (ENUM_FIELDS[path]) {
-              var opts = ENUM_FIELDS[path];
-              var selHtml = '<select class="settings-input" data-settings-path="' + esc(path) + '" style="min-width:160px">';
-              opts.forEach(function(o) { selHtml += '<option value="' + esc(o) + '"' + (String(val) === o ? ' selected' : '') + '>' + esc(o) + '</option>'; });
+              var toggleDisabled = isDisabled ? ' style="opacity:0.5;pointer-events:none"' : '';
+              html += '<div class="settings-row"><div class="settings-label">' + esc(key) + tooltipHtml + immutableHint + '</div><div class="settings-toggle-wrap"><label class="toggle"' + toggleDisabled + '><input type="checkbox" data-settings-path="' + esc(path) + '"' + (val ? ' checked' : '') + (isDisabled ? ' disabled' : '') + '><span class="toggle-track"></span></label><span class="settings-toggle-label">' + (val ? 'On' : 'Off') + '</span></div></div>';
+            } else if (enumValues) {
+              var selHtml = '<select class="settings-input" data-settings-path="' + esc(path) + '" style="min-width:160px"' + disabledAttr + '>';
+              enumValues.forEach(function(o) { selHtml += '<option value="' + esc(o) + '"' + (String(val) === o ? ' selected' : '') + '>' + esc(o) + '</option>'; });
               selHtml += '</select>';
-              html += '<div class="settings-row"><div class="settings-label">' + esc(key) + tooltipHtml + '</div>' + selHtml + '</div>';
+              html += '<div class="settings-row"><div class="settings-label">' + esc(key) + tooltipHtml + immutableHint + '</div>' + selHtml + '</div>';
             } else if (Array.isArray(val)) {
               var joined = val.join('\n');
-              html += '<div class="settings-row"><div class="settings-label">' + esc(key) + tooltipHtml + '</div>'
+              html += '<div class="settings-row"><div class="settings-label">' + esc(key) + tooltipHtml + immutableHint + '</div>'
                 + '<textarea class="settings-input" data-settings-path="' + esc(path) + '" data-settings-array="1" '
-                + 'rows="' + Math.max(2, Math.min(6, val.length + 1)) + '" placeholder="One entry per line" style="font-family:var(--font-mono);font-size:0.75rem">' + esc(joined) + '</textarea></div>';
+                + 'rows="' + Math.max(2, Math.min(6, val.length + 1)) + '" placeholder="One entry per line" style="font-family:var(--font-mono);font-size:0.75rem"' + disabledAttr + '>' + esc(joined) + '</textarea></div>';
             } else if (typeof val === 'object' && val !== null) {
               html += '<div class="settings-nested"><div style="font-size:0.625rem;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted);margin-bottom:0.5rem">' + esc(key) + '</div>';
               Object.keys(val).forEach(function(subKey) {
@@ -6295,9 +6324,10 @@
               });
               html += '</div>';
             } else {
-              var type = typeof val === 'number' ? 'number' : 'text';
+              var type = (sf && (sf.type === 'integer' || sf.type === 'float')) ? 'number' : (typeof val === 'number' ? 'number' : 'text');
               var sv = (val == null || val === '') ? '' : esc(String(val));
-              html += '<div class="settings-row"><div class="settings-label">' + esc(key) + tooltipHtml + '</div><input class="settings-input" type="' + type + '" data-settings-path="' + esc(path) + '" value="' + sv + '" placeholder="none"></div>';
+              var step = (sf && sf.type === 'float') ? ' step="any"' : '';
+              html += '<div class="settings-row"><div class="settings-label">' + esc(key) + tooltipHtml + immutableHint + '</div><input class="settings-input" type="' + type + '" data-settings-path="' + esc(path) + '" value="' + sv + '" placeholder="' + esc(placeholder) + '"' + step + disabledAttr + '></div>';
             }
           };
           // Display-friendly labels for config sections whose JSON key is misleading.

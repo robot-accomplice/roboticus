@@ -277,6 +277,7 @@ func NewServer(ctx context.Context, cfg ServerConfig, state *AppState) *http.Ser
 		r.Put("/api/config", routes.UpdateConfig(state.Config, state.Store))
 		r.Get("/api/config/capabilities", routes.GetCapabilities())
 		r.Get("/api/config/status", routes.GetConfigStatus())
+		r.Get("/api/config/schema", routes.GetConfigSchema(state.Config))
 		r.Get("/api/config/raw", routes.GetConfigRaw())
 		r.Put("/api/config/raw", routes.UpdateConfigRaw())
 
