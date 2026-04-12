@@ -61,7 +61,7 @@
       --crt-scanline: rgba(0,0,0,0.12); --crt-vignette: rgba(0,0,0,0.45);
       --text-glow: rgba(0,255,65,0.2); --robot-color: #00ff41;
     }
-    [data-theme="psychedelic"] {
+    [data-theme="psychedelic-freakout"] {
       --bg: #0a0012; --surface: #150025; --surface-2: #1e0035; --surface-3: #2a0050; --surface-4: #350068;
       --border: #4a0080; --border-ghost: rgba(74, 0, 128, 0.20);
       --text: #f0e0ff; --muted: #9966cc; --outline: #7744aa;
@@ -670,7 +670,7 @@
     .theme-info-name { font-size: 0.6875rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 2px; }
     .theme-info-desc { font-size: 0.5625rem; opacity: 0.7; text-transform: none; letter-spacing: 0; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
     .theme-info-meta { font-size: 0.5rem; opacity: 0.4; margin-top: 3px; text-transform: none; }
-    [data-theme="psychedelic"] { animation: psychBg 6s linear infinite; }
+    [data-theme="psychedelic-freakout"] { animation: psychBg 6s linear infinite; }
     @keyframes psychBg { 0% { --accent: #ff00ff; } 25% { --accent: #00ffcc; } 50% { --accent: #ffff00; } 75% { --accent: #ff0066; } 100% { --accent: #ff00ff; } }
     @property --accent { syntax: '<color>'; inherits: true; initial-value: #c180ff; }
     .crt-overlay { position: fixed; inset: 0; pointer-events: none; z-index: 9999; }
@@ -4511,6 +4511,233 @@
         : '<div style="font-size:0.75rem;color:var(--muted)">No revenue tax tasks yet.</div>';
       return '<div class="card" style="margin-bottom:1rem"><div class="card-title">Revenue Tax Tasks</div>' + body + '</div>';
     },
+    // --- MCP Server Management ---
+    _mcpEnrichStatuses: function() {
+      api('/api/mcp/servers').then(function(data) {
+        var servers = (data && data.servers) || [];
+        servers.forEach(function(srv) {
+          var statusEl = document.getElementById('mcp-status-' + srv.name);
+          var toolsEl = document.getElementById('mcp-tools-' + srv.name);
+          if (statusEl) {
+            if (srv.connected) {
+              statusEl.className = 'badge success';
+              statusEl.textContent = 'connected';
+            } else {
+              statusEl.className = 'badge muted';
+              statusEl.textContent = 'disconnected';
+            }
+          }
+          if (toolsEl && srv.tool_count > 0) {
+            toolsEl.className = 'badge';
+            toolsEl.style.cssText = 'background:rgba(139,92,246,0.15);color:#a78bfa';
+            toolsEl.textContent = srv.tool_count + ' tool' + (srv.tool_count === 1 ? '' : 's');
+          } else if (toolsEl) {
+            toolsEl.textContent = '';
+          }
+        });
+      }).catch(function() {});
+    },
+    _mcpCloseMod: function() {
+      var m = document.getElementById('mcp-server-modal');
+      if (m) m.remove();
+    },
+    _mcpOpenModal: function(editIdx) {
+      var self = this;
+      self._mcpCloseMod();
+      var draft = self._getSettingsDraft();
+      if (!draft.mcp) draft.mcp = {};
+      if (!Array.isArray(draft.mcp.servers)) draft.mcp.servers = [];
+      var isEdit = editIdx != null && editIdx >= 0;
+      var srv = isEdit ? (draft.mcp.servers[editIdx] || {}) : {};
+      var transport = srv.transport || 'stdio';
+      var envStr = '';
+      if (srv.env && typeof srv.env === 'object') {
+        envStr = Object.keys(srv.env).map(function(k) { return k + '=' + srv.env[k]; }).join('\n');
+      }
+      var modal = document.createElement('div');
+      modal.id = 'mcp-server-modal';
+      modal.style.cssText = 'position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,0.65);display:flex;align-items:center;justify-content:center;padding:1.5rem';
+
+      var formHtml = '<div style="width:min(520px,100%);background:var(--bg);border:1px solid var(--border);border-radius:8px;box-shadow:0 20px 40px rgba(0,0,0,0.45);display:flex;flex-direction:column;max-height:calc(100vh - 3rem);overflow:auto">'
+        + '<div style="display:flex;align-items:center;justify-content:space-between;padding:0.75rem 1rem;border-bottom:1px solid var(--border-ghost)">'
+        + '<h3 style="font-size:0.8125rem;text-transform:uppercase;letter-spacing:0.06em;margin:0">' + (isEdit ? 'Edit MCP Server' : 'Add MCP Server') + '</h3>'
+        + '<button data-mcp-modal-close style="background:none;border:none;color:var(--muted);font-size:1.25rem;cursor:pointer;font-family:var(--font)">x</button></div>'
+        + '<div style="padding:1rem;display:flex;flex-direction:column;gap:0.75rem">';
+      // Name
+      formHtml += '<div style="display:flex;flex-direction:column;gap:0.25rem"><label style="font-size:0.625rem;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted)">Name *</label>'
+        + '<input id="mcp-f-name" class="settings-input" type="text" value="' + esc(srv.name || '') + '" placeholder="e.g. filesystem"' + (isEdit ? ' readonly style="opacity:0.6;cursor:not-allowed"' : '') + '></div>';
+      // Transport
+      formHtml += '<div style="display:flex;flex-direction:column;gap:0.25rem"><label style="font-size:0.625rem;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted)">Transport</label>'
+        + '<select id="mcp-f-transport" class="settings-input" style="appearance:auto"><option value="stdio"' + (transport === 'stdio' ? ' selected' : '') + '>stdio</option><option value="sse"' + (transport === 'sse' ? ' selected' : '') + '>sse</option></select></div>';
+      // Stdio fields
+      formHtml += '<div id="mcp-f-stdio-fields" style="display:' + (transport === 'stdio' ? 'flex' : 'none') + ';flex-direction:column;gap:0.75rem">'
+        + '<div style="display:flex;flex-direction:column;gap:0.25rem"><label style="font-size:0.625rem;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted)">Command</label>'
+        + '<input id="mcp-f-command" class="settings-input" type="text" value="' + esc(srv.command || '') + '" placeholder="e.g. npx"></div>'
+        + '<div style="display:flex;flex-direction:column;gap:0.25rem"><label style="font-size:0.625rem;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted)">Args (comma-separated)</label>'
+        + '<input id="mcp-f-args" class="settings-input" type="text" value="' + esc((srv.args || []).join(', ')) + '" placeholder="e.g. -y, @modelcontextprotocol/server-filesystem, /tmp"></div></div>';
+      // SSE fields
+      formHtml += '<div id="mcp-f-sse-fields" style="display:' + (transport === 'sse' ? 'flex' : 'none') + ';flex-direction:column;gap:0.75rem">'
+        + '<div style="display:flex;flex-direction:column;gap:0.25rem"><label style="font-size:0.625rem;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted)">URL</label>'
+        + '<input id="mcp-f-url" class="settings-input" type="text" value="' + esc(srv.url || '') + '" placeholder="https://example.com/mcp/sse"></div></div>';
+      // Env vars
+      formHtml += '<div style="display:flex;flex-direction:column;gap:0.25rem"><label style="font-size:0.625rem;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted)">Environment Variables (KEY=VALUE, one per line)</label>'
+        + '<textarea id="mcp-f-env" class="settings-input" rows="3" style="font-family:var(--font-mono);font-size:0.75rem" placeholder="API_KEY=xxx">' + esc(envStr) + '</textarea></div>';
+      // Auth token
+      formHtml += '<div style="display:flex;flex-direction:column;gap:0.25rem"><label style="font-size:0.625rem;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted)">Auth Token Env Var Name (optional)</label>'
+        + '<input id="mcp-f-auth" class="settings-input" type="text" value="' + esc(srv.auth_token_env || '') + '" placeholder="e.g. MCP_AUTH_TOKEN"></div>';
+      // Enabled toggle
+      formHtml += '<div style="display:flex;align-items:center;gap:0.5rem"><label class="toggle"><input type="checkbox" id="mcp-f-enabled"' + (isEdit ? (srv.enabled ? ' checked' : '') : ' checked') + '><span class="toggle-track"></span></label>'
+        + '<span style="font-size:0.8125rem">Enabled</span></div>';
+      // Footer
+      formHtml += '</div>'
+        + '<div style="display:flex;gap:0.5rem;justify-content:flex-end;padding:0.75rem 1rem;border-top:1px solid var(--border-ghost)">'
+        + '<button class="btn secondary" data-mcp-modal-close style="font-size:0.75rem;padding:0.375rem 0.875rem">Cancel</button>'
+        + '<button class="btn" id="mcp-modal-save" style="font-size:0.75rem;padding:0.375rem 0.875rem">' + (isEdit ? 'Update' : 'Add') + '</button></div></div>';
+
+      modal.textContent = '';
+      var wrapper = document.createElement('div');
+      wrapper.style.cssText = 'width:100%;display:flex;justify-content:center';
+      wrapper.insertAdjacentHTML('afterbegin', formHtml);
+      modal.appendChild(wrapper);
+
+      modal.addEventListener('change', function(ev) {
+        if (ev.target.id === 'mcp-f-transport') {
+          var val = ev.target.value;
+          var stdioDiv = document.getElementById('mcp-f-stdio-fields');
+          var sseDiv = document.getElementById('mcp-f-sse-fields');
+          if (stdioDiv) stdioDiv.style.display = val === 'stdio' ? 'flex' : 'none';
+          if (sseDiv) sseDiv.style.display = val === 'sse' ? 'flex' : 'none';
+        }
+      });
+      modal.addEventListener('click', function(ev) {
+        if (ev.target === modal || ev.target.closest('[data-mcp-modal-close]')) {
+          self._mcpCloseMod();
+          return;
+        }
+        if (ev.target.id === 'mcp-modal-save' || ev.target.closest('#mcp-modal-save')) {
+          self._mcpSaveFromModal(isEdit ? editIdx : null);
+        }
+      });
+      document.body.appendChild(modal);
+      if (!isEdit) {
+        var nameField = document.getElementById('mcp-f-name');
+        if (nameField) nameField.focus();
+      }
+    },
+    _mcpSaveFromModal: function(editIdx) {
+      var self = this;
+      var nameEl = document.getElementById('mcp-f-name');
+      var transportEl = document.getElementById('mcp-f-transport');
+      var commandEl = document.getElementById('mcp-f-command');
+      var argsEl = document.getElementById('mcp-f-args');
+      var urlEl = document.getElementById('mcp-f-url');
+      var envEl = document.getElementById('mcp-f-env');
+      var authEl = document.getElementById('mcp-f-auth');
+      var enabledEl = document.getElementById('mcp-f-enabled');
+
+      var name = (nameEl && nameEl.value || '').trim();
+      if (!name) { toast('Server name is required'); return; }
+      var transport = (transportEl && transportEl.value) || 'stdio';
+      var command = (commandEl && commandEl.value || '').trim();
+      var argsRaw = (argsEl && argsEl.value || '').trim();
+      var args = argsRaw ? argsRaw.split(',').map(function(s) { return s.trim(); }).filter(Boolean) : [];
+      var url = (urlEl && urlEl.value || '').trim();
+      var envRaw = (envEl && envEl.value || '').trim();
+      var env = {};
+      if (envRaw) {
+        envRaw.split('\n').forEach(function(line) {
+          var eq = line.indexOf('=');
+          if (eq > 0) env[line.substring(0, eq).trim()] = line.substring(eq + 1).trim();
+        });
+      }
+      var authTokenEnv = (authEl && authEl.value || '').trim();
+      var enabled = enabledEl ? enabledEl.checked : true;
+
+      if (transport === 'stdio' && !command) { toast('Command is required for stdio transport'); return; }
+      if (transport === 'sse' && !url) { toast('URL is required for SSE transport'); return; }
+
+      var entry = { name: name, transport: transport, command: command, args: args, url: url, env: env, enabled: enabled };
+      if (authTokenEnv) entry.auth_token_env = authTokenEnv;
+
+      var draft = self._getSettingsDraft();
+      if (!draft.mcp) draft.mcp = {};
+      if (!Array.isArray(draft.mcp.servers)) draft.mcp.servers = [];
+      var isEdit = editIdx != null && editIdx >= 0;
+      if (isEdit) {
+        draft.mcp.servers[editIdx] = entry;
+      } else {
+        var dup = draft.mcp.servers.some(function(s) { return s.name === name; });
+        if (dup) { toast('A server named "' + name + '" already exists'); return; }
+        draft.mcp.servers.push(entry);
+      }
+      self._settingsDirty = JSON.stringify(draft) !== JSON.stringify(_cachedConfig);
+      self._settingsRawText = null;
+      self._mcpCloseMod();
+      toast(isEdit ? 'Server updated (save to apply)' : 'Server added (save to apply)');
+      App.navigate('settings');
+    },
+    _mcpDeleteServer: function(idx, name) {
+      var self = this;
+      if (!confirm('Delete MCP server "' + name + '"? Save settings to apply.')) return;
+      var draft = self._getSettingsDraft();
+      if (!draft.mcp || !Array.isArray(draft.mcp.servers)) return;
+      draft.mcp.servers.splice(idx, 1);
+      self._settingsDirty = JSON.stringify(draft) !== JSON.stringify(_cachedConfig);
+      self._settingsRawText = null;
+      toast('Server removed (save to apply)');
+      App.navigate('settings');
+    },
+    _mcpToggleServer: function(idx) {
+      var self = this;
+      var draft = self._getSettingsDraft();
+      if (!draft.mcp || !Array.isArray(draft.mcp.servers) || !draft.mcp.servers[idx]) return;
+      draft.mcp.servers[idx].enabled = !draft.mcp.servers[idx].enabled;
+      self._settingsDirty = JSON.stringify(draft) !== JSON.stringify(_cachedConfig);
+      self._settingsRawText = null;
+      toast('Server ' + (draft.mcp.servers[idx].enabled ? 'enabled' : 'disabled') + ' (save to apply)');
+      App.navigate('settings');
+    },
+    _mcpTestServer: function(name) {
+      var btn = document.querySelector('[data-mcp-test="' + name + '"]');
+      if (btn) { btn.disabled = true; btn.textContent = 'Testing...'; }
+      api('/api/mcp/servers/' + encodeURIComponent(name) + '/test', { method: 'POST' }).then(function(res) {
+        if (res.ok) {
+          toast('Server "' + name + '" connected OK (' + (res.tool_count || 0) + ' tools)');
+          var statusEl = document.getElementById('mcp-status-' + name);
+          if (statusEl) { statusEl.className = 'badge success'; statusEl.textContent = 'connected'; }
+          var toolsEl = document.getElementById('mcp-tools-' + name);
+          if (toolsEl && res.tool_count > 0) {
+            toolsEl.className = 'badge';
+            toolsEl.style.cssText = 'background:rgba(139,92,246,0.15);color:#a78bfa';
+            toolsEl.textContent = res.tool_count + ' tool' + (res.tool_count === 1 ? '' : 's');
+          }
+        } else {
+          toast('Test failed: ' + (res.error || 'unknown error'));
+        }
+      }).catch(function(err) {
+        toast('Test failed: ' + (err.message || 'unknown error'));
+      }).finally(function() {
+        if (btn) { btn.disabled = false; btn.textContent = 'Test'; }
+      });
+    },
+    _mcpRefreshTools: function(name) {
+      var btn = document.querySelector('[data-mcp-refresh="' + name + '"]');
+      if (btn) { btn.disabled = true; btn.textContent = 'Refreshing...'; }
+      api('/api/runtime/mcp/clients/' + encodeURIComponent(name) + '/discover', { method: 'POST' }).then(function(res) {
+        var count = res.tool_count || (res.tools && res.tools.length) || 0;
+        toast('Discovered ' + count + ' tool' + (count === 1 ? '' : 's') + ' on "' + name + '"');
+        var toolsEl = document.getElementById('mcp-tools-' + name);
+        if (toolsEl && count > 0) {
+          toolsEl.className = 'badge';
+          toolsEl.style.cssText = 'background:rgba(139,92,246,0.15);color:#a78bfa';
+          toolsEl.textContent = count + ' tool' + (count === 1 ? '' : 's');
+        }
+      }).catch(function(err) {
+        toast('Refresh failed: ' + (err.message || 'Server may not be connected'));
+      }).finally(function() {
+        if (btn) { btn.disabled = false; btn.textContent = 'Refresh Tools'; }
+      });
+    },
     _renderRevenueSwapSettings: function(revenueSwap) {
       var cfg = revenueSwap || {};
       var chains = Array.isArray(cfg.chains) ? cfg.chains : [];
@@ -5407,7 +5634,7 @@
         var dirty = self._settingsDirty;
         var dirtyDot = dirty ? '<span class="settings-dirty-dot" title="Unsaved changes"></span>' : '';
         var tabs = '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;flex-wrap:wrap;gap:0.5rem"><div class="tabs" style="margin-bottom:0"><button class="' + (mode === 'form' ? 'active' : '') + '" data-settings-mode="form">Form</button><button class="' + (mode === 'models' ? 'active' : '') + '" data-settings-mode="models">Model Order</button><button class="' + (mode === 'access' ? 'active' : '') + '" data-settings-mode="access">Access Control</button></div><div style="display:flex;background:var(--surface-2);border:1px solid var(--border-ghost);border-radius:9999px;padding:2px;gap:0"><button data-settings-mode="' + (mode === 'raw' ? 'form' : 'raw') + '" style="padding:0.375rem 1rem;border-radius:9999px;border:none;font-family:var(--font-headline);font-size:0.625rem;font-weight:700;letter-spacing:0.15em;text-transform:uppercase;cursor:pointer;transition:all 0.2s;' + (mode !== 'raw' ? 'background:var(--accent);color:#000;' : 'background:transparent;color:var(--outline);') + '">Form</button><button data-settings-mode="raw" style="padding:0.375rem 1rem;border-radius:9999px;border:none;font-family:var(--font-headline);font-size:0.625rem;font-weight:700;letter-spacing:0.15em;text-transform:uppercase;cursor:pointer;transition:all 0.2s;' + (mode === 'raw' ? 'background:var(--accent);color:#000;' : 'background:transparent;color:var(--outline);') + '">TOML</button></div></div>';
-        var actions = '<div class="settings-actions"><button class="btn" id="settings-save" ' + (dirty ? '' : 'disabled style="opacity:0.4;pointer-events:none"') + '>Save</button><button class="btn secondary" id="settings-apply" ' + (dirty ? '' : 'disabled style="opacity:0.4;pointer-events:none"') + '>Apply</button><button class="btn secondary" id="settings-cancel" ' + (dirty ? '' : 'disabled style="opacity:0.4;pointer-events:none"') + '>Cancel</button>' + dirtyDot + '</div>';
+        var actions = '<div class="settings-actions" style="display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap"><button class="btn" id="settings-save" ' + (dirty ? '' : 'disabled style="opacity:0.4;pointer-events:none"') + '>Save</button><button class="btn secondary" id="settings-apply" ' + (dirty ? '' : 'disabled style="opacity:0.4;pointer-events:none"') + '>Apply</button><button class="btn secondary" id="settings-cancel" ' + (dirty ? '' : 'disabled style="opacity:0.4;pointer-events:none"') + '>Cancel</button>' + dirtyDot + '<div id="settings-status" style="display:none;flex:1;min-width:200px"></div></div>';
 
         if (mode === 'raw') {
           var rawText = self._settingsRawText != null ? self._settingsRawText : String(rawToml || '');
@@ -6256,29 +6483,52 @@
             return;
           }
 
-          // MCP Servers: render as cards with per-server fields.
+          // MCP Servers: full management UI with add/edit/delete/test/refresh.
           if (section === 'mcp') {
-            html += '<div class="settings-section"><div class="settings-section-title">MCP Servers</div>';
+            html += '<div class="settings-section"><div class="settings-section-title" style="display:flex;justify-content:space-between;align-items:center">MCP Servers'
+              + '<button class="btn secondary" data-mcp-add style="font-size:0.72rem;padding:0.25rem 0.6rem">+ Add Server</button></div>';
             var servers = sectionData.servers || [];
             if (!Array.isArray(servers) || servers.length === 0) {
               html += '<div style="padding:1rem 0;color:var(--muted);font-size:0.8125rem">'
-                + 'No MCP servers configured. Add servers in your <code>config.toml</code> under <code>[mcp]</code>.'
+                + 'No MCP servers configured. Click <strong>+ Add Server</strong> above to get started.'
                 + '</div>';
             } else {
+              // Fetch live status to enrich cards.
+              html += '<div id="mcp-server-list">';
               servers.forEach(function(srv, idx) {
-                var badge = srv.enabled ? '<span class="badge success">enabled</span>' : '<span class="badge muted">disabled</span>';
+                var name = srv.name || 'server-' + idx;
+                var enabledBadge = srv.enabled ? '<span class="badge success">enabled</span>' : '<span class="badge muted">disabled</span>';
+                var transportBadge = '<span class="badge" style="background:rgba(59,130,246,0.15);color:var(--accent)">' + esc(srv.transport || 'stdio') + '</span>';
                 html += '<div class="card" style="margin-bottom:0.75rem;border-left:3px solid ' + (srv.enabled ? 'var(--success)' : 'var(--border)') + '">'
-                  + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem"><strong>' + esc(srv.name || 'server-' + idx) + '</strong> ' + badge + '</div>'
-                  + '<div style="display:grid;grid-template-columns:auto 1fr;gap:0.25rem 0.75rem;font-size:0.8125rem">';
-                if (srv.transport) html += '<span style="color:var(--muted)">Transport</span><span class="card-mono">' + esc(srv.transport) + '</span>';
+                  + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem;flex-wrap:wrap;gap:0.35rem">'
+                  + '<div style="display:flex;align-items:center;gap:0.5rem"><strong>' + esc(name) + '</strong> ' + transportBadge + ' ' + enabledBadge
+                  + ' <span class="badge muted" id="mcp-status-' + esc(name) + '">checking...</span>'
+                  + ' <span class="badge muted" id="mcp-tools-' + esc(name) + '"></span></div>'
+                  + '<div style="display:flex;gap:0.35rem;flex-wrap:wrap">'
+                  + '<button class="btn secondary" data-mcp-test="' + esc(name) + '" style="font-size:0.68rem;padding:0.2rem 0.5rem">Test</button>'
+                  + '<button class="btn secondary" data-mcp-refresh="' + esc(name) + '" style="font-size:0.68rem;padding:0.2rem 0.5rem">Refresh Tools</button>'
+                  + '<button class="btn secondary" data-mcp-toggle="' + idx + '" style="font-size:0.68rem;padding:0.2rem 0.5rem">' + (srv.enabled ? 'Disable' : 'Enable') + '</button>'
+                  + '<button class="btn secondary" data-mcp-edit="' + idx + '" style="font-size:0.68rem;padding:0.2rem 0.5rem">Edit</button>'
+                  + '<button class="btn secondary" data-mcp-delete="' + idx + '" data-mcp-delete-name="' + esc(name) + '" style="font-size:0.68rem;padding:0.2rem 0.5rem;border-color:var(--error);color:var(--error)">Delete</button>'
+                  + '</div></div>';
+                html += '<div style="display:grid;grid-template-columns:auto 1fr;gap:0.25rem 0.75rem;font-size:0.8125rem">';
                 if (srv.command) html += '<span style="color:var(--muted)">Command</span><span class="card-mono">' + esc(srv.command) + '</span>';
                 if (srv.args && srv.args.length) html += '<span style="color:var(--muted)">Args</span><span class="card-mono">' + esc(srv.args.join(' ')) + '</span>';
                 if (srv.url) html += '<span style="color:var(--muted)">URL</span><span class="card-mono">' + esc(srv.url) + '</span>';
-                if (srv.auth_token_env) html += '<span style="color:var(--muted)">Auth Token Env</span><span class="card-mono">' + esc(srv.auth_token_env) + '</span>';
+                if (srv.auth_token_env) html += '<span style="color:var(--muted)">Auth Env</span><span class="card-mono">' + esc(srv.auth_token_env) + '</span>';
+                if (srv.env && Object.keys(srv.env).length) {
+                  html += '<span style="color:var(--muted)">Env Vars</span><span class="card-mono">' + esc(Object.keys(srv.env).join(', ')) + '</span>';
+                }
+                if (srv.tool_allowlist && srv.tool_allowlist.length) {
+                  html += '<span style="color:var(--muted)">Tool Allowlist</span><span class="card-mono">' + esc(srv.tool_allowlist.join(', ')) + '</span>';
+                }
                 html += '</div></div>';
               });
+              html += '</div>';
             }
             html += '</div>';
+            // Kick off async status enrichment after render.
+            setTimeout(function() { App._mcpEnrichStatuses(); }, 50);
             return;
           }
 
@@ -6589,7 +6839,7 @@
       }
     },
     {
-      id: 'psychedelic',
+      id: 'psychedelic-freakout',
       name: 'Psychedelic Freakout',
       description: 'A maximalist neon chaos mode with saturated gradients and unmistakably unserious operator vibes.',
       author: 'Roboticus',
@@ -6769,22 +7019,25 @@
     addThemeToDropdown(manifest);
   }
 
+  // Register hardcoded builtins for instant rendering before API loads.
   builtinThemeManifests.forEach(function(theme) {
     registerThemeManifest(theme, { injectCss: false });
   });
 
-  // Load external themes from API
+  // Load ALL themes from the single catalog endpoint.
+  // This is the sole source of truth — builtins + catalog themes.
   function loadExternalThemes() {
-    fetch('/api/themes').then(function(r) { return r.json(); }).then(function(themes) {
+    fetch('/api/themes/catalog').then(function(r) { return r.json(); }).then(function(data) {
+      var themes = data.themes || data || [];
       themes.forEach(function(t) {
-        if (themeNames[t.id]) return; // skip built-in overrides for now
+        if (themeNames[t.id]) return; // already registered from hardcoded builtins
         registerThemeManifest(t, { injectCss: true });
       });
-      // If saved theme is an external theme, apply it now
+      // If saved theme is a catalog theme, apply it now
       var saved = localStorage.getItem('roboticus-theme');
       if (saved && loadedThemes[saved]) applyTheme(saved);
     }).catch(function(e) {
-      console.warn('Failed to load external themes:', e);
+      console.warn('Failed to load themes from catalog:', e);
     });
   }
 
@@ -8233,20 +8486,48 @@
       }
       var draft = App._getSettingsDraft();
       var patch = App._buildMutableConfigPatch(draft);
+      var statusEl = document.getElementById('settings-status');
       api('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) }).then(function() {
         var merged = JSON.parse(JSON.stringify(_cachedConfig || {}));
         Object.keys(patch || {}).forEach(function(k) { merged[k] = patch[k]; });
         _cachedConfig = merged;
         App._settingsDirty = false; App._settingsRawText = null;
+        if (statusEl) { statusEl.textContent = ''; statusEl.style.display = 'none'; }
         toast(isApply ? 'Configuration applied' : 'Configuration saved');
         App.navigate('settings');
-      }).catch(function(err) { toast(err.message || 'Save failed'); });
+      }).catch(function(err) {
+        var msg = err.message || 'Save failed';
+        if (statusEl) {
+          statusEl.textContent = msg;
+          statusEl.style.display = 'block';
+          statusEl.style.color = 'var(--error, #ef4444)';
+          statusEl.style.background = 'rgba(239,68,68,0.1)';
+          statusEl.style.border = '1px solid rgba(239,68,68,0.3)';
+          statusEl.style.borderRadius = '4px';
+          statusEl.style.padding = '0.5rem 0.75rem';
+          statusEl.style.fontSize = '0.8125rem';
+          statusEl.style.fontFamily = 'var(--font-mono)';
+        }
+        toast(msg);
+      });
       return;
     }
     if (e.target.closest('#settings-cancel')) {
       App._settingsDraft = null; App._settingsRawText = null; App._settingsDirty = false;
       toast('Changes discarded'); App.navigate('settings'); return;
     }
+    // --- MCP Server management event handlers ---
+    if (e.target.closest('[data-mcp-add]')) { App._mcpOpenModal(); return; }
+    var mcpEditBtn = e.target.closest('[data-mcp-edit]');
+    if (mcpEditBtn) { App._mcpOpenModal(Number(mcpEditBtn.getAttribute('data-mcp-edit'))); return; }
+    var mcpDelBtn = e.target.closest('[data-mcp-delete]');
+    if (mcpDelBtn) { App._mcpDeleteServer(Number(mcpDelBtn.getAttribute('data-mcp-delete')), mcpDelBtn.getAttribute('data-mcp-delete-name') || ''); return; }
+    var mcpTogBtn = e.target.closest('[data-mcp-toggle]');
+    if (mcpTogBtn) { App._mcpToggleServer(Number(mcpTogBtn.getAttribute('data-mcp-toggle'))); return; }
+    var mcpTestBtn = e.target.closest('[data-mcp-test]');
+    if (mcpTestBtn) { App._mcpTestServer(mcpTestBtn.getAttribute('data-mcp-test')); return; }
+    var mcpRefBtn = e.target.closest('[data-mcp-refresh]');
+    if (mcpRefBtn) { App._mcpRefreshTools(mcpRefBtn.getAttribute('data-mcp-refresh')); return; }
     var chainBtn = e.target.closest('[data-chain-preset]');
     if (chainBtn) {
       var name = chainBtn.getAttribute('data-chain-preset');

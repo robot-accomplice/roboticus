@@ -155,6 +155,32 @@ func coerceArrayFields(m map[string]any) {
 			}
 		}
 	}
+
+	// Handle top-level array fields.
+	topLevelArrays := []string{"disabled_bundled_providers"}
+	for _, f := range topLevelArrays {
+		v, exists := m[f]
+		if !exists {
+			continue
+		}
+		if s, isStr := v.(string); isStr {
+			parts := strings.Split(s, "\n")
+			var result []string
+			for _, p := range parts {
+				p = strings.TrimSpace(p)
+				if p != "" {
+					result = append(result, p)
+				}
+			}
+			if len(result) == 0 {
+				m[f] = []string{}
+			} else {
+				m[f] = result
+			}
+		} else if v == nil {
+			m[f] = []string{}
+		}
+	}
 }
 
 // ReadConfigRaw reads the raw TOML config file content.
