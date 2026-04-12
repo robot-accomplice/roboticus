@@ -57,10 +57,19 @@ func (rq *RouteQueries) GetCronJobPayload(ctx context.Context, id string) *sql.R
 }
 
 // ListCronRuns returns recent cron runs.
+// Handles both old schema (error, created_at) and new schema (error_msg, timestamp).
 func (rq *RouteQueries) ListCronRuns(ctx context.Context, limit int) (*sql.Rows, error) {
-	return rq.q.QueryContext(ctx,
+	// Try new schema first (error_msg, timestamp).
+	rows, err := rq.q.QueryContext(ctx,
 		`SELECT id, job_id, status, duration_ms, error_msg, '', timestamp
 		 FROM cron_runs ORDER BY timestamp DESC LIMIT ?`, limit)
+	if err != nil {
+		// Fall back to old schema (error, created_at).
+		return rq.q.QueryContext(ctx,
+			`SELECT id, job_id, status, duration_ms, error, COALESCE(output_text, ''), created_at
+			 FROM cron_runs ORDER BY created_at DESC LIMIT ?`, limit)
+	}
+	return rows, nil
 }
 
 // --- Delegation Outcomes ---
