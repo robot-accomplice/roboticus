@@ -165,3 +165,73 @@ func AnnotateInferenceTrace(tr *TraceRecorder, model, provider string, escalated
 	tr.Annotate(TraceNSInference+".provider", provider)
 	tr.Annotate(TraceNSInference+".escalated", escalated)
 }
+
+// ── Guard Trace Annotations ──────────────────────────────────────────────────
+
+// GuardTraceEntry records a single guard's evaluation result for tracing.
+type GuardTraceEntry struct {
+	Outcome string `json:"outcome"` // "pass", "fail", "rewrite", "retry"
+	Reason  string `json:"reason,omitempty"`
+}
+
+// AnnotateGuardTrace writes guard chain evaluation results as namespaced trace
+// annotations. Groups under the "guard" namespace.
+func AnnotateGuardTrace(tr *TraceRecorder, results map[string]GuardTraceEntry, chainType string, totalMs int64) {
+	if tr == nil {
+		return
+	}
+	tr.Annotate(TraceNSGuard+".results", results)
+	tr.Annotate(TraceNSGuard+".chain", chainType)
+	tr.Annotate(TraceNSGuard+".total_ms", totalMs)
+}
+
+// ── Routing Trace Annotations ────────────────────────────────────────────────
+
+// AnnotateRoutingTrace writes model routing decision metadata as namespaced
+// trace annotations. Groups under the "inference" namespace (routing sub-group).
+func AnnotateRoutingTrace(tr *TraceRecorder, candidates []string, winner string, winnerScore float64, mode string) {
+	if tr == nil {
+		return
+	}
+	tr.Annotate(TraceNSInference+".routing.candidates", candidates)
+	tr.Annotate(TraceNSInference+".routing.winner", winner)
+	tr.Annotate(TraceNSInference+".routing.winner_score", winnerScore)
+	tr.Annotate(TraceNSInference+".routing.mode", mode)
+}
+
+// AnnotateRoutingWeightsTrace writes the active routing weights at selection time.
+func AnnotateRoutingWeightsTrace(tr *TraceRecorder, weights map[string]float64) {
+	if tr == nil {
+		return
+	}
+	tr.Annotate(TraceNSInference+".routing.weights", weights)
+}
+
+// ── Memory Trace Annotations ─────────────────────────────────────────────────
+
+// AnnotateMemoryTrace writes detailed memory retrieval stats as namespaced
+// trace annotations. Groups under the "retrieval" namespace.
+func AnnotateMemoryTrace(tr *TraceRecorder, tiersQueried []string, hitsPerTier map[string]int, budgetConsumed int) {
+	if tr == nil {
+		return
+	}
+	tr.Annotate(TraceNSRetrieval+".tiers_queried", tiersQueried)
+	tr.Annotate(TraceNSRetrieval+".hits", hitsPerTier)
+	tr.Annotate(TraceNSRetrieval+".budget_consumed", budgetConsumed)
+}
+
+// ── Context Budget Trace Annotations ─────────────────────────────────────────
+
+// AnnotateContextBudgetTrace writes context window budget allocation as
+// namespaced trace annotations. Groups under the "retrieval" namespace
+// (context sub-group).
+func AnnotateContextBudgetTrace(tr *TraceRecorder, budgetTotal, systemPromptTokens, toolDefsTokens, memoryTokens, historyTokens int) {
+	if tr == nil {
+		return
+	}
+	tr.Annotate(TraceNSRetrieval+".context.budget_total", budgetTotal)
+	tr.Annotate(TraceNSRetrieval+".context.system_prompt_tokens", systemPromptTokens)
+	tr.Annotate(TraceNSRetrieval+".context.tool_defs_tokens", toolDefsTokens)
+	tr.Annotate(TraceNSRetrieval+".context.memory_tokens", memoryTokens)
+	tr.Annotate(TraceNSRetrieval+".context.history_tokens", historyTokens)
+}

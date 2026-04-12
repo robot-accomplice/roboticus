@@ -12,6 +12,7 @@ import (
 	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/rs/zerolog/log"
 
+	"roboticus/internal/agent/tools"
 	"roboticus/internal/api/routes"
 	"roboticus/internal/browser"
 	"roboticus/internal/core"
@@ -32,6 +33,7 @@ type AppState struct {
 	Keystore        *core.Keystore
 	EventBus        *EventBus
 	Approvals       routes.ApprovalService
+	Tools           *tools.Registry
 	MCP             *mcp.ConnectionManager
 	MCPGateway      *mcp.Gateway // serves the agent's tools to external MCP clients
 	Plugins         *plugin.Registry
@@ -184,11 +186,11 @@ func NewServer(ctx context.Context, cfg ServerConfig, state *AppState) *http.Ser
 		r.Get("/api/memory/health", routes.MemoryHealth(state.Store))
 
 		// Routing profile.
-		r.Get("/api/routing/profile", routes.GetRoutingProfile(state.Store))
 		var llmRouter *llm.Router
 		if state.LLM != nil {
 			llmRouter = state.LLM.Router()
 		}
+		r.Get("/api/routing/profile", routes.GetRoutingProfile(state.Store, llmRouter))
 		r.Put("/api/routing/profile", routes.PutRoutingProfile(state.Store, llmRouter))
 
 		// Circuit breaker observability and reset.
@@ -223,7 +225,7 @@ func NewServer(ctx context.Context, cfg ServerConfig, state *AppState) *http.Ser
 		}))
 		r.Delete("/api/skills/{id}", routes.DeleteSkill(state.Store))
 		r.Put("/api/skills/{id}/toggle", routes.ToggleSkill(state.Store))
-		r.Get("/api/skills/catalog", routes.GetSkillsCatalog(state.Store))
+		r.Get("/api/skills/catalog", routes.GetSkillsCatalog(state.Store, state.Plugins, state.Config))
 		r.Post("/api/skills/catalog/install", routes.InstallSkillFromCatalog(state.Config, state.Store))
 		r.Post("/api/skills/catalog/activate", routes.ActivateSkillFromCatalog(state.Store))
 		r.Get("/api/skills/audit", routes.AuditSkills(state.Store))
@@ -257,6 +259,7 @@ func NewServer(ctx context.Context, cfg ServerConfig, state *AppState) *http.Ser
 		r.Post("/api/models/reset", routes.ResetModelScores(state.LLM))
 		r.Post("/api/models/exercise", routes.ExerciseModel(state.LLM, state.Store))
 		r.Get("/api/models/exercise/status", routes.GetExerciseStatus(state.Store))
+		r.Get("/api/models/exercise/scorecard", routes.GetExerciseScorecard(state.Store))
 		r.Post("/api/models/routing-eval", routes.RunRoutingEval(state.LLM))
 
 		// Recommendations.
@@ -274,6 +277,7 @@ func NewServer(ctx context.Context, cfg ServerConfig, state *AppState) *http.Ser
 		r.Put("/api/config", routes.UpdateConfig(state.Config, state.Store))
 		r.Get("/api/config/capabilities", routes.GetCapabilities())
 		r.Get("/api/config/status", routes.GetConfigStatus())
+		r.Get("/api/config/schema", routes.GetConfigSchema(state.Config))
 		r.Get("/api/config/raw", routes.GetConfigRaw())
 		r.Put("/api/config/raw", routes.UpdateConfigRaw())
 
@@ -428,8 +432,13 @@ func NewServer(ctx context.Context, cfg ServerConfig, state *AppState) *http.Ser
 		}
 
 		// WebSocket.
-		r.Get("/ws", HandleWebSocket(state.EventBus, cfg.APIKey))
-		wsTickets := NewTicketStore(ctx, 60 * time.Second)
+		wsTickets := NewTicketStore(ctx, 60*time.Second)
+		r.Get("/ws", HandleWebSocket(WSHandlerDeps{
+			Bus:       state.EventBus,
+			APIKey:    cfg.APIKey,
+			Tickets:   wsTickets,
+			Snapshots: BuildTopicSnapshots(state),
+		}))
 		r.Post("/api/ws-ticket", routes.IssueWSTicket(wsTickets))
 	})
 

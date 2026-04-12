@@ -61,7 +61,7 @@
       --crt-scanline: rgba(0,0,0,0.12); --crt-vignette: rgba(0,0,0,0.45);
       --text-glow: rgba(0,255,65,0.2); --robot-color: #00ff41;
     }
-    [data-theme="psychedelic"] {
+    [data-theme="psychedelic-freakout"] {
       --bg: #0a0012; --surface: #150025; --surface-2: #1e0035; --surface-3: #2a0050; --surface-4: #350068;
       --border: #4a0080; --border-ghost: rgba(74, 0, 128, 0.20);
       --text: #f0e0ff; --muted: #9966cc; --outline: #7744aa;
@@ -483,6 +483,23 @@
     .settings-input::placeholder { color: var(--muted); opacity: 0.45; font-style: italic; }
     .settings-input.warn { border-color: var(--error); background: rgba(239,68,68,0.06); }
     .settings-label.warn { color: var(--error); }
+    .settings-help-trigger { cursor: help; color: var(--muted); font-size: 0.65rem; display: inline-block; padding: 0 0.15rem; user-select: none; position: relative; }
+    .settings-help-trigger:hover { color: var(--accent); }
+    .settings-tooltip-popover {
+      position: fixed; z-index: 9999; max-width: 320px; padding: 0.625rem 0.75rem;
+      background: var(--surface-2); color: var(--text); border: 1px solid var(--accent-dim);
+      border-radius: var(--radius); font-size: 0.75rem; line-height: 1.5;
+      font-family: var(--font); box-shadow: 0 4px 16px rgba(0,0,0,0.25);
+      pointer-events: auto; opacity: 0; transform: translateY(4px);
+      transition: opacity 0.15s, transform 0.15s;
+    }
+    .settings-tooltip-popover.visible { opacity: 1; transform: translateY(0); }
+    .settings-tooltip-popover::before {
+      content: ''; position: absolute; top: -5px; left: var(--arrow-left, 16px);
+      width: 8px; height: 8px; background: var(--surface-2);
+      border-left: 1px solid var(--accent-dim); border-top: 1px solid var(--accent-dim);
+      transform: rotate(45deg);
+    }
     .settings-warn-icon { color: var(--error); font-size: 0.75rem; margin-left: 0.25rem; }
     .model-order-list { display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 0.75rem; }
     .model-order-item { display: grid; grid-template-columns: 16px minmax(160px,1fr) auto auto auto; gap: 0.5rem; align-items: center; padding: 0.45rem 0.5rem; border: 1px solid var(--border-ghost); border-radius: 4px; background: var(--bg); }
@@ -653,7 +670,7 @@
     .theme-info-name { font-size: 0.6875rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 2px; }
     .theme-info-desc { font-size: 0.5625rem; opacity: 0.7; text-transform: none; letter-spacing: 0; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
     .theme-info-meta { font-size: 0.5rem; opacity: 0.4; margin-top: 3px; text-transform: none; }
-    [data-theme="psychedelic"] { animation: psychBg 6s linear infinite; }
+    [data-theme="psychedelic-freakout"] { animation: psychBg 6s linear infinite; }
     @keyframes psychBg { 0% { --accent: #ff00ff; } 25% { --accent: #00ffcc; } 50% { --accent: #ffff00; } 75% { --accent: #ff0066; } 100% { --accent: #ff00ff; } }
     @property --accent { syntax: '<color>'; inherits: true; initial-value: #c180ff; }
     .crt-overlay { position: fixed; inset: 0; pointer-events: none; z-index: 9999; }
@@ -804,10 +821,58 @@
       try {
         var obj = JSON.parse(s);
         return formatMemValue(obj, 0);
-      } catch(_) { /* not valid JSON, fall through */ }
+      } catch(_) {
+        // Truncated/malformed JSON from old DB entries — summarize instead of raw display
+        return formatTruncatedJson(s);
+      }
+    }
+    // Check for embedded truncated JSON anywhere in the string.
+    // Patterns: "tool_name: {json...", "tool_name: text text [{json..."
+    var jsonIdx = -1;
+    for (var ci = 0; ci < s.length; ci++) {
+      if (s.charAt(ci) === '{' || s.charAt(ci) === '[') { jsonIdx = ci; break; }
+    }
+    if (jsonIdx > 0) {
+      var textBefore = s.substring(0, jsonIdx).trim();
+      // Remove trailing colon/whitespace from prefix
+      textBefore = textBefore.replace(/[:\s]+$/, '');
+      var jsonPart = s.substring(jsonIdx);
+      try {
+        var parsed = JSON.parse(jsonPart);
+        return '<span class="badge" style="font-size:0.68rem">' + esc(textBefore) + '</span> ' + formatMemValue(parsed, 0);
+      } catch(_) {
+        // JSON is truncated — show the text prefix cleanly and mark as truncated
+        return '<span class="badge" style="font-size:0.68rem">' + esc(textBefore) + '</span> '
+          + formatTruncatedJson(jsonPart);
+      }
     }
     // For non-JSON: convert basic markdown-like formatting and truncate
     return formatMemText(s);
+  }
+  /** Summarize truncated/malformed JSON from old DB entries into readable display. */
+  function formatTruncatedJson(s) {
+    // Try to extract tool name from "tool_name: {json..." pattern
+    var toolMatch = s.match(/^(\w+):\s*/);
+    var toolName = toolMatch ? toolMatch[1] : '';
+    var badge = toolName ? '<span class="badge" style="font-size:0.68rem">' + esc(toolName) + '</span> ' : '';
+    // Try to extract useful fragments: count fields, status, error
+    var countMatch = s.match(/"count"\s*:\s*(\d+)/);
+    var statusMatch = s.match(/"status"\s*:\s*"([^"]+)"/);
+    var errorMatch = s.match(/"error"\s*:\s*"([^"]{0,80})/);
+    var resultsMatch = s.match(/"results"\s*:\s*\[/);
+    var parts = [];
+    if (errorMatch) parts.push('error: ' + errorMatch[1]);
+    else if (statusMatch) parts.push('status: ' + statusMatch[1]);
+    if (countMatch) parts.push(countMatch[1] + ' items');
+    else if (resultsMatch) parts.push('results array');
+    if (parts.length > 0) {
+      return badge + '<span style="color:var(--text);font-size:0.78rem">' + esc(parts.join(', ')) + '</span>';
+    }
+    // Fallback: show first 120 chars with truncation indicator
+    var preview = s.length > 120 ? s.substring(0, 120) : s;
+    // Clean up mid-token cuts
+    preview = preview.replace(/[{[\]},:"\\]+$/, '').trim();
+    return badge + '<span style="color:var(--muted);font-size:0.78rem">' + esc(preview) + '\u2026</span>';
   }
   /** Render a parsed JSON value as label:data rows, recursing into nested objects. */
   function formatMemValue(val, depth) {
@@ -1742,57 +1807,21 @@
       while (_fleetHistory.byAgent[k].length < len) _fleetHistory.byAgent[k].unshift(0);
     });
   }
-  function startOverviewRefresh(app) {
-    if (overviewRefreshTimer) clearInterval(overviewRefreshTimer);
-    overviewRefreshTimer = setInterval(function() {
-      if (!app || app.page !== 'overview') return;
-      app.refreshOverview();
-    }, 7000);
-  }
-  function stopModelsBackgroundRefresh() {
-    if (modelsRefreshTimer) {
-      clearInterval(modelsRefreshTimer);
-      modelsRefreshTimer = null;
-    }
-  }
-  function startModelsBackgroundRefresh(app) {
-    stopModelsBackgroundRefresh();
-    // Keep model cache warm using metadata-only discovery (no inference calls).
-    modelsRefreshTimer = setInterval(function() {
-      if (!app || !app._loadAvailableModels) return;
-      app._loadAvailableModels({
-        forceRefresh: true,
-        cacheTtlMs: 0,
-        timeoutMs: 700,
-        nonBlocking: true,
-        validationLevel: 'zero'
-      }).catch(function() {});
-    }, 180000);
-  }
-  var workspaceRefreshTimer = null;
-  function stopWorkspaceRefresh() {
-    if (workspaceRefreshTimer) {
-      clearInterval(workspaceRefreshTimer);
-      workspaceRefreshTimer = null;
-    }
-  }
-  function startWorkspaceRefresh(app) {
-    stopWorkspaceRefresh();
-    workspaceRefreshTimer = setInterval(function() {
-      if (app.page !== 'workspace' || !workspace || !workspace.applySnapshot) return;
-      api('/api/workspace/state')
-        .then(function(data) {
-          _cachedWorkspace = data;
-          workspace.applySnapshot(data);
-          updateWorkspaceStatusPanel(data);
-        })
-        .catch(function() {});
-    }, 3000);
-  }
+  // Overview and model refresh are now driven by WebSocket topic subscriptions.
+  // stats.snapshot pushes overview data, models.snapshot pushes model availability.
+  function startOverviewRefresh() {} // no-op: WS-driven
+  function stopModelsBackgroundRefresh() {} // no-op: WS-driven
+  function startModelsBackgroundRefresh() {} // no-op: WS-driven
+  // Workspace updates are now pushed via WebSocket topic subscription.
+  // The workspace.snapshot handler in App._wsTopicHandlers applies state deltas
+  // in real-time instead of polling every 3 seconds.
+  function stopWorkspaceRefresh() {} // no-op: polling removed
+  function startWorkspaceRefresh() {} // no-op: WS-driven
 
   var _cachedConfig = null;
   var _cachedCronJobs = [];
   var _cachedWorkspace = null;
+  var _catalogThemeVars = [];
 
   var App = {
     page: 'overview',
@@ -1857,7 +1886,8 @@
         + '  <div id="ov-card-errors"></div>'
         + '  <div id="ov-card-fleet" class="overview-fleet-slot" style="display:none"></div>'
         + '</div>'
-        + '<div class="card" id="ov-integrations" style="margin-top:1rem"></div>';
+        + '<div class="card" id="ov-integrations" style="margin-top:1rem"></div>'
+        + '<div class="card" id="ov-throttle" style="margin-top:1rem"></div>';
     },
     _applyOverviewCards: function(cards) {
       var self = this;
@@ -1948,6 +1978,63 @@
         }
         setHtml(intEl, intHtml);
       }
+      // Render throttle / rate-limit panel
+      var thrEl = document.getElementById('ov-throttle');
+      if (thrEl) {
+        var thr = cards && cards.__throttle ? cards.__throttle : {};
+        var thrHtml = '<div class="card-title">Rate Limiting</div>';
+        var gCount = Number(thr.global_count) || 0;
+        var gCap = Number(thr.global_capacity) || 1;
+        var pct = Math.min(100, Math.round((gCount / gCap) * 100));
+        var barColor = pct >= 90 ? '#ef4444' : (pct >= 70 ? '#f59e0b' : '#22c55e');
+        thrHtml += '<div style="margin-bottom:0.75rem">'
+          + '<div style="font-size:0.75rem;color:var(--muted);margin-bottom:0.25rem">Window utilization (' + esc(String(gCount)) + ' / ' + esc(String(gCap)) + ')</div>'
+          + '<div style="background:var(--border);border-radius:4px;height:8px;overflow:hidden">'
+          + '<div style="width:' + pct + '%;height:100%;background:' + barColor + ';border-radius:4px;transition:width 0.3s"></div>'
+          + '</div>'
+          + '</div>';
+        var activeIps = Number(thr.active_ips) || 0;
+        var activeActors = Number(thr.active_actors) || 0;
+        var throttledGlobal = Number(thr.throttled_global) || 0;
+        var windowSecs = Number(thr.window_secs) || 60;
+        thrHtml += '<div style="display:flex;gap:1.5rem;margin-bottom:0.75rem;font-size:0.75rem">'
+          + '<div><span style="color:var(--muted)">Active IPs:</span> ' + esc(String(activeIps)) + '</div>'
+          + '<div><span style="color:var(--muted)">Active Actors:</span> ' + esc(String(activeActors)) + '</div>'
+          + '<div><span style="color:var(--muted)">Throttled (global):</span> ' + esc(String(throttledGlobal)) + '</div>'
+          + '<div><span style="color:var(--muted)">Window:</span> ' + esc(String(windowSecs)) + 's</div>'
+          + '</div>';
+        var topIps = Array.isArray(thr.top_throttled_ips) ? thr.top_throttled_ips : [];
+        var topActors = Array.isArray(thr.top_throttled_actors) ? thr.top_throttled_actors : [];
+        thrHtml += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem">';
+        thrHtml += '<div>';
+        thrHtml += '<div style="font-size:0.7rem;font-weight:600;margin-bottom:0.35rem">Top Throttled IPs</div>';
+        if (topIps.length > 0) {
+          thrHtml += '<table style="width:100%;font-size:0.7rem;border-collapse:collapse">';
+          thrHtml += '<tr style="color:var(--muted)"><td style="padding:0.15rem 0.5rem 0.15rem 0">IP</td><td style="padding:0.15rem 0;text-align:right">Count</td></tr>';
+          topIps.forEach(function(entry) {
+            thrHtml += '<tr><td style="padding:0.15rem 0.5rem 0.15rem 0">' + esc(String(entry[0])) + '</td><td style="padding:0.15rem 0;text-align:right">' + esc(String(entry[1])) + '</td></tr>';
+          });
+          thrHtml += '</table>';
+        } else {
+          thrHtml += '<div style="font-size:0.7rem;color:var(--muted)">No throttled IPs</div>';
+        }
+        thrHtml += '</div>';
+        thrHtml += '<div>';
+        thrHtml += '<div style="font-size:0.7rem;font-weight:600;margin-bottom:0.35rem">Top Throttled Actors</div>';
+        if (topActors.length > 0) {
+          thrHtml += '<table style="width:100%;font-size:0.7rem;border-collapse:collapse">';
+          thrHtml += '<tr style="color:var(--muted)"><td style="padding:0.15rem 0.5rem 0.15rem 0">Actor</td><td style="padding:0.15rem 0;text-align:right">Count</td></tr>';
+          topActors.forEach(function(entry) {
+            thrHtml += '<tr><td style="padding:0.15rem 0.5rem 0.15rem 0">' + esc(String(entry[0])) + '</td><td style="padding:0.15rem 0;text-align:right">' + esc(String(entry[1])) + '</td></tr>';
+          });
+          thrHtml += '</table>';
+        } else {
+          thrHtml += '<div style="font-size:0.7rem;color:var(--muted)">No throttled actors</div>';
+        }
+        thrHtml += '</div>';
+        thrHtml += '</div>';
+        setHtml(thrEl, thrHtml);
+      }
     },
     navigate: function(page) {
       if (page === 'recommendations') {
@@ -2033,13 +2120,15 @@
         fetchWithFallback('/api/breaker/status', {}, 'breaker'),
         fetchWithFallback('/api/workspace/state', { agents: [] }, 'workspace'),
         fetchWithFallback('/api/stats/costs', { costs: [] }, 'cost stats'),
-        fetchWithFallback('/api/channels/status', [], 'channel status')
+        fetchWithFallback('/api/channels/status', [], 'channel status'),
+        fetchWithFallback('/api/stats/throttle', {}, 'throttle stats')
       ]).then(function(arr) {
         sparklineId = 0; stackedId = 0;
         var failures = arr.filter(function(r) { return !r.ok; });
         var agent = arr[0].data, health = arr[1].data, sessions = arr[2].data, skills = arr[3].data;
         var cron = arr[4].data, cache = arr[5].data, timeseries = arr[6].data, wallet = arr[7].data, breaker = arr[8].data;
         var wsState = arr[9].data, costData = arr[10].data, channelStatuses = arr[11].data || [];
+        var throttleData = arr[12].data || {};
         _cachedWorkspace = wsState;
 
         var state = (agent.state || 'unknown').toLowerCase();
@@ -2189,7 +2278,8 @@
           __attention: attention,
           __failures: failures,
           __meta: { updated_at: new Date().toLocaleTimeString() },
-          __channelStatuses: channelStatuses
+          __channelStatuses: channelStatuses,
+          __throttle: throttleData
         };
       });
     },
@@ -2205,6 +2295,7 @@
         var data = results[0] || {};
         var agentStatus = results[1] || {};
         if (agentStatus.name) setAgentDisplayName(agentStatus.name);
+        var rootAgentId = (agentStatus.agent_id || agentStatus.id || '').toLowerCase();
         var sessions = data.sessions || [];
         if (sessions.length > 0) {
           dismissHint('sessions-helper');
@@ -2247,39 +2338,76 @@
                   }
                 }
               }
-              return '<div class="message ' + side + '" id="msg-' + idx + '"><div class="message-role">' + esc(roleLabel) + expandBtn + '</div><div>' + renderSafeMarkdown(m.content || '') + '</div>' + gradeHtml + '<div class="ctx-detail" id="ctx-detail-' + idx + '" style="display:none"></div></div>';
+              var timeHtml = '';
+              if (m.created_at) {
+                var d = new Date(m.created_at);
+                var now = new Date();
+                var diffMs = now - d;
+                var diffMin = Math.floor(diffMs / 60000);
+                var relative = diffMin < 1 ? 'just now'
+                  : diffMin < 60 ? diffMin + 'm ago'
+                  : diffMin < 1440 ? Math.floor(diffMin / 60) + 'h ago'
+                  : Math.floor(diffMin / 1440) + 'd ago';
+                timeHtml = '<div class="msg-time" title="' + esc(d.toISOString()) + '" style="font-size:0.625rem;color:var(--muted);text-align:right;margin-top:0.25rem">' + relative + '</div>';
+              }
+              return '<div class="message ' + side + '" id="msg-' + idx + '"><div class="message-role">' + esc(roleLabel) + expandBtn + '</div><div>' + renderSafeMarkdown(m.content || '') + '</div>' + gradeHtml + timeHtml + '<div class="ctx-detail" id="ctx-detail-' + idx + '" style="display:none"></div></div>';
             }).join('') || '<p style="color:var(--muted);padding:1rem">Send a message to begin the conversation.</p>';
             var chatLabel = self._activeSession.nickname || truncate(self._activeSession.id, 16);
-            var chatAgentLabel = sessionAssistantLabel(self._activeSession, self._activeSession.agent_id || 'default');
-            var sessionAgentId = String(self._activeSession.agent_id || 'default').toLowerCase();
-            var primaryAgentId = String(App._activeAgentId || 'default').toLowerCase();
-            var scope = String(self._activeSession.scope || '').toLowerCase();
-            var isScheduledTask = scope.indexOf('task') !== -1 || String(self._activeSession.nickname || '').indexOf('Scheduled:') === 0;
-            var isOwnSession = !isScheduledTask && (sessionAgentId === primaryAgentId || sessionAgentId === 'default');
-            var inputHtml = isOwnSession
-              ? '<div class="session-chat-input"><textarea id="session-msg-input" placeholder="Type a message\u2026" rows="1" autocomplete="off"></textarea><button class="btn" id="btn-send-msg">' + uiBtnLabel('send', 'Send') + '</button></div>'
-              : '<div class="session-chat-input" style="opacity:0.5;pointer-events:none;border-top:1px solid var(--border-ghost)"><span style="font-size:0.75rem;color:var(--muted);padding:0.5rem 0">\ud83d\udd12 Read-only session \u2014 owned by ' + esc(chatAgentLabel) + '</span></div>';
-            return '<div class="session-chat-wrap"><div class="session-chat-header"><button class="btn secondary" style="font-size:0.75rem;padding:0.3rem 0.75rem" id="btn-back-sessions">' + uiBtnLabel('back', 'Back') + '</button><span style="font-weight:600">' + esc(chatAgentLabel) + '</span><span class="session-nick" title="' + esc(self._activeSession.id) + '" style="color:var(--muted);font-size:0.75rem">' + esc(chatLabel) + '</span>' + copyIdBtn(self._activeSession.id) + '</div><div class="message-thread">' + msgs + '</div>' + inputHtml + '</div>';
+            var sessionAgentId = (self._activeSession.agent_id || '').toLowerCase();
+            // A session belongs to the orchestrator when agent IDs match exactly,
+            // or we can't determine the root agent (graceful degradation).
+            // Composite IDs like "duncan:automation_scripting" are non-orchestrator.
+            var isOrchestratorSession = !rootAgentId || sessionAgentId === rootAgentId;
+            var isReadOnly = self._activeSession.non_interactive || !isOrchestratorSession;
+            // Non-orchestrator sessions show their own agent name, not the orchestrator's
+            var chatAgentLabel = isOrchestratorSession
+              ? sessionAssistantLabel(self._activeSession, self._activeSession.agent_id || 'default')
+              : (self._activeSession.agent_id || 'subagent');
+            var readOnlyReason = self._activeSession.non_interactive
+              ? 'cron/subagent session'
+              : (!isOrchestratorSession ? 'subagent session' : '');
+            var inputArea = isReadOnly
+              ? '<div style="padding:0.75rem 1rem;background:rgba(245,158,11,0.08);border-top:1px solid var(--border-ghost);font-size:0.8125rem;color:var(--muted);text-align:center">\ud83d\udd12 Read-only (' + readOnlyReason + ')</div>'
+              : '<div class="session-chat-input"><textarea id="session-msg-input" placeholder="Type a message\u2026" rows="1" autocomplete="off"></textarea><button class="btn" id="btn-send-msg">' + uiBtnLabel('send', 'Send') + '</button></div>';
+            return '<div class="session-chat-wrap"><div class="session-chat-header"><button class="btn secondary" style="font-size:0.75rem;padding:0.3rem 0.75rem" id="btn-back-sessions">' + uiBtnLabel('back', 'Back') + '</button><span style="font-weight:600">' + esc(chatAgentLabel) + '</span><span class="session-nick" title="' + esc(self._activeSession.id) + '" style="color:var(--muted);font-size:0.75rem">' + esc(chatLabel) + '</span>' + copyIdBtn(self._activeSession.id) + (isReadOnly ? ' <span class="badge" style="font-size:0.5rem;padding:1px 5px;background:var(--warning);color:#000;vertical-align:middle">AUTO</span>' : '') + '</div><div class="message-thread">' + msgs + '</div>' + inputArea + '</div>';
           });
         }
 
+        // Separate active/closed from archived
+        var showArchived = self._showArchivedSessions || false;
+        var activeSessions = sessions.filter(function(s) { return s.status !== 'archived'; });
+        var archivedSessions = sessions.filter(function(s) { return s.status === 'archived'; });
+        var displaySessions = showArchived ? sessions : activeSessions;
+
         var PAGE_SIZE = 25;
         var page = self._sessionsPage || 0;
-        var totalPages = Math.ceil(sessions.length / PAGE_SIZE) || 1;
+        var totalPages = Math.ceil(displaySessions.length / PAGE_SIZE) || 1;
         if (page >= totalPages) page = totalPages - 1;
-        var paged = sessions.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+        var paged = displaySessions.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
         var rows = paged.map(function(s) {
-          var label = s.nickname || truncate(s.id, 16);
+          // Fallback label: nickname -> agent name for subagents -> truncated ID
+          var sAgentLower = (s.agent_id || '').toLowerCase();
+          var isSubagent = rootAgentId && sAgentLower !== rootAgentId;
+          // For composite IDs like "duncan:automation_scripting", show the subagent part
+          var subagentLabel = s.agent_id || '';
+          if (subagentLabel.indexOf(':') > -1) subagentLabel = subagentLabel.split(':').slice(1).join(':');
+          var label = s.nickname || (isSubagent ? subagentLabel : '') || truncate(s.id, 16);
+          if (label === 'Untitled' && s.agent_id) label = s.agent_id;
           var st = s.status || 'active';
           var stCls = st === 'active' ? 'success' : (st === 'closed' ? '' : 'warning');
+          var isNonInteractive = s.non_interactive;
+          var openLabel = isNonInteractive ? 'View' : 'Open';
           var archiveBtn = st === 'archived'
             ? '<button class="btn secondary" style="font-size:0.65rem;padding:0.2rem 0.5rem" disabled>Archived</button>'
             : '<button class="btn secondary session-archive-btn" data-archive-session="' + esc(s.id || '') + '" style="font-size:0.65rem;padding:0.2rem 0.5rem" title="Archive">Archive</button>';
-          return '<tr data-id="' + esc(s.id || '') + '" style="cursor:pointer" title="' + esc(s.id || '') + '"><td><span class="session-nick">' + esc(label) + '</span>' + copyIdBtn(s.id || '') + '</td><td>' + esc(s.agent_id || '') + '</td><td><span class="badge ' + stCls + '" style="font-size:0.5625rem">' + esc(st) + '</span></td><td>' + esc(s.created_at || '') + '</td><td>' + esc(s.updated_at || '') + '</td><td style="display:flex;gap:0.25rem"><button class="btn secondary" style="font-size:0.65rem;padding:0.2rem 0.5rem">Open</button>' + archiveBtn + '<button class="btn secondary danger session-delete-btn" data-delete-session="' + esc(s.id || '') + '" style="font-size:0.65rem;padding:0.2rem 0.5rem" title="Delete">\u2715</button></td></tr>';
+          return '<tr data-id="' + esc(s.id || '') + '" data-non-interactive="' + (isNonInteractive ? '1' : '') + '" data-status="' + esc(st) + '" style="cursor:pointer" title="' + esc(s.id || '') + '"><td><span class="session-nick">' + esc(label) + '</span>' + copyIdBtn(s.id || '') + '</td><td>' + esc(s.agent_id || '') + '</td><td><span class="badge ' + stCls + '" style="font-size:0.5625rem">' + esc(st) + '</span></td><td>' + esc(s.created_at || '') + '</td><td>' + esc(s.updated_at || '') + '</td><td style="display:flex;gap:0.25rem"><button class="btn secondary" style="font-size:0.65rem;padding:0.2rem 0.5rem">' + openLabel + '</button>' + archiveBtn + '<button class="btn secondary danger session-delete-btn" data-delete-session="' + esc(s.id || '') + '" style="font-size:0.65rem;padding:0.2rem 0.5rem" title="Delete">\u2715</button></td></tr>';
         }).join('');
-        var emptyHint = sessions.length === 0 ? '<div class="card" style="margin-top:1rem;color:var(--muted)">No sessions yet. Click <strong>New session</strong> to start one.</div>' : '';
+        var emptyHint = displaySessions.length === 0 ? '<div class="card" style="margin-top:1rem;color:var(--muted)">No sessions yet. Click <strong>New session</strong> to start one.</div>' : '';
         var pager = totalPages > 1 ? '<div style="display:flex;gap:0.5rem;align-items:center;margin-top:0.75rem;justify-content:center"><button class="btn secondary" id="sess-prev" style="font-size:0.75rem;padding:0.2rem 0.6rem"' + (page === 0 ? ' disabled' : '') + '>\u2190 Prev</button><span style="font-size:0.75rem;color:var(--muted)">Page ' + (page + 1) + ' of ' + totalPages + '</span><button class="btn secondary" id="sess-next" style="font-size:0.75rem;padding:0.2rem 0.6rem"' + (page >= totalPages - 1 ? ' disabled' : '') + '>Next \u2192</button></div>' : '';
-        return '<div style="display:flex;gap:0.75rem;align-items:center"><button class="btn" id="btn-new-session">' + uiBtnLabel('plus', 'New session') + '</button><span style="font-size:0.8125rem;color:var(--muted)">' + sessions.length + ' session' + (sessions.length !== 1 ? 's' : '') + '</span></div><div class="table-wrap" style="margin-top:1rem;max-height:calc(100vh - 56px - 8rem);overflow-y:auto"><table><thead><tr><th>Topic</th><th>Agent</th><th>Status</th><th>Created</th><th>Updated</th><th>Action</th></tr></thead><tbody>' + rows + '</tbody></table></div>' + pager + emptyHint;
+        var archiveToggle = archivedSessions.length > 0
+          ? '<button class="btn secondary" id="toggle-archived" style="font-size:0.7rem;padding:0.25rem 0.6rem">' + (showArchived ? 'Hide archived (' + archivedSessions.length + ')' : 'Show archived (' + archivedSessions.length + ')') + '</button>'
+          : '';
+        return '<div style="display:flex;gap:0.75rem;align-items:center"><button class="btn" id="btn-new-session">' + uiBtnLabel('plus', 'New session') + '</button><span style="font-size:0.8125rem;color:var(--muted)">' + activeSessions.length + ' active</span>' + archiveToggle + '</div><div class="table-wrap" style="margin-top:1rem;max-height:calc(100vh - 56px - 8rem);overflow-y:auto"><table><thead><tr><th>Topic</th><th>Agent</th><th>Status</th><th>Created</th><th>Updated</th><th>Action</th></tr></thead><tbody>' + rows + '</tbody></table></div>' + pager + emptyHint;
       });
     },
 
@@ -2418,12 +2546,14 @@
             filterHtml += '</select></div>';
           }
           var list = memPaged.map(function(e) {
+            var ts = e.created_at ? e.created_at.substring(0, 16).replace('T', ' ') : '';
             return '<div class="card" style="margin-bottom:0.5rem">'
               + '<div>' + formatMemContent(e.content || '') + '</div>'
               + '<div style="margin-top:6px">'
               + '<span class="badge muted">' + esc(e.entry_type || '—') + '</span> '
               + '<span class="badge">imp: ' + esc(String(e.importance != null ? e.importance : '—')) + '</span> '
               + '<span style="font-size:0.7rem;color:var(--muted)">' + esc((e.session_id || '').substring(0, 8)) + '</span>'
+              + (ts ? ' <span style="font-size:0.7rem;color:var(--muted)">' + esc(ts) + '</span>' : '')
               + '</div></div>';
           }).join('') || '<p style="color:var(--muted)">No working memory entries. Open a session and send a message to populate this view.</p>';
           return healthStripHtml + tabButtons + filterHtml + memFilterBar() + '<div id="memory-list">' + list + '</div>' + memPager();
@@ -2440,13 +2570,15 @@
           var content = e.content || e.value || '';
           if (!content && e.key) content = e.key + ': ' + (e.summary || '');
           if (!content) { try { var ek = Object.keys(e).filter(function(k) { return k !== 'id' && k !== 'created_at' && k !== 'updated_at'; }); content = ek.map(function(k) { return k + ': ' + String(e[k] || ''); }).join(' | '); } catch(_) { content = '(no content)'; } }
-          return '<div class="card" style="margin-bottom:0.5rem"><div>' + formatMemContent(content) + '</div><div style="margin-top:6px"><span class="badge muted">' + esc(type) + '</span> <span class="badge">imp: ' + esc(String(imp)) + '</span></div></div>';
+          var ts = e.created_at ? e.created_at.substring(0, 16).replace('T', ' ') : (e.updated_at ? e.updated_at.substring(0, 16).replace('T', ' ') : '');
+          return '<div class="card" style="margin-bottom:0.5rem"><div>' + formatMemContent(content) + '</div><div style="margin-top:6px"><span class="badge muted">' + esc(type) + '</span> <span class="badge">imp: ' + esc(String(imp)) + '</span>' + (ts ? ' <span style="font-size:0.7rem;color:var(--muted)">' + esc(ts) + '</span>' : '') + '</div></div>';
         }).join('') || '<p style="color:var(--muted)">No entries found for this memory view yet.</p>';
         return healthStripHtml + tabButtons + memFilterBar() + '<div id="memory-list">' + list + '</div>' + memPager();
       });
     },
 
     renderSkills: function() {
+      _catalogThemeVars = [];
       var self = this;
       var tab = self._skillsTab || 'installed';
       if (tab !== 'installed' && tab !== 'catalog') tab = 'installed';
@@ -2463,7 +2595,7 @@
         var catalogData = (results[1] && results[1].data) ? results[1].data : { items: [] };
         var installedPlugins = (results[2] && results[2].plugins) || [];
         var skills = data.skills || [];
-        var catalogItems = (catalogData.items || []).filter(function(i) { return (i.source || '') === 'registry'; });
+        var catalogItems = (catalogData.skills || catalogData.items || []).filter(function(i) { return (i.source || '') === 'registry'; });
         var installedSkillSet = {};
         skills.forEach(function(s) {
           var skillName = (s && s.name) ? String(s.name).trim().toLowerCase() : '';
@@ -2591,8 +2723,117 @@
             + '</div>';
         }
 
+        // ── Plugins empty state ──
+        if (!pluginsHtml) {
+          pluginsHtml = ''
+            + '<div class="card" style="margin-bottom:1rem">'
+            + '  <div style="display:flex;justify-content:space-between;align-items:center;gap:0.75rem;flex-wrap:wrap">'
+            + '    <div><div class="card-title">plugins</div><div style="font-size:0.75rem;color:var(--muted)">0 plugins installed</div></div>'
+            + '  </div>'
+            + '  <div style="margin-top:0.75rem;font-size:0.8125rem;color:var(--muted)">No plugins installed. Install with <code style="background:var(--surface);padding:0.15rem 0.35rem;border-radius:3px;font-size:0.78rem">roboticus plugins install &lt;name&gt;</code></div>'
+            + '</div>';
+        }
+
+        // ── Themes section ──
+        var themeItems = catalogData.themes || [];
+        var themesHtml = '';
+        if (themeItems.length > 0) {
+          var themeRows = themeItems.map(function(th) {
+            var name = th.name || th.id || '';
+            var desc = th.description || '';
+            var author = th.author || '';
+            var swatch = th.swatch || th.variables && th.variables['--accent'] || '#888';
+            var installed = th.installed;
+            var source = th.source || '';
+            var installedBadge = installed
+              ? '<span class="badge success" style="font-size:0.62rem;padding:0.08rem 0.35rem">installed</span>'
+              : '';
+            var sourceBadge = source === 'builtin'
+              ? '<span class="badge" style="font-size:0.62rem;padding:0.08rem 0.35rem">builtin</span>'
+              : source === 'catalog'
+                ? '<span class="badge" style="font-size:0.62rem;padding:0.08rem 0.35rem;background:var(--accent-dim);color:var(--text)">catalog</span>'
+                : '';
+            var vars = th.variables || {};
+            var textures = th.textures || {};
+            var textureNames = Object.keys(textures);
+            var textureHint = textureNames.length > 0
+              ? '<div style="margin-top:0.15rem;font-size:0.62rem;color:var(--accent-dim);text-transform:uppercase;letter-spacing:0.05em">\u2728 ' + textureNames.join(', ') + ' texture' + (textureNames.length > 1 ? 's' : '') + '</div>'
+              : '';
+            var fonts = th.fonts || [];
+            var fontHint = fonts.length > 0
+              ? '<div style="margin-top:0.1rem;font-size:0.62rem;color:var(--text-dim)">Font: ' + esc(fonts[0].split('family=')[1] || '').split('&')[0].split(':')[0].replace(/\+/g, ' ') + '</div>'
+              : '';
+            _catalogThemeVars = _catalogThemeVars || [];
+            var varIdx = _catalogThemeVars.length;
+            _catalogThemeVars.push(vars);
+            return '<div style="display:flex;align-items:center;gap:0.6rem;padding:0.6rem 0.65rem;border:1px solid var(--border-soft);border-radius:6px;background:rgba(255,255,255,0.01)">'
+              + '<div class="catalog-theme-preview" data-theme-var-idx="' + varIdx + '" style="flex-shrink:0"></div>'
+              + '<div style="min-width:0;flex:1">'
+              + '<div style="display:flex;align-items:center;gap:0.4rem;flex-wrap:wrap">'
+              + '<span style="font-family:var(--font-mono);font-size:0.82rem;color:var(--text)">' + esc(name) + '</span>'
+              + sourceBadge + installedBadge
+              + '</div>'
+              + '<div style="margin-top:0.18rem;font-size:0.75rem;color:var(--muted);line-height:1.35">' + esc(desc) + '</div>'
+              + textureHint + fontHint
+              + (author ? '<div style="margin-top:0.15rem;font-size:0.68rem;color:var(--text-dim)">by ' + esc(author) + '</div>' : '')
+              + '</div>'
+              + '</div>';
+          }).join('');
+          themesHtml = ''
+            + '<div class="card" style="margin-bottom:1rem">'
+            + '  <div><div class="card-title">themes</div><div style="font-size:0.75rem;color:var(--muted)">available themes (' + themeItems.length + ')</div></div>'
+            + '  <div style="margin-top:0.75rem;display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:0.55rem">' + themeRows + '</div>'
+            + '</div>';
+          // Post-render: populate theme previews using buildThemePreview
+          setTimeout(function() {
+            document.querySelectorAll('.catalog-theme-preview').forEach(function(el) {
+              var idx = parseInt(el.getAttribute('data-theme-var-idx'), 10);
+              if (_catalogThemeVars && _catalogThemeVars[idx]) {
+                var preview = buildThemePreview(_catalogThemeVars[idx]);
+                el.appendChild(preview);
+              }
+            });
+          }, 0);
+        }
+
         if (tab === 'catalog') {
-          return tabs + catalogHtml + pluginsHtml;
+        // ── Apps section ──
+        var appItems = catalogData.apps || [];
+        var appsHtml = '';
+        if (appItems.length > 0) {
+          var appRows = appItems.map(function(a) {
+            var name = a.name || '';
+            var desc = a.description || '';
+            var agentName = a.agent_name || '';
+            var tier = a.tier || '';
+            var tierBadge = tier === 'official'
+              ? '<span class="badge success" style="font-size:0.62rem;padding:0.08rem 0.35rem">official</span>'
+              : '<span class="badge" style="font-size:0.62rem;padding:0.08rem 0.35rem">' + esc(tier) + '</span>';
+            return '<div style="display:flex;align-items:flex-start;gap:0.6rem;padding:0.6rem 0.65rem;border:1px solid var(--border-soft);border-radius:6px;background:rgba(255,255,255,0.01)">'
+              + '<div style="min-width:0;flex:1">'
+              + '<div style="display:flex;align-items:center;gap:0.4rem;flex-wrap:wrap">'
+              + '<span style="font-family:var(--font-mono);font-size:0.82rem;color:var(--text)">' + esc(name) + '</span>'
+              + tierBadge
+              + (a.version ? '<span style="font-size:0.68rem;color:var(--text-dim)">v' + esc(a.version) + '</span>' : '')
+              + '</div>'
+              + (agentName ? '<div style="margin-top:0.15rem;font-size:0.75rem;color:var(--accent)">\u2728 ' + esc(agentName) + '</div>' : '')
+              + '<div style="margin-top:0.18rem;font-size:0.75rem;color:var(--muted);line-height:1.35">' + esc(desc) + '</div>'
+              + '<div style="margin-top:0.2rem;font-size:0.68rem;color:var(--text-dim)">'
+              + (a.skills_count ? a.skills_count + ' skills' : '') + (a.subagents_count ? ' \u00b7 ' + a.subagents_count + ' subagents' : '')
+              + (a.min_model_params ? ' \u00b7 min ' + a.min_model_params : '')
+              + '</div>'
+              + '</div>'
+              + '<button class="btn secondary" style="font-size:0.75rem;padding:0.3rem 0.6rem;white-space:nowrap">' + uiBtnLabel('download', 'Install') + '</button>'
+              + '</div>';
+          }).join('');
+          appsHtml = ''
+            + '<div class="card" style="margin-bottom:1rem">'
+            + '  <div><div class="card-title">apps</div><div style="font-size:0.75rem;color:var(--muted)">available apps (' + appItems.length + ')</div></div>'
+            + '  <div style="margin-top:0.75rem;display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:0.55rem">' + appRows + '</div>'
+            + '</div>';
+        }
+
+          return tabs + catalogHtml + pluginsHtml + appsHtml + themesHtml;
         }
 
         if (skills.length === 0) {
@@ -3361,7 +3602,7 @@
       var self = this;
       var turnId = App._flightTurnId || '';
       var selectedSession = App._flightSessionId || '';
-      return api('/api/sessions?limit=50').catch(function() { return { sessions: [] }; }).then(function(sessData) {
+      return api('/api/sessions?limit=50&has_flight_records=true').catch(function() { return { sessions: [] }; }).then(function(sessData) {
         var sessions = sessData.sessions || [];
         var sessionOpts = sessions.map(function(s) {
           var sid = s.id || s.session_id || '';
@@ -3422,17 +3663,38 @@
           if (s.retry != null) parts.push('retry: ' + s.retry);
           return parts.join(' \u00b7 ');
         }
+        var maxStepMs = Math.max.apply(null, steps.map(function(s) { return s.duration_ms || 1; }).concat([1]));
         var timeline = steps.map(function(s, i) {
-          var type = s.step_type || s.type || 'Unknown';
+          var type = s.step_type || s.type || s.kind || 'Unknown';
           var color = stepColor(type);
+          var durMs = s.duration_ms || 0;
+          var durPct = Math.max(Math.round((durMs / maxStepMs) * 100), 2);
+          var toolName = s.tool_name || s.name || '';
+          var successBadge = s.success != null
+            ? (s.success ? '<span style="font-size:0.5625rem;padding:1px 5px;border-radius:3px;background:rgba(34,197,94,0.15);color:#22c55e;font-weight:600">OK</span>'
+                         : '<span style="font-size:0.5625rem;padding:1px 5px;border-radius:3px;background:rgba(239,68,68,0.15);color:#ef4444;font-weight:600">FAIL</span>')
+            : '';
+          var hasIO = (s.input && s.input.length > 0) || (s.output && s.output.length > 0);
+          var ioHtml = '';
+          if (hasIO) {
+            ioHtml = '<details style="margin-top:0.3rem"><summary style="cursor:pointer;font-size:0.625rem;color:var(--muted)">I/O</summary>'
+              + '<div style="margin-top:0.25rem;font-size:0.6875rem;font-family:var(--font-mono)">';
+            if (s.input) ioHtml += '<div style="margin-bottom:0.2rem"><span style="color:var(--muted);font-size:0.5625rem">INPUT</span><pre style="margin:2px 0;padding:0.3rem;background:var(--surface-2,var(--bg));border:1px solid var(--border-ghost);border-radius:3px;white-space:pre-wrap;word-break:break-all;max-height:8rem;overflow:auto;font-size:0.625rem;color:var(--text)">' + esc(s.input) + '</pre></div>';
+            if (s.output) ioHtml += '<div><span style="color:var(--muted);font-size:0.5625rem">OUTPUT</span><pre style="margin:2px 0;padding:0.3rem;background:var(--surface-2,var(--bg));border:1px solid var(--border-ghost);border-radius:3px;white-space:pre-wrap;word-break:break-all;max-height:8rem;overflow:auto;font-size:0.625rem;color:var(--text)">' + esc(s.output) + '</pre></div>';
+            ioHtml += '</div></details>';
+          }
           return '<div style="display:flex;align-items:flex-start;gap:0.75rem;margin-bottom:0.6rem">'
             + '<div style="min-width:3.5rem;text-align:right;font-size:0.6875rem;color:var(--muted);padding-top:0.2rem">' + (i + 1) + '</div>'
             + '<div style="width:2px;background:var(--border);align-self:stretch;min-height:1.5rem"></div>'
             + '<div style="flex:1;background:var(--surface);border:1px solid var(--border);border-left:3px solid ' + color + ';border-radius:4px;padding:0.35rem 0.65rem">'
-            + '<div style="display:flex;align-items:center;gap:0.5rem">'
+            + '<div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap">'
             + '<span style="font-size:0.75rem;font-weight:600;color:' + color + '">' + esc(type) + '</span>'
-            + '<span style="font-size:0.75rem;color:var(--muted)">' + stepDetail(s) + '</span>'
+            + (toolName ? '<span style="font-size:0.6875rem;font-family:var(--font-mono);color:var(--text)">' + esc(toolName) + '</span>' : '')
+            + successBadge
+            + '<span style="font-size:0.625rem;color:var(--muted);font-family:var(--font-mono)">' + durMs + 'ms</span>'
             + '</div>'
+            + '<div style="margin-top:0.25rem;height:4px;background:var(--surface-2,var(--bg));border-radius:2px;overflow:hidden"><div style="width:' + durPct + '%;height:100%;background:' + color + ';border-radius:2px;opacity:0.7"></div></div>'
+            + ioHtml
             + '</div>'
             + '</div>';
         }).join('');
@@ -3504,11 +3766,13 @@
         api('/api/stats/efficiency?period=' + encodeURIComponent(period)),
         api('/api/models/selections?limit=80').catch(function() { return { events: [] }; }),
         api('/api/models/routing-diagnostics').catch(function() { return { config: {} }; }),
-        api('/api/config').catch(function() { return {}; })
+        api('/api/config').catch(function() { return {}; }),
+        api('/api/models/exercise/scorecard').catch(function() { return { entries: [] }; })
       ]).then(function(arr) {
         var report = arr[0] || {};
         var modelSelections = (arr[1] && arr[1].events) ? arr[1].events : [];
         var configData = arr[3] || {};
+        var scorecardEntries = (arr[4] && arr[4].entries) ? arr[4].entries : [];
         var persistedRoutingConfig = (configData && configData.models && configData.models.routing) ? configData.models.routing : {};
         var routingConfig = Object.assign({}, (arr[2] && arr[2].config) ? arr[2].config : {}, persistedRoutingConfig);
         // Prefer persisted 6-axis profile (lossless) over derived profile (lossy).
@@ -3858,7 +4122,86 @@
 
         // Store tips for use in Recommendations tab
         self._quickTipsHtml = tips;
-        return tabBar + profileCard + budgetCard + breakerCard + decisionGraph + periodBar + banner + cards + tsChart + table + assignmentSection;
+
+        // Model Scorecard — ranked quality matrix with per-intent breakdown
+        var scorecard = '';
+        var intentClasses = ['EXECUTION', 'DELEGATION', 'INTROSPECTION', 'CONVERSATION', 'MEMORY_RECALL', 'TOOL_USE'];
+        // Build per-model scorecard from efficiency quality + exercise intent data.
+        var scModels = {};
+        modelNames.forEach(function(name) {
+          var m = models[name];
+          var q = m.quality || {};
+          scModels[name] = { overall: q.avg_quality_score || 0, intents: {} };
+        });
+        // Merge exercise scorecard entries (per-intent quality).
+        scorecardEntries.forEach(function(e) {
+          if (!scModels[e.model]) {
+            scModels[e.model] = { overall: 0, intents: {} };
+          }
+          scModels[e.model].intents[e.intent_class] = e.avg_quality;
+        });
+        // If exercise data provides a richer overall, recompute from intents.
+        Object.keys(scModels).forEach(function(name) {
+          var intents = scModels[name].intents;
+          var keys = Object.keys(intents);
+          if (keys.length > 0 && scModels[name].overall === 0) {
+            var sum = 0;
+            keys.forEach(function(k) { sum += intents[k]; });
+            scModels[name].overall = sum / keys.length;
+          }
+        });
+        var scNames = Object.keys(scModels).sort(function(a, b) {
+          return (scModels[b].overall || 0) - (scModels[a].overall || 0);
+        });
+        // Only render if at least one model has quality data.
+        var hasAnyQuality = scNames.some(function(n) { return scModels[n].overall > 0; });
+        if (hasAnyQuality) {
+          var hasIntentData = scorecardEntries.length > 0;
+          scorecard = '<div class="card" style="margin-bottom:1.25rem"><div style="font-weight:600;margin-bottom:0.75rem">Model Scorecard</div>';
+          scorecard += '<div class="table-wrap"><table><thead><tr>';
+          scorecard += '<th>Rank</th><th>Model</th><th>Overall Quality</th>';
+          if (hasIntentData) {
+            intentClasses.forEach(function(ic) {
+              scorecard += '<th style="font-size:0.6875rem">' + esc(ic.replace('_', ' ')) + '</th>';
+            });
+          }
+          scorecard += '</tr></thead><tbody>';
+          scNames.forEach(function(name, idx) {
+            var sc = scModels[name];
+            var pct = (sc.overall * 100);
+            var barColor = pct >= 80 ? '#22c55e' : pct >= 50 ? '#eab308' : '#ef4444';
+            var pctText = pct > 0 ? pct.toFixed(0) + '%' : '\u2014';
+            scorecard += '<tr>';
+            scorecard += '<td style="font-weight:600;text-align:center">#' + (idx + 1) + '</td>';
+            scorecard += '<td class="card-mono">' + esc(name) + '</td>';
+            scorecard += '<td><div style="display:flex;align-items:center;gap:0.5rem">'
+              + '<div style="flex:1;background:var(--border);border-radius:3px;height:8px;min-width:60px;overflow:hidden">'
+              + '<div style="width:' + Math.min(pct, 100) + '%;height:100%;background:' + barColor + ';border-radius:3px;transition:width 0.3s"></div>'
+              + '</div>'
+              + '<span style="font-weight:600;color:' + barColor + ';font-size:0.8125rem;min-width:2.5rem;text-align:right">' + pctText + '</span>'
+              + '</div></td>';
+            if (hasIntentData) {
+              intentClasses.forEach(function(ic) {
+                var iq = sc.intents[ic];
+                if (iq != null) {
+                  var ipct = (iq * 100);
+                  var iColor = ipct >= 80 ? '#22c55e' : ipct >= 50 ? '#eab308' : '#ef4444';
+                  scorecard += '<td style="color:' + iColor + ';font-weight:600;font-size:0.8125rem;text-align:center">' + ipct.toFixed(0) + '%</td>';
+                } else {
+                  scorecard += '<td style="color:var(--muted);text-align:center">\u2014</td>';
+                }
+              });
+            }
+            scorecard += '</tr>';
+          });
+          scorecard += '</tbody></table></div>';
+          if (!hasIntentData) {
+            scorecard += '<div style="font-size:0.75rem;color:var(--muted);margin-top:0.5rem;font-style:italic">Run <code style="background:var(--surface);padding:0.1rem 0.35rem;border-radius:3px;font-size:0.6875rem">roboticus models baseline</code> for per-intent breakdown.</div>';
+          }
+          scorecard += '</div>';
+        }
+
+        return tabBar + profileCard + budgetCard + breakerCard + decisionGraph + periodBar + banner + cards + tsChart + table + scorecard + assignmentSection;
       });
     },
 
@@ -4193,6 +4536,233 @@
         : '<div style="font-size:0.75rem;color:var(--muted)">No revenue tax tasks yet.</div>';
       return '<div class="card" style="margin-bottom:1rem"><div class="card-title">Revenue Tax Tasks</div>' + body + '</div>';
     },
+    // --- MCP Server Management ---
+    _mcpEnrichStatuses: function() {
+      api('/api/mcp/servers').then(function(data) {
+        var servers = (data && data.servers) || [];
+        servers.forEach(function(srv) {
+          var statusEl = document.getElementById('mcp-status-' + srv.name);
+          var toolsEl = document.getElementById('mcp-tools-' + srv.name);
+          if (statusEl) {
+            if (srv.connected) {
+              statusEl.className = 'badge success';
+              statusEl.textContent = 'connected';
+            } else {
+              statusEl.className = 'badge muted';
+              statusEl.textContent = 'disconnected';
+            }
+          }
+          if (toolsEl && srv.tool_count > 0) {
+            toolsEl.className = 'badge';
+            toolsEl.style.cssText = 'background:rgba(139,92,246,0.15);color:#a78bfa';
+            toolsEl.textContent = srv.tool_count + ' tool' + (srv.tool_count === 1 ? '' : 's');
+          } else if (toolsEl) {
+            toolsEl.textContent = '';
+          }
+        });
+      }).catch(function() {});
+    },
+    _mcpCloseMod: function() {
+      var m = document.getElementById('mcp-server-modal');
+      if (m) m.remove();
+    },
+    _mcpOpenModal: function(editIdx) {
+      var self = this;
+      self._mcpCloseMod();
+      var draft = self._getSettingsDraft();
+      if (!draft.mcp) draft.mcp = {};
+      if (!Array.isArray(draft.mcp.servers)) draft.mcp.servers = [];
+      var isEdit = editIdx != null && editIdx >= 0;
+      var srv = isEdit ? (draft.mcp.servers[editIdx] || {}) : {};
+      var transport = srv.transport || 'stdio';
+      var envStr = '';
+      if (srv.env && typeof srv.env === 'object') {
+        envStr = Object.keys(srv.env).map(function(k) { return k + '=' + srv.env[k]; }).join('\n');
+      }
+      var modal = document.createElement('div');
+      modal.id = 'mcp-server-modal';
+      modal.style.cssText = 'position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,0.65);display:flex;align-items:center;justify-content:center;padding:1.5rem';
+
+      var formHtml = '<div style="width:min(520px,100%);background:var(--bg);border:1px solid var(--border);border-radius:8px;box-shadow:0 20px 40px rgba(0,0,0,0.45);display:flex;flex-direction:column;max-height:calc(100vh - 3rem);overflow:auto">'
+        + '<div style="display:flex;align-items:center;justify-content:space-between;padding:0.75rem 1rem;border-bottom:1px solid var(--border-ghost)">'
+        + '<h3 style="font-size:0.8125rem;text-transform:uppercase;letter-spacing:0.06em;margin:0">' + (isEdit ? 'Edit MCP Server' : 'Add MCP Server') + '</h3>'
+        + '<button data-mcp-modal-close style="background:none;border:none;color:var(--muted);font-size:1.25rem;cursor:pointer;font-family:var(--font)">x</button></div>'
+        + '<div style="padding:1rem;display:flex;flex-direction:column;gap:0.75rem">';
+      // Name
+      formHtml += '<div style="display:flex;flex-direction:column;gap:0.25rem"><label style="font-size:0.625rem;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted)">Name *</label>'
+        + '<input id="mcp-f-name" class="settings-input" type="text" value="' + esc(srv.name || '') + '" placeholder="e.g. filesystem"' + (isEdit ? ' readonly style="opacity:0.6;cursor:not-allowed"' : '') + '></div>';
+      // Transport
+      formHtml += '<div style="display:flex;flex-direction:column;gap:0.25rem"><label style="font-size:0.625rem;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted)">Transport</label>'
+        + '<select id="mcp-f-transport" class="settings-input" style="appearance:auto"><option value="stdio"' + (transport === 'stdio' ? ' selected' : '') + '>stdio</option><option value="sse"' + (transport === 'sse' ? ' selected' : '') + '>sse</option></select></div>';
+      // Stdio fields
+      formHtml += '<div id="mcp-f-stdio-fields" style="display:' + (transport === 'stdio' ? 'flex' : 'none') + ';flex-direction:column;gap:0.75rem">'
+        + '<div style="display:flex;flex-direction:column;gap:0.25rem"><label style="font-size:0.625rem;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted)">Command</label>'
+        + '<input id="mcp-f-command" class="settings-input" type="text" value="' + esc(srv.command || '') + '" placeholder="e.g. npx"></div>'
+        + '<div style="display:flex;flex-direction:column;gap:0.25rem"><label style="font-size:0.625rem;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted)">Args (comma-separated)</label>'
+        + '<input id="mcp-f-args" class="settings-input" type="text" value="' + esc((srv.args || []).join(', ')) + '" placeholder="e.g. -y, @modelcontextprotocol/server-filesystem, /tmp"></div></div>';
+      // SSE fields
+      formHtml += '<div id="mcp-f-sse-fields" style="display:' + (transport === 'sse' ? 'flex' : 'none') + ';flex-direction:column;gap:0.75rem">'
+        + '<div style="display:flex;flex-direction:column;gap:0.25rem"><label style="font-size:0.625rem;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted)">URL</label>'
+        + '<input id="mcp-f-url" class="settings-input" type="text" value="' + esc(srv.url || '') + '" placeholder="https://example.com/mcp/sse"></div></div>';
+      // Env vars
+      formHtml += '<div style="display:flex;flex-direction:column;gap:0.25rem"><label style="font-size:0.625rem;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted)">Environment Variables (KEY=VALUE, one per line)</label>'
+        + '<textarea id="mcp-f-env" class="settings-input" rows="3" style="font-family:var(--font-mono);font-size:0.75rem" placeholder="API_KEY=xxx">' + esc(envStr) + '</textarea></div>';
+      // Auth token
+      formHtml += '<div style="display:flex;flex-direction:column;gap:0.25rem"><label style="font-size:0.625rem;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted)">Auth Token Env Var Name (optional)</label>'
+        + '<input id="mcp-f-auth" class="settings-input" type="text" value="' + esc(srv.auth_token_env || '') + '" placeholder="e.g. MCP_AUTH_TOKEN"></div>';
+      // Enabled toggle
+      formHtml += '<div style="display:flex;align-items:center;gap:0.5rem"><label class="toggle"><input type="checkbox" id="mcp-f-enabled"' + (isEdit ? (srv.enabled ? ' checked' : '') : ' checked') + '><span class="toggle-track"></span></label>'
+        + '<span style="font-size:0.8125rem">Enabled</span></div>';
+      // Footer
+      formHtml += '</div>'
+        + '<div style="display:flex;gap:0.5rem;justify-content:flex-end;padding:0.75rem 1rem;border-top:1px solid var(--border-ghost)">'
+        + '<button class="btn secondary" data-mcp-modal-close style="font-size:0.75rem;padding:0.375rem 0.875rem">Cancel</button>'
+        + '<button class="btn" id="mcp-modal-save" style="font-size:0.75rem;padding:0.375rem 0.875rem">' + (isEdit ? 'Update' : 'Add') + '</button></div></div>';
+
+      modal.textContent = '';
+      var wrapper = document.createElement('div');
+      wrapper.style.cssText = 'width:100%;display:flex;justify-content:center';
+      wrapper.insertAdjacentHTML('afterbegin', formHtml);
+      modal.appendChild(wrapper);
+
+      modal.addEventListener('change', function(ev) {
+        if (ev.target.id === 'mcp-f-transport') {
+          var val = ev.target.value;
+          var stdioDiv = document.getElementById('mcp-f-stdio-fields');
+          var sseDiv = document.getElementById('mcp-f-sse-fields');
+          if (stdioDiv) stdioDiv.style.display = val === 'stdio' ? 'flex' : 'none';
+          if (sseDiv) sseDiv.style.display = val === 'sse' ? 'flex' : 'none';
+        }
+      });
+      modal.addEventListener('click', function(ev) {
+        if (ev.target === modal || ev.target.closest('[data-mcp-modal-close]')) {
+          self._mcpCloseMod();
+          return;
+        }
+        if (ev.target.id === 'mcp-modal-save' || ev.target.closest('#mcp-modal-save')) {
+          self._mcpSaveFromModal(isEdit ? editIdx : null);
+        }
+      });
+      document.body.appendChild(modal);
+      if (!isEdit) {
+        var nameField = document.getElementById('mcp-f-name');
+        if (nameField) nameField.focus();
+      }
+    },
+    _mcpSaveFromModal: function(editIdx) {
+      var self = this;
+      var nameEl = document.getElementById('mcp-f-name');
+      var transportEl = document.getElementById('mcp-f-transport');
+      var commandEl = document.getElementById('mcp-f-command');
+      var argsEl = document.getElementById('mcp-f-args');
+      var urlEl = document.getElementById('mcp-f-url');
+      var envEl = document.getElementById('mcp-f-env');
+      var authEl = document.getElementById('mcp-f-auth');
+      var enabledEl = document.getElementById('mcp-f-enabled');
+
+      var name = (nameEl && nameEl.value || '').trim();
+      if (!name) { toast('Server name is required'); return; }
+      var transport = (transportEl && transportEl.value) || 'stdio';
+      var command = (commandEl && commandEl.value || '').trim();
+      var argsRaw = (argsEl && argsEl.value || '').trim();
+      var args = argsRaw ? argsRaw.split(',').map(function(s) { return s.trim(); }).filter(Boolean) : [];
+      var url = (urlEl && urlEl.value || '').trim();
+      var envRaw = (envEl && envEl.value || '').trim();
+      var env = {};
+      if (envRaw) {
+        envRaw.split('\n').forEach(function(line) {
+          var eq = line.indexOf('=');
+          if (eq > 0) env[line.substring(0, eq).trim()] = line.substring(eq + 1).trim();
+        });
+      }
+      var authTokenEnv = (authEl && authEl.value || '').trim();
+      var enabled = enabledEl ? enabledEl.checked : true;
+
+      if (transport === 'stdio' && !command) { toast('Command is required for stdio transport'); return; }
+      if (transport === 'sse' && !url) { toast('URL is required for SSE transport'); return; }
+
+      var entry = { name: name, transport: transport, command: command, args: args, url: url, env: env, enabled: enabled };
+      if (authTokenEnv) entry.auth_token_env = authTokenEnv;
+
+      var draft = self._getSettingsDraft();
+      if (!draft.mcp) draft.mcp = {};
+      if (!Array.isArray(draft.mcp.servers)) draft.mcp.servers = [];
+      var isEdit = editIdx != null && editIdx >= 0;
+      if (isEdit) {
+        draft.mcp.servers[editIdx] = entry;
+      } else {
+        var dup = draft.mcp.servers.some(function(s) { return s.name === name; });
+        if (dup) { toast('A server named "' + name + '" already exists'); return; }
+        draft.mcp.servers.push(entry);
+      }
+      self._settingsDirty = JSON.stringify(draft) !== JSON.stringify(_cachedConfig);
+      self._settingsRawText = null;
+      self._mcpCloseMod();
+      toast(isEdit ? 'Server updated (save to apply)' : 'Server added (save to apply)');
+      App.navigate('settings');
+    },
+    _mcpDeleteServer: function(idx, name) {
+      var self = this;
+      if (!confirm('Delete MCP server "' + name + '"? Save settings to apply.')) return;
+      var draft = self._getSettingsDraft();
+      if (!draft.mcp || !Array.isArray(draft.mcp.servers)) return;
+      draft.mcp.servers.splice(idx, 1);
+      self._settingsDirty = JSON.stringify(draft) !== JSON.stringify(_cachedConfig);
+      self._settingsRawText = null;
+      toast('Server removed (save to apply)');
+      App.navigate('settings');
+    },
+    _mcpToggleServer: function(idx) {
+      var self = this;
+      var draft = self._getSettingsDraft();
+      if (!draft.mcp || !Array.isArray(draft.mcp.servers) || !draft.mcp.servers[idx]) return;
+      draft.mcp.servers[idx].enabled = !draft.mcp.servers[idx].enabled;
+      self._settingsDirty = JSON.stringify(draft) !== JSON.stringify(_cachedConfig);
+      self._settingsRawText = null;
+      toast('Server ' + (draft.mcp.servers[idx].enabled ? 'enabled' : 'disabled') + ' (save to apply)');
+      App.navigate('settings');
+    },
+    _mcpTestServer: function(name) {
+      var btn = document.querySelector('[data-mcp-test="' + name + '"]');
+      if (btn) { btn.disabled = true; btn.textContent = 'Testing...'; }
+      api('/api/mcp/servers/' + encodeURIComponent(name) + '/test', { method: 'POST' }).then(function(res) {
+        if (res.ok) {
+          toast('Server "' + name + '" connected OK (' + (res.tool_count || 0) + ' tools)');
+          var statusEl = document.getElementById('mcp-status-' + name);
+          if (statusEl) { statusEl.className = 'badge success'; statusEl.textContent = 'connected'; }
+          var toolsEl = document.getElementById('mcp-tools-' + name);
+          if (toolsEl && res.tool_count > 0) {
+            toolsEl.className = 'badge';
+            toolsEl.style.cssText = 'background:rgba(139,92,246,0.15);color:#a78bfa';
+            toolsEl.textContent = res.tool_count + ' tool' + (res.tool_count === 1 ? '' : 's');
+          }
+        } else {
+          toast('Test failed: ' + (res.error || 'unknown error'));
+        }
+      }).catch(function(err) {
+        toast('Test failed: ' + (err.message || 'unknown error'));
+      }).finally(function() {
+        if (btn) { btn.disabled = false; btn.textContent = 'Test'; }
+      });
+    },
+    _mcpRefreshTools: function(name) {
+      var btn = document.querySelector('[data-mcp-refresh="' + name + '"]');
+      if (btn) { btn.disabled = true; btn.textContent = 'Refreshing...'; }
+      api('/api/runtime/mcp/clients/' + encodeURIComponent(name) + '/discover', { method: 'POST' }).then(function(res) {
+        var count = res.tool_count || (res.tools && res.tools.length) || 0;
+        toast('Discovered ' + count + ' tool' + (count === 1 ? '' : 's') + ' on "' + name + '"');
+        var toolsEl = document.getElementById('mcp-tools-' + name);
+        if (toolsEl && count > 0) {
+          toolsEl.className = 'badge';
+          toolsEl.style.cssText = 'background:rgba(139,92,246,0.15);color:#a78bfa';
+          toolsEl.textContent = count + ' tool' + (count === 1 ? '' : 's');
+        }
+      }).catch(function(err) {
+        toast('Refresh failed: ' + (err.message || 'Server may not be connected'));
+      }).finally(function() {
+        if (btn) { btn.disabled = false; btn.textContent = 'Refresh Tools'; }
+      });
+    },
     _renderRevenueSwapSettings: function(revenueSwap) {
       var cfg = revenueSwap || {};
       var chains = Array.isArray(cfg.chains) ? cfg.chains : [];
@@ -4238,7 +4808,7 @@
           var amtStr = (typeof t.amount === 'number' ? t.amount.toFixed(2) : t.amount) + ' ' + (t.currency || '');
           var dateStr = t.created_at || '';
           if (dateStr.length > 19) dateStr = dateStr.substring(0, 19).replace('T', ' ');
-          return '<tr><td>' + esc(label) + '</td><td style="font-family:var(--mono)">' + esc(amtStr) + '</td><td style="color:var(--muted)">' + esc(dateStr) + '</td></tr>';
+          return '<tr><td>' + esc(label) + '</td><td style="font-family:var(--mono)">' + esc(amtStr) + '</td><td>' + esc(t.counterparty || '') + '</td><td style="color:var(--muted)">' + esc(dateStr) + '</td></tr>';
         }).join('');
 
         // Network & address card
@@ -4295,7 +4865,7 @@
             + 'To adjust spending limits, visit <a href="#settings" data-page="settings" style="color:var(--accent)">Settings</a> \u2192 Wallet section.'
             + '</div></div>';
         return guidanceBanner + addrSection + balancesCard + treasuryCard + revenueSwapCard + seedReadinessCard + seedProgressCard + seedPlanCard + strategySummaryCard + feedbackSummaryCard + swapTasksCard + taxTasksCard +
-          '<div class="card-title">Transaction history</div><div class="table-wrap"><table><thead><tr><th>Type</th><th>Amount</th><th>Date</th></tr></thead><tbody>' + txRows + '</tbody></table></div>';
+          '<div class="card-title">Transaction history</div><div class="table-wrap"><table><thead><tr><th>Type</th><th>Amount</th><th>Counterparty</th><th>Date</th></tr></thead><tbody>' + txRows + '</tbody></table></div>';
       });
     },
     _explorerUrl: function(chainId, contract) {
@@ -4560,6 +5130,26 @@
             + '<span>' + sessionCount + ' sessions</span>'
             + '<span>last used ' + esc(lastUsedLabel) + '</span>'
             + '</div>'
+            + (function() {
+                var extras = '';
+                var v = agent.voice || {};
+                if (v.formality || v.proactiveness || v.verbosity || v.humor || v.domain) {
+                  var vAttrs = [v.formality, v.proactiveness, v.verbosity, v.humor, v.domain].filter(Boolean);
+                  extras += '<div style="display:flex;flex-wrap:wrap;gap:3px;margin-top:0.4rem">';
+                  vAttrs.forEach(function(va) {
+                    extras += '<span style="font-size:0.5625rem;padding:1px 5px;border-radius:3px;background:rgba(139,92,246,0.12);color:#a78bfa;font-family:var(--font-mono)">' + esc(va) + '</span>';
+                  });
+                  extras += '</div>';
+                }
+                var badges = [];
+                if (agent.missions && agent.missions.length) badges.push('<span style="font-size:0.625rem;color:var(--muted)">' + agent.missions.length + ' mission' + (agent.missions.length > 1 ? 's' : '') + '</span>');
+                if (agent.firmware_rules && agent.firmware_rules.length) badges.push('<span style="font-size:0.625rem;color:var(--muted)">' + agent.firmware_rules.length + ' rule' + (agent.firmware_rules.length > 1 ? 's' : '') + '</span>');
+                var st = agent.stats;
+                if (st && st.total_skills != null) badges.push('<span style="font-size:0.625rem;color:var(--muted)">' + (st.enabled_skills || 0) + '/' + st.total_skills + ' skills</span>');
+                if (st && st.subordinate_count) badges.push('<span style="font-size:0.625rem;color:var(--muted)">' + st.subordinate_count + ' subs</span>');
+                if (badges.length) extras += '<div style="display:flex;gap:0.5rem;margin-top:0.3rem;flex-wrap:wrap">' + badges.join('') + '</div>';
+                return extras;
+              })()
             + '</div>';
           return card;
         }).join('');
@@ -5046,12 +5636,19 @@
         api('/api/config'),
         api('/api/config/capabilities').catch(function() { return { immutable_sections: ['server', 'a2a', 'wallet'] }; }),
         mode === 'raw' ? api('/api/config/raw').catch(function() { return ''; }) : Promise.resolve(null),
-        api('/api/keystore/status').catch(function() { return { unlocked: true }; })
+        api('/api/keystore/status').catch(function() { return { unlocked: true }; }),
+        api('/api/config/schema').catch(function() { return { fields: [] }; })
       ]).then(function(arr) {
         var cfg = arr[0] || {};
         var caps = arr[1] || {};
         var rawToml = arr[2];
         var keystoreStatus = arr[3] || {};
+        var schemaData = arr[4] || {};
+        // Build a lookup index: dotted path -> schema field info.
+        var _schemaIndex = {};
+        (schemaData.fields || []).forEach(function(f) { _schemaIndex[f.name] = f; });
+        self._schemaIndex = _schemaIndex;
+        self._schemaFields = schemaData.fields || [];
         cfg._keystore_locked = !keystoreStatus.unlocked;
         self._configCapabilities = caps;
         var immutableSet = {};
@@ -5062,7 +5659,7 @@
         var dirty = self._settingsDirty;
         var dirtyDot = dirty ? '<span class="settings-dirty-dot" title="Unsaved changes"></span>' : '';
         var tabs = '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;flex-wrap:wrap;gap:0.5rem"><div class="tabs" style="margin-bottom:0"><button class="' + (mode === 'form' ? 'active' : '') + '" data-settings-mode="form">Form</button><button class="' + (mode === 'models' ? 'active' : '') + '" data-settings-mode="models">Model Order</button><button class="' + (mode === 'access' ? 'active' : '') + '" data-settings-mode="access">Access Control</button></div><div style="display:flex;background:var(--surface-2);border:1px solid var(--border-ghost);border-radius:9999px;padding:2px;gap:0"><button data-settings-mode="' + (mode === 'raw' ? 'form' : 'raw') + '" style="padding:0.375rem 1rem;border-radius:9999px;border:none;font-family:var(--font-headline);font-size:0.625rem;font-weight:700;letter-spacing:0.15em;text-transform:uppercase;cursor:pointer;transition:all 0.2s;' + (mode !== 'raw' ? 'background:var(--accent);color:#000;' : 'background:transparent;color:var(--outline);') + '">Form</button><button data-settings-mode="raw" style="padding:0.375rem 1rem;border-radius:9999px;border:none;font-family:var(--font-headline);font-size:0.625rem;font-weight:700;letter-spacing:0.15em;text-transform:uppercase;cursor:pointer;transition:all 0.2s;' + (mode === 'raw' ? 'background:var(--accent);color:#000;' : 'background:transparent;color:var(--outline);') + '">TOML</button></div></div>';
-        var actions = '<div class="settings-actions"><button class="btn" id="settings-save" ' + (dirty ? '' : 'disabled style="opacity:0.4;pointer-events:none"') + '>Save</button><button class="btn secondary" id="settings-apply" ' + (dirty ? '' : 'disabled style="opacity:0.4;pointer-events:none"') + '>Apply</button><button class="btn secondary" id="settings-cancel" ' + (dirty ? '' : 'disabled style="opacity:0.4;pointer-events:none"') + '>Cancel</button>' + dirtyDot + '</div>';
+        var actions = '<div class="settings-actions" style="display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap"><button class="btn" id="settings-save" ' + (dirty ? '' : 'disabled style="opacity:0.4;pointer-events:none"') + '>Save</button><button class="btn secondary" id="settings-apply" ' + (dirty ? '' : 'disabled style="opacity:0.4;pointer-events:none"') + '>Apply</button><button class="btn secondary" id="settings-cancel" ' + (dirty ? '' : 'disabled style="opacity:0.4;pointer-events:none"') + '>Cancel</button>' + dirtyDot + '<div id="settings-status" style="display:none;flex:1;min-width:200px"></div></div>';
 
         if (mode === 'raw') {
           var rawText = self._settingsRawText != null ? self._settingsRawText : String(rawToml || '');
@@ -5102,7 +5699,7 @@
           var autoCheckbox = '<div style="margin-top:0.75rem;display:flex;align-items:center;gap:0.5rem">'
             + '<input type="checkbox" id="model-order-auto"' + (autoOrder ? ' checked' : '') + '>'
             + '<label for="model-order-auto" style="font-size:0.8125rem;color:var(--text)">Auto</label>'
-            + '<span title="When enabled, the model order is treated as a default and may be adjusted dynamically at runtime based on availability and performance" style="cursor:help;color:var(--muted);font-size:0.65rem">(?)</span>'
+            + '<span class="settings-help-trigger" onclick="showSettingsTooltip(this, \'When enabled, the model order is treated as a default and may be adjusted dynamically at runtime based on availability and performance.\'); event.stopPropagation();">(?)</span>'
             + '</div>';
           return tabs
             + '<div class="settings-form"><div class="settings-section"><div class="settings-section-title">Model Order</div>'
@@ -5247,42 +5844,276 @@
           return tabs + '<div class="settings-form">' + accHtml + '</div>' + actions;
         }
 
-        // Ensure all known config sections appear in the form even when not yet configured.
-        var CONFIG_SCHEMA = {
-          agent: { name: '', id: '', workspace: '', log_level: 'info' },
-          server: { bind: 'localhost', port: 18789 },
-          database: { path: '' },
-          models: { primary: '', fallbacks: [] },
-          providers: {},
-          channels: { telegram: null, discord: null, whatsapp: null, signal: null, email: null, web: null, voice: null },
-          personality: { tone: '', greeting: '' },
-          skills: { enabled: true },
-          wallet: {},
-          treasury: {},
-          context_budget: { l0: 4000, l1: 8000, l2: 16000, l3: 32000, channel_minimum: 'L1' }
-        };
+        // Build CONFIG_SCHEMA from the struct-driven /api/config/schema endpoint.
+        // This ensures every field from the Go Config struct appears in the form,
+        // even if the live config has no value for it yet.
+        var CONFIG_SCHEMA = {};
+        (self._schemaFields || []).forEach(function(f) {
+          var parts = f.name.split('.');
+          var topSection = parts[0];
+          if (!CONFIG_SCHEMA[topSection]) CONFIG_SCHEMA[topSection] = {};
+          // Build nested structure from dotted path.
+          var obj = CONFIG_SCHEMA[topSection];
+          for (var pi = 1; pi < parts.length - 1; pi++) {
+            if (!obj[parts[pi]] || typeof obj[parts[pi]] !== 'object') obj[parts[pi]] = {};
+            obj = obj[parts[pi]];
+          }
+          if (parts.length > 1) {
+            var leaf = parts[parts.length - 1];
+            if (obj[leaf] === undefined) obj[leaf] = f['default'];
+          }
+        });
+        // Ensure channels sub-configs exist for the channel UI.
+        if (!CONFIG_SCHEMA.channels) CONFIG_SCHEMA.channels = {};
+        ['telegram','discord','whatsapp','signal','email','web','voice'].forEach(function(ch) {
+          if (CONFIG_SCHEMA.channels[ch] === undefined) CONFIG_SCHEMA.channels[ch] = null;
+        });
+        // Ensure providers exists as empty object for provider UI.
+        if (!CONFIG_SCHEMA.providers) CONFIG_SCHEMA.providers = {};
         Object.keys(CONFIG_SCHEMA).forEach(function(k) {
           if (draft[k] === undefined || draft[k] === null) draft[k] = JSON.parse(JSON.stringify(CONFIG_SCHEMA[k]));
         });
 
         var fieldTooltips = {
-            'name': 'The agent\'s display name, shown in chat and dashboard headers',
-            'id': 'Unique identifier for this agent instance',
-            'workspace': 'Root directory for agent file operations',
-            'log_level': 'Logging verbosity: trace, debug, info, warn, error',
+            // --- Agent & Identity ---
+            'name': 'The agent\'s display name, shown in chat and dashboard headers.',
+            'id': 'Unique identifier for this agent instance. Used in logs and multi-agent coordination.',
+            'workspace': 'Root directory for agent file operations. Tools are sandboxed to this path.',
+            'log_level': 'Logging verbosity: trace, debug, info, warn, error.',
+            'delegation_enabled': 'Allow this agent to delegate sub-tasks to specialist agents.',
+            'delegation_min_complexity': 'Minimum task complexity score (0.0-1.0) before delegation is considered.',
+            'delegation_min_utility_margin': 'Minimum expected utility gain to justify delegation overhead.',
+            'specialist_creation_requires_approval': 'Require human approval before spawning a new specialist agent.',
+            'composition_policy': 'How multi-agent compositions are orchestrated: sequential, parallel, or adaptive.',
+            'skill_creation_rigor': 'Rigor level for auto-generated skills: generate, validate, or full.',
+            'output_validation_policy': 'Output quality checking: strict (all), sample (random subset), or off.',
+            'output_validation_sample_rate': 'Fraction of outputs to validate when policy is "sample" (0.0-1.0).',
+            'max_output_retries': 'Maximum retries when output validation fails.',
+            'retirement_success_threshold': 'Success rate threshold (0.0-1.0) below which a specialist is retired.',
+            'retirement_min_delegations': 'Minimum delegations before retirement evaluation applies.',
+            'autonomy_max_react_turns': 'Max consecutive ReAct turns the agent can take autonomously.',
+            'autonomy_max_turn_duration_seconds': 'Max seconds per autonomous turn before timeout.',
+            // --- Session ---
+            'scope_mode': 'Session scoping: agent (global), peer (per-user), or group (per-channel).',
+            'ttl_seconds': 'Session time-to-live in seconds. 0 = no expiry.',
+            'reset_schedule': 'Cron expression for automatic session resets (e.g. "0 0 * * *" for daily).',
+            // --- Server ---
             'port': 'HTTP server port. Default: 18789. Requires restart.',
             'bind': 'Network interface to bind. 127.0.0.1 = local only, 0.0.0.0 = all interfaces.',
-            'primary': 'Primary LLM model in provider/model format',
+            'log_dir': 'Directory for server log files.',
+            'cron_max_concurrency': 'Maximum number of cron jobs that can run simultaneously.',
+            'api_key': 'API key for authenticating dashboard and API requests.',
+            'log_max_days': 'Number of days to retain log files before rotation.',
+            'trusted_proxy_cidrs': 'CIDR ranges of trusted reverse proxies for X-Forwarded-For handling.',
+            'rate_limit_requests': 'Global rate limit: max requests per window.',
+            'rate_limit_window_secs': 'Global rate limit window in seconds.',
+            'per_ip_rate_limit_requests': 'Per-IP rate limit: max requests per window.',
+            'per_actor_rate_limit_requests': 'Per-actor (authenticated user) rate limit.',
+            // --- Models ---
+            'primary': 'Primary LLM model in provider/model format (e.g. openai/gpt-4o).',
+            'fallbacks': 'Ordered list of fallback models tried when the primary fails.',
+            'stream_by_default': 'Stream LLM responses by default for lower perceived latency.',
+            'mode': 'Routing strategy: metascore, round_robin, cost_aware, or local_first.',
+            'confidence_threshold': 'Minimum confidence score (0.0-1.0) to accept a model\'s response.',
+            'estimated_output_tokens': 'Expected output size in tokens for cost estimation.',
+            'accuracy_floor': 'Minimum accuracy score before a model is deprioritized.',
+            'accuracy_min_obs': 'Minimum observations before accuracy stats are trusted.',
+            'cost_aware': 'Factor inference cost into routing decisions.',
+            'canary_fraction': 'Fraction of traffic (0.0-1.0) routed to the canary model.',
+            'canary_model': 'Model to test with canary traffic for evaluation.',
+            'blocked_models': 'Models excluded from routing. Overrides all other routing logic.',
+            'per_provider_timeout_seconds': 'Max seconds to wait for a single provider response.',
+            'max_total_inference_seconds': 'Hard ceiling on total inference time including retries.',
+            'max_fallback_attempts': 'Maximum number of fallback models to try before giving up.',
+            'local_first': 'Prefer locally-hosted models when available and capable.',
+            // --- Tiered Inference ---
+            'enabled': 'Enable or disable this subsystem.',
+            'confidence_floor': 'Minimum confidence for the fast tier before escalating to a larger model.',
+            'escalation_latency_budget_ms': 'Max latency budget (ms) for tier escalation decisions.',
+            // --- Memory ---
+            'working_budget': 'Percentage of memory budget allocated to working memory.',
+            'episodic_budget': 'Percentage of memory budget allocated to episodic (conversation) memory.',
+            'semantic_budget': 'Percentage of memory budget allocated to semantic (knowledge) memory.',
+            'procedural_budget': 'Percentage of memory budget allocated to procedural (skill) memory.',
+            'relationship_budget': 'Percentage of memory budget allocated to relationship memory.',
+            'embedding_provider': 'Provider for generating embeddings (e.g. openai, local).',
+            'embedding_model': 'Specific embedding model to use for vector similarity.',
+            'hybrid_weight': 'Balance between keyword (0.0) and semantic (1.0) search. Default: 0.5.',
+            'ann_index': 'Enable approximate nearest neighbor indexing for faster vector search.',
+            'decay_half_life_days': 'Half-life in days for memory recency decay scoring.',
+            'similarity_threshold': 'Minimum cosine similarity (0.0-1.0) for memory retrieval matches.',
+            'ann_activation_threshold': 'Minimum stored vectors before ANN index activates.',
+            // --- Context Budget ---
+            'l0': 'Token budget for trivial queries (tier 0). Min: 512.',
+            'l1': 'Token budget for low-complexity queries (tier 1).',
+            'l2': 'Token budget for moderate-complexity queries (tier 2).',
+            'l3': 'Token budget for high-complexity queries (tier 3).',
+            'soul_max_context_pct': 'Max context percentage (0.0-1.0) for personality/soul content. Default: 0.4.',
+            'channel_minimum': 'Minimum budget tier for channel messages: L0, L1, L2, or L3.',
+            // --- Cache ---
+            'max_entries': 'Maximum number of cached entries before eviction.',
+            'prompt_compression': 'Enable prompt compression to reduce token usage on cache misses.',
+            'compression_target_ratio': 'Target compression ratio (0.0-1.0). Lower = more aggressive compression.',
+            // --- Security ---
+            'workspace_only': 'Restrict all file operations to the workspace directory.',
+            'deny_on_empty_allowlist': 'Deny all operations when the allowlist is empty (fail-closed).',
+            'allowed_paths': 'Filesystem paths the agent is allowed to read/write.',
+            'protected_paths': 'Paths that are read-only even within the workspace.',
+            'extra_protected_paths': 'Additional protected paths beyond the defaults.',
+            'interpreter_allow': 'Script interpreters allowed for tool execution (e.g. python3, node).',
+            'script_allowed_paths': 'Paths accessible to script/plugin execution.',
+            'threat_caution_ceiling': 'Maximum threat level before agent refuses action: low, medium, high, critical.',
+            'allowlist_authority': 'Minimum authority to modify allowlists: owner, admin, user, none.',
+            'trusted_authority': 'Authority level granted to trusted sender IDs.',
+            'api_authority': 'Authority level granted to API key holders.',
+            'sandbox_required': 'Require sandboxed execution for all tool invocations.',
+            'script_fs_confinement': 'Confine script file access to the workspace directory only.',
+            'trusted_sender_ids': 'Sender/chat IDs that receive elevated trust via TrustedAuthority.',
+            'tool_allowed_paths': 'Paths accessible to tool execution (filesystem security).',
+            // --- Plugins ---
+            'dir': 'Directory to scan for plugin definitions.',
+            'allow': 'Allowlist of plugin names permitted to load.',
+            'deny': 'Denylist of plugin names blocked from loading.',
+            'strict_permissions': 'Require explicit permission grants for each plugin capability.',
+            // --- Skills / Script Runtime ---
+            'directory': 'Directory containing skill script files.',
+            'watch_mode': 'Watch skill directory for changes and auto-reload.',
+            'script_timeout_seconds': 'Max execution time in seconds for a single script run.',
+            'script_max_output_bytes': 'Max output size in bytes from a script execution.',
+            'allowed_interpreters': 'Interpreters permitted for script execution.',
+            'sandbox_env': 'Run scripts in a sandboxed environment with restricted syscalls.',
+            'hot_reload': 'Automatically reload scripts when files change on disk.',
+            'script_max_memory_bytes': 'Maximum memory a script process may consume.',
+            'network_allowed': 'Allow scripts to make outbound network requests.',
+            'workspace_dir': 'Override workspace directory for script file access.',
+            // --- Channels (legacy flat fields) ---
+            'telegram_token_env': 'Env var holding the Telegram bot token.',
+            'whatsapp_token_env': 'Env var holding the WhatsApp Cloud API token.',
+            'discord_token_env': 'Env var holding the Discord bot token.',
+            'signal_account': 'Signal phone number for the signal-cli daemon.',
+            'signal_daemon_url': 'URL of the signal-cli REST daemon.',
+            'email_from_address': 'Default From address for outbound email.',
+            // --- Channel sub-configs ---
+            'token_env': 'Environment variable name containing the API token.',
+            'token_ref': 'Secret reference (e.g. vault path) for the API token.',
+            'allowed_chat_ids': 'Chat/group IDs permitted to interact with the bot.',
+            'poll_timeout_seconds': 'Long-poll timeout in seconds for message fetching.',
+            'webhook_mode': 'Use webhook delivery instead of polling.',
+            'webhook_path': 'URL path for receiving webhook callbacks.',
+            'webhook_secret': 'Shared secret for webhook signature verification.',
+            'phone_number_id': 'WhatsApp Cloud API phone number ID.',
+            'verify_token': 'Webhook verification token for initial handshake.',
+            'allowed_numbers': 'Phone numbers permitted to interact with the bot.',
+            'app_secret': 'Application secret for webhook payload verification.',
+            'application_id': 'Discord application ID for slash commands.',
+            'allowed_guild_ids': 'Discord server (guild) IDs the bot may operate in.',
+            'phone_number': 'Phone number registered with Signal for this bot.',
+            'daemon_url': 'URL of the Signal REST API daemon.',
+            'imap_host': 'IMAP server hostname for incoming email.',
+            'imap_port': 'IMAP server port (993 for TLS, 143 for STARTTLS).',
+            'smtp_host': 'SMTP server hostname for outgoing email.',
+            'smtp_port': 'SMTP server port (587 for STARTTLS, 465 for TLS).',
+            'username': 'Email account username for IMAP/SMTP authentication.',
+            'password_env': 'Env var holding the email account password.',
+            'from_address': 'From address for outbound email messages.',
+            'allowed_senders': 'Email addresses permitted to send messages to the bot.',
+            'poll_interval_seconds': 'Seconds between mailbox polls for new messages.',
+            'oauth2_token_env': 'Env var for OAuth2 token (Gmail, Outlook).',
+            'use_oauth2': 'Use OAuth2 instead of password authentication.',
+            'imap_idle_enabled': 'Use IMAP IDLE for real-time push notifications.',
+            'stt_model': 'Speech-to-text model for voice input transcription.',
+            'tts_model': 'Text-to-speech model for voice output synthesis.',
+            'tts_voice': 'Voice preset for TTS output.',
+            // --- Matrix ---
+            'homeserver_url': 'Matrix homeserver URL (e.g. https://matrix.org).',
+            'access_token_env': 'Env var holding the Matrix access token.',
+            'access_token': 'Matrix access token (prefer access_token_env for security).',
+            'device_id': 'Matrix device ID for this bot session.',
+            'allowed_rooms': 'Matrix room IDs the bot may join and respond in.',
+            'auto_join': 'Automatically accept room invitations.',
+            'sync_timeout_seconds': 'Timeout for Matrix /sync long-polling.',
+            'e2ee_enabled': 'Enable end-to-end encryption for Matrix messages.',
+            'device_store_path': 'File path for persisting E2EE device keys.',
+            'device_display_name': 'Display name for this bot\'s Matrix device.',
+            // --- MCP ---
+            'servers': 'List of MCP (Model Context Protocol) server connections.',
+            'transport': 'MCP transport: stdio (subprocess) or sse (HTTP streaming).',
+            'command': 'Command to launch an MCP stdio server.',
+            'args': 'Arguments passed to the MCP server command.',
+            'url': 'URL for SSE-based MCP server connections.',
+            'env': 'Environment variables passed to the MCP server process.',
+            'auth_token_env': 'Env var holding the authentication token for the MCP server.',
+            'tool_allowlist': 'Only expose these tools from the MCP server (empty = all).',
+            // --- Treasury ---
+            'daily_cap': 'Maximum total spend per day across all operations.',
+            'per_payment_cap': 'Maximum amount for a single payment transaction.',
+            'transfer_limit': 'Maximum amount for a single transfer.',
+            'minimum_reserve': 'Minimum wallet balance to maintain as reserve.',
+            'hourly_transfer_limit': 'Maximum total transfers per hour.',
+            'daily_transfer_limit': 'Maximum total transfers per day.',
+            'daily_inference_budget': 'Maximum daily spend on LLM inference.',
+            // --- Wallet ---
+            'chain_id': 'Blockchain chain ID (e.g. 1 = Ethereum mainnet, 137 = Polygon).',
+            'rpc_url': 'RPC endpoint URL for blockchain interactions.',
+            'balance_poll_seconds': 'Seconds between wallet balance checks. 0 = disabled.',
+            // --- Themes ---
+            'catalog_url': 'URL of the theme catalog for dashboard theme downloads.',
+            // --- Update ---
+            'check_interval_hours': 'Hours between automatic update checks.',
+            // --- Database ---
             'path': 'Database file path. Use :memory: for in-memory (dev only).',
-            'l0': 'Token budget for trivial queries. Min: 512.',
-            'l1': 'Token budget for low complexity queries.',
-            'l2': 'Token budget for moderate complexity queries.',
-            'l3': 'Token budget for high complexity queries.',
-            'soul_max_context_pct': 'Max context budget percentage (0.0-1.0) for personality. Default: 0.4.',
-            'channel_minimum': 'Minimum budget tier for channel messages: L0, L1, L2, L3.',
-            'tone': 'Personality tone directive for the agent',
-            'greeting': 'Initial greeting message for new conversations'
+            // --- Personality (visible via context_budget) ---
+            'tone': 'Personality tone directive for the agent.',
+            'greeting': 'Initial greeting message for new conversations.'
         };
+
+        // --- Tooltip popover system ---
+        var _activePopover = null;
+        function showSettingsTooltip(triggerEl, text) {
+          hideSettingsTooltip();
+          var pop = document.createElement('div');
+          pop.className = 'settings-tooltip-popover';
+          pop.textContent = text;
+          document.body.appendChild(pop);
+          // Position near trigger
+          var rect = triggerEl.getBoundingClientRect();
+          var popW = Math.min(320, window.innerWidth - 32);
+          var left = Math.max(8, Math.min(rect.left - 12, window.innerWidth - popW - 16));
+          var top = rect.bottom + 6;
+          // If below viewport, show above
+          if (top + 80 > window.innerHeight) {
+            top = rect.top - 10;
+            pop.style.transform = 'translateY(-100%)';
+          }
+          pop.style.left = left + 'px';
+          pop.style.top = top + 'px';
+          pop.style.maxWidth = popW + 'px';
+          // Adjust arrow to point at trigger
+          var arrowLeft = Math.max(8, rect.left - left + rect.width / 2 - 4);
+          pop.style.setProperty('--arrow-left', arrowLeft + 'px');
+          _activePopover = pop;
+          requestAnimationFrame(function() { pop.classList.add('visible'); });
+          // Close on click outside (next tick to avoid immediate close)
+          setTimeout(function() {
+            document.addEventListener('click', _closePopoverHandler, true);
+          }, 0);
+        }
+        function hideSettingsTooltip() {
+          if (_activePopover) {
+            _activePopover.remove();
+            _activePopover = null;
+          }
+          document.removeEventListener('click', _closePopoverHandler, true);
+        }
+        function _closePopoverHandler(e) {
+          if (_activePopover && !_activePopover.contains(e.target) && !e.target.classList.contains('settings-help-trigger')) {
+            hideSettingsTooltip();
+          }
+        }
+        function tooltipSpan(key) {
+          if (!fieldTooltips[key]) return '';
+          return ' <span class="settings-help-trigger" data-tooltip-key="' + esc(key) + '" onclick="showSettingsTooltip(this, fieldTooltips[\'' + key.replace(/'/g, "\\'") + '\']); event.stopPropagation();">(?)</span>';
+        }
         var html = tabs + '<div class="settings-form">';
         var specialSections = ['models', 'providers', 'wallet'];
         // Internal/structural sections hidden from the settings UI.
@@ -5677,67 +6508,101 @@
             return;
           }
 
-          // MCP Servers: render as cards with per-server fields.
+          // MCP Servers: full management UI with add/edit/delete/test/refresh.
           if (section === 'mcp') {
-            html += '<div class="settings-section"><div class="settings-section-title">MCP Servers</div>';
+            html += '<div class="settings-section"><div class="settings-section-title" style="display:flex;justify-content:space-between;align-items:center">MCP Servers'
+              + '<button class="btn secondary" data-mcp-add style="font-size:0.72rem;padding:0.25rem 0.6rem">+ Add Server</button></div>';
             var servers = sectionData.servers || [];
             if (!Array.isArray(servers) || servers.length === 0) {
               html += '<div style="padding:1rem 0;color:var(--muted);font-size:0.8125rem">'
-                + 'No MCP servers configured. Add servers in your <code>config.toml</code> under <code>[mcp]</code>.'
+                + 'No MCP servers configured. Click <strong>+ Add Server</strong> above to get started.'
                 + '</div>';
             } else {
+              // Fetch live status to enrich cards.
+              html += '<div id="mcp-server-list">';
               servers.forEach(function(srv, idx) {
-                var badge = srv.enabled ? '<span class="badge success">enabled</span>' : '<span class="badge muted">disabled</span>';
+                var name = srv.name || 'server-' + idx;
+                var enabledBadge = srv.enabled ? '<span class="badge success">enabled</span>' : '<span class="badge muted">disabled</span>';
+                var transportBadge = '<span class="badge" style="background:rgba(59,130,246,0.15);color:var(--accent)">' + esc(srv.transport || 'stdio') + '</span>';
                 html += '<div class="card" style="margin-bottom:0.75rem;border-left:3px solid ' + (srv.enabled ? 'var(--success)' : 'var(--border)') + '">'
-                  + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem"><strong>' + esc(srv.name || 'server-' + idx) + '</strong> ' + badge + '</div>'
-                  + '<div style="display:grid;grid-template-columns:auto 1fr;gap:0.25rem 0.75rem;font-size:0.8125rem">';
-                if (srv.transport) html += '<span style="color:var(--muted)">Transport</span><span class="card-mono">' + esc(srv.transport) + '</span>';
+                  + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem;flex-wrap:wrap;gap:0.35rem">'
+                  + '<div style="display:flex;align-items:center;gap:0.5rem"><strong>' + esc(name) + '</strong> ' + transportBadge + ' ' + enabledBadge
+                  + ' <span class="badge muted" id="mcp-status-' + esc(name) + '">checking...</span>'
+                  + ' <span class="badge muted" id="mcp-tools-' + esc(name) + '"></span></div>'
+                  + '<div style="display:flex;gap:0.35rem;flex-wrap:wrap">'
+                  + '<button class="btn secondary" data-mcp-test="' + esc(name) + '" style="font-size:0.68rem;padding:0.2rem 0.5rem">Test</button>'
+                  + '<button class="btn secondary" data-mcp-refresh="' + esc(name) + '" style="font-size:0.68rem;padding:0.2rem 0.5rem">Refresh Tools</button>'
+                  + '<button class="btn secondary" data-mcp-toggle="' + idx + '" style="font-size:0.68rem;padding:0.2rem 0.5rem">' + (srv.enabled ? 'Disable' : 'Enable') + '</button>'
+                  + '<button class="btn secondary" data-mcp-edit="' + idx + '" style="font-size:0.68rem;padding:0.2rem 0.5rem">Edit</button>'
+                  + '<button class="btn secondary" data-mcp-delete="' + idx + '" data-mcp-delete-name="' + esc(name) + '" style="font-size:0.68rem;padding:0.2rem 0.5rem;border-color:var(--error);color:var(--error)">Delete</button>'
+                  + '</div></div>';
+                html += '<div style="display:grid;grid-template-columns:auto 1fr;gap:0.25rem 0.75rem;font-size:0.8125rem">';
                 if (srv.command) html += '<span style="color:var(--muted)">Command</span><span class="card-mono">' + esc(srv.command) + '</span>';
                 if (srv.args && srv.args.length) html += '<span style="color:var(--muted)">Args</span><span class="card-mono">' + esc(srv.args.join(' ')) + '</span>';
                 if (srv.url) html += '<span style="color:var(--muted)">URL</span><span class="card-mono">' + esc(srv.url) + '</span>';
-                if (srv.auth_token_env) html += '<span style="color:var(--muted)">Auth Token Env</span><span class="card-mono">' + esc(srv.auth_token_env) + '</span>';
+                if (srv.auth_token_env) html += '<span style="color:var(--muted)">Auth Env</span><span class="card-mono">' + esc(srv.auth_token_env) + '</span>';
+                if (srv.env && Object.keys(srv.env).length) {
+                  html += '<span style="color:var(--muted)">Env Vars</span><span class="card-mono">' + esc(Object.keys(srv.env).join(', ')) + '</span>';
+                }
+                if (srv.tool_allowlist && srv.tool_allowlist.length) {
+                  html += '<span style="color:var(--muted)">Tool Allowlist</span><span class="card-mono">' + esc(srv.tool_allowlist.join(', ')) + '</span>';
+                }
                 html += '</div></div>';
               });
+              html += '</div>';
             }
             html += '</div>';
+            // Kick off async status enrichment after render.
+            setTimeout(function() { App._mcpEnrichStatuses(); }, 50);
             return;
           }
 
-          // Enum fields: render as dropdowns instead of text inputs.
-          var ENUM_FIELDS = {
-            'session.scope_mode': ['agent', 'peer', 'group'],
-            'security.allowlist_authority': ['owner', 'admin', 'user', 'none'],
-            'security.trusted_authority': ['owner', 'admin', 'user', 'none'],
-            'security.api_authority': ['owner', 'admin', 'user', 'none'],
-            'security.threat_caution_ceiling': ['low', 'medium', 'high', 'critical'],
-            'models.routing.mode': ['metascore', 'round_robin', 'cost_aware', 'local_first']
-          };
+          // Schema-driven field renderer. Uses _schemaIndex for enums, descriptions, defaults, immutability.
+          var _schemaIdx = self._schemaIndex || {};
           var _renderSettingsField = function(key, val, path, tooltipHtml) {
+            var sf = _schemaIdx[path];
+            // Build tooltip from schema description if no static tooltip exists.
+            if (sf && sf.description && !fieldTooltips[key]) {
+              tooltipHtml = ' <span class="settings-help-trigger" onclick="showSettingsTooltip(this, \'' + sf.description.replace(/'/g, "\\'") + '\'); event.stopPropagation();">(?)</span>';
+            }
+            // Immutable field hint.
+            var immutableHint = (sf && sf.immutable) ? ' <span class="badge muted" style="font-size:0.55rem;vertical-align:middle">restart</span>' : '';
+            var isDisabled = sf && sf.immutable;
+            var disabledAttr = isDisabled ? ' disabled style="opacity:0.6;cursor:not-allowed"' : '';
+            // Placeholder from schema default.
+            var placeholder = 'none';
+            if (sf && sf['default'] != null && sf['default'] !== '') {
+              placeholder = String(sf['default']);
+            }
+            // Enum from schema.
+            var enumValues = (sf && sf['enum'] && sf['enum'].length) ? sf['enum'] : null;
+
             if (typeof val === 'boolean') {
-              html += '<div class="settings-row"><div class="settings-label">' + esc(key) + tooltipHtml + '</div><div class="settings-toggle-wrap"><label class="toggle"><input type="checkbox" data-settings-path="' + esc(path) + '"' + (val ? ' checked' : '') + '><span class="toggle-track"></span></label><span class="settings-toggle-label">' + (val ? 'On' : 'Off') + '</span></div></div>';
-            } else if (ENUM_FIELDS[path]) {
-              var opts = ENUM_FIELDS[path];
-              var selHtml = '<select class="settings-input" data-settings-path="' + esc(path) + '" style="min-width:160px">';
-              opts.forEach(function(o) { selHtml += '<option value="' + esc(o) + '"' + (String(val) === o ? ' selected' : '') + '>' + esc(o) + '</option>'; });
+              var toggleDisabled = isDisabled ? ' style="opacity:0.5;pointer-events:none"' : '';
+              html += '<div class="settings-row"><div class="settings-label">' + esc(key) + tooltipHtml + immutableHint + '</div><div class="settings-toggle-wrap"><label class="toggle"' + toggleDisabled + '><input type="checkbox" data-settings-path="' + esc(path) + '"' + (val ? ' checked' : '') + (isDisabled ? ' disabled' : '') + '><span class="toggle-track"></span></label><span class="settings-toggle-label">' + (val ? 'On' : 'Off') + '</span></div></div>';
+            } else if (enumValues) {
+              var selHtml = '<select class="settings-input" data-settings-path="' + esc(path) + '" style="min-width:160px"' + disabledAttr + '>';
+              enumValues.forEach(function(o) { selHtml += '<option value="' + esc(o) + '"' + (String(val) === o ? ' selected' : '') + '>' + esc(o) + '</option>'; });
               selHtml += '</select>';
-              html += '<div class="settings-row"><div class="settings-label">' + esc(key) + tooltipHtml + '</div>' + selHtml + '</div>';
+              html += '<div class="settings-row"><div class="settings-label">' + esc(key) + tooltipHtml + immutableHint + '</div>' + selHtml + '</div>';
             } else if (Array.isArray(val)) {
               var joined = val.join('\n');
-              html += '<div class="settings-row"><div class="settings-label">' + esc(key) + tooltipHtml + '</div>'
+              html += '<div class="settings-row"><div class="settings-label">' + esc(key) + tooltipHtml + immutableHint + '</div>'
                 + '<textarea class="settings-input" data-settings-path="' + esc(path) + '" data-settings-array="1" '
-                + 'rows="' + Math.max(2, Math.min(6, val.length + 1)) + '" placeholder="One entry per line" style="font-family:var(--font-mono);font-size:0.75rem">' + esc(joined) + '</textarea></div>';
+                + 'rows="' + Math.max(2, Math.min(6, val.length + 1)) + '" placeholder="One entry per line" style="font-family:var(--font-mono);font-size:0.75rem"' + disabledAttr + '>' + esc(joined) + '</textarea></div>';
             } else if (typeof val === 'object' && val !== null) {
               html += '<div class="settings-nested"><div style="font-size:0.625rem;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted);margin-bottom:0.5rem">' + esc(key) + '</div>';
               Object.keys(val).forEach(function(subKey) {
                 var subVal = val[subKey]; var subPath = path + '.' + subKey;
-                var subTooltipHtml = fieldTooltips[subKey] ? ' <span title="' + esc(fieldTooltips[subKey]) + '" style="cursor:help;color:var(--muted);font-size:0.65rem">(?)</span>' : '';
+                var subTooltipHtml = tooltipSpan(subKey);
                 _renderSettingsField(subKey, subVal, subPath, subTooltipHtml);
               });
               html += '</div>';
             } else {
-              var type = typeof val === 'number' ? 'number' : 'text';
+              var type = (sf && (sf.type === 'integer' || sf.type === 'float')) ? 'number' : (typeof val === 'number' ? 'number' : 'text');
               var sv = (val == null || val === '') ? '' : esc(String(val));
-              html += '<div class="settings-row"><div class="settings-label">' + esc(key) + tooltipHtml + '</div><input class="settings-input" type="' + type + '" data-settings-path="' + esc(path) + '" value="' + sv + '" placeholder="none"></div>';
+              var step = (sf && sf.type === 'float') ? ' step="any"' : '';
+              html += '<div class="settings-row"><div class="settings-label">' + esc(key) + tooltipHtml + immutableHint + '</div><input class="settings-input" type="' + type + '" data-settings-path="' + esc(path) + '" value="' + sv + '" placeholder="' + esc(placeholder) + '"' + step + disabledAttr + '></div>';
             }
           };
           // Display-friendly labels for config sections whose JSON key is misleading.
@@ -5750,7 +6615,7 @@
           Object.keys(sectionData).forEach(function(key) {
             var val = sectionData[key];
             var path = section + '.' + key;
-            var tooltipHtml = fieldTooltips[key] ? ' <span title="' + esc(fieldTooltips[key]) + '" style="cursor:help;color:var(--muted);font-size:0.65rem">(?)</span>' : '';
+            var tooltipHtml = tooltipSpan(key);
             _renderSettingsField(key, val, path, tooltipHtml);
           });
           html += '</div>';
@@ -5766,8 +6631,8 @@
     renderWorkspace: function() {
       return api('/api/workspace/state').then(function(data) {
         _cachedWorkspace = data;
-        return '<div style="display:flex;flex-direction:column;height:calc(100vh - 8rem);min-height:400px;gap:0">'
-          + '<div id="ws-wrap" style="position:relative;flex:1;min-height:300px;overflow:hidden"><canvas id="ws-canvas" style="display:block;width:100%;height:100%;border-radius:var(--radius)"></canvas></div>'
+        return '<div style="display:flex;flex-direction:column;height:100%;min-height:0;gap:0">'
+          + '<div id="ws-wrap" style="position:relative;flex:1;min-height:0;overflow:hidden"><canvas id="ws-canvas" style="display:block;border-radius:var(--radius)"></canvas></div>'
           + '<div id="ws-status-panel" style="flex-shrink:0;padding:0.5rem 0.75rem;background:var(--surface);border-top:1px solid var(--border-ghost);display:flex;flex-wrap:wrap;align-items:center;gap:0.5rem 1rem;min-height:2.5rem"></div>'
           + '</div>';
       });
@@ -5999,7 +6864,7 @@
       }
     },
     {
-      id: 'psychedelic',
+      id: 'psychedelic-freakout',
       name: 'Psychedelic Freakout',
       description: 'A maximalist neon chaos mode with saturated gradients and unmistakably unserious operator vibes.',
       author: 'Roboticus',
@@ -6025,6 +6890,8 @@
     document.documentElement.setAttribute('data-theme', theme);
     document.querySelectorAll('.theme-option').forEach(function(o) { o.classList.toggle('active', o.getAttribute('data-theme-set') === theme); });
     var nameEl = document.getElementById('theme-name'); if (nameEl) nameEl.textContent = themeNames[theme] || theme;
+    // Invalidate cached theme colors so workspace re-parses on next frame
+    if (workspace) workspace._themeColors = null;
     // Apply textures if this is an external theme with textures
     applyTextures(theme);
     // Load fonts if needed
@@ -6179,22 +7046,28 @@
     addThemeToDropdown(manifest);
   }
 
+  // Register hardcoded builtins for instant rendering before API loads.
   builtinThemeManifests.forEach(function(theme) {
     registerThemeManifest(theme, { injectCss: false });
   });
 
-  // Load external themes from API
+  // Load installed themes only — the dropdown shows what you can use,
+  // not the full catalog. Catalog browsing/installation is on the
+  // Skills & Plugins page.
   function loadExternalThemes() {
-    fetch('/api/themes').then(function(r) { return r.json(); }).then(function(themes) {
+    fetch('/api/themes/catalog').then(function(r) { return r.json(); }).then(function(data) {
+      var themes = data.themes || data || [];
       themes.forEach(function(t) {
-        if (themeNames[t.id]) return; // skip built-in overrides for now
-        registerThemeManifest(t, { injectCss: true });
+        if (themeNames[t.id]) return; // already registered from hardcoded builtins
+        // Only add installed catalog themes to the dropdown.
+        if (t.source === 'builtin' || t.installed) {
+          registerThemeManifest(t, { injectCss: true });
+        }
       });
-      // If saved theme is an external theme, apply it now
       var saved = localStorage.getItem('roboticus-theme');
       if (saved && loadedThemes[saved]) applyTheme(saved);
     }).catch(function(e) {
-      console.warn('Failed to load external themes:', e);
+      console.warn('Failed to load themes:', e);
     });
   }
 
@@ -6717,11 +7590,16 @@
         if (agent.firmware_rules && agent.firmware_rules.length > 0) {
           rulesHtml = '<div style="margin-top:1rem"><div style="font-size:0.75rem;font-weight:600;color:var(--muted);letter-spacing:0.05em;margin-bottom:0.5rem">FIRMWARE RULES</div>';
           agent.firmware_rules.forEach(function(r) {
-            var rColor = r.type === 'must' ? '#22c55e' : '#ef4444';
-            var rLabel = r.type === 'must' ? 'MUST' : 'MUST NOT';
+            // Handle both formats: plain string or {type, rule} object.
+            var ruleText = typeof r === 'string' ? r : (r.rule || r.text || JSON.stringify(r));
+            var rType = typeof r === 'object' && r.type ? r.type : '';
+            var rColor, rLabel;
+            if (rType === 'must') { rColor = '#22c55e'; rLabel = 'MUST'; }
+            else if (rType === 'must_not') { rColor = '#ef4444'; rLabel = 'MUST NOT'; }
+            else { rColor = 'var(--accent)'; rLabel = '\u2022'; }
             rulesHtml += '<div style="display:flex;gap:0.5rem;margin-bottom:0.3rem;font-size:0.75rem;align-items:baseline">'
               + '<span style="font-weight:700;color:' + rColor + ';font-size:0.65rem;flex-shrink:0">' + rLabel + '</span>'
-              + '<span style="color:var(--text)">' + esc(r.rule) + '</span></div>';
+              + '<span style="color:var(--text)">' + esc(ruleText) + '</span></div>';
           });
           rulesHtml += '</div>';
         }
@@ -7257,10 +8135,98 @@
                 + '<div style="display:grid;grid-template-columns:auto 1fr;gap:0.2rem 0.75rem">'
                 + '<span style="color:var(--muted)">Duration</span><span>' + (s.duration_ms || 0) + 'ms</span>'
                 + '<span style="color:var(--muted)">Outcome</span><span style="color:' + (oc === 'ok' ? 'var(--success)' : oc === 'skipped' ? 'var(--muted)' : 'var(--error)') + '">' + esc(s.outcome || 'unknown') + '</span>';
+              // Enriched namespace sections
+              var enrichedNS = { 'guard': [], 'inference.routing': [], 'retrieval': [], 'retrieval.context': [] };
+              var plainKeys = [];
               metaKeys.forEach(function(k) {
-                metaHtml += '<span style="color:var(--muted);font-family:var(--font-mono);font-size:0.6875rem">' + esc(k) + '</span><span style="font-family:var(--font-mono);font-size:0.6875rem">' + esc(String(meta[k])) + '</span>';
+                var matched = false;
+                ['retrieval.context', 'inference.routing', 'guard', 'retrieval'].forEach(function(ns) {
+                  if (!matched && k.indexOf(ns + '.') === 0) { enrichedNS[ns].push(k); matched = true; }
+                });
+                if (!matched) plainKeys.push(k);
+              });
+              plainKeys.forEach(function(k) {
+                var v = meta[k];
+                var display = (typeof v === 'object' && v !== null) ? JSON.stringify(v) : String(v);
+                metaHtml += '<span style="color:var(--muted);font-family:var(--font-mono);font-size:0.6875rem">' + esc(k) + '</span><span style="font-family:var(--font-mono);font-size:0.6875rem">' + esc(display) + '</span>';
               });
               metaHtml += '</div>';
+              // Guard annotations
+              if (enrichedNS['guard'].length > 0) {
+                var gChain = meta['guard.chain'] || '';
+                var gTotalMs = meta['guard.total_ms'];
+                var gResults = meta['guard.results'];
+                metaHtml += '<details style="margin-top:0.5rem"><summary style="cursor:pointer;font-size:0.6875rem;font-weight:600;color:#f97316;letter-spacing:0.04em">GUARD CHAIN' + (gChain ? ' (' + esc(gChain) + ')' : '') + (gTotalMs != null ? ' \u2014 ' + gTotalMs + 'ms' : '') + '</summary>';
+                if (gResults && typeof gResults === 'object') {
+                  metaHtml += '<div style="margin:0.35rem 0 0 0.5rem;display:grid;grid-template-columns:auto auto 1fr;gap:0.15rem 0.5rem;font-size:0.6875rem">';
+                  Object.keys(gResults).forEach(function(gn) {
+                    var ge = gResults[gn] || {};
+                    var gOutcome = (ge.outcome || '').toLowerCase();
+                    var gColor = gOutcome === 'pass' || gOutcome === 'ok' ? '#22c55e' : gOutcome === 'skip' || gOutcome === 'skipped' ? '#6b7280' : '#ef4444';
+                    metaHtml += '<span style="font-family:var(--font-mono);color:var(--text)">' + esc(gn) + '</span>'
+                      + '<span style="color:' + gColor + ';font-weight:600">' + esc(ge.outcome || '?') + '</span>'
+                      + '<span style="color:var(--muted)">' + esc(ge.reason || '') + '</span>';
+                  });
+                  metaHtml += '</div>';
+                }
+                metaHtml += '</details>';
+              }
+              // Routing annotations
+              if (enrichedNS['inference.routing'].length > 0) {
+                var rWinner = meta['inference.routing.winner'] || '';
+                var rMode = meta['inference.routing.mode'] || '';
+                var rCandidates = meta['inference.routing.candidates'];
+                var rWeights = meta['inference.routing.weights'];
+                var rScore = meta['inference.routing.winner_score'];
+                metaHtml += '<details style="margin-top:0.35rem"><summary style="cursor:pointer;font-size:0.6875rem;font-weight:600;color:#8b5cf6;letter-spacing:0.04em">ROUTING \u2014 ' + esc(rWinner) + (rMode ? ' (' + esc(rMode) + ')' : '') + '</summary>';
+                metaHtml += '<div style="margin:0.35rem 0 0 0.5rem;font-size:0.6875rem;font-family:var(--font-mono)">';
+                if (rScore != null) metaHtml += '<div>Score: <span style="color:var(--accent)">' + Number(rScore).toFixed(3) + '</span></div>';
+                if (Array.isArray(rCandidates) && rCandidates.length) {
+                  metaHtml += '<div style="margin-top:0.2rem">Candidates: ' + rCandidates.map(function(c) {
+                    return '<span style="padding:1px 5px;border-radius:3px;background:' + (c === rWinner ? 'rgba(139,92,246,0.2)' : 'rgba(255,255,255,0.05)') + ';margin-right:3px;font-size:0.625rem">' + esc(c) + '</span>';
+                  }).join('') + '</div>';
+                }
+                if (rWeights && typeof rWeights === 'object') {
+                  metaHtml += '<div style="margin-top:0.25rem;display:flex;flex-wrap:wrap;gap:0.35rem">';
+                  Object.keys(rWeights).forEach(function(axis) {
+                    metaHtml += '<span style="font-size:0.5625rem;color:var(--muted)">' + esc(axis) + ':<span style="color:var(--text)">' + Number(rWeights[axis]).toFixed(2) + '</span></span>';
+                  });
+                  metaHtml += '</div>';
+                }
+                metaHtml += '</div></details>';
+              }
+              // Memory annotations
+              if (enrichedNS['retrieval'].length > 0 && !enrichedNS['retrieval'].every(function(k) { return k.indexOf('retrieval.context.') === 0; })) {
+                var mTiers = meta['retrieval.tiers_queried'];
+                var mHits = meta['retrieval.hits'];
+                var mBudget = meta['retrieval.budget_consumed'];
+                metaHtml += '<details style="margin-top:0.35rem"><summary style="cursor:pointer;font-size:0.6875rem;font-weight:600;color:#22c55e;letter-spacing:0.04em">MEMORY' + (mBudget != null ? ' \u2014 ' + mBudget + ' tokens' : '') + '</summary>';
+                metaHtml += '<div style="margin:0.35rem 0 0 0.5rem;font-size:0.6875rem;font-family:var(--font-mono)">';
+                if (Array.isArray(mTiers) && mTiers.length) metaHtml += '<div>Tiers: ' + mTiers.map(function(t) { return esc(t); }).join(', ') + '</div>';
+                if (mHits && typeof mHits === 'object') {
+                  metaHtml += '<div style="margin-top:0.15rem">Hits: ' + Object.keys(mHits).map(function(t) { return esc(t) + '=' + mHits[t]; }).join(', ') + '</div>';
+                }
+                metaHtml += '</div></details>';
+              }
+              // Context budget annotations
+              if (enrichedNS['retrieval.context'].length > 0) {
+                var cTotal = meta['retrieval.context.budget_total'];
+                var cSys = meta['retrieval.context.system_prompt_tokens'];
+                var cTool = meta['retrieval.context.tool_defs_tokens'];
+                var cMem = meta['retrieval.context.memory_tokens'];
+                var cHist = meta['retrieval.context.history_tokens'];
+                metaHtml += '<details style="margin-top:0.35rem"><summary style="cursor:pointer;font-size:0.6875rem;font-weight:600;color:#06b6d4;letter-spacing:0.04em">CONTEXT BUDGET' + (cTotal != null ? ' \u2014 ' + cTotal + ' tokens' : '') + '</summary>';
+                metaHtml += '<div style="margin:0.35rem 0 0 0.5rem;font-size:0.6875rem">';
+                var budgetItems = [{ l: 'System prompt', v: cSys }, { l: 'Tool defs', v: cTool }, { l: 'Memory', v: cMem }, { l: 'History', v: cHist }];
+                budgetItems.forEach(function(bi) {
+                  if (bi.v == null) return;
+                  var pct = cTotal ? Math.round((bi.v / cTotal) * 100) : 0;
+                  metaHtml += '<div style="display:flex;align-items:center;gap:0.4rem;margin-bottom:2px"><span style="width:90px;color:var(--muted)">' + bi.l + '</span>'
+                    + '<div style="flex:1;height:5px;background:var(--surface);border-radius:3px;overflow:hidden;max-width:120px"><div style="width:' + pct + '%;height:100%;background:#06b6d4;border-radius:3px"></div></div>'
+                    + '<span style="font-family:var(--font-mono);color:var(--text);min-width:50px">' + bi.v + '</span></div>';
+                });
+                metaHtml += '</div></details>';
+              }
               if (metaKeys.length === 0) {
                 metaHtml += '<div style="color:var(--muted);font-style:italic;margin-top:0.25rem">No metadata annotations for this stage.</div>';
               }
@@ -7555,20 +8521,48 @@
       }
       var draft = App._getSettingsDraft();
       var patch = App._buildMutableConfigPatch(draft);
+      var statusEl = document.getElementById('settings-status');
       api('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) }).then(function() {
         var merged = JSON.parse(JSON.stringify(_cachedConfig || {}));
         Object.keys(patch || {}).forEach(function(k) { merged[k] = patch[k]; });
         _cachedConfig = merged;
         App._settingsDirty = false; App._settingsRawText = null;
+        if (statusEl) { statusEl.textContent = ''; statusEl.style.display = 'none'; }
         toast(isApply ? 'Configuration applied' : 'Configuration saved');
         App.navigate('settings');
-      }).catch(function(err) { toast(err.message || 'Save failed'); });
+      }).catch(function(err) {
+        var msg = err.message || 'Save failed';
+        if (statusEl) {
+          statusEl.textContent = msg;
+          statusEl.style.display = 'block';
+          statusEl.style.color = 'var(--error, #ef4444)';
+          statusEl.style.background = 'rgba(239,68,68,0.1)';
+          statusEl.style.border = '1px solid rgba(239,68,68,0.3)';
+          statusEl.style.borderRadius = '4px';
+          statusEl.style.padding = '0.5rem 0.75rem';
+          statusEl.style.fontSize = '0.8125rem';
+          statusEl.style.fontFamily = 'var(--font-mono)';
+        }
+        toast(msg);
+      });
       return;
     }
     if (e.target.closest('#settings-cancel')) {
       App._settingsDraft = null; App._settingsRawText = null; App._settingsDirty = false;
       toast('Changes discarded'); App.navigate('settings'); return;
     }
+    // --- MCP Server management event handlers ---
+    if (e.target.closest('[data-mcp-add]')) { App._mcpOpenModal(); return; }
+    var mcpEditBtn = e.target.closest('[data-mcp-edit]');
+    if (mcpEditBtn) { App._mcpOpenModal(Number(mcpEditBtn.getAttribute('data-mcp-edit'))); return; }
+    var mcpDelBtn = e.target.closest('[data-mcp-delete]');
+    if (mcpDelBtn) { App._mcpDeleteServer(Number(mcpDelBtn.getAttribute('data-mcp-delete')), mcpDelBtn.getAttribute('data-mcp-delete-name') || ''); return; }
+    var mcpTogBtn = e.target.closest('[data-mcp-toggle]');
+    if (mcpTogBtn) { App._mcpToggleServer(Number(mcpTogBtn.getAttribute('data-mcp-toggle'))); return; }
+    var mcpTestBtn = e.target.closest('[data-mcp-test]');
+    if (mcpTestBtn) { App._mcpTestServer(mcpTestBtn.getAttribute('data-mcp-test')); return; }
+    var mcpRefBtn = e.target.closest('[data-mcp-refresh]');
+    if (mcpRefBtn) { App._mcpRefreshTools(mcpRefBtn.getAttribute('data-mcp-refresh')); return; }
     var chainBtn = e.target.closest('[data-chain-preset]');
     if (chainBtn) {
       var name = chainBtn.getAttribute('data-chain-preset');
@@ -7796,7 +8790,9 @@
         id: id,
         agent_id: agentTd ? agentTd.textContent : 'default',
         agent_name: AGENT_DISPLAY_NAME || null,
-        nickname: nick !== id ? nick : null
+        nickname: nick !== id ? nick : null,
+        non_interactive: row.getAttribute('data-non-interactive') === '1',
+        status: row.getAttribute('data-status') || 'active'
       };
       App.navigate('sessions');
       return;
@@ -8359,14 +9355,14 @@
     this.stations = systems.map(function(s) { return { id: s.id, name: s.name, kind: s.kind, x: s.x, y: s.y }; });
     if (this.stations.length === 0) {
       this.stations = [
-        { id: 'llm', name: 'LLM Inference', kind: 'Inference', x: 0.18, y: 0.22 },
-        { id: 'memory', name: 'Memory', kind: 'Storage', x: 0.82, y: 0.22 },
-        { id: 'exec', name: 'Code Execution', kind: 'Execution', x: 0.18, y: 0.78 },
-        { id: 'blockchain', name: 'Blockchain', kind: 'Blockchain', x: 0.82, y: 0.78 },
-        { id: 'web', name: 'Web / APIs', kind: 'Tool', x: 0.50, y: 0.12 },
-        { id: 'files', name: 'File System', kind: 'Tool', x: 0.50, y: 0.88 },
-        { id: 'tools_plugins', name: 'Tools / Plugins', kind: 'Plugin', x: 0.965, y: 0.50 },
-        { id: 'shelter', name: 'Idle Agents', kind: 'Shelter', x: 0.035, y: 0.50 }
+        { id: 'web', name: 'Web / APIs', kind: 'Tool', x: 0.50, y: 0.10 },
+        { id: 'llm', name: 'LLM Inference', kind: 'Inference', x: 0.30, y: 0.25 },
+        { id: 'memory', name: 'Memory', kind: 'Storage', x: 0.70, y: 0.25 },
+        { id: 'shelter', name: 'Idle Agents', kind: 'Shelter', x: 0.22, y: 0.50 },
+        { id: 'tools_plugins', name: 'Tools / Plugins', kind: 'Plugin', x: 0.78, y: 0.50 },
+        { id: 'exec', name: 'Code Execution', kind: 'Execution', x: 0.30, y: 0.75 },
+        { id: 'blockchain', name: 'Blockchain', kind: 'Blockchain', x: 0.70, y: 0.75 },
+        { id: 'files', name: 'File System', kind: 'Tool', x: 0.50, y: 0.90 }
       ];
     }
     var self = this;
@@ -8471,6 +9467,14 @@
     this.canvas.style.width = w + 'px'; this.canvas.style.height = h + 'px';
     this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     this.W = w; this.H = h;
+    // Clamp station positions so icons + labels never clip the canvas edge.
+    // 80px accommodates the 42px glow radius + label overhang.
+    var padX = Math.min(0.20, 80 / w), padY = Math.min(0.15, 80 / h);
+    for (var i = 0; i < this.stations.length; i++) {
+      var s = this.stations[i];
+      s.x = Math.max(padX, Math.min(1 - padX, s.x));
+      s.y = Math.max(padY, Math.min(1 - padY, s.y));
+    }
   };
 
   WorkspaceEngine.prototype.start = function() {
@@ -8669,7 +9673,7 @@
   WorkspaceEngine.prototype.render = function() {
     var ctx = this.ctx, W = this.W, H = this.H;
     if (!W || !H) return;
-    var tc = parseThemeColors(); var aR = tc.aR, aG = tc.aG, aB = tc.aB;
+    var tc = this._themeColors || parseThemeColors(); var aR = tc.aR, aG = tc.aG, aB = tc.aB;
     this._themeColors = tc;
     ctx.clearRect(0, 0, W, H); ctx.fillStyle = tc.bg; ctx.fillRect(0, 0, W, H);
 
@@ -8866,6 +9870,7 @@
       // still walking back — keep drawing at reduced opacity
     }
     var tc = this._themeColors || { surface: '#081329', muted: '#9baad6', text: '#dee5ff', aR: 193, aG: 128, aB: 255 };
+    var isAgent = (bot.role === 'orchestrator' || bot.role === 'agent');
     var px = bot.x * W, py = bot.y * H, t = this.time, frame = bot.animFrame;
     var sizing = { orchestrator: { scale: 1.0, w: 20, h: 24 }, agent: { scale: 1.0, w: 20, h: 24 } };
     var s = sizing[bot.role] || { scale: 0.7, w: 14, h: 18 };
@@ -9073,12 +10078,79 @@
   // S-HIGH-2: Uses short-lived tickets instead of persistent API key in URL.
   App._wsReconnectDelay = 1000;
   App._wsReconnectTimer = null;
+  // ── WebSocket topic subscription helpers ─────────────────────────────
+  App._wsSubscribedTopics = [];
+  App._wsSend = function(msg) {
+    if (App.ws && App.ws.readyState === WebSocket.OPEN) {
+      App.ws.send(JSON.stringify(msg));
+    }
+  };
+  App._wsSubscribe = function(topics) {
+    App._wsSend({ type: 'subscribe', topics: topics });
+  };
+  App._wsUnsubscribe = function(topics) {
+    App._wsSend({ type: 'unsubscribe', topics: topics });
+  };
+  // Subscribe to page-specific topics on navigation, unsubscribe from old ones.
+  App._wsSetPageTopics = function(topics) {
+    if (App._wsSubscribedTopics.length > 0) {
+      App._wsUnsubscribe(App._wsSubscribedTopics);
+    }
+    App._wsSubscribedTopics = topics;
+    if (topics.length > 0) {
+      App._wsSubscribe(topics);
+    }
+  };
+
+  // Topic snapshot handlers — apply pushed data to the dashboard.
+  App._wsTopicHandlers = {
+    'workspace.snapshot': function(data) {
+      _cachedWorkspace = data;
+      if (workspace && workspace.applySnapshot) {
+        workspace.applySnapshot(data);
+        updateWorkspaceStatusPanel(data);
+      }
+    },
+    'agent.status.snapshot': function(data) {
+      applySidebarIdentity(data, {});
+    },
+    'models.snapshot': function(data) {
+      if (data && data.models) App._cachedModels = data.models;
+    },
+    'sessions.snapshot': function(data) {
+      if (App.page === 'sessions') App.navigate('sessions');
+    },
+    'stats.snapshot': function(data) {
+      if (App.page === 'overview') App._applyStatsSnapshot(data);
+    },
+    'workspace.changed': function() {
+      // Server notified workspace data changed — snapshot will follow or re-subscribe
+      App._wsSubscribe(['workspace']);
+    },
+    'agent.status.changed': function() {
+      App._wsSubscribe(['agent.status']);
+    },
+    'models.changed': function() {
+      App._wsSubscribe(['models']);
+    },
+    'sessions.changed': function() {
+      if (App.page === 'sessions') App._wsSubscribe(['sessions']);
+    }
+  };
+  // Stats snapshot applicator (used by WS push).
+  App._applyStatsSnapshot = function(data) {
+    if (!data) return;
+    // Cache for next overview render.
+    App._wsStatsCache = data;
+  };
+
   App._bindWsEvents = function(ws) {
     ws.onopen = function() {
       App._wsReconnectDelay = 1000;
       var d = document.getElementById('ws-dot'); if (d) d.classList.remove('off');
       var l = document.getElementById('ws-label'); if (l) l.textContent = 'Connected';
-      refreshSidebarIdentity();
+      // Subscribe to always-on topics via WebSocket (replaces HTTP polling).
+      App._wsSubscribe(['agent.status', 'workspace', 'models']);
     };
     ws.onclose = function() {
       var d = document.getElementById('ws-dot'); if (d) d.classList.add('off');
@@ -9093,6 +10165,10 @@
     ws.onmessage = function(ev) {
       try {
         var event = JSON.parse(ev.data);
+        // Route topic snapshots and change notifications to handlers.
+        if (event && event.type && App._wsTopicHandlers[event.type]) {
+          App._wsTopicHandlers[event.type](event.data);
+        }
         if (workspace && workspace.handleEvent) workspace.handleEvent(event);
         if (event && event.type === 'stream_start') {
           App._liveStreamTurn = {
@@ -9152,9 +10228,8 @@
     } catch (err) { var d = document.getElementById('ws-dot'); if (d) d.classList.add('off'); var l = document.getElementById('ws-label'); if (l) l.textContent = 'No WebSocket'; }
   };
   App._connectWs();
-  setInterval(refreshSidebarIdentity, 30000);
-
-  startModelsBackgroundRefresh(App);
+  // Sidebar identity and model refresh are now driven by WebSocket topic subscriptions
+  // (agent.status, models) — no more HTTP polling intervals.
   App._loadAvailableModels({ nonBlocking: true, validationLevel: 'zero' }).catch(function() {});
   // BUG-FIX: call hint preference prompt only once on startup, not on every navigation
   ensureAuth().then(function() { maybePromptHintPreference(); }).catch(function() {});

@@ -152,6 +152,42 @@ Blocking commands for feature-complete releases:
 | R-DISC-01 | A2A handshake and runtime-discovery surfaces remain functional if advertised | route tests + smoke | L2/L3 |
 | R-DISC-02 | Discovery/device/runtime surfaces do not silently fake success when incomplete | route tests | L2 |
 
+### R-WS: WebSocket Protocol
+
+| ID | Regression Class | Required Coverage | Layer |
+| --- | --- | --- | --- |
+| R-WS-01 | WS upgrade requires valid ticket (anti-CSRF, anti-replay) | `internal/api/routes/ws_protocol_test.go` | L1/L2 |
+| R-WS-02 | Topic subscription delivers only subscribed events, not all events | `internal/api/routes/ws_topics_test.go` | L1/L2 |
+| R-WS-03 | Pipeline lifecycle events propagate through EventBus to WS subscribers | integration tests + smoke | L2/L3 |
+| R-WS-04 | WS layer contains no business logic (thin connector enforcement) | `internal/api/architecture_test.go` | L0 |
+| R-WS-05 | Zero `setInterval` polling calls survive in dashboard JavaScript | dashboard audit / smoke | L3 |
+
+### R-THEME: Theme And Rendering
+
+| ID | Regression Class | Required Coverage | Layer |
+| --- | --- | --- | --- |
+| R-THEME-01 | Theme variable serialization round-trips correctly for preview rendering | theme route tests | L1/L2 |
+| R-THEME-02 | `parseThemeColors` is cached per frame and invalidated on theme change | unit tests | L1 |
+| R-THEME-03 | `_catalogThemeVars` does not crash when theme variables are undefined | route tests | L1/L2 |
+| R-THEME-04 | Catalog entries carry full theme metadata (variables, textures, fonts) | route tests | L2 |
+
+### R-LAYOUT: Workspace And Layout
+
+| ID | Regression Class | Required Coverage | Layer |
+| --- | --- | --- | --- |
+| R-LAYOUT-01 | Workspace footer is pinned to bottom without `calc()` misfire | layout tests / smoke | L2/L3 |
+| R-LAYOUT-02 | Workstation positioning is equidistant with dynamic edge clamping | layout tests | L1/L2 |
+| R-LAYOUT-03 | Canvas sizing is delegated to `resize()` — no conflicting CSS dimensions | layout tests | L1/L2 |
+
+### R-CFG: Config Schema
+
+| ID | Regression Class | Required Coverage | Layer |
+| --- | --- | --- | --- |
+| R-CFG-01 | `/api/config/schema` returns all Config struct fields via reflection | route tests | L2 |
+| R-CFG-02 | Config defaults match `DefaultConfig()` output | unit tests | L1 |
+| R-CFG-03 | Config validation enforces constraints (ranges, enums, required) | unit tests | L1 |
+| R-CFG-04 | Settings UI derives from schema, not hardcoded TOML | smoke | L3 |
+
 ### R-UX: Dashboard, TUI, CLI, Docs
 
 | ID | Regression Class | Required Coverage | Layer |

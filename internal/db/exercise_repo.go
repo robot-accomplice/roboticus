@@ -79,6 +79,47 @@ func ExerciseResultCountByModel(ctx context.Context, store *Store) map[string]in
 	return counts
 }
 
+// ExerciseScorecardEntry holds per-model per-intent average quality.
+type ExerciseScorecardEntry struct {
+	Model       string  `json:"model"`
+	IntentClass string  `json:"intent_class"`
+	AvgQuality  float64 `json:"avg_quality"`
+	Count       int     `json:"count"`
+}
+
+// ExerciseScorecard returns per-model per-intent average quality from the
+// latest run for each model. Results are suitable for rendering a quality
+// matrix (models x intent classes).
+func ExerciseScorecard(ctx context.Context, store *Store) []ExerciseScorecardEntry {
+	// For each model, pick the latest run_id then aggregate by intent.
+	rows, err := store.QueryContext(ctx,
+		`WITH latest_runs AS (
+		   SELECT model, run_id
+		   FROM exercise_results
+		   GROUP BY model
+		   HAVING created_at = MAX(created_at)
+		 )
+		 SELECT e.model, e.intent_class, AVG(e.quality), COUNT(*)
+		 FROM exercise_results e
+		 INNER JOIN latest_runs lr ON e.model = lr.model AND e.run_id = lr.run_id
+		 GROUP BY e.model, e.intent_class
+		 ORDER BY e.model, e.intent_class`)
+	if err != nil {
+		log.Warn().Err(err).Msg("exercise: scorecard query failed")
+		return nil
+	}
+	defer func() { _ = rows.Close() }()
+
+	var entries []ExerciseScorecardEntry
+	for rows.Next() {
+		var e ExerciseScorecardEntry
+		if err := rows.Scan(&e.Model, &e.IntentClass, &e.AvgQuality, &e.Count); err == nil {
+			entries = append(entries, e)
+		}
+	}
+	return entries
+}
+
 // LatestExerciseResults returns the most recent exercise results for a model.
 func LatestExerciseResults(ctx context.Context, store *Store, model string) []ExerciseResultRow {
 	// Find the latest run_id for this model.

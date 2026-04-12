@@ -69,8 +69,8 @@ C4Container
         Container(guards, "Architecture Enforcement", "Go tests + docs", "Rules, fitness tests, dependency checks, ownership checks")
     }
 
-    Rel(user, connectors, "Uses", "HTTP / SSE / channel protocol / CLI")
-    Rel(connectors, pipeline, "Invokes", "pipeline.RunPipeline(...)")
+    Rel(user, connectors, "Uses", "HTTP / SSE / WS / channel protocol / CLI")
+    Rel(connectors, pipeline, "Invokes", "pipeline.RunPipeline(...) or subscribes to EventBus")
     Rel(pipeline, agent, "Uses", "Go interfaces")
     Rel(pipeline, llm, "Uses", "Go interfaces")
     Rel(pipeline, state, "Uses", "Go interfaces + SQL")
@@ -90,6 +90,7 @@ C4Component
     Container_Boundary(connectors, "Connector Layer") {
         Component(api, "HTTP / REST Routes", "Go", "Parse HTTP input, call unified pipeline, format HTTP output")
         Component(streaming, "Streaming / SSE Routes", "Go", "Parse stream request, call unified pipeline, format chunked output")
+        Component(ws, "WebSocket Transport", "Go", "Ticket auth, topic subscription, EventBus broadcast. No business logic.")
         Component(channels, "Channel Adapters", "Go", "Translate Telegram, Discord, Signal, WhatsApp, Email, Voice, A2A to pipeline input")
         Component(cron, "Cron Connectors", "Go", "Translate scheduled execution into pipeline input")
         Component(cli, "CLI / Admin Adapters", "Go", "Call API or runtime surfaces without owning shared business rules")
@@ -99,6 +100,7 @@ C4Component
 
     Rel(api, pipeline, "Calls", "RunPipeline")
     Rel(streaming, pipeline, "Calls", "RunPipeline")
+    Rel(ws, pipeline, "Subscribes to EventBus", "topic push")
     Rel(channels, pipeline, "Calls", "RunPipeline")
     Rel(cron, pipeline, "Calls", "RunPipeline")
     Rel(cli, pipeline, "Calls shared behavior through canonical surfaces", "Go / HTTP")
@@ -196,7 +198,35 @@ flowchart LR
     t1 --> shared --> t2
 ```
 
-## 7. Supplementary Rule View — No Symptom Fixes
+## 7. Supplementary View — WebSocket Topic Subscription (v1.0.3+)
+
+The WebSocket layer is a push-only delivery connector. It does not call
+`RunPipeline()` — it subscribes to the EventBus that the pipeline publishes to.
+
+```mermaid
+sequenceDiagram
+    participant D as Dashboard (Browser)
+    participant WS as WS Transport
+    participant EB as EventBus
+    participant P as Pipeline
+    participant DB as SQLite
+
+    D->>WS: Upgrade + ticket
+    WS->>WS: Validate ticket (anti-CSRF)
+    D->>WS: subscribe(topics=["sessions","traces"])
+
+    Note over P: User message arrives via HTTP/channel
+    P->>DB: Persist session, trace, etc.
+    P->>EB: Publish(topic="sessions", payload)
+    P->>EB: Publish(topic="traces", payload)
+
+    EB->>WS: Deliver "sessions" event
+    EB->>WS: Deliver "traces" event
+    WS->>D: Push session update
+    WS->>D: Push trace update
+```
+
+## 8. Supplementary Rule View — No Symptom Fixes
 
 This is a supporting debugging diagram rather than a structural one.
 
@@ -224,7 +254,7 @@ flowchart TD
     diff -. "MUST NOT" .-> wrong3
 ```
 
-## 8. Supplementary Rule View — Enforcement Model
+## 9. Supplementary Rule View — Enforcement Model
 
 This diagram shows how the architecture is kept real.
 
@@ -241,7 +271,7 @@ flowchart LR
     review --> code
 ```
 
-## 9. Reading Guide
+## 10. Reading Guide
 
 - Use the C4 context and container views to understand architectural ownership.
 - Use the connector-layer component diagram when reviewing route, streaming,
@@ -256,7 +286,7 @@ flowchart LR
 If a proposed code change does not fit cleanly onto these diagrams, the change
 SHOULD be treated as architecturally suspect until its ownership becomes clear.
 
-## 8. Memory Retrieval Architecture (v1.0.1+)
+## 11. Memory Retrieval Architecture (v1.0.1+)
 
 Two-stage pattern: direct injection for cheap/session-scoped data, index for
 everything else. The model uses tools (`recall_memory`, `search_memories`) to

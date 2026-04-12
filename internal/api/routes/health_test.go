@@ -127,14 +127,20 @@ func TestIssueWSTicket_NoIssuer(t *testing.T) {
 
 func TestGetSkillsCatalog(t *testing.T) {
 	store := testutil.TempStore(t)
-	handler := GetSkillsCatalog(store)
+	handler := GetSkillsCatalog(store, nil, nil)
 	req := httptest.NewRequest("GET", "/api/skills/catalog", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
 	body := jsonBody(t, rec)
-	if _, ok := body["items"]; !ok {
-		t.Error("missing items key")
+	if _, ok := body["skills"]; !ok {
+		t.Error("missing skills key")
+	}
+	if _, ok := body["plugins"]; !ok {
+		t.Error("missing plugins key")
+	}
+	if _, ok := body["themes"]; !ok {
+		t.Error("missing themes key")
 	}
 }
 

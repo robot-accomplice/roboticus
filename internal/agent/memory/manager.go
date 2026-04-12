@@ -2,6 +2,9 @@ package memory
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -119,7 +122,7 @@ func (mm *Manager) IngestTurn(ctx context.Context, session *session.Session) {
 					log.Debug().Str("tool", m.Name).Msg("skipping derivable tool in memory ingestion")
 					continue
 				}
-				event := m.Name + ": " + safeUTF8Truncate(m.Content, 150) // Rust parity: 150 char tool result preview
+				event := summarizeToolOutput(m.Name, m.Content) // Summarize JSON; plain-text truncated to 150 chars
 				// Dedup check: don't store if identical episodic content exists.
 				if !mm.episodicContentExists(ctx, event) {
 					mm.storeEpisodicMemoryWithImportance(ctx, "tool_event", event, 7)
@@ -421,6 +424,67 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// summarizeToolOutput produces a human-readable summary of a tool's output.
+// For JSON content it extracts structure (array length, error/status fields, key names)
+// so that episodic memory never contains truncated/malformed JSON fragments.
+// Non-JSON content falls back to safeUTF8Truncate at 150 bytes.
+func summarizeToolOutput(toolName, content string) string {
+	trimmed := strings.TrimSpace(content)
+
+	// Only attempt JSON summarisation when content looks like JSON.
+	if len(trimmed) > 0 && (trimmed[0] == '{' || trimmed[0] == '[') {
+		if s, ok := summarizeJSON(toolName, trimmed); ok {
+			return s
+		}
+	}
+
+	// Fallback: plain-text truncation (Rust parity: 150 chars).
+	return toolName + ": " + safeUTF8Truncate(content, 150)
+}
+
+// summarizeJSON attempts to parse content as JSON and returns a concise summary.
+// Returns ("", false) if content is not valid JSON.
+func summarizeJSON(toolName, content string) (string, bool) {
+	// Try array first.
+	var arr []json.RawMessage
+	if json.Unmarshal([]byte(content), &arr) == nil {
+		return safeUTF8Truncate(fmt.Sprintf("%s: %d items returned", toolName, len(arr)), 150), true
+	}
+
+	// Try object.
+	var obj map[string]json.RawMessage
+	if json.Unmarshal([]byte(content), &obj) != nil {
+		return "", false
+	}
+
+	// Error field takes priority.
+	if raw, ok := obj["error"]; ok {
+		var errMsg string
+		if json.Unmarshal(raw, &errMsg) != nil {
+			errMsg = strings.Trim(string(raw), `"`)
+		}
+		return safeUTF8Truncate(fmt.Sprintf("%s: error — %s", toolName, errMsg), 150), true
+	}
+
+	// Status field.
+	if raw, ok := obj["status"]; ok {
+		var status string
+		if json.Unmarshal(raw, &status) != nil {
+			status = strings.Trim(string(raw), `"`)
+		}
+		return safeUTF8Truncate(fmt.Sprintf("%s: status=%s", toolName, status), 150), true
+	}
+
+	// Generic: list the first few top-level keys.
+	keys := make([]string, 0, len(obj))
+	for k := range obj {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	keyList := strings.Join(keys, ", ")
+	return safeUTF8Truncate(fmt.Sprintf("%s: {%s}", toolName, keyList), 150), true
 }
 
 // autoIndex creates a memory_index entry for a newly stored memory.

@@ -6,11 +6,15 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/rs/zerolog/log"
 
 	"roboticus/internal/core"
 	"roboticus/internal/db"
+	"roboticus/internal/plugin"
 )
 
 // ListSessionTurns returns turns for a session.
@@ -199,48 +203,110 @@ func ToggleSkill(store *db.Store) http.HandlerFunc {
 	}
 }
 
-// GetSkillsCatalog returns available skills from the catalog.
-func GetSkillsCatalog(store *db.Store) http.HandlerFunc {
+// GetSkillsCatalog returns the unified catalog with three distinct sections:
+// skills (from DB), plugins (from plugin registry + remote catalog), and themes (builtin + catalog with install status).
+func GetSkillsCatalog(store *db.Store, reg *plugin.Registry, cfg *core.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// --- Skills section ---
+		skills := make([]map[string]any, 0)
 		rows, err := db.NewRouteQueries(store).ListSkillsAll(r.Context())
-		if err != nil {
-			writeJSON(w, http.StatusOK, map[string]any{"items": make([]any, 0)})
-			return
-		}
-		defer func() { _ = rows.Close() }()
-
-		items := make([]map[string]any, 0)
-		for rows.Next() {
-			var id, name, kind, description, version, riskLevel, createdAt string
-			var enabled bool
-			if err := rows.Scan(&id, &name, &kind, &description, &version, &riskLevel, &enabled, &createdAt); err != nil {
-				continue
+		if err == nil {
+			defer func() { _ = rows.Close() }()
+			for rows.Next() {
+				var id, name, kind, description, version, riskLevel, createdAt string
+				var enabled bool
+				if err := rows.Scan(&id, &name, &kind, &description, &version, &riskLevel, &enabled, &createdAt); err != nil {
+					continue
+				}
+				skills = append(skills, map[string]any{
+					"id":          id,
+					"name":        name,
+					"kind":        kind,
+					"description": description,
+					"version":     version,
+					"risk_level":  riskLevel,
+					"enabled":     enabled,
+					"installed":   true,
+					"source":      "registry",
+					"created_at":  createdAt,
+				})
 			}
-			items = append(items, map[string]any{
-				"id":          id,
-				"name":        name,
-				"kind":        kind,
-				"description": description,
-				"version":     version,
-				"risk_level":  riskLevel,
-				"enabled":     enabled,
-				"installed":   true,
-				"source":      "registry",
-				"created_at":  createdAt,
-			})
 		}
-		// Include builtin themes in the catalog response.
-		themes := make([]map[string]any, 0, len(builtinThemes))
-		for _, t := range builtinThemes {
-			themes = append(themes, map[string]any{
-				"name": t.Name, "id": t.ID, "description": t.Description,
-				"author": t.Author, "source": "builtin",
+
+		// --- Plugins section ---
+		// Merge remote catalog with locally installed plugins.
+		installedNames := make(map[string]bool)
+		plugins := make([]map[string]any, 0)
+		if reg != nil {
+			for _, p := range reg.List() {
+				installedNames[strings.ToLower(p.Name)] = true
+				plugins = append(plugins, map[string]any{
+					"name":      p.Name,
+					"version":   p.Version,
+					"status":    p.Status,
+					"tools":     p.Tools,
+					"installed": true,
+					"source":    "local",
+				})
+			}
+		}
+		// Fetch remote plugin catalog (best-effort, non-blocking with timeout).
+		if cfg != nil && cfg.Plugins.CatalogURL != "" {
+			fetchRemotePluginCatalog(cfg.Plugins.CatalogURL, installedNames, &plugins)
+		}
+		// Fallback: if remote fetch returned nothing, use hardcoded catalog.
+		if len(plugins) == 0 || allLocal(plugins) {
+			for _, fp := range fallbackPluginCatalog {
+				if !installedNames[strings.ToLower(fp.Name)] {
+					plugins = append(plugins, map[string]any{
+						"name": fp.Name, "version": fp.Version, "description": fp.Description,
+						"author": fp.Author, "tier": fp.Tier, "permissions": fp.Permissions,
+						"risk_level": fp.RiskLevel, "installed": false, "source": "catalog",
+					})
+				}
+			}
+		}
+
+		// --- Themes section (catalog themes only — builtins are always available) ---
+		catalogMu.RLock()
+		installed := installedThemeIDs(store)
+		themes := make([]map[string]any, 0, len(catalogThemes))
+		for _, t := range catalogThemes {
+			entry := map[string]any{
+				"id": t.ID, "name": t.Name, "description": t.Description,
+				"author": t.Author, "swatch": t.Swatch, "source": t.Source,
+				"version": t.Version,
+				"installed": installedThemes[t.ID] || installed[t.ID],
+			}
+			if len(t.Variables) > 0 {
+				entry["variables"] = t.Variables
+			}
+			if len(t.Textures) > 0 {
+				entry["textures"] = t.Textures
+			}
+			if len(t.Fonts) > 0 {
+				entry["fonts"] = t.Fonts
+			}
+			themes = append(themes, entry)
+		}
+		catalogMu.RUnlock()
+
+		// --- Apps section (from registry) ---
+		apps := make([]map[string]any, 0)
+		for _, a := range fallbackAppCatalog {
+			apps = append(apps, map[string]any{
+				"name": a.Name, "version": a.Version, "description": a.Description,
+				"author": a.Author, "agent_name": a.AgentName, "tier": a.Tier,
+				"min_model_params": a.MinModelParams, "recommended_model": a.RecommendedModel,
+				"skills_count": a.SkillsCount, "subagents_count": a.SubagentsCount,
+				"source": "catalog",
 			})
 		}
 
 		writeJSON(w, http.StatusOK, map[string]any{
-			"items":   items,
-			"plugins": make([]any, 0), // populated from /api/plugins by the dashboard
+			"skills":  skills,
+			"plugins": plugins,
+			"apps":    apps,
 			"themes":  themes,
 		})
 	}
@@ -450,4 +516,94 @@ func AuditSkills(store *db.Store) http.HandlerFunc {
 		}
 		writeJSON(w, http.StatusOK, result)
 	}
+}
+
+// fetchRemotePluginCatalog fetches the remote plugin catalog and merges entries
+// that aren't already locally installed into the plugins slice.
+func fetchRemotePluginCatalog(catalogURL string, installedNames map[string]bool, plugins *[]map[string]any) {
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(catalogURL)
+	if err != nil {
+		log.Debug().Err(err).Str("url", catalogURL).Msg("plugin catalog fetch failed (non-fatal)")
+		return
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != 200 {
+		log.Debug().Int("status", resp.StatusCode).Str("url", catalogURL).Msg("plugin catalog returned non-200")
+		return
+	}
+
+	var catalog []struct {
+		Name        string   `json:"name"`
+		Version     string   `json:"version"`
+		Description string   `json:"description"`
+		Author      string   `json:"author"`
+		Tier        string   `json:"tier"` // official, community
+		Permissions []string `json:"permissions"`
+		RiskLevel   string   `json:"risk_level"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&catalog); err != nil {
+		log.Debug().Err(err).Msg("plugin catalog JSON decode failed")
+		return
+	}
+
+	for _, entry := range catalog {
+		isInstalled := installedNames[strings.ToLower(entry.Name)]
+		*plugins = append(*plugins, map[string]any{
+			"name":        entry.Name,
+			"version":     entry.Version,
+			"description": entry.Description,
+			"author":      entry.Author,
+			"tier":        entry.Tier,
+			"permissions": entry.Permissions,
+			"risk_level":  entry.RiskLevel,
+			"installed":   isInstalled,
+			"source":      "catalog",
+		})
+	}
+}
+
+// allLocal returns true if every plugin entry has source:"local" (no remote catalog entries).
+func allLocal(plugins []map[string]any) bool {
+	for _, p := range plugins {
+		if s, _ := p["source"].(string); s != "local" {
+			return false
+		}
+	}
+	return true
+}
+
+// fallbackPluginCatalog is used when the remote catalog URL is unreachable.
+type catalogPlugin struct {
+	Name        string
+	Version     string
+	Description string
+	Author      string
+	Tier        string
+	Permissions []string
+	RiskLevel   string
+}
+
+var fallbackPluginCatalog = []catalogPlugin{
+	{Name: "codex-cli", Version: "1.0.0", Description: "Claude Code / Codex CLI integration for autonomous coding tasks", Author: "Robot Accomplice AG", Tier: "official", Permissions: []string{"exec", "filesystem", "network"}, RiskLevel: "caution"},
+	{Name: "web-research", Version: "1.0.0", Description: "Structured web search and page content extraction for research tasks", Author: "Robot Accomplice AG", Tier: "official", Permissions: []string{"network"}, RiskLevel: "safe"},
+}
+
+type catalogApp struct {
+	Name             string
+	Version          string
+	Description      string
+	Author           string
+	AgentName        string
+	Tier             string
+	MinModelParams   string
+	RecommendedModel string
+	SkillsCount      int
+	SubagentsCount   int
+}
+
+var fallbackAppCatalog = []catalogApp{
+	{Name: "tabletop-gm", Version: "1.0.0", Description: "Collaborative storyteller for tabletop RPG sessions using the d20 system", Author: "Robot Accomplice AG", AgentName: "The Narrator", Tier: "official", MinModelParams: "32B", RecommendedModel: "ollama/qwen2.5:32b", SkillsCount: 13, SubagentsCount: 3},
+	{Name: "eastern-philosophy", Version: "1.0.0", Description: "Contemplative philosophical dialogue grounded in Eastern traditions", Author: "Robot Accomplice AG", AgentName: "The Sage", Tier: "official", MinModelParams: "14B", RecommendedModel: "ollama/qwen2.5:32b", SkillsCount: 8, SubagentsCount: 2},
+	{Name: "western-philosophy", Version: "1.0.0", Description: "Rigorous philosophical inquiry grounded in Western traditions", Author: "Robot Accomplice AG", AgentName: "The Philosopher", Tier: "official", MinModelParams: "14B", RecommendedModel: "ollama/qwen2.5:32b", SkillsCount: 8, SubagentsCount: 2},
 }

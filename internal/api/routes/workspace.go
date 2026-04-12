@@ -3,7 +3,6 @@ package routes
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"os"
 	"runtime"
@@ -56,30 +55,57 @@ func GetWorkspaceState(store *db.Store, cfg *core.Config) http.HandlerFunc {
 			},
 		}
 
-		// Append subagents from DB.
-		agentRows, err := rq.ListSubAgentNamesModels(r.Context())
+		// Append subagents from DB (enriched query for workspace canvas).
+		agentRows, err := rq.ListSubAgentWorkspace(r.Context())
 		if err == nil {
 			defer func() { _ = agentRows.Close() }()
 			for agentRows.Next() {
-				var name, model string
+				var name, displayName, model, role, description string
 				var enabled bool
-				if err := agentRows.Scan(&name, &model, &enabled); err != nil {
+				var sessionCount int
+				var lastUsedAt, updatedAt *string
+				if err := agentRows.Scan(&name, &displayName, &model, &enabled,
+					&role, &description, &sessionCount, &lastUsedAt, &updatedAt); err != nil {
 					break
 				}
 				state := "stopped"
 				if enabled {
 					state = "running"
 				}
-				agents = append(agents, map[string]any{
-					"name":     name,
-					"model":    model,
-					"enabled":  enabled,
-					"state":    state,
-					"activity": "idle",
-					"color":    "",
-					"role":     "subagent",
-				})
+				entry := map[string]any{
+					"name":          name,
+					"display_name":  displayName,
+					"model":         model,
+					"enabled":       enabled,
+					"state":         state,
+					"activity":      "idle",
+					"color":         "",
+					"role":          role,
+					"description":   description,
+					"session_count": sessionCount,
+				}
+				if lastUsedAt != nil {
+					entry["last_used_at"] = *lastUsedAt
+				}
+				if updatedAt != nil {
+					entry["updated_at"] = *updatedAt
+				}
+				agents = append(agents, entry)
 			}
+		}
+
+		// Fetch last pipeline trace timestamp for last_event_at.
+		var lastEventAt *string
+		if traceTS, err := rq.LatestPipelineTraceTime(r.Context()); err == nil && traceTS.Valid {
+			lastEventAt = &traceTS.String
+		}
+
+		// Fetch active task summary if any task is in-progress.
+		var activeTaskSummary *string
+		var activeTaskPercentage *int
+		if goal, pct, err := rq.ActiveTaskSummary(r.Context()); err == nil && goal != "" {
+			activeTaskSummary = &goal
+			activeTaskPercentage = &pct
 		}
 
 		// Systems/workstations for workspace canvas (Rust parity).
@@ -94,7 +120,7 @@ func GetWorkspaceState(store *db.Store, cfg *core.Config) http.HandlerFunc {
 			{"id": "shelter", "name": "Idle Agents", "kind": "Shelter", "x": 0.035, "y": 0.50},
 		}
 
-		writeJSON(w, http.StatusOK, map[string]any{
+		resp := map[string]any{
 			"uptime":          time.Since(processStartTime).Seconds(),
 			"goroutines":      runtime.NumGoroutine(),
 			"connections":     dbStats.OpenConnections,
@@ -104,158 +130,16 @@ func GetWorkspaceState(store *db.Store, cfg *core.Config) http.HandlerFunc {
 			"status":          "running",
 			"agents":          agents,
 			"systems":         systems,
-		})
-	}
-}
-
-// GetRoster returns the agent roster: primary/orchestrator agent first, then subagents.
-func GetRoster(store *db.Store, cfg *core.Config) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		// Primary agent is always first in the roster.
-		primaryName := cfg.Agent.Name
-		if primaryName == "" {
-			primaryName = "roboticus"
+			"updated_at":      time.Now().UTC().Format(time.RFC3339),
 		}
-		primaryModel := cfg.Models.Primary
-		if primaryModel == "" {
-			primaryModel = "auto"
+		if lastEventAt != nil {
+			resp["last_event_at"] = *lastEventAt
 		}
-		// Count skills for the primary agent.
-		rq := db.NewRouteQueries(store)
-		var skillNames []string
-		skillRows, sErr := rq.ListEnabledSkillNames(r.Context(), 20)
-		if sErr == nil {
-			defer func() { _ = skillRows.Close() }()
-			for skillRows.Next() {
-				var sn string
-				if skillRows.Scan(&sn) == nil {
-					skillNames = append(skillNames, sn)
-				}
-			}
+		if activeTaskSummary != nil {
+			resp["active_task_summary"] = *activeTaskSummary
+			resp["active_task_percentage"] = *activeTaskPercentage
 		}
-
-		agents := []map[string]any{
-			{
-				"name":            strings.ToLower(primaryName),
-				"display_name":    primaryName,
-				"model":           primaryModel,
-				"enabled":         true,
-				"role":            "orchestrator",
-				"description":     "Primary orchestrator agent",
-				"skills":          skillNames,
-				"fallback_models": cfg.Models.Fallback,
-			},
-		}
-
-		rows, err := rq.ListSubAgentRoster(r.Context())
-		if err == nil {
-			defer func() { _ = rows.Close() }()
-			for rows.Next() {
-				var name, displayName, model, role, description string
-				var enabled bool
-				if err := rows.Scan(&name, &displayName, &model, &enabled, &role, &description); err != nil {
-					continue
-				}
-				if displayName == "" {
-					displayName = name
-				}
-				agents = append(agents, map[string]any{
-					"name":         name,
-					"display_name": displayName,
-					"model":        model,
-					"enabled":      enabled,
-					"role":         role,
-					"description":  description,
-					"skills":       []string{},
-				})
-			}
-		}
-
-		writeJSON(w, http.StatusOK, map[string]any{"roster": agents})
-	}
-}
-
-// UpdateRosterModel updates an agent's model assignment.
-func UpdateRosterModel(store *db.Store) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		agentName := chi.URLParam(r, "agent")
-		var req struct {
-			Model string `json:"model"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid JSON")
-			return
-		}
-		repo := db.NewAgentsRepository(store)
-		if err := repo.UpdateModel(r.Context(), agentName, req.Model, ""); err != nil {
-			if errors.Is(err, db.ErrNoRowsAffected) {
-				writeError(w, http.StatusNotFound, "agent not found")
-			} else {
-				writeError(w, http.StatusInternalServerError, err.Error())
-			}
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-	}
-}
-
-// UpdateSubagent updates a subagent by name.
-func UpdateSubagent(store *db.Store) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		name := chi.URLParam(r, "name")
-		var req struct {
-			Model       string `json:"model"`
-			Description string `json:"description"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid JSON")
-			return
-		}
-		repo := db.NewAgentsRepository(store)
-		if err := repo.UpdateModel(r.Context(), name, req.Model, req.Description); err != nil {
-			if errors.Is(err, db.ErrNoRowsAffected) {
-				writeError(w, http.StatusNotFound, "subagent not found")
-			} else {
-				writeError(w, http.StatusInternalServerError, err.Error())
-			}
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
-	}
-}
-
-// ToggleSubagent enables/disables a subagent by name.
-func ToggleSubagent(store *db.Store) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		name := chi.URLParam(r, "name")
-		repo := db.NewAgentsRepository(store)
-		if err := repo.ToggleEnabled(r.Context(), name); err != nil {
-			if errors.Is(err, db.ErrNoRowsAffected) {
-				writeError(w, http.StatusNotFound, "subagent not found")
-			} else {
-				writeError(w, http.StatusInternalServerError, err.Error())
-			}
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]string{"status": "toggled"})
-	}
-}
-
-// DeleteSubagent removes a subagent by name.
-func DeleteSubagent(store *db.Store) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		name := chi.URLParam(r, "name")
-		repo := db.NewAgentsRepository(store)
-		affected, err := repo.DeleteByName(r.Context(), name)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		if affected == 0 {
-			writeError(w, http.StatusNotFound, "subagent not found")
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+		writeJSON(w, http.StatusOK, resp)
 	}
 }
 

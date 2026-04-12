@@ -156,8 +156,55 @@ func TestRosterEndpoint_Shape(t *testing.T) {
 	srv := createTestServer(t)
 	resp := doGet(t, srv, "/api/roster")
 	assertStatus(t, resp, 200)
-	// Should be valid JSON (array or object).
-	_ = parseJSON(t, resp)
+	data := parseJSON(t, resp)
+
+	// Rust-parity envelope fields.
+	requireField(t, data, "roster")
+	requireField(t, data, "count")
+	requireField(t, data, "taskable_subagent_count")
+	requireField(t, data, "model_proxy_count")
+	requireField(t, data, "model_proxies")
+
+	// Primary agent card must have enriched fields.
+	roster, ok := data["roster"].([]any)
+	if !ok || len(roster) == 0 {
+		t.Fatal("roster should be a non-empty array")
+	}
+	primary, ok := roster[0].(map[string]any)
+	if !ok {
+		t.Fatal("roster[0] should be an object")
+	}
+	for _, field := range []string{
+		"id", "name", "display_name", "role", "model", "enabled", "color",
+		"description", "voice", "missions", "firmware_rules", "skills",
+		"skill_breakdown", "capabilities", "subordinates", "stats",
+	} {
+		if _, exists := primary[field]; !exists {
+			t.Errorf("primary agent card missing field %q", field)
+		}
+	}
+
+	// Voice must have structured parameters.
+	voice, ok := primary["voice"].(map[string]any)
+	if !ok {
+		t.Fatal("voice should be an object")
+	}
+	for _, vf := range []string{"formality", "proactiveness", "verbosity", "humor", "domain"} {
+		if _, exists := voice[vf]; !exists {
+			t.Errorf("voice missing field %q", vf)
+		}
+	}
+
+	// Stats must have counts.
+	stats, ok := primary["stats"].(map[string]any)
+	if !ok {
+		t.Fatal("stats should be an object")
+	}
+	for _, sf := range []string{"subordinate_count", "running_subordinates", "total_skills", "enabled_skills"} {
+		if _, exists := stats[sf]; !exists {
+			t.Errorf("stats missing field %q", sf)
+		}
+	}
 }
 
 // --- Test helpers ---

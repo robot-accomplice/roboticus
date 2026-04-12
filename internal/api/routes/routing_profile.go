@@ -29,24 +29,43 @@ var defaultProfile = routingProfile{
 
 const routingProfileKey = "routing_profile"
 
-// GetRoutingProfile returns the persisted routing profile weights.
-func GetRoutingProfile(store *db.Store) http.HandlerFunc {
+// routingProfileResponse is the GET response, including both persisted weights
+// and the weights the router is actually using right now.
+type routingProfileResponse struct {
+	routingProfile
+	ActiveWeights *routingProfile `json:"active_weights,omitempty"`
+}
+
+// GetRoutingProfile returns the persisted routing profile weights plus,
+// when a router is provided, the weights the router is actually using.
+func GetRoutingProfile(store *db.Store, router ...*llm.Router) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		row := db.NewRouteQueries(store).GetRuntimeSetting(r.Context(), routingProfileKey)
 
+		persisted := defaultProfile
 		var raw string
-		if err := row.Scan(&raw); err != nil {
-			// No saved profile — return defaults.
-			writeJSON(w, http.StatusOK, defaultProfile)
-			return
+		if err := row.Scan(&raw); err == nil {
+			if err2 := json.Unmarshal([]byte(raw), &persisted); err2 != nil {
+				persisted = defaultProfile
+			}
 		}
 
-		var profile routingProfile
-		if err := json.Unmarshal([]byte(raw), &profile); err != nil {
-			writeJSON(w, http.StatusOK, defaultProfile)
-			return
+		resp := routingProfileResponse{routingProfile: persisted}
+
+		// Include active weights from the live router when available.
+		if len(router) > 0 && router[0] != nil {
+			active := router[0].GetRoutingWeights()
+			resp.ActiveWeights = &routingProfile{
+				Efficacy:     active.Efficacy,
+				Cost:         active.Cost,
+				Availability: active.Availability,
+				Locality:     active.Locality,
+				Confidence:   active.Confidence,
+				Speed:        active.Speed,
+			}
 		}
-		writeJSON(w, http.StatusOK, profile)
+
+		writeJSON(w, http.StatusOK, resp)
 	}
 }
 
