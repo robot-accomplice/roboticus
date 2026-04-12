@@ -107,7 +107,7 @@ var ExerciseMatrix = []ExercisePrompt{
 	// ── Trivial (complexity ~0.1) ──────────────────────────────
 	{Prompt: "What time is it?", Intent: IntentExecution, Complexity: ComplexityTrivial},
 	{Prompt: "Say hello.", Intent: IntentDelegation, Complexity: ComplexityTrivial},
-	{Prompt: "What model are you?", Intent: IntentIntrospection, Complexity: ComplexityTrivial},
+	{Prompt: "When should you refuse a request instead of attempting it?", Intent: IntentIntrospection, Complexity: ComplexityTrivial},
 	{Prompt: "Thanks!", Intent: IntentConversation, Complexity: ComplexityTrivial},
 	{Prompt: "Do you have any memories stored?", Intent: IntentMemoryRecall, Complexity: ComplexityTrivial},
 	{Prompt: "What is 2 + 2?", Intent: IntentToolUse, Complexity: ComplexityTrivial}, // Should NOT use tools — pure reasoning
@@ -115,7 +115,7 @@ var ExerciseMatrix = []ExercisePrompt{
 	// ── Simple (complexity ~0.3) ───────────────────────────────
 	{Prompt: "List the files in the workspace directory.", Intent: IntentExecution, Complexity: ComplexitySimple},
 	{Prompt: "Check the health of all integrations.", Intent: IntentDelegation, Complexity: ComplexitySimple},
-	{Prompt: "What tools do you have access to?", Intent: IntentIntrospection, Complexity: ComplexitySimple},
+	{Prompt: "What are your biggest limitations when handling complex multi-step tasks?", Intent: IntentIntrospection, Complexity: ComplexitySimple},
 	{Prompt: "Explain what you can do in one sentence.", Intent: IntentConversation, Complexity: ComplexitySimple},
 	{Prompt: "What do you remember about our last conversation?", Intent: IntentMemoryRecall, Complexity: ComplexitySimple},
 	{Prompt: "Show me the contents of the README file.", Intent: IntentToolUse, Complexity: ComplexitySimple}, // Should use read_file
@@ -123,7 +123,7 @@ var ExerciseMatrix = []ExercisePrompt{
 	// ── Moderate (complexity ~0.5) ─────────────────────────────
 	{Prompt: "Read the main configuration file and summarize the model settings.", Intent: IntentExecution, Complexity: ComplexityModerate},
 	{Prompt: "Search the workspace for any TODO comments and list them.", Intent: IntentDelegation, Complexity: ComplexityModerate},
-	{Prompt: "What memories do you have about recent conversations?", Intent: IntentIntrospection, Complexity: ComplexityModerate},
+	{Prompt: "How would you know if you were giving a wrong answer, and what would you do about it?", Intent: IntentIntrospection, Complexity: ComplexityModerate},
 	{Prompt: "Compare the advantages of local models versus cloud models for my use case.", Intent: IntentConversation, Complexity: ComplexityModerate},
 	{Prompt: "Search your memories for anything about the deployment project. What can you find?", Intent: IntentMemoryRecall, Complexity: ComplexityModerate},
 	{Prompt: "Look up how many sessions were created today by querying the database.", Intent: IntentToolUse, Complexity: ComplexityModerate}, // Should use query_table
@@ -457,10 +457,25 @@ func scoreIntentRelevance(lower string, intent IntentClass) float64 {
 		return markerScore(lower, markers, 2)
 
 	case IntentIntrospection:
-		// Introspection responses should discuss the model's own state/capabilities.
-		markers := []string{"i ", "my ", "i'm", "memory", "tool", "access", "capable",
-			"model", "conversation", "knowledge", "remember"}
-		return markerScore(lower, markers, 2)
+		// Introspection responses should demonstrate genuine self-assessment:
+		// acknowledging limitations, reasoning about own behavior, identifying
+		// failure modes, not just listing capabilities from the system prompt.
+		strengthMarkers := []string{"limitation", "unable", "cannot", "difficult",
+			"challenge", "risk", "mistake", "wrong", "uncertain", "confidence",
+			"trade-off", "tradeoff", "depends", "context", "judgment",
+			"improve", "weakness", "failure", "careful", "verify"}
+		score := markerScore(lower, strengthMarkers, 3) * 0.6
+
+		// Some self-reference is expected but shouldn't dominate.
+		selfMarkers := []string{"i ", "my ", "i'm", "i can", "i would"}
+		score += markerScore(lower, selfMarkers, 1) * 0.2
+
+		// Specificity: references to concrete behaviors, not abstract platitudes.
+		specificMarkers := []string{"tool", "query", "file", "memory", "session",
+			"token", "latency", "cost", "escalat", "fallback"}
+		score += markerScore(lower, specificMarkers, 2) * 0.2
+
+		return score
 
 	case IntentConversation:
 		// Conversation responses should be warm, natural, and engaged.
