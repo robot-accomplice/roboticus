@@ -3480,17 +3480,38 @@
           if (s.retry != null) parts.push('retry: ' + s.retry);
           return parts.join(' \u00b7 ');
         }
+        var maxStepMs = Math.max.apply(null, steps.map(function(s) { return s.duration_ms || 1; }).concat([1]));
         var timeline = steps.map(function(s, i) {
-          var type = s.step_type || s.type || 'Unknown';
+          var type = s.step_type || s.type || s.kind || 'Unknown';
           var color = stepColor(type);
+          var durMs = s.duration_ms || 0;
+          var durPct = Math.max(Math.round((durMs / maxStepMs) * 100), 2);
+          var toolName = s.tool_name || s.name || '';
+          var successBadge = s.success != null
+            ? (s.success ? '<span style="font-size:0.5625rem;padding:1px 5px;border-radius:3px;background:rgba(34,197,94,0.15);color:#22c55e;font-weight:600">OK</span>'
+                         : '<span style="font-size:0.5625rem;padding:1px 5px;border-radius:3px;background:rgba(239,68,68,0.15);color:#ef4444;font-weight:600">FAIL</span>')
+            : '';
+          var hasIO = (s.input && s.input.length > 0) || (s.output && s.output.length > 0);
+          var ioHtml = '';
+          if (hasIO) {
+            ioHtml = '<details style="margin-top:0.3rem"><summary style="cursor:pointer;font-size:0.625rem;color:var(--muted)">I/O</summary>'
+              + '<div style="margin-top:0.25rem;font-size:0.6875rem;font-family:var(--font-mono)">';
+            if (s.input) ioHtml += '<div style="margin-bottom:0.2rem"><span style="color:var(--muted);font-size:0.5625rem">INPUT</span><pre style="margin:2px 0;padding:0.3rem;background:var(--surface-2,var(--bg));border:1px solid var(--border-ghost);border-radius:3px;white-space:pre-wrap;word-break:break-all;max-height:8rem;overflow:auto;font-size:0.625rem;color:var(--text)">' + esc(s.input) + '</pre></div>';
+            if (s.output) ioHtml += '<div><span style="color:var(--muted);font-size:0.5625rem">OUTPUT</span><pre style="margin:2px 0;padding:0.3rem;background:var(--surface-2,var(--bg));border:1px solid var(--border-ghost);border-radius:3px;white-space:pre-wrap;word-break:break-all;max-height:8rem;overflow:auto;font-size:0.625rem;color:var(--text)">' + esc(s.output) + '</pre></div>';
+            ioHtml += '</div></details>';
+          }
           return '<div style="display:flex;align-items:flex-start;gap:0.75rem;margin-bottom:0.6rem">'
             + '<div style="min-width:3.5rem;text-align:right;font-size:0.6875rem;color:var(--muted);padding-top:0.2rem">' + (i + 1) + '</div>'
             + '<div style="width:2px;background:var(--border);align-self:stretch;min-height:1.5rem"></div>'
             + '<div style="flex:1;background:var(--surface);border:1px solid var(--border);border-left:3px solid ' + color + ';border-radius:4px;padding:0.35rem 0.65rem">'
-            + '<div style="display:flex;align-items:center;gap:0.5rem">'
+            + '<div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap">'
             + '<span style="font-size:0.75rem;font-weight:600;color:' + color + '">' + esc(type) + '</span>'
-            + '<span style="font-size:0.75rem;color:var(--muted)">' + stepDetail(s) + '</span>'
+            + (toolName ? '<span style="font-size:0.6875rem;font-family:var(--font-mono);color:var(--text)">' + esc(toolName) + '</span>' : '')
+            + successBadge
+            + '<span style="font-size:0.625rem;color:var(--muted);font-family:var(--font-mono)">' + durMs + 'ms</span>'
             + '</div>'
+            + '<div style="margin-top:0.25rem;height:4px;background:var(--surface-2,var(--bg));border-radius:2px;overflow:hidden"><div style="width:' + durPct + '%;height:100%;background:' + color + ';border-radius:2px;opacity:0.7"></div></div>'
+            + ioHtml
             + '</div>'
             + '</div>';
         }).join('');
@@ -4618,6 +4639,26 @@
             + '<span>' + sessionCount + ' sessions</span>'
             + '<span>last used ' + esc(lastUsedLabel) + '</span>'
             + '</div>'
+            + (function() {
+                var extras = '';
+                var v = agent.voice || {};
+                if (v.formality || v.proactiveness || v.verbosity || v.humor || v.domain) {
+                  var vAttrs = [v.formality, v.proactiveness, v.verbosity, v.humor, v.domain].filter(Boolean);
+                  extras += '<div style="display:flex;flex-wrap:wrap;gap:3px;margin-top:0.4rem">';
+                  vAttrs.forEach(function(va) {
+                    extras += '<span style="font-size:0.5625rem;padding:1px 5px;border-radius:3px;background:rgba(139,92,246,0.12);color:#a78bfa;font-family:var(--font-mono)">' + esc(va) + '</span>';
+                  });
+                  extras += '</div>';
+                }
+                var badges = [];
+                if (agent.missions && agent.missions.length) badges.push('<span style="font-size:0.625rem;color:var(--muted)">' + agent.missions.length + ' mission' + (agent.missions.length > 1 ? 's' : '') + '</span>');
+                if (agent.firmware_rules && agent.firmware_rules.length) badges.push('<span style="font-size:0.625rem;color:var(--muted)">' + agent.firmware_rules.length + ' rule' + (agent.firmware_rules.length > 1 ? 's' : '') + '</span>');
+                var st = agent.stats;
+                if (st && st.total_skills != null) badges.push('<span style="font-size:0.625rem;color:var(--muted)">' + (st.enabled_skills || 0) + '/' + st.total_skills + ' skills</span>');
+                if (st && st.subordinate_count) badges.push('<span style="font-size:0.625rem;color:var(--muted)">' + st.subordinate_count + ' subs</span>');
+                if (badges.length) extras += '<div style="display:flex;gap:0.5rem;margin-top:0.3rem;flex-wrap:wrap">' + badges.join('') + '</div>';
+                return extras;
+              })()
             + '</div>';
           return card;
         }).join('');
@@ -7537,10 +7578,98 @@
                 + '<div style="display:grid;grid-template-columns:auto 1fr;gap:0.2rem 0.75rem">'
                 + '<span style="color:var(--muted)">Duration</span><span>' + (s.duration_ms || 0) + 'ms</span>'
                 + '<span style="color:var(--muted)">Outcome</span><span style="color:' + (oc === 'ok' ? 'var(--success)' : oc === 'skipped' ? 'var(--muted)' : 'var(--error)') + '">' + esc(s.outcome || 'unknown') + '</span>';
+              // Enriched namespace sections
+              var enrichedNS = { 'guard': [], 'inference.routing': [], 'retrieval': [], 'retrieval.context': [] };
+              var plainKeys = [];
               metaKeys.forEach(function(k) {
-                metaHtml += '<span style="color:var(--muted);font-family:var(--font-mono);font-size:0.6875rem">' + esc(k) + '</span><span style="font-family:var(--font-mono);font-size:0.6875rem">' + esc(String(meta[k])) + '</span>';
+                var matched = false;
+                ['retrieval.context', 'inference.routing', 'guard', 'retrieval'].forEach(function(ns) {
+                  if (!matched && k.indexOf(ns + '.') === 0) { enrichedNS[ns].push(k); matched = true; }
+                });
+                if (!matched) plainKeys.push(k);
+              });
+              plainKeys.forEach(function(k) {
+                var v = meta[k];
+                var display = (typeof v === 'object' && v !== null) ? JSON.stringify(v) : String(v);
+                metaHtml += '<span style="color:var(--muted);font-family:var(--font-mono);font-size:0.6875rem">' + esc(k) + '</span><span style="font-family:var(--font-mono);font-size:0.6875rem">' + esc(display) + '</span>';
               });
               metaHtml += '</div>';
+              // Guard annotations
+              if (enrichedNS['guard'].length > 0) {
+                var gChain = meta['guard.chain'] || '';
+                var gTotalMs = meta['guard.total_ms'];
+                var gResults = meta['guard.results'];
+                metaHtml += '<details style="margin-top:0.5rem"><summary style="cursor:pointer;font-size:0.6875rem;font-weight:600;color:#f97316;letter-spacing:0.04em">GUARD CHAIN' + (gChain ? ' (' + esc(gChain) + ')' : '') + (gTotalMs != null ? ' \u2014 ' + gTotalMs + 'ms' : '') + '</summary>';
+                if (gResults && typeof gResults === 'object') {
+                  metaHtml += '<div style="margin:0.35rem 0 0 0.5rem;display:grid;grid-template-columns:auto auto 1fr;gap:0.15rem 0.5rem;font-size:0.6875rem">';
+                  Object.keys(gResults).forEach(function(gn) {
+                    var ge = gResults[gn] || {};
+                    var gOutcome = (ge.outcome || '').toLowerCase();
+                    var gColor = gOutcome === 'pass' || gOutcome === 'ok' ? '#22c55e' : gOutcome === 'skip' || gOutcome === 'skipped' ? '#6b7280' : '#ef4444';
+                    metaHtml += '<span style="font-family:var(--font-mono);color:var(--text)">' + esc(gn) + '</span>'
+                      + '<span style="color:' + gColor + ';font-weight:600">' + esc(ge.outcome || '?') + '</span>'
+                      + '<span style="color:var(--muted)">' + esc(ge.reason || '') + '</span>';
+                  });
+                  metaHtml += '</div>';
+                }
+                metaHtml += '</details>';
+              }
+              // Routing annotations
+              if (enrichedNS['inference.routing'].length > 0) {
+                var rWinner = meta['inference.routing.winner'] || '';
+                var rMode = meta['inference.routing.mode'] || '';
+                var rCandidates = meta['inference.routing.candidates'];
+                var rWeights = meta['inference.routing.weights'];
+                var rScore = meta['inference.routing.winner_score'];
+                metaHtml += '<details style="margin-top:0.35rem"><summary style="cursor:pointer;font-size:0.6875rem;font-weight:600;color:#8b5cf6;letter-spacing:0.04em">ROUTING \u2014 ' + esc(rWinner) + (rMode ? ' (' + esc(rMode) + ')' : '') + '</summary>';
+                metaHtml += '<div style="margin:0.35rem 0 0 0.5rem;font-size:0.6875rem;font-family:var(--font-mono)">';
+                if (rScore != null) metaHtml += '<div>Score: <span style="color:var(--accent)">' + Number(rScore).toFixed(3) + '</span></div>';
+                if (Array.isArray(rCandidates) && rCandidates.length) {
+                  metaHtml += '<div style="margin-top:0.2rem">Candidates: ' + rCandidates.map(function(c) {
+                    return '<span style="padding:1px 5px;border-radius:3px;background:' + (c === rWinner ? 'rgba(139,92,246,0.2)' : 'rgba(255,255,255,0.05)') + ';margin-right:3px;font-size:0.625rem">' + esc(c) + '</span>';
+                  }).join('') + '</div>';
+                }
+                if (rWeights && typeof rWeights === 'object') {
+                  metaHtml += '<div style="margin-top:0.25rem;display:flex;flex-wrap:wrap;gap:0.35rem">';
+                  Object.keys(rWeights).forEach(function(axis) {
+                    metaHtml += '<span style="font-size:0.5625rem;color:var(--muted)">' + esc(axis) + ':<span style="color:var(--text)">' + Number(rWeights[axis]).toFixed(2) + '</span></span>';
+                  });
+                  metaHtml += '</div>';
+                }
+                metaHtml += '</div></details>';
+              }
+              // Memory annotations
+              if (enrichedNS['retrieval'].length > 0 && !enrichedNS['retrieval'].every(function(k) { return k.indexOf('retrieval.context.') === 0; })) {
+                var mTiers = meta['retrieval.tiers_queried'];
+                var mHits = meta['retrieval.hits'];
+                var mBudget = meta['retrieval.budget_consumed'];
+                metaHtml += '<details style="margin-top:0.35rem"><summary style="cursor:pointer;font-size:0.6875rem;font-weight:600;color:#22c55e;letter-spacing:0.04em">MEMORY' + (mBudget != null ? ' \u2014 ' + mBudget + ' tokens' : '') + '</summary>';
+                metaHtml += '<div style="margin:0.35rem 0 0 0.5rem;font-size:0.6875rem;font-family:var(--font-mono)">';
+                if (Array.isArray(mTiers) && mTiers.length) metaHtml += '<div>Tiers: ' + mTiers.map(function(t) { return esc(t); }).join(', ') + '</div>';
+                if (mHits && typeof mHits === 'object') {
+                  metaHtml += '<div style="margin-top:0.15rem">Hits: ' + Object.keys(mHits).map(function(t) { return esc(t) + '=' + mHits[t]; }).join(', ') + '</div>';
+                }
+                metaHtml += '</div></details>';
+              }
+              // Context budget annotations
+              if (enrichedNS['retrieval.context'].length > 0) {
+                var cTotal = meta['retrieval.context.budget_total'];
+                var cSys = meta['retrieval.context.system_prompt_tokens'];
+                var cTool = meta['retrieval.context.tool_defs_tokens'];
+                var cMem = meta['retrieval.context.memory_tokens'];
+                var cHist = meta['retrieval.context.history_tokens'];
+                metaHtml += '<details style="margin-top:0.35rem"><summary style="cursor:pointer;font-size:0.6875rem;font-weight:600;color:#06b6d4;letter-spacing:0.04em">CONTEXT BUDGET' + (cTotal != null ? ' \u2014 ' + cTotal + ' tokens' : '') + '</summary>';
+                metaHtml += '<div style="margin:0.35rem 0 0 0.5rem;font-size:0.6875rem">';
+                var budgetItems = [{ l: 'System prompt', v: cSys }, { l: 'Tool defs', v: cTool }, { l: 'Memory', v: cMem }, { l: 'History', v: cHist }];
+                budgetItems.forEach(function(bi) {
+                  if (bi.v == null) return;
+                  var pct = cTotal ? Math.round((bi.v / cTotal) * 100) : 0;
+                  metaHtml += '<div style="display:flex;align-items:center;gap:0.4rem;margin-bottom:2px"><span style="width:90px;color:var(--muted)">' + bi.l + '</span>'
+                    + '<div style="flex:1;height:5px;background:var(--surface);border-radius:3px;overflow:hidden;max-width:120px"><div style="width:' + pct + '%;height:100%;background:#06b6d4;border-radius:3px"></div></div>'
+                    + '<span style="font-family:var(--font-mono);color:var(--text);min-width:50px">' + bi.v + '</span></div>';
+                });
+                metaHtml += '</div></details>';
+              }
               if (metaKeys.length === 0) {
                 metaHtml += '<div style="color:var(--muted);font-style:italic;margin-top:0.25rem">No metadata annotations for this stage.</div>';
               }

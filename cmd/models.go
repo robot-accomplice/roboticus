@@ -365,20 +365,33 @@ func probeOpenAI(client *http.Client, baseURL string) []string {
 
 var modelsExerciseCmd = &cobra.Command{
 	Use:   "exercise [model]",
-	Short: "Exercise a model with the 20-prompt matrix to establish quality baseline",
-	Args:  cobra.MaximumNArgs(1),
+	Short: "Exercise a model with the 25-prompt matrix to establish quality baseline",
+	Long: `Exercise runs the model through the full prompt matrix across 5 intent classes
+(Execution, Delegation, Introspection, Conversation, Memory Recall).
+
+Use -n to run multiple iterations for statistical confidence.
+Use --min-quality to set a pass/fail threshold — models below the threshold
+are flagged for removal from the routing chain.`,
+	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		model := ""
 		if len(args) > 0 {
 			model = args[0]
 		}
 
+		iterations, _ := cmd.Flags().GetInt("iterations")
+		if iterations < 1 {
+			iterations = 1
+		}
+		minQuality, _ := cmd.Flags().GetFloat64("min-quality")
+
 		// Fetch config for per-model timeout resolution.
 		exerciseCfg, _ := apiGet("/api/config")
 		exerciseTimeout := resolveModelTimeout(exerciseCfg, model)
 
+		totalPrompts := len(llm.ExerciseMatrix) * iterations
 		fmt.Println()
-		fmt.Printf("  Exercising %s with %d prompts across 5 intent classes (timeout: %s)...\n\n",
+		fmt.Printf("  Exercising %s with %d prompts x %d iteration(s) = %d calls across 5 intent classes (timeout: %s)...\n",
 			func() string {
 				if model != "" {
 					return model
@@ -386,7 +399,13 @@ var modelsExerciseCmd = &cobra.Command{
 				return "default model"
 			}(),
 			len(llm.ExerciseMatrix),
+			iterations,
+			totalPrompts,
 			exerciseTimeout)
+		if minQuality > 0 {
+			fmt.Printf("  Minimum quality threshold: %.0f%% — models below this will be flagged.\n", minQuality*100)
+		}
+		fmt.Println()
 
 		// Per-intent-class tracking.
 		type intentStats struct {
@@ -399,37 +418,46 @@ var modelsExerciseCmd = &cobra.Command{
 		}
 
 		pass, fail := 0, 0
-		for i, ep := range llm.ExerciseMatrix {
-			body := map[string]any{"content": ep.Prompt}
-			if model != "" {
-				body["model"] = model
+		for iter := 0; iter < iterations; iter++ {
+			if iterations > 1 {
+				fmt.Printf("  ── Iteration %d/%d ──────────────────────────\n\n", iter+1, iterations)
 			}
-			start := time.Now()
-			resp, err := apiPostSlow("/api/agent/message", body, exerciseTimeout)
-			latencyMs := time.Since(start).Milliseconds()
-
-			prefix := fmt.Sprintf("  [%2d/%d] %-15s C%d", i+1, len(llm.ExerciseMatrix), ep.Intent, ep.Complexity)
-
-			stats := byIntent[ep.Intent]
-			if err != nil {
-				fail++
-				stats.fail++
-				fmt.Printf("%s FAIL: %v\n", prefix, err)
-				continue
-			}
-			content := fmt.Sprintf("%v", resp["content"])
-			if content != "" && content != "<nil>" {
-				pass++
-				stats.pass++
-				stats.totalMs += latencyMs
-				if len(content) > 50 {
-					content = content[:50] + "..."
+			for i, ep := range llm.ExerciseMatrix {
+				body := map[string]any{"content": ep.Prompt}
+				if model != "" {
+					body["model"] = model
 				}
-				fmt.Printf("%s PASS %4dms: %s\n", prefix, latencyMs, content)
-			} else {
-				fail++
-				stats.fail++
-				fmt.Printf("%s FAIL: empty response\n", prefix)
+				start := time.Now()
+				resp, err := apiPostSlow("/api/agent/message", body, exerciseTimeout)
+				latencyMs := time.Since(start).Milliseconds()
+
+				promptNum := iter*len(llm.ExerciseMatrix) + i + 1
+				prefix := fmt.Sprintf("  [%2d/%d] %-15s C%d", promptNum, totalPrompts, ep.Intent, ep.Complexity)
+
+				stats := byIntent[ep.Intent]
+				if err != nil {
+					fail++
+					stats.fail++
+					fmt.Printf("%s FAIL: %v\n", prefix, err)
+					continue
+				}
+				content := fmt.Sprintf("%v", resp["content"])
+				if content != "" && content != "<nil>" {
+					pass++
+					stats.pass++
+					stats.totalMs += latencyMs
+					if len(content) > 50 {
+						content = content[:50] + "..."
+					}
+					fmt.Printf("%s PASS %4dms: %s\n", prefix, latencyMs, content)
+				} else {
+					fail++
+					stats.fail++
+					fmt.Printf("%s FAIL: empty response\n", prefix)
+				}
+			}
+			if iterations > 1 {
+				fmt.Println()
 			}
 		}
 
@@ -445,6 +473,23 @@ var modelsExerciseCmd = &cobra.Command{
 			}
 			fmt.Printf("  %-15s  %4d  %4d  %6dms\n", ic, s.pass, s.fail, avgMs)
 		}
+
+		total := pass + fail
+		qualityPct := 0.0
+		if total > 0 {
+			qualityPct = float64(pass) / float64(total)
+		}
+		fmt.Printf("\n  Quality score: %.0f%% (%d/%d)\n", qualityPct*100, pass, total)
+
+		if minQuality > 0 && qualityPct < minQuality {
+			modelLabel := model
+			if modelLabel == "" {
+				modelLabel = "default model"
+			}
+			fmt.Printf("\n  ⚠  %s scored %.0f%% — below the %.0f%% minimum quality threshold.\n", modelLabel, qualityPct*100, minQuality*100)
+			fmt.Printf("     Consider removing this model from the routing chain.\n")
+		}
+
 		fmt.Println()
 		return nil
 	},
@@ -1017,6 +1062,9 @@ per-intent-class latency scorecard and 6-axis metascore dimension reporting.`,
 }
 
 func init() {
+	modelsExerciseCmd.Flags().IntP("iterations", "n", 1, "Number of iterations over the prompt matrix (default: 1 quick mode)")
+	modelsExerciseCmd.Flags().Float64("min-quality", 0, "Minimum quality threshold (0.0-1.0) — flag models below this for removal")
+
 	modelsBaselineCmd.Flags().IntP("iterations", "n", 1, "Number of iterations over the 20-prompt matrix per model")
 	modelsBaselineCmd.Flags().Bool("new-only", false, "Only exercise models with no existing baseline data")
 }
