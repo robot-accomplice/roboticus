@@ -105,7 +105,7 @@ jobs:
         run: |
           BINARY_NAME="roboticus-${GOOS}-${GOARCH}${SUFFIX}"
           go build -trimpath \
-            -ldflags="-s -w -X roboticus/cmd.version=${BUILD_VERSION}" \
+            -ldflags="-s -w -X roboticus/cmd.version=${BUILD_VERSION} -X roboticus/internal/daemon.version=${BUILD_VERSION}" \
             -o "${BINARY_NAME}" .
           echo "binary=${BINARY_NAME}" >> "$GITHUB_ENV"
 
