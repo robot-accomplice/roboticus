@@ -158,13 +158,35 @@ CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
     source_id
 );
 
+-- Episodic FTS triggers (uses full table names for consistency with memory_index).
 CREATE TRIGGER IF NOT EXISTS episodic_ai AFTER INSERT ON episodic_memory BEGIN
     INSERT INTO memory_fts(content, category, source_table, source_id)
-    VALUES (new.content, new.classification, 'episodic', new.id);
+    VALUES (new.content, new.classification, 'episodic_memory', new.id);
 END;
 
 CREATE TRIGGER IF NOT EXISTS episodic_ad AFTER DELETE ON episodic_memory BEGIN
-    DELETE FROM memory_fts WHERE source_table = 'episodic' AND source_id = old.id;
+    DELETE FROM memory_fts WHERE source_table = 'episodic_memory' AND source_id = old.id;
+END;
+
+-- Procedural FTS triggers (v1.0.2: was missing — only LIKE fallback before).
+CREATE TRIGGER IF NOT EXISTS procedural_ai AFTER INSERT ON procedural_memory BEGIN
+    INSERT INTO memory_fts(content, category, source_table, source_id)
+    VALUES (new.name || ': ' || new.steps, 'procedural', 'procedural_memory', new.id);
+END;
+
+CREATE TRIGGER IF NOT EXISTS procedural_ad AFTER DELETE ON procedural_memory BEGIN
+    DELETE FROM memory_fts WHERE source_table = 'procedural_memory' AND source_id = old.id;
+END;
+
+-- Relationship FTS triggers (v1.0.2: was missing — only LIKE fallback before).
+CREATE TRIGGER IF NOT EXISTS relationship_ai AFTER INSERT ON relationship_memory BEGIN
+    INSERT INTO memory_fts(content, category, source_table, source_id)
+    VALUES (COALESCE(new.entity_name, '') || ': ' || COALESCE(new.interaction_summary, ''),
+            'relationship', 'relationship_memory', new.id);
+END;
+
+CREATE TRIGGER IF NOT EXISTS relationship_ad AFTER DELETE ON relationship_memory BEGIN
+    DELETE FROM memory_fts WHERE source_table = 'relationship_memory' AND source_id = old.id;
 END;
 
 CREATE TABLE IF NOT EXISTS tasks (

@@ -90,13 +90,13 @@ func TestMemoryIndex_LoadAndLookup(t *testing.T) {
 	// Seed memory_index entries.
 	_, err := store.ExecContext(ctx,
 		`INSERT INTO memory_index (id, source_table, source_id, summary, confidence)
-		 VALUES ('mi1', 'episodic', 'ep1', 'the weather is sunny today', 0.9)`)
+		 VALUES ('mi1', 'episodic_memory', 'ep1', 'the weather is sunny today', 0.9)`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, err = store.ExecContext(ctx,
 		`INSERT INTO memory_index (id, source_table, source_id, summary, confidence)
-		 VALUES ('mi2', 'semantic', 'sem1', 'database query optimization', 0.7)`)
+		 VALUES ('mi2', 'semantic_memory', 'sem1', 'database query optimization', 0.7)`)
 	if err != nil {
 		t.Fatal(err)
 	}

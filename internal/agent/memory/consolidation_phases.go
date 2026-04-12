@@ -33,27 +33,27 @@ const (
 func (p *ConsolidationPipeline) phaseIndexBackfill(ctx context.Context, store *db.Store) int {
 	count := 0
 
-	// Backfill episodic entries.
+	// Backfill episodic entries (check both legacy short and full names).
 	rows, err := store.QueryContext(ctx,
 		`SELECT em.id, em.content FROM episodic_memory em
 		 WHERE em.memory_state = 'active'
-		 AND NOT EXISTS (SELECT 1 FROM memory_index mi WHERE mi.source_table = 'episodic' AND mi.source_id = em.id)`)
+		 AND NOT EXISTS (SELECT 1 FROM memory_index mi WHERE mi.source_table IN ('episodic', 'episodic_memory') AND mi.source_id = em.id)`)
 	if err != nil {
 		log.Warn().Err(err).Msg("consolidation: index backfill episodic query failed")
 		return count
 	}
-	count += p.indexRows(ctx, store, rows, "episodic")
+	count += p.indexRows(ctx, store, rows, "episodic_memory")
 
-	// Backfill semantic entries.
+	// Backfill semantic entries (check both legacy short and full names).
 	rows, err = store.QueryContext(ctx,
 		`SELECT sm.id, sm.value FROM semantic_memory sm
 		 WHERE sm.memory_state = 'active'
-		 AND NOT EXISTS (SELECT 1 FROM memory_index mi WHERE mi.source_table = 'semantic' AND mi.source_id = sm.id)`)
+		 AND NOT EXISTS (SELECT 1 FROM memory_index mi WHERE mi.source_table IN ('semantic', 'semantic_memory') AND mi.source_id = sm.id)`)
 	if err != nil {
 		log.Warn().Err(err).Msg("consolidation: index backfill semantic query failed")
 		return count
 	}
-	count += p.indexRows(ctx, store, rows, "semantic")
+	count += p.indexRows(ctx, store, rows, "semantic_memory")
 
 	return count
 }
@@ -393,13 +393,14 @@ func (p *ConsolidationPipeline) phaseOrphanCleanup(ctx context.Context, store *d
 	total := 0
 
 	// 7a: Orphaned embeddings — source_id not in any memory table.
+	// Handles both legacy short and full table names.
 	res, err := store.ExecContext(ctx,
 		`DELETE FROM embeddings WHERE
-		 (source_table = 'episodic' AND source_id NOT IN (SELECT id FROM episodic_memory)) OR
-		 (source_table = 'semantic' AND source_id NOT IN (SELECT id FROM semantic_memory)) OR
-		 (source_table = 'procedural' AND source_id NOT IN (SELECT id FROM procedural_memory)) OR
-		 (source_table = 'relationship' AND source_id NOT IN (SELECT id FROM relationship_memory)) OR
-		 (source_table = 'working' AND source_id NOT IN (SELECT id FROM working_memory))`)
+		 (source_table IN ('episodic', 'episodic_memory') AND source_id NOT IN (SELECT id FROM episodic_memory)) OR
+		 (source_table IN ('semantic', 'semantic_memory') AND source_id NOT IN (SELECT id FROM semantic_memory)) OR
+		 (source_table IN ('procedural', 'procedural_memory') AND source_id NOT IN (SELECT id FROM procedural_memory)) OR
+		 (source_table IN ('relationship', 'relationship_memory') AND source_id NOT IN (SELECT id FROM relationship_memory)) OR
+		 (source_table IN ('working', 'working_memory') AND source_id NOT IN (SELECT id FROM working_memory))`)
 	if err != nil {
 		log.Warn().Err(err).Msg("consolidation: orphan embedding cleanup failed")
 	} else {
@@ -410,10 +411,10 @@ func (p *ConsolidationPipeline) phaseOrphanCleanup(ctx context.Context, store *d
 	// 7b: Orphaned index entries — source_id not in source table.
 	res, err = store.ExecContext(ctx,
 		`DELETE FROM memory_index WHERE
-		 (source_table = 'episodic' AND source_id NOT IN (SELECT id FROM episodic_memory)) OR
-		 (source_table = 'semantic' AND source_id NOT IN (SELECT id FROM semantic_memory)) OR
-		 (source_table = 'procedural' AND source_id NOT IN (SELECT id FROM procedural_memory)) OR
-		 (source_table = 'relationship' AND source_id NOT IN (SELECT id FROM relationship_memory))`)
+		 (source_table IN ('episodic', 'episodic_memory') AND source_id NOT IN (SELECT id FROM episodic_memory)) OR
+		 (source_table IN ('semantic', 'semantic_memory') AND source_id NOT IN (SELECT id FROM semantic_memory)) OR
+		 (source_table IN ('procedural', 'procedural_memory') AND source_id NOT IN (SELECT id FROM procedural_memory)) OR
+		 (source_table IN ('relationship', 'relationship_memory') AND source_id NOT IN (SELECT id FROM relationship_memory))`)
 	if err != nil {
 		log.Warn().Err(err).Msg("consolidation: orphan index cleanup failed")
 	} else {
@@ -533,7 +534,7 @@ func (p *ConsolidationPipeline) Phase4_TierStateSync(ctx context.Context, store 
 	// Sync semantic entries.
 	res, err = store.ExecContext(ctx,
 		`UPDATE memory_index SET confidence = 0.1
-		 WHERE source_table = 'semantic'
+		 WHERE source_table IN ('semantic', 'semantic_memory')
 		 AND source_id IN (
 			SELECT id FROM semantic_memory WHERE memory_state IN ('stale', 'deduped', 'pruned')
 		 )
@@ -546,7 +547,7 @@ func (p *ConsolidationPipeline) Phase4_TierStateSync(ctx context.Context, store 
 	// Boost confidence for recently verified active entries.
 	res, err = store.ExecContext(ctx,
 		`UPDATE memory_index SET confidence = MIN(1.0, confidence + 0.1)
-		 WHERE source_table = 'semantic'
+		 WHERE source_table IN ('semantic', 'semantic_memory')
 		 AND source_id IN (
 			SELECT id FROM semantic_memory
 			WHERE memory_state = 'active' AND confidence > 0.7

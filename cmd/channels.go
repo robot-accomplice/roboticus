@@ -160,7 +160,96 @@ MatrixAccessTokenEnv = "MATRIX_ACCESS_TOKEN"
 	},
 }
 
+// channelsHealthCmd checks connectivity of channel adapters.
+// Rust parity: `integrations health`.
+var channelsHealthCmd = &cobra.Command{
+	Use:   "health [platform]",
+	Short: "Check health of channel adapters",
+	Args:  cobra.MaximumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		data, err := apiGet("/api/channels/status")
+		if err != nil {
+			return err
+		}
+
+		// The status endpoint returns either a top-level array or {channels: [...]}.
+		var channels []any
+		if arr, ok := data["channels"].([]any); ok {
+			channels = arr
+		}
+
+		if len(args) > 0 {
+			// Filter to specific platform.
+			platform := strings.ToLower(args[0])
+			for _, c := range channels {
+				cm, _ := c.(map[string]any)
+				if strings.ToLower(fmt.Sprint(cm["name"])) == platform {
+					connected := cm["connected"] == true
+					status := "disconnected"
+					if connected {
+						status = "healthy"
+					}
+					fmt.Printf("%s: %s\n", platform, status)
+					if lastErr, ok := cm["last_error"].(string); ok && lastErr != "" {
+						fmt.Printf("  last error: %s\n", lastErr)
+					}
+					return nil
+				}
+			}
+			fmt.Printf("%s: not configured\n", args[0])
+			return nil
+		}
+
+		// Show all.
+		if len(channels) == 0 {
+			fmt.Println("No channel adapters configured.")
+			return nil
+		}
+		fmt.Println("Channel Health:")
+		for _, c := range channels {
+			cm, _ := c.(map[string]any)
+			name := fmt.Sprint(cm["name"])
+			connected := cm["connected"] == true
+			status := "❌ disconnected"
+			if connected {
+				status = "✅ healthy"
+			}
+			fmt.Printf("  %-12s %s\n", name, status)
+		}
+		return nil
+	},
+}
+
+// channelsConnectCmd attempts to establish a channel connection.
+// Currently, channel adapters are started at boot — runtime connect/disconnect
+// requires adapter lifecycle management which is not yet implemented.
+var channelsConnectCmd = &cobra.Command{
+	Use:   "connect <platform>",
+	Short: "Connect a channel adapter (requires restart for most adapters)",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		fmt.Printf("Channel adapters are currently managed at startup.\n")
+		fmt.Printf("To enable %s, configure its credentials and restart: roboticus serve\n", args[0])
+		fmt.Printf("Use `roboticus channels guide %s` for setup instructions.\n", args[0])
+		return nil
+	},
+}
+
+// channelsDisconnectCmd closes a channel connection.
+var channelsDisconnectCmd = &cobra.Command{
+	Use:   "disconnect <platform>",
+	Short: "Disconnect a channel adapter (requires restart for most adapters)",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		fmt.Printf("Channel adapters are currently managed at startup.\n")
+		fmt.Printf("To disable %s, remove its credentials and restart: roboticus serve\n", args[0])
+		return nil
+	},
+}
+
 func init() {
 	channelsCmd.AddCommand(channelsListCmd, channelsTestCmd, channelsDeadLetterCmd, channelsReplayCmd, channelsGuideCmd)
+	channelsCmd.AddCommand(channelsHealthCmd, channelsConnectCmd, channelsDisconnectCmd)
+	channelsCmd.Aliases = []string{"integrations"} // Rust parity: `integrations` is an alias for `channels`
 	rootCmd.AddCommand(channelsCmd)
 }

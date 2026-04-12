@@ -174,7 +174,7 @@ func TestArchitecture_ConnectorFilesInvokeRunPipeline(t *testing.T) {
 // business logic is likely leaking out of the pipeline.
 func TestArchitecture_ConnectorFilesAreStructurallyThin(t *testing.T) {
 	limits := map[string]int{
-		filepath.Join("routes", "agent.go"):    180,
+		filepath.Join("routes", "agent.go"):    190, // v1.0.2: +10 for SecurityClaim construction (Gap 2 fix)
 		filepath.Join("routes", "sessions.go"): 350,
 		filepath.Join("routes", "cron.go"):     320,
 	}
