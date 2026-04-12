@@ -577,13 +577,6 @@ type catalogPlugin struct {
 var fallbackPluginCatalog = []catalogPlugin{
 	{Name: "codex-cli", Version: "1.0.0", Description: "Claude Code / Codex CLI integration for autonomous coding tasks", Author: "Robot Accomplice AG", Tier: "official", Permissions: []string{"exec", "filesystem", "network"}, RiskLevel: "caution"},
 	{Name: "web-research", Version: "1.0.0", Description: "Structured web search and page content extraction for research tasks", Author: "Robot Accomplice AG", Tier: "official", Permissions: []string{"network"}, RiskLevel: "safe"},
-	{Name: "github", Version: "0.1.0", Description: "PR creation, issue management, code search beyond the workspace", Author: "Robot Accomplice AG", Tier: "planned", Permissions: []string{"network"}, RiskLevel: "safe"},
-	{Name: "notion", Version: "0.1.0", Description: "Read/write Notion pages and databases as a knowledge backend", Author: "Robot Accomplice AG", Tier: "planned", Permissions: []string{"network"}, RiskLevel: "safe"},
-	{Name: "calendar", Version: "0.1.0", Description: "Read/write Google Calendar or CalDAV for scheduling and availability", Author: "Robot Accomplice AG", Tier: "planned", Permissions: []string{"network"}, RiskLevel: "safe"},
-	{Name: "image-generation", Version: "0.1.0", Description: "Stable Diffusion, Flux, or ComfyUI for inline image generation", Author: "Robot Accomplice AG", Tier: "planned", Permissions: []string{"network"}, RiskLevel: "safe"},
-	{Name: "pdf-processor", Version: "0.1.0", Description: "Extract text, summarize, and index PDF documents into agent memory", Author: "Robot Accomplice AG", Tier: "planned", Permissions: []string{"filesystem"}, RiskLevel: "safe"},
-	{Name: "code-sandbox", Version: "0.1.0", Description: "Isolated code execution environment for safe script evaluation", Author: "Robot Accomplice AG", Tier: "planned", Permissions: []string{"exec", "network"}, RiskLevel: "caution"},
-	{Name: "rss-feed", Version: "0.1.0", Description: "Feed aggregation and monitoring with digest generation", Author: "Robot Accomplice AG", Tier: "planned", Permissions: []string{"network"}, RiskLevel: "safe"},
 }
 
 type catalogApp struct {
