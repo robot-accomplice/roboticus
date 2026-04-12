@@ -158,7 +158,11 @@ Fix: use `height: 100%` on the workspace wrapper (not viewport-relative calc) si
 
 5. **Ticket expiry**: The WS ticket already expires after use. Strengthen by binding the ticket to the WebSocket session — if the connection drops, a new ticket is required.
 
-**Why this matters**: On a shared machine, any process can `curl http://127.0.0.1:18789/api/config` with the API key (which is visible in the dashboard's network traffic). Moving to WebSocket means the API key is only used once for the ticket exchange, and all subsequent communication is over a persistent connection that can't be replayed.
+**Why this matters**:
+
+Security: On a shared machine, any process can `curl http://127.0.0.1:18789/api/config` with the API key (which is visible in the dashboard's network traffic). Moving to WebSocket means the API key is only used once for the ticket exchange, and all subsequent communication is over a persistent connection that can't be replayed.
+
+Concurrency: The current model fires 50+ independent HTTP requests on page load, each spawning a goroutine, each acquiring a DB connection from the pool, each serializing independently. On a resource-constrained machine running local LLM inference, this burst competes with the agent's actual work. A single WebSocket connection with server-controlled push means the server decides when and how to batch data, the DB connection pool isn't hammered by dashboard refreshes, and the goroutine count stays predictable. This is the "Concurrency In Go" principle applied to the dashboard: the server owns the concurrency, not the client.
 
 **Migration path**: This is a v1.0.4 architectural change, not a quick fix. The EventBus already supports pub/sub — extend it with typed message routing so the dashboard can subscribe to specific data channels and send mutations.
 
