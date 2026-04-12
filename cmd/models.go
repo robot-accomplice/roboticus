@@ -967,52 +967,64 @@ per-intent-class latency scorecard and 6-axis metascore dimension reporting.`,
 			modelTimeout := resolveModelTimeout(config, model)
 			fmt.Printf("  --- %s (timeout: %s) ---\n", model, modelTimeout)
 
-			resp, err := apiPostSlow("/api/models/exercise", map[string]any{"model": model}, modelTimeout*20)
-			if err != nil {
-				fmt.Printf("    SKIP: exercise failed: %v\n\n", err)
-				results = append(results, modelResult{model: model, fail: len(llm.ExerciseMatrix)})
-				continue
-			}
-
-			// Parse per-prompt results from exercise endpoint.
+			// Exercise per-prompt through the pipeline for immediate output.
+			// Previous approach used bulk /api/models/exercise which blocked for
+			// the entire model exercise with no progress output.
 			mr := modelResult{
 				model:         model,
 				intentQuality: make(map[string]float64),
 				latencies:     make(map[string][]int64),
 			}
-			mr.pass = int(toFloat(resp["pass"]))
-			mr.fail = int(toFloat(resp["fail"]))
-			mr.avgQuality = toFloat(resp["avg_quality"])
 
-			// Per-intent quality averages.
-			if iq, ok := resp["intent_quality"].(map[string]any); ok {
-				for intent, val := range iq {
-					mr.intentQuality[intent] = toFloat(val)
+			intentSums := make(map[string]float64)
+			intentCounts := make(map[string]int)
+			var qualitySum float64
+			var qualityCount int
+
+			for i, ep := range llm.ExerciseMatrix {
+				body := map[string]any{"content": ep.Prompt, "model": model}
+				start := time.Now()
+				resp, err := apiPostSlow("/api/agent/message", body, modelTimeout)
+				latencyMs := time.Since(start).Milliseconds()
+				intent := ep.Intent.String()
+				label := fmt.Sprintf("[%d/%d] %s:C%d", i+1, len(llm.ExerciseMatrix), intent, ep.Complexity)
+				mr.latencies[intent] = append(mr.latencies[intent], latencyMs)
+
+				if err != nil {
+					mr.fail++
+					fmt.Printf("    %s FAIL  %v\n", label, err)
+					continue
+				}
+				content := fmt.Sprintf("%v", resp["content"])
+				if content != "" && content != "<nil>" {
+					mr.pass++
+					// Score the response quality.
+					quality := toFloat(resp["quality"])
+					if quality == 0 {
+						quality = 0.5 // default if not scored server-side
+					}
+					qualitySum += quality
+					qualityCount++
+					intentSums[intent] += quality
+					intentCounts[intent]++
+					preview := content
+					if len(preview) > 50 {
+						preview = preview[:50] + "..."
+					}
+					fmt.Printf("    %s PASS  Q=%.2f  %.1fs: %s\n", label, quality, float64(latencyMs)/1000.0, preview)
+				} else {
+					mr.fail++
+					fmt.Printf("    %s FAIL  empty response  %.1fs\n", label, float64(latencyMs)/1000.0)
 				}
 			}
 
-			// Print per-prompt details.
-			if promptResults, ok := resp["results"].([]any); ok {
-				for i, pr := range promptResults {
-					if p, ok := pr.(map[string]any); ok {
-						intent := fmt.Sprintf("%v", p["intent"])
-						complexity := fmt.Sprintf("%v", p["complexity"])
-						quality := toFloat(p["quality"])
-						latencyMs := int64(toFloat(p["latency_ms"]))
-						passed, _ := p["passed"].(bool)
-						errStr := fmt.Sprintf("%v", p["error"])
-
-						label := fmt.Sprintf("[%d/%d] %s:%s", i+1, len(promptResults), intent, complexity)
-						mr.latencies[intent] = append(mr.latencies[intent], latencyMs)
-
-						if errStr != "" && errStr != "<nil>" {
-							fmt.Printf("    %s FAIL  Q=%.2f  %s\n", label, quality, errStr)
-						} else if passed {
-							fmt.Printf("    %s PASS  Q=%.2f  %.1fs\n", label, quality, float64(latencyMs)/1000.0)
-						} else {
-							fmt.Printf("    %s FAIL  Q=%.2f  %.1fs\n", label, quality, float64(latencyMs)/1000.0)
-						}
-					}
+			// Compute averages.
+			if qualityCount > 0 {
+				mr.avgQuality = qualitySum / float64(qualityCount)
+			}
+			for intent, sum := range intentSums {
+				if intentCounts[intent] > 0 {
+					mr.intentQuality[intent] = sum / float64(intentCounts[intent])
 				}
 			}
 
