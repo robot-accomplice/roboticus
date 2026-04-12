@@ -145,48 +145,6 @@ func topicTagFromNum(n int) string {
 	return fmt.Sprintf("topic-%d", n)
 }
 
-// ── Bot Command Dispatch ────────────────────────────────────────────────────
-// Matches Rust's bot_command_dispatch: handles /commands before inference.
-
-// tryBotCommand checks if the input is a bot command (starts with /) and
-// dispatches it. Returns nil if not a command or if the command is unknown.
-func (p *Pipeline) tryBotCommand(ctx context.Context, input Input) *Outcome {
-	content := strings.TrimSpace(input.Content)
-	if !strings.HasPrefix(content, "/") {
-		return nil
-	}
-
-	parts := strings.SplitN(content, " ", 2)
-	cmd := strings.ToLower(parts[0])
-	// arg is unused for now but available for future commands.
-
-	switch cmd {
-	case "/help":
-		return &Outcome{
-			SessionID: input.SessionID,
-			Content:   "Available commands: /help, /status, /whoami, /clear",
-		}
-	case "/whoami":
-		return &Outcome{
-			SessionID: input.SessionID,
-			Content:   "You are communicating via " + input.Platform + " as " + input.SenderID,
-		}
-	case "/status":
-		return &Outcome{
-			SessionID: input.SessionID,
-			Content:   "System operational. Agent: " + input.AgentName,
-		}
-	case "/clear":
-		// Clear session context by adding a system message.
-		return &Outcome{
-			SessionID: input.SessionID,
-			Content:   "Context cleared. Starting fresh.",
-		}
-	}
-
-	return nil // Unknown command, fall through to normal processing.
-}
-
 // ── Delegation Execution ────────────────────────────────────────────────────
 // Matches Rust's execute_delegation: orchestrate-subagents tool execution.
 
