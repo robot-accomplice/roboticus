@@ -29,8 +29,8 @@ func TestAllIntentClasses_IncludesMemoryRecall(t *testing.T) {
 	if !found {
 		t.Error("AllIntentClasses() should include IntentMemoryRecall")
 	}
-	if len(all) != 5 {
-		t.Errorf("AllIntentClasses() count = %d, want 5", len(all))
+	if len(all) != 6 {
+		t.Errorf("AllIntentClasses() count = %d, want 6", len(all))
 	}
 }
 
@@ -47,8 +47,8 @@ func TestExerciseMatrix_HasMemoryRecallPrompts(t *testing.T) {
 }
 
 func TestExerciseMatrix_TotalCount(t *testing.T) {
-	if len(ExerciseMatrix) != 25 {
-		t.Errorf("ExerciseMatrix has %d prompts, want 25 (5 complexity x 5 intent)", len(ExerciseMatrix))
+	if len(ExerciseMatrix) != 30 {
+		t.Errorf("ExerciseMatrix has %d prompts, want 30 (5 complexity x 6 intent)", len(ExerciseMatrix))
 	}
 }
 
@@ -93,19 +93,23 @@ func TestScoreMemoryRecall_EmptyIsZero(t *testing.T) {
 
 // Regression: every model must have a MEMORY_RECALL baseline.
 
-func TestCommonIntentBaselines_AllModelsHaveMemoryRecall(t *testing.T) {
+func TestCommonIntentBaselines_AllModelsHaveAllIntents(t *testing.T) {
 	// Collect all unique models from baselines.
 	models := make(map[string]bool)
-	hasRecall := make(map[string]bool)
+	hasIntent := make(map[string]map[string]bool)
 	for _, b := range CommonIntentBaselines {
 		models[b.Model] = true
-		if b.IntentClass == "MEMORY_RECALL" {
-			hasRecall[b.Model] = true
+		if hasIntent[b.Model] == nil {
+			hasIntent[b.Model] = make(map[string]bool)
 		}
+		hasIntent[b.Model][b.IntentClass] = true
 	}
+	required := []string{"MEMORY_RECALL", "TOOL_USE"}
 	for model := range models {
-		if !hasRecall[model] {
-			t.Errorf("model %q has baselines but no MEMORY_RECALL entry", model)
+		for _, intent := range required {
+			if !hasIntent[model][intent] {
+				t.Errorf("model %q has baselines but no %s entry", model, intent)
+			}
 		}
 	}
 }

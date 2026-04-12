@@ -16,6 +16,7 @@ const (
 	IntentIntrospection
 	IntentConversation
 	IntentMemoryRecall
+	IntentToolUse
 )
 
 // String returns the canonical label for this intent class.
@@ -31,6 +32,8 @@ func (ic IntentClass) String() string {
 		return "CONVERSATION"
 	case IntentMemoryRecall:
 		return "MEMORY_RECALL"
+	case IntentToolUse:
+		return "TOOL_USE"
 	default:
 		return "UNKNOWN"
 	}
@@ -50,6 +53,8 @@ func ParseIntentClass(s string) IntentClass {
 		return IntentConversation
 	case "MEMORY_RECALL":
 		return IntentMemoryRecall
+	case "TOOL_USE":
+		return IntentToolUse
 	default:
 		return IntentExecution
 	}
@@ -57,7 +62,7 @@ func ParseIntentClass(s string) IntentClass {
 
 // AllIntentClasses returns all defined intent classes in order.
 func AllIntentClasses() []IntentClass {
-	return []IntentClass{IntentExecution, IntentDelegation, IntentIntrospection, IntentConversation, IntentMemoryRecall}
+	return []IntentClass{IntentExecution, IntentDelegation, IntentIntrospection, IntentConversation, IntentMemoryRecall, IntentToolUse}
 }
 
 // ComplexityLevel defines exercise difficulty.
@@ -96,8 +101,8 @@ type ExercisePrompt struct {
 	Complexity ComplexityLevel
 }
 
-// ExerciseMatrix contains 25 synthetic prompts: 5 complexity levels x 5 intent classes.
-// Extends the Rust exercise::EXERCISE_MATRIX with IntentMemoryRecall (beyond-parity).
+// ExerciseMatrix contains 30 synthetic prompts: 5 complexity levels x 6 intent classes.
+// Extends the Rust exercise::EXERCISE_MATRIX with IntentMemoryRecall and IntentToolUse (beyond-parity).
 var ExerciseMatrix = []ExercisePrompt{
 	// ── Trivial (complexity ~0.1) ──────────────────────────────
 	{Prompt: "What time is it?", Intent: IntentExecution, Complexity: ComplexityTrivial},
@@ -105,6 +110,7 @@ var ExerciseMatrix = []ExercisePrompt{
 	{Prompt: "What model are you?", Intent: IntentIntrospection, Complexity: ComplexityTrivial},
 	{Prompt: "Thanks!", Intent: IntentConversation, Complexity: ComplexityTrivial},
 	{Prompt: "Do you have any memories stored?", Intent: IntentMemoryRecall, Complexity: ComplexityTrivial},
+	{Prompt: "What is 2 + 2?", Intent: IntentToolUse, Complexity: ComplexityTrivial}, // Should NOT use tools — pure reasoning
 
 	// ── Simple (complexity ~0.3) ───────────────────────────────
 	{Prompt: "List the files in the workspace directory.", Intent: IntentExecution, Complexity: ComplexitySimple},
@@ -112,6 +118,7 @@ var ExerciseMatrix = []ExercisePrompt{
 	{Prompt: "What tools do you have access to?", Intent: IntentIntrospection, Complexity: ComplexitySimple},
 	{Prompt: "Explain what you can do in one sentence.", Intent: IntentConversation, Complexity: ComplexitySimple},
 	{Prompt: "What do you remember about our last conversation?", Intent: IntentMemoryRecall, Complexity: ComplexitySimple},
+	{Prompt: "Show me the contents of the README file.", Intent: IntentToolUse, Complexity: ComplexitySimple}, // Should use read_file
 
 	// ── Moderate (complexity ~0.5) ─────────────────────────────
 	{Prompt: "Read the main configuration file and summarize the model settings.", Intent: IntentExecution, Complexity: ComplexityModerate},
@@ -119,6 +126,7 @@ var ExerciseMatrix = []ExercisePrompt{
 	{Prompt: "What memories do you have about recent conversations?", Intent: IntentIntrospection, Complexity: ComplexityModerate},
 	{Prompt: "Compare the advantages of local models versus cloud models for my use case.", Intent: IntentConversation, Complexity: ComplexityModerate},
 	{Prompt: "Search your memories for anything about the deployment project. What can you find?", Intent: IntentMemoryRecall, Complexity: ComplexityModerate},
+	{Prompt: "Look up how many sessions were created today by querying the database.", Intent: IntentToolUse, Complexity: ComplexityModerate}, // Should use query_table
 
 	// ── Complex (complexity ~0.7) ──────────────────────────────
 	{Prompt: "Write a shell script that checks disk usage and alerts if any partition is over 90%.", Intent: IntentExecution, Complexity: ComplexityComplex},
@@ -126,6 +134,7 @@ var ExerciseMatrix = []ExercisePrompt{
 	{Prompt: "Analyze your recent performance across different task types and suggest which model would handle each best.", Intent: IntentIntrospection, Complexity: ComplexityComplex},
 	{Prompt: "Explain the trade-offs between consistency and availability in distributed systems, with examples relevant to my setup.", Intent: IntentConversation, Complexity: ComplexityComplex},
 	{Prompt: "I told you something important about palm a few months ago. Use your search_memories tool to look it up and tell me what you find.", Intent: IntentMemoryRecall, Complexity: ComplexityComplex},
+	{Prompt: "Find all files in the workspace that were modified in the last 24 hours, read the 3 most recent, and summarize the changes.", Intent: IntentToolUse, Complexity: ComplexityComplex}, // Should chain bash + read_file
 
 	// ── Expert (complexity ~0.9) ───────────────────────────────
 	{Prompt: "Refactor the configuration parser to support hot-reload with validation, rollback on failure, and emit structured change events.", Intent: IntentExecution, Complexity: ComplexityExpert},
@@ -133,6 +142,7 @@ var ExerciseMatrix = []ExercisePrompt{
 	{Prompt: "Evaluate your own decision-making process over the last 50 turns: where did you make correct tool choices, where did you waste tokens on unnecessary actions, and what patterns should the routing system learn from?", Intent: IntentIntrospection, Complexity: ComplexityExpert},
 	{Prompt: "Design a capability-based security model for a multi-tenant agent platform where each tenant has different trust levels, tool access policies, and cost budgets, considering both the authorization and audit requirements.", Intent: IntentConversation, Complexity: ComplexityExpert},
 	{Prompt: "Cross-reference your episodic and semantic memories about the infrastructure migration project, then search for any related relationship data about the people involved. Compile a timeline of what happened, who was involved, and what decisions were made.", Intent: IntentMemoryRecall, Complexity: ComplexityExpert},
+	{Prompt: "Query the sessions database for the last 10 conversations, analyze the tool call patterns in each, cross-reference with the inference costs table to calculate per-tool cost efficiency, and write a report to the workspace.", Intent: IntentToolUse, Complexity: ComplexityExpert}, // Should chain query_table + bash + write_file
 }
 
 // ModelBaseline holds pre-computed scores for a common model across all 6
@@ -166,54 +176,63 @@ var CommonIntentBaselines = []IntentBaseline{
 	{Model: "openai/gpt-4o-mini", IntentClass: "INTROSPECTION", Quality: 0.65},
 	{Model: "openai/gpt-4o-mini", IntentClass: "CONVERSATION", Quality: 0.80},
 	{Model: "openai/gpt-4o-mini", IntentClass: "MEMORY_RECALL", Quality: 0.65},
+	{Model: "openai/gpt-4o-mini", IntentClass: "TOOL_USE", Quality: 0.60},
 	// GPT-4o: strong across the board
 	{Model: "openai/gpt-4o", IntentClass: "EXECUTION", Quality: 0.85},
 	{Model: "openai/gpt-4o", IntentClass: "DELEGATION", Quality: 0.80},
 	{Model: "openai/gpt-4o", IntentClass: "INTROSPECTION", Quality: 0.80},
 	{Model: "openai/gpt-4o", IntentClass: "CONVERSATION", Quality: 0.90},
 	{Model: "openai/gpt-4o", IntentClass: "MEMORY_RECALL", Quality: 0.80},
+	{Model: "openai/gpt-4o", IntentClass: "TOOL_USE", Quality: 0.85},
 	// Claude Sonnet: very strong at complex tasks
 	{Model: "anthropic/claude-sonnet", IntentClass: "EXECUTION", Quality: 0.85},
 	{Model: "anthropic/claude-sonnet", IntentClass: "DELEGATION", Quality: 0.85},
 	{Model: "anthropic/claude-sonnet", IntentClass: "INTROSPECTION", Quality: 0.80},
 	{Model: "anthropic/claude-sonnet", IntentClass: "CONVERSATION", Quality: 0.90},
 	{Model: "anthropic/claude-sonnet", IntentClass: "MEMORY_RECALL", Quality: 0.85},
+	{Model: "anthropic/claude-sonnet", IntentClass: "TOOL_USE", Quality: 0.90},
 	// Qwen 2.5 32B: solid local model
 	{Model: "ollama/qwen2.5:32b", IntentClass: "EXECUTION", Quality: 0.75},
 	{Model: "ollama/qwen2.5:32b", IntentClass: "DELEGATION", Quality: 0.60},
 	{Model: "ollama/qwen2.5:32b", IntentClass: "INTROSPECTION", Quality: 0.70},
 	{Model: "ollama/qwen2.5:32b", IntentClass: "CONVERSATION", Quality: 0.75},
 	{Model: "ollama/qwen2.5:32b", IntentClass: "MEMORY_RECALL", Quality: 0.55},
+	{Model: "ollama/qwen2.5:32b", IntentClass: "TOOL_USE", Quality: 0.65},
 	// Qwen 3.5 35B: capable local model
 	{Model: "ollama/qwen3.5:35b-a3b", IntentClass: "EXECUTION", Quality: 0.70},
 	{Model: "ollama/qwen3.5:35b-a3b", IntentClass: "DELEGATION", Quality: 0.55},
 	{Model: "ollama/qwen3.5:35b-a3b", IntentClass: "INTROSPECTION", Quality: 0.65},
 	{Model: "ollama/qwen3.5:35b-a3b", IntentClass: "CONVERSATION", Quality: 0.70},
 	{Model: "ollama/qwen3.5:35b-a3b", IntentClass: "MEMORY_RECALL", Quality: 0.50},
-	// Gemma 3 13B: lightweight local — weak tool selection for memory
+	{Model: "ollama/qwen3.5:35b-a3b", IntentClass: "TOOL_USE", Quality: 0.55},
+	// Gemma 3 13B: lightweight local — weak tool selection
 	{Model: "ollama/gemma3:13b", IntentClass: "EXECUTION", Quality: 0.60},
 	{Model: "ollama/gemma3:13b", IntentClass: "DELEGATION", Quality: 0.40},
 	{Model: "ollama/gemma3:13b", IntentClass: "INTROSPECTION", Quality: 0.55},
 	{Model: "ollama/gemma3:13b", IntentClass: "CONVERSATION", Quality: 0.65},
 	{Model: "ollama/gemma3:13b", IntentClass: "MEMORY_RECALL", Quality: 0.30},
+	{Model: "ollama/gemma3:13b", IntentClass: "TOOL_USE", Quality: 0.35},
 	// Mixtral 8x7B: good reasoning, moderate tool use
 	{Model: "ollama/mixtral:8x7b", IntentClass: "EXECUTION", Quality: 0.65},
 	{Model: "ollama/mixtral:8x7b", IntentClass: "DELEGATION", Quality: 0.50},
 	{Model: "ollama/mixtral:8x7b", IntentClass: "INTROSPECTION", Quality: 0.60},
 	{Model: "ollama/mixtral:8x7b", IntentClass: "CONVERSATION", Quality: 0.70},
 	{Model: "ollama/mixtral:8x7b", IntentClass: "MEMORY_RECALL", Quality: 0.45},
+	{Model: "ollama/mixtral:8x7b", IntentClass: "TOOL_USE", Quality: 0.50},
 	// Kimi K2: capable cloud model — good at tool calls, memory recall proven
 	{Model: "moonshot/kimi-k2-turbo-preview", IntentClass: "EXECUTION", Quality: 0.75},
 	{Model: "moonshot/kimi-k2-turbo-preview", IntentClass: "DELEGATION", Quality: 0.60},
 	{Model: "moonshot/kimi-k2-turbo-preview", IntentClass: "INTROSPECTION", Quality: 0.65},
 	{Model: "moonshot/kimi-k2-turbo-preview", IntentClass: "CONVERSATION", Quality: 0.75},
 	{Model: "moonshot/kimi-k2-turbo-preview", IntentClass: "MEMORY_RECALL", Quality: 0.70},
-	// Gemma 4: primary local model — confabulates instead of calling memory tools
+	{Model: "moonshot/kimi-k2-turbo-preview", IntentClass: "TOOL_USE", Quality: 0.70},
+	// Gemma 4: primary local model — confabulates instead of calling tools
 	{Model: "ollama/gemma4", IntentClass: "EXECUTION", Quality: 0.65},
 	{Model: "ollama/gemma4", IntentClass: "DELEGATION", Quality: 0.45},
 	{Model: "ollama/gemma4", IntentClass: "INTROSPECTION", Quality: 0.60},
 	{Model: "ollama/gemma4", IntentClass: "CONVERSATION", Quality: 0.70},
 	{Model: "ollama/gemma4", IntentClass: "MEMORY_RECALL", Quality: 0.25},
+	{Model: "ollama/gemma4", IntentClass: "TOOL_USE", Quality: 0.30},
 }
 
 // CommonModelBaselines provides the legacy 6-axis view for display purposes.
@@ -471,6 +490,29 @@ func scoreIntentRelevance(lower string, intent IntentClass) float64 {
 		if score < 0 {
 			score = 0
 		}
+		if score > 1 {
+			score = 1
+		}
+		return score
+
+	case IntentToolUse:
+		// Tool use responses should demonstrate correct tool selection judgment:
+		// using the right tool for the job (read_file for reading, query_table for DB,
+		// bash for shell commands) and NOT using tools when pure reasoning suffices.
+		score := 0.0
+
+		// Positive: evidence of deliberate tool selection.
+		toolSelectionMarkers := []string{"read_file", "write_file", "query_table",
+			"bash", "tool_call", "list_dir", "search", "executed",
+			"result", "output", "command", "queried", "rows"}
+		score += 0.5 * markerScore(lower, toolSelectionMarkers, 2)
+
+		// Positive: structured output from tool execution.
+		structuredOutputMarkers := []string{"found", "returned", "entries", "total",
+			"shows", "contains", "results", "created", "modified"}
+		score += 0.3 * markerScore(lower, structuredOutputMarkers, 1)
+
+		score += 0.2 // Base credit for responding.
 		if score > 1 {
 			score = 1
 		}

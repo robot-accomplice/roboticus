@@ -3685,11 +3685,13 @@
         api('/api/stats/efficiency?period=' + encodeURIComponent(period)),
         api('/api/models/selections?limit=80').catch(function() { return { events: [] }; }),
         api('/api/models/routing-diagnostics').catch(function() { return { config: {} }; }),
-        api('/api/config').catch(function() { return {}; })
+        api('/api/config').catch(function() { return {}; }),
+        api('/api/models/exercise/scorecard').catch(function() { return { entries: [] }; })
       ]).then(function(arr) {
         var report = arr[0] || {};
         var modelSelections = (arr[1] && arr[1].events) ? arr[1].events : [];
         var configData = arr[3] || {};
+        var scorecardEntries = (arr[4] && arr[4].entries) ? arr[4].entries : [];
         var persistedRoutingConfig = (configData && configData.models && configData.models.routing) ? configData.models.routing : {};
         var routingConfig = Object.assign({}, (arr[2] && arr[2].config) ? arr[2].config : {}, persistedRoutingConfig);
         // Prefer persisted 6-axis profile (lossless) over derived profile (lossy).
@@ -4039,7 +4041,86 @@
 
         // Store tips for use in Recommendations tab
         self._quickTipsHtml = tips;
-        return tabBar + profileCard + budgetCard + breakerCard + decisionGraph + periodBar + banner + cards + tsChart + table + assignmentSection;
+
+        // Model Scorecard — ranked quality matrix with per-intent breakdown
+        var scorecard = '';
+        var intentClasses = ['EXECUTION', 'DELEGATION', 'INTROSPECTION', 'CONVERSATION', 'MEMORY_RECALL', 'TOOL_USE'];
+        // Build per-model scorecard from efficiency quality + exercise intent data.
+        var scModels = {};
+        modelNames.forEach(function(name) {
+          var m = models[name];
+          var q = m.quality || {};
+          scModels[name] = { overall: q.avg_quality_score || 0, intents: {} };
+        });
+        // Merge exercise scorecard entries (per-intent quality).
+        scorecardEntries.forEach(function(e) {
+          if (!scModels[e.model]) {
+            scModels[e.model] = { overall: 0, intents: {} };
+          }
+          scModels[e.model].intents[e.intent_class] = e.avg_quality;
+        });
+        // If exercise data provides a richer overall, recompute from intents.
+        Object.keys(scModels).forEach(function(name) {
+          var intents = scModels[name].intents;
+          var keys = Object.keys(intents);
+          if (keys.length > 0 && scModels[name].overall === 0) {
+            var sum = 0;
+            keys.forEach(function(k) { sum += intents[k]; });
+            scModels[name].overall = sum / keys.length;
+          }
+        });
+        var scNames = Object.keys(scModels).sort(function(a, b) {
+          return (scModels[b].overall || 0) - (scModels[a].overall || 0);
+        });
+        // Only render if at least one model has quality data.
+        var hasAnyQuality = scNames.some(function(n) { return scModels[n].overall > 0; });
+        if (hasAnyQuality) {
+          var hasIntentData = scorecardEntries.length > 0;
+          scorecard = '<div class="card" style="margin-bottom:1.25rem"><div style="font-weight:600;margin-bottom:0.75rem">Model Scorecard</div>';
+          scorecard += '<div class="table-wrap"><table><thead><tr>';
+          scorecard += '<th>Rank</th><th>Model</th><th>Overall Quality</th>';
+          if (hasIntentData) {
+            intentClasses.forEach(function(ic) {
+              scorecard += '<th style="font-size:0.6875rem">' + esc(ic.replace('_', ' ')) + '</th>';
+            });
+          }
+          scorecard += '</tr></thead><tbody>';
+          scNames.forEach(function(name, idx) {
+            var sc = scModels[name];
+            var pct = (sc.overall * 100);
+            var barColor = pct >= 80 ? '#22c55e' : pct >= 50 ? '#eab308' : '#ef4444';
+            var pctText = pct > 0 ? pct.toFixed(0) + '%' : '\u2014';
+            scorecard += '<tr>';
+            scorecard += '<td style="font-weight:600;text-align:center">#' + (idx + 1) + '</td>';
+            scorecard += '<td class="card-mono">' + esc(name) + '</td>';
+            scorecard += '<td><div style="display:flex;align-items:center;gap:0.5rem">'
+              + '<div style="flex:1;background:var(--border);border-radius:3px;height:8px;min-width:60px;overflow:hidden">'
+              + '<div style="width:' + Math.min(pct, 100) + '%;height:100%;background:' + barColor + ';border-radius:3px;transition:width 0.3s"></div>'
+              + '</div>'
+              + '<span style="font-weight:600;color:' + barColor + ';font-size:0.8125rem;min-width:2.5rem;text-align:right">' + pctText + '</span>'
+              + '</div></td>';
+            if (hasIntentData) {
+              intentClasses.forEach(function(ic) {
+                var iq = sc.intents[ic];
+                if (iq != null) {
+                  var ipct = (iq * 100);
+                  var iColor = ipct >= 80 ? '#22c55e' : ipct >= 50 ? '#eab308' : '#ef4444';
+                  scorecard += '<td style="color:' + iColor + ';font-weight:600;font-size:0.8125rem;text-align:center">' + ipct.toFixed(0) + '%</td>';
+                } else {
+                  scorecard += '<td style="color:var(--muted);text-align:center">\u2014</td>';
+                }
+              });
+            }
+            scorecard += '</tr>';
+          });
+          scorecard += '</tbody></table></div>';
+          if (!hasIntentData) {
+            scorecard += '<div style="font-size:0.75rem;color:var(--muted);margin-top:0.5rem;font-style:italic">Run <code style="background:var(--surface);padding:0.1rem 0.35rem;border-radius:3px;font-size:0.6875rem">roboticus models baseline</code> for per-intent breakdown.</div>';
+          }
+          scorecard += '</div>';
+        }
+
+        return tabBar + profileCard + budgetCard + breakerCard + decisionGraph + periodBar + banner + cards + tsChart + table + scorecard + assignmentSection;
       });
     },
 

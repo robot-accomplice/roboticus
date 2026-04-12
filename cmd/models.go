@@ -366,7 +366,7 @@ func probeOpenAI(client *http.Client, baseURL string) []string {
 var modelsExerciseCmd = &cobra.Command{
 	Use:   "exercise [model]",
 	Short: "Exercise a model with the 25-prompt matrix to establish quality baseline",
-	Long: `Exercise runs the model through the full prompt matrix across 5 intent classes
+	Long: `Exercise runs the model through the full prompt matrix across 6 intent classes
 (Execution, Delegation, Introspection, Conversation, Memory Recall).
 
 Use -n to run multiple iterations for statistical confidence.
@@ -391,7 +391,7 @@ are flagged for removal from the routing chain.`,
 
 		totalPrompts := len(llm.ExerciseMatrix) * iterations
 		fmt.Println()
-		fmt.Printf("  Exercising %s with %d prompts x %d iteration(s) = %d calls across 5 intent classes (timeout: %s)...\n",
+		fmt.Printf("  Exercising %s with %d prompts x %d iteration(s) = %d calls across 6 intent classes (timeout: %s)...\n",
 			func() string {
 				if model != "" {
 					return model
@@ -413,7 +413,7 @@ are flagged for removal from the routing chain.`,
 			totalMs    int64
 		}
 		byIntent := make(map[llm.IntentClass]*intentStats)
-		for _, ic := range []llm.IntentClass{llm.IntentExecution, llm.IntentDelegation, llm.IntentIntrospection, llm.IntentConversation, llm.IntentMemoryRecall} {
+		for _, ic := range llm.AllIntentClasses() {
 			byIntent[ic] = &intentStats{}
 		}
 
@@ -465,7 +465,7 @@ are flagged for removal from the routing chain.`,
 		fmt.Printf("  Total: %d/%d passed\n\n", pass, pass+fail)
 		fmt.Printf("  %-15s  %s  %s  %s\n", "Intent Class", "Pass", "Fail", "Avg Latency")
 		fmt.Printf("  %-15s  %s  %s  %s\n", "───────────────", "────", "────", "───────────")
-		for _, ic := range []llm.IntentClass{llm.IntentExecution, llm.IntentDelegation, llm.IntentIntrospection, llm.IntentConversation, llm.IntentMemoryRecall} {
+		for _, ic := range llm.AllIntentClasses() {
 			s := byIntent[ic]
 			avgMs := int64(0)
 			if s.pass > 0 {
@@ -1018,7 +1018,7 @@ per-intent-class latency scorecard and 6-axis metascore dimension reporting.`,
 
 			// Print per-intent quality + latency scorecard.
 			fmt.Printf("\n    Intent Quality:\n")
-			for _, intent := range []string{"EXECUTION", "DELEGATION", "INTROSPECTION", "CONVERSATION", "MEMORY_RECALL"} {
+			for _, intent := range []string{"EXECUTION", "DELEGATION", "INTROSPECTION", "CONVERSATION", "MEMORY_RECALL", "TOOL_USE"} {
 				q := mr.intentQuality[intent]
 				bar := qualityBar(q)
 				fmt.Printf("      %-16s %s %.2f\n", intent, bar, q)
@@ -1044,7 +1044,7 @@ per-intent-class latency scorecard and 6-axis metascore dimension reporting.`,
 
 			// Per-intent quality breakdown.
 			if len(r.intentQuality) > 0 {
-				for _, intent := range []string{"EXECUTION", "DELEGATION", "INTROSPECTION", "CONVERSATION", "MEMORY_RECALL"} {
+				for _, intent := range []string{"EXECUTION", "DELEGATION", "INTROSPECTION", "CONVERSATION", "MEMORY_RECALL", "TOOL_USE"} {
 					q := r.intentQuality[intent]
 					fmt.Printf("    %-18s %s %.2f\n", intent, qualityBar(q), q)
 				}
@@ -1071,15 +1071,16 @@ per-intent-class latency scorecard and 6-axis metascore dimension reporting.`,
 			}
 
 			fmt.Printf("\n  Model Comparison (ranked by quality):\n\n")
-			fmt.Printf("  %-4s  %-35s  %-8s  %-5s  %-5s  %-5s  %-5s  %-5s  %s\n",
-				"RANK", "MODEL", "QUALITY", "EXEC", "DELEG", "INTRO", "CONV", "MEMRC", "AVG LATENCY")
-			fmt.Println("  " + strings.Repeat("─", 100))
+			fmt.Printf("  %-4s  %-35s  %-8s  %-5s  %-5s  %-5s  %-5s  %-5s  %-5s  %s\n",
+				"RANK", "MODEL", "QUALITY", "EXEC", "DELEG", "INTRO", "CONV", "MEMRC", "TOOLS", "AVG LATENCY")
+			fmt.Println("  " + strings.Repeat("─", 110))
 			for rank, r := range sorted {
 				exec := r.intentQuality["EXECUTION"]
 				deleg := r.intentQuality["DELEGATION"]
 				intro := r.intentQuality["INTROSPECTION"]
 				conv := r.intentQuality["CONVERSATION"]
 				memrc := r.intentQuality["MEMORY_RECALL"]
+				tools := r.intentQuality["TOOL_USE"]
 				avgMs := int64(0)
 				var totalLat int64
 				var latCount int
@@ -1092,14 +1093,14 @@ per-intent-class latency scorecard and 6-axis metascore dimension reporting.`,
 				if latCount > 0 {
 					avgMs = totalLat / int64(latCount)
 				}
-				fmt.Printf("  #%-3d  %-35s  %s %.0f%%   %.0f%%  %.0f%%  %.0f%%  %.0f%%  %.0f%%  %dms\n",
+				fmt.Printf("  #%-3d  %-35s  %s %.0f%%   %.0f%%  %.0f%%  %.0f%%  %.0f%%  %.0f%%  %.0f%%  %dms\n",
 					rank+1, r.model, qualityBar(r.avgQuality), r.avgQuality*100,
-					exec*100, deleg*100, intro*100, conv*100, memrc*100, avgMs)
+					exec*100, deleg*100, intro*100, conv*100, memrc*100, tools*100, avgMs)
 			}
 			fmt.Println()
 
 			// Highlight best/worst per intent class.
-			intents := []string{"EXECUTION", "DELEGATION", "INTROSPECTION", "CONVERSATION", "MEMORY_RECALL"}
+			intents := []string{"EXECUTION", "DELEGATION", "INTROSPECTION", "CONVERSATION", "MEMORY_RECALL", "TOOL_USE"}
 			fmt.Printf("  Best per intent class:\n")
 			for _, intent := range intents {
 				bestModel := ""

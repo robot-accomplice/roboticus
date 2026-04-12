@@ -259,6 +259,7 @@ func NewServer(ctx context.Context, cfg ServerConfig, state *AppState) *http.Ser
 		r.Post("/api/models/reset", routes.ResetModelScores(state.LLM))
 		r.Post("/api/models/exercise", routes.ExerciseModel(state.LLM, state.Store))
 		r.Get("/api/models/exercise/status", routes.GetExerciseStatus(state.Store))
+		r.Get("/api/models/exercise/scorecard", routes.GetExerciseScorecard(state.Store))
 		r.Post("/api/models/routing-eval", routes.RunRoutingEval(state.LLM))
 
 		// Recommendations.
