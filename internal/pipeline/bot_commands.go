@@ -178,7 +178,7 @@ func (h *BotCommandHandler) cmdStatus(ctx context.Context, _ string, s *Session)
 			`SELECT COUNT(*) FROM cron_jobs`).Scan(&cronTotal); err == nil {
 			_ = h.store.QueryRowContext(ctx,
 				`SELECT COUNT(*) FROM cron_runs WHERE status = 'failed'
-				 AND created_at > datetime('now', '-24 hours')`).Scan(&cronFailed)
+				 AND timestamp > datetime('now', '-24 hours')`).Scan(&cronFailed)
 			fmt.Fprintf(&b, "Cron: %d jobs (%d failed/24h)\n", cronTotal, cronFailed)
 		}
 

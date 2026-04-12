@@ -562,65 +562,6 @@ func (s *Service) Drain(timeout time.Duration) {
 	}
 }
 
-// wrapStreamCache accumulates streamed chunks and caches the full response.
-func (s *Service) wrapStreamCache(ctx context.Context, in <-chan StreamChunk, req *Request) <-chan StreamChunk {
-	out := make(chan StreamChunk, 32)
-	go func() {
-		defer close(out)
-		var full strings.Builder
-		for chunk := range core.OrDone(ctx.Done(), in) {
-			full.WriteString(chunk.Delta)
-			select {
-			case out <- chunk:
-			case <-ctx.Done():
-				return
-			}
-		}
-		if content := full.String(); content != "" {
-			s.cache.Put(ctx, req, &Response{Content: content})
-		}
-	}()
-	return out
-}
-
-// wrapStreamBreaker wraps a stream to record circuit breaker state.
-// It owns the original errs channel and returns a new one to prevent data races.
-func (s *Service) wrapStreamBreaker(ctx context.Context, in <-chan StreamChunk, errs <-chan error, cb *CircuitBreaker, provider string) (<-chan StreamChunk, <-chan error) {
-	out := make(chan StreamChunk, 32)
-	outErrs := make(chan error, 1)
-	go func() {
-		defer close(out)
-		defer close(outErrs)
-		gotChunk := false
-
-		for chunk := range core.OrDone(ctx.Done(), in) {
-			if !gotChunk {
-				cb.RecordSuccess()
-				gotChunk = true
-			}
-			select {
-			case out <- chunk:
-			case <-ctx.Done():
-				return
-			}
-		}
-
-		// Drain the original error channel (single reader).
-		select {
-		case err := <-errs:
-			if err != nil {
-				if !gotChunk {
-					cb.RecordFailure()
-				}
-				log.Warn().Err(err).Str("provider", provider).Msg("stream failed")
-				outErrs <- err
-			}
-		default:
-		}
-	}()
-	return out, outErrs
-}
-
 // splitModelSpec parses "provider/model" format into (provider, model).
 // If there's no slash, returns (spec, "") — the full spec as provider, empty model.
 // Callers must check whether the returned "provider" is actually a registered

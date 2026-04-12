@@ -239,7 +239,7 @@ func (h *HippocampusRegistry) SyncBuiltinTables(ctx context.Context) error {
 		{"procedural_memory", "Tool usage statistics", `["id","name","steps","success_count","failure_count","created_at","updated_at"]`, false},
 		{"relationship_memory", "Entity interaction tracking", `["id","entity_id","entity_name","trust_score","interaction_summary","interaction_count","last_interaction","created_at"]`, false},
 		{"cron_jobs", "Scheduled jobs", `["id","name","description","enabled","schedule_kind","schedule_expr","schedule_every_ms","schedule_tz","agent_id","session_target","payload_json","delivery_mode","delivery_channel","last_run_at","last_status","next_run_at"]`, false},
-		{"cron_runs", "Job execution history", `["id","job_id","status","duration_ms","error","output_text","created_at"]`, false},
+		{"cron_runs", "Job execution history", `["id","job_id","status","duration_ms","error_msg","timestamp"]`, false},
 		{"inference_costs", "LLM inference cost tracking", `["id","model","provider","tokens_in","tokens_out","cost","tier","cached","created_at"]`, false},
 		{"semantic_cache", "LLM response cache", `["id","prompt_hash","embedding","response","model","tokens_saved","hit_count","created_at","updated_at"]`, false},
 		{"delivery_queue", "Outbound message delivery", `["id","channel","recipient_id","content","idempotency_key","status","attempts","max_attempts","next_retry_at","last_error","created_at"]`, false},
