@@ -593,7 +593,7 @@ CREATE TABLE IF NOT EXISTS memory_index (
     source_id TEXT NOT NULL,
     summary TEXT NOT NULL DEFAULT '',
     category TEXT DEFAULT '',
-    confidence REAL NOT NULL DEFAULT 1.0,
+    confidence REAL NOT NULL DEFAULT 0.8,
     last_verified TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
