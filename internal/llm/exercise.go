@@ -362,7 +362,7 @@ func RunExercise(ctx context.Context, completer Completer, model string, prompts
 		}
 
 		result.Content = resp.Content
-		result.Quality = scoreExerciseResponse(p, resp.Content)
+		result.Quality = ScoreExerciseResponse(p, resp.Content)
 		result.Passed = result.Quality >= 0.3 && result.Error == ""
 		results = append(results, result)
 		if cb != nil {
@@ -373,10 +373,10 @@ func RunExercise(ctx context.Context, completer Completer, model string, prompts
 	return results
 }
 
-// scoreExerciseResponse computes a quality score for an exercise response.
+// ScoreExerciseResponse computes a quality score for an exercise response.
 // Combines length adequacy (40%), intent relevance (30%), and structural
 // quality (30%) into a single 0-1 score.
-func scoreExerciseResponse(prompt ExercisePrompt, content string) float64 {
+func ScoreExerciseResponse(prompt ExercisePrompt, content string) float64 {
 	if content == "" {
 		return 0.0
 	}

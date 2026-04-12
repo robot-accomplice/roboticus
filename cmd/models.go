@@ -998,11 +998,9 @@ per-intent-class latency scorecard and 6-axis metascore dimension reporting.`,
 				content := fmt.Sprintf("%v", resp["content"])
 				if content != "" && content != "<nil>" {
 					mr.pass++
-					// Score the response quality.
-					quality := toFloat(resp["quality"])
-					if quality == 0 {
-						quality = 0.5 // default if not scored server-side
-					}
+					// Score the response quality using the same scoring function
+					// as the server-side exercise endpoint.
+					quality := llm.ScoreExerciseResponse(ep, content)
 					qualitySum += quality
 					qualityCount++
 					intentSums[intent] += quality

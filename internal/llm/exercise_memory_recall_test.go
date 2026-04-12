@@ -58,7 +58,7 @@ func TestScoreMemoryRecall_ToolUseRewarded(t *testing.T) {
 	prompt := ExercisePrompt{Intent: IntentMemoryRecall, Complexity: ComplexityModerate}
 	// Good response: mentions using search_memories, reports findings.
 	good := "I used search_memories to look for deployment-related entries. Found 3 results in the memory store including project timeline discussions."
-	score := scoreExerciseResponse(prompt, good)
+	score := ScoreExerciseResponse(prompt, good)
 	if score < 0.5 {
 		t.Errorf("tool-using memory response scored %.2f, want >= 0.5", score)
 	}
@@ -67,7 +67,7 @@ func TestScoreMemoryRecall_ToolUseRewarded(t *testing.T) {
 func TestScoreMemoryRecall_HonestyRewarded(t *testing.T) {
 	prompt := ExercisePrompt{Intent: IntentMemoryRecall, Complexity: ComplexitySimple}
 	honest := "Let me search my memories. I don't have any stored memories about that topic. No results were found matching your query."
-	score := scoreExerciseResponse(prompt, honest)
+	score := ScoreExerciseResponse(prompt, honest)
 	if score < 0.4 {
 		t.Errorf("honest 'no memories' response scored %.2f, want >= 0.4", score)
 	}
@@ -77,7 +77,7 @@ func TestScoreMemoryRecall_ConfabulationPenalized(t *testing.T) {
 	prompt := ExercisePrompt{Intent: IntentMemoryRecall, Complexity: ComplexityModerate}
 	// Bad response: claims memories without tool evidence — confabulation.
 	confab := "As I recall from our previous discussions, you mentioned wanting to refactor the authentication layer. Based on our history, I remember that the deployment was scheduled for Friday."
-	score := scoreExerciseResponse(prompt, confab)
+	score := ScoreExerciseResponse(prompt, confab)
 	if score > 0.5 {
 		t.Errorf("confabulated memory response scored %.2f, want <= 0.5 — should be penalized", score)
 	}
@@ -85,7 +85,7 @@ func TestScoreMemoryRecall_ConfabulationPenalized(t *testing.T) {
 
 func TestScoreMemoryRecall_EmptyIsZero(t *testing.T) {
 	prompt := ExercisePrompt{Intent: IntentMemoryRecall, Complexity: ComplexityTrivial}
-	score := scoreExerciseResponse(prompt, "")
+	score := ScoreExerciseResponse(prompt, "")
 	if score != 0.0 {
 		t.Errorf("empty response scored %.2f, want 0.0", score)
 	}
