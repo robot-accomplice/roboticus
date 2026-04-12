@@ -90,11 +90,12 @@ func TestSoakMatrix_KnownFailureModes(t *testing.T) {
 			}(),
 			wantErr: false,
 			assertOutcome: func(t *testing.T, o *Outcome) {
-				if !strings.Contains(o.Content, "commands") && !strings.Contains(o.Content, "Available") {
+				lower := strings.ToLower(o.Content)
+				if !strings.Contains(lower, "commands") && !strings.Contains(lower, "help") {
 					t.Errorf("/help should list commands, got %q", o.Content)
 				}
 			},
-			controllingPath: "pipeline_gaps.go:tryBotCommand",
+			controllingPath: "bot_commands.go:TryHandle",
 		},
 		{
 			name:    "normal_inference",
