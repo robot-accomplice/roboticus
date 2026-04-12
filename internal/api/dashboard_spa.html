@@ -1915,7 +1915,8 @@
         + '  <div id="ov-card-errors"></div>'
         + '  <div id="ov-card-fleet" class="overview-fleet-slot" style="display:none"></div>'
         + '</div>'
-        + '<div class="card" id="ov-integrations" style="margin-top:1rem"></div>';
+        + '<div class="card" id="ov-integrations" style="margin-top:1rem"></div>'
+        + '<div class="card" id="ov-throttle" style="margin-top:1rem"></div>';
     },
     _applyOverviewCards: function(cards) {
       var self = this;
@@ -2006,6 +2007,63 @@
         }
         setHtml(intEl, intHtml);
       }
+      // Render throttle / rate-limit panel
+      var thrEl = document.getElementById('ov-throttle');
+      if (thrEl) {
+        var thr = cards && cards.__throttle ? cards.__throttle : {};
+        var thrHtml = '<div class="card-title">Rate Limiting</div>';
+        var gCount = Number(thr.global_count) || 0;
+        var gCap = Number(thr.global_capacity) || 1;
+        var pct = Math.min(100, Math.round((gCount / gCap) * 100));
+        var barColor = pct >= 90 ? '#ef4444' : (pct >= 70 ? '#f59e0b' : '#22c55e');
+        thrHtml += '<div style="margin-bottom:0.75rem">'
+          + '<div style="font-size:0.75rem;color:var(--muted);margin-bottom:0.25rem">Window utilization (' + esc(String(gCount)) + ' / ' + esc(String(gCap)) + ')</div>'
+          + '<div style="background:var(--border);border-radius:4px;height:8px;overflow:hidden">'
+          + '<div style="width:' + pct + '%;height:100%;background:' + barColor + ';border-radius:4px;transition:width 0.3s"></div>'
+          + '</div>'
+          + '</div>';
+        var activeIps = Number(thr.active_ips) || 0;
+        var activeActors = Number(thr.active_actors) || 0;
+        var throttledGlobal = Number(thr.throttled_global) || 0;
+        var windowSecs = Number(thr.window_secs) || 60;
+        thrHtml += '<div style="display:flex;gap:1.5rem;margin-bottom:0.75rem;font-size:0.75rem">'
+          + '<div><span style="color:var(--muted)">Active IPs:</span> ' + esc(String(activeIps)) + '</div>'
+          + '<div><span style="color:var(--muted)">Active Actors:</span> ' + esc(String(activeActors)) + '</div>'
+          + '<div><span style="color:var(--muted)">Throttled (global):</span> ' + esc(String(throttledGlobal)) + '</div>'
+          + '<div><span style="color:var(--muted)">Window:</span> ' + esc(String(windowSecs)) + 's</div>'
+          + '</div>';
+        var topIps = Array.isArray(thr.top_throttled_ips) ? thr.top_throttled_ips : [];
+        var topActors = Array.isArray(thr.top_throttled_actors) ? thr.top_throttled_actors : [];
+        thrHtml += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem">';
+        thrHtml += '<div>';
+        thrHtml += '<div style="font-size:0.7rem;font-weight:600;margin-bottom:0.35rem">Top Throttled IPs</div>';
+        if (topIps.length > 0) {
+          thrHtml += '<table style="width:100%;font-size:0.7rem;border-collapse:collapse">';
+          thrHtml += '<tr style="color:var(--muted)"><td style="padding:0.15rem 0.5rem 0.15rem 0">IP</td><td style="padding:0.15rem 0;text-align:right">Count</td></tr>';
+          topIps.forEach(function(entry) {
+            thrHtml += '<tr><td style="padding:0.15rem 0.5rem 0.15rem 0">' + esc(String(entry[0])) + '</td><td style="padding:0.15rem 0;text-align:right">' + esc(String(entry[1])) + '</td></tr>';
+          });
+          thrHtml += '</table>';
+        } else {
+          thrHtml += '<div style="font-size:0.7rem;color:var(--muted)">No throttled IPs</div>';
+        }
+        thrHtml += '</div>';
+        thrHtml += '<div>';
+        thrHtml += '<div style="font-size:0.7rem;font-weight:600;margin-bottom:0.35rem">Top Throttled Actors</div>';
+        if (topActors.length > 0) {
+          thrHtml += '<table style="width:100%;font-size:0.7rem;border-collapse:collapse">';
+          thrHtml += '<tr style="color:var(--muted)"><td style="padding:0.15rem 0.5rem 0.15rem 0">Actor</td><td style="padding:0.15rem 0;text-align:right">Count</td></tr>';
+          topActors.forEach(function(entry) {
+            thrHtml += '<tr><td style="padding:0.15rem 0.5rem 0.15rem 0">' + esc(String(entry[0])) + '</td><td style="padding:0.15rem 0;text-align:right">' + esc(String(entry[1])) + '</td></tr>';
+          });
+          thrHtml += '</table>';
+        } else {
+          thrHtml += '<div style="font-size:0.7rem;color:var(--muted)">No throttled actors</div>';
+        }
+        thrHtml += '</div>';
+        thrHtml += '</div>';
+        setHtml(thrEl, thrHtml);
+      }
     },
     navigate: function(page) {
       if (page === 'recommendations') {
@@ -2091,13 +2149,15 @@
         fetchWithFallback('/api/breaker/status', {}, 'breaker'),
         fetchWithFallback('/api/workspace/state', { agents: [] }, 'workspace'),
         fetchWithFallback('/api/stats/costs', { costs: [] }, 'cost stats'),
-        fetchWithFallback('/api/channels/status', [], 'channel status')
+        fetchWithFallback('/api/channels/status', [], 'channel status'),
+        fetchWithFallback('/api/stats/throttle', {}, 'throttle stats')
       ]).then(function(arr) {
         sparklineId = 0; stackedId = 0;
         var failures = arr.filter(function(r) { return !r.ok; });
         var agent = arr[0].data, health = arr[1].data, sessions = arr[2].data, skills = arr[3].data;
         var cron = arr[4].data, cache = arr[5].data, timeseries = arr[6].data, wallet = arr[7].data, breaker = arr[8].data;
         var wsState = arr[9].data, costData = arr[10].data, channelStatuses = arr[11].data || [];
+        var throttleData = arr[12].data || {};
         _cachedWorkspace = wsState;
 
         var state = (agent.state || 'unknown').toLowerCase();
@@ -2247,7 +2307,8 @@
           __attention: attention,
           __failures: failures,
           __meta: { updated_at: new Date().toLocaleTimeString() },
-          __channelStatuses: channelStatuses
+          __channelStatuses: channelStatuses,
+          __throttle: throttleData
         };
       });
     },
@@ -2263,6 +2324,7 @@
         var data = results[0] || {};
         var agentStatus = results[1] || {};
         if (agentStatus.name) setAgentDisplayName(agentStatus.name);
+        var rootAgentId = (agentStatus.agent_id || agentStatus.id || '').toLowerCase();
         var sessions = data.sessions || [];
         if (sessions.length > 0) {
           dismissHint('sessions-helper');
@@ -2305,39 +2367,76 @@
                   }
                 }
               }
-              return '<div class="message ' + side + '" id="msg-' + idx + '"><div class="message-role">' + esc(roleLabel) + expandBtn + '</div><div>' + renderSafeMarkdown(m.content || '') + '</div>' + gradeHtml + '<div class="ctx-detail" id="ctx-detail-' + idx + '" style="display:none"></div></div>';
+              var timeHtml = '';
+              if (m.created_at) {
+                var d = new Date(m.created_at);
+                var now = new Date();
+                var diffMs = now - d;
+                var diffMin = Math.floor(diffMs / 60000);
+                var relative = diffMin < 1 ? 'just now'
+                  : diffMin < 60 ? diffMin + 'm ago'
+                  : diffMin < 1440 ? Math.floor(diffMin / 60) + 'h ago'
+                  : Math.floor(diffMin / 1440) + 'd ago';
+                timeHtml = '<div class="msg-time" title="' + esc(d.toISOString()) + '" style="font-size:0.625rem;color:var(--muted);text-align:right;margin-top:0.25rem">' + relative + '</div>';
+              }
+              return '<div class="message ' + side + '" id="msg-' + idx + '"><div class="message-role">' + esc(roleLabel) + expandBtn + '</div><div>' + renderSafeMarkdown(m.content || '') + '</div>' + gradeHtml + timeHtml + '<div class="ctx-detail" id="ctx-detail-' + idx + '" style="display:none"></div></div>';
             }).join('') || '<p style="color:var(--muted);padding:1rem">Send a message to begin the conversation.</p>';
             var chatLabel = self._activeSession.nickname || truncate(self._activeSession.id, 16);
-            var chatAgentLabel = sessionAssistantLabel(self._activeSession, self._activeSession.agent_id || 'default');
-            var sessionAgentId = String(self._activeSession.agent_id || 'default').toLowerCase();
-            var primaryAgentId = String(App._activeAgentId || 'default').toLowerCase();
-            var scope = String(self._activeSession.scope || '').toLowerCase();
-            var isScheduledTask = scope.indexOf('task') !== -1 || String(self._activeSession.nickname || '').indexOf('Scheduled:') === 0;
-            var isOwnSession = !isScheduledTask && (sessionAgentId === primaryAgentId || sessionAgentId === 'default');
-            var inputHtml = isOwnSession
-              ? '<div class="session-chat-input"><textarea id="session-msg-input" placeholder="Type a message\u2026" rows="1" autocomplete="off"></textarea><button class="btn" id="btn-send-msg">' + uiBtnLabel('send', 'Send') + '</button></div>'
-              : '<div class="session-chat-input" style="opacity:0.5;pointer-events:none;border-top:1px solid var(--border-ghost)"><span style="font-size:0.75rem;color:var(--muted);padding:0.5rem 0">\ud83d\udd12 Read-only session \u2014 owned by ' + esc(chatAgentLabel) + '</span></div>';
-            return '<div class="session-chat-wrap"><div class="session-chat-header"><button class="btn secondary" style="font-size:0.75rem;padding:0.3rem 0.75rem" id="btn-back-sessions">' + uiBtnLabel('back', 'Back') + '</button><span style="font-weight:600">' + esc(chatAgentLabel) + '</span><span class="session-nick" title="' + esc(self._activeSession.id) + '" style="color:var(--muted);font-size:0.75rem">' + esc(chatLabel) + '</span>' + copyIdBtn(self._activeSession.id) + '</div><div class="message-thread">' + msgs + '</div>' + inputHtml + '</div>';
+            var sessionAgentId = (self._activeSession.agent_id || '').toLowerCase();
+            // A session belongs to the orchestrator when agent IDs match exactly,
+            // or we can't determine the root agent (graceful degradation).
+            // Composite IDs like "duncan:automation_scripting" are non-orchestrator.
+            var isOrchestratorSession = !rootAgentId || sessionAgentId === rootAgentId;
+            var isReadOnly = self._activeSession.non_interactive || !isOrchestratorSession;
+            // Non-orchestrator sessions show their own agent name, not the orchestrator's
+            var chatAgentLabel = isOrchestratorSession
+              ? sessionAssistantLabel(self._activeSession, self._activeSession.agent_id || 'default')
+              : (self._activeSession.agent_id || 'subagent');
+            var readOnlyReason = self._activeSession.non_interactive
+              ? 'cron/subagent session'
+              : (!isOrchestratorSession ? 'subagent session' : '');
+            var inputArea = isReadOnly
+              ? '<div style="padding:0.75rem 1rem;background:rgba(245,158,11,0.08);border-top:1px solid var(--border-ghost);font-size:0.8125rem;color:var(--muted);text-align:center">\ud83d\udd12 Read-only (' + readOnlyReason + ')</div>'
+              : '<div class="session-chat-input"><textarea id="session-msg-input" placeholder="Type a message\u2026" rows="1" autocomplete="off"></textarea><button class="btn" id="btn-send-msg">' + uiBtnLabel('send', 'Send') + '</button></div>';
+            return '<div class="session-chat-wrap"><div class="session-chat-header"><button class="btn secondary" style="font-size:0.75rem;padding:0.3rem 0.75rem" id="btn-back-sessions">' + uiBtnLabel('back', 'Back') + '</button><span style="font-weight:600">' + esc(chatAgentLabel) + '</span><span class="session-nick" title="' + esc(self._activeSession.id) + '" style="color:var(--muted);font-size:0.75rem">' + esc(chatLabel) + '</span>' + copyIdBtn(self._activeSession.id) + (isReadOnly ? ' <span class="badge" style="font-size:0.5rem;padding:1px 5px;background:var(--warning);color:#000;vertical-align:middle">AUTO</span>' : '') + '</div><div class="message-thread">' + msgs + '</div>' + inputArea + '</div>';
           });
         }
 
+        // Separate active/closed from archived
+        var showArchived = self._showArchivedSessions || false;
+        var activeSessions = sessions.filter(function(s) { return s.status !== 'archived'; });
+        var archivedSessions = sessions.filter(function(s) { return s.status === 'archived'; });
+        var displaySessions = showArchived ? sessions : activeSessions;
+
         var PAGE_SIZE = 25;
         var page = self._sessionsPage || 0;
-        var totalPages = Math.ceil(sessions.length / PAGE_SIZE) || 1;
+        var totalPages = Math.ceil(displaySessions.length / PAGE_SIZE) || 1;
         if (page >= totalPages) page = totalPages - 1;
-        var paged = sessions.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+        var paged = displaySessions.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
         var rows = paged.map(function(s) {
-          var label = s.nickname || truncate(s.id, 16);
+          // Fallback label: nickname -> agent name for subagents -> truncated ID
+          var sAgentLower = (s.agent_id || '').toLowerCase();
+          var isSubagent = rootAgentId && sAgentLower !== rootAgentId;
+          // For composite IDs like "duncan:automation_scripting", show the subagent part
+          var subagentLabel = s.agent_id || '';
+          if (subagentLabel.indexOf(':') > -1) subagentLabel = subagentLabel.split(':').slice(1).join(':');
+          var label = s.nickname || (isSubagent ? subagentLabel : '') || truncate(s.id, 16);
+          if (label === 'Untitled' && s.agent_id) label = s.agent_id;
           var st = s.status || 'active';
           var stCls = st === 'active' ? 'success' : (st === 'closed' ? '' : 'warning');
+          var isNonInteractive = s.non_interactive;
+          var openLabel = isNonInteractive ? 'View' : 'Open';
           var archiveBtn = st === 'archived'
             ? '<button class="btn secondary" style="font-size:0.65rem;padding:0.2rem 0.5rem" disabled>Archived</button>'
             : '<button class="btn secondary session-archive-btn" data-archive-session="' + esc(s.id || '') + '" style="font-size:0.65rem;padding:0.2rem 0.5rem" title="Archive">Archive</button>';
-          return '<tr data-id="' + esc(s.id || '') + '" style="cursor:pointer" title="' + esc(s.id || '') + '"><td><span class="session-nick">' + esc(label) + '</span>' + copyIdBtn(s.id || '') + '</td><td>' + esc(s.agent_id || '') + '</td><td><span class="badge ' + stCls + '" style="font-size:0.5625rem">' + esc(st) + '</span></td><td>' + esc(s.created_at || '') + '</td><td>' + esc(s.updated_at || '') + '</td><td style="display:flex;gap:0.25rem"><button class="btn secondary" style="font-size:0.65rem;padding:0.2rem 0.5rem">Open</button>' + archiveBtn + '<button class="btn secondary danger session-delete-btn" data-delete-session="' + esc(s.id || '') + '" style="font-size:0.65rem;padding:0.2rem 0.5rem" title="Delete">\u2715</button></td></tr>';
+          return '<tr data-id="' + esc(s.id || '') + '" data-non-interactive="' + (isNonInteractive ? '1' : '') + '" data-status="' + esc(st) + '" style="cursor:pointer" title="' + esc(s.id || '') + '"><td><span class="session-nick">' + esc(label) + '</span>' + copyIdBtn(s.id || '') + '</td><td>' + esc(s.agent_id || '') + '</td><td><span class="badge ' + stCls + '" style="font-size:0.5625rem">' + esc(st) + '</span></td><td>' + esc(s.created_at || '') + '</td><td>' + esc(s.updated_at || '') + '</td><td style="display:flex;gap:0.25rem"><button class="btn secondary" style="font-size:0.65rem;padding:0.2rem 0.5rem">' + openLabel + '</button>' + archiveBtn + '<button class="btn secondary danger session-delete-btn" data-delete-session="' + esc(s.id || '') + '" style="font-size:0.65rem;padding:0.2rem 0.5rem" title="Delete">\u2715</button></td></tr>';
         }).join('');
-        var emptyHint = sessions.length === 0 ? '<div class="card" style="margin-top:1rem;color:var(--muted)">No sessions yet. Click <strong>New session</strong> to start one.</div>' : '';
+        var emptyHint = displaySessions.length === 0 ? '<div class="card" style="margin-top:1rem;color:var(--muted)">No sessions yet. Click <strong>New session</strong> to start one.</div>' : '';
         var pager = totalPages > 1 ? '<div style="display:flex;gap:0.5rem;align-items:center;margin-top:0.75rem;justify-content:center"><button class="btn secondary" id="sess-prev" style="font-size:0.75rem;padding:0.2rem 0.6rem"' + (page === 0 ? ' disabled' : '') + '>\u2190 Prev</button><span style="font-size:0.75rem;color:var(--muted)">Page ' + (page + 1) + ' of ' + totalPages + '</span><button class="btn secondary" id="sess-next" style="font-size:0.75rem;padding:0.2rem 0.6rem"' + (page >= totalPages - 1 ? ' disabled' : '') + '>Next \u2192</button></div>' : '';
-        return '<div style="display:flex;gap:0.75rem;align-items:center"><button class="btn" id="btn-new-session">' + uiBtnLabel('plus', 'New session') + '</button><span style="font-size:0.8125rem;color:var(--muted)">' + sessions.length + ' session' + (sessions.length !== 1 ? 's' : '') + '</span></div><div class="table-wrap" style="margin-top:1rem;max-height:calc(100vh - 56px - 8rem);overflow-y:auto"><table><thead><tr><th>Topic</th><th>Agent</th><th>Status</th><th>Created</th><th>Updated</th><th>Action</th></tr></thead><tbody>' + rows + '</tbody></table></div>' + pager + emptyHint;
+        var archiveToggle = archivedSessions.length > 0
+          ? '<button class="btn secondary" id="toggle-archived" style="font-size:0.7rem;padding:0.25rem 0.6rem">' + (showArchived ? 'Hide archived (' + archivedSessions.length + ')' : 'Show archived (' + archivedSessions.length + ')') + '</button>'
+          : '';
+        return '<div style="display:flex;gap:0.75rem;align-items:center"><button class="btn" id="btn-new-session">' + uiBtnLabel('plus', 'New session') + '</button><span style="font-size:0.8125rem;color:var(--muted)">' + activeSessions.length + ' active</span>' + archiveToggle + '</div><div class="table-wrap" style="margin-top:1rem;max-height:calc(100vh - 56px - 8rem);overflow-y:auto"><table><thead><tr><th>Topic</th><th>Agent</th><th>Status</th><th>Created</th><th>Updated</th><th>Action</th></tr></thead><tbody>' + rows + '</tbody></table></div>' + pager + emptyHint;
       });
     },
 
@@ -2476,12 +2575,14 @@
             filterHtml += '</select></div>';
           }
           var list = memPaged.map(function(e) {
+            var ts = e.created_at ? e.created_at.substring(0, 16).replace('T', ' ') : '';
             return '<div class="card" style="margin-bottom:0.5rem">'
               + '<div>' + formatMemContent(e.content || '') + '</div>'
               + '<div style="margin-top:6px">'
               + '<span class="badge muted">' + esc(e.entry_type || '—') + '</span> '
               + '<span class="badge">imp: ' + esc(String(e.importance != null ? e.importance : '—')) + '</span> '
               + '<span style="font-size:0.7rem;color:var(--muted)">' + esc((e.session_id || '').substring(0, 8)) + '</span>'
+              + (ts ? ' <span style="font-size:0.7rem;color:var(--muted)">' + esc(ts) + '</span>' : '')
               + '</div></div>';
           }).join('') || '<p style="color:var(--muted)">No working memory entries. Open a session and send a message to populate this view.</p>';
           return healthStripHtml + tabButtons + filterHtml + memFilterBar() + '<div id="memory-list">' + list + '</div>' + memPager();
@@ -2498,7 +2599,8 @@
           var content = e.content || e.value || '';
           if (!content && e.key) content = e.key + ': ' + (e.summary || '');
           if (!content) { try { var ek = Object.keys(e).filter(function(k) { return k !== 'id' && k !== 'created_at' && k !== 'updated_at'; }); content = ek.map(function(k) { return k + ': ' + String(e[k] || ''); }).join(' | '); } catch(_) { content = '(no content)'; } }
-          return '<div class="card" style="margin-bottom:0.5rem"><div>' + formatMemContent(content) + '</div><div style="margin-top:6px"><span class="badge muted">' + esc(type) + '</span> <span class="badge">imp: ' + esc(String(imp)) + '</span></div></div>';
+          var ts = e.created_at ? e.created_at.substring(0, 16).replace('T', ' ') : (e.updated_at ? e.updated_at.substring(0, 16).replace('T', ' ') : '');
+          return '<div class="card" style="margin-bottom:0.5rem"><div>' + formatMemContent(content) + '</div><div style="margin-top:6px"><span class="badge muted">' + esc(type) + '</span> <span class="badge">imp: ' + esc(String(imp)) + '</span>' + (ts ? ' <span style="font-size:0.7rem;color:var(--muted)">' + esc(ts) + '</span>' : '') + '</div></div>';
         }).join('') || '<p style="color:var(--muted)">No entries found for this memory view yet.</p>';
         return healthStripHtml + tabButtons + memFilterBar() + '<div id="memory-list">' + list + '</div>' + memPager();
       });
@@ -4317,7 +4419,7 @@
           var amtStr = (typeof t.amount === 'number' ? t.amount.toFixed(2) : t.amount) + ' ' + (t.currency || '');
           var dateStr = t.created_at || '';
           if (dateStr.length > 19) dateStr = dateStr.substring(0, 19).replace('T', ' ');
-          return '<tr><td>' + esc(label) + '</td><td style="font-family:var(--mono)">' + esc(amtStr) + '</td><td style="color:var(--muted)">' + esc(dateStr) + '</td></tr>';
+          return '<tr><td>' + esc(label) + '</td><td style="font-family:var(--mono)">' + esc(amtStr) + '</td><td>' + esc(t.counterparty || '') + '</td><td style="color:var(--muted)">' + esc(dateStr) + '</td></tr>';
         }).join('');
 
         // Network & address card
@@ -4374,7 +4476,7 @@
             + 'To adjust spending limits, visit <a href="#settings" data-page="settings" style="color:var(--accent)">Settings</a> \u2192 Wallet section.'
             + '</div></div>';
         return guidanceBanner + addrSection + balancesCard + treasuryCard + revenueSwapCard + seedReadinessCard + seedProgressCard + seedPlanCard + strategySummaryCard + feedbackSummaryCard + swapTasksCard + taxTasksCard +
-          '<div class="card-title">Transaction history</div><div class="table-wrap"><table><thead><tr><th>Type</th><th>Amount</th><th>Date</th></tr></thead><tbody>' + txRows + '</tbody></table></div>';
+          '<div class="card-title">Transaction history</div><div class="table-wrap"><table><thead><tr><th>Type</th><th>Amount</th><th>Counterparty</th><th>Date</th></tr></thead><tbody>' + txRows + '</tbody></table></div>';
       });
     },
     _explorerUrl: function(chainId, contract) {
@@ -8205,7 +8307,9 @@
         id: id,
         agent_id: agentTd ? agentTd.textContent : 'default',
         agent_name: AGENT_DISPLAY_NAME || null,
-        nickname: nick !== id ? nick : null
+        nickname: nick !== id ? nick : null,
+        non_interactive: row.getAttribute('data-non-interactive') === '1',
+        status: row.getAttribute('data-status') || 'active'
       };
       App.navigate('sessions');
       return;
