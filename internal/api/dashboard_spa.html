@@ -2808,7 +2808,43 @@
         }
 
         if (tab === 'catalog') {
-          return tabs + catalogHtml + pluginsHtml + themesHtml;
+        // ── Apps section ──
+        var appItems = catalogData.apps || [];
+        var appsHtml = '';
+        if (appItems.length > 0) {
+          var appRows = appItems.map(function(a) {
+            var name = a.name || '';
+            var desc = a.description || '';
+            var agentName = a.agent_name || '';
+            var tier = a.tier || '';
+            var tierBadge = tier === 'official'
+              ? '<span class="badge success" style="font-size:0.62rem;padding:0.08rem 0.35rem">official</span>'
+              : '<span class="badge" style="font-size:0.62rem;padding:0.08rem 0.35rem">' + esc(tier) + '</span>';
+            return '<div style="display:flex;align-items:flex-start;gap:0.6rem;padding:0.6rem 0.65rem;border:1px solid var(--border-soft);border-radius:6px;background:rgba(255,255,255,0.01)">'
+              + '<div style="min-width:0;flex:1">'
+              + '<div style="display:flex;align-items:center;gap:0.4rem;flex-wrap:wrap">'
+              + '<span style="font-family:var(--font-mono);font-size:0.82rem;color:var(--text)">' + esc(name) + '</span>'
+              + tierBadge
+              + (a.version ? '<span style="font-size:0.68rem;color:var(--text-dim)">v' + esc(a.version) + '</span>' : '')
+              + '</div>'
+              + (agentName ? '<div style="margin-top:0.15rem;font-size:0.75rem;color:var(--accent)">\u2728 ' + esc(agentName) + '</div>' : '')
+              + '<div style="margin-top:0.18rem;font-size:0.75rem;color:var(--muted);line-height:1.35">' + esc(desc) + '</div>'
+              + '<div style="margin-top:0.2rem;font-size:0.68rem;color:var(--text-dim)">'
+              + (a.skills_count ? a.skills_count + ' skills' : '') + (a.subagents_count ? ' \u00b7 ' + a.subagents_count + ' subagents' : '')
+              + (a.min_model_params ? ' \u00b7 min ' + a.min_model_params : '')
+              + '</div>'
+              + '</div>'
+              + '<button class="btn secondary" style="font-size:0.75rem;padding:0.3rem 0.6rem;white-space:nowrap">' + uiBtnLabel('download', 'Install') + '</button>'
+              + '</div>';
+          }).join('');
+          appsHtml = ''
+            + '<div class="card" style="margin-bottom:1rem">'
+            + '  <div><div class="card-title">apps</div><div style="font-size:0.75rem;color:var(--muted)">available apps (' + appItems.length + ')</div></div>'
+            + '  <div style="margin-top:0.75rem;display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:0.55rem">' + appRows + '</div>'
+            + '</div>';
+        }
+
+          return tabs + catalogHtml + pluginsHtml + appsHtml + themesHtml;
         }
 
         if (skills.length === 0) {
@@ -7024,20 +7060,23 @@
     registerThemeManifest(theme, { injectCss: false });
   });
 
-  // Load ALL themes from the single catalog endpoint.
-  // This is the sole source of truth — builtins + catalog themes.
+  // Load installed themes only — the dropdown shows what you can use,
+  // not the full catalog. Catalog browsing/installation is on the
+  // Skills & Plugins page.
   function loadExternalThemes() {
     fetch('/api/themes/catalog').then(function(r) { return r.json(); }).then(function(data) {
       var themes = data.themes || data || [];
       themes.forEach(function(t) {
         if (themeNames[t.id]) return; // already registered from hardcoded builtins
-        registerThemeManifest(t, { injectCss: true });
+        // Only add installed catalog themes to the dropdown.
+        if (t.source === 'builtin' || t.installed) {
+          registerThemeManifest(t, { injectCss: true });
+        }
       });
-      // If saved theme is a catalog theme, apply it now
       var saved = localStorage.getItem('roboticus-theme');
       if (saved && loadedThemes[saved]) applyTheme(saved);
     }).catch(function(e) {
-      console.warn('Failed to load themes from catalog:', e);
+      console.warn('Failed to load themes:', e);
     });
   }
 

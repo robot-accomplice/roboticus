@@ -254,6 +254,18 @@ func GetSkillsCatalog(store *db.Store, reg *plugin.Registry, cfg *core.Config) h
 		if cfg != nil && cfg.Plugins.CatalogURL != "" {
 			fetchRemotePluginCatalog(cfg.Plugins.CatalogURL, installedNames, &plugins)
 		}
+		// Fallback: if remote fetch returned nothing, use hardcoded catalog.
+		if len(plugins) == 0 || allLocal(plugins) {
+			for _, fp := range fallbackPluginCatalog {
+				if !installedNames[strings.ToLower(fp.Name)] {
+					plugins = append(plugins, map[string]any{
+						"name": fp.Name, "version": fp.Version, "description": fp.Description,
+						"author": fp.Author, "tier": fp.Tier, "permissions": fp.Permissions,
+						"risk_level": fp.RiskLevel, "installed": false, "source": "catalog",
+					})
+				}
+			}
+		}
 
 		// --- Themes section (catalog themes only — builtins are always available) ---
 		catalogMu.RLock()
@@ -269,9 +281,22 @@ func GetSkillsCatalog(store *db.Store, reg *plugin.Registry, cfg *core.Config) h
 		}
 		catalogMu.RUnlock()
 
+		// --- Apps section (from registry) ---
+		apps := make([]map[string]any, 0)
+		for _, a := range fallbackAppCatalog {
+			apps = append(apps, map[string]any{
+				"name": a.Name, "version": a.Version, "description": a.Description,
+				"author": a.Author, "agent_name": a.AgentName, "tier": a.Tier,
+				"min_model_params": a.MinModelParams, "recommended_model": a.RecommendedModel,
+				"skills_count": a.SkillsCount, "subagents_count": a.SubagentsCount,
+				"source": "catalog",
+			})
+		}
+
 		writeJSON(w, http.StatusOK, map[string]any{
 			"skills":  skills,
 			"plugins": plugins,
+			"apps":    apps,
 			"themes":  themes,
 		})
 	}
@@ -526,4 +551,56 @@ func fetchRemotePluginCatalog(catalogURL string, installedNames map[string]bool,
 			"source":      "catalog",
 		})
 	}
+}
+
+// allLocal returns true if every plugin entry has source:"local" (no remote catalog entries).
+func allLocal(plugins []map[string]any) bool {
+	for _, p := range plugins {
+		if s, _ := p["source"].(string); s != "local" {
+			return false
+		}
+	}
+	return true
+}
+
+// fallbackPluginCatalog is used when the remote catalog URL is unreachable.
+type catalogPlugin struct {
+	Name        string
+	Version     string
+	Description string
+	Author      string
+	Tier        string
+	Permissions []string
+	RiskLevel   string
+}
+
+var fallbackPluginCatalog = []catalogPlugin{
+	{Name: "codex-cli", Version: "1.0.0", Description: "Claude Code / Codex CLI integration for autonomous coding tasks", Author: "Robot Accomplice AG", Tier: "official", Permissions: []string{"exec", "filesystem", "network"}, RiskLevel: "caution"},
+	{Name: "web-research", Version: "1.0.0", Description: "Structured web search and page content extraction for research tasks", Author: "Robot Accomplice AG", Tier: "official", Permissions: []string{"network"}, RiskLevel: "safe"},
+	{Name: "github", Version: "0.1.0", Description: "PR creation, issue management, code search beyond the workspace", Author: "Robot Accomplice AG", Tier: "planned", Permissions: []string{"network"}, RiskLevel: "safe"},
+	{Name: "notion", Version: "0.1.0", Description: "Read/write Notion pages and databases as a knowledge backend", Author: "Robot Accomplice AG", Tier: "planned", Permissions: []string{"network"}, RiskLevel: "safe"},
+	{Name: "calendar", Version: "0.1.0", Description: "Read/write Google Calendar or CalDAV for scheduling and availability", Author: "Robot Accomplice AG", Tier: "planned", Permissions: []string{"network"}, RiskLevel: "safe"},
+	{Name: "image-generation", Version: "0.1.0", Description: "Stable Diffusion, Flux, or ComfyUI for inline image generation", Author: "Robot Accomplice AG", Tier: "planned", Permissions: []string{"network"}, RiskLevel: "safe"},
+	{Name: "pdf-processor", Version: "0.1.0", Description: "Extract text, summarize, and index PDF documents into agent memory", Author: "Robot Accomplice AG", Tier: "planned", Permissions: []string{"filesystem"}, RiskLevel: "safe"},
+	{Name: "code-sandbox", Version: "0.1.0", Description: "Isolated code execution environment for safe script evaluation", Author: "Robot Accomplice AG", Tier: "planned", Permissions: []string{"exec", "network"}, RiskLevel: "caution"},
+	{Name: "rss-feed", Version: "0.1.0", Description: "Feed aggregation and monitoring with digest generation", Author: "Robot Accomplice AG", Tier: "planned", Permissions: []string{"network"}, RiskLevel: "safe"},
+}
+
+type catalogApp struct {
+	Name             string
+	Version          string
+	Description      string
+	Author           string
+	AgentName        string
+	Tier             string
+	MinModelParams   string
+	RecommendedModel string
+	SkillsCount      int
+	SubagentsCount   int
+}
+
+var fallbackAppCatalog = []catalogApp{
+	{Name: "tabletop-gm", Version: "1.0.0", Description: "Collaborative storyteller for tabletop RPG sessions using the d20 system", Author: "Robot Accomplice AG", AgentName: "The Narrator", Tier: "official", MinModelParams: "32B", RecommendedModel: "ollama/qwen2.5:32b", SkillsCount: 13, SubagentsCount: 3},
+	{Name: "eastern-philosophy", Version: "1.0.0", Description: "Contemplative philosophical dialogue grounded in Eastern traditions", Author: "Robot Accomplice AG", AgentName: "The Sage", Tier: "official", MinModelParams: "14B", RecommendedModel: "ollama/qwen2.5:32b", SkillsCount: 8, SubagentsCount: 2},
+	{Name: "western-philosophy", Version: "1.0.0", Description: "Rigorous philosophical inquiry grounded in Western traditions", Author: "Robot Accomplice AG", AgentName: "The Philosopher", Tier: "official", MinModelParams: "14B", RecommendedModel: "ollama/qwen2.5:32b", SkillsCount: 8, SubagentsCount: 2},
 }
