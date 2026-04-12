@@ -423,6 +423,7 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 	}
 
 	// ── Phase 10: Pipeline assembly ─────────────────────────────────────
+	eventBus := api.NewEventBus(256)
 	pipe := pipeline.New(pipeline.PipelineDeps{
 		Store:     store,
 		LLM:       llmSvc,
@@ -455,6 +456,7 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 		BGWorker:   bgWorker,
 		Embeddings: embedClient,
 		ErrBus:     errBus,
+		Dashboard:  eventBus,
 	})
 
 	bootStep(10, steps, "Pipeline assembled")
@@ -473,8 +475,6 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 		BlockedTools:   cfg.Approvals.BlockedTools,
 		TimeoutSeconds: cfg.Approvals.TimeoutSeconds,
 	})
-
-	eventBus := api.NewEventBus(256)
 
 	// Log ring buffer: captures structured logs for /api/logs endpoint.
 	logBuf := api.NewLogRingBuffer(5000)

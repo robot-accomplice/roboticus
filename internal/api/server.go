@@ -432,8 +432,13 @@ func NewServer(ctx context.Context, cfg ServerConfig, state *AppState) *http.Ser
 		}
 
 		// WebSocket.
-		r.Get("/ws", HandleWebSocket(state.EventBus, cfg.APIKey))
-		wsTickets := NewTicketStore(ctx, 60 * time.Second)
+		wsTickets := NewTicketStore(ctx, 60*time.Second)
+		r.Get("/ws", HandleWebSocket(WSHandlerDeps{
+			Bus:       state.EventBus,
+			APIKey:    cfg.APIKey,
+			Tickets:   wsTickets,
+			Snapshots: BuildTopicSnapshots(state),
+		}))
 		r.Post("/api/ws-ticket", routes.IssueWSTicket(wsTickets))
 	})
 

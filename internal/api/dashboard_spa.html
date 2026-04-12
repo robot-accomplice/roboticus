@@ -1807,57 +1807,21 @@
       while (_fleetHistory.byAgent[k].length < len) _fleetHistory.byAgent[k].unshift(0);
     });
   }
-  function startOverviewRefresh(app) {
-    if (overviewRefreshTimer) clearInterval(overviewRefreshTimer);
-    overviewRefreshTimer = setInterval(function() {
-      if (!app || app.page !== 'overview') return;
-      app.refreshOverview();
-    }, 7000);
-  }
-  function stopModelsBackgroundRefresh() {
-    if (modelsRefreshTimer) {
-      clearInterval(modelsRefreshTimer);
-      modelsRefreshTimer = null;
-    }
-  }
-  function startModelsBackgroundRefresh(app) {
-    stopModelsBackgroundRefresh();
-    // Keep model cache warm using metadata-only discovery (no inference calls).
-    modelsRefreshTimer = setInterval(function() {
-      if (!app || !app._loadAvailableModels) return;
-      app._loadAvailableModels({
-        forceRefresh: true,
-        cacheTtlMs: 0,
-        timeoutMs: 700,
-        nonBlocking: true,
-        validationLevel: 'zero'
-      }).catch(function() {});
-    }, 180000);
-  }
-  var workspaceRefreshTimer = null;
-  function stopWorkspaceRefresh() {
-    if (workspaceRefreshTimer) {
-      clearInterval(workspaceRefreshTimer);
-      workspaceRefreshTimer = null;
-    }
-  }
-  function startWorkspaceRefresh(app) {
-    stopWorkspaceRefresh();
-    workspaceRefreshTimer = setInterval(function() {
-      if (app.page !== 'workspace' || !workspace || !workspace.applySnapshot) return;
-      api('/api/workspace/state')
-        .then(function(data) {
-          _cachedWorkspace = data;
-          workspace.applySnapshot(data);
-          updateWorkspaceStatusPanel(data);
-        })
-        .catch(function() {});
-    }, 3000);
-  }
+  // Overview and model refresh are now driven by WebSocket topic subscriptions.
+  // stats.snapshot pushes overview data, models.snapshot pushes model availability.
+  function startOverviewRefresh() {} // no-op: WS-driven
+  function stopModelsBackgroundRefresh() {} // no-op: WS-driven
+  function startModelsBackgroundRefresh() {} // no-op: WS-driven
+  // Workspace updates are now pushed via WebSocket topic subscription.
+  // The workspace.snapshot handler in App._wsTopicHandlers applies state deltas
+  // in real-time instead of polling every 3 seconds.
+  function stopWorkspaceRefresh() {} // no-op: polling removed
+  function startWorkspaceRefresh() {} // no-op: WS-driven
 
   var _cachedConfig = null;
   var _cachedCronJobs = [];
   var _cachedWorkspace = null;
+  var _catalogThemeVars = [];
 
   var App = {
     page: 'overview',
@@ -2614,6 +2578,7 @@
     },
 
     renderSkills: function() {
+      _catalogThemeVars = [];
       var self = this;
       var tab = self._skillsTab || 'installed';
       if (tab !== 'installed' && tab !== 'catalog') tab = 'installed';
@@ -6666,8 +6631,8 @@
     renderWorkspace: function() {
       return api('/api/workspace/state').then(function(data) {
         _cachedWorkspace = data;
-        return '<div style="display:flex;flex-direction:column;height:calc(100vh - 56px - 3rem);min-height:400px;gap:0">'
-          + '<div id="ws-wrap" style="position:relative;flex:1;min-height:300px;overflow:hidden"><canvas id="ws-canvas" style="display:block;border-radius:var(--radius)"></canvas></div>'
+        return '<div style="display:flex;flex-direction:column;height:100%;min-height:0;gap:0">'
+          + '<div id="ws-wrap" style="position:relative;flex:1;min-height:0;overflow:hidden"><canvas id="ws-canvas" style="display:block;border-radius:var(--radius)"></canvas></div>'
           + '<div id="ws-status-panel" style="flex-shrink:0;padding:0.5rem 0.75rem;background:var(--surface);border-top:1px solid var(--border-ghost);display:flex;flex-wrap:wrap;align-items:center;gap:0.5rem 1rem;min-height:2.5rem"></div>'
           + '</div>';
       });
@@ -6925,6 +6890,8 @@
     document.documentElement.setAttribute('data-theme', theme);
     document.querySelectorAll('.theme-option').forEach(function(o) { o.classList.toggle('active', o.getAttribute('data-theme-set') === theme); });
     var nameEl = document.getElementById('theme-name'); if (nameEl) nameEl.textContent = themeNames[theme] || theme;
+    // Invalidate cached theme colors so workspace re-parses on next frame
+    if (workspace) workspace._themeColors = null;
     // Apply textures if this is an external theme with textures
     applyTextures(theme);
     // Load fonts if needed
@@ -9388,14 +9355,14 @@
     this.stations = systems.map(function(s) { return { id: s.id, name: s.name, kind: s.kind, x: s.x, y: s.y }; });
     if (this.stations.length === 0) {
       this.stations = [
-        { id: 'llm', name: 'LLM Inference', kind: 'Inference', x: 0.18, y: 0.22 },
-        { id: 'memory', name: 'Memory', kind: 'Storage', x: 0.82, y: 0.22 },
-        { id: 'exec', name: 'Code Execution', kind: 'Execution', x: 0.18, y: 0.78 },
-        { id: 'blockchain', name: 'Blockchain', kind: 'Blockchain', x: 0.82, y: 0.78 },
-        { id: 'web', name: 'Web / APIs', kind: 'Tool', x: 0.50, y: 0.12 },
-        { id: 'files', name: 'File System', kind: 'Tool', x: 0.50, y: 0.88 },
-        { id: 'tools_plugins', name: 'Tools / Plugins', kind: 'Plugin', x: 0.965, y: 0.50 },
-        { id: 'shelter', name: 'Idle Agents', kind: 'Shelter', x: 0.035, y: 0.50 }
+        { id: 'web', name: 'Web / APIs', kind: 'Tool', x: 0.50, y: 0.10 },
+        { id: 'llm', name: 'LLM Inference', kind: 'Inference', x: 0.30, y: 0.25 },
+        { id: 'memory', name: 'Memory', kind: 'Storage', x: 0.70, y: 0.25 },
+        { id: 'shelter', name: 'Idle Agents', kind: 'Shelter', x: 0.22, y: 0.50 },
+        { id: 'tools_plugins', name: 'Tools / Plugins', kind: 'Plugin', x: 0.78, y: 0.50 },
+        { id: 'exec', name: 'Code Execution', kind: 'Execution', x: 0.30, y: 0.75 },
+        { id: 'blockchain', name: 'Blockchain', kind: 'Blockchain', x: 0.70, y: 0.75 },
+        { id: 'files', name: 'File System', kind: 'Tool', x: 0.50, y: 0.90 }
       ];
     }
     var self = this;
@@ -9500,6 +9467,14 @@
     this.canvas.style.width = w + 'px'; this.canvas.style.height = h + 'px';
     this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     this.W = w; this.H = h;
+    // Clamp station positions so icons + labels never clip the canvas edge.
+    // 80px accommodates the 42px glow radius + label overhang.
+    var padX = Math.min(0.20, 80 / w), padY = Math.min(0.15, 80 / h);
+    for (var i = 0; i < this.stations.length; i++) {
+      var s = this.stations[i];
+      s.x = Math.max(padX, Math.min(1 - padX, s.x));
+      s.y = Math.max(padY, Math.min(1 - padY, s.y));
+    }
   };
 
   WorkspaceEngine.prototype.start = function() {
@@ -9698,7 +9673,7 @@
   WorkspaceEngine.prototype.render = function() {
     var ctx = this.ctx, W = this.W, H = this.H;
     if (!W || !H) return;
-    var tc = parseThemeColors(); var aR = tc.aR, aG = tc.aG, aB = tc.aB;
+    var tc = this._themeColors || parseThemeColors(); var aR = tc.aR, aG = tc.aG, aB = tc.aB;
     this._themeColors = tc;
     ctx.clearRect(0, 0, W, H); ctx.fillStyle = tc.bg; ctx.fillRect(0, 0, W, H);
 
@@ -10103,12 +10078,79 @@
   // S-HIGH-2: Uses short-lived tickets instead of persistent API key in URL.
   App._wsReconnectDelay = 1000;
   App._wsReconnectTimer = null;
+  // ── WebSocket topic subscription helpers ─────────────────────────────
+  App._wsSubscribedTopics = [];
+  App._wsSend = function(msg) {
+    if (App.ws && App.ws.readyState === WebSocket.OPEN) {
+      App.ws.send(JSON.stringify(msg));
+    }
+  };
+  App._wsSubscribe = function(topics) {
+    App._wsSend({ type: 'subscribe', topics: topics });
+  };
+  App._wsUnsubscribe = function(topics) {
+    App._wsSend({ type: 'unsubscribe', topics: topics });
+  };
+  // Subscribe to page-specific topics on navigation, unsubscribe from old ones.
+  App._wsSetPageTopics = function(topics) {
+    if (App._wsSubscribedTopics.length > 0) {
+      App._wsUnsubscribe(App._wsSubscribedTopics);
+    }
+    App._wsSubscribedTopics = topics;
+    if (topics.length > 0) {
+      App._wsSubscribe(topics);
+    }
+  };
+
+  // Topic snapshot handlers — apply pushed data to the dashboard.
+  App._wsTopicHandlers = {
+    'workspace.snapshot': function(data) {
+      _cachedWorkspace = data;
+      if (workspace && workspace.applySnapshot) {
+        workspace.applySnapshot(data);
+        updateWorkspaceStatusPanel(data);
+      }
+    },
+    'agent.status.snapshot': function(data) {
+      applySidebarIdentity(data, {});
+    },
+    'models.snapshot': function(data) {
+      if (data && data.models) App._cachedModels = data.models;
+    },
+    'sessions.snapshot': function(data) {
+      if (App.page === 'sessions') App.navigate('sessions');
+    },
+    'stats.snapshot': function(data) {
+      if (App.page === 'overview') App._applyStatsSnapshot(data);
+    },
+    'workspace.changed': function() {
+      // Server notified workspace data changed — snapshot will follow or re-subscribe
+      App._wsSubscribe(['workspace']);
+    },
+    'agent.status.changed': function() {
+      App._wsSubscribe(['agent.status']);
+    },
+    'models.changed': function() {
+      App._wsSubscribe(['models']);
+    },
+    'sessions.changed': function() {
+      if (App.page === 'sessions') App._wsSubscribe(['sessions']);
+    }
+  };
+  // Stats snapshot applicator (used by WS push).
+  App._applyStatsSnapshot = function(data) {
+    if (!data) return;
+    // Cache for next overview render.
+    App._wsStatsCache = data;
+  };
+
   App._bindWsEvents = function(ws) {
     ws.onopen = function() {
       App._wsReconnectDelay = 1000;
       var d = document.getElementById('ws-dot'); if (d) d.classList.remove('off');
       var l = document.getElementById('ws-label'); if (l) l.textContent = 'Connected';
-      refreshSidebarIdentity();
+      // Subscribe to always-on topics via WebSocket (replaces HTTP polling).
+      App._wsSubscribe(['agent.status', 'workspace', 'models']);
     };
     ws.onclose = function() {
       var d = document.getElementById('ws-dot'); if (d) d.classList.add('off');
@@ -10123,6 +10165,10 @@
     ws.onmessage = function(ev) {
       try {
         var event = JSON.parse(ev.data);
+        // Route topic snapshots and change notifications to handlers.
+        if (event && event.type && App._wsTopicHandlers[event.type]) {
+          App._wsTopicHandlers[event.type](event.data);
+        }
         if (workspace && workspace.handleEvent) workspace.handleEvent(event);
         if (event && event.type === 'stream_start') {
           App._liveStreamTurn = {
@@ -10182,9 +10228,8 @@
     } catch (err) { var d = document.getElementById('ws-dot'); if (d) d.classList.add('off'); var l = document.getElementById('ws-label'); if (l) l.textContent = 'No WebSocket'; }
   };
   App._connectWs();
-  setInterval(refreshSidebarIdentity, 30000);
-
-  startModelsBackgroundRefresh(App);
+  // Sidebar identity and model refresh are now driven by WebSocket topic subscriptions
+  // (agent.status, models) — no more HTTP polling intervals.
   App._loadAvailableModels({ nonBlocking: true, validationLevel: 'zero' }).catch(function() {});
   // BUG-FIX: call hint preference prompt only once on startup, not on every navigation
   ensureAuth().then(function() { maybePromptHintPreference(); }).catch(function() {});

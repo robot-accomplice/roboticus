@@ -272,12 +272,22 @@ func GetSkillsCatalog(store *db.Store, reg *plugin.Registry, cfg *core.Config) h
 		installed := installedThemeIDs(store)
 		themes := make([]map[string]any, 0, len(catalogThemes))
 		for _, t := range catalogThemes {
-			themes = append(themes, map[string]any{
+			entry := map[string]any{
 				"id": t.ID, "name": t.Name, "description": t.Description,
 				"author": t.Author, "swatch": t.Swatch, "source": t.Source,
 				"version": t.Version,
 				"installed": installedThemes[t.ID] || installed[t.ID],
-			})
+			}
+			if len(t.Variables) > 0 {
+				entry["variables"] = t.Variables
+			}
+			if len(t.Textures) > 0 {
+				entry["textures"] = t.Textures
+			}
+			if len(t.Fonts) > 0 {
+				entry["fonts"] = t.Fonts
+			}
+			themes = append(themes, entry)
 		}
 		catalogMu.RUnlock()
 

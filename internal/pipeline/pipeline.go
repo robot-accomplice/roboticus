@@ -68,6 +68,12 @@ type Runner interface {
 	Run(ctx context.Context, cfg Config, input Input) (*Outcome, error)
 }
 
+// DashboardNotifier publishes typed events to the dashboard WebSocket bus.
+// The api.EventBus satisfies this interface — defined here to avoid circular imports.
+type DashboardNotifier interface {
+	PublishEvent(eventType string, data any)
+}
+
 // StreamFinalizer runs post-turn work after streaming completes.
 // Connectors MUST call this after assembling the full streamed content,
 // or streaming turns will silently lose memory ingestion, embedding
@@ -98,6 +104,7 @@ type Pipeline struct {
 	botCmds    *BotCommandHandler
 	embeddings *llm.EmbeddingClient
 	errBus     *core.ErrorBus
+	dashboard  DashboardNotifier
 }
 
 // PipelineDeps bundles dependencies for the Pipeline.
@@ -115,6 +122,7 @@ type PipelineDeps struct {
 	BGWorker   *core.BackgroundWorker
 	Embeddings *llm.EmbeddingClient
 	ErrBus     *core.ErrorBus
+	Dashboard  DashboardNotifier
 }
 
 // New creates the unified pipeline.
@@ -139,6 +147,7 @@ func New(deps PipelineDeps) *Pipeline {
 		tasks:      NewTaskTracker(),
 		embeddings: deps.Embeddings,
 		errBus:     deps.ErrBus,
+		dashboard:  deps.Dashboard,
 		botCmds:    NewBotCommandHandler(deps.LLM, deps.Store),
 	}
 }
@@ -146,6 +155,13 @@ func New(deps PipelineDeps) *Pipeline {
 // RunPipeline is the canonical package-level entry point for all connectors.
 func RunPipeline(ctx context.Context, p Runner, cfg Config, input Input) (*Outcome, error) {
 	return p.Run(ctx, cfg, input)
+}
+
+// dashNotify publishes a typed event to the dashboard if a notifier is configured.
+func (p *Pipeline) dashNotify(eventType string, data any) {
+	if p.dashboard != nil {
+		p.dashboard.PublishEvent(eventType, data)
+	}
 }
 
 // Run executes the full pipeline with the given config and input.
@@ -172,6 +188,11 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 	tr := NewTraceRecorder()
 	pipelineStart := time.Now()
 	log.Info().Str("channel", cfg.ChannelLabel).Str("agent", input.AgentID).Msg("pipeline started")
+
+	// Notify dashboard: agent is working.
+	p.dashNotify("agent_working", map[string]string{
+		"agent_id": input.AgentID, "workstation": "llm", "skill": "inference",
+	})
 
 	// ── Stage 1: Input validation ──────────────────────────────────────────
 	tr.BeginSpan("validation")
@@ -699,6 +720,9 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 
 	// ── Stage 12: Inference ────────────────────────────────────────────────
 	tr.BeginSpan("inference")
+	p.dashNotify("stream_start", map[string]string{
+		"session_id": session.ID, "agent_id": input.AgentID,
+	})
 	var outcome *Outcome
 	switch cfg.InferenceMode {
 	case InferenceStandard:
@@ -737,6 +761,14 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 	p.tasks.Complete(taskID)
 
 	log.Info().Str("session", session.ID).Str("model", outcome.Model).Int("tokens_out", outcome.TokensOut).Int64("duration_ms", time.Since(pipelineStart).Milliseconds()).Msg("pipeline completed")
+
+	// Notify dashboard: inference complete, agent returning to idle.
+	p.dashNotify("stream_end", map[string]any{
+		"session_id": session.ID, "model": outcome.Model,
+		"tokens_in": outcome.TokensIn, "tokens_out": outcome.TokensOut,
+	})
+	p.dashNotify("agent_idle", map[string]string{"agent_id": input.AgentID})
+
 	return outcome, nil
 }
 
