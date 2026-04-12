@@ -36,7 +36,8 @@ func (rq *RouteQueries) ListToolCallsByTurn(ctx context.Context, turnID string) 
 func (rq *RouteQueries) ListCronJobs(ctx context.Context) (*sql.Rows, error) {
 	return rq.q.QueryContext(ctx,
 		`SELECT id, name, description, enabled, schedule_kind, schedule_expr,
-		        schedule_every_ms, agent_id, payload_json, last_run_at, last_status, next_run_at
+		        schedule_every_ms, agent_id, payload_json, last_run_at, last_status, next_run_at,
+		        COALESCE(delivery_mode, 'none'), COALESCE(delivery_channel, '')
 		 FROM cron_jobs ORDER BY name`)
 }
 
@@ -44,7 +45,8 @@ func (rq *RouteQueries) ListCronJobs(ctx context.Context) (*sql.Rows, error) {
 func (rq *RouteQueries) GetCronJob(ctx context.Context, id string) *sql.Row {
 	return rq.q.QueryRowContext(ctx,
 		`SELECT id, name, description, enabled, schedule_kind, schedule_expr, schedule_every_ms,
-		        agent_id, payload_json, last_run_at, last_status, next_run_at
+		        agent_id, payload_json, last_run_at, last_status, next_run_at,
+		        COALESCE(delivery_mode, 'none'), COALESCE(delivery_channel, '')
 		 FROM cron_jobs WHERE id = ?`, id)
 }
 

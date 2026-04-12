@@ -111,7 +111,8 @@ func (w *CronWorker) listEnabledJobs(ctx context.Context) ([]*CronJob, error) {
 	rows, err := w.store.QueryContext(ctx,
 		`SELECT id, name, agent_id, schedule_kind, schedule_expr, schedule_every_ms,
 		        payload_json, enabled, last_run_at, next_run_at,
-		        COALESCE(retry_count, 0), COALESCE(max_retries, 3), COALESCE(retry_delay_ms, 60000)
+		        COALESCE(retry_count, 0), COALESCE(max_retries, 3), COALESCE(retry_delay_ms, 60000),
+		        COALESCE(delivery_mode, 'none'), COALESCE(delivery_channel, '')
 		 FROM cron_jobs WHERE enabled = 1`)
 	if err != nil {
 		return nil, err
@@ -124,7 +125,8 @@ func (w *CronWorker) listEnabledJobs(ctx context.Context) ([]*CronJob, error) {
 		var lastRun, nextRun *string
 		if err := rows.Scan(&job.ID, &job.Name, &job.AgentID, &job.Kind, &job.Expression,
 			&job.IntervalMs, &job.PayloadJSON, &job.Enabled, &lastRun, &nextRun,
-			&job.RetryCount, &job.MaxRetries, &job.RetryDelayMs); err != nil {
+			&job.RetryCount, &job.MaxRetries, &job.RetryDelayMs,
+			&job.DeliveryMode, &job.DeliveryChannel); err != nil {
 			continue
 		}
 		if lastRun != nil {

@@ -107,11 +107,24 @@ func (d *Daemon) run() {
 				if input.Content == "" {
 					input.Content = fmt.Sprintf("Execute scheduled job: %s", job.Name)
 				}
-				_, err := pipeline.RunPipeline(ctx, d.pipe, pipeline.PresetCron(), input)
+				outcome, err := pipeline.RunPipeline(ctx, d.pipe, pipeline.PresetCron(), input)
 				if err != nil {
 					log.Error().Err(err).Str("job", job.Name).Msg("cron job pipeline failed")
+					return err
 				}
-				return err
+
+				// Deliver the pipeline outcome to the configured channel.
+				if job.DeliveryMode != "" && job.DeliveryMode != "none" && job.DeliveryChannel != "" && outcome.Content != "" {
+					dq := d.router.DeliveryQueue()
+					dq.Enqueue(job.DeliveryChannel, "", outcome.Content)
+					log.Info().
+						Str("job", job.Name).
+						Str("channel", job.DeliveryChannel).
+						Str("mode", job.DeliveryMode).
+						Msg("cron job outcome enqueued for delivery")
+				}
+
+				return nil
 			}), d.errBus)
 		worker.Run(ctx)
 	}()

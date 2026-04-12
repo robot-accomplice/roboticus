@@ -201,6 +201,18 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 		tr.EndSpan("error")
 		return nil, core.NewError(core.ErrConfig, fmt.Sprintf("message exceeds %d bytes", core.MaxUserMessageBytes))
 	}
+	tr.Annotate("content_len", len(input.Content))
+	tr.Annotate("channel", cfg.ChannelLabel)
+	tr.Annotate("agent_id", input.AgentID)
+	if isBotCommand {
+		tr.Annotate("bot_command_detected", true)
+	}
+	if cfg.ModelOverride != "" {
+		tr.Annotate("model_override", cfg.ModelOverride)
+	}
+	if cfg.PreferLocalModel {
+		tr.Annotate("prefer_local", true)
+	}
 	tr.EndSpan("ok")
 
 	// ── Stage 2: Injection defense ─────────────────────────────────────────
@@ -210,6 +222,7 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 		score := p.injection.CheckInput(input.Content)
 		tr.Annotate("score", float64(score))
 		if score.IsBlocked() {
+			tr.Annotate("action", "blocked")
 			tr.EndSpan("error")
 			log.Warn().Float64("score", float64(score)).Str("channel", cfg.ChannelLabel).Str("session", input.SessionID).Str("agent", input.AgentID).Str("sender", input.SenderID).Msg("injection blocked")
 			return nil, core.NewError(core.ErrInjectionBlocked, "input rejected by injection defense")
@@ -217,7 +230,10 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 		if score.IsCaution() {
 			input.Content = p.injection.Sanitize(input.Content)
 			threatCaution = true
+			tr.Annotate("action", "sanitized")
 			log.Warn().Float64("score", float64(score)).Str("session", input.SessionID).Str("channel", cfg.ChannelLabel).Str("agent", input.AgentID).Msg("input sanitized")
+		} else {
+			tr.Annotate("action", "pass")
 		}
 	}
 	tr.EndSpan("ok")
@@ -226,7 +242,9 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 	if cfg.DedupTracking && p.dedup != nil {
 		tr.BeginSpan("dedup_check")
 		dedupFP := Fingerprint(input.Content, input.AgentID, input.SessionID)
+		tr.Annotate("fingerprint", dedupFP)
 		if !p.dedup.CheckAndTrack(dedupFP) {
+			tr.Annotate("duplicate", true)
 			tr.EndSpan("rejected")
 			return nil, core.NewError(core.ErrDuplicate, "duplicate request already in flight")
 		}
@@ -298,6 +316,9 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 		return nil, core.WrapError(core.ErrDatabase, "failed to store user message", err)
 	}
 	session.AddUserMessage(content)
+	tr.Annotate("msg_id", msgID)
+	tr.Annotate("topic_tag", topicTag)
+	tr.Annotate("turn_count", session.TurnCount())
 	tr.EndSpan("ok")
 
 	// ── Stage 6: Turn creation ─────────────────────────────────────────────
@@ -430,6 +451,27 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 		}
 
 		AnnotateRetrievalStrategy(tr, retrievalStrat.Strategy, retrievalStrat.Budget, fragmentCount)
+
+		// Enriched memory trace: tier breakdown and budget consumption.
+		// Parse tier markers from the memory block to report per-tier hits.
+		tiersQueried := []string{retrievalStrat.Strategy}
+		hitsPerTier := map[string]int{retrievalStrat.Strategy: fragmentCount}
+		budgetConsumed := 0
+		if memoryBlock != "" {
+			budgetConsumed = len(memoryBlock) / 4 // 4-char token heuristic
+			// Detect tier markers if present (e.g. "[episodic]", "[semantic]", "[working]").
+			for _, tier := range []string{"episodic", "semantic", "working", "procedural"} {
+				count := strings.Count(memoryBlock, "["+tier+"]")
+				if count > 0 {
+					if _, exists := hitsPerTier[tier]; !exists {
+						tiersQueried = append(tiersQueried, tier)
+					}
+					hitsPerTier[tier] = count
+				}
+			}
+		}
+		AnnotateMemoryTrace(tr, tiersQueried, hitsPerTier, budgetConsumed)
+		tr.Annotate(TraceNSRetrieval+".reason", retrievalStrat.Reason)
 		tr.EndSpan("ok")
 	}
 
@@ -515,7 +557,24 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 				},
 			}
 			if p.guards != nil && cfg.CacheGuardSet != GuardSetNone {
-				cacheOutcome.Content = p.guards.Apply(cacheOutcome.Content)
+				tr.BeginSpan("cache_guard")
+				cacheGuardStart := time.Now()
+				cacheGuardResult := p.guards.ApplyFull(cacheOutcome.Content)
+				cacheOutcome.Content = cacheGuardResult.Content
+				cacheGuardDur := time.Since(cacheGuardStart).Milliseconds()
+				// Annotate cache guard results.
+				cacheGuardEntries := make(map[string]GuardTraceEntry)
+				for _, v := range cacheGuardResult.Violations {
+					parts := strings.SplitN(v, ":", 2)
+					name := strings.TrimSpace(parts[0])
+					reason := ""
+					if len(parts) > 1 {
+						reason = strings.TrimSpace(parts[1])
+					}
+					cacheGuardEntries[name] = GuardTraceEntry{Outcome: "fail", Reason: reason}
+				}
+				AnnotateGuardTrace(tr, cacheGuardEntries, "cached", cacheGuardDur)
+				tr.EndSpan("ok")
 			}
 
 			// Persist cached assistant response to session_messages.
@@ -543,7 +602,87 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 	}
 
 	// ── Stage 11.75: Prepare for inference (Rust: prepare_for_inference) ──
+	tr.BeginSpan("prepare_inference")
 	p.PrepareForInference(ctx, session, memoryBlock, cfg.BudgetTier)
+
+	// Annotate context budget allocation so the dashboard shows where tokens go.
+	{
+		budget := defaultTokenBudget
+		switch cfg.BudgetTier {
+		case 0:
+			budget = 4096
+		case 2:
+			budget = 16384
+		case 3:
+			budget = 32768
+		}
+		var sysToks, memToks, histToks int
+		for _, m := range session.Messages() {
+			msgTokens := len(m.Content) / 4 // 4-char heuristic
+			switch m.Role {
+			case "system":
+				sysToks += msgTokens
+			case "user", "assistant":
+				histToks += msgTokens
+			}
+		}
+		if memoryBlock != "" {
+			memToks = len(memoryBlock) / 4
+		}
+		AnnotateContextBudgetTrace(tr, budget, sysToks, 0, memToks, histToks)
+	}
+
+	// Annotate routing decision: which model was selected and why.
+	{
+		var candidates []string
+		var winner string
+		var winnerScore float64
+		routingMode := "fallback"
+
+		if cfg.ModelOverride != "" {
+			winner = cfg.ModelOverride
+			routingMode = "override"
+		} else if p.llmSvc != nil && p.llmSvc.Router() != nil {
+			router := p.llmSvc.Router()
+			// Collect candidate models.
+			for _, t := range router.Targets() {
+				candidates = append(candidates, t.Model)
+			}
+			// Resolve the selection.
+			userContent := ""
+			msgs := session.Messages()
+			for i := len(msgs) - 1; i >= 0; i-- {
+				if msgs[i].Role == "user" {
+					userContent = msgs[i].Content
+					break
+				}
+			}
+			target := router.Select(&llm.Request{
+				Messages: []llm.Message{{Role: "user", Content: userContent}},
+			})
+			winner = target.Model
+			if router.MetascoreSelector != nil {
+				routingMode = "metascore"
+			} else {
+				routingMode = "heuristic"
+			}
+		}
+		AnnotateRoutingTrace(tr, candidates, winner, winnerScore, routingMode)
+
+		// Also annotate the active routing weights when metascore routing is used.
+		if p.llmSvc != nil && p.llmSvc.Router() != nil {
+			w := p.llmSvc.Router().GetRoutingWeights()
+			AnnotateRoutingWeightsTrace(tr, map[string]float64{
+				"efficacy":     w.Efficacy,
+				"cost":         w.Cost,
+				"availability": w.Availability,
+				"locality":     w.Locality,
+				"confidence":   w.Confidence,
+				"speed":        w.Speed,
+			})
+		}
+	}
+	tr.EndSpan("ok")
 
 	// Thread delegation result into inference context (Rust parity H8).
 	// Rust seeds tool_results_acc with ("orchestrate-subagents", result)
@@ -562,7 +701,7 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 	var outcome *Outcome
 	switch cfg.InferenceMode {
 	case InferenceStandard:
-		outcome, err = p.runStandardInference(ctx, cfg, session, msgID, turnID)
+		outcome, err = p.runStandardInferenceWithTrace(ctx, cfg, session, msgID, turnID, tr)
 	case InferenceStreaming:
 		outcome, err = p.prepareStreamInference(ctx, cfg, session, msgID)
 	default:
