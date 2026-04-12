@@ -39,10 +39,11 @@ func (rq *RouteQueries) CostsByHour(ctx context.Context, hours int) (*sql.Rows, 
 // CostsByModel returns cost aggregation by model.
 func (rq *RouteQueries) CostsByModel(ctx context.Context, hours int) (*sql.Rows, error) {
 	return rq.q.QueryContext(ctx,
-		`SELECT model, SUM(cost) as total_cost, SUM(tokens_in) as total_in, SUM(tokens_out) as total_out, COUNT(*) as calls
+		`SELECT CASE WHEN model NOT LIKE '%/%' AND provider != '' THEN provider || '/' || model ELSE model END AS model,
+		 SUM(cost) as total_cost, SUM(tokens_in) as total_in, SUM(tokens_out) as total_out, COUNT(*) as calls
 		 FROM inference_costs
 		 WHERE created_at >= datetime('now', '-' || ? || ' hours')
-		 GROUP BY model ORDER BY total_cost DESC`, hours)
+		 GROUP BY 1 ORDER BY total_cost DESC`, hours)
 }
 
 // CountRow returns a single integer count for a query.
@@ -97,23 +98,24 @@ func (rq *RouteQueries) EfficiencyMetrics(ctx context.Context, offset string) (t
 // ModelCostBreakdown returns per-model cost breakdown for a time window.
 func (rq *RouteQueries) ModelCostBreakdown(ctx context.Context, offset string) (*sql.Rows, error) {
 	return rq.q.QueryContext(ctx,
-		`SELECT model, COUNT(*), COALESCE(SUM(cost), 0), COALESCE(SUM(tokens_in), 0), COALESCE(SUM(tokens_out), 0)
+		`SELECT CASE WHEN model NOT LIKE '%/%' AND provider != '' THEN provider || '/' || model ELSE model END AS model,
+		 COUNT(*), COALESCE(SUM(cost), 0), COALESCE(SUM(tokens_in), 0), COALESCE(SUM(tokens_out), 0)
 		 FROM inference_costs
 		 WHERE created_at >= datetime('now', ? || ' hours')
-		 GROUP BY model ORDER BY COUNT(*) DESC`, offset)
+		 GROUP BY 1 ORDER BY COUNT(*) DESC`, offset)
 }
 
 // ModelQualityBreakdown returns per-model quality/efficacy aggregates.
 func (rq *RouteQueries) ModelQualityBreakdown(ctx context.Context, offset string) (*sql.Rows, error) {
 	return rq.q.QueryContext(ctx,
-		`SELECT model,
+		`SELECT CASE WHEN model NOT LIKE '%/%' AND provider != '' THEN provider || '/' || model ELSE model END AS model,
 		        COALESCE(AVG(quality_score), 0),
 		        SUM(CASE WHEN quality_score IS NOT NULL THEN 1 ELSE 0 END),
 		        SUM(CASE WHEN escalation = 1 THEN 1 ELSE 0 END),
 		        COALESCE(AVG(latency_ms), 0)
 		 FROM inference_costs
 		 WHERE created_at >= datetime('now', ? || ' hours')
-		 GROUP BY model`, offset)
+		 GROUP BY 1`, offset)
 }
 
 // ListModelSelectionEvents returns recent model selection events with candidates.

@@ -821,10 +821,51 @@
       try {
         var obj = JSON.parse(s);
         return formatMemValue(obj, 0);
-      } catch(_) { /* not valid JSON, fall through */ }
+      } catch(_) {
+        // Truncated/malformed JSON from old DB entries — summarize instead of raw display
+        return formatTruncatedJson(s);
+      }
+    }
+    // Check for "tool_name: {..." pattern (old episodic format with embedded truncated JSON)
+    var colonJson = s.match(/^([^:]+):\s*(\{|\[)/);
+    if (colonJson) {
+      var toolPrefix = colonJson[1].trim();
+      var jsonPart = s.substring(s.indexOf(colonJson[2]));
+      try {
+        var parsed = JSON.parse(jsonPart);
+        return '<span class="badge" style="font-size:0.68rem">' + esc(toolPrefix) + '</span> ' + formatMemValue(parsed, 0);
+      } catch(_) {
+        return '<span class="badge" style="font-size:0.68rem">' + esc(toolPrefix) + '</span> '
+          + '<span style="color:var(--muted);font-size:0.78rem;font-style:italic">(truncated result)</span>';
+      }
     }
     // For non-JSON: convert basic markdown-like formatting and truncate
     return formatMemText(s);
+  }
+  /** Summarize truncated/malformed JSON from old DB entries into readable display. */
+  function formatTruncatedJson(s) {
+    // Try to extract tool name from "tool_name: {json..." pattern
+    var toolMatch = s.match(/^(\w+):\s*/);
+    var toolName = toolMatch ? toolMatch[1] : '';
+    var badge = toolName ? '<span class="badge" style="font-size:0.68rem">' + esc(toolName) + '</span> ' : '';
+    // Try to extract useful fragments: count fields, status, error
+    var countMatch = s.match(/"count"\s*:\s*(\d+)/);
+    var statusMatch = s.match(/"status"\s*:\s*"([^"]+)"/);
+    var errorMatch = s.match(/"error"\s*:\s*"([^"]{0,80})/);
+    var resultsMatch = s.match(/"results"\s*:\s*\[/);
+    var parts = [];
+    if (errorMatch) parts.push('error: ' + errorMatch[1]);
+    else if (statusMatch) parts.push('status: ' + statusMatch[1]);
+    if (countMatch) parts.push(countMatch[1] + ' items');
+    else if (resultsMatch) parts.push('results array');
+    if (parts.length > 0) {
+      return badge + '<span style="color:var(--text);font-size:0.78rem">' + esc(parts.join(', ')) + '</span>';
+    }
+    // Fallback: show first 120 chars with truncation indicator
+    var preview = s.length > 120 ? s.substring(0, 120) : s;
+    // Clean up mid-token cuts
+    preview = preview.replace(/[{[\]},:"\\]+$/, '').trim();
+    return badge + '<span style="color:var(--muted);font-size:0.78rem">' + esc(preview) + '\u2026</span>';
   }
   /** Render a parsed JSON value as label:data rows, recursing into nested objects. */
   function formatMemValue(val, depth) {
@@ -2480,7 +2521,7 @@
         var catalogData = (results[1] && results[1].data) ? results[1].data : { items: [] };
         var installedPlugins = (results[2] && results[2].plugins) || [];
         var skills = data.skills || [];
-        var catalogItems = (catalogData.items || []).filter(function(i) { return (i.source || '') === 'registry'; });
+        var catalogItems = (catalogData.skills || catalogData.items || []).filter(function(i) { return (i.source || '') === 'registry'; });
         var installedSkillSet = {};
         skills.forEach(function(s) {
           var skillName = (s && s.name) ? String(s.name).trim().toLowerCase() : '';
@@ -3378,7 +3419,7 @@
       var self = this;
       var turnId = App._flightTurnId || '';
       var selectedSession = App._flightSessionId || '';
-      return api('/api/sessions?limit=50').catch(function() { return { sessions: [] }; }).then(function(sessData) {
+      return api('/api/sessions?limit=50&has_flight_records=true').catch(function() { return { sessions: [] }; }).then(function(sessData) {
         var sessions = sessData.sessions || [];
         var sessionOpts = sessions.map(function(s) {
           var sid = s.id || s.session_id || '';

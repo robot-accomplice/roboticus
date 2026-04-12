@@ -661,12 +661,19 @@ func (s *Service) recordCostWithMeta(ctx context.Context, providerName string, r
 		tier = "cloud"
 	}
 
+	// Normalize model name to always include provider prefix for consistent grouping.
+	// Prevents duplicates like "qwen3.5:35b" vs "ollama/qwen3.5:35b" in analytics.
+	modelName := resp.Model
+	if providerName != "" && !strings.Contains(modelName, "/") {
+		modelName = providerName + "/" + modelName
+	}
+
 	_, err := s.store.ExecContext(ctx,
 		`INSERT INTO inference_costs (id, model, provider, tokens_in, tokens_out, cost,
 		 tier, latency_ms, quality_score, escalation, turn_id, cached, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
 		fmt.Sprintf("%s-%d", resp.ID, resp.Usage.OutputTokens),
-		resp.Model, providerName,
+		modelName, providerName,
 		resp.Usage.InputTokens, resp.Usage.OutputTokens, cost,
 		tier, meta.Latency, meta.Quality, escalated, meta.TurnID, cached,
 	)
