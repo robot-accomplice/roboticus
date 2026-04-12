@@ -255,3 +255,56 @@ flowchart LR
 
 If a proposed code change does not fit cleanly onto these diagrams, the change
 SHOULD be treated as architecturally suspect until its ownership becomes clear.
+
+## 8. Memory Retrieval Architecture (v1.0.1+)
+
+Two-stage pattern: direct injection for cheap/session-scoped data, index for
+everything else. The model uses tools (`recall_memory`, `search_memories`) to
+fetch full content on demand.
+
+```mermaid
+sequenceDiagram
+    participant U as User Message
+    participant P as Pipeline
+    participant R as Retriever
+    participant DB as SQLite
+    participant CB as ContextBuilder
+    participant M as Model (LLM)
+    participant T as search_memories / recall_memory
+
+    U->>P: "Do you remember palm?"
+    P->>R: RetrieveDirectOnly(session, query, budget)
+    R->>DB: SELECT from working_memory (session-scoped)
+    R->>DB: SELECT from episodic_memory (last 2 hours)
+    R-->>CB: [Working Memory] + [Recent Activity]
+
+    P->>DB: BuildMemoryIndex(store, 20, "palm")
+    Note over DB: Strategy 1: LIKE on memory_index.summary WHERE '%palm%'
+    Note over DB: Strategy 2: FTS5 MATCH on memory_fts JOIN memory_index
+    Note over DB: Fill remaining with tier-priority top-N
+    DB-->>CB: [Memory Index] with Palm entries in first 1/3
+
+    CB->>M: System prompt + Working + Ambient + Index + History
+    M->>T: search_memories(query="palm")
+    T->>DB: FTS5 MATCH + LIKE fallback (all tiers)
+    DB-->>T: 21 results
+    T-->>M: Matching memories with source IDs
+    M->>T: recall_memory(id="idx-obsidian-Projects/Pal")
+    T->>DB: SELECT full content from source tier
+    DB-->>T: Full Palm USD project details
+    T-->>M: Complete memory content
+    M-->>U: Response with real Palm memories
+```
+
+### What Gets Injected vs. What Requires Tool Calls
+
+| Layer | Injection | Source |
+|-------|-----------|--------|
+| Working Memory | **Direct** (always) | `working_memory` table, session-scoped |
+| Recent Activity | **Direct** (always) | `episodic_memory` last 2 hours |
+| Memory Index | **Direct** (query-aware) | `memory_index` top-20 + FTS matches |
+| Episodic details | **Tool** (`recall_memory`) | `episodic_memory` by ID |
+| Semantic facts | **Tool** (`recall_memory`) | `semantic_memory` by ID |
+| Procedural stats | **Tool** (`recall_memory`) | `procedural_memory` by ID |
+| Relationship data | **Tool** (`recall_memory`) | `relationship_memory` by ID |
+| Topic search | **Tool** (`search_memories`) | FTS5 + LIKE across all tiers |
