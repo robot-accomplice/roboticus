@@ -142,6 +142,42 @@ func (rq *RouteQueries) ListSubAgentRoster(ctx context.Context) (*sql.Rows, erro
 		 FROM sub_agents ORDER BY name`)
 }
 
+// ListSubAgentRosterEnriched returns enriched subagent data for the roster endpoint.
+// Includes fallback models, skills, session counts, and status for Rust parity.
+func (rq *RouteQueries) ListSubAgentRosterEnriched(ctx context.Context) (*sql.Rows, error) {
+	return rq.q.QueryContext(ctx,
+		`SELECT name, COALESCE(display_name, name) AS display_name, model, enabled,
+		        COALESCE(role, 'specialist') AS role, COALESCE(description, '') AS description,
+		        COALESCE(fallback_models_json, '[]') AS fallback_models_json,
+		        COALESCE(skills_json, '[]') AS skills_json,
+		        session_count, last_used_at, status
+		 FROM sub_agents ORDER BY name`)
+}
+
+// ListSkillNamesAndKinds returns skill name, kind, and enabled for roster breakdown.
+func (rq *RouteQueries) ListSkillNamesAndKinds(ctx context.Context) (*sql.Rows, error) {
+	return rq.q.QueryContext(ctx,
+		`SELECT name, kind, enabled FROM skills ORDER BY name`)
+}
+
+// CountSubAgents returns total and enabled sub-agent counts.
+func (rq *RouteQueries) CountSubAgents(ctx context.Context) (total, enabled int, err error) {
+	err = rq.q.QueryRowContext(ctx, `SELECT COUNT(*) FROM sub_agents`).Scan(&total)
+	if err != nil {
+		return
+	}
+	err = rq.q.QueryRowContext(ctx, `SELECT COUNT(*) FROM sub_agents WHERE enabled = 1`).Scan(&enabled)
+	return
+}
+
+// CountRunningSubAgents returns the number of sub-agents with status 'running'.
+func (rq *RouteQueries) CountRunningSubAgents(ctx context.Context) (int, error) {
+	var count int
+	err := rq.q.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sub_agents WHERE status = 'running' OR (enabled = 1 AND status = 'registered')`).Scan(&count)
+	return count, err
+}
+
 // --- Themes ---
 
 // ListThemes returns installed themes.

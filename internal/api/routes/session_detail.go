@@ -11,6 +11,7 @@ import (
 
 	"roboticus/internal/core"
 	"roboticus/internal/db"
+	"roboticus/internal/plugin"
 )
 
 // ListSessionTurns returns turns for a session.
@@ -199,48 +200,72 @@ func ToggleSkill(store *db.Store) http.HandlerFunc {
 	}
 }
 
-// GetSkillsCatalog returns available skills from the catalog.
-func GetSkillsCatalog(store *db.Store) http.HandlerFunc {
+// GetSkillsCatalog returns the unified catalog with three distinct sections:
+// skills (from DB), plugins (from plugin registry), and themes (builtin + catalog with install status).
+func GetSkillsCatalog(store *db.Store, reg *plugin.Registry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// --- Skills section ---
+		skills := make([]map[string]any, 0)
 		rows, err := db.NewRouteQueries(store).ListSkillsAll(r.Context())
-		if err != nil {
-			writeJSON(w, http.StatusOK, map[string]any{"items": make([]any, 0)})
-			return
-		}
-		defer func() { _ = rows.Close() }()
-
-		items := make([]map[string]any, 0)
-		for rows.Next() {
-			var id, name, kind, description, version, riskLevel, createdAt string
-			var enabled bool
-			if err := rows.Scan(&id, &name, &kind, &description, &version, &riskLevel, &enabled, &createdAt); err != nil {
-				continue
+		if err == nil {
+			defer func() { _ = rows.Close() }()
+			for rows.Next() {
+				var id, name, kind, description, version, riskLevel, createdAt string
+				var enabled bool
+				if err := rows.Scan(&id, &name, &kind, &description, &version, &riskLevel, &enabled, &createdAt); err != nil {
+					continue
+				}
+				skills = append(skills, map[string]any{
+					"id":          id,
+					"name":        name,
+					"kind":        kind,
+					"description": description,
+					"version":     version,
+					"risk_level":  riskLevel,
+					"enabled":     enabled,
+					"installed":   true,
+					"source":      "registry",
+					"created_at":  createdAt,
+				})
 			}
-			items = append(items, map[string]any{
-				"id":          id,
-				"name":        name,
-				"kind":        kind,
-				"description": description,
-				"version":     version,
-				"risk_level":  riskLevel,
-				"enabled":     enabled,
-				"installed":   true,
-				"source":      "registry",
-				"created_at":  createdAt,
-			})
 		}
-		// Include builtin themes in the catalog response.
-		themes := make([]map[string]any, 0, len(builtinThemes))
+
+		// --- Plugins section ---
+		plugins := make([]map[string]any, 0)
+		if reg != nil {
+			for _, p := range reg.List() {
+				plugins = append(plugins, map[string]any{
+					"name":    p.Name,
+					"version": p.Version,
+					"status":  p.Status,
+					"tools":   p.Tools,
+				})
+			}
+		}
+
+		// --- Themes section (same enrichment as GetThemeCatalog) ---
+		catalogMu.RLock()
+		installed := installedThemeIDs(store)
+		themes := make([]map[string]any, 0, len(builtinThemes)+len(catalogThemes))
 		for _, t := range builtinThemes {
 			themes = append(themes, map[string]any{
-				"name": t.Name, "id": t.ID, "description": t.Description,
-				"author": t.Author, "source": "builtin",
+				"id": t.ID, "name": t.Name, "description": t.Description,
+				"author": t.Author, "swatch": t.Swatch, "source": t.Source,
+				"installed": installedThemes[t.ID] || t.Source == "builtin" || installed[t.ID],
 			})
 		}
+		for _, t := range catalogThemes {
+			themes = append(themes, map[string]any{
+				"id": t.ID, "name": t.Name, "description": t.Description,
+				"author": t.Author, "swatch": t.Swatch, "source": t.Source,
+				"installed": installedThemes[t.ID] || installed[t.ID],
+			})
+		}
+		catalogMu.RUnlock()
 
 		writeJSON(w, http.StatusOK, map[string]any{
-			"items":   items,
-			"plugins": make([]any, 0), // populated from /api/plugins by the dashboard
+			"skills":  skills,
+			"plugins": plugins,
 			"themes":  themes,
 		})
 	}
