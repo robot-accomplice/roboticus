@@ -96,6 +96,18 @@ Blocking commands for feature-complete releases:
 | R-RT-06 | Metascore-weighted routing improves outcome metrics over baseline on a fixed corpus | efficacy tests | L4 |
 | R-RT-07 | OpenAI-compatible tool_call_id serialization includes explicit `content` field on assistant tool-call messages | `internal/llm/client_formats_test.go` | L1 |
 | R-RT-08 | Tool result messages serialize `tool_call_id`, `content`, and `name` fields | `internal/llm/client_formats_test.go` | L1 |
+| R-RT-09 | IntentMemoryRecall scoring rewards tool use and penalizes confabulation | `internal/llm/exercise_memory_recall_test.go` | L1 |
+| R-RT-10 | Every model in CommonIntentBaselines has a MEMORY_RECALL entry | `internal/llm/exercise_memory_recall_test.go` | L1 |
+
+### R-BOT: Bot Commands
+
+| ID | Regression Class | Required Coverage | Layer |
+| --- | --- | --- | --- |
+| R-BOT-01 | All 11 bot commands match and return expected content | `internal/pipeline/bot_commands_test.go` | L1 |
+| R-BOT-02 | /model set and /breaker reset require Creator authority | `internal/pipeline/bot_commands_test.go` | L1 |
+| R-BOT-03 | @bot_name stripping works for Telegram-style mentions | `internal/pipeline/bot_commands_test.go` | L1 |
+| R-BOT-04 | /retry replays last assistant message or reports no history | `internal/pipeline/bot_commands_test.go` | L1 |
+| R-BOT-05 | /help lists all registered commands | `internal/pipeline/bot_commands_test.go` | L1 |
 
 ### R-TOOLS: Tools, Policy, Browser, Plugins, MCP
 
