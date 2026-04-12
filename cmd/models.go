@@ -953,12 +953,13 @@ per-intent-class latency scorecard and 6-axis metascore dimension reporting.`,
 		fmt.Printf("\n  Step 3: Exercising models...\n\n")
 
 		type modelResult struct {
-			model        string
-			pass         int
-			fail         int
-			avgQuality   float64
+			model         string
+			pass          int
+			fail          int
+			totalMs       int64
+			avgQuality    float64
 			intentQuality map[string]float64 // intent_class → avg quality 0-1
-			latencies    map[string][]int64  // intent_class → latencies in ms
+			latencies     map[string][]int64  // intent_class → latencies in ms
 		}
 		var results []modelResult
 
@@ -1017,7 +1018,7 @@ per-intent-class latency scorecard and 6-axis metascore dimension reporting.`,
 
 			// Print per-intent quality + latency scorecard.
 			fmt.Printf("\n    Intent Quality:\n")
-			for _, intent := range []string{"EXECUTION", "DELEGATION", "INTROSPECTION", "CONVERSATION"} {
+			for _, intent := range []string{"EXECUTION", "DELEGATION", "INTROSPECTION", "CONVERSATION", "MEMORY_RECALL"} {
 				q := mr.intentQuality[intent]
 				bar := qualityBar(q)
 				fmt.Printf("      %-16s %s %.2f\n", intent, bar, q)
@@ -1043,7 +1044,7 @@ per-intent-class latency scorecard and 6-axis metascore dimension reporting.`,
 
 			// Per-intent quality breakdown.
 			if len(r.intentQuality) > 0 {
-				for _, intent := range []string{"EXECUTION", "DELEGATION", "INTROSPECTION", "CONVERSATION"} {
+				for _, intent := range []string{"EXECUTION", "DELEGATION", "INTROSPECTION", "CONVERSATION", "MEMORY_RECALL"} {
 					q := r.intentQuality[intent]
 					fmt.Printf("    %-18s %s %.2f\n", intent, qualityBar(q), q)
 				}
@@ -1056,6 +1057,82 @@ per-intent-class latency scorecard and 6-axis metascore dimension reporting.`,
 					baseline.Locality, baseline.Confidence, baseline.Speed)
 			}
 		}
+		// Cross-model comparison: rank all models by overall quality.
+		if len(results) > 1 {
+			// Sort by avgQuality descending.
+			sorted := make([]modelResult, len(results))
+			copy(sorted, results)
+			for i := 0; i < len(sorted)-1; i++ {
+				for j := i + 1; j < len(sorted); j++ {
+					if sorted[j].avgQuality > sorted[i].avgQuality {
+						sorted[i], sorted[j] = sorted[j], sorted[i]
+					}
+				}
+			}
+
+			fmt.Printf("\n  Model Comparison (ranked by quality):\n\n")
+			fmt.Printf("  %-4s  %-35s  %-8s  %-5s  %-5s  %-5s  %-5s  %-5s  %s\n",
+				"RANK", "MODEL", "QUALITY", "EXEC", "DELEG", "INTRO", "CONV", "MEMRC", "AVG LATENCY")
+			fmt.Println("  " + strings.Repeat("─", 100))
+			for rank, r := range sorted {
+				exec := r.intentQuality["EXECUTION"]
+				deleg := r.intentQuality["DELEGATION"]
+				intro := r.intentQuality["INTROSPECTION"]
+				conv := r.intentQuality["CONVERSATION"]
+				memrc := r.intentQuality["MEMORY_RECALL"]
+				avgMs := int64(0)
+				var totalLat int64
+				var latCount int
+				for _, lats := range r.latencies {
+					for _, l := range lats {
+						totalLat += l
+						latCount++
+					}
+				}
+				if latCount > 0 {
+					avgMs = totalLat / int64(latCount)
+				}
+				fmt.Printf("  #%-3d  %-35s  %s %.0f%%   %.0f%%  %.0f%%  %.0f%%  %.0f%%  %.0f%%  %dms\n",
+					rank+1, r.model, qualityBar(r.avgQuality), r.avgQuality*100,
+					exec*100, deleg*100, intro*100, conv*100, memrc*100, avgMs)
+			}
+			fmt.Println()
+
+			// Highlight best/worst per intent class.
+			intents := []string{"EXECUTION", "DELEGATION", "INTROSPECTION", "CONVERSATION", "MEMORY_RECALL"}
+			fmt.Printf("  Best per intent class:\n")
+			for _, intent := range intents {
+				bestModel := ""
+				bestQ := 0.0
+				for _, r := range results {
+					if q, ok := r.intentQuality[intent]; ok && q > bestQ {
+						bestQ = q
+						bestModel = r.model
+					}
+				}
+				if bestModel != "" {
+					fmt.Printf("    %-18s  %s (%.0f%%)\n", intent, bestModel, bestQ*100)
+				}
+			}
+			fmt.Println()
+
+			// Flag underperformers — models below 50% overall quality.
+			var underperformers []string
+			for _, r := range sorted {
+				if r.avgQuality < 0.5 && r.avgQuality > 0 {
+					underperformers = append(underperformers, fmt.Sprintf("%s (%.0f%%)", r.model, r.avgQuality*100))
+				}
+			}
+			if len(underperformers) > 0 {
+				fmt.Printf("  Underperforming models (below 50%%):\n")
+				for _, u := range underperformers {
+					fmt.Printf("    - %s\n", u)
+				}
+				fmt.Printf("\n  Consider removing these from the routing chain with:\n")
+				fmt.Printf("    roboticus models remove <model>\n\n")
+			}
+		}
+
 		fmt.Println()
 		return nil
 	},
