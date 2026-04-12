@@ -826,17 +826,24 @@
         return formatTruncatedJson(s);
       }
     }
-    // Check for "tool_name: {..." pattern (old episodic format with embedded truncated JSON)
-    var colonJson = s.match(/^([^:]+):\s*(\{|\[)/);
-    if (colonJson) {
-      var toolPrefix = colonJson[1].trim();
-      var jsonPart = s.substring(s.indexOf(colonJson[2]));
+    // Check for embedded truncated JSON anywhere in the string.
+    // Patterns: "tool_name: {json...", "tool_name: text text [{json..."
+    var jsonIdx = -1;
+    for (var ci = 0; ci < s.length; ci++) {
+      if (s.charAt(ci) === '{' || s.charAt(ci) === '[') { jsonIdx = ci; break; }
+    }
+    if (jsonIdx > 0) {
+      var textBefore = s.substring(0, jsonIdx).trim();
+      // Remove trailing colon/whitespace from prefix
+      textBefore = textBefore.replace(/[:\s]+$/, '');
+      var jsonPart = s.substring(jsonIdx);
       try {
         var parsed = JSON.parse(jsonPart);
-        return '<span class="badge" style="font-size:0.68rem">' + esc(toolPrefix) + '</span> ' + formatMemValue(parsed, 0);
+        return '<span class="badge" style="font-size:0.68rem">' + esc(textBefore) + '</span> ' + formatMemValue(parsed, 0);
       } catch(_) {
-        return '<span class="badge" style="font-size:0.68rem">' + esc(toolPrefix) + '</span> '
-          + '<span style="color:var(--muted);font-size:0.78rem;font-style:italic">(truncated result)</span>';
+        // JSON is truncated — show the text prefix cleanly and mark as truncated
+        return '<span class="badge" style="font-size:0.68rem">' + esc(textBefore) + '</span> '
+          + formatTruncatedJson(jsonPart);
       }
     }
     // For non-JSON: convert basic markdown-like formatting and truncate
@@ -2751,8 +2758,57 @@
             + '</div>';
         }
 
+        // ── Plugins empty state ──
+        if (!pluginsHtml) {
+          pluginsHtml = ''
+            + '<div class="card" style="margin-bottom:1rem">'
+            + '  <div style="display:flex;justify-content:space-between;align-items:center;gap:0.75rem;flex-wrap:wrap">'
+            + '    <div><div class="card-title">plugins</div><div style="font-size:0.75rem;color:var(--muted)">0 plugins installed</div></div>'
+            + '  </div>'
+            + '  <div style="margin-top:0.75rem;font-size:0.8125rem;color:var(--muted)">No plugins installed. Install with <code style="background:var(--surface);padding:0.15rem 0.35rem;border-radius:3px;font-size:0.78rem">roboticus plugins install &lt;name&gt;</code></div>'
+            + '</div>';
+        }
+
+        // ── Themes section ──
+        var themeItems = catalogData.themes || [];
+        var themesHtml = '';
+        if (themeItems.length > 0) {
+          var themeRows = themeItems.map(function(th) {
+            var name = th.name || th.id || '';
+            var desc = th.description || '';
+            var author = th.author || '';
+            var swatch = th.swatch || th.variables && th.variables['--accent'] || '#888';
+            var installed = th.installed;
+            var source = th.source || '';
+            var installedBadge = installed
+              ? '<span class="badge success" style="font-size:0.62rem;padding:0.08rem 0.35rem">installed</span>'
+              : '';
+            var sourceBadge = source === 'builtin'
+              ? '<span class="badge" style="font-size:0.62rem;padding:0.08rem 0.35rem">builtin</span>'
+              : source === 'catalog'
+                ? '<span class="badge" style="font-size:0.62rem;padding:0.08rem 0.35rem;background:var(--accent-dim);color:var(--text)">catalog</span>'
+                : '';
+            return '<div style="display:flex;align-items:center;gap:0.6rem;padding:0.6rem 0.65rem;border:1px solid var(--border-soft);border-radius:6px;background:rgba(255,255,255,0.01)">'
+              + '<div style="width:24px;height:24px;border-radius:4px;background:' + esc(swatch) + ';flex-shrink:0;border:1px solid var(--border-ghost)"></div>'
+              + '<div style="min-width:0;flex:1">'
+              + '<div style="display:flex;align-items:center;gap:0.4rem;flex-wrap:wrap">'
+              + '<span style="font-family:var(--font-mono);font-size:0.82rem;color:var(--text)">' + esc(name) + '</span>'
+              + sourceBadge + installedBadge
+              + '</div>'
+              + '<div style="margin-top:0.18rem;font-size:0.75rem;color:var(--muted);line-height:1.35">' + esc(desc) + '</div>'
+              + (author ? '<div style="margin-top:0.15rem;font-size:0.68rem;color:var(--text-dim)">by ' + esc(author) + '</div>' : '')
+              + '</div>'
+              + '</div>';
+          }).join('');
+          themesHtml = ''
+            + '<div class="card" style="margin-bottom:1rem">'
+            + '  <div><div class="card-title">themes</div><div style="font-size:0.75rem;color:var(--muted)">available themes (' + themeItems.length + ')</div></div>'
+            + '  <div style="margin-top:0.75rem;display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:0.55rem">' + themeRows + '</div>'
+            + '</div>';
+        }
+
         if (tab === 'catalog') {
-          return tabs + catalogHtml + pluginsHtml;
+          return tabs + catalogHtml + pluginsHtml + themesHtml;
         }
 
         if (skills.length === 0) {
@@ -6271,7 +6327,7 @@
       return api('/api/workspace/state').then(function(data) {
         _cachedWorkspace = data;
         return '<div style="display:flex;flex-direction:column;height:calc(100vh - 8rem);min-height:400px;gap:0">'
-          + '<div id="ws-wrap" style="position:relative;flex:1;min-height:300px;overflow:hidden"><canvas id="ws-canvas" style="display:block;width:100%;height:100%;border-radius:var(--radius)"></canvas></div>'
+          + '<div id="ws-wrap" style="position:relative;flex:1;min-height:0;overflow:hidden"><canvas id="ws-canvas" style="display:block;border-radius:var(--radius)"></canvas></div>'
           + '<div id="ws-status-panel" style="flex-shrink:0;padding:0.5rem 0.75rem;background:var(--surface);border-top:1px solid var(--border-ghost);display:flex;flex-wrap:wrap;align-items:center;gap:0.5rem 1rem;min-height:2.5rem"></div>'
           + '</div>';
       });
