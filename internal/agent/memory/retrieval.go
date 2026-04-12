@@ -356,7 +356,7 @@ func (mr *Retriever) retrieveEpisodic(ctx context.Context, query string, queryEm
 				`SELECT em.id, em.content, julianday('now') - julianday(em.created_at) as age_days
 				 FROM memory_fts fts
 				 JOIN episodic_memory em ON em.id = fts.source_id
-				 WHERE fts.source_table = 'episodic'
+				 WHERE fts.source_table = 'episodic_memory'
 				   AND memory_fts MATCH ?
 				   AND em.memory_state = 'active'
 				 LIMIT 20`, ftsQuery)

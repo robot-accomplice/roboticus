@@ -163,9 +163,9 @@ Policy denials soft-fail with structured reason. Error dedup suppresses repeated
 | Priority | Gap | Effort | Impact |
 |----------|-----|--------|--------|
 | ~~P0~~ | ~~Gap 4: Memory injection not guaranteed~~ | **CLOSED v1.0.1** | Two-stage injection + search_memories tool |
-| P1 | Gap 1: SecurityClaim resolvers not wired | Medium | Audit trail incomplete, authority simplified |
+| ~~P1~~ | ~~Gap 1: SecurityClaim resolvers not wired~~ | **CLOSED v1.0.2** | Resolvers called at stage 8, claim stored on session + trace |
 | P1 | Gap 5: Context budget missing tier system | Large | Long sessions overflow, tool instructions drowned |
-| P2 | Gap 3: HMAC boundaries passive | Medium | Trust boundary verification incomplete |
+| ~~P2~~ | ~~Gap 3: HMAC boundaries passive~~ | **CLOSED v1.0.2** | Prompt now includes boundary instructions |
 | P2 | Gap 6: Topic-aware compression missing | Large | Off-topic history wastes budget |
-| P3 | Gap 2: API routes never set Claim | Small | Consistency, not functionality |
+| ~~P3~~ | ~~Gap 2: API routes never set Claim~~ | **CLOSED v1.0.2** | Both API routes now construct ChannelClaimContext |
 | P3 | Gap 7: Preset doc comments missing | Small | Documentation, not code |

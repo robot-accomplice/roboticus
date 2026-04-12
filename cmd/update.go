@@ -956,11 +956,53 @@ var versionCmd = &cobra.Command{
 	},
 }
 
+// updateProvidersCmd exposes the provider pack update as a standalone command.
+// The backend logic already exists in applyProvidersUpdate (used by `update all`).
+var updateProvidersCmd = &cobra.Command{
+	Use:   "providers",
+	Short: "Update provider pack from registry",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		configPath := effectiveConfigPath()
+		registryURL := resolveRegistryURL(configPath)
+		changed, err := applyProvidersUpdate(cmd.Context(), registryURL, configPath)
+		if err != nil {
+			return err
+		}
+		if !changed {
+			fmt.Println("Provider pack already up to date.")
+		} else {
+			fmt.Println("Provider pack updated successfully.")
+		}
+		return nil
+	},
+}
+
+// updateSkillsCmd exposes the skills update as a standalone command.
+// The backend logic already exists in applySkillsUpdate (used by `update all`).
+var updateSkillsCmd = &cobra.Command{
+	Use:   "skills",
+	Short: "Update skills from registry",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		configPath := effectiveConfigPath()
+		registryURL := resolveRegistryURL(configPath)
+		changed, err := applySkillsUpdate(cmd.Context(), registryURL, configPath)
+		if err != nil {
+			return err
+		}
+		if !changed {
+			fmt.Println("Skills already up to date.")
+		} else {
+			fmt.Println("Skills updated successfully.")
+		}
+		return nil
+	},
+}
+
 func init() {
 	updateAllCmd.Flags().Bool("yes", false, "Skip confirmation prompt")
 	upgradeAllCmd.Flags().Bool("yes", false, "Skip confirmation prompt")
 
-	updateCmd.AddCommand(updateCheckCmd, updateAllCmd, updateBinaryCmd)
+	updateCmd.AddCommand(updateCheckCmd, updateAllCmd, updateBinaryCmd, updateProvidersCmd, updateSkillsCmd)
 	upgradeCmd.AddCommand(upgradeAllCmd)
 
 	rootCmd.AddCommand(updateCmd, upgradeCmd, versionCmd)

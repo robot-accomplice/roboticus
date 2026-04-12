@@ -401,13 +401,11 @@ func BuildMemoryIndex(ctx context.Context, store *db.Store, limit int, query ...
 			ftsQuery := db.SanitizeFTSQuery(q)
 			if ftsQuery != "" {
 				remaining := querySlots - len(entries)
+				// After migration 037, memory_fts uses full table names matching memory_index.
 				rows, err = store.QueryContext(ctx,
 					`SELECT DISTINCT mi.id, mi.source_table, mi.summary, COALESCE(mi.category, '')
 					 FROM memory_fts fts
-					 JOIN memory_index mi ON (
-					   (mi.source_table = fts.source_table || '_memory' AND mi.source_id = fts.source_id)
-					   OR (mi.source_table = fts.source_table AND mi.source_id = fts.source_id)
-					 )
+					 JOIN memory_index mi ON mi.source_table = fts.source_table AND mi.source_id = fts.source_id
 					 WHERE memory_fts MATCH ?
 					   AND mi.confidence > 0.1
 					   AND mi.source_table != 'system'`+toolNoiseFilter()+`
