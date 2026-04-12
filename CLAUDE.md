@@ -64,3 +64,17 @@ go vet ./...                # Lint
 | MCP client | `internal/mcp/` |
 | Plugin API routes | `internal/api/routes/plugins.go` |
 | Trace API routes | `internal/api/routes/traces.go` |
+| Memory architecture spec | `docs/memory-architecture-spec.md` |
+
+## Release Checklist (MANDATORY — every release, no exceptions)
+
+Every release MUST complete ALL of these before the PR is merged:
+
+1. **Release notes**: `docs/releases/v{X.Y.Z}-release-notes.md` — summary, changes table, test coverage, file diff
+2. **Architecture gap report**: `docs/architecture-gap-report.md` — close any resolved gaps, update severity table
+3. **Architecture diagrams**: `docs/architecture-rules-diagrams.md` — update if any architectural patterns changed
+4. **Regression test matrix**: `docs/regression-test-matrix.md` — add rows for every new regression test
+5. **Site changelog**: `roboticus-site/src/lib/changelog-updates.ts` — add release entry with geek + layman text
+6. **Spec docs**: Update any spec documents affected by the changes (e.g., `docs/memory-architecture-spec.md`)
+
+Skipping any of these is a release defect. The release PR must not be created until all 6 are done.
