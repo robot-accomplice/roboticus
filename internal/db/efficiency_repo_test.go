@@ -42,6 +42,7 @@ func TestEfficiency_ComputeWithData(t *testing.T) {
 	ctx := context.Background()
 
 	// Seed some inference costs.
+	// Model names are normalized to provider/model in queries (e.g., "gpt-4" with provider "test" → "test/gpt-4").
 	seedInferenceCost(t, store, "gpt-4", 1000, 200, 0.05, false)
 	seedInferenceCost(t, store, "gpt-4", 800, 150, 0.04, true)
 	seedInferenceCost(t, store, "claude-3", 500, 300, 0.03, false)
@@ -51,12 +52,12 @@ func TestEfficiency_ComputeWithData(t *testing.T) {
 		t.Fatalf("ComputeEfficiency: %v", err)
 	}
 	if len(report.Models) != 2 {
-		t.Fatalf("expected 2 models, got %d", len(report.Models))
+		t.Fatalf("expected 2 models, got %d: %v", len(report.Models), report.Models)
 	}
 
-	gpt4 := report.Models["gpt-4"]
+	gpt4 := report.Models["test/gpt-4"]
 	if gpt4.TotalTurns != 2 {
-		t.Errorf("gpt-4 turns = %d, want 2", gpt4.TotalTurns)
+		t.Errorf("test/gpt-4 turns = %d, want 2", gpt4.TotalTurns)
 	}
 	if gpt4.CacheHitRate != 0.5 {
 		t.Errorf("cache_hit_rate = %f, want 0.5", gpt4.CacheHitRate)
@@ -75,15 +76,17 @@ func TestEfficiency_ModelFilter(t *testing.T) {
 	seedInferenceCost(t, store, "gpt-4", 1000, 200, 0.05, false)
 	seedInferenceCost(t, store, "claude-3", 500, 300, 0.03, false)
 
+	// Filter by raw model name — the query normalizes to test/claude-3 but the filter
+	// matches against the raw model column, so use the raw name.
 	report, err := repo.ComputeEfficiency(ctx, "all", "claude-3")
 	if err != nil {
 		t.Fatalf("ComputeEfficiency filtered: %v", err)
 	}
 	if len(report.Models) != 1 {
-		t.Fatalf("expected 1 model, got %d", len(report.Models))
+		t.Fatalf("expected 1 model, got %d: %v", len(report.Models), report.Models)
 	}
-	if _, ok := report.Models["claude-3"]; !ok {
-		t.Error("expected claude-3 in results")
+	if _, ok := report.Models["test/claude-3"]; !ok {
+		t.Errorf("expected test/claude-3 in results, got %v", report.Models)
 	}
 }
 
@@ -118,8 +121,8 @@ func TestEfficiency_BuildUserProfileWithData(t *testing.T) {
 	if profile.TotalTurns != 2 {
 		t.Errorf("total turns = %d, want 2", profile.TotalTurns)
 	}
-	if len(profile.ModelsUsed) != 1 || profile.ModelsUsed[0] != "gpt-4" {
-		t.Errorf("models_used = %v", profile.ModelsUsed)
+	if len(profile.ModelsUsed) != 1 || profile.ModelsUsed[0] != "test/gpt-4" {
+		t.Errorf("models_used = %v, want [test/gpt-4]", profile.ModelsUsed)
 	}
 	if profile.CacheHitRate != 0.5 {
 		t.Errorf("cache_hit_rate = %f, want 0.5", profile.CacheHitRate)

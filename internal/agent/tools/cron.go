@@ -117,15 +117,23 @@ func (t *CronTool) create(ctx context.Context, name, schedule, task string, tctx
 		return nil, fmt.Errorf("marshal payload: %w", err)
 	}
 
+	// Default delivery to the current session's channel so cron output reaches the user.
+	deliveryMode := "none"
+	deliveryChannel := ""
+	if tctx.Channel != "" {
+		deliveryMode = "push"
+		deliveryChannel = tctx.Channel
+	}
+
 	_, err = tctx.Store.ExecContext(ctx,
-		`INSERT INTO cron_jobs (id, name, schedule_kind, schedule_expr, agent_id, payload_json)
-		 VALUES (?, ?, 'cron', ?, ?, ?)`,
-		id, name, schedule, tctx.AgentID, string(payload))
+		`INSERT INTO cron_jobs (id, name, schedule_kind, schedule_expr, agent_id, payload_json, delivery_mode, delivery_channel)
+		 VALUES (?, ?, 'cron', ?, ?, ?, ?, ?)`,
+		id, name, schedule, tctx.AgentID, string(payload), deliveryMode, deliveryChannel)
 	if err != nil {
 		return nil, fmt.Errorf("insert cron_job: %w", err)
 	}
 
-	return &Result{Output: fmt.Sprintf("Created cron job %q (id=%s, schedule=%s)", name, id, schedule)}, nil
+	return &Result{Output: fmt.Sprintf("Created cron job %q (id=%s, schedule=%s, delivery=%s/%s)", name, id, schedule, deliveryMode, deliveryChannel)}, nil
 }
 
 func (t *CronTool) delete(ctx context.Context, idOrName string, tctx *Context) (*Result, error) {

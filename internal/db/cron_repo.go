@@ -18,11 +18,11 @@ func NewCronRepository(q Querier) *CronRepository {
 }
 
 // CreateJob inserts a new cron job.
-func (r *CronRepository) CreateJob(ctx context.Context, id, name, description, kind, expr string, intervalMs any, agentID, payloadJSON string) error {
+func (r *CronRepository) CreateJob(ctx context.Context, id, name, description, kind, expr string, intervalMs any, agentID, payloadJSON, deliveryMode, deliveryChannel string) error {
 	_, err := r.q.ExecContext(ctx,
-		`INSERT INTO cron_jobs (id, name, description, schedule_kind, schedule_expr, schedule_every_ms, agent_id, payload_json)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, name, description, kind, expr, intervalMs, agentID, payloadJSON)
+		`INSERT INTO cron_jobs (id, name, description, schedule_kind, schedule_expr, schedule_every_ms, agent_id, payload_json, delivery_mode, delivery_channel)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, name, description, kind, expr, intervalMs, agentID, payloadJSON, deliveryMode, deliveryChannel)
 	return err
 }
 

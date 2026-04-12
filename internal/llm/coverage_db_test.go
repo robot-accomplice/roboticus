@@ -137,7 +137,7 @@ func TestService_RecordCost_WithStore(t *testing.T) {
 	// Verify the cost was recorded.
 	var count int
 	err := store.QueryRowContext(context.Background(),
-		`SELECT COUNT(*) FROM inference_costs WHERE model = 'gpt-4'`).Scan(&count)
+		`SELECT COUNT(*) FROM inference_costs WHERE model = 'cost-p/gpt-4'`).Scan(&count)
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}

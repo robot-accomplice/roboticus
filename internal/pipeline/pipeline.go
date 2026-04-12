@@ -58,6 +58,7 @@ type Input struct {
 	SenderID      string // channel sender identifier
 	ChatID        string // channel chat identifier
 	ModelOverride string // force a specific model, bypassing router
+	NoCache       bool   // skip semantic cache (used by exercise/baseline)
 	Claim         *ChannelClaimContext
 }
 
@@ -65,6 +66,12 @@ type Input struct {
 // Routes and tests should depend on this interface, not the concrete Pipeline.
 type Runner interface {
 	Run(ctx context.Context, cfg Config, input Input) (*Outcome, error)
+}
+
+// DashboardNotifier publishes typed events to the dashboard WebSocket bus.
+// The api.EventBus satisfies this interface — defined here to avoid circular imports.
+type DashboardNotifier interface {
+	PublishEvent(eventType string, data any)
 }
 
 // StreamFinalizer runs post-turn work after streaming completes.
@@ -97,6 +104,7 @@ type Pipeline struct {
 	botCmds    *BotCommandHandler
 	embeddings *llm.EmbeddingClient
 	errBus     *core.ErrorBus
+	dashboard  DashboardNotifier
 }
 
 // PipelineDeps bundles dependencies for the Pipeline.
@@ -114,6 +122,7 @@ type PipelineDeps struct {
 	BGWorker   *core.BackgroundWorker
 	Embeddings *llm.EmbeddingClient
 	ErrBus     *core.ErrorBus
+	Dashboard  DashboardNotifier
 }
 
 // New creates the unified pipeline.
@@ -138,6 +147,7 @@ func New(deps PipelineDeps) *Pipeline {
 		tasks:      NewTaskTracker(),
 		embeddings: deps.Embeddings,
 		errBus:     deps.ErrBus,
+		dashboard:  deps.Dashboard,
 		botCmds:    NewBotCommandHandler(deps.LLM, deps.Store),
 	}
 }
@@ -145,6 +155,13 @@ func New(deps PipelineDeps) *Pipeline {
 // RunPipeline is the canonical package-level entry point for all connectors.
 func RunPipeline(ctx context.Context, p Runner, cfg Config, input Input) (*Outcome, error) {
 	return p.Run(ctx, cfg, input)
+}
+
+// dashNotify publishes a typed event to the dashboard if a notifier is configured.
+func (p *Pipeline) dashNotify(eventType string, data any) {
+	if p.dashboard != nil {
+		p.dashboard.PublishEvent(eventType, data)
+	}
 }
 
 // Run executes the full pipeline with the given config and input.
@@ -171,6 +188,11 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 	tr := NewTraceRecorder()
 	pipelineStart := time.Now()
 	log.Info().Str("channel", cfg.ChannelLabel).Str("agent", input.AgentID).Msg("pipeline started")
+
+	// Notify dashboard: agent is working.
+	p.dashNotify("agent_working", map[string]string{
+		"agent_id": input.AgentID, "workstation": "llm", "skill": "inference",
+	})
 
 	// ── Stage 1: Input validation ──────────────────────────────────────────
 	tr.BeginSpan("validation")
@@ -201,6 +223,18 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 		tr.EndSpan("error")
 		return nil, core.NewError(core.ErrConfig, fmt.Sprintf("message exceeds %d bytes", core.MaxUserMessageBytes))
 	}
+	tr.Annotate("content_len", len(input.Content))
+	tr.Annotate("channel", cfg.ChannelLabel)
+	tr.Annotate("agent_id", input.AgentID)
+	if isBotCommand {
+		tr.Annotate("bot_command_detected", true)
+	}
+	if cfg.ModelOverride != "" {
+		tr.Annotate("model_override", cfg.ModelOverride)
+	}
+	if cfg.PreferLocalModel {
+		tr.Annotate("prefer_local", true)
+	}
 	tr.EndSpan("ok")
 
 	// ── Stage 2: Injection defense ─────────────────────────────────────────
@@ -210,6 +244,7 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 		score := p.injection.CheckInput(input.Content)
 		tr.Annotate("score", float64(score))
 		if score.IsBlocked() {
+			tr.Annotate("action", "blocked")
 			tr.EndSpan("error")
 			log.Warn().Float64("score", float64(score)).Str("channel", cfg.ChannelLabel).Str("session", input.SessionID).Str("agent", input.AgentID).Str("sender", input.SenderID).Msg("injection blocked")
 			return nil, core.NewError(core.ErrInjectionBlocked, "input rejected by injection defense")
@@ -217,7 +252,10 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 		if score.IsCaution() {
 			input.Content = p.injection.Sanitize(input.Content)
 			threatCaution = true
+			tr.Annotate("action", "sanitized")
 			log.Warn().Float64("score", float64(score)).Str("session", input.SessionID).Str("channel", cfg.ChannelLabel).Str("agent", input.AgentID).Msg("input sanitized")
+		} else {
+			tr.Annotate("action", "pass")
 		}
 	}
 	tr.EndSpan("ok")
@@ -226,7 +264,9 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 	if cfg.DedupTracking && p.dedup != nil {
 		tr.BeginSpan("dedup_check")
 		dedupFP := Fingerprint(input.Content, input.AgentID, input.SessionID)
+		tr.Annotate("fingerprint", dedupFP)
 		if !p.dedup.CheckAndTrack(dedupFP) {
+			tr.Annotate("duplicate", true)
 			tr.EndSpan("rejected")
 			return nil, core.NewError(core.ErrDuplicate, "duplicate request already in flight")
 		}
@@ -298,6 +338,9 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 		return nil, core.WrapError(core.ErrDatabase, "failed to store user message", err)
 	}
 	session.AddUserMessage(content)
+	tr.Annotate("msg_id", msgID)
+	tr.Annotate("topic_tag", topicTag)
+	tr.Annotate("turn_count", session.TurnCount())
 	tr.EndSpan("ok")
 
 	// ── Stage 6: Turn creation ─────────────────────────────────────────────
@@ -430,6 +473,27 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 		}
 
 		AnnotateRetrievalStrategy(tr, retrievalStrat.Strategy, retrievalStrat.Budget, fragmentCount)
+
+		// Enriched memory trace: tier breakdown and budget consumption.
+		// Parse tier markers from the memory block to report per-tier hits.
+		tiersQueried := []string{retrievalStrat.Strategy}
+		hitsPerTier := map[string]int{retrievalStrat.Strategy: fragmentCount}
+		budgetConsumed := 0
+		if memoryBlock != "" {
+			budgetConsumed = len(memoryBlock) / 4 // 4-char token heuristic
+			// Detect tier markers if present (e.g. "[episodic]", "[semantic]", "[working]").
+			for _, tier := range []string{"episodic", "semantic", "working", "procedural"} {
+				count := strings.Count(memoryBlock, "["+tier+"]")
+				if count > 0 {
+					if _, exists := hitsPerTier[tier]; !exists {
+						tiersQueried = append(tiersQueried, tier)
+					}
+					hitsPerTier[tier] = count
+				}
+			}
+		}
+		AnnotateMemoryTrace(tr, tiersQueried, hitsPerTier, budgetConsumed)
+		tr.Annotate(TraceNSRetrieval+".reason", retrievalStrat.Reason)
 		tr.EndSpan("ok")
 	}
 
@@ -495,7 +559,7 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 	tr.EndSpan("skipped")
 
 	// ── Stage 11.5: Cache check (Rust: check_cache) ──────────────────────
-	if cfg.CacheEnabled {
+	if cfg.CacheEnabled && !input.NoCache {
 		tr.BeginSpan("cache_check")
 		if hit := p.CheckCache(content); hit != nil {
 			tr.Annotate("cache_hit", true)
@@ -515,7 +579,24 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 				},
 			}
 			if p.guards != nil && cfg.CacheGuardSet != GuardSetNone {
-				cacheOutcome.Content = p.guards.Apply(cacheOutcome.Content)
+				tr.BeginSpan("cache_guard")
+				cacheGuardStart := time.Now()
+				cacheGuardResult := p.guards.ApplyFull(cacheOutcome.Content)
+				cacheOutcome.Content = cacheGuardResult.Content
+				cacheGuardDur := time.Since(cacheGuardStart).Milliseconds()
+				// Annotate cache guard results.
+				cacheGuardEntries := make(map[string]GuardTraceEntry)
+				for _, v := range cacheGuardResult.Violations {
+					parts := strings.SplitN(v, ":", 2)
+					name := strings.TrimSpace(parts[0])
+					reason := ""
+					if len(parts) > 1 {
+						reason = strings.TrimSpace(parts[1])
+					}
+					cacheGuardEntries[name] = GuardTraceEntry{Outcome: "fail", Reason: reason}
+				}
+				AnnotateGuardTrace(tr, cacheGuardEntries, "cached", cacheGuardDur)
+				tr.EndSpan("ok")
 			}
 
 			// Persist cached assistant response to session_messages.
@@ -543,7 +624,87 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 	}
 
 	// ── Stage 11.75: Prepare for inference (Rust: prepare_for_inference) ──
+	tr.BeginSpan("prepare_inference")
 	p.PrepareForInference(ctx, session, memoryBlock, cfg.BudgetTier)
+
+	// Annotate context budget allocation so the dashboard shows where tokens go.
+	{
+		budget := defaultTokenBudget
+		switch cfg.BudgetTier {
+		case 0:
+			budget = 4096
+		case 2:
+			budget = 16384
+		case 3:
+			budget = 32768
+		}
+		var sysToks, memToks, histToks int
+		for _, m := range session.Messages() {
+			msgTokens := len(m.Content) / 4 // 4-char heuristic
+			switch m.Role {
+			case "system":
+				sysToks += msgTokens
+			case "user", "assistant":
+				histToks += msgTokens
+			}
+		}
+		if memoryBlock != "" {
+			memToks = len(memoryBlock) / 4
+		}
+		AnnotateContextBudgetTrace(tr, budget, sysToks, 0, memToks, histToks)
+	}
+
+	// Annotate routing decision: which model was selected and why.
+	{
+		var candidates []string
+		var winner string
+		var winnerScore float64
+		routingMode := "fallback"
+
+		if cfg.ModelOverride != "" {
+			winner = cfg.ModelOverride
+			routingMode = "override"
+		} else if p.llmSvc != nil && p.llmSvc.Router() != nil {
+			router := p.llmSvc.Router()
+			// Collect candidate models.
+			for _, t := range router.Targets() {
+				candidates = append(candidates, t.Model)
+			}
+			// Resolve the selection.
+			userContent := ""
+			msgs := session.Messages()
+			for i := len(msgs) - 1; i >= 0; i-- {
+				if msgs[i].Role == "user" {
+					userContent = msgs[i].Content
+					break
+				}
+			}
+			target := router.Select(&llm.Request{
+				Messages: []llm.Message{{Role: "user", Content: userContent}},
+			})
+			winner = target.Model
+			if router.MetascoreSelector != nil {
+				routingMode = "metascore"
+			} else {
+				routingMode = "heuristic"
+			}
+		}
+		AnnotateRoutingTrace(tr, candidates, winner, winnerScore, routingMode)
+
+		// Also annotate the active routing weights when metascore routing is used.
+		if p.llmSvc != nil && p.llmSvc.Router() != nil {
+			w := p.llmSvc.Router().GetRoutingWeights()
+			AnnotateRoutingWeightsTrace(tr, map[string]float64{
+				"efficacy":     w.Efficacy,
+				"cost":         w.Cost,
+				"availability": w.Availability,
+				"locality":     w.Locality,
+				"confidence":   w.Confidence,
+				"speed":        w.Speed,
+			})
+		}
+	}
+	tr.EndSpan("ok")
 
 	// Thread delegation result into inference context (Rust parity H8).
 	// Rust seeds tool_results_acc with ("orchestrate-subagents", result)
@@ -559,10 +720,13 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 
 	// ── Stage 12: Inference ────────────────────────────────────────────────
 	tr.BeginSpan("inference")
+	p.dashNotify("stream_start", map[string]string{
+		"session_id": session.ID, "agent_id": input.AgentID,
+	})
 	var outcome *Outcome
 	switch cfg.InferenceMode {
 	case InferenceStandard:
-		outcome, err = p.runStandardInference(ctx, cfg, session, msgID, turnID)
+		outcome, err = p.runStandardInferenceWithTrace(ctx, cfg, session, msgID, turnID, tr)
 	case InferenceStreaming:
 		outcome, err = p.prepareStreamInference(ctx, cfg, session, msgID)
 	default:
@@ -577,7 +741,7 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 	tr.EndSpan("ok")
 
 	// ── Stage 12.5: Cache store (Rust: store_in_cache) ────────────────────
-	if cfg.CacheEnabled && outcome != nil && !outcome.Stream && outcome.Content != "" {
+	if cfg.CacheEnabled && !input.NoCache && outcome != nil && !outcome.Stream && outcome.Content != "" {
 		p.bgWorker.Submit("storeCache", func(_ context.Context) {
 			p.StoreInCache(content, outcome.Content, outcome.Model)
 		})
@@ -597,6 +761,14 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 	p.tasks.Complete(taskID)
 
 	log.Info().Str("session", session.ID).Str("model", outcome.Model).Int("tokens_out", outcome.TokensOut).Int64("duration_ms", time.Since(pipelineStart).Milliseconds()).Msg("pipeline completed")
+
+	// Notify dashboard: inference complete, agent returning to idle.
+	p.dashNotify("stream_end", map[string]any{
+		"session_id": session.ID, "model": outcome.Model,
+		"tokens_in": outcome.TokensIn, "tokens_out": outcome.TokensOut,
+	})
+	p.dashNotify("agent_idle", map[string]string{"agent_id": input.AgentID})
+
 	return outcome, nil
 }
 

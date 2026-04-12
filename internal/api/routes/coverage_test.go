@@ -766,8 +766,8 @@ func TestGetActiveTheme_DefaultWhenEmpty(t *testing.T) {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
 	body := jsonBody(t, rec)
-	if body["id"] != "default" {
-		t.Errorf("id = %v, want default", body["id"])
+	if body["id"] != "ai-purple" {
+		t.Errorf("id = %v, want ai-purple", body["id"])
 	}
 }
 

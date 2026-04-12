@@ -111,7 +111,8 @@ func (w *CronWorker) listEnabledJobs(ctx context.Context) ([]*CronJob, error) {
 	rows, err := w.store.QueryContext(ctx,
 		`SELECT id, name, agent_id, schedule_kind, schedule_expr, schedule_every_ms,
 		        payload_json, enabled, last_run_at, next_run_at,
-		        COALESCE(retry_count, 0), COALESCE(max_retries, 3), COALESCE(retry_delay_ms, 60000)
+		        COALESCE(retry_count, 0), COALESCE(max_retries, 3), COALESCE(retry_delay_ms, 60000),
+		        COALESCE(delivery_mode, 'none'), COALESCE(delivery_channel, '')
 		 FROM cron_jobs WHERE enabled = 1`)
 	if err != nil {
 		return nil, err
@@ -124,7 +125,8 @@ func (w *CronWorker) listEnabledJobs(ctx context.Context) ([]*CronJob, error) {
 		var lastRun, nextRun *string
 		if err := rows.Scan(&job.ID, &job.Name, &job.AgentID, &job.Kind, &job.Expression,
 			&job.IntervalMs, &job.PayloadJSON, &job.Enabled, &lastRun, &nextRun,
-			&job.RetryCount, &job.MaxRetries, &job.RetryDelayMs); err != nil {
+			&job.RetryCount, &job.MaxRetries, &job.RetryDelayMs,
+			&job.DeliveryMode, &job.DeliveryChannel); err != nil {
 			continue
 		}
 		if lastRun != nil {
@@ -165,11 +167,22 @@ func (w *CronWorker) releaseLease(ctx context.Context, jobID string) {
 }
 
 func (w *CronWorker) recordRun(ctx context.Context, run *CronRun) {
-	if _, err := w.store.ExecContext(ctx,
+	// Use column names compatible with both old schema (error, created_at)
+	// and new schema (error_msg, timestamp). Try new first, fall back to old.
+	_, err := w.store.ExecContext(ctx,
 		`INSERT INTO cron_runs (job_id, status, duration_ms, error_msg, timestamp)
 		 VALUES (?, ?, ?, ?, ?)`,
 		run.JobID, run.Status, run.DurationMs, run.ErrorMsg,
-		run.Timestamp.UTC().Format(time.RFC3339)); err != nil {
+		run.Timestamp.UTC().Format(time.RFC3339))
+	if err != nil {
+		// Old schema: columns are 'error' and 'created_at'.
+		_, err = w.store.ExecContext(ctx,
+			`INSERT INTO cron_runs (job_id, status, duration_ms, error, created_at)
+			 VALUES (?, ?, ?, ?, ?)`,
+			run.JobID, run.Status, run.DurationMs, run.ErrorMsg,
+			run.Timestamp.UTC().Format(time.RFC3339))
+	}
+	if err != nil {
 		w.errBus.ReportIfErr(err, "scheduler", "record_run", core.SevWarning)
 	}
 }

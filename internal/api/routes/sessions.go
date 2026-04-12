@@ -1,6 +1,7 @@
 package routes
 
 import (
+	"database/sql"
 	"encoding/json"
 	"net/http"
 
@@ -11,10 +12,17 @@ import (
 	"roboticus/internal/pipeline"
 )
 
-// ListSessions returns all sessions.
+// ListSessions returns all sessions, optionally filtered to only those with flight records.
 func ListSessions(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		rows, err := db.NewRouteQueries(store).ListSessions(r.Context(), 100)
+		rq := db.NewRouteQueries(store)
+		var rows *sql.Rows
+		var err error
+		if r.URL.Query().Get("has_flight_records") == "true" {
+			rows, err = rq.ListSessionsWithFlightRecords(r.Context(), 100)
+		} else {
+			rows, err = rq.ListSessions(r.Context(), 100)
+		}
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return

@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"strings"
 	"testing"
 
 	"roboticus/internal/llm"
@@ -108,6 +109,71 @@ func TestTruncate(t *testing.T) {
 	}
 	if got := truncate("exact", 5); got != "exact" {
 		t.Errorf("exact: got %q", got)
+	}
+}
+
+func TestSummarizeToolOutput_JSONArray(t *testing.T) {
+	got := summarizeToolOutput("web_search", `[{"title":"a"},{"title":"b"},{"title":"c"}]`)
+	if got != "web_search: 3 items returned" {
+		t.Errorf("array: got %q", got)
+	}
+}
+
+func TestSummarizeToolOutput_EmptyArray(t *testing.T) {
+	got := summarizeToolOutput("query_table", `[]`)
+	if got != "query_table: 0 items returned" {
+		t.Errorf("empty array: got %q", got)
+	}
+}
+
+func TestSummarizeToolOutput_JSONError(t *testing.T) {
+	got := summarizeToolOutput("query_table", `{"error":"table not found"}`)
+	want := "query_table: error — table not found"
+	if got != want {
+		t.Errorf("error: got %q, want %q", got, want)
+	}
+}
+
+func TestSummarizeToolOutput_JSONStatus(t *testing.T) {
+	got := summarizeToolOutput("deploy", `{"status":"complete","id":"abc123"}`)
+	if got != "deploy: status=complete" {
+		t.Errorf("status: got %q", got)
+	}
+}
+
+func TestSummarizeToolOutput_JSONKeys(t *testing.T) {
+	got := summarizeToolOutput("api_call", `{"count":5,"name":"test","value":42}`)
+	if got != "api_call: {count, name, value}" {
+		t.Errorf("keys: got %q", got)
+	}
+}
+
+func TestSummarizeToolOutput_PlainText(t *testing.T) {
+	got := summarizeToolOutput("read_file", "hello world this is plain text")
+	if got != "read_file: hello world this is plain text" {
+		t.Errorf("plain: got %q", got)
+	}
+}
+
+func TestSummarizeToolOutput_InvalidJSON(t *testing.T) {
+	// Truncated JSON should NOT be stored as-is; fallback to plain truncation.
+	content := `{"data": [1,2,3,`
+	got := summarizeToolOutput("some_tool", content)
+	want := "some_tool: " + content
+	if got != want {
+		t.Errorf("invalid json: got %q, want %q", got, want)
+	}
+}
+
+func TestSummarizeToolOutput_LongContent(t *testing.T) {
+	// Ensure output is capped at 150 chars.
+	longErr := strings.Repeat("x", 200)
+	got := summarizeToolOutput("tool", `{"error":"`+longErr+`"}`)
+	if len(got) > 150 {
+		t.Errorf("too long: len=%d, got %q", len(got), got)
+	}
+	if !strings.HasPrefix(got, "tool: error — ") {
+		t.Errorf("wrong prefix: got %q", got)
 	}
 }
 

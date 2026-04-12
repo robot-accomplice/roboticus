@@ -11,7 +11,7 @@ func TestCronRepository_TryAcquireLease(t *testing.T) {
 	ctx := context.Background()
 
 	// Seed a cron job.
-	err := repo.CreateJob(ctx, "job-1", "test-job", "desc", "cron", "*/5 * * * *", nil, "agent-1", `{}`)
+	err := repo.CreateJob(ctx, "job-1", "test-job", "desc", "cron", "*/5 * * * *", nil, "agent-1", `{}`, "none", "")
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestCronRepository_ReleaseLease(t *testing.T) {
 	repo := NewCronRepository(store)
 	ctx := context.Background()
 
-	err := repo.CreateJob(ctx, "job-2", "test-job-2", "desc", "cron", "*/5 * * * *", nil, "agent-1", `{}`)
+	err := repo.CreateJob(ctx, "job-2", "test-job-2", "desc", "cron", "*/5 * * * *", nil, "agent-1", `{}`, "none", "")
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestCronRepository_TryAcquireLease_ExpiredLease(t *testing.T) {
 	repo := NewCronRepository(store)
 	ctx := context.Background()
 
-	err := repo.CreateJob(ctx, "job-3", "test-job-3", "desc", "cron", "*/5 * * * *", nil, "agent-1", `{}`)
+	err := repo.CreateJob(ctx, "job-3", "test-job-3", "desc", "cron", "*/5 * * * *", nil, "agent-1", `{}`, "none", "")
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}

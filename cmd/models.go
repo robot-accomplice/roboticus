@@ -365,20 +365,33 @@ func probeOpenAI(client *http.Client, baseURL string) []string {
 
 var modelsExerciseCmd = &cobra.Command{
 	Use:   "exercise [model]",
-	Short: "Exercise a model with the 20-prompt matrix to establish quality baseline",
-	Args:  cobra.MaximumNArgs(1),
+	Short: "Exercise a model with the 25-prompt matrix to establish quality baseline",
+	Long: `Exercise runs the model through the full prompt matrix across 6 intent classes
+(Execution, Delegation, Introspection, Conversation, Memory Recall).
+
+Use -n to run multiple iterations for statistical confidence.
+Use --min-quality to set a pass/fail threshold — models below the threshold
+are flagged for removal from the routing chain.`,
+	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		model := ""
 		if len(args) > 0 {
 			model = args[0]
 		}
 
+		iterations, _ := cmd.Flags().GetInt("iterations")
+		if iterations < 1 {
+			iterations = 1
+		}
+		minQuality, _ := cmd.Flags().GetFloat64("min-quality")
+
 		// Fetch config for per-model timeout resolution.
 		exerciseCfg, _ := apiGet("/api/config")
 		exerciseTimeout := resolveModelTimeout(exerciseCfg, model)
 
+		totalPrompts := len(llm.ExerciseMatrix) * iterations
 		fmt.Println()
-		fmt.Printf("  Exercising %s with %d prompts across 4 intent classes (timeout: %s)...\n\n",
+		fmt.Printf("  Exercising %s with %d prompts x %d iteration(s) = %d calls across 6 intent classes (timeout: %s)...\n",
 			func() string {
 				if model != "" {
 					return model
@@ -386,7 +399,13 @@ var modelsExerciseCmd = &cobra.Command{
 				return "default model"
 			}(),
 			len(llm.ExerciseMatrix),
+			iterations,
+			totalPrompts,
 			exerciseTimeout)
+		if minQuality > 0 {
+			fmt.Printf("  Minimum quality threshold: %.0f%% — models below this will be flagged.\n", minQuality*100)
+		}
+		fmt.Println()
 
 		// Per-intent-class tracking.
 		type intentStats struct {
@@ -394,42 +413,51 @@ var modelsExerciseCmd = &cobra.Command{
 			totalMs    int64
 		}
 		byIntent := make(map[llm.IntentClass]*intentStats)
-		for _, ic := range []llm.IntentClass{llm.IntentExecution, llm.IntentDelegation, llm.IntentIntrospection, llm.IntentConversation} {
+		for _, ic := range llm.AllIntentClasses() {
 			byIntent[ic] = &intentStats{}
 		}
 
 		pass, fail := 0, 0
-		for i, ep := range llm.ExerciseMatrix {
-			body := map[string]any{"content": ep.Prompt}
-			if model != "" {
-				body["model"] = model
+		for iter := 0; iter < iterations; iter++ {
+			if iterations > 1 {
+				fmt.Printf("  ── Iteration %d/%d ──────────────────────────\n\n", iter+1, iterations)
 			}
-			start := time.Now()
-			resp, err := apiPostSlow("/api/agent/message", body, exerciseTimeout)
-			latencyMs := time.Since(start).Milliseconds()
-
-			prefix := fmt.Sprintf("  [%2d/%d] %-15s C%d", i+1, len(llm.ExerciseMatrix), ep.Intent, ep.Complexity)
-
-			stats := byIntent[ep.Intent]
-			if err != nil {
-				fail++
-				stats.fail++
-				fmt.Printf("%s FAIL: %v\n", prefix, err)
-				continue
-			}
-			content := fmt.Sprintf("%v", resp["content"])
-			if content != "" && content != "<nil>" {
-				pass++
-				stats.pass++
-				stats.totalMs += latencyMs
-				if len(content) > 50 {
-					content = content[:50] + "..."
+			for i, ep := range llm.ExerciseMatrix {
+				body := map[string]any{"content": ep.Prompt}
+				if model != "" {
+					body["model"] = model
 				}
-				fmt.Printf("%s PASS %4dms: %s\n", prefix, latencyMs, content)
-			} else {
-				fail++
-				stats.fail++
-				fmt.Printf("%s FAIL: empty response\n", prefix)
+				start := time.Now()
+				resp, err := apiPostSlow("/api/agent/message", body, exerciseTimeout)
+				latencyMs := time.Since(start).Milliseconds()
+
+				promptNum := iter*len(llm.ExerciseMatrix) + i + 1
+				prefix := fmt.Sprintf("  [%2d/%d] %-15s C%d", promptNum, totalPrompts, ep.Intent, ep.Complexity)
+
+				stats := byIntent[ep.Intent]
+				if err != nil {
+					fail++
+					stats.fail++
+					fmt.Printf("%s FAIL: %v\n", prefix, err)
+					continue
+				}
+				content := fmt.Sprintf("%v", resp["content"])
+				if content != "" && content != "<nil>" {
+					pass++
+					stats.pass++
+					stats.totalMs += latencyMs
+					if len(content) > 50 {
+						content = content[:50] + "..."
+					}
+					fmt.Printf("%s PASS %4dms: %s\n", prefix, latencyMs, content)
+				} else {
+					fail++
+					stats.fail++
+					fmt.Printf("%s FAIL: empty response\n", prefix)
+				}
+			}
+			if iterations > 1 {
+				fmt.Println()
 			}
 		}
 
@@ -437,7 +465,7 @@ var modelsExerciseCmd = &cobra.Command{
 		fmt.Printf("  Total: %d/%d passed\n\n", pass, pass+fail)
 		fmt.Printf("  %-15s  %s  %s  %s\n", "Intent Class", "Pass", "Fail", "Avg Latency")
 		fmt.Printf("  %-15s  %s  %s  %s\n", "───────────────", "────", "────", "───────────")
-		for _, ic := range []llm.IntentClass{llm.IntentExecution, llm.IntentDelegation, llm.IntentIntrospection, llm.IntentConversation} {
+		for _, ic := range llm.AllIntentClasses() {
 			s := byIntent[ic]
 			avgMs := int64(0)
 			if s.pass > 0 {
@@ -445,6 +473,23 @@ var modelsExerciseCmd = &cobra.Command{
 			}
 			fmt.Printf("  %-15s  %4d  %4d  %6dms\n", ic, s.pass, s.fail, avgMs)
 		}
+
+		total := pass + fail
+		qualityPct := 0.0
+		if total > 0 {
+			qualityPct = float64(pass) / float64(total)
+		}
+		fmt.Printf("\n  Quality score: %.0f%% (%d/%d)\n", qualityPct*100, pass, total)
+
+		if minQuality > 0 && qualityPct < minQuality {
+			modelLabel := model
+			if modelLabel == "" {
+				modelLabel = "default model"
+			}
+			fmt.Printf("\n  ⚠  %s scored %.0f%% — below the %.0f%% minimum quality threshold.\n", modelLabel, qualityPct*100, minQuality*100)
+			fmt.Printf("     Consider removing this model from the routing chain.\n")
+		}
+
 		fmt.Println()
 		return nil
 	},
@@ -908,12 +953,12 @@ per-intent-class latency scorecard and 6-axis metascore dimension reporting.`,
 		fmt.Printf("\n  Step 3: Exercising models...\n\n")
 
 		type modelResult struct {
-			model        string
-			pass         int
-			fail         int
-			avgQuality   float64
+			model         string
+			pass          int
+			fail          int
+			avgQuality    float64
 			intentQuality map[string]float64 // intent_class → avg quality 0-1
-			latencies    map[string][]int64  // intent_class → latencies in ms
+			latencies     map[string][]int64  // intent_class → latencies in ms
 		}
 		var results []modelResult
 
@@ -921,58 +966,68 @@ per-intent-class latency scorecard and 6-axis metascore dimension reporting.`,
 			modelTimeout := resolveModelTimeout(config, model)
 			fmt.Printf("  --- %s (timeout: %s) ---\n", model, modelTimeout)
 
-			resp, err := apiPostSlow("/api/models/exercise", map[string]any{"model": model}, modelTimeout*20)
-			if err != nil {
-				fmt.Printf("    SKIP: exercise failed: %v\n\n", err)
-				results = append(results, modelResult{model: model, fail: len(llm.ExerciseMatrix)})
-				continue
-			}
-
-			// Parse per-prompt results from exercise endpoint.
+			// Exercise per-prompt through the pipeline for immediate output.
+			// Previous approach used bulk /api/models/exercise which blocked for
+			// the entire model exercise with no progress output.
 			mr := modelResult{
 				model:         model,
 				intentQuality: make(map[string]float64),
 				latencies:     make(map[string][]int64),
 			}
-			mr.pass = int(toFloat(resp["pass"]))
-			mr.fail = int(toFloat(resp["fail"]))
-			mr.avgQuality = toFloat(resp["avg_quality"])
 
-			// Per-intent quality averages.
-			if iq, ok := resp["intent_quality"].(map[string]any); ok {
-				for intent, val := range iq {
-					mr.intentQuality[intent] = toFloat(val)
+			intentSums := make(map[string]float64)
+			intentCounts := make(map[string]int)
+			var qualitySum float64
+			var qualityCount int
+
+			for i, ep := range llm.ExerciseMatrix {
+				body := map[string]any{"content": ep.Prompt, "model": model, "no_cache": true}
+				start := time.Now()
+				resp, err := apiPostSlow("/api/agent/message", body, modelTimeout)
+				latencyMs := time.Since(start).Milliseconds()
+				intent := ep.Intent.String()
+				label := fmt.Sprintf("[%d/%d] %s:C%d", i+1, len(llm.ExerciseMatrix), intent, ep.Complexity)
+				mr.latencies[intent] = append(mr.latencies[intent], latencyMs)
+
+				if err != nil {
+					mr.fail++
+					fmt.Printf("    %s FAIL  %v\n", label, err)
+					continue
+				}
+				content := fmt.Sprintf("%v", resp["content"])
+				if content != "" && content != "<nil>" {
+					mr.pass++
+					// Score the response quality using the same scoring function
+					// as the server-side exercise endpoint.
+					quality := llm.ScoreExerciseResponse(ep, content)
+					qualitySum += quality
+					qualityCount++
+					intentSums[intent] += quality
+					intentCounts[intent]++
+					preview := content
+					if len(preview) > 50 {
+						preview = preview[:50] + "..."
+					}
+					fmt.Printf("    %s PASS  Q=%.2f  %.1fs: %s\n", label, quality, float64(latencyMs)/1000.0, preview)
+				} else {
+					mr.fail++
+					fmt.Printf("    %s FAIL  empty response  %.1fs\n", label, float64(latencyMs)/1000.0)
 				}
 			}
 
-			// Print per-prompt details.
-			if promptResults, ok := resp["results"].([]any); ok {
-				for i, pr := range promptResults {
-					if p, ok := pr.(map[string]any); ok {
-						intent := fmt.Sprintf("%v", p["intent"])
-						complexity := fmt.Sprintf("%v", p["complexity"])
-						quality := toFloat(p["quality"])
-						latencyMs := int64(toFloat(p["latency_ms"]))
-						passed, _ := p["passed"].(bool)
-						errStr := fmt.Sprintf("%v", p["error"])
-
-						label := fmt.Sprintf("[%d/%d] %s:%s", i+1, len(promptResults), intent, complexity)
-						mr.latencies[intent] = append(mr.latencies[intent], latencyMs)
-
-						if errStr != "" && errStr != "<nil>" {
-							fmt.Printf("    %s FAIL  Q=%.2f  %s\n", label, quality, errStr)
-						} else if passed {
-							fmt.Printf("    %s PASS  Q=%.2f  %.1fs\n", label, quality, float64(latencyMs)/1000.0)
-						} else {
-							fmt.Printf("    %s FAIL  Q=%.2f  %.1fs\n", label, quality, float64(latencyMs)/1000.0)
-						}
-					}
+			// Compute averages.
+			if qualityCount > 0 {
+				mr.avgQuality = qualitySum / float64(qualityCount)
+			}
+			for intent, sum := range intentSums {
+				if intentCounts[intent] > 0 {
+					mr.intentQuality[intent] = sum / float64(intentCounts[intent])
 				}
 			}
 
 			// Print per-intent quality + latency scorecard.
 			fmt.Printf("\n    Intent Quality:\n")
-			for _, intent := range []string{"EXECUTION", "DELEGATION", "INTROSPECTION", "CONVERSATION"} {
+			for _, intent := range []string{"EXECUTION", "DELEGATION", "INTROSPECTION", "CONVERSATION", "MEMORY_RECALL", "TOOL_USE"} {
 				q := mr.intentQuality[intent]
 				bar := qualityBar(q)
 				fmt.Printf("      %-16s %s %.2f\n", intent, bar, q)
@@ -998,7 +1053,7 @@ per-intent-class latency scorecard and 6-axis metascore dimension reporting.`,
 
 			// Per-intent quality breakdown.
 			if len(r.intentQuality) > 0 {
-				for _, intent := range []string{"EXECUTION", "DELEGATION", "INTROSPECTION", "CONVERSATION"} {
+				for _, intent := range []string{"EXECUTION", "DELEGATION", "INTROSPECTION", "CONVERSATION", "MEMORY_RECALL", "TOOL_USE"} {
 					q := r.intentQuality[intent]
 					fmt.Printf("    %-18s %s %.2f\n", intent, qualityBar(q), q)
 				}
@@ -1011,12 +1066,96 @@ per-intent-class latency scorecard and 6-axis metascore dimension reporting.`,
 					baseline.Locality, baseline.Confidence, baseline.Speed)
 			}
 		}
+		// Cross-model comparison: rank all models by overall quality.
+		if len(results) > 1 {
+			// Sort by avgQuality descending.
+			sorted := make([]modelResult, len(results))
+			copy(sorted, results)
+			for i := 0; i < len(sorted)-1; i++ {
+				for j := i + 1; j < len(sorted); j++ {
+					if sorted[j].avgQuality > sorted[i].avgQuality {
+						sorted[i], sorted[j] = sorted[j], sorted[i]
+					}
+				}
+			}
+
+			fmt.Printf("\n  Model Comparison (ranked by quality):\n\n")
+			fmt.Printf("  %-4s  %-30s  %-15s  %5s  %5s  %5s  %5s  %5s  %5s  %s\n",
+				"RANK", "MODEL", "QUALITY", "EXEC", "DELEG", "INTRO", "CONV", "MEMRC", "TOOLS", "AVG MS")
+			fmt.Println("  " + strings.Repeat("─", 105))
+			for rank, r := range sorted {
+				exec := r.intentQuality["EXECUTION"]
+				deleg := r.intentQuality["DELEGATION"]
+				intro := r.intentQuality["INTROSPECTION"]
+				conv := r.intentQuality["CONVERSATION"]
+				memrc := r.intentQuality["MEMORY_RECALL"]
+				tools := r.intentQuality["TOOL_USE"]
+				avgMs := int64(0)
+				var totalLat int64
+				var latCount int
+				for _, lats := range r.latencies {
+					for _, l := range lats {
+						totalLat += l
+						latCount++
+					}
+				}
+				if latCount > 0 {
+					avgMs = totalLat / int64(latCount)
+				}
+				modelLabel := r.model
+				if len(modelLabel) > 30 {
+					modelLabel = modelLabel[:27] + "..."
+				}
+				fmt.Printf("  #%-3d  %-30s  %s %3.0f%%  %4.0f%%  %4.0f%%  %4.0f%%  %4.0f%%  %4.0f%%  %4.0f%%  %5dms\n",
+					rank+1, modelLabel, qualityBar(r.avgQuality), r.avgQuality*100,
+					exec*100, deleg*100, intro*100, conv*100, memrc*100, tools*100, avgMs)
+			}
+			fmt.Println()
+
+			// Highlight best/worst per intent class.
+			intents := []string{"EXECUTION", "DELEGATION", "INTROSPECTION", "CONVERSATION", "MEMORY_RECALL", "TOOL_USE"}
+			fmt.Printf("  Best per intent class:\n")
+			for _, intent := range intents {
+				bestModel := ""
+				bestQ := 0.0
+				for _, r := range results {
+					if q, ok := r.intentQuality[intent]; ok && q > bestQ {
+						bestQ = q
+						bestModel = r.model
+					}
+				}
+				if bestModel != "" {
+					fmt.Printf("    %-18s  %s (%.0f%%)\n", intent, bestModel, bestQ*100)
+				}
+			}
+			fmt.Println()
+
+			// Flag underperformers — models below 50% overall quality.
+			var underperformers []string
+			for _, r := range sorted {
+				if r.avgQuality < 0.5 && r.avgQuality > 0 {
+					underperformers = append(underperformers, fmt.Sprintf("%s (%.0f%%)", r.model, r.avgQuality*100))
+				}
+			}
+			if len(underperformers) > 0 {
+				fmt.Printf("  Underperforming models (below 50%%):\n")
+				for _, u := range underperformers {
+					fmt.Printf("    - %s\n", u)
+				}
+				fmt.Printf("\n  Consider removing these from the routing chain with:\n")
+				fmt.Printf("    roboticus models remove <model>\n\n")
+			}
+		}
+
 		fmt.Println()
 		return nil
 	},
 }
 
 func init() {
+	modelsExerciseCmd.Flags().IntP("iterations", "n", 1, "Number of iterations over the prompt matrix (default: 1 quick mode)")
+	modelsExerciseCmd.Flags().Float64("min-quality", 0, "Minimum quality threshold (0.0-1.0) — flag models below this for removal")
+
 	modelsBaselineCmd.Flags().IntP("iterations", "n", 1, "Number of iterations over the 20-prompt matrix per model")
 	modelsBaselineCmd.Flags().Bool("new-only", false, "Only exercise models with no existing baseline data")
 }

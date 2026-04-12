@@ -48,6 +48,7 @@ func AgentMessage(p pipeline.Runner, agentName string, bus ...EventPublisher) ht
 			SenderID:      req.SenderID,
 			ChatID:        req.GroupID,
 			ModelOverride: req.Model,
+			NoCache:       req.NoCache,
 			// API requests get a proper claim for audit consistency (Gap 2 fix).
 			// API keys are fully trusted — SenderInAllowlist is true.
 			Claim: &pipeline.ChannelClaimContext{

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog/log"
 
@@ -17,6 +18,12 @@ const defaultTokenBudget = 8192
 
 // runStandardInference executes the full ReAct loop via the ToolExecutor interface.
 func (p *Pipeline) runStandardInference(ctx context.Context, cfg Config, session *Session, msgID, turnID string) (*Outcome, error) {
+	return p.runStandardInferenceWithTrace(ctx, cfg, session, msgID, turnID, nil)
+}
+
+// runStandardInferenceWithTrace is the trace-aware variant of runStandardInference.
+// When tr is non-nil, guard evaluation results are annotated to the trace.
+func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config, session *Session, msgID, turnID string, tr *TraceRecorder) (*Outcome, error) {
 	if p.executor == nil {
 		return nil, core.NewError(core.ErrConfig, "no tool executor configured")
 	}
@@ -44,15 +51,45 @@ func (p *Pipeline) runStandardInference(ctx context.Context, cfg Config, session
 
 	// Guard chain with full context and retry support.
 	if p.guards != nil && cfg.GuardSet != GuardSetNone {
+		guardStart := time.Now()
 		guardCtx := p.buildGuardContext(session)
 		guardResult := p.guards.ApplyFullWithContext(result, guardCtx)
 		result = guardResult.Content
+		guardDur := time.Since(guardStart).Milliseconds()
 		log.Debug().
 			Str("session", session.ID).
 			Bool("retry", guardResult.RetryRequested).
 			Strs("violations", guardResult.Violations).
 			Str("reason", guardResult.RetryReason).
 			Msg("guard chain evaluated")
+
+		// Build per-guard trace entries for the dashboard.
+		if tr != nil {
+			guardResults := make(map[string]GuardTraceEntry)
+			for _, v := range guardResult.Violations {
+				// Violations are in "name: reason" format from ApplyFull,
+				// or just "name" from ApplyFullWithContext.
+				parts := strings.SplitN(v, ":", 2)
+				name := strings.TrimSpace(parts[0])
+				reason := ""
+				if len(parts) > 1 {
+					reason = strings.TrimSpace(parts[1])
+				}
+				outcome := "fail"
+				if guardResult.RetryRequested && name == guardResult.RetryReason {
+					outcome = "retry"
+				}
+				guardResults[name] = GuardTraceEntry{Outcome: outcome, Reason: reason}
+			}
+			// Determine chain type based on guard set config.
+			chainType := "full"
+			if cfg.GuardSet == GuardSetCached {
+				chainType = "cached"
+			} else if cfg.InferenceMode == InferenceStreaming {
+				chainType = "stream"
+			}
+			AnnotateGuardTrace(tr, guardResults, chainType, guardDur)
+		}
 
 		// If guard requests retry, re-run inference once with the rejection reason.
 		if guardResult.RetryRequested {

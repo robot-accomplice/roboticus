@@ -184,6 +184,21 @@ func GetExerciseStatus(store *db.Store) http.HandlerFunc {
 	}
 }
 
+// GetExerciseScorecard returns per-model per-intent quality averages from
+// the latest exercise run for each model. The frontend uses this to render a
+// quality matrix in the Model Scorecard card.
+func GetExerciseScorecard(store *db.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		entries := db.ExerciseScorecard(r.Context(), store)
+		if entries == nil {
+			entries = []db.ExerciseScorecardEntry{}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"entries": entries,
+		})
+	}
+}
+
 // ResetModelScores clears metascore quality observations for one model or all models.
 func ResetModelScores(llmSvc *llm.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

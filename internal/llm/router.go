@@ -69,6 +69,14 @@ func NewRouter(targets []RouteTarget, cfg RouterConfig) *Router {
 	}
 }
 
+// Targets returns a copy of the configured routing targets.
+// Used by trace annotations to record which models were considered.
+func (r *Router) Targets() []RouteTarget {
+	out := make([]RouteTarget, len(r.models))
+	copy(out, r.models)
+	return out
+}
+
 // SetOverride forces all subsequent Select calls to return the given model,
 // bypassing all routing logic.
 func (r *Router) SetOverride(model string) {

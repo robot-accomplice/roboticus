@@ -26,18 +26,22 @@ func ListCronJobs(store *db.Store) http.HandlerFunc {
 			var description, scheduleExpr, lastRunAt, lastStatus, nextRunAt *string
 			var scheduleEveryMs *int64
 			var enabled bool
+			var deliveryMode, deliveryChannel string
 			if err := rows.Scan(&id, &name, &description, &enabled, &scheduleKind, &scheduleExpr,
-				&scheduleEveryMs, &agentID, &payloadJSON, &lastRunAt, &lastStatus, &nextRunAt); err != nil {
+				&scheduleEveryMs, &agentID, &payloadJSON, &lastRunAt, &lastStatus, &nextRunAt,
+				&deliveryMode, &deliveryChannel); err != nil {
 				writeError(w, http.StatusInternalServerError, "failed to read cron job row")
 				return
 			}
 			j := map[string]any{
-				"id":            id,
-				"name":          name,
-				"enabled":       enabled,
-				"schedule_kind": scheduleKind,
-				"agent_id":      agentID,
-				"payload":       payloadJSON,
+				"id":               id,
+				"name":             name,
+				"enabled":          enabled,
+				"schedule_kind":    scheduleKind,
+				"agent_id":         agentID,
+				"payload":          payloadJSON,
+				"delivery_mode":    deliveryMode,
+				"delivery_channel": deliveryChannel,
 			}
 			if description != nil {
 				j["description"] = *description
@@ -77,6 +81,8 @@ func CreateCronJob(store *db.Store) http.HandlerFunc {
 			ScheduleEveryMs *int64 `json:"schedule_every_ms"`
 			AgentID         string `json:"agent_id"`
 			PayloadJSON     string `json:"payload_json"`
+			DeliveryMode    string `json:"delivery_mode"`
+			DeliveryChannel string `json:"delivery_channel"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid JSON body")
@@ -95,7 +101,11 @@ func CreateCronJob(store *db.Store) http.HandlerFunc {
 
 		id := db.NewID()
 		cronRepo := db.NewCronRepository(store)
-		if err := cronRepo.CreateJob(r.Context(), id, req.Name, req.Description, req.ScheduleKind, req.ScheduleExpr, req.ScheduleEveryMs, req.AgentID, req.PayloadJSON); err != nil {
+		deliveryMode := req.DeliveryMode
+		if deliveryMode == "" {
+			deliveryMode = "none"
+		}
+		if err := cronRepo.CreateJob(r.Context(), id, req.Name, req.Description, req.ScheduleKind, req.ScheduleExpr, req.ScheduleEveryMs, req.AgentID, req.PayloadJSON, deliveryMode, req.DeliveryChannel); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -156,14 +166,17 @@ func GetCronJob(store *db.Store) http.HandlerFunc {
 		var description, scheduleExpr, lastRunAt, lastStatus, nextRunAt *string
 		var scheduleEveryMs *int64
 		var enabled bool
+		var deliveryMode, deliveryChannel string
 		if err := row.Scan(&id, &name, &description, &enabled, &scheduleKind, &scheduleExpr,
-			&scheduleEveryMs, &agentID, &payloadJSON, &lastRunAt, &lastStatus, &nextRunAt); err != nil {
+			&scheduleEveryMs, &agentID, &payloadJSON, &lastRunAt, &lastStatus, &nextRunAt,
+			&deliveryMode, &deliveryChannel); err != nil {
 			writeError(w, http.StatusNotFound, "cron job not found")
 			return
 		}
 		j := map[string]any{
 			"id": id, "name": name, "enabled": enabled,
 			"schedule_kind": scheduleKind, "agent_id": agentID, "payload": payloadJSON,
+			"delivery_mode": deliveryMode, "delivery_channel": deliveryChannel,
 		}
 		if description != nil {
 			j["description"] = *description
@@ -193,12 +206,14 @@ func UpdateCronJob(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
 		var req struct {
-			Name         *string `json:"name"`
-			Description  *string `json:"description"`
-			ScheduleKind *string `json:"schedule_kind"`
-			ScheduleExpr *string `json:"schedule_expr"`
-			Enabled      *bool   `json:"enabled"`
-			PayloadJSON  *string `json:"payload_json"`
+			Name            *string `json:"name"`
+			Description     *string `json:"description"`
+			ScheduleKind    *string `json:"schedule_kind"`
+			ScheduleExpr    *string `json:"schedule_expr"`
+			Enabled         *bool   `json:"enabled"`
+			PayloadJSON     *string `json:"payload_json"`
+			DeliveryMode    *string `json:"delivery_mode"`
+			DeliveryChannel *string `json:"delivery_channel"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid JSON body")
@@ -232,6 +247,14 @@ func UpdateCronJob(store *db.Store) http.HandlerFunc {
 		if req.PayloadJSON != nil {
 			setClauses = append(setClauses, "payload_json = ?")
 			args = append(args, *req.PayloadJSON)
+		}
+		if req.DeliveryMode != nil {
+			setClauses = append(setClauses, "delivery_mode = ?")
+			args = append(args, *req.DeliveryMode)
+		}
+		if req.DeliveryChannel != nil {
+			setClauses = append(setClauses, "delivery_channel = ?")
+			args = append(args, *req.DeliveryChannel)
 		}
 
 		if len(setClauses) == 0 {

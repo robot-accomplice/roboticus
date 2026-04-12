@@ -211,8 +211,9 @@ func (r *EfficiencyRepository) ComputeEfficiency(
 	}
 
 	// Per-model aggregates.
+	// Normalize model names: combine "qwen3.5:35b" and "ollama/qwen3.5:35b" into one row.
 	mainSQL := `SELECT
-		model,
+		CASE WHEN model NOT LIKE '%/%' AND provider != '' THEN provider || '/' || model ELSE model END AS norm_model,
 		COUNT(*) AS total_turns,
 		MAX(created_at) AS last_invoked_at,
 		AVG(CAST(tokens_out AS REAL) / NULLIF(tokens_in, 0)) AS avg_output_density,
@@ -223,7 +224,7 @@ func (r *EfficiencyRepository) ComputeEfficiency(
 		AVG(cost) AS avg_cost_per_turn
 	FROM inference_costs
 	WHERE created_at >= ` + cutoff + modelClause + `
-	GROUP BY model
+	GROUP BY norm_model
 	ORDER BY total_cost DESC`
 
 	args := make([]any, len(modelArgs))
@@ -556,7 +557,7 @@ func (r *EfficiencyRepository) BuildUserProfile(
 	// Per-model stats.
 	modelRows, err := r.q.QueryContext(ctx,
 		`SELECT
-		   model,
+		   CASE WHEN model NOT LIKE '%/%' AND provider != '' THEN provider || '/' || model ELSE model END AS model,
 		   COUNT(*) AS turns,
 		   AVG(cost) AS avg_cost,
 		   CASE WHEN COUNT(*) > 0
@@ -565,7 +566,7 @@ func (r *EfficiencyRepository) BuildUserProfile(
 		   AVG(CAST(tokens_out AS REAL) / NULLIF(tokens_in, 0)) AS avg_density
 		 FROM inference_costs
 		 WHERE created_at >= `+cutoff+`
-		 GROUP BY model
+		 GROUP BY 1
 		 ORDER BY turns DESC`)
 	if err != nil {
 		return nil, err
