@@ -1081,9 +1081,9 @@ per-intent-class latency scorecard and 6-axis metascore dimension reporting.`,
 			}
 
 			fmt.Printf("\n  Model Comparison (ranked by quality):\n\n")
-			fmt.Printf("  %-4s  %-35s  %-8s  %-5s  %-5s  %-5s  %-5s  %-5s  %-5s  %s\n",
-				"RANK", "MODEL", "QUALITY", "EXEC", "DELEG", "INTRO", "CONV", "MEMRC", "TOOLS", "AVG LATENCY")
-			fmt.Println("  " + strings.Repeat("─", 110))
+			fmt.Printf("  %-4s  %-30s  %-15s  %5s  %5s  %5s  %5s  %5s  %5s  %s\n",
+				"RANK", "MODEL", "QUALITY", "EXEC", "DELEG", "INTRO", "CONV", "MEMRC", "TOOLS", "AVG MS")
+			fmt.Println("  " + strings.Repeat("─", 105))
 			for rank, r := range sorted {
 				exec := r.intentQuality["EXECUTION"]
 				deleg := r.intentQuality["DELEGATION"]
@@ -1103,8 +1103,12 @@ per-intent-class latency scorecard and 6-axis metascore dimension reporting.`,
 				if latCount > 0 {
 					avgMs = totalLat / int64(latCount)
 				}
-				fmt.Printf("  #%-3d  %-35s  %s %.0f%%   %.0f%%  %.0f%%  %.0f%%  %.0f%%  %.0f%%  %.0f%%  %dms\n",
-					rank+1, r.model, qualityBar(r.avgQuality), r.avgQuality*100,
+				modelLabel := r.model
+				if len(modelLabel) > 30 {
+					modelLabel = modelLabel[:27] + "..."
+				}
+				fmt.Printf("  #%-3d  %-30s  %s %3.0f%%  %4.0f%%  %4.0f%%  %4.0f%%  %4.0f%%  %4.0f%%  %4.0f%%  %5dms\n",
+					rank+1, modelLabel, qualityBar(r.avgQuality), r.avgQuality*100,
 					exec*100, deleg*100, intro*100, conv*100, memrc*100, tools*100, avgMs)
 			}
 			fmt.Println()
