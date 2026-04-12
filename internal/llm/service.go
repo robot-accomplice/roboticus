@@ -672,7 +672,7 @@ func (s *Service) recordCostWithMeta(ctx context.Context, providerName string, r
 		`INSERT INTO inference_costs (id, model, provider, tokens_in, tokens_out, cost,
 		 tier, latency_ms, quality_score, escalation, turn_id, cached, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
-		fmt.Sprintf("%s-%d", resp.ID, resp.Usage.OutputTokens),
+		fmt.Sprintf("%s-%s-%d", resp.ID, modelName, resp.Usage.OutputTokens),
 		modelName, providerName,
 		resp.Usage.InputTokens, resp.Usage.OutputTokens, cost,
 		tier, meta.Latency, meta.Quality, escalated, meta.TurnID, cached,
