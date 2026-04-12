@@ -2798,8 +2798,11 @@
             var fontHint = fonts.length > 0
               ? '<div style="margin-top:0.1rem;font-size:0.62rem;color:var(--text-dim)">Font: ' + esc(fonts[0].split('family=')[1] || '').split('&')[0].split(':')[0].replace(/\+/g, ' ') + '</div>'
               : '';
+            _catalogThemeVars = _catalogThemeVars || [];
+            var varIdx = _catalogThemeVars.length;
+            _catalogThemeVars.push(vars);
             return '<div style="display:flex;align-items:center;gap:0.6rem;padding:0.6rem 0.65rem;border:1px solid var(--border-soft);border-radius:6px;background:rgba(255,255,255,0.01)">'
-              + '<div class="catalog-theme-preview" data-theme-vars=\'' + esc(JSON.stringify(vars)) + '\' style="flex-shrink:0"></div>'
+              + '<div class="catalog-theme-preview" data-theme-var-idx="' + varIdx + '" style="flex-shrink:0"></div>'
               + '<div style="min-width:0;flex:1">'
               + '<div style="display:flex;align-items:center;gap:0.4rem;flex-wrap:wrap">'
               + '<span style="font-family:var(--font-mono);font-size:0.82rem;color:var(--text)">' + esc(name) + '</span>'
@@ -2819,11 +2822,11 @@
           // Post-render: populate theme previews using buildThemePreview
           setTimeout(function() {
             document.querySelectorAll('.catalog-theme-preview').forEach(function(el) {
-              try {
-                var v = JSON.parse(el.getAttribute('data-theme-vars') || '{}');
-                var preview = buildThemePreview(v);
+              var idx = parseInt(el.getAttribute('data-theme-var-idx'), 10);
+              if (_catalogThemeVars && _catalogThemeVars[idx]) {
+                var preview = buildThemePreview(_catalogThemeVars[idx]);
                 el.appendChild(preview);
-              } catch(_) {}
+              }
             });
           }, 0);
         }
@@ -7620,11 +7623,16 @@
         if (agent.firmware_rules && agent.firmware_rules.length > 0) {
           rulesHtml = '<div style="margin-top:1rem"><div style="font-size:0.75rem;font-weight:600;color:var(--muted);letter-spacing:0.05em;margin-bottom:0.5rem">FIRMWARE RULES</div>';
           agent.firmware_rules.forEach(function(r) {
-            var rColor = r.type === 'must' ? '#22c55e' : '#ef4444';
-            var rLabel = r.type === 'must' ? 'MUST' : 'MUST NOT';
+            // Handle both formats: plain string or {type, rule} object.
+            var ruleText = typeof r === 'string' ? r : (r.rule || r.text || JSON.stringify(r));
+            var rType = typeof r === 'object' && r.type ? r.type : '';
+            var rColor, rLabel;
+            if (rType === 'must') { rColor = '#22c55e'; rLabel = 'MUST'; }
+            else if (rType === 'must_not') { rColor = '#ef4444'; rLabel = 'MUST NOT'; }
+            else { rColor = 'var(--accent)'; rLabel = '\u2022'; }
             rulesHtml += '<div style="display:flex;gap:0.5rem;margin-bottom:0.3rem;font-size:0.75rem;align-items:baseline">'
               + '<span style="font-weight:700;color:' + rColor + ';font-size:0.65rem;flex-shrink:0">' + rLabel + '</span>'
-              + '<span style="color:var(--text)">' + esc(r.rule) + '</span></div>';
+              + '<span style="color:var(--text)">' + esc(ruleText) + '</span></div>';
           });
           rulesHtml += '</div>';
         }
