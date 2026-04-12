@@ -114,6 +114,34 @@ Fix: cache `parseThemeColors` result and only re-parse on theme change, not ever
 
 ---
 
+## Additional Workspace Issues
+
+### Agent Shows Idle During Inference
+
+`workspace.go:40-41` derives activity from `HasRecentActivity(ctx, 30)` which checks for pipeline traces in the last 30 seconds. But traces are written AFTER the pipeline completes — so during a 30-240 second inference run, the agent shows idle.
+
+Fix: The workspace should use WebSocket for real-time updates, not HTTP polling. The WebSocket infrastructure already exists:
+- `EventBus` pub/sub hub at `internal/api/ws.go`
+- `/ws` endpoint at `internal/api/server.go:435`
+- Ticket-based auth at `/api/ws-ticket`
+- The Rust version uses `websocket.js` for all workspace updates
+
+The pipeline should publish events to the EventBus on:
+- Pipeline start (agent goes to "inference")
+- Tool call start/complete (agent goes to "tooling"/"working")
+- Pipeline complete (agent goes back to "idle")
+- Subagent dispatch/return
+
+The dashboard workspace page should connect via WebSocket and apply state deltas in real-time instead of polling `/api/workspace/state` every 3 seconds.
+
+Additionally, track active pipeline runs in-memory (atomic counter or sync.Map of active session IDs) so the workspace state endpoint also reflects real-time activity for non-WebSocket consumers.
+
+### Footer Not Pinned to Bottom
+
+The workspace status panel doesn't stick to the viewport bottom. Multiple calc attempts (`100vh - 8rem`, `100vh - 56px - 3rem`) fail because the `#content` element is inside a flex layout where `100vh` doesn't equal available space.
+
+Fix: use `height: 100%` on the workspace wrapper (not viewport-relative calc) since the `#content` element already fills the available space via `flex: 1`. The Rust version uses `height: 100%` (see workspace.js line 4).
+
 ## Files to Modify
 
 - `internal/api/dashboard_spa.html` — settings renderer (primary work)
