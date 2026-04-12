@@ -6663,7 +6663,7 @@
     renderWorkspace: function() {
       return api('/api/workspace/state').then(function(data) {
         _cachedWorkspace = data;
-        return '<div style="display:flex;flex-direction:column;height:calc(100vh - 8rem);min-height:400px;gap:0">'
+        return '<div style="display:flex;flex-direction:column;height:calc(100vh - 56px - 3rem);min-height:400px;gap:0">'
           + '<div id="ws-wrap" style="position:relative;flex:1;min-height:300px;overflow:hidden"><canvas id="ws-canvas" style="display:block;border-radius:var(--radius)"></canvas></div>'
           + '<div id="ws-status-panel" style="flex-shrink:0;padding:0.5rem 0.75rem;background:var(--surface);border-top:1px solid var(--border-ghost);display:flex;flex-wrap:wrap;align-items:center;gap:0.5rem 1rem;min-height:2.5rem"></div>'
           + '</div>';
