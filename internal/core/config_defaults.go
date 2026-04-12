@@ -104,6 +104,7 @@ func DefaultConfig() Config {
 		Plugins: PluginsConfig{
 			Dir:               filepath.Join(dataDir, "plugins"),
 			StrictPermissions: true,
+			CatalogURL:        "https://roboticus.ai/registry/plugins.json",
 		},
 		Security: SecurityConfig{
 			WorkspaceOnly:        true,

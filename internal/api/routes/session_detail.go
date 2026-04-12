@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/rs/zerolog/log"
 
 	"roboticus/internal/core"
 	"roboticus/internal/db"
@@ -201,8 +204,8 @@ func ToggleSkill(store *db.Store) http.HandlerFunc {
 }
 
 // GetSkillsCatalog returns the unified catalog with three distinct sections:
-// skills (from DB), plugins (from plugin registry), and themes (builtin + catalog with install status).
-func GetSkillsCatalog(store *db.Store, reg *plugin.Registry) http.HandlerFunc {
+// skills (from DB), plugins (from plugin registry + remote catalog), and themes (builtin + catalog with install status).
+func GetSkillsCatalog(store *db.Store, reg *plugin.Registry, cfg *core.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// --- Skills section ---
 		skills := make([]map[string]any, 0)
@@ -231,16 +234,25 @@ func GetSkillsCatalog(store *db.Store, reg *plugin.Registry) http.HandlerFunc {
 		}
 
 		// --- Plugins section ---
+		// Merge remote catalog with locally installed plugins.
+		installedNames := make(map[string]bool)
 		plugins := make([]map[string]any, 0)
 		if reg != nil {
 			for _, p := range reg.List() {
+				installedNames[strings.ToLower(p.Name)] = true
 				plugins = append(plugins, map[string]any{
-					"name":    p.Name,
-					"version": p.Version,
-					"status":  p.Status,
-					"tools":   p.Tools,
+					"name":      p.Name,
+					"version":   p.Version,
+					"status":    p.Status,
+					"tools":     p.Tools,
+					"installed": true,
+					"source":    "local",
 				})
 			}
+		}
+		// Fetch remote plugin catalog (best-effort, non-blocking with timeout).
+		if cfg != nil && cfg.Plugins.CatalogURL != "" {
+			fetchRemotePluginCatalog(cfg.Plugins.CatalogURL, installedNames, &plugins)
 		}
 
 		// --- Themes section (same enrichment as GetThemeCatalog) ---
@@ -474,5 +486,50 @@ func AuditSkills(store *db.Store) http.HandlerFunc {
 			result["last_reload"] = *lastReload
 		}
 		writeJSON(w, http.StatusOK, result)
+	}
+}
+
+// fetchRemotePluginCatalog fetches the remote plugin catalog and merges entries
+// that aren't already locally installed into the plugins slice.
+func fetchRemotePluginCatalog(catalogURL string, installedNames map[string]bool, plugins *[]map[string]any) {
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(catalogURL)
+	if err != nil {
+		log.Debug().Err(err).Str("url", catalogURL).Msg("plugin catalog fetch failed (non-fatal)")
+		return
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != 200 {
+		log.Debug().Int("status", resp.StatusCode).Str("url", catalogURL).Msg("plugin catalog returned non-200")
+		return
+	}
+
+	var catalog []struct {
+		Name        string   `json:"name"`
+		Version     string   `json:"version"`
+		Description string   `json:"description"`
+		Author      string   `json:"author"`
+		Tier        string   `json:"tier"` // official, community
+		Permissions []string `json:"permissions"`
+		RiskLevel   string   `json:"risk_level"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&catalog); err != nil {
+		log.Debug().Err(err).Msg("plugin catalog JSON decode failed")
+		return
+	}
+
+	for _, entry := range catalog {
+		isInstalled := installedNames[strings.ToLower(entry.Name)]
+		*plugins = append(*plugins, map[string]any{
+			"name":        entry.Name,
+			"version":     entry.Version,
+			"description": entry.Description,
+			"author":      entry.Author,
+			"tier":        entry.Tier,
+			"permissions": entry.Permissions,
+			"risk_level":  entry.RiskLevel,
+			"installed":   isInstalled,
+			"source":      "catalog",
+		})
 	}
 }

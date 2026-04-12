@@ -225,7 +225,7 @@ func NewServer(ctx context.Context, cfg ServerConfig, state *AppState) *http.Ser
 		}))
 		r.Delete("/api/skills/{id}", routes.DeleteSkill(state.Store))
 		r.Put("/api/skills/{id}/toggle", routes.ToggleSkill(state.Store))
-		r.Get("/api/skills/catalog", routes.GetSkillsCatalog(state.Store, state.Plugins))
+		r.Get("/api/skills/catalog", routes.GetSkillsCatalog(state.Store, state.Plugins, state.Config))
 		r.Post("/api/skills/catalog/install", routes.InstallSkillFromCatalog(state.Config, state.Store))
 		r.Post("/api/skills/catalog/activate", routes.ActivateSkillFromCatalog(state.Store))
 		r.Get("/api/skills/audit", routes.AuditSkills(state.Store))

@@ -269,6 +269,7 @@ type PluginsConfig struct {
 	Allow             []string `json:"allow,omitempty" mapstructure:"allow"`
 	Deny              []string `json:"deny,omitempty" mapstructure:"deny"`
 	StrictPermissions bool     `json:"strict_permissions" mapstructure:"strict_permissions"`
+	CatalogURL        string   `json:"catalog_url" mapstructure:"catalog_url"`
 }
 
 // ChannelsConfig holds channel adapter settings.
