@@ -30,7 +30,7 @@ func HybridSearch(
 	var results []HNSWSearchResult
 
 	// FTS5 leg: text search via memory_fts MATCH.
-	ftsQuery := sanitizeFTSQuery(queryText)
+	ftsQuery := SanitizeFTSQuery(queryText)
 	if ftsQuery != "" && hybridWeight < 1.0 {
 		rows, err := store.QueryContext(ctx,
 			`SELECT content, source_table, source_id
@@ -92,8 +92,8 @@ func HybridSearch(
 	return results
 }
 
-// sanitizeFTSQuery escapes FTS5 special characters to prevent syntax errors.
-func sanitizeFTSQuery(query string) string {
+// SanitizeFTSQuery escapes FTS5 special characters to prevent syntax errors.
+func SanitizeFTSQuery(query string) string {
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return ""

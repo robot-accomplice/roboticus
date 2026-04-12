@@ -126,6 +126,40 @@ func (mr *Retriever) Retrieve(ctx context.Context, sessionID, query string, tota
 	return text
 }
 
+// RetrieveDirectOnly returns only working memory + recent ambient activity.
+// This matches Rust's two-stage pattern: direct injection is limited to cheap,
+// session-scoped, always-relevant content. All other tiers (episodic, semantic,
+// procedural, relationship) are accessed via the memory index + recall_memory tool.
+//
+// This prevents the model from treating the injected block as "all of my memories"
+// and confabulating when a topic isn't present.
+func (mr *Retriever) RetrieveDirectOnly(ctx context.Context, sessionID, query string, totalTokens int) string {
+	if mr.store == nil {
+		return ""
+	}
+
+	var sections []string
+
+	// Working memory (session-scoped).
+	if budget := int(float64(totalTokens) * mr.budgets.Working); budget > 0 {
+		working := mr.retrieveWorkingMemory(ctx, sessionID, budget)
+		if working != "" {
+			sections = append(sections, "[Working Memory]\n"+working)
+		}
+	}
+
+	// Ambient recency: recent episodic memories (last 2 hours).
+	ambient := mr.retrieveAmbientRecent(ctx, 2)
+	if ambient != "" {
+		sections = append(sections, "[Recent Activity]\n"+ambient)
+	}
+
+	if len(sections) == 0 {
+		return ""
+	}
+	return strings.Join(sections, "\n\n")
+}
+
 // RetrieveWithMetrics fetches memories and returns both the injected text
 // and observability metrics (Rust parity: retrieve_with_metrics).
 func (mr *Retriever) RetrieveWithMetrics(ctx context.Context, sessionID, query string, totalTokens int) (string, RetrievalMetrics) {
@@ -298,63 +332,96 @@ func (mr *Retriever) retrieveWorkingMemory(ctx context.Context, sessionID string
 	return b.String()
 }
 
-// retrieveEpisodic fetches from episodic_memory with temporal decay and optional embedding re-ranking.
+// retrieveEpisodic fetches from episodic_memory using a union strategy:
+// 1. FTS5-matched results (query-relevant, any age)
+// 2. Recency results (recent, any content)
+// Deduplicated and re-ranked with hybrid scoring (temporal decay + embedding similarity).
 func (mr *Retriever) retrieveEpisodic(ctx context.Context, query string, queryEmbed []float32, budgetTokens int) string {
 	maxChars := budgetTokens * mr.charsPerToken
 
-	// Try FTS5 first if a query is provided.
-	var rows *sql.Rows
-	var err error
-	if query != "" {
-		// Try FTS5 match.
-		rows, err = mr.store.QueryContext(ctx,
-			`SELECT em.id, em.content, julianday('now') - julianday(em.created_at) as age_days
-			 FROM episodic_memory em
-			 LEFT JOIN memory_fts fts ON fts.rowid = (SELECT rowid FROM episodic_memory WHERE id = em.id)
-			 WHERE em.memory_state = 'active'
-			 ORDER BY em.created_at DESC LIMIT 30`)
+	type candidate struct {
+		id      string
+		content string
+		ageDays float64
+		ftsHit  bool // true if this came from FTS match
 	}
-	if err != nil || rows == nil {
-		rows, err = mr.store.QueryContext(ctx,
+	seen := make(map[string]struct{})
+	var candidates []candidate
+
+	// Leg 1: FTS5 match — query-relevant memories regardless of age.
+	if query != "" {
+		ftsQuery := db.SanitizeFTSQuery(query)
+		if ftsQuery != "" {
+			rows, err := mr.store.QueryContext(ctx,
+				`SELECT em.id, em.content, julianday('now') - julianday(em.created_at) as age_days
+				 FROM memory_fts fts
+				 JOIN episodic_memory em ON em.id = fts.source_id
+				 WHERE fts.source_table = 'episodic'
+				   AND memory_fts MATCH ?
+				   AND em.memory_state = 'active'
+				 LIMIT 20`, ftsQuery)
+			if err != nil {
+				log.Debug().Err(err).Str("fts_query", ftsQuery).Msg("episodic FTS match failed, continuing with recency")
+			} else {
+				for rows.Next() {
+					var c candidate
+					if rows.Scan(&c.id, &c.content, &c.ageDays) != nil {
+						continue
+					}
+					c.ftsHit = true
+					seen[c.id] = struct{}{}
+					candidates = append(candidates, c)
+				}
+				_ = rows.Close()
+			}
+		}
+	}
+
+	// Leg 2: Recency — recent memories regardless of query match.
+	{
+		rows, err := mr.store.QueryContext(ctx,
 			`SELECT id, content, julianday('now') - julianday(created_at) as age_days
 			 FROM episodic_memory WHERE memory_state = 'active'
-			 ORDER BY created_at DESC LIMIT 30`)
+			 ORDER BY created_at DESC LIMIT 20`)
+		if err == nil {
+			for rows.Next() {
+				var c candidate
+				if rows.Scan(&c.id, &c.content, &c.ageDays) != nil {
+					continue
+				}
+				if _, dup := seen[c.id]; dup {
+					continue // Already in FTS results.
+				}
+				seen[c.id] = struct{}{}
+				candidates = append(candidates, c)
+			}
+			_ = rows.Close()
+		}
 	}
-	if err != nil {
+
+	if len(candidates) == 0 {
 		return ""
 	}
-	defer func() { _ = rows.Close() }()
 
+	// Score and rank: blend temporal decay, FTS relevance, and embedding similarity.
 	type scored struct {
 		content string
 		score   float64
 	}
-	var entries []scored
-	for rows.Next() {
-		var id, content string
-		var ageDays float64
-		if rows.Scan(&id, &content, &ageDays) != nil {
-			continue
-		}
-
-		// Temporal decay: score = 0.5^(age/halfLife), floored.
-		decay := math.Pow(0.5, ageDays/mr.config.EpisodicHalfLife)
-		if decay < mr.config.DecayFloor {
-			decay = mr.config.DecayFloor
-		}
+	entries := make([]scored, 0, len(candidates))
+	for _, c := range candidates {
+		score := scoreEpisodicCandidate(c.ageDays, c.ftsHit, mr.config)
 
 		// Blend with embedding similarity if available.
-		finalScore := decay
 		if queryEmbed != nil && mr.embedClient != nil {
-			textEmbed, err := mr.embedClient.EmbedSingle(ctx, content)
+			textEmbed, err := mr.embedClient.EmbedSingle(ctx, c.content)
 			if err == nil {
 				sim := llm.CosineSimilarity(queryEmbed, textEmbed)
-				// Hybrid blend: (1-w)*decay + w*similarity.
-				finalScore = (1-mr.config.HybridWeight)*decay + mr.config.HybridWeight*sim
+				score = (1-mr.config.HybridWeight)*score + mr.config.HybridWeight*sim
 			}
 		}
 
-		entries = append(entries, scored{content: content, score: finalScore})
+		entries = append(entries, scored{content: c.content, score: score})
 	}
 
 	// Sort by score descending.
@@ -372,6 +439,31 @@ func (mr *Retriever) retrieveEpisodic(ctx context.Context, query string, queryEm
 		used += len(e.content)
 	}
 	return b.String()
+}
+
+// scoreEpisodicCandidate computes a base relevance score for an episodic memory.
+// FTS hits get a relevance boost that resists temporal decay, ensuring old but
+// query-matched memories can outrank recent but irrelevant ones.
+//
+// TODO(owner): This is the scoring blend — the key design knob. Current approach:
+//   - Decay:    0.5^(age/halfLife), floored at DecayFloor
+//   - FTS boost: 0.4 additive for text-matched results
+//   - The boost means a 6-month-old FTS hit scores ~0.45 vs a 1-day-old
+//     non-match at ~0.91. With embedding similarity blended in, the FTS hit
+//     can win when semantically relevant.
+func scoreEpisodicCandidate(ageDays float64, ftsHit bool, cfg RetrievalConfig) float64 {
+	decay := math.Pow(0.5, ageDays/cfg.EpisodicHalfLife)
+	if decay < cfg.DecayFloor {
+		decay = cfg.DecayFloor
+	}
+	if ftsHit {
+		// FTS relevance boost — resists decay so old memories surface when queried.
+		decay += 0.4
+		if decay > 1.0 {
+			decay = 1.0
+		}
+	}
+	return decay
 }
 
 // retrieveSemanticMemory fetches from the semantic_memory table.

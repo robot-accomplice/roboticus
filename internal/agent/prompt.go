@@ -232,7 +232,12 @@ func buildBehavioralContract(tier int) string {
 		"- Never claim capabilities, metrics, or status you haven't verified via tool call.\n" +
 		"- If a tool exists that can answer a question, USE IT before responding.\n" +
 		"- 'I don't have access to' is only valid AFTER a tool call fails.\n" +
-		"- Never say 'I don't have memories' without first calling recall_memory.\n\n" +
+		"- Never say 'I don't have memories' without first calling recall_memory.\n" +
+		"- **Memory recall rule**: When asked about a specific topic, person, or past event, your injected " +
+		"memories may not cover it. ALWAYS call recall_memory to search before answering. " +
+		"If recall_memory returns nothing, say so honestly — never fabricate memories or " +
+		"synthesize vague 'themes' from context. Specifics (dates, names, facts) or an honest " +
+		"'I don't have memories about that' — never anything in between.\n\n" +
 		"### Behavioral Self-Awareness\n" +
 		"- If you notice yourself repeating the same response pattern, change strategy.\n" +
 		"- If a tool call fails, try a different tool or approach — don't give up.\n" +
@@ -254,7 +259,7 @@ func buildOperationalIntrospection(cfg PromptConfig) string {
 	var sb strings.Builder
 	sb.WriteString("---\n## Operational Introspection\n")
 	sb.WriteString("Before acting on any task (not casual conversation):\n")
-	sb.WriteString("1. Check memory: call `recall_memory` for relevant context before claiming ignorance.\n")
+	sb.WriteString("1. Check memory: when asked about a specific topic, person, or past event, ALWAYS call `recall_memory` to search — even if injected memories are present. Injected memories are a sample, not the full store.\n")
 	sb.WriteString("2. Check data: if the user asks about stored data, query the database before saying it doesn't exist.\n")
 	sb.WriteString("3. Check filesystem: for file/repo tasks, use `list_directory` or `search_files` before guessing paths.\n")
 	sb.WriteString("4. Check tools: inspect your tool roster before claiming a capability is unavailable.\n")

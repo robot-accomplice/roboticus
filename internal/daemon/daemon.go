@@ -118,37 +118,55 @@ func buildAgentContext(ctx context.Context, sess *session.Session, tools *agent.
 		ctxBuilder.SetTools(tools.ToolDefs())
 	}
 
-	// Memory injection: always provide memory context so the model never
-	// claims "I don't have memories." Rust principle: "Session history, memory
-	// layers, and procedural skills are proactively injected into every turn."
+	// Memory injection: two-stage pattern (Rust parity).
+	//
+	// Rust architecture (retrieval.rs lines 235-258):
+	//   "Memory = index, not storage. Only working memory and recent activity
+	//   are injected directly (cheap, session-scoped, always relevant).
+	//   All other tiers are index-only — the model calls recall_memory(id)
+	//   to fetch full content on demand."
+	//
+	// CRITICAL: Do NOT inject full episodic/semantic/procedural/relationship
+	// content. If the model sees a blob of "memories" it assumes that's
+	// everything and never calls recall_memory — leading to confabulation
+	// when the topic isn't in the injected block.
 	if retriever != nil {
 		msgs := sess.Messages()
-		var mem string
+		var query string
 		for i := len(msgs) - 1; i >= 0; i-- {
 			if msgs[i].Role == "user" {
-				mem = retriever.Retrieve(ctx, sess.ID, msgs[i].Content, 2048)
+				query = msgs[i].Content
 				break
 			}
 		}
+		// Retrieve working + ambient only (Rust: direct_sections filter).
+		mem := retriever.RetrieveDirectOnly(ctx, sess.ID, query, 2048)
 		if mem != "" {
 			ctxBuilder.SetMemory(mem)
-		} else {
-			// Empty retrieval: inject orientation block so model knows memory
-			// exists and can be queried via recall_memory tool.
-			ctxBuilder.SetMemory("[Memory: No relevant memories found for this query. " +
-				"Use recall_memory(id) to search by topic. Your memory index is provided separately.]")
 		}
 	}
 
 	// Memory index: always inject so the model can call recall_memory(id).
 	// Rust: two-stage pattern — index always injected, full content on demand.
+	// Beyond-parity: query-aware index selection — when the user asks about a
+	// specific topic, FTS-matched entries are included alongside the global top-N.
 	if store != nil {
-		index := agenttools.BuildMemoryIndex(ctx, store, 20)
+		msgs := sess.Messages()
+		var userQuery string
+		for i := len(msgs) - 1; i >= 0; i-- {
+			if msgs[i].Role == "user" {
+				userQuery = msgs[i].Content
+				break
+			}
+		}
+		index := agenttools.BuildMemoryIndex(ctx, store, 20, userQuery)
 		if index != "" {
 			ctxBuilder.SetMemoryIndex(index)
 		} else {
 			ctxBuilder.SetMemoryIndex("[Memory Index: No memories stored yet. " +
-				"Memories will accumulate as conversations continue.]")
+				"Memories will accumulate as conversations continue. " +
+				"When a user asks about a past topic, use search_memories(query) to check, " +
+				"or be honest that you don't have stored memories about it yet.]")
 		}
 	}
 
@@ -538,6 +556,7 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 
 	// Memory tools.
 	tools.Register(agenttools.NewMemoryRecallTool(store))
+	tools.Register(agenttools.NewMemorySearchTool(store))
 
 	// Channel and subagent introspection.
 	tools.Register(&agenttools.ChannelHealthTool{})
