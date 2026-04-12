@@ -255,21 +255,15 @@ func GetSkillsCatalog(store *db.Store, reg *plugin.Registry, cfg *core.Config) h
 			fetchRemotePluginCatalog(cfg.Plugins.CatalogURL, installedNames, &plugins)
 		}
 
-		// --- Themes section (same enrichment as GetThemeCatalog) ---
+		// --- Themes section (catalog themes only — builtins are always available) ---
 		catalogMu.RLock()
 		installed := installedThemeIDs(store)
-		themes := make([]map[string]any, 0, len(builtinThemes)+len(catalogThemes))
-		for _, t := range builtinThemes {
-			themes = append(themes, map[string]any{
-				"id": t.ID, "name": t.Name, "description": t.Description,
-				"author": t.Author, "swatch": t.Swatch, "source": t.Source,
-				"installed": installedThemes[t.ID] || t.Source == "builtin" || installed[t.ID],
-			})
-		}
+		themes := make([]map[string]any, 0, len(catalogThemes))
 		for _, t := range catalogThemes {
 			themes = append(themes, map[string]any{
 				"id": t.ID, "name": t.Name, "description": t.Description,
 				"author": t.Author, "swatch": t.Swatch, "source": t.Source,
+				"version": t.Version,
 				"installed": installedThemes[t.ID] || installed[t.ID],
 			})
 		}

@@ -230,8 +230,8 @@ func TestGetThemeCatalog(t *testing.T) {
 
 	body := jsonBody(t, rec)
 	themes := body["themes"].([]any)
-	if len(themes) != 10 {
-		t.Errorf("got %d themes, want 10", len(themes))
+	if len(themes) != 13 {
+		t.Errorf("got %d themes, want 13 (4 builtin + 9 catalog)", len(themes))
 	}
 }
 
@@ -266,7 +266,7 @@ func TestGetSetActiveTheme(t *testing.T) {
 
 	// Set theme.
 	setReq := httptest.NewRequest("PUT", "/api/themes/active",
-		strings.NewReader(`{"theme_id":"nord"}`))
+		strings.NewReader(`{"theme_id":"crt-green"}`))
 	setRec := httptest.NewRecorder()
 	SetActiveTheme(store).ServeHTTP(setRec, setReq)
 	if setRec.Code != http.StatusOK {
@@ -278,8 +278,8 @@ func TestGetSetActiveTheme(t *testing.T) {
 	getRec := httptest.NewRecorder()
 	GetActiveTheme(store).ServeHTTP(getRec, getReq)
 	body := jsonBody(t, getRec)
-	if body["id"] != "nord" {
-		t.Errorf("active theme = %v, want nord", body["id"])
+	if body["id"] != "crt-green" {
+		t.Errorf("active theme = %v, want crt-green", body["id"])
 	}
 }
 
