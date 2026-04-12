@@ -15,6 +15,7 @@ const (
 	IntentDelegation
 	IntentIntrospection
 	IntentConversation
+	IntentMemoryRecall
 )
 
 // String returns the canonical label for this intent class.
@@ -28,6 +29,8 @@ func (ic IntentClass) String() string {
 		return "INTROSPECTION"
 	case IntentConversation:
 		return "CONVERSATION"
+	case IntentMemoryRecall:
+		return "MEMORY_RECALL"
 	default:
 		return "UNKNOWN"
 	}
@@ -45,6 +48,8 @@ func ParseIntentClass(s string) IntentClass {
 		return IntentIntrospection
 	case "CONVERSATION":
 		return IntentConversation
+	case "MEMORY_RECALL":
+		return IntentMemoryRecall
 	default:
 		return IntentExecution
 	}
@@ -52,7 +57,7 @@ func ParseIntentClass(s string) IntentClass {
 
 // AllIntentClasses returns all defined intent classes in order.
 func AllIntentClasses() []IntentClass {
-	return []IntentClass{IntentExecution, IntentDelegation, IntentIntrospection, IntentConversation}
+	return []IntentClass{IntentExecution, IntentDelegation, IntentIntrospection, IntentConversation, IntentMemoryRecall}
 }
 
 // ComplexityLevel defines exercise difficulty.
@@ -91,38 +96,43 @@ type ExercisePrompt struct {
 	Complexity ComplexityLevel
 }
 
-// ExerciseMatrix contains 20 synthetic prompts: 5 complexity levels x 4 intent classes.
-// Matches the Rust exercise::EXERCISE_MATRIX for quality baselining.
+// ExerciseMatrix contains 25 synthetic prompts: 5 complexity levels x 5 intent classes.
+// Extends the Rust exercise::EXERCISE_MATRIX with IntentMemoryRecall (beyond-parity).
 var ExerciseMatrix = []ExercisePrompt{
 	// ── Trivial (complexity ~0.1) ──────────────────────────────
 	{Prompt: "What time is it?", Intent: IntentExecution, Complexity: ComplexityTrivial},
 	{Prompt: "Say hello.", Intent: IntentDelegation, Complexity: ComplexityTrivial},
 	{Prompt: "What model are you?", Intent: IntentIntrospection, Complexity: ComplexityTrivial},
 	{Prompt: "Thanks!", Intent: IntentConversation, Complexity: ComplexityTrivial},
+	{Prompt: "Do you have any memories stored?", Intent: IntentMemoryRecall, Complexity: ComplexityTrivial},
 
 	// ── Simple (complexity ~0.3) ───────────────────────────────
 	{Prompt: "List the files in the workspace directory.", Intent: IntentExecution, Complexity: ComplexitySimple},
 	{Prompt: "Check the health of all integrations.", Intent: IntentDelegation, Complexity: ComplexitySimple},
 	{Prompt: "What tools do you have access to?", Intent: IntentIntrospection, Complexity: ComplexitySimple},
 	{Prompt: "Explain what you can do in one sentence.", Intent: IntentConversation, Complexity: ComplexitySimple},
+	{Prompt: "What do you remember about our last conversation?", Intent: IntentMemoryRecall, Complexity: ComplexitySimple},
 
 	// ── Moderate (complexity ~0.5) ─────────────────────────────
 	{Prompt: "Read the main configuration file and summarize the model settings.", Intent: IntentExecution, Complexity: ComplexityModerate},
 	{Prompt: "Search the workspace for any TODO comments and list them.", Intent: IntentDelegation, Complexity: ComplexityModerate},
 	{Prompt: "What memories do you have about recent conversations?", Intent: IntentIntrospection, Complexity: ComplexityModerate},
 	{Prompt: "Compare the advantages of local models versus cloud models for my use case.", Intent: IntentConversation, Complexity: ComplexityModerate},
+	{Prompt: "Search your memories for anything about the deployment project. What can you find?", Intent: IntentMemoryRecall, Complexity: ComplexityModerate},
 
 	// ── Complex (complexity ~0.7) ──────────────────────────────
 	{Prompt: "Write a shell script that checks disk usage and alerts if any partition is over 90%.", Intent: IntentExecution, Complexity: ComplexityComplex},
 	{Prompt: "Create a scheduled task that runs a health check every hour and stores the results.", Intent: IntentDelegation, Complexity: ComplexityComplex},
 	{Prompt: "Analyze your recent performance across different task types and suggest which model would handle each best.", Intent: IntentIntrospection, Complexity: ComplexityComplex},
 	{Prompt: "Explain the trade-offs between consistency and availability in distributed systems, with examples relevant to my setup.", Intent: IntentConversation, Complexity: ComplexityComplex},
+	{Prompt: "I told you something important about palm a few months ago. Use your search_memories tool to look it up and tell me what you find.", Intent: IntentMemoryRecall, Complexity: ComplexityComplex},
 
 	// ── Expert (complexity ~0.9) ───────────────────────────────
 	{Prompt: "Refactor the configuration parser to support hot-reload with validation, rollback on failure, and emit structured change events.", Intent: IntentExecution, Complexity: ComplexityExpert},
 	{Prompt: "Orchestrate a multi-step workflow: scan all connected services for vulnerabilities, prioritize findings by severity, and generate a remediation plan with estimated effort.", Intent: IntentDelegation, Complexity: ComplexityExpert},
 	{Prompt: "Evaluate your own decision-making process over the last 50 turns: where did you make correct tool choices, where did you waste tokens on unnecessary actions, and what patterns should the routing system learn from?", Intent: IntentIntrospection, Complexity: ComplexityExpert},
 	{Prompt: "Design a capability-based security model for a multi-tenant agent platform where each tenant has different trust levels, tool access policies, and cost budgets, considering both the authorization and audit requirements.", Intent: IntentConversation, Complexity: ComplexityExpert},
+	{Prompt: "Cross-reference your episodic and semantic memories about the infrastructure migration project, then search for any related relationship data about the people involved. Compile a timeline of what happened, who was involved, and what decisions were made.", Intent: IntentMemoryRecall, Complexity: ComplexityExpert},
 }
 
 // ModelBaseline holds pre-computed scores for a common model across all 6
@@ -155,41 +165,55 @@ var CommonIntentBaselines = []IntentBaseline{
 	{Model: "openai/gpt-4o-mini", IntentClass: "DELEGATION", Quality: 0.50},
 	{Model: "openai/gpt-4o-mini", IntentClass: "INTROSPECTION", Quality: 0.65},
 	{Model: "openai/gpt-4o-mini", IntentClass: "CONVERSATION", Quality: 0.80},
+	{Model: "openai/gpt-4o-mini", IntentClass: "MEMORY_RECALL", Quality: 0.65},
 	// GPT-4o: strong across the board
 	{Model: "openai/gpt-4o", IntentClass: "EXECUTION", Quality: 0.85},
 	{Model: "openai/gpt-4o", IntentClass: "DELEGATION", Quality: 0.80},
 	{Model: "openai/gpt-4o", IntentClass: "INTROSPECTION", Quality: 0.80},
 	{Model: "openai/gpt-4o", IntentClass: "CONVERSATION", Quality: 0.90},
+	{Model: "openai/gpt-4o", IntentClass: "MEMORY_RECALL", Quality: 0.80},
 	// Claude Sonnet: very strong at complex tasks
 	{Model: "anthropic/claude-sonnet", IntentClass: "EXECUTION", Quality: 0.85},
 	{Model: "anthropic/claude-sonnet", IntentClass: "DELEGATION", Quality: 0.85},
 	{Model: "anthropic/claude-sonnet", IntentClass: "INTROSPECTION", Quality: 0.80},
 	{Model: "anthropic/claude-sonnet", IntentClass: "CONVERSATION", Quality: 0.90},
+	{Model: "anthropic/claude-sonnet", IntentClass: "MEMORY_RECALL", Quality: 0.85},
 	// Qwen 2.5 32B: solid local model
 	{Model: "ollama/qwen2.5:32b", IntentClass: "EXECUTION", Quality: 0.75},
 	{Model: "ollama/qwen2.5:32b", IntentClass: "DELEGATION", Quality: 0.60},
 	{Model: "ollama/qwen2.5:32b", IntentClass: "INTROSPECTION", Quality: 0.70},
 	{Model: "ollama/qwen2.5:32b", IntentClass: "CONVERSATION", Quality: 0.75},
+	{Model: "ollama/qwen2.5:32b", IntentClass: "MEMORY_RECALL", Quality: 0.55},
 	// Qwen 3.5 35B: capable local model
 	{Model: "ollama/qwen3.5:35b-a3b", IntentClass: "EXECUTION", Quality: 0.70},
 	{Model: "ollama/qwen3.5:35b-a3b", IntentClass: "DELEGATION", Quality: 0.55},
 	{Model: "ollama/qwen3.5:35b-a3b", IntentClass: "INTROSPECTION", Quality: 0.65},
 	{Model: "ollama/qwen3.5:35b-a3b", IntentClass: "CONVERSATION", Quality: 0.70},
-	// Gemma 3 13B: lightweight local
+	{Model: "ollama/qwen3.5:35b-a3b", IntentClass: "MEMORY_RECALL", Quality: 0.50},
+	// Gemma 3 13B: lightweight local — weak tool selection for memory
 	{Model: "ollama/gemma3:13b", IntentClass: "EXECUTION", Quality: 0.60},
 	{Model: "ollama/gemma3:13b", IntentClass: "DELEGATION", Quality: 0.40},
 	{Model: "ollama/gemma3:13b", IntentClass: "INTROSPECTION", Quality: 0.55},
 	{Model: "ollama/gemma3:13b", IntentClass: "CONVERSATION", Quality: 0.65},
+	{Model: "ollama/gemma3:13b", IntentClass: "MEMORY_RECALL", Quality: 0.30},
 	// Mixtral 8x7B: good reasoning, moderate tool use
 	{Model: "ollama/mixtral:8x7b", IntentClass: "EXECUTION", Quality: 0.65},
 	{Model: "ollama/mixtral:8x7b", IntentClass: "DELEGATION", Quality: 0.50},
 	{Model: "ollama/mixtral:8x7b", IntentClass: "INTROSPECTION", Quality: 0.60},
 	{Model: "ollama/mixtral:8x7b", IntentClass: "CONVERSATION", Quality: 0.70},
-	// Kimi K2: capable cloud model
+	{Model: "ollama/mixtral:8x7b", IntentClass: "MEMORY_RECALL", Quality: 0.45},
+	// Kimi K2: capable cloud model — good at tool calls, memory recall proven
 	{Model: "moonshot/kimi-k2-turbo-preview", IntentClass: "EXECUTION", Quality: 0.75},
 	{Model: "moonshot/kimi-k2-turbo-preview", IntentClass: "DELEGATION", Quality: 0.60},
 	{Model: "moonshot/kimi-k2-turbo-preview", IntentClass: "INTROSPECTION", Quality: 0.65},
 	{Model: "moonshot/kimi-k2-turbo-preview", IntentClass: "CONVERSATION", Quality: 0.75},
+	{Model: "moonshot/kimi-k2-turbo-preview", IntentClass: "MEMORY_RECALL", Quality: 0.70},
+	// Gemma 4: primary local model — confabulates instead of calling memory tools
+	{Model: "ollama/gemma4", IntentClass: "EXECUTION", Quality: 0.65},
+	{Model: "ollama/gemma4", IntentClass: "DELEGATION", Quality: 0.45},
+	{Model: "ollama/gemma4", IntentClass: "INTROSPECTION", Quality: 0.60},
+	{Model: "ollama/gemma4", IntentClass: "CONVERSATION", Quality: 0.70},
+	{Model: "ollama/gemma4", IntentClass: "MEMORY_RECALL", Quality: 0.25},
 }
 
 // CommonModelBaselines provides the legacy 6-axis view for display purposes.
@@ -353,7 +377,28 @@ func scoreExerciseResponse(prompt ExercisePrompt, content string) float64 {
 	structureScore := scoreStructure(lower, length)
 
 	// Weighted combination.
-	return 0.4*lengthScore + 0.3*relevanceScore + 0.3*structureScore
+	score := 0.4*lengthScore + 0.3*relevanceScore + 0.3*structureScore
+
+	// Memory recall: apply confabulation penalty at top level.
+	// A fluent, well-structured fabrication should still score poorly.
+	if prompt.Intent == IntentMemoryRecall {
+		confabMarkers := []string{"as i recall", "from our previous", "i remember that",
+			"based on our history", "in our last conversation", "you mentioned"}
+		confabHits := 0
+		for _, m := range confabMarkers {
+			if strings.Contains(lower, m) {
+				confabHits++
+			}
+		}
+		hasToolEvidence := strings.Contains(lower, "search_memories") ||
+			strings.Contains(lower, "recall_memory") ||
+			strings.Contains(lower, "tool")
+		if confabHits >= 2 && !hasToolEvidence {
+			score *= 0.4 // Heavy penalty: fluent confabulation is the worst failure mode.
+		}
+	}
+
+	return score
 }
 
 // scoreLengthAdequacy scores response length relative to complexity expectations.
@@ -403,6 +448,33 @@ func scoreIntentRelevance(lower string, intent IntentClass) float64 {
 		markers := []string{"!", "glad", "happy", "welcome", "thank", "help",
 			"sure", "of course", "here", "let me", "can "}
 		return markerScore(lower, markers, 1)
+
+	case IntentMemoryRecall:
+		// Memory recall responses should demonstrate actual memory retrieval behavior:
+		// calling search_memories or recall_memory, referencing found/not-found results,
+		// and being honest about what was or wasn't found. Confabulation (fabricating
+		// memories without tool calls) should score poorly.
+		score := 0.0
+
+		// Positive: evidence of tool use for memory search.
+		toolMarkers := []string{"search_memories", "recall_memory", "memory_index",
+			"tool_call", "search", "recall", "found", "no memories", "not found",
+			"stored", "memory store"}
+		score += 0.5 * markerScore(lower, toolMarkers, 2)
+
+		// Positive: honesty markers (admitting what is/isn't available).
+		honestyMarkers := []string{"i found", "i don't have", "no results",
+			"no memories found", "not stored", "let me search", "searching"}
+		score += 0.3 * markerScore(lower, honestyMarkers, 1)
+
+		score += 0.2 // Base credit for responding at all.
+		if score < 0 {
+			score = 0
+		}
+		if score > 1 {
+			score = 1
+		}
+		return score
 
 	default:
 		return 0.5
