@@ -41,6 +41,44 @@ func (rq *RouteQueries) HasRecentActivity(ctx context.Context, withinSeconds int
 	return count > 0, err
 }
 
+// LatestPipelineTraceTime returns the most recent pipeline trace timestamp.
+// Used by workspace to populate last_event_at.
+func (rq *RouteQueries) LatestPipelineTraceTime(ctx context.Context) (sql.NullString, error) {
+	var ts sql.NullString
+	err := rq.q.QueryRowContext(ctx,
+		`SELECT MAX(created_at) FROM pipeline_traces`).Scan(&ts)
+	return ts, err
+}
+
+// ListSubAgentWorkspace returns enriched subagent data for the workspace page.
+func (rq *RouteQueries) ListSubAgentWorkspace(ctx context.Context) (*sql.Rows, error) {
+	return rq.q.QueryContext(ctx,
+		`SELECT name, COALESCE(display_name, name) AS display_name, model, enabled,
+		        COALESCE(role, 'specialist') AS role, COALESCE(description, '') AS description,
+		        session_count, last_used_at, updated_at
+		 FROM sub_agents ORDER BY name`)
+}
+
+// ActiveTaskSummary returns the current active task goal and completion percentage.
+func (rq *RouteQueries) ActiveTaskSummary(ctx context.Context) (string, int, error) {
+	var goal string
+	var currentStep int
+	var totalSteps int
+	err := rq.q.QueryRowContext(ctx,
+		`SELECT t.goal, t.current_step,
+		        (SELECT COUNT(*) FROM task_steps WHERE task_id = t.id) AS total_steps
+		 FROM agent_tasks t WHERE t.phase = 'active' ORDER BY t.updated_at DESC LIMIT 1`,
+	).Scan(&goal, &currentStep, &totalSteps)
+	if err != nil {
+		return "", 0, err
+	}
+	pct := 0
+	if totalSteps > 0 {
+		pct = (currentStep * 100) / totalSteps
+	}
+	return goal, pct, nil
+}
+
 // SessionMessages returns messages for a session.
 func (rq *RouteQueries) SessionMessages(ctx context.Context, sessionID string, limit int) (*sql.Rows, error) {
 	return rq.q.QueryContext(ctx,

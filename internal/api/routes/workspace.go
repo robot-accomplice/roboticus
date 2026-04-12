@@ -56,30 +56,57 @@ func GetWorkspaceState(store *db.Store, cfg *core.Config) http.HandlerFunc {
 			},
 		}
 
-		// Append subagents from DB.
-		agentRows, err := rq.ListSubAgentNamesModels(r.Context())
+		// Append subagents from DB (enriched query for workspace canvas).
+		agentRows, err := rq.ListSubAgentWorkspace(r.Context())
 		if err == nil {
 			defer func() { _ = agentRows.Close() }()
 			for agentRows.Next() {
-				var name, model string
+				var name, displayName, model, role, description string
 				var enabled bool
-				if err := agentRows.Scan(&name, &model, &enabled); err != nil {
+				var sessionCount int
+				var lastUsedAt, updatedAt *string
+				if err := agentRows.Scan(&name, &displayName, &model, &enabled,
+					&role, &description, &sessionCount, &lastUsedAt, &updatedAt); err != nil {
 					break
 				}
 				state := "stopped"
 				if enabled {
 					state = "running"
 				}
-				agents = append(agents, map[string]any{
-					"name":     name,
-					"model":    model,
-					"enabled":  enabled,
-					"state":    state,
-					"activity": "idle",
-					"color":    "",
-					"role":     "subagent",
-				})
+				entry := map[string]any{
+					"name":          name,
+					"display_name":  displayName,
+					"model":         model,
+					"enabled":       enabled,
+					"state":         state,
+					"activity":      "idle",
+					"color":         "",
+					"role":          role,
+					"description":   description,
+					"session_count": sessionCount,
+				}
+				if lastUsedAt != nil {
+					entry["last_used_at"] = *lastUsedAt
+				}
+				if updatedAt != nil {
+					entry["updated_at"] = *updatedAt
+				}
+				agents = append(agents, entry)
 			}
+		}
+
+		// Fetch last pipeline trace timestamp for last_event_at.
+		var lastEventAt *string
+		if traceTS, err := rq.LatestPipelineTraceTime(r.Context()); err == nil && traceTS.Valid {
+			lastEventAt = &traceTS.String
+		}
+
+		// Fetch active task summary if any task is in-progress.
+		var activeTaskSummary *string
+		var activeTaskPercentage *int
+		if goal, pct, err := rq.ActiveTaskSummary(r.Context()); err == nil && goal != "" {
+			activeTaskSummary = &goal
+			activeTaskPercentage = &pct
 		}
 
 		// Systems/workstations for workspace canvas (Rust parity).
@@ -94,7 +121,7 @@ func GetWorkspaceState(store *db.Store, cfg *core.Config) http.HandlerFunc {
 			{"id": "shelter", "name": "Idle Agents", "kind": "Shelter", "x": 0.035, "y": 0.50},
 		}
 
-		writeJSON(w, http.StatusOK, map[string]any{
+		resp := map[string]any{
 			"uptime":          time.Since(processStartTime).Seconds(),
 			"goroutines":      runtime.NumGoroutine(),
 			"connections":     dbStats.OpenConnections,
@@ -104,7 +131,16 @@ func GetWorkspaceState(store *db.Store, cfg *core.Config) http.HandlerFunc {
 			"status":          "running",
 			"agents":          agents,
 			"systems":         systems,
-		})
+			"updated_at":      time.Now().UTC().Format(time.RFC3339),
+		}
+		if lastEventAt != nil {
+			resp["last_event_at"] = *lastEventAt
+		}
+		if activeTaskSummary != nil {
+			resp["active_task_summary"] = *activeTaskSummary
+			resp["active_task_percentage"] = *activeTaskPercentage
+		}
+		writeJSON(w, http.StatusOK, resp)
 	}
 }
 

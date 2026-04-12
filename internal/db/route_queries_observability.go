@@ -159,6 +159,21 @@ func (rq *RouteQueries) RateLimitCurrent(ctx context.Context) (slowdown, quarant
 	return
 }
 
+// --- Flight Recorder ---
+
+// ListSessionsWithFlightRecords returns sessions that have at least one react_traces record.
+func (rq *RouteQueries) ListSessionsWithFlightRecords(ctx context.Context, limit int) (*sql.Rows, error) {
+	return rq.q.QueryContext(ctx,
+		`SELECT DISTINCT s.id, s.agent_id, s.scope_key, s.status, s.nickname, s.created_at, s.updated_at
+		 FROM sessions s
+		 WHERE EXISTS (
+		     SELECT 1 FROM react_traces rt
+		     JOIN pipeline_traces pt ON pt.id = rt.pipeline_trace_id
+		     WHERE pt.session_id = s.id
+		 )
+		 ORDER BY s.created_at DESC LIMIT ?`, limit)
+}
+
 // --- Traces ---
 
 // ListTracesSimple returns traces with fewer columns for the trace list.
