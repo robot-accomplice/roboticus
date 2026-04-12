@@ -483,6 +483,23 @@
     .settings-input::placeholder { color: var(--muted); opacity: 0.45; font-style: italic; }
     .settings-input.warn { border-color: var(--error); background: rgba(239,68,68,0.06); }
     .settings-label.warn { color: var(--error); }
+    .settings-help-trigger { cursor: help; color: var(--muted); font-size: 0.65rem; display: inline-block; padding: 0 0.15rem; user-select: none; position: relative; }
+    .settings-help-trigger:hover { color: var(--accent); }
+    .settings-tooltip-popover {
+      position: fixed; z-index: 9999; max-width: 320px; padding: 0.625rem 0.75rem;
+      background: var(--surface-2); color: var(--text); border: 1px solid var(--accent-dim);
+      border-radius: var(--radius); font-size: 0.75rem; line-height: 1.5;
+      font-family: var(--font); box-shadow: 0 4px 16px rgba(0,0,0,0.25);
+      pointer-events: auto; opacity: 0; transform: translateY(4px);
+      transition: opacity 0.15s, transform 0.15s;
+    }
+    .settings-tooltip-popover.visible { opacity: 1; transform: translateY(0); }
+    .settings-tooltip-popover::before {
+      content: ''; position: absolute; top: -5px; left: var(--arrow-left, 16px);
+      width: 8px; height: 8px; background: var(--surface-2);
+      border-left: 1px solid var(--accent-dim); border-top: 1px solid var(--accent-dim);
+      transform: rotate(45deg);
+    }
     .settings-warn-icon { color: var(--error); font-size: 0.75rem; margin-left: 0.25rem; }
     .model-order-list { display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 0.75rem; }
     .model-order-item { display: grid; grid-template-columns: 16px minmax(160px,1fr) auto auto auto; gap: 0.5rem; align-items: center; padding: 0.45rem 0.5rem; border: 1px solid var(--border-ghost); border-radius: 4px; background: var(--bg); }
@@ -5102,7 +5119,7 @@
           var autoCheckbox = '<div style="margin-top:0.75rem;display:flex;align-items:center;gap:0.5rem">'
             + '<input type="checkbox" id="model-order-auto"' + (autoOrder ? ' checked' : '') + '>'
             + '<label for="model-order-auto" style="font-size:0.8125rem;color:var(--text)">Auto</label>'
-            + '<span title="When enabled, the model order is treated as a default and may be adjusted dynamically at runtime based on availability and performance" style="cursor:help;color:var(--muted);font-size:0.65rem">(?)</span>'
+            + '<span class="settings-help-trigger" onclick="showSettingsTooltip(this, \'When enabled, the model order is treated as a default and may be adjusted dynamically at runtime based on availability and performance.\'); event.stopPropagation();">(?)</span>'
             + '</div>';
           return tabs
             + '<div class="settings-form"><div class="settings-section"><div class="settings-section-title">Model Order</div>'
@@ -5266,23 +5283,245 @@
         });
 
         var fieldTooltips = {
-            'name': 'The agent\'s display name, shown in chat and dashboard headers',
-            'id': 'Unique identifier for this agent instance',
-            'workspace': 'Root directory for agent file operations',
-            'log_level': 'Logging verbosity: trace, debug, info, warn, error',
+            // --- Agent & Identity ---
+            'name': 'The agent\'s display name, shown in chat and dashboard headers.',
+            'id': 'Unique identifier for this agent instance. Used in logs and multi-agent coordination.',
+            'workspace': 'Root directory for agent file operations. Tools are sandboxed to this path.',
+            'log_level': 'Logging verbosity: trace, debug, info, warn, error.',
+            'delegation_enabled': 'Allow this agent to delegate sub-tasks to specialist agents.',
+            'delegation_min_complexity': 'Minimum task complexity score (0.0-1.0) before delegation is considered.',
+            'delegation_min_utility_margin': 'Minimum expected utility gain to justify delegation overhead.',
+            'specialist_creation_requires_approval': 'Require human approval before spawning a new specialist agent.',
+            'composition_policy': 'How multi-agent compositions are orchestrated: sequential, parallel, or adaptive.',
+            'skill_creation_rigor': 'Rigor level for auto-generated skills: generate, validate, or full.',
+            'output_validation_policy': 'Output quality checking: strict (all), sample (random subset), or off.',
+            'output_validation_sample_rate': 'Fraction of outputs to validate when policy is "sample" (0.0-1.0).',
+            'max_output_retries': 'Maximum retries when output validation fails.',
+            'retirement_success_threshold': 'Success rate threshold (0.0-1.0) below which a specialist is retired.',
+            'retirement_min_delegations': 'Minimum delegations before retirement evaluation applies.',
+            'autonomy_max_react_turns': 'Max consecutive ReAct turns the agent can take autonomously.',
+            'autonomy_max_turn_duration_seconds': 'Max seconds per autonomous turn before timeout.',
+            // --- Session ---
+            'scope_mode': 'Session scoping: agent (global), peer (per-user), or group (per-channel).',
+            'ttl_seconds': 'Session time-to-live in seconds. 0 = no expiry.',
+            'reset_schedule': 'Cron expression for automatic session resets (e.g. "0 0 * * *" for daily).',
+            // --- Server ---
             'port': 'HTTP server port. Default: 18789. Requires restart.',
             'bind': 'Network interface to bind. 127.0.0.1 = local only, 0.0.0.0 = all interfaces.',
-            'primary': 'Primary LLM model in provider/model format',
+            'log_dir': 'Directory for server log files.',
+            'cron_max_concurrency': 'Maximum number of cron jobs that can run simultaneously.',
+            'api_key': 'API key for authenticating dashboard and API requests.',
+            'log_max_days': 'Number of days to retain log files before rotation.',
+            'trusted_proxy_cidrs': 'CIDR ranges of trusted reverse proxies for X-Forwarded-For handling.',
+            'rate_limit_requests': 'Global rate limit: max requests per window.',
+            'rate_limit_window_secs': 'Global rate limit window in seconds.',
+            'per_ip_rate_limit_requests': 'Per-IP rate limit: max requests per window.',
+            'per_actor_rate_limit_requests': 'Per-actor (authenticated user) rate limit.',
+            // --- Models ---
+            'primary': 'Primary LLM model in provider/model format (e.g. openai/gpt-4o).',
+            'fallbacks': 'Ordered list of fallback models tried when the primary fails.',
+            'stream_by_default': 'Stream LLM responses by default for lower perceived latency.',
+            'mode': 'Routing strategy: metascore, round_robin, cost_aware, or local_first.',
+            'confidence_threshold': 'Minimum confidence score (0.0-1.0) to accept a model\'s response.',
+            'estimated_output_tokens': 'Expected output size in tokens for cost estimation.',
+            'accuracy_floor': 'Minimum accuracy score before a model is deprioritized.',
+            'accuracy_min_obs': 'Minimum observations before accuracy stats are trusted.',
+            'cost_aware': 'Factor inference cost into routing decisions.',
+            'canary_fraction': 'Fraction of traffic (0.0-1.0) routed to the canary model.',
+            'canary_model': 'Model to test with canary traffic for evaluation.',
+            'blocked_models': 'Models excluded from routing. Overrides all other routing logic.',
+            'per_provider_timeout_seconds': 'Max seconds to wait for a single provider response.',
+            'max_total_inference_seconds': 'Hard ceiling on total inference time including retries.',
+            'max_fallback_attempts': 'Maximum number of fallback models to try before giving up.',
+            'local_first': 'Prefer locally-hosted models when available and capable.',
+            // --- Tiered Inference ---
+            'enabled': 'Enable or disable this subsystem.',
+            'confidence_floor': 'Minimum confidence for the fast tier before escalating to a larger model.',
+            'escalation_latency_budget_ms': 'Max latency budget (ms) for tier escalation decisions.',
+            // --- Memory ---
+            'working_budget': 'Percentage of memory budget allocated to working memory.',
+            'episodic_budget': 'Percentage of memory budget allocated to episodic (conversation) memory.',
+            'semantic_budget': 'Percentage of memory budget allocated to semantic (knowledge) memory.',
+            'procedural_budget': 'Percentage of memory budget allocated to procedural (skill) memory.',
+            'relationship_budget': 'Percentage of memory budget allocated to relationship memory.',
+            'embedding_provider': 'Provider for generating embeddings (e.g. openai, local).',
+            'embedding_model': 'Specific embedding model to use for vector similarity.',
+            'hybrid_weight': 'Balance between keyword (0.0) and semantic (1.0) search. Default: 0.5.',
+            'ann_index': 'Enable approximate nearest neighbor indexing for faster vector search.',
+            'decay_half_life_days': 'Half-life in days for memory recency decay scoring.',
+            'similarity_threshold': 'Minimum cosine similarity (0.0-1.0) for memory retrieval matches.',
+            'ann_activation_threshold': 'Minimum stored vectors before ANN index activates.',
+            // --- Context Budget ---
+            'l0': 'Token budget for trivial queries (tier 0). Min: 512.',
+            'l1': 'Token budget for low-complexity queries (tier 1).',
+            'l2': 'Token budget for moderate-complexity queries (tier 2).',
+            'l3': 'Token budget for high-complexity queries (tier 3).',
+            'soul_max_context_pct': 'Max context percentage (0.0-1.0) for personality/soul content. Default: 0.4.',
+            'channel_minimum': 'Minimum budget tier for channel messages: L0, L1, L2, or L3.',
+            // --- Cache ---
+            'max_entries': 'Maximum number of cached entries before eviction.',
+            'prompt_compression': 'Enable prompt compression to reduce token usage on cache misses.',
+            'compression_target_ratio': 'Target compression ratio (0.0-1.0). Lower = more aggressive compression.',
+            // --- Security ---
+            'workspace_only': 'Restrict all file operations to the workspace directory.',
+            'deny_on_empty_allowlist': 'Deny all operations when the allowlist is empty (fail-closed).',
+            'allowed_paths': 'Filesystem paths the agent is allowed to read/write.',
+            'protected_paths': 'Paths that are read-only even within the workspace.',
+            'extra_protected_paths': 'Additional protected paths beyond the defaults.',
+            'interpreter_allow': 'Script interpreters allowed for tool execution (e.g. python3, node).',
+            'script_allowed_paths': 'Paths accessible to script/plugin execution.',
+            'threat_caution_ceiling': 'Maximum threat level before agent refuses action: low, medium, high, critical.',
+            'allowlist_authority': 'Minimum authority to modify allowlists: owner, admin, user, none.',
+            'trusted_authority': 'Authority level granted to trusted sender IDs.',
+            'api_authority': 'Authority level granted to API key holders.',
+            'sandbox_required': 'Require sandboxed execution for all tool invocations.',
+            'script_fs_confinement': 'Confine script file access to the workspace directory only.',
+            'trusted_sender_ids': 'Sender/chat IDs that receive elevated trust via TrustedAuthority.',
+            'tool_allowed_paths': 'Paths accessible to tool execution (filesystem security).',
+            // --- Plugins ---
+            'dir': 'Directory to scan for plugin definitions.',
+            'allow': 'Allowlist of plugin names permitted to load.',
+            'deny': 'Denylist of plugin names blocked from loading.',
+            'strict_permissions': 'Require explicit permission grants for each plugin capability.',
+            // --- Skills / Script Runtime ---
+            'directory': 'Directory containing skill script files.',
+            'watch_mode': 'Watch skill directory for changes and auto-reload.',
+            'script_timeout_seconds': 'Max execution time in seconds for a single script run.',
+            'script_max_output_bytes': 'Max output size in bytes from a script execution.',
+            'allowed_interpreters': 'Interpreters permitted for script execution.',
+            'sandbox_env': 'Run scripts in a sandboxed environment with restricted syscalls.',
+            'hot_reload': 'Automatically reload scripts when files change on disk.',
+            'script_max_memory_bytes': 'Maximum memory a script process may consume.',
+            'network_allowed': 'Allow scripts to make outbound network requests.',
+            'workspace_dir': 'Override workspace directory for script file access.',
+            // --- Channels (legacy flat fields) ---
+            'telegram_token_env': 'Env var holding the Telegram bot token.',
+            'whatsapp_token_env': 'Env var holding the WhatsApp Cloud API token.',
+            'discord_token_env': 'Env var holding the Discord bot token.',
+            'signal_account': 'Signal phone number for the signal-cli daemon.',
+            'signal_daemon_url': 'URL of the signal-cli REST daemon.',
+            'email_from_address': 'Default From address for outbound email.',
+            // --- Channel sub-configs ---
+            'token_env': 'Environment variable name containing the API token.',
+            'token_ref': 'Secret reference (e.g. vault path) for the API token.',
+            'allowed_chat_ids': 'Chat/group IDs permitted to interact with the bot.',
+            'poll_timeout_seconds': 'Long-poll timeout in seconds for message fetching.',
+            'webhook_mode': 'Use webhook delivery instead of polling.',
+            'webhook_path': 'URL path for receiving webhook callbacks.',
+            'webhook_secret': 'Shared secret for webhook signature verification.',
+            'phone_number_id': 'WhatsApp Cloud API phone number ID.',
+            'verify_token': 'Webhook verification token for initial handshake.',
+            'allowed_numbers': 'Phone numbers permitted to interact with the bot.',
+            'app_secret': 'Application secret for webhook payload verification.',
+            'application_id': 'Discord application ID for slash commands.',
+            'allowed_guild_ids': 'Discord server (guild) IDs the bot may operate in.',
+            'phone_number': 'Phone number registered with Signal for this bot.',
+            'daemon_url': 'URL of the Signal REST API daemon.',
+            'imap_host': 'IMAP server hostname for incoming email.',
+            'imap_port': 'IMAP server port (993 for TLS, 143 for STARTTLS).',
+            'smtp_host': 'SMTP server hostname for outgoing email.',
+            'smtp_port': 'SMTP server port (587 for STARTTLS, 465 for TLS).',
+            'username': 'Email account username for IMAP/SMTP authentication.',
+            'password_env': 'Env var holding the email account password.',
+            'from_address': 'From address for outbound email messages.',
+            'allowed_senders': 'Email addresses permitted to send messages to the bot.',
+            'poll_interval_seconds': 'Seconds between mailbox polls for new messages.',
+            'oauth2_token_env': 'Env var for OAuth2 token (Gmail, Outlook).',
+            'use_oauth2': 'Use OAuth2 instead of password authentication.',
+            'imap_idle_enabled': 'Use IMAP IDLE for real-time push notifications.',
+            'stt_model': 'Speech-to-text model for voice input transcription.',
+            'tts_model': 'Text-to-speech model for voice output synthesis.',
+            'tts_voice': 'Voice preset for TTS output.',
+            // --- Matrix ---
+            'homeserver_url': 'Matrix homeserver URL (e.g. https://matrix.org).',
+            'access_token_env': 'Env var holding the Matrix access token.',
+            'access_token': 'Matrix access token (prefer access_token_env for security).',
+            'device_id': 'Matrix device ID for this bot session.',
+            'allowed_rooms': 'Matrix room IDs the bot may join and respond in.',
+            'auto_join': 'Automatically accept room invitations.',
+            'sync_timeout_seconds': 'Timeout for Matrix /sync long-polling.',
+            'e2ee_enabled': 'Enable end-to-end encryption for Matrix messages.',
+            'device_store_path': 'File path for persisting E2EE device keys.',
+            'device_display_name': 'Display name for this bot\'s Matrix device.',
+            // --- MCP ---
+            'servers': 'List of MCP (Model Context Protocol) server connections.',
+            'transport': 'MCP transport: stdio (subprocess) or sse (HTTP streaming).',
+            'command': 'Command to launch an MCP stdio server.',
+            'args': 'Arguments passed to the MCP server command.',
+            'url': 'URL for SSE-based MCP server connections.',
+            'env': 'Environment variables passed to the MCP server process.',
+            'auth_token_env': 'Env var holding the authentication token for the MCP server.',
+            'tool_allowlist': 'Only expose these tools from the MCP server (empty = all).',
+            // --- Treasury ---
+            'daily_cap': 'Maximum total spend per day across all operations.',
+            'per_payment_cap': 'Maximum amount for a single payment transaction.',
+            'transfer_limit': 'Maximum amount for a single transfer.',
+            'minimum_reserve': 'Minimum wallet balance to maintain as reserve.',
+            'hourly_transfer_limit': 'Maximum total transfers per hour.',
+            'daily_transfer_limit': 'Maximum total transfers per day.',
+            'daily_inference_budget': 'Maximum daily spend on LLM inference.',
+            // --- Wallet ---
+            'chain_id': 'Blockchain chain ID (e.g. 1 = Ethereum mainnet, 137 = Polygon).',
+            'rpc_url': 'RPC endpoint URL for blockchain interactions.',
+            'balance_poll_seconds': 'Seconds between wallet balance checks. 0 = disabled.',
+            // --- Themes ---
+            'catalog_url': 'URL of the theme catalog for dashboard theme downloads.',
+            // --- Update ---
+            'check_interval_hours': 'Hours between automatic update checks.',
+            // --- Database ---
             'path': 'Database file path. Use :memory: for in-memory (dev only).',
-            'l0': 'Token budget for trivial queries. Min: 512.',
-            'l1': 'Token budget for low complexity queries.',
-            'l2': 'Token budget for moderate complexity queries.',
-            'l3': 'Token budget for high complexity queries.',
-            'soul_max_context_pct': 'Max context budget percentage (0.0-1.0) for personality. Default: 0.4.',
-            'channel_minimum': 'Minimum budget tier for channel messages: L0, L1, L2, L3.',
-            'tone': 'Personality tone directive for the agent',
-            'greeting': 'Initial greeting message for new conversations'
+            // --- Personality (visible via context_budget) ---
+            'tone': 'Personality tone directive for the agent.',
+            'greeting': 'Initial greeting message for new conversations.'
         };
+
+        // --- Tooltip popover system ---
+        var _activePopover = null;
+        function showSettingsTooltip(triggerEl, text) {
+          hideSettingsTooltip();
+          var pop = document.createElement('div');
+          pop.className = 'settings-tooltip-popover';
+          pop.textContent = text;
+          document.body.appendChild(pop);
+          // Position near trigger
+          var rect = triggerEl.getBoundingClientRect();
+          var popW = Math.min(320, window.innerWidth - 32);
+          var left = Math.max(8, Math.min(rect.left - 12, window.innerWidth - popW - 16));
+          var top = rect.bottom + 6;
+          // If below viewport, show above
+          if (top + 80 > window.innerHeight) {
+            top = rect.top - 10;
+            pop.style.transform = 'translateY(-100%)';
+          }
+          pop.style.left = left + 'px';
+          pop.style.top = top + 'px';
+          pop.style.maxWidth = popW + 'px';
+          // Adjust arrow to point at trigger
+          var arrowLeft = Math.max(8, rect.left - left + rect.width / 2 - 4);
+          pop.style.setProperty('--arrow-left', arrowLeft + 'px');
+          _activePopover = pop;
+          requestAnimationFrame(function() { pop.classList.add('visible'); });
+          // Close on click outside (next tick to avoid immediate close)
+          setTimeout(function() {
+            document.addEventListener('click', _closePopoverHandler, true);
+          }, 0);
+        }
+        function hideSettingsTooltip() {
+          if (_activePopover) {
+            _activePopover.remove();
+            _activePopover = null;
+          }
+          document.removeEventListener('click', _closePopoverHandler, true);
+        }
+        function _closePopoverHandler(e) {
+          if (_activePopover && !_activePopover.contains(e.target) && !e.target.classList.contains('settings-help-trigger')) {
+            hideSettingsTooltip();
+          }
+        }
+        function tooltipSpan(key) {
+          if (!fieldTooltips[key]) return '';
+          return ' <span class="settings-help-trigger" data-tooltip-key="' + esc(key) + '" onclick="showSettingsTooltip(this, fieldTooltips[\'' + key.replace(/'/g, "\\'") + '\']); event.stopPropagation();">(?)</span>';
+        }
         var html = tabs + '<div class="settings-form">';
         var specialSections = ['models', 'providers', 'wallet'];
         // Internal/structural sections hidden from the settings UI.
@@ -5730,7 +5969,7 @@
               html += '<div class="settings-nested"><div style="font-size:0.625rem;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted);margin-bottom:0.5rem">' + esc(key) + '</div>';
               Object.keys(val).forEach(function(subKey) {
                 var subVal = val[subKey]; var subPath = path + '.' + subKey;
-                var subTooltipHtml = fieldTooltips[subKey] ? ' <span title="' + esc(fieldTooltips[subKey]) + '" style="cursor:help;color:var(--muted);font-size:0.65rem">(?)</span>' : '';
+                var subTooltipHtml = tooltipSpan(subKey);
                 _renderSettingsField(subKey, subVal, subPath, subTooltipHtml);
               });
               html += '</div>';
@@ -5750,7 +5989,7 @@
           Object.keys(sectionData).forEach(function(key) {
             var val = sectionData[key];
             var path = section + '.' + key;
-            var tooltipHtml = fieldTooltips[key] ? ' <span title="' + esc(fieldTooltips[key]) + '" style="cursor:help;color:var(--muted);font-size:0.65rem">(?)</span>' : '';
+            var tooltipHtml = tooltipSpan(key);
             _renderSettingsField(key, val, path, tooltipHtml);
           });
           html += '</div>';

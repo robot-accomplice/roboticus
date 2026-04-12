@@ -184,11 +184,11 @@ func NewServer(ctx context.Context, cfg ServerConfig, state *AppState) *http.Ser
 		r.Get("/api/memory/health", routes.MemoryHealth(state.Store))
 
 		// Routing profile.
-		r.Get("/api/routing/profile", routes.GetRoutingProfile(state.Store))
 		var llmRouter *llm.Router
 		if state.LLM != nil {
 			llmRouter = state.LLM.Router()
 		}
+		r.Get("/api/routing/profile", routes.GetRoutingProfile(state.Store, llmRouter))
 		r.Put("/api/routing/profile", routes.PutRoutingProfile(state.Store, llmRouter))
 
 		// Circuit breaker observability and reset.
