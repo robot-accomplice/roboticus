@@ -1,8 +1,8 @@
 # Architecture Gap Report: Go Implementation vs Rust Reference
 
-**Date**: 2026-04-09
+**Date**: 2026-04-12
 **Auditor**: Automated deep audit (3 parallel agents)
-**Scope**: Connector-factory compliance, security architecture, tool execution, context management
+**Scope**: Connector-factory compliance, security architecture, tool execution, context management, real-time transport
 **Reference**: `/Users/jmachen/code/roboticus-rust/ARCHITECTURE.md`
 
 ---
@@ -10,6 +10,8 @@
 ## Executive Summary
 
 The Go implementation achieves **strong structural compliance** with the connector-factory pattern. The pipeline is the single source of truth for business logic, all 8 entry points use `RunPipeline()`, and architecture tests enforce connector thinness. Of the original 7 systemic gaps, **4 are now closed** (v1.0.1 + v1.0.2).
+
+v1.0.3 adds a WebSocket-first dashboard architecture. All HTTP polling has been replaced with topic-based WebSocket subscriptions. The pipeline publishes lifecycle events to the EventBus, and the WS layer acts as a thin connector (subscribe/broadcast only — no business logic). This is architecturally compliant: the WS layer is a transport adapter, not a behavior owner.
 
 | Category | Compliant | Gaps |
 |----------|-----------|------|
@@ -23,6 +25,8 @@ The Go implementation achieves **strong structural compliance** with the connect
 | Memory Injection Guarantee | Two-stage (v1.0.1) | **CLOSED** |
 | Feature Parity Across Channels | Mostly | **2 gaps** |
 | Off-Pipeline Surfaces | 3 documented | 0 |
+| WebSocket Transport (v1.0.3) | Thin connector | 0 |
+| Config Schema Derivation (v1.0.3) | Struct-driven | 0 |
 
 ---
 
@@ -126,6 +130,23 @@ The Go implementation achieves **strong structural compliance** with the connect
 **Missing**: The Go preset constructors lack doc comments explaining *why* stages are disabled for each preset. The Rust architecture document requires documented rationale.
 
 **Fix**: Add doc comments to each preset function documenting the rationale for any disabled stage, matching the Rust architecture's table format.
+
+---
+
+## WebSocket-First Dashboard Architecture (v1.0.3)
+
+**Severity**: N/A (new capability, not a gap)
+**Architectural assessment**: COMPLIANT
+
+The v1.0.3 WebSocket-first dashboard replaces all HTTP polling with topic-based subscriptions. Key architectural properties:
+
+1. **Thin connector**: `ws_protocol.go` handles upgrade, ticket validation, and message framing only. No business logic.
+2. **Pipeline bridge**: Pipeline stages publish lifecycle events (session start/end, trace, health) to the EventBus. The WS layer subscribes and broadcasts — it does not query or transform.
+3. **Ticket authentication**: WS connections require a pre-validated ticket (anti-CSRF, anti-replay). Ticket issuance is in the API route layer; validation is in the WS upgrade handler.
+4. **Topic isolation**: `ws_topics.go` defines a registry of subscribable topics. Clients subscribe to specific topics; the server does not broadcast everything to everyone.
+5. **Zero polling**: All `setInterval`-based polling removed from dashboard. All state updates arrive via WS push.
+
+This is a transport-layer change. The pipeline remains the single behavioral authority. The WS layer is a delivery connector, analogous to the existing SSE streaming connector.
 
 ---
 
