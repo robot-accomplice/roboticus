@@ -378,7 +378,7 @@ var modelsExerciseCmd = &cobra.Command{
 		exerciseTimeout := resolveModelTimeout(exerciseCfg, model)
 
 		fmt.Println()
-		fmt.Printf("  Exercising %s with %d prompts across 4 intent classes (timeout: %s)...\n\n",
+		fmt.Printf("  Exercising %s with %d prompts across 5 intent classes (timeout: %s)...\n\n",
 			func() string {
 				if model != "" {
 					return model
@@ -394,7 +394,7 @@ var modelsExerciseCmd = &cobra.Command{
 			totalMs    int64
 		}
 		byIntent := make(map[llm.IntentClass]*intentStats)
-		for _, ic := range []llm.IntentClass{llm.IntentExecution, llm.IntentDelegation, llm.IntentIntrospection, llm.IntentConversation} {
+		for _, ic := range []llm.IntentClass{llm.IntentExecution, llm.IntentDelegation, llm.IntentIntrospection, llm.IntentConversation, llm.IntentMemoryRecall} {
 			byIntent[ic] = &intentStats{}
 		}
 
@@ -437,7 +437,7 @@ var modelsExerciseCmd = &cobra.Command{
 		fmt.Printf("  Total: %d/%d passed\n\n", pass, pass+fail)
 		fmt.Printf("  %-15s  %s  %s  %s\n", "Intent Class", "Pass", "Fail", "Avg Latency")
 		fmt.Printf("  %-15s  %s  %s  %s\n", "───────────────", "────", "────", "───────────")
-		for _, ic := range []llm.IntentClass{llm.IntentExecution, llm.IntentDelegation, llm.IntentIntrospection, llm.IntentConversation} {
+		for _, ic := range []llm.IntentClass{llm.IntentExecution, llm.IntentDelegation, llm.IntentIntrospection, llm.IntentConversation, llm.IntentMemoryRecall} {
 			s := byIntent[ic]
 			avgMs := int64(0)
 			if s.pass > 0 {
