@@ -58,6 +58,7 @@ type Input struct {
 	SenderID      string // channel sender identifier
 	ChatID        string // channel chat identifier
 	ModelOverride string // force a specific model, bypassing router
+	NoCache       bool   // skip semantic cache (used by exercise/baseline)
 	Claim         *ChannelClaimContext
 }
 
@@ -537,7 +538,7 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 	tr.EndSpan("skipped")
 
 	// ── Stage 11.5: Cache check (Rust: check_cache) ──────────────────────
-	if cfg.CacheEnabled {
+	if cfg.CacheEnabled && !input.NoCache {
 		tr.BeginSpan("cache_check")
 		if hit := p.CheckCache(content); hit != nil {
 			tr.Annotate("cache_hit", true)
@@ -716,7 +717,7 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 	tr.EndSpan("ok")
 
 	// ── Stage 12.5: Cache store (Rust: store_in_cache) ────────────────────
-	if cfg.CacheEnabled && outcome != nil && !outcome.Stream && outcome.Content != "" {
+	if cfg.CacheEnabled && !input.NoCache && outcome != nil && !outcome.Stream && outcome.Content != "" {
 		p.bgWorker.Submit("storeCache", func(_ context.Context) {
 			p.StoreInCache(content, outcome.Content, outcome.Model)
 		})

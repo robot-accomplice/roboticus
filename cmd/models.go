@@ -982,7 +982,7 @@ per-intent-class latency scorecard and 6-axis metascore dimension reporting.`,
 			var qualityCount int
 
 			for i, ep := range llm.ExerciseMatrix {
-				body := map[string]any{"content": ep.Prompt, "model": model}
+				body := map[string]any{"content": ep.Prompt, "model": model, "no_cache": true}
 				start := time.Now()
 				resp, err := apiPostSlow("/api/agent/message", body, modelTimeout)
 				latencyMs := time.Since(start).Milliseconds()
