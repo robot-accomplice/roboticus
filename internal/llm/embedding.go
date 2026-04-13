@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"math"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -128,8 +127,8 @@ func (ec *EmbeddingClient) embedOpenAI(ctx context.Context, texts []string) ([][
 // embedGoogle calls the Google Generative AI batch embed endpoint.
 func (ec *EmbeddingClient) embedGoogle(ctx context.Context, texts []string) ([][]float32, error) {
 	apiKey := ""
-	if ec.provider.APIKeyEnv != "" {
-		apiKey = os.Getenv(ec.provider.APIKeyEnv)
+	if KeyResolver != nil {
+		apiKey = KeyResolver(ec.provider.Name + "_api_key")
 	}
 
 	// Build batch request.
@@ -196,8 +195,8 @@ func (ec *EmbeddingClient) setAuth(req *http.Request) {
 		return
 	}
 	apiKey := ""
-	if ec.provider.APIKeyEnv != "" {
-		apiKey = os.Getenv(ec.provider.APIKeyEnv)
+	if KeyResolver != nil {
+		apiKey = KeyResolver(ec.provider.Name + "_api_key")
 	}
 	if apiKey == "" {
 		return

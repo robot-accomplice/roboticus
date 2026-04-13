@@ -179,6 +179,9 @@ func coerceArrayFields(m map[string]any) {
 			}
 		} else if v == nil {
 			m[f] = []string{}
+		} else if _, isMap := v.(map[string]any); isMap {
+			// Dashboard may send {} (empty object) instead of [] (empty array).
+			m[f] = []string{}
 		}
 	}
 }

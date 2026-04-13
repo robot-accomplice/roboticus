@@ -6,14 +6,20 @@ import (
 	"net/http"
 	"sync"
 
+	"github.com/rs/zerolog/log"
+
 	"roboticus/internal/db"
 )
 
 // ThemeTexture describes a CSS texture or pattern overlay.
 type ThemeTexture struct {
-	Kind  string `json:"kind"`  // "css" or "url"
-	Value string `json:"value"` // CSS gradient/pattern string or URL
+	Kind  string `json:"kind"`            // "css", "url", or "file"
+	Value string `json:"value"`           // CSS gradient/pattern string, URL, or local filename
+	Tile  bool   `json:"tile,omitempty"`  // true = repeat/tile, false = cover (for photos)
 }
+
+// ThemeRegistryBaseURL is the base URL for the theme asset registry.
+const ThemeRegistryBaseURL = "https://roboticus.ai/registry/themes"
 
 // ThemeManifest describes a UI theme.
 type ThemeManifest struct {
@@ -88,15 +94,12 @@ var catalogThemes = []ThemeManifest{
 			"--bg": "#2a2118", "--surface": "#352a1f", "--surface-2": "#3f3326",
 			"--accent": "#c17f3a", "--text": "#f5e6c8", "--muted": "#b8a080",
 			"--border": "#6b5540",
-			"--theme-body-texture":    "repeating-linear-gradient(0deg, transparent, transparent 3px, rgba(139,94,60,0.03) 3px, rgba(139,94,60,0.03) 4px)",
 			"--theme-separator":       "linear-gradient(90deg, transparent, #8b5e3c 20%, #c17f3a 50%, #8b5e3c 80%, transparent)",
 			"--theme-separator-height": "2px",
 			"--theme-scrollbar":       "rgba(193,127,58,0.3)",
-			"--theme-card-border":     "linear-gradient(to bottom, #6b5540, #3f3326) 1",
 		},
 		Textures: map[string]ThemeTexture{
-			"body":    {Kind: "css", Value: "repeating-linear-gradient(0deg, transparent, transparent 3px, rgba(139,94,60,0.03) 3px, rgba(139,94,60,0.03) 4px)"},
-			"surface": {Kind: "css", Value: "radial-gradient(ellipse at 20% 50%, rgba(193,127,58,0.06) 0%, transparent 70%)"},
+			"body": {Kind: "url", Value: ThemeRegistryBaseURL + "/parchment/textures/parchment.jpg"},
 		},
 		Version: "1.0.0", Source: "catalog"},
 	{ID: "midnight-ocean", Name: "Midnight Ocean", Description: "Deep navy depths with teal accents and wave-inspired separators", Author: "Roboticus", Swatch: "#0d9488",
@@ -110,7 +113,7 @@ var catalogThemes = []ThemeManifest{
 			"--theme-scrollbar":    "rgba(13,148,136,0.3)",
 		},
 		Textures: map[string]ThemeTexture{
-			"body": {Kind: "css", Value: "radial-gradient(ellipse at 50% 0%, rgba(13,148,136,0.08) 0%, transparent 60%)"},
+			"body": {Kind: "url", Value: ThemeRegistryBaseURL + "/midnight-ocean/textures/ocean.jpg"},
 		},
 		Version: "1.0.0", Source: "catalog"},
 	{ID: "solarized-dark", Name: "Solarized Dark", Description: "Ethan Schoonover's precision-engineered dark palette for low-fatigue reading", Author: "Roboticus", Swatch: "#268bd2",
@@ -142,9 +145,6 @@ var catalogThemes = []ThemeManifest{
 			"--accent": "#2aa198", "--text": "#839496", "--muted": "#657b83",
 			"--border": "#586e75", "--highlight": "#b58900", "--secondary": "#268bd2",
 		},
-		Textures: map[string]ThemeTexture{
-			"body": {Kind: "css", Value: "url(data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='4' height='4'%3E%3Crect width='4' height='4' fill='%23002b36'/%3E%3Crect width='1' height='1' fill='%23073642' opacity='0.3'/%3E%3C/svg%3E)"},
-		},
 		Fonts:   []string{"https://fonts.googleapis.com/css2?family=Source+Code+Pro:wght@400;600&display=swap"},
 		Version: "1.0.0", Source: "catalog"},
 	{ID: "cyberpunk", Name: "Cyberpunk", Description: "Neon-soaked dystopian interface with scanline overlay", Author: "Roboticus", Swatch: "#ff2a6d",
@@ -154,7 +154,7 @@ var catalogThemes = []ThemeManifest{
 			"--border": "#3a1a5e", "--highlight": "#01ff70", "--secondary": "#05d9e8",
 		},
 		Textures: map[string]ThemeTexture{
-			"body": {Kind: "css", Value: "repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.15) 2px, rgba(0,0,0,0.15) 4px)"},
+			"body": {Kind: "url", Value: ThemeRegistryBaseURL + "/cyberpunk/textures/scanlines.png", Tile: true},
 		},
 		Fonts:   []string{"https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap"},
 		Version: "1.0.0", Source: "catalog"},
@@ -172,9 +172,20 @@ var catalogThemes = []ThemeManifest{
 			"--border": "#3b4261", "--highlight": "#e0af68", "--secondary": "#9ece6a",
 		},
 		Textures: map[string]ThemeTexture{
-			"body": {Kind: "css", Value: "linear-gradient(180deg, rgba(122,162,247,0.03) 0%, transparent 30%), linear-gradient(0deg, rgba(158,206,106,0.02) 0%, transparent 20%)"},
+			"body": {Kind: "url", Value: ThemeRegistryBaseURL + "/tokyo-night/textures/skyline.jpg"},
 		},
 		Fonts:   []string{"https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap"},
+		Version: "1.0.0", Source: "catalog"},
+	{ID: "ancient-castle", Name: "Ancient Castle", Description: "Dark medieval fortress with stone and iron — for the keeper of secrets", Author: "Roboticus", Swatch: "#8b7355",
+		Variables: map[string]string{
+			"--bg": "#1a1510", "--surface": "#2a2318", "--surface-2": "#352d20",
+			"--accent": "#8b7355", "--text": "#d4c8a8", "--muted": "#9b8b6f",
+			"--border": "#5a4a35", "--highlight": "#c4a265", "--secondary": "#6b5b42",
+		},
+		Textures: map[string]ThemeTexture{
+			"body": {Kind: "url", Value: ThemeRegistryBaseURL + "/ancient-castle/textures/castle.jpg"},
+		},
+		Fonts:   []string{"https://fonts.googleapis.com/css2?family=MedievalSharp&display=swap"},
 		Version: "1.0.0", Source: "catalog"},
 }
 
@@ -237,7 +248,7 @@ func GetThemeCatalog(store *db.Store) http.HandlerFunc {
 				entry["variables"] = t.Variables
 			}
 			if len(t.Textures) > 0 {
-				entry["textures"] = t.Textures
+				entry["textures"] = ResolveTextureURLs(t.ID, t.Textures)
 			}
 			if len(t.Fonts) > 0 {
 				entry["fonts"] = t.Fonts
@@ -254,7 +265,7 @@ func GetThemeCatalog(store *db.Store) http.HandlerFunc {
 				entry["variables"] = t.Variables
 			}
 			if len(t.Textures) > 0 {
-				entry["textures"] = t.Textures
+				entry["textures"] = ResolveTextureURLs(t.ID, t.Textures)
 			}
 			if len(t.Fonts) > 0 {
 				entry["fonts"] = t.Fonts
@@ -292,6 +303,16 @@ func InstallCatalogTheme(store *db.Store) http.HandlerFunc {
 			writeError(w, http.StatusNotFound, "theme not found in catalog")
 			return
 		}
+		// Download texture assets and write theme directory.
+		if len(theme.Textures) > 0 {
+			if err := DownloadThemeTextures(req.ID, &theme); err != nil {
+				log.Warn().Err(err).Str("theme", req.ID).Msg("texture download failed (theme installed without textures)")
+			}
+		}
+		if err := WriteThemeManifest(req.ID, theme); err != nil {
+			log.Warn().Err(err).Str("theme", req.ID).Msg("manifest write failed")
+		}
+
 		content, err := json.Marshal(theme)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to encode theme")
@@ -301,7 +322,43 @@ func InstallCatalogTheme(store *db.Store) http.HandlerFunc {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "theme": theme})
+
+		// Return theme with resolved texture URLs (file refs → servable URLs).
+		responseTheme := theme
+		responseTheme.Textures = ResolveTextureURLs(req.ID, theme.Textures)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "theme": responseTheme})
+	}
+}
+
+// UninstallCatalogTheme removes a catalog theme by ID.
+func UninstallCatalogTheme(store *db.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID string `json:"id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
+		if req.ID == "" {
+			writeError(w, http.StatusBadRequest, "id required")
+			return
+		}
+		// Prevent uninstalling builtin themes.
+		for _, t := range builtinThemes {
+			if t.ID == req.ID {
+				writeError(w, http.StatusBadRequest, "cannot uninstall builtin theme")
+				return
+			}
+		}
+		if err := db.NewRouteQueries(store).UninstallTheme(r.Context(), req.ID); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		catalogMu.Lock()
+		delete(installedThemes, req.ID)
+		catalogMu.Unlock()
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": req.ID})
 	}
 }
 

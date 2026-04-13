@@ -81,13 +81,11 @@ var securityAuditCmd = &cobra.Command{
 		fmt.Println("Security Audit:")
 		fmt.Println("===============")
 
-		// Check: API keys configured.
+		// Check: API keys configured (via keystore refs).
 		hasAPIKey := false
 		for _, p := range cfg.Providers {
-			if p.APIKeyEnv != "" {
-				if v := os.Getenv(p.APIKeyEnv); v != "" {
-					hasAPIKey = true
-				}
+			if p.APIKeyRef != "" {
+				hasAPIKey = true
 			}
 		}
 		if !hasAPIKey {

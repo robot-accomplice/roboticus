@@ -153,7 +153,7 @@ func parseBundledProviders() map[string]ProviderConfig {
 		case "chat_path":
 			cfg.ChatPath = val
 		case "api_key_env":
-			cfg.APIKeyEnv = val
+			// Ignored — keys come from keystore, not env vars.
 		case "is_local":
 			cfg.IsLocal = val == "true"
 		case "auth_header":

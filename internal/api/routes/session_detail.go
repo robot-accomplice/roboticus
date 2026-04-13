@@ -282,7 +282,7 @@ func GetSkillsCatalog(store *db.Store, reg *plugin.Registry, cfg *core.Config) h
 				entry["variables"] = t.Variables
 			}
 			if len(t.Textures) > 0 {
-				entry["textures"] = t.Textures
+				entry["textures"] = ResolveTextureURLs(t.ID, t.Textures)
 			}
 			if len(t.Fonts) > 0 {
 				entry["fonts"] = t.Fonts

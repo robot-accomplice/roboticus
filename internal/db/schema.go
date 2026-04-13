@@ -843,6 +843,12 @@ func (s *Store) ensureOptionalColumns() error {
 		{Table: "cron_jobs", Column: "retry_count", ColType: "INTEGER", Default: "0"},
 		{Table: "cron_jobs", Column: "max_retries", ColType: "INTEGER", Default: "3"},
 		{Table: "cron_jobs", Column: "retry_delay_ms", ColType: "INTEGER", Default: "60000"},
+		// installed_themes columns for older DBs that created the table without them.
+		{Table: "installed_themes", Column: "name", ColType: "TEXT", Default: "''"},
+		{Table: "installed_themes", Column: "source", ColType: "TEXT", Default: "'catalog'"},
+		{Table: "installed_themes", Column: "version", ColType: "TEXT", Default: "'1.0.0'"},
+		{Table: "installed_themes", Column: "active", ColType: "INTEGER", Default: "0"},
+		{Table: "installed_themes", Column: "content", ColType: "TEXT", Default: "'{}'"},
 	}
 
 	for _, col := range columns {

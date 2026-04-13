@@ -141,7 +141,7 @@ func (d *Daemon) run() {
 	// No dedicated poller needed — PollAll calls Recv on all registered adapters.
 
 	// Signal poll loop.
-	if d.cfg.Channels.SignalAccount != "" {
+	if d.cfg.Channels.Signal != nil && d.cfg.Channels.Signal.Enabled {
 		d.wg.Add(1)
 		go func() {
 			defer d.wg.Done()
@@ -150,7 +150,7 @@ func (d *Daemon) run() {
 	}
 
 	// Email poll loop.
-	if d.cfg.Channels.EmailFromAddress != "" {
+	if d.cfg.Channels.Email != nil && d.cfg.Channels.Email.Enabled {
 		d.wg.Add(1)
 		go func() {
 			defer d.wg.Done()

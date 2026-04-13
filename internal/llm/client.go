@@ -8,7 +8,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -42,29 +41,24 @@ type Client struct {
 // from the environment at construction time, returning an error if the key
 // is required but missing.
 // KeyResolver resolves API keys from the keystore by key name.
-// When set, the LLM client uses this to look up secrets before falling
-// back to environment variables.
+// This is the ONLY source for API keys — no environment variable fallback.
 var KeyResolver func(keystoreKey string) string
 
 func NewClient(p *Provider) (*Client, error) {
 	var apiKey string
 	if !p.IsLocal {
-		// Priority (matching Rust resolve_key_source):
+		// Keys come from the keystore only. No env var fallback.
+		// Priority:
 		// 1. Explicit api_key_ref (keystore reference or "keystore:name")
 		// 2. Conventional keystore name: {provider}_api_key
-		// 3. Environment variable from api_key_env
 		if KeyResolver != nil {
 			if p.APIKeyRef != "" {
-				// Strip "keystore:" prefix if present (Rust convention).
 				ref := strings.TrimPrefix(p.APIKeyRef, "keystore:")
 				apiKey = KeyResolver(ref)
 			}
 			if apiKey == "" {
 				apiKey = KeyResolver(p.Name + "_api_key")
 			}
-		}
-		if apiKey == "" && p.APIKeyEnv != "" {
-			apiKey = os.Getenv(p.APIKeyEnv)
 		}
 		// Non-local providers without a key will fail at request time,
 		// not at construction — this allows the service to start even
@@ -99,8 +93,9 @@ func NewClient(p *Provider) (*Client, error) {
 // Use this in tests to provide a mock HTTPDoer.
 func NewClientWithHTTP(p *Provider, httpClient core.HTTPDoer) (*Client, error) {
 	var apiKey string
-	if p.APIKeyEnv != "" && !p.IsLocal {
-		apiKey = os.Getenv(p.APIKeyEnv)
+	// Keys from keystore only — no env var lookup.
+	if KeyResolver != nil && !p.IsLocal {
+		apiKey = KeyResolver(p.Name + "_api_key")
 	}
 	return &Client{
 		provider:   p,
