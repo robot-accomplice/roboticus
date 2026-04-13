@@ -6190,7 +6190,54 @@
             'wallet.balance_poll_seconds': 'Seconds between on-chain wallet balance checks. 0 = disabled.',
             // --- Personality (visible via context_budget) ---
             'tone': 'Personality tone directive for the agent.',
-            'greeting': 'Initial greeting message for new conversations.'
+            'greeting': 'Initial greeting message for new conversations.',
+            // --- Section-qualified 'enabled' fields ---
+            'cache.enabled': 'Enable the semantic response cache to avoid re-inferring identical prompts.',
+            'skills.enabled': 'Enable the skill/script execution system.',
+            'a2a.enabled': 'Enable agent-to-agent communication protocol.',
+            'abuse.enabled': 'Enable abuse detection and rate limiting.',
+            'approvals.enabled': 'Enable human-in-the-loop approval for gated operations.',
+            'backups.enabled': 'Enable automatic database backups.',
+            'browser.enabled': 'Enable headless browser for web automation tools.',
+            'cors.enabled': 'Enable CORS headers for cross-origin API access.',
+            'daemon.enabled': 'Enable background daemon subsystems (cron, delivery, health).',
+            'dkim.enabled': 'Enable DKIM signature verification for inbound email.',
+            'digest.enabled': 'Enable periodic conversation digest generation.',
+            'discovery.enabled': 'Enable mDNS/DNS-SD agent discovery on the local network.',
+            'heartbeat.enabled': 'Enable periodic heartbeat checks for subsystem health.',
+            'knowledge.enabled': 'Enable the knowledge graph for structured fact storage.',
+            'learning.enabled': 'Enable automatic skill learning from successful tool sequences.',
+            'multimodal.enabled': 'Enable image/audio/video processing in conversations.',
+            'obsidian.enabled': 'Enable Obsidian vault integration for knowledge sync.',
+            'planner.enabled': 'Enable the action planner for multi-step task decomposition.',
+            'revenue.enabled': 'Enable revenue tracking and settlement.',
+            'sandbox.enabled': 'Enable OS-level sandbox confinement for tool execution.',
+            'self_funding.enabled': 'Enable self-funding via on-chain revenue.',
+            'tier_adapt.enabled': 'Enable adaptive tier adjustment based on query complexity.',
+            'update.enabled': 'Check for roboticus updates on startup.',
+            'yield.enabled': 'Enable DeFi yield strategies for idle treasury funds.',
+            'classifier.enabled': 'Enable intent classification for routing decisions.',
+            'devices.pairing_enabled': 'Enable device pairing for cross-device session sync.',
+            'circuit_breaker.enabled': 'Enable circuit breakers for provider failure isolation.',
+            // --- Treasury fields ---
+            'treasury.daily_cap': 'Maximum total spend per day across all operations.',
+            'treasury.per_payment_cap': 'Maximum amount for a single payment transaction.',
+            'treasury.transfer_limit': 'Maximum amount for a single transfer.',
+            'treasury.minimum_reserve': 'Minimum wallet balance to maintain as reserve.',
+            'treasury.hourly_transfer_limit': 'Maximum total transfers per hour.',
+            'treasury.daily_transfer_limit': 'Maximum total transfers per day.',
+            'treasury.daily_inference_budget': 'Maximum daily spend on LLM inference.',
+            // --- Revenue Swap ---
+            'treasury.revenue_swap.enabled': 'Enable automatic revenue token swaps.',
+            'treasury.revenue_swap.target_symbol': 'Target token symbol for swaps (e.g. USDC).',
+            'treasury.revenue_swap.default_chain': 'Default blockchain for swap execution.',
+            // --- Models routing profile ---
+            'models.routing.profile.efficacy': 'Weight for model efficacy in routing score (0.0-1.0).',
+            'models.routing.profile.cost': 'Weight for cost efficiency in routing score.',
+            'models.routing.profile.availability': 'Weight for uptime/availability in routing score.',
+            'models.routing.profile.locality': 'Weight for local-vs-cloud preference in routing score.',
+            'models.routing.profile.confidence': 'Weight for response confidence in routing score.',
+            'models.routing.profile.speed': 'Weight for inference speed in routing score.'
         };
 
         // --- Tooltip popover system ---
@@ -6266,8 +6313,7 @@
           { label: 'Context Budget', sections: ['context_budget'] },
           { label: 'Session', sections: ['session'] },
           { label: 'Cache', sections: ['cache'] },
-          { label: 'Channels', sections: ['channels'] },
-          { label: 'Matrix', sections: ['matrix'] },
+          { label: 'Channels', sections: ['channels', 'matrix'] },
           { label: 'MCP Servers', sections: ['mcp'] },
           { label: 'Plugins', sections: ['plugins'] },
           { label: 'Skills', sections: ['skills'] },
@@ -6407,7 +6453,7 @@
             html += '<div class="settings-section"><div class="settings-section-title">Models</div>';
             html += self._renderProviderDiscoveryAlerts();
             var routingMode = (sectionData.routing && sectionData.routing.mode) || 'auto';
-            html += '<div class="settings-row"><div class="settings-label">Routing</div><select class="settings-input" data-settings-path="models.routing.mode" style="max-width:200px">'
+            html += '<div class="settings-row"><div class="settings-label">Routing' + tooltipSpan('mode', 'models.routing.mode') + '</div><select class="settings-input" data-settings-path="models.routing.mode" style="max-width:200px">'
               + '<option value="primary"' + (routingMode === 'primary' ? ' selected' : '') + '>Primary Only</option>'
               + '<option value="fallback"' + (routingMode === 'fallback' ? ' selected' : '') + '>Fallback</option>'
               + '<option value="auto"' + (routingMode === 'auto' || routingMode === 'metascore' || routingMode === 'routed' ? ' selected' : '') + '>Auto / Routed</option>'
@@ -6417,16 +6463,16 @@
               config: draft,
               includeControlModes: false
             });
-            html += '<div class="settings-row"><div class="settings-label">Primary</div><div style="position:relative;width:100%"><input class="settings-input" list="model-list" type="text" data-settings-path="models.primary" value="' + esc(primaryVal) + '" placeholder="Select or type a model"><datalist id="model-list">' + modelOpts + '</datalist></div></div>';
+            html += '<div class="settings-row"><div class="settings-label">Primary' + tooltipSpan('primary', 'models.primary') + '</div><div style="position:relative;width:100%"><input class="settings-input" list="model-list" type="text" data-settings-path="models.primary" value="' + esc(primaryVal) + '" placeholder="Select or type a model"><datalist id="model-list">' + modelOpts + '</datalist></div></div>';
             Object.keys(sectionData).forEach(function(key) {
               if (key === 'mode' || key === 'routing' || key === 'primary') return;
               var val = sectionData[key]; var path = 'models.' + key;
-              if (typeof val === 'boolean') {
-                html += '<div class="settings-row"><div class="settings-label">' + esc(key) + '</div><div class="settings-toggle-wrap"><label class="toggle"><input type="checkbox" data-settings-path="' + esc(path) + '"' + (val ? ' checked' : '') + '><span class="toggle-track"></span></label><span class="settings-toggle-label">' + (val ? 'On' : 'Off') + '</span></div></div>';
-              } else if (typeof val !== 'object') {
-                var type = typeof val === 'number' ? 'number' : 'text';
-                var sv = (val == null || val === '') ? '' : esc(String(val));
-                html += '<div class="settings-row"><div class="settings-label">' + esc(key) + '</div><input class="settings-input" type="' + type + '" data-settings-path="' + esc(path) + '" value="' + sv + '" placeholder="none"></div>';
+              var tip = tooltipSpan(key, path);
+              if (typeof val === 'object' && val !== null) {
+                // Render nested objects (routing, tiered_inference) with tooltips.
+                _renderSettingsField(key, val, path, tip);
+              } else {
+                _renderSettingsField(key, val, path, tip);
               }
             });
             html += '</div>';
@@ -6466,15 +6512,7 @@
               Object.keys(pData).forEach(function(pKey) {
                 if (pKey.charAt(0) === '_') return;
                 var pVal = pData[pKey]; var pPath = 'providers.' + pName + '.' + pKey;
-                if (typeof pVal === 'boolean') {
-                  html += '<div class="settings-row"><div class="settings-label">' + esc(pKey) + '</div><div class="settings-toggle-wrap"><label class="toggle"><input type="checkbox" data-settings-path="' + esc(pPath) + '"' + (pVal ? ' checked' : '') + '><span class="toggle-track"></span></label><span class="settings-toggle-label">' + (pVal ? 'On' : 'Off') + '</span></div></div>';
-                } else if (typeof pVal === 'object' && pVal !== null) {
-                  html += '<div class="settings-row"><div class="settings-label">' + esc(pKey) + '</div><span class="badge muted" style="font-size:0.6rem">' + Object.keys(pVal).length + ' entries</span></div>';
-                } else {
-                  var type = typeof pVal === 'number' ? 'number' : 'text';
-                  var sv = (pVal == null || pVal === '') ? '' : esc(String(pVal));
-                  html += '<div class="settings-row"><div class="settings-label">' + esc(pKey) + '</div><input class="settings-input" type="' + type + '" data-settings-path="' + esc(pPath) + '" value="' + sv + '" placeholder="none"></div>';
-                }
+                _renderSettingsField(pKey, pVal, pPath, tooltipSpan(pKey, pPath));
               });
               if (keyStatus === 'missing' && !keystoreLocked) {
                 html += '<div class="key-manage-row" data-provider="' + esc(pName) + '">'
@@ -6661,31 +6699,20 @@
               html += '</div>';
             });
 
-            // Render any remaining non-channel keys in the channels section
+            // Render any remaining non-channel keys in the channels section (with tooltips).
             Object.keys(sectionData).forEach(function(key) {
               if (key === 'startup_announcements' || key === 'trusted_sender_ids' || handledChannelKeys[key]) return;
               var val = sectionData[key];
               var path = section + '.' + key;
-              if (typeof val === 'boolean') {
-                html += '<div class="settings-row"><div class="settings-label">' + esc(key) + '</div><div class="settings-toggle-wrap"><label class="toggle"><input type="checkbox" data-settings-path="' + esc(path) + '"' + (val ? ' checked' : '') + '><span class="toggle-track"></span></label><span class="settings-toggle-label">' + (val ? 'On' : 'Off') + '</span></div></div>';
-              } else if (typeof val === 'object' && val !== null) {
+              if (typeof val === 'object' && val !== null) {
                 html += '<div class="channel-subsection">';
                 html += '<div class="channel-subsection-title">' + esc(key) + '</div>';
                 Object.keys(val).forEach(function(subKey) {
-                  var subVal = val[subKey]; var subPath = path + '.' + subKey;
-                  var type = typeof subVal === 'number' ? 'number' : 'text';
-                  if (typeof subVal === 'boolean') {
-                    html += '<div class="settings-row"><div class="settings-label">' + esc(subKey) + '</div><div class="settings-toggle-wrap"><label class="toggle"><input type="checkbox" data-settings-path="' + esc(subPath) + '"' + (subVal ? ' checked' : '') + '><span class="toggle-track"></span></label><span class="settings-toggle-label">' + (subVal ? 'On' : 'Off') + '</span></div></div>';
-                  } else {
-                    var ssv = (subVal == null || subVal === '') ? '' : esc(String(subVal));
-                    html += '<div class="settings-row"><div class="settings-label">' + esc(subKey) + '</div><input class="settings-input" type="' + type + '" data-settings-path="' + esc(subPath) + '" value="' + ssv + '" placeholder="none"></div>';
-                  }
+                  _renderSettingsField(subKey, val[subKey], path + '.' + subKey, tooltipSpan(subKey, path + '.' + subKey));
                 });
                 html += '</div>';
               } else {
-                var type = typeof val === 'number' ? 'number' : 'text';
-                var sv = (val == null || val === '') ? '' : esc(String(val));
-                html += '<div class="settings-row"><div class="settings-label">' + esc(key) + '</div><input class="settings-input" type="' + type + '" data-settings-path="' + esc(path) + '" value="' + sv + '" placeholder="none"></div>';
+                _renderSettingsField(key, val, path, tooltipSpan(key, path));
               }
             });
             html += '</div>';
@@ -6705,17 +6732,8 @@
             chainPresetBtns += '</div>';
             html += '<div class="settings-row"><div class="settings-label">Chain</div><div style="width:100%">' + chainPresetBtns + '</div></div>';
             Object.keys(sectionData).forEach(function(key) {
-              var val = sectionData[key]; var path = 'wallet.' + key;
               if (key === 'private_key' || key === 'mnemonic') return;
-              var isRpc = key.toLowerCase().indexOf('rpc') !== -1;
-              if (typeof val === 'boolean') {
-                html += '<div class="settings-row"><div class="settings-label">' + esc(key) + '</div><div class="settings-toggle-wrap"><label class="toggle"><input type="checkbox" data-settings-path="' + esc(path) + '"' + (val ? ' checked' : '') + '><span class="toggle-track"></span></label><span class="settings-toggle-label">' + (val ? 'On' : 'Off') + '</span></div></div>';
-              } else {
-                var type = typeof val === 'number' ? 'number' : 'text';
-                var sv = (val == null || val === '') ? '' : esc(String(val));
-                var ph = isRpc ? 'Auto-populated from chain preset' : 'none';
-                html += '<div class="settings-row"><div class="settings-label">' + esc(key) + '</div><input class="settings-input" type="' + type + '" data-settings-path="' + esc(path) + '" value="' + sv + '" placeholder="' + ph + '"></div>';
-              }
+              _renderSettingsField(key, sectionData[key], 'wallet.' + key, tooltipSpan(key, 'wallet.' + key));
             });
             html += '</div>';
             return;
@@ -6725,15 +6743,7 @@
             html += '<div class="settings-section"><div class="settings-section-title">Treasury</div>';
             Object.keys(sectionData).forEach(function(key) {
               if (key === 'revenue_swap') return;
-              var val = sectionData[key];
-              var path = section + '.' + key;
-              if (typeof val === 'boolean') {
-                html += '<div class="settings-row"><div class="settings-label">' + esc(key) + '</div><div class="settings-toggle-wrap"><label class="toggle"><input type="checkbox" data-settings-path="' + esc(path) + '"' + (val ? ' checked' : '') + '><span class="toggle-track"></span></label><span class="settings-toggle-label">' + (val ? 'On' : 'Off') + '</span></div></div>';
-              } else if (typeof val !== 'object') {
-                var type = typeof val === 'number' ? 'number' : 'text';
-                var sv = (val == null || val === '') ? '' : esc(String(val));
-                html += '<div class="settings-row"><div class="settings-label">' + esc(key) + '</div><input class="settings-input" type="' + type + '" data-settings-path="' + esc(path) + '" value="' + sv + '" placeholder="none"></div>';
-              }
+              _renderSettingsField(key, sectionData[key], 'treasury.' + key, tooltipSpan(key, 'treasury.' + key));
             });
             html += '</div>';
             html += self._renderRevenueSwapSettings(sectionData.revenue_swap || {});
@@ -8813,7 +8823,14 @@
     }
     if (e.target.closest('[data-settings-toggle-advanced]')) {
       App._settingsAdvancedExpanded = !App._settingsAdvancedExpanded;
-      App.navigate('settings');
+      var body = document.getElementById('settings-advanced-body');
+      if (body) body.style.display = App._settingsAdvancedExpanded ? '' : 'none';
+      // Update arrow without re-rendering.
+      var titleEl = e.target.closest('[data-settings-toggle-advanced]');
+      if (titleEl) {
+        var arrow = titleEl.firstChild;
+        if (arrow) arrow.textContent = (App._settingsAdvancedExpanded ? '\u25be' : '\u25b8') + ' Advanced ';
+      }
       return;
     }
     if (e.target.closest('#hints-reset-dismissed')) {
