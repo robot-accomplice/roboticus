@@ -2,8 +2,6 @@ package pipeline
 
 import (
 	"context"
-	"fmt"
-	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -185,581 +183,87 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 	if p.store == nil {
 		return nil, core.NewError(core.ErrConfig, "pipeline requires a database store")
 	}
-	tr := NewTraceRecorder()
-	pipelineStart := time.Now()
-	log.Info().Str("channel", cfg.ChannelLabel).Str("agent", input.AgentID).Msg("pipeline started")
 
-	// Notify dashboard: agent is working.
+	pc := &pipelineContext{
+		cfg:   cfg,
+		input: input,
+		start: time.Now(),
+		tr:    NewTraceRecorder(),
+	}
+	log.Info().Str("channel", pc.cfg.ChannelLabel).Str("agent", pc.input.AgentID).Msg("pipeline started")
 	p.dashNotify("agent_working", map[string]string{
-		"agent_id": input.AgentID, "workstation": "llm", "skill": "inference",
+		"agent_id": pc.input.AgentID, "workstation": "llm", "skill": "inference",
 	})
 
-	// ── Stage 1: Input validation ──────────────────────────────────────────
-	tr.BeginSpan("validation")
-
-	// Bot command early-exit marker: checked after session resolution (Stage 4b).
-	isBotCommand := cfg.BotCommandDispatch && len(input.Content) > 0 && input.Content[0] == '/'
-
-	// Cron delegation wrap: prepend subagent directive for non-root cron tasks.
-	if cfg.CronDelegationWrap && input.AgentID != "" && input.AgentID != "default" {
-		input.Content = fmt.Sprintf("[Delegated to %s] %s", input.AgentID, input.Content)
-	}
-
-	// API-level model override takes precedence over config.
-	if input.ModelOverride != "" {
-		cfg.ModelOverride = input.ModelOverride
-	}
-
-	// Prefer local model: scan fallbacks for a local provider and set override.
-	if cfg.PreferLocalModel && cfg.ModelOverride == "" {
-		cfg.ModelOverride = p.findLocalModel()
-	}
-
-	if input.Content == "" {
-		tr.EndSpan("error")
-		return nil, core.NewError(core.ErrConfig, "empty message content")
-	}
-	if len(input.Content) > core.MaxUserMessageBytes {
-		tr.EndSpan("error")
-		return nil, core.NewError(core.ErrConfig, fmt.Sprintf("message exceeds %d bytes", core.MaxUserMessageBytes))
-	}
-	tr.Annotate("content_len", len(input.Content))
-	tr.Annotate("channel", cfg.ChannelLabel)
-	tr.Annotate("agent_id", input.AgentID)
-	if isBotCommand {
-		tr.Annotate("bot_command_detected", true)
-	}
-	if cfg.ModelOverride != "" {
-		tr.Annotate("model_override", cfg.ModelOverride)
-	}
-	if cfg.PreferLocalModel {
-		tr.Annotate("prefer_local", true)
-	}
-	tr.EndSpan("ok")
-
-	// ── Stage 2: Injection defense ─────────────────────────────────────────
-	tr.BeginSpan("injection_defense")
-	var threatCaution bool
-	if cfg.InjectionDefense && p.injection != nil {
-		score := p.injection.CheckInput(input.Content)
-		tr.Annotate("score", float64(score))
-		if score.IsBlocked() {
-			tr.Annotate("action", "blocked")
-			tr.EndSpan("error")
-			log.Warn().Float64("score", float64(score)).Str("channel", cfg.ChannelLabel).Str("session", input.SessionID).Str("agent", input.AgentID).Str("sender", input.SenderID).Msg("injection blocked")
-			return nil, core.NewError(core.ErrInjectionBlocked, "input rejected by injection defense")
-		}
-		if score.IsCaution() {
-			input.Content = p.injection.Sanitize(input.Content)
-			threatCaution = true
-			tr.Annotate("action", "sanitized")
-			log.Warn().Float64("score", float64(score)).Str("session", input.SessionID).Str("channel", cfg.ChannelLabel).Str("agent", input.AgentID).Msg("input sanitized")
-		} else {
-			tr.Annotate("action", "pass")
-		}
-	}
-	tr.EndSpan("ok")
-
-	// ── Stage 3: Dedup tracking ────────────────────────────────────────────
-	if cfg.DedupTracking && p.dedup != nil {
-		tr.BeginSpan("dedup_check")
-		dedupFP := Fingerprint(input.Content, input.AgentID, input.SessionID)
-		tr.Annotate("fingerprint", dedupFP)
-		if !p.dedup.CheckAndTrack(dedupFP) {
-			tr.Annotate("duplicate", true)
-			tr.EndSpan("rejected")
-			return nil, core.NewError(core.ErrDuplicate, "duplicate request already in flight")
-		}
-		defer p.dedup.Release(dedupFP)
-		tr.EndSpan("ok")
-	}
-
-	// Create task for lifecycle tracking.
-	taskID := db.NewID()
-	task := p.tasks.Create(taskID, input.SessionID, input.Content)
-	_ = task
-
-	// ── Stage 4: Session resolution ────────────────────────────────────────
-	tr.BeginSpan("session_resolution")
-	session, err := p.resolveSession(ctx, cfg, input)
-	if err != nil {
-		tr.EndSpan("error")
-		return nil, core.WrapError(core.ErrDatabase, "session resolution failed", err)
-	}
-	tr.Annotate("session_id", session.ID)
-	tr.EndSpan("ok")
-
-	// Stage 4a: Cross-channel consent check (Rust parity).
-	// Runs immediately after session resolution to gate cross-channel access.
-	consentResult, consentMsg := p.checkCrossChannelConsent(ctx, session, input)
-	switch consentResult {
-	case ConsentGranted:
-		// User confirmed consent — return synthetic response.
-		return &Outcome{SessionID: session.ID, Content: consentMsg}, nil
-	case ConsentBlocked:
-		// Cross-channel access denied — return error with instructions.
-		return nil, core.NewError(core.ErrUnauthorized, consentMsg)
-	case ConsentContinue:
-		// No consent action needed — proceed.
-	}
-
-	// ── Stage 4b: Bot command dispatch ─────────────────────────────────────
-	// Runs AFTER session resolution so authority gating works.
-	// Bot commands bypass inference, message storage, and guards — they're lightweight.
-	if isBotCommand && p.botCmds != nil {
-		if result, matched := p.botCmds.TryHandle(ctx, input.Content, session); matched {
-			tr.Annotate("bot_command", true)
-			p.storeTrace(ctx, tr, session.ID, "", cfg.ChannelLabel)
-			return result, nil
-		}
-	}
-
-	// Short-followup expansion (Rust parity: contextualize_short_followup).
-	// Detects sarcasm, contradiction, and quote-back reactions and expands them
-	// with prior context so the LLM understands the reference. Also sets
-	// correctionTurn to bypass shortcut dispatch for corrections.
-	content := input.Content
-	var correctionTurn bool
-	if cfg.ShortFollowupExpansion {
-		content, correctionTurn = ContextualizeShortFollowup(session, content)
-	}
-
-	// ── Stage 5: User message storage (with topic tag) ─────────────────────
-	tr.BeginSpan("message_storage")
-	msgID := db.NewID()
-	topicTag := p.deriveTopicTag(session, content)
-	_, err = p.store.ExecContext(ctx,
-		`INSERT INTO session_messages (id, session_id, role, content, topic_tag)
-		 VALUES (?, ?, 'user', ?, ?)`,
-		msgID, session.ID, content, topicTag,
-	)
-	if err != nil {
-		tr.EndSpan("error")
-		return nil, core.WrapError(core.ErrDatabase, "failed to store user message", err)
-	}
-	session.AddUserMessage(content)
-	tr.Annotate("msg_id", msgID)
-	tr.Annotate("topic_tag", topicTag)
-	tr.Annotate("turn_count", session.TurnCount())
-	tr.EndSpan("ok")
-
-	// ── Stage 6: Turn creation ─────────────────────────────────────────────
-	turnID := db.NewID()
-	_, turnErr := p.store.ExecContext(ctx,
-		`INSERT INTO turns (id, session_id) VALUES (?, ?)`,
-		turnID, session.ID,
-	)
-	if turnErr != nil {
-		log.Warn().Err(turnErr).Str("turn", turnID).Msg("turn creation failed, continuing")
-	}
-
-	// ── Stage 7: Decomposition gate ────────────────────────────────────────
-	tr.BeginSpan("decomposition_gate")
-	p.tasks.Start(taskID, msgID)
-	var decomp *DecompositionResult
-	if cfg.DecompositionGate {
-		d := EvaluateDecomposition(content, len(session.Messages()))
-		decomp = &d
-		p.tasks.Classify(taskID, TaskClassification(decomp.Decision))
-		tr.Annotate("decision", decomp.Decision.String())
-		if decomp.Decision == DecompDelegated && len(decomp.Subtasks) > 0 {
-			tr.Annotate("subtask_count", len(decomp.Subtasks))
-			p.tasks.Delegate(taskID, input.AgentID, nil)
-			log.Info().
-				Str("task", taskID).
-				Str("session", session.ID).
-				Str("agent", input.AgentID).
-				Int("subtasks", len(decomp.Subtasks)).
-				Msg("task delegated via decomposition gate")
-		}
-	} else {
-		decomp = &DecompositionResult{Decision: DecompCentralized}
-	}
-	tr.EndSpan("ok")
-
-	// ── Stage 7.5: Task state synthesis (Rust: synthesize_task_state + plan) ──
-	// synthesis is hoisted out of the if-block so DecideRetrievalStrategy
-	// can use it in Stage 8.5 (H10: stage separation).
-	var synthesis TaskSynthesis
-	if cfg.TaskOperatingState != "" || cfg.DecompositionGate {
-		tr.BeginSpan("task_synthesis")
-		// Gather agent skills for capability matching.
-		var agentSkills []string
-		if p.skills != nil {
-			// Skills interface doesn't expose a list method; use empty for now.
-			// The synthesis still works — it just reports 0% capability fit.
-			_ = agentSkills // SA9003: populated when skills list method is added
-		}
-		synthesis = SynthesizeTaskState(content, session.TurnCount(), agentSkills)
-
-		// Structured trace annotations (Rust: annotate_task_state_trace).
-		AnnotateTaskStateTrace(tr, synthesis)
-		tr.EndSpan("ok")
-
-		// Map planned action to gate decision (Rust: map_planned_action).
-		gateDecision := MapPlannedAction(synthesis, decomp)
-		switch gateDecision {
-		case ActionGateDelegate:
-			if decomp.Decision == DecompCentralized {
-				decomp.Decision = DecompDelegated
-				log.Info().Str("session", session.ID).Msg("planner upgraded decision to delegation")
-			}
-		case ActionGateSpecialistPropose:
-			if decomp.Decision == DecompCentralized {
-				decomp.Decision = DecompSpecialistProposal
-				log.Info().Str("session", session.ID).Msg("planner upgraded decision to specialist proposal")
-			}
-		}
-	}
-
-	// ── Stage 8: Authority resolution ──────────────────────────────────────
-	// Full SecurityClaim resolution via core resolvers (Rust parity).
-	// The claim carries source tracking for audit + ceiling enforcement.
-	tr.BeginSpan("authority_resolution")
-	secClaim := ResolveSecurityClaim(cfg.AuthorityMode, input.Claim)
-	// Reduce authority if injection threat was caution-level (Rust parity).
-	if threatCaution && secClaim.Authority == core.AuthorityCreator {
-		secClaim.Authority = core.AuthorityPeer
-		secClaim.ThreatDowngraded = true
-		log.Warn().Str("session", session.ID).Msg("authority reduced due to injection caution")
-	}
-	session.Authority = secClaim.Authority
-	session.SecurityClaim = &secClaim
-	tr.Annotate("authority", secClaim.Authority.String())
-	if len(secClaim.Sources) > 0 {
-		sourceStrs := make([]string, len(secClaim.Sources))
-		for i, s := range secClaim.Sources {
-			sourceStrs[i] = s.String()
-		}
-		tr.Annotate("claim_sources", strings.Join(sourceStrs, ","))
-	}
-	tr.EndSpan("ok")
-
-	// ── Stage 8.5: Memory retrieval (Rust parity: ARCHITECTURE.md §4) ────
-	// Memory must be proactively injected BEFORE delegation and skill-first
-	// so early-exit paths still have full cognitive context. "The model should
-	// never have to guess at something the framework already knows."
-	//
-	// H10: Retrieval strategy is decided as a separate function, decoupling
-	// retrieval policy from retrieval execution.
-	var memoryBlock string
-	retrievalStrat := DecideRetrievalStrategy(synthesis, session.TurnCount(), 2048)
-	if p.retriever != nil && retrievalStrat.Strategy != "none" {
-		tr.BeginSpan("memory_retrieval")
-		memoryBlock = p.retriever.Retrieve(ctx, session.ID, content, retrievalStrat.Budget)
-		if memoryBlock != "" {
-			session.SetMemoryContext(memoryBlock)
-		}
-		fragmentCount := 0
-		if memoryBlock != "" {
-			fragmentCount = strings.Count(memoryBlock, "---") + 1
-		}
-
-		// Personality reinforcement on early turns (Rust parity).
-		// On turns 1-3, memory retrieval returns empty because IngestTurn
-		// runs as post-turn background work — no episodic/semantic memories
-		// exist yet. Without reinforcement, the model sees only the system
-		// prompt personality and deprioritizes it as boilerplate. Rust solves
-		// this by seeding an initial memory orientation; we inject a system
-		// note that explicitly directs the model to embody its identity.
-		if memoryBlock == "" && session.TurnCount() <= 3 {
-			personalityBoost := "[Identity Reinforcement] This is an early turn in the conversation. " +
-				"Your personality, voice, and behavioral directives from the system prompt are " +
-				"your PRIMARY guide for tone, style, and approach. Embody them fully — do not " +
-				"fall back to generic AI assistant behavior. Respond as the character defined in " +
-				"your system prompt, not as a generic helpful assistant."
-			session.AddSystemMessage(personalityBoost)
-			tr.Annotate("personality_boost", true)
-		}
-
-		AnnotateRetrievalStrategy(tr, retrievalStrat.Strategy, retrievalStrat.Budget, fragmentCount)
-
-		// Enriched memory trace: tier breakdown and budget consumption.
-		// Parse tier markers from the memory block to report per-tier hits.
-		tiersQueried := []string{retrievalStrat.Strategy}
-		hitsPerTier := map[string]int{retrievalStrat.Strategy: fragmentCount}
-		budgetConsumed := 0
-		if memoryBlock != "" {
-			budgetConsumed = llm.EstimateTokens(memoryBlock)
-			// Detect tier markers if present (e.g. "[episodic]", "[semantic]", "[working]").
-			for _, tier := range []string{"episodic", "semantic", "working", "procedural"} {
-				count := strings.Count(memoryBlock, "["+tier+"]")
-				if count > 0 {
-					if _, exists := hitsPerTier[tier]; !exists {
-						tiersQueried = append(tiersQueried, tier)
-					}
-					hitsPerTier[tier] = count
-				}
-			}
-		}
-		AnnotateMemoryTrace(tr, tiersQueried, hitsPerTier, budgetConsumed)
-		tr.Annotate(TraceNSRetrieval+".reason", retrievalStrat.Reason)
-		tr.EndSpan("ok")
-	}
-
-	// ── Stage 9: Delegated execution ───────────────────────────────────────
-	// Rust parity (H8): delegation results are either returned directly
-	// (when complete) or threaded back into the inference context as an
-	// initial tool observation so the main agent can incorporate them.
-	var delegationResult string // Threaded to inference if non-empty.
-	if cfg.DelegatedExecution && decomp.Decision == DecompDelegated && len(decomp.Subtasks) > 0 {
-		tr.BeginSpan("delegated_execution")
-		delegOutcome := p.executeDelegation(ctx, session, decomp, turnID)
-		if delegOutcome != nil {
-			AnnotateDelegationTrace(tr, input.AgentID, len(decomp.Subtasks), "decomposition_gate")
-			if delegOutcome.Complete {
-				// Delegation fully satisfied the request — return directly.
-				tr.Annotate("delegation_complete", true)
-				tr.EndSpan("ok")
-				p.storeTrace(ctx, tr, session.ID, msgID, cfg.ChannelLabel)
-				p.tasks.Complete(taskID)
-				return &Outcome{
-					SessionID:  session.ID,
-					MessageID:  msgID,
-					Content:    delegOutcome.Content,
-					ReactTurns: delegOutcome.Turns,
-				}, nil
-			}
-			// Partial/failed delegation — thread result back to inference.
-			// Rust: seeds tool_results_acc with ("orchestrate-subagents", result).
-			delegationResult = delegOutcome.Content
-			tr.Annotate("delegation_complete", false)
-			tr.Annotate("delegation_threaded", true)
-			log.Info().Str("session", session.ID).Int("quality", delegOutcome.Quality.Score).Msg("delegation incomplete, threading to inference")
-		}
-		tr.EndSpan("fallthrough")
-	}
-
-	// ── Stage 10: Skill-first fulfillment ──────────────────────────────────
-	tr.BeginSpan("skill_dispatch")
-	if skillResult := p.trySkillFirst(ctx, cfg, secClaim.Authority, session, content); skillResult != nil {
-		tr.Annotate("matched", true)
-		tr.EndSpan("ok")
-		p.storeTrace(ctx, tr, session.ID, msgID, cfg.ChannelLabel)
-		p.tasks.Complete(taskID)
-		return p.guardOutcome(cfg, skillResult), nil
-	}
-	tr.EndSpan("skipped")
-
-	// ── Stage 11: Shortcut dispatch ────────────────────────────────────────
-	// Rust parity: correction_turn is passed through to the shortcut handler
-	// system so individual handlers can decide (e.g., AcknowledgementShortcut
-	// skips on correction turns, IdentityShortcut does not).
-	tr.BeginSpan("shortcut_dispatch")
-	if cfg.ShortcutsEnabled {
-		if result := p.tryShortcut(ctx, session, content, correctionTurn, cfg.ChannelLabel); result != nil {
-			tr.Annotate("matched", true)
-			tr.EndSpan("ok")
-			p.recordShortcutCost(ctx, turnID, session.ID, cfg.ChannelLabel)
-			p.storeTrace(ctx, tr, session.ID, msgID, cfg.ChannelLabel)
-			p.tasks.Complete(taskID)
-			return p.guardOutcome(cfg, result), nil
-		}
-	}
-	tr.EndSpan("skipped")
-
-	// ── Stage 11.5: Cache check (Rust: check_cache) ──────────────────────
-	if cfg.CacheEnabled && !input.NoCache {
-		tr.BeginSpan("cache_check")
-		if hit := p.CheckCache(content); hit != nil {
-			tr.Annotate("cache_hit", true)
-			tr.Annotate("cache_model", hit.Model)
-			tr.EndSpan("ok")
-
-			// Apply cache-specific guards (reduced set).
-			cacheOutcome := &Outcome{
-				SessionID: session.ID,
-				MessageID: msgID,
-				Content:   hit.Content,
-				Model:     hit.Model,
-				FromCache: true,
-				inferenceParams: &InferenceParams{
-					FromCache:    true,
-					ModelActual:  hit.Model,
-				},
-			}
-			if p.guards != nil && cfg.CacheGuardSet != GuardSetNone {
-				tr.BeginSpan("cache_guard")
-				cacheGuardStart := time.Now()
-				cacheGuardResult := p.guards.ApplyFull(cacheOutcome.Content)
-				cacheOutcome.Content = cacheGuardResult.Content
-				cacheGuardDur := time.Since(cacheGuardStart).Milliseconds()
-				// Annotate cache guard results.
-				cacheGuardEntries := make(map[string]GuardTraceEntry)
-				for _, v := range cacheGuardResult.Violations {
-					parts := strings.SplitN(v, ":", 2)
-					name := strings.TrimSpace(parts[0])
-					reason := ""
-					if len(parts) > 1 {
-						reason = strings.TrimSpace(parts[1])
-					}
-					cacheGuardEntries[name] = GuardTraceEntry{Outcome: "fail", Reason: reason}
-				}
-				AnnotateGuardTrace(tr, cacheGuardEntries, "cached", cacheGuardDur)
-				tr.EndSpan("ok")
-			}
-
-			// Persist cached assistant response to session_messages.
-			// Without this, subsequent turns lose the cached exchange from
-			// their history, causing context drift and response looping.
-			assistantMsgID := db.NewID()
-			topicTag := p.deriveTopicTag(session, cacheOutcome.Content)
-			_, cacheStoreErr := p.store.ExecContext(ctx,
-				`INSERT INTO session_messages (id, session_id, role, content, topic_tag)
-				 VALUES (?, ?, 'assistant', ?, ?)`,
-				assistantMsgID, session.ID, cacheOutcome.Content, topicTag,
-			)
-			if cacheStoreErr != nil {
-				log.Error().Err(cacheStoreErr).Str("session", session.ID).Msg("failed to store cached assistant message")
-			}
-			// Also update in-memory session so guard context and dedup
-			// see the cached response within this request lifecycle.
-			session.AddAssistantMessage(cacheOutcome.Content, nil)
-
-			p.storeTraceWithArtifacts(ctx, tr, session.ID, msgID, cfg.ChannelLabel, cacheOutcome)
-			p.tasks.Complete(taskID)
-			return cacheOutcome, nil
-		}
-		tr.EndSpan("miss")
-	}
-
-	// ── Stage 11.75: Prepare for inference (Rust: prepare_for_inference) ──
-	tr.BeginSpan("prepare_inference")
-	p.PrepareForInference(ctx, session, memoryBlock, cfg.BudgetTier)
-
-	// Annotate context budget allocation so the dashboard shows where tokens go.
-	{
-		budget := cfg.ResolveBudget()
-		var sysToks, memToks, histToks int
-		for _, m := range session.Messages() {
-			msgTokens := llm.EstimateTokens(m.Content)
-			switch m.Role {
-			case "system":
-				sysToks += msgTokens
-			case "user", "assistant":
-				histToks += msgTokens
-			}
-		}
-		if memoryBlock != "" {
-			memToks = llm.EstimateTokens(memoryBlock)
-		}
-		AnnotateContextBudgetTrace(tr, budget, sysToks, 0, memToks, histToks)
-	}
-
-	// Annotate routing decision: which model was selected and why.
-	{
-		var candidates []string
-		var winner string
-		var winnerScore float64
-		routingMode := "fallback"
-
-		if cfg.ModelOverride != "" {
-			winner = cfg.ModelOverride
-			routingMode = "override"
-		} else if p.llmSvc != nil && p.llmSvc.Router() != nil {
-			router := p.llmSvc.Router()
-			// Collect candidate models.
-			for _, t := range router.Targets() {
-				candidates = append(candidates, t.Model)
-			}
-			// Resolve the selection.
-			userContent := ""
-			msgs := session.Messages()
-			for i := len(msgs) - 1; i >= 0; i-- {
-				if msgs[i].Role == "user" {
-					userContent = msgs[i].Content
-					break
-				}
-			}
-			target := router.Select(&llm.Request{
-				Messages: []llm.Message{{Role: "user", Content: userContent}},
-			})
-			winner = target.Model
-			if router.MetascoreSelector != nil {
-				routingMode = "metascore"
-			} else {
-				routingMode = "heuristic"
-			}
-		}
-		AnnotateRoutingTrace(tr, candidates, winner, winnerScore, routingMode)
-
-		// Also annotate the active routing weights when metascore routing is used.
-		if p.llmSvc != nil && p.llmSvc.Router() != nil {
-			w := p.llmSvc.Router().GetRoutingWeights()
-			AnnotateRoutingWeightsTrace(tr, map[string]float64{
-				"efficacy":     w.Efficacy,
-				"cost":         w.Cost,
-				"availability": w.Availability,
-				"locality":     w.Locality,
-				"confidence":   w.Confidence,
-				"speed":        w.Speed,
-			})
-		}
-	}
-	tr.EndSpan("ok")
-
-	// Thread delegation result into inference context (Rust parity H8).
-	// Rust seeds tool_results_acc with ("orchestrate-subagents", result)
-	// so the LLM sees prior delegation work as an initial observation.
-	if delegationResult != "" {
-		session.AddSystemMessage(fmt.Sprintf(
-			"[Prior delegation result from orchestrate-subagents]\n%s\n"+
-				"[Incorporate the above delegation output into your response. "+
-				"If it's incomplete, supplement with your own reasoning.]",
-			delegationResult,
-		))
-	}
-
-	// ── Stage 12: Inference ────────────────────────────────────────────────
-	tr.BeginSpan("inference")
-	p.dashNotify("stream_start", map[string]string{
-		"session_id": session.ID, "agent_id": input.AgentID,
-	})
-	var outcome *Outcome
-	switch cfg.InferenceMode {
-	case InferenceStandard:
-		outcome, err = p.runStandardInferenceWithTrace(ctx, cfg, session, msgID, turnID, tr)
-	case InferenceStreaming:
-		outcome, err = p.prepareStreamInference(ctx, cfg, session, msgID)
-	default:
-		tr.EndSpan("error")
-		return nil, core.NewError(core.ErrConfig, "unknown inference mode")
-	}
-	if err != nil {
-		tr.EndSpan("error")
-		p.storeTrace(ctx, tr, session.ID, msgID, cfg.ChannelLabel)
+	// Stages 1-2: validation + injection defense.
+	if err := p.stageValidation(ctx, pc); err != nil {
 		return nil, err
 	}
-	tr.EndSpan("ok")
-
-	// ── Stage 12.5: Cache store (Rust: store_in_cache) ────────────────────
-	if cfg.CacheEnabled && !input.NoCache && outcome != nil && !outcome.Stream && outcome.Content != "" {
-		p.bgWorker.Submit("storeCache", func(_ context.Context) {
-			p.StoreInCache(content, outcome.Content, outcome.Model)
-		})
+	if err := p.stageInjectionDefense(ctx, pc); err != nil {
+		return nil, err
 	}
 
-	// Empty response guard: if inference produced nothing (all models failed,
-	// guard chain stripped everything, or deadline hit), provide a fallback
-	// rather than sending an empty message to the channel.
-	if outcome != nil && strings.TrimSpace(outcome.Content) == "" {
-		outcome.Content = "I wasn't able to formulate a response right now. Could you try again?"
-		log.Warn().Str("session", session.ID).Msg("pipeline produced empty content — injected fallback")
+	// Stage 3: dedup + task creation. Dedup release is deferred here in Run()
+	// because stage methods must not defer across the call boundary.
+	if err := p.stageDedup(ctx, pc); err != nil {
+		return nil, err
+	}
+	if pc.dedupFP != "" {
+		defer p.dedup.Release(pc.dedupFP)
 	}
 
-	p.storeTraceWithArtifacts(ctx, tr, session.ID, msgID, cfg.ChannelLabel, outcome)
+	// Stage 4: session resolution, consent, bot command, short-followup.
+	if out, err := p.stageSessionResolution(ctx, pc); out != nil || err != nil {
+		return out, err
+	}
 
-	// Mark task completed.
-	p.tasks.Complete(taskID)
+	// Stage 5-6: message storage + turn creation.
+	if err := p.stageMessageStorage(ctx, pc); err != nil {
+		return nil, err
+	}
+	p.stageTurnCreation(ctx, pc)
 
-	log.Info().Str("session", session.ID).Str("model", outcome.Model).Int("tokens_out", outcome.TokensOut).Int64("duration_ms", time.Since(pipelineStart).Milliseconds()).Msg("pipeline completed")
+	// Stage 7 + 7.5: decomposition gate + task synthesis.
+	p.stageDecomposition(ctx, pc)
 
-	// Notify dashboard: inference complete, agent returning to idle.
+	// Stage 8 + 8.5: authority + memory retrieval.
+	p.stageAuthority(ctx, pc)
+	p.stageMemoryRetrieval(ctx, pc)
+
+	// Stage 9: delegated execution (may return early).
+	if out, err := p.stageDelegation(ctx, pc); out != nil || err != nil {
+		return out, err
+	}
+
+	// Stage 10-11.5: skill-first, shortcut, cache (each may return early).
+	if out, err := p.stageSkillFirst(ctx, pc); out != nil || err != nil {
+		return out, err
+	}
+	if out, err := p.stageShortcut(ctx, pc); out != nil || err != nil {
+		return out, err
+	}
+	if out, err := p.stageCacheCheck(ctx, pc); out != nil || err != nil {
+		return out, err
+	}
+
+	// Stage 11.75: prepare inference context.
+	p.stagePrepareInference(ctx, pc)
+
+	// Stage 12: inference.
+	outcome, err := p.stageInference(ctx, pc)
+	if err != nil {
+		return nil, err
+	}
+
+	// Stage 12.5: post-inference (cache store, empty guard, trace, task complete).
+	p.stagePostInference(ctx, pc, outcome)
+
+	log.Info().Str("session", pc.session.ID).Str("model", outcome.Model).Int("tokens_out", outcome.TokensOut).Int64("duration_ms", time.Since(pc.start).Milliseconds()).Msg("pipeline completed")
 	p.dashNotify("stream_end", map[string]any{
-		"session_id": session.ID, "model": outcome.Model,
+		"session_id": pc.session.ID, "model": outcome.Model,
 		"tokens_in": outcome.TokensIn, "tokens_out": outcome.TokensOut,
 	})
-	p.dashNotify("agent_idle", map[string]string{"agent_id": input.AgentID})
+	p.dashNotify("agent_idle", map[string]string{"agent_id": pc.input.AgentID})
 
 	return outcome, nil
 }
