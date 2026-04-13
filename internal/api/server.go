@@ -356,6 +356,7 @@ func NewServer(ctx context.Context, cfg ServerConfig, state *AppState) *http.Ser
 		r.Get("/api/themes", routes.GetThemesList())
 		r.Get("/api/themes/catalog", routes.GetThemeCatalog(state.Store))
 		r.Post("/api/themes/catalog/install", routes.InstallCatalogTheme(state.Store))
+		r.Post("/api/themes/catalog/uninstall", routes.UninstallCatalogTheme(state.Store))
 		r.Get("/api/themes/active", routes.GetActiveTheme(state.Store))
 		r.Put("/api/themes/active", routes.SetActiveTheme(state.Store))
 

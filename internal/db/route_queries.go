@@ -194,6 +194,12 @@ func (rq *RouteQueries) InstallTheme(ctx context.Context, id, name, content stri
 	return err
 }
 
+// UninstallTheme removes a catalog theme from the installed_themes table.
+func (rq *RouteQueries) UninstallTheme(ctx context.Context, id string) error {
+	_, err := rq.q.ExecContext(ctx, `DELETE FROM installed_themes WHERE id = ?`, id)
+	return err
+}
+
 // SetActiveThemeID updates the active theme in the identity table.
 func (rq *RouteQueries) SetActiveThemeID(ctx context.Context, themeID string) error {
 	_, err := rq.q.ExecContext(ctx,

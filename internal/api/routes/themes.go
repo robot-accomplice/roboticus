@@ -305,6 +305,38 @@ func InstallCatalogTheme(store *db.Store) http.HandlerFunc {
 	}
 }
 
+// UninstallCatalogTheme removes a catalog theme by ID.
+func UninstallCatalogTheme(store *db.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID string `json:"id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
+		if req.ID == "" {
+			writeError(w, http.StatusBadRequest, "id required")
+			return
+		}
+		// Prevent uninstalling builtin themes.
+		for _, t := range builtinThemes {
+			if t.ID == req.ID {
+				writeError(w, http.StatusBadRequest, "cannot uninstall builtin theme")
+				return
+			}
+		}
+		if err := db.NewRouteQueries(store).UninstallTheme(r.Context(), req.ID); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		catalogMu.Lock()
+		delete(installedThemes, req.ID)
+		catalogMu.Unlock()
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": req.ID})
+	}
+}
+
 // GetActiveTheme returns the currently active theme.
 func GetActiveTheme(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

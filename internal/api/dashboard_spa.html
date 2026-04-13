@@ -2766,17 +2766,37 @@
             _catalogThemeVars = _catalogThemeVars || [];
             var varIdx = _catalogThemeVars.length;
             _catalogThemeVars.push(vars);
-            return '<div style="display:flex;align-items:center;gap:0.6rem;padding:0.6rem 0.65rem;border:1px solid var(--border-soft);border-radius:6px;background:rgba(255,255,255,0.01)">'
+            // Card background: use theme's --bg color + body texture for live preview.
+            var cardBg = vars['--bg'] || 'rgba(255,255,255,0.01)';
+            var bodyTexture = textures.body && textures.body.value ? textures.body.value : '';
+            var cardBgStyle = bodyTexture
+              ? 'background:' + bodyTexture + ',' + cardBg
+              : 'background:' + cardBg;
+            // Action button: install, uninstall, or builtin badge.
+            var actionBtn = '';
+            if (source === 'builtin') {
+              actionBtn = '<span class="badge" style="font-size:0.68rem;padding:0.2rem 0.45rem">builtin</span>';
+            } else if (installed) {
+              actionBtn = '<button class="btn secondary" data-theme-uninstall="' + esc(th.id) + '" style="font-size:0.72rem;padding:0.25rem 0.5rem;white-space:nowrap">Uninstall</button>';
+            } else {
+              actionBtn = '<button class="btn secondary" data-theme-install="' + esc(th.id) + '" style="font-size:0.72rem;padding:0.25rem 0.5rem;white-space:nowrap">' + uiBtnLabel('download', 'Install') + '</button>';
+            }
+            // Text color from theme vars so card content is readable against theme bg.
+            var cardText = vars['--text'] || 'var(--text)';
+            var cardMuted = vars['--muted'] || 'var(--muted)';
+            var cardBorder = vars['--border'] || 'var(--border-soft)';
+            return '<div style="display:flex;align-items:center;gap:0.6rem;padding:0.6rem 0.65rem;border:1px solid ' + cardBorder + ';border-radius:6px;' + cardBgStyle + '">'
               + '<div class="catalog-theme-preview" data-theme-var-idx="' + varIdx + '" style="flex-shrink:0"></div>'
               + '<div style="min-width:0;flex:1">'
               + '<div style="display:flex;align-items:center;gap:0.4rem;flex-wrap:wrap">'
-              + '<span style="font-family:var(--font-mono);font-size:0.82rem;color:var(--text)">' + esc(name) + '</span>'
-              + sourceBadge + installedBadge
+              + '<span style="font-family:var(--font-mono);font-size:0.82rem;color:' + cardText + '">' + esc(name) + '</span>'
+              + sourceBadge
               + '</div>'
-              + '<div style="margin-top:0.18rem;font-size:0.75rem;color:var(--muted);line-height:1.35">' + esc(desc) + '</div>'
-              + textureHint + fontHint
-              + (author ? '<div style="margin-top:0.15rem;font-size:0.68rem;color:var(--text-dim)">by ' + esc(author) + '</div>' : '')
+              + '<div style="margin-top:0.18rem;font-size:0.75rem;color:' + cardMuted + ';line-height:1.35">' + esc(desc) + '</div>'
+              + fontHint
+              + (author ? '<div style="margin-top:0.15rem;font-size:0.68rem;color:' + cardMuted + '">by ' + esc(author) + '</div>' : '')
               + '</div>'
+              + '<div style="flex-shrink:0">' + actionBtn + '</div>'
               + '</div>';
           }).join('');
           themesHtml = ''
@@ -7948,19 +7968,48 @@
     if (pluginInstallBtn) {
       var pluginName = pluginInstallBtn.getAttribute('data-plugin-install');
       if (!pluginName) { toast('Missing plugin name'); return; }
-      pluginInstallBtn.disabled = true;
-      pluginInstallBtn.textContent = 'Installing…';
-      api('/api/skills/catalog/install', { method: 'POST', body: JSON.stringify({ skills: [pluginName], activate: true }) })
+      toast(pluginName + ' plugin coming in v1.0.4 — implementation in progress');
+      return;
+    }
+    // Theme install button.
+    var themeInstallBtn = e.target.closest('[data-theme-install]');
+    if (themeInstallBtn) {
+      var themeId = themeInstallBtn.getAttribute('data-theme-install');
+      if (!themeId) { toast('Missing theme ID'); return; }
+      themeInstallBtn.disabled = true;
+      themeInstallBtn.textContent = 'Installing…';
+      api('/api/themes/catalog/install', { method: 'POST', body: JSON.stringify({ id: themeId }) })
         .then(function(resp) {
-          toast('Installed plugin: ' + pluginName + (resp.tools ? ' (' + resp.tools + ' tools)' : ''));
+          toast('Installed theme: ' + (resp.theme && resp.theme.name || themeId));
+          App.refreshSkills(); // re-render the catalog page
+        })
+        .catch(function(err) {
+          toast(err.message || 'Theme install failed');
+        })
+        .finally(function() {
+          themeInstallBtn.disabled = false;
+          themeInstallBtn.textContent = 'Install';
+        });
+      return;
+    }
+    // Theme uninstall button.
+    var themeUninstallBtn = e.target.closest('[data-theme-uninstall]');
+    if (themeUninstallBtn) {
+      var uninstallId = themeUninstallBtn.getAttribute('data-theme-uninstall');
+      if (!uninstallId) { toast('Missing theme ID'); return; }
+      themeUninstallBtn.disabled = true;
+      themeUninstallBtn.textContent = 'Removing…';
+      api('/api/themes/catalog/uninstall', { method: 'POST', body: JSON.stringify({ id: uninstallId }) })
+        .then(function() {
+          toast('Uninstalled theme: ' + uninstallId);
           App.refreshSkills();
         })
         .catch(function(err) {
-          toast(err.message || 'Plugin install failed');
+          toast(err.message || 'Theme uninstall failed');
         })
         .finally(function() {
-          pluginInstallBtn.disabled = false;
-          pluginInstallBtn.textContent = 'Install';
+          themeUninstallBtn.disabled = false;
+          themeUninstallBtn.textContent = 'Uninstall';
         });
       return;
     }
