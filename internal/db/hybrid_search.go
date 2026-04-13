@@ -48,8 +48,6 @@ func HybridSearch(
 				}
 				// Rust: rank-based FTS score: 1.0 - (i * 0.05), min 0.1.
 				ftsScore := math.Max(1.0-float64(i)*0.05, 0.1)
-				// Normalize table names (Rust parity).
-				// Migration 039 normalized all table names; no conversion needed.
 				preview := content
 				if len(preview) > 200 {
 					preview = preview[:200]
@@ -111,24 +109,4 @@ func SanitizeFTSQuery(query string) string {
 	// Quote each word for exact match.
 	words := strings.Fields(cleaned)
 	return "\"" + strings.Join(words, "\" \"") + "\""
-}
-
-// normalizeTableName is retained for backward compatibility with any unmigrated
-// rows that predate migration 039. Can be removed once all production databases
-// have run migration 039.
-func normalizeTableName(name string) string {
-	switch name {
-	case "working":
-		return "working_memory"
-	case "episodic":
-		return "episodic_memory"
-	case "semantic":
-		return "semantic_memory"
-	case "procedural":
-		return "procedural_memory"
-	case "relationship":
-		return "relationship_memory"
-	default:
-		return name
-	}
 }

@@ -96,12 +96,12 @@ func TestArchitecture_AdaptiveBudgetRedistributes(t *testing.T) {
 
 	// Seed only episodic data — other tiers empty.
 	for i := 0; i < 10; i++ {
-		store.ExecContext(ctx,
+		_, _ = store.ExecContext(ctx,
 			`INSERT INTO episodic_memory (id, classification, content) VALUES (?, 'test', ?)`,
 			db.NewID(), "test entry for adaptive budget architecture verification")
 	}
 	sessionID := db.NewID()
-	store.ExecContext(ctx,
+	_, _ = store.ExecContext(ctx,
 		`INSERT INTO sessions (id, agent_id, status) VALUES (?, 'test', 'active')`, sessionID)
 
 	retriever := NewRetriever(DefaultRetrievalConfig(), DefaultTierBudget(), store)

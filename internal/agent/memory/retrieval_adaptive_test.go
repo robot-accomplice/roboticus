@@ -14,21 +14,21 @@ func TestAdaptiveBudget_EmptyTierRedistributes(t *testing.T) {
 
 	// Seed only episodic and semantic — leave procedural and relationship empty.
 	for i := 0; i < 5; i++ {
-		store.ExecContext(ctx,
+		_, _ = store.ExecContext(ctx,
 			`INSERT INTO episodic_memory (id, classification, content) VALUES (?, 'test', ?)`,
 			db.NewID(), "test episodic content with enough words to fill budget slots")
 	}
 	for i := 0; i < 5; i++ {
-		store.ExecContext(ctx,
+		_, _ = store.ExecContext(ctx,
 			`INSERT INTO semantic_memory (id, category, key, value) VALUES (?, 'knowledge', ?, 'some fact value')`,
 			db.NewID(), "key"+string(rune('A'+i)))
 	}
 
 	// Create a session for working memory.
 	sessionID := db.NewID()
-	store.ExecContext(ctx,
+	_, _ = store.ExecContext(ctx,
 		`INSERT INTO sessions (id, agent_id, status) VALUES (?, 'test-agent', 'active')`, sessionID)
-	store.ExecContext(ctx,
+	_, _ = store.ExecContext(ctx,
 		`INSERT INTO working_memory (id, session_id, entry_type, content) VALUES (?, ?, 'note', 'working mem entry')`,
 		db.NewID(), sessionID)
 
@@ -57,18 +57,18 @@ func TestAdaptiveBudget_TotalCharsWithinBudget(t *testing.T) {
 
 	// Seed all tiers generously.
 	for i := 0; i < 20; i++ {
-		store.ExecContext(ctx,
+		_, _ = store.ExecContext(ctx,
 			`INSERT INTO episodic_memory (id, classification, content) VALUES (?, 'test', ?)`,
 			db.NewID(), "episodic entry with substantial content to use budget space effectively for testing purposes")
 	}
 	for i := 0; i < 10; i++ {
-		store.ExecContext(ctx,
+		_, _ = store.ExecContext(ctx,
 			`INSERT INTO semantic_memory (id, category, key, value) VALUES (?, 'knowledge', ?, 'detailed fact about the system architecture')`,
 			db.NewID(), "key"+string(rune('A'+i)))
 	}
 
 	sessionID := db.NewID()
-	store.ExecContext(ctx,
+	_, _ = store.ExecContext(ctx,
 		`INSERT INTO sessions (id, agent_id, status) VALUES (?, 'test-agent', 'active')`, sessionID)
 
 	retriever := NewRetriever(DefaultRetrievalConfig(), DefaultTierBudget(), store)
@@ -93,7 +93,7 @@ func TestRetrievalStrategy_ModeSelection(t *testing.T) {
 	ctx := context.Background()
 
 	sessionID := db.NewID()
-	store.ExecContext(ctx,
+	_, _ = store.ExecContext(ctx,
 		`INSERT INTO sessions (id, agent_id, status) VALUES (?, 'test-agent', 'active')`, sessionID)
 
 	// Without embed client → should use keyword mode.
@@ -112,7 +112,7 @@ func TestRetrievalStrategy_RecencyForNewSession(t *testing.T) {
 
 	// Create a session with created_at = now (very new session).
 	sessionID := db.NewID()
-	store.ExecContext(ctx,
+	_, _ = store.ExecContext(ctx,
 		`INSERT INTO sessions (id, agent_id, status, created_at) VALUES (?, 'test', 'active', datetime('now'))`, sessionID)
 
 	retriever := NewRetriever(DefaultRetrievalConfig(), DefaultTierBudget(), store)
@@ -132,7 +132,7 @@ func TestRetrievalStrategy_HybridForMatureSession(t *testing.T) {
 
 	// Create a session with created_at = 1 hour ago.
 	sessionID := db.NewID()
-	store.ExecContext(ctx,
+	_, _ = store.ExecContext(ctx,
 		`INSERT INTO sessions (id, agent_id, status, created_at) VALUES (?, 'test', 'active', datetime('now', '-1 hour'))`, sessionID)
 
 	retriever := NewRetriever(DefaultRetrievalConfig(), DefaultTierBudget(), store)

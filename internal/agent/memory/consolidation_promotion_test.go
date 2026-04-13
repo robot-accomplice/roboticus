@@ -199,17 +199,17 @@ func TestContradictionDetection_BothPreExisting(t *testing.T) {
 	ec := llm.NewEmbeddingClient(nil)
 
 	// Both entries created "before" consolidation cutoff.
-	store.ExecContext(ctx,
+	_, _ = store.ExecContext(ctx,
 		`INSERT INTO semantic_memory (id, category, key, value, created_at)
 		 VALUES (?, 'knowledge', 'db_old', 'the system uses PostgreSQL database for storage', datetime('now', '-2 hours'))`,
 		db.NewID())
-	store.ExecContext(ctx,
+	_, _ = store.ExecContext(ctx,
 		`INSERT INTO semantic_memory (id, category, key, value, created_at)
 		 VALUES (?, 'knowledge', 'db_new', 'the system uses SQLite database for storage', datetime('now', '-1 hour'))`,
 		db.NewID())
 
 	// Consolidation log entry that predates both entries (old approach would miss both).
-	store.ExecContext(ctx,
+	_, _ = store.ExecContext(ctx,
 		`INSERT INTO consolidation_log (id, indexed, deduped, promoted, confidence_decayed, importance_decayed, pruned, orphaned, created_at)
 		 VALUES (?, 0, 0, 0, 0, 0, 0, 0, datetime('now', '-3 hours'))`,
 		db.NewID())
@@ -230,11 +230,11 @@ func TestContradictionDetection_DifferentSubjectNotSuperseded(t *testing.T) {
 	ec := llm.NewEmbeddingClient(nil)
 
 	// Two entries about different subjects — should NOT supersede.
-	store.ExecContext(ctx,
+	_, _ = store.ExecContext(ctx,
 		`INSERT INTO semantic_memory (id, category, key, value)
 		 VALUES (?, 'knowledge', 'deploy_docker', 'the deployment system uses Docker containers for isolation')`,
 		db.NewID())
-	store.ExecContext(ctx,
+	_, _ = store.ExecContext(ctx,
 		`INSERT INTO semantic_memory (id, category, key, value)
 		 VALUES (?, 'knowledge', 'test_docker', 'the testing framework uses Docker containers for isolation')`,
 		db.NewID())
@@ -246,7 +246,7 @@ func TestContradictionDetection_DifferentSubjectNotSuperseded(t *testing.T) {
 
 	// Both should remain active (different subjects: deployment vs testing).
 	var activeCount int
-	store.QueryRowContext(ctx,
+	_ = store.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM semantic_memory WHERE memory_state = 'active'`).Scan(&activeCount)
 	if activeCount < 2 {
 		t.Errorf("different-subject entries should both remain active, got %d active", activeCount)
@@ -290,7 +290,7 @@ func TestFTSUpdateTrigger_SemanticValueChange(t *testing.T) {
 
 	// Check FTS finds the original value.
 	var count int
-	store.QueryRowContext(ctx,
+	_ = store.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM memory_fts WHERE memory_fts MATCH '"Docker"'`).Scan(&count)
 	// Note: FTS entry may not exist if no INSERT trigger covers semantic_memory directly.
 	// The UPDATE trigger we added fires only on UPDATE, not INSERT.

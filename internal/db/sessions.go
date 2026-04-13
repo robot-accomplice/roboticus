@@ -125,7 +125,7 @@ func (s *Store) ArchiveSession(ctx context.Context, id string) error {
 	// Fire post-archival callbacks (best-effort — hook errors don't block archival).
 	for _, cb := range s.onSessionArchived {
 		func() {
-			defer func() { recover() }() // Don't let panicking hooks block archival.
+			defer func() { _ = recover() }() // Don't let panicking hooks block archival.
 			cb(ctx, id)
 		}()
 	}

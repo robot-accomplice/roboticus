@@ -26,14 +26,14 @@ func TestProductionScenario_ExistingDataBackfill(t *testing.T) {
 	numEpisodic := 50
 	numSemantic := 30
 	for i := 0; i < numEpisodic; i++ {
-		store.ExecContext(ctx,
+		_, _ = store.ExecContext(ctx,
 			`INSERT INTO episodic_memory (id, classification, content, importance)
 			 VALUES (?, 'tool_use', ?, 5)`,
 			db.NewID(), fmt.Sprintf("unique episodic event %d: the specific action taken was %d and the result was code %d at timestamp %d",
 				i, i*17, i*31, i*43))
 	}
 	for i := 0; i < numSemantic; i++ {
-		store.ExecContext(ctx,
+		_, _ = store.ExecContext(ctx,
 			`INSERT INTO semantic_memory (id, category, key, value)
 			 VALUES (?, 'learned', ?, ?)`,
 			db.NewID(), fmt.Sprintf("unique_fact_%d", i),
@@ -42,7 +42,7 @@ func TestProductionScenario_ExistingDataBackfill(t *testing.T) {
 
 	// Verify no memory-tier embeddings exist (matching production state).
 	var embedsBefore int
-	store.QueryRowContext(ctx,
+	_ = store.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM embeddings WHERE source_table IN ('episodic_memory', 'semantic_memory')`).Scan(&embedsBefore)
 	if embedsBefore != 0 {
 		t.Fatalf("expected 0 memory-tier embeddings before backfill, got %d", embedsBefore)
@@ -62,7 +62,7 @@ func TestProductionScenario_ExistingDataBackfill(t *testing.T) {
 	}
 
 	var embedsAfterRun1 int
-	store.QueryRowContext(ctx,
+	_ = store.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM embeddings WHERE source_table IN ('episodic_memory', 'semantic_memory')`).Scan(&embedsAfterRun1)
 	t.Logf("After run 1: %d memory-tier embeddings", embedsAfterRun1)
 
@@ -72,17 +72,17 @@ func TestProductionScenario_ExistingDataBackfill(t *testing.T) {
 	t.Logf("Run 2: indexed=%d, backfilled=%d", r2.Indexed, r2.EmbeddingsBackfill)
 
 	var embedsAfterRun2 int
-	store.QueryRowContext(ctx,
+	_ = store.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM embeddings WHERE source_table IN ('episodic_memory', 'semantic_memory')`).Scan(&embedsAfterRun2)
 	t.Logf("After run 2: %d memory-tier embeddings", embedsAfterRun2)
 
 	// After runs, embeddings should be growing. Some entries may have been
 	// deduped/promoted by consolidation, reducing the active set.
 	var activeEntries int
-	store.QueryRowContext(ctx,
+	_ = store.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM episodic_memory WHERE memory_state = 'active'`).Scan(&activeEntries)
 	var activeSemantic int
-	store.QueryRowContext(ctx,
+	_ = store.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM semantic_memory WHERE memory_state = 'active'`).Scan(&activeSemantic)
 	activeTotal := activeEntries + activeSemantic
 
@@ -92,7 +92,7 @@ func TestProductionScenario_ExistingDataBackfill(t *testing.T) {
 		pipe.Run(ctx, store)
 	}
 	var embedsFinal int
-	store.QueryRowContext(ctx,
+	_ = store.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM embeddings WHERE source_table IN ('episodic_memory', 'semantic_memory')`).Scan(&embedsFinal)
 	t.Logf("After all runs: %d embeddings, %d active entries across tiers", embedsFinal, activeTotal)
 	if embedsFinal == 0 {
@@ -101,7 +101,7 @@ func TestProductionScenario_ExistingDataBackfill(t *testing.T) {
 
 	// Verify retrieval works with backfilled embeddings.
 	sessionID := db.NewID()
-	store.ExecContext(ctx,
+	_, _ = store.ExecContext(ctx,
 		`INSERT INTO sessions (id, agent_id, status) VALUES (?, 'test', 'active')`, sessionID)
 
 	retriever := NewRetriever(DefaultRetrievalConfig(), DefaultTierBudget(), store)
@@ -126,7 +126,7 @@ func TestProductionScenario_HighVolumeDedup(t *testing.T) {
 	for i := 0; i < 500; i++ {
 		content := fmt.Sprintf("bash: executed command variant %d with output containing status code %d",
 			i%50, i%7) // Only 50 unique patterns × 7 status codes = ~350 unique
-		store.ExecContext(ctx,
+		_, _ = store.ExecContext(ctx,
 			`INSERT INTO episodic_memory (id, classification, content, importance)
 			 VALUES (?, 'tool_use', ?, 5)`,
 			db.NewID(), content)
@@ -141,7 +141,7 @@ func TestProductionScenario_HighVolumeDedup(t *testing.T) {
 	// With MinHash/LSH, this should complete quickly (not O(n²)).
 	// The batch cap of 500 means all entries are processed.
 	var remaining int
-	store.QueryRowContext(ctx,
+	_ = store.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM episodic_memory WHERE memory_state = 'active'`).Scan(&remaining)
 	t.Logf("After dedup: %d active entries remain (from 500)", remaining)
 
@@ -161,7 +161,7 @@ func TestProductionScenario_MixedWorkload(t *testing.T) {
 	mgr.SetEmbeddingClient(ec)
 
 	sessionID := db.NewID()
-	store.ExecContext(ctx,
+	_, _ = store.ExecContext(ctx,
 		`INSERT INTO sessions (id, agent_id, status) VALUES (?, 'test', 'active')`, sessionID)
 
 	// Phase 1: Tool-heavy session.
@@ -194,7 +194,7 @@ func TestProductionScenario_MixedWorkload(t *testing.T) {
 	tierCounts := map[string]int{}
 	for _, table := range []string{"episodic_memory", "semantic_memory", "procedural_memory", "relationship_memory", "working_memory"} {
 		var count int
-		store.QueryRowContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s", table)).Scan(&count)
+		_ = store.QueryRowContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s", table)).Scan(&count)
 		tierCounts[table] = count
 	}
 
@@ -231,7 +231,7 @@ func TestProductionScenario_MixedWorkload(t *testing.T) {
 
 	// Verify embeddings were generated for non-derivable episodic + semantic.
 	var embedCount int
-	store.QueryRowContext(ctx,
+	_ = store.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM embeddings WHERE source_table IN ('episodic_memory', 'semantic_memory')`).Scan(&embedCount)
 	if embedCount == 0 {
 		t.Error("expected embeddings from ingestion")
@@ -252,7 +252,7 @@ func TestProductionScenario_MixedWorkload(t *testing.T) {
 	// Session summary promotion should work.
 	mgr.PromoteSessionSummary(ctx, sessionID)
 	var summaryExists int
-	store.QueryRowContext(ctx,
+	_ = store.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM semantic_memory WHERE category = 'session_summary'`).Scan(&summaryExists)
 	if summaryExists == 0 {
 		t.Error("session summary promotion failed")
@@ -260,7 +260,7 @@ func TestProductionScenario_MixedWorkload(t *testing.T) {
 
 	// Cross-session injection should work.
 	newSessionID := db.NewID()
-	store.ExecContext(ctx,
+	_, _ = store.ExecContext(ctx,
 		`INSERT INTO sessions (id, agent_id, status) VALUES (?, 'test', 'active')`, newSessionID)
 	working := retriever.retrieveWorkingMemory(ctx, newSessionID, 500)
 	if !strings.Contains(working, "Previously:") {

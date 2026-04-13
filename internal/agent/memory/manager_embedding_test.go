@@ -210,7 +210,7 @@ func TestConsolidation_BackfillsEmbeddings(t *testing.T) {
 
 	// Verify no embeddings exist yet.
 	var countBefore int
-	store.QueryRowContext(ctx,
+	_ = store.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM embeddings WHERE source_table = 'episodic_memory'`).Scan(&countBefore)
 	if countBefore != 0 {
 		t.Fatalf("expected 0 embeddings before backfill, got %d", countBefore)
@@ -228,7 +228,7 @@ func TestConsolidation_BackfillsEmbeddings(t *testing.T) {
 
 	// Verify embeddings now exist.
 	var countAfter int
-	store.QueryRowContext(ctx,
+	_ = store.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM embeddings WHERE source_table = 'episodic_memory'`).Scan(&countAfter)
 	if countAfter == 0 {
 		t.Error("expected embeddings after backfill, got 0")
@@ -250,7 +250,7 @@ func TestLoadStoredEmbeddings_BulkLoad(t *testing.T) {
 		content := "test content number " + string(rune('A'+i))
 		vec, _ := ec.EmbedSingle(ctx, content)
 		blob := db.EmbeddingToBlob(vec)
-		store.ExecContext(ctx,
+		_, _ = store.ExecContext(ctx,
 			`INSERT INTO embeddings (id, source_table, source_id, content_preview, embedding_blob, dimensions)
 			 VALUES (?, 'episodic_memory', ?, ?, ?, ?)`,
 			db.NewID(), ids[i], content, blob, len(vec))
@@ -278,7 +278,7 @@ func TestLoadStoredEmbeddings_MissingSomeIDs(t *testing.T) {
 	realID := db.NewID()
 	vec, _ := ec.EmbedSingle(ctx, "real content")
 	blob := db.EmbeddingToBlob(vec)
-	store.ExecContext(ctx,
+	_, _ = store.ExecContext(ctx,
 		`INSERT INTO embeddings (id, source_table, source_id, content_preview, embedding_blob, dimensions)
 		 VALUES (?, 'episodic_memory', ?, 'real', ?, ?)`,
 		db.NewID(), realID, blob, len(vec))

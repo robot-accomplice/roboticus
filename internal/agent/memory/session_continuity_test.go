@@ -15,12 +15,12 @@ func TestSessionSummary_PromotedOnArchival(t *testing.T) {
 	ctx := context.Background()
 
 	sessionID := db.NewID()
-	store.ExecContext(ctx,
+	_, _ = store.ExecContext(ctx,
 		`INSERT INTO sessions (id, agent_id, status) VALUES (?, 'test', 'active')`, sessionID)
 
 	// Add working memory entries.
 	for _, entry := range []string{"debugging auth issue", "found the bug in JWT validation", "fix deployed"} {
-		store.ExecContext(ctx,
+		_, _ = store.ExecContext(ctx,
 			`INSERT INTO working_memory (id, session_id, entry_type, content, importance)
 			 VALUES (?, ?, 'note', ?, 5)`,
 			db.NewID(), sessionID, entry)
@@ -46,14 +46,14 @@ func TestSessionSummary_InjectedInNewSession(t *testing.T) {
 	ctx := context.Background()
 
 	// Store a session summary from a "previous" session.
-	store.ExecContext(ctx,
+	_, _ = store.ExecContext(ctx,
 		`INSERT INTO semantic_memory (id, category, key, value)
 		 VALUES (?, 'session_summary', 'old-session', 'was debugging JWT auth bug in production')`,
 		db.NewID())
 
 	// Create a new session with no working memory.
 	newSessionID := db.NewID()
-	store.ExecContext(ctx,
+	_, _ = store.ExecContext(ctx,
 		`INSERT INTO sessions (id, agent_id, status) VALUES (?, 'test', 'active')`, newSessionID)
 
 	retriever := NewRetriever(DefaultRetrievalConfig(), DefaultTierBudget(), store)

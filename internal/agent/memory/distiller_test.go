@@ -122,7 +122,7 @@ func TestConsolidation_FullPipeline_WithServiceDistiller(t *testing.T) {
 		"deployment failed because of access error on haproxy config file in development environment",
 	}
 	for _, v := range variants {
-		store.ExecContext(ctx,
+		_, _ = store.ExecContext(ctx,
 			`INSERT INTO episodic_memory (id, classification, content, importance) VALUES (?, 'tool_event', ?, 5)`,
 			db.NewID(), v)
 	}

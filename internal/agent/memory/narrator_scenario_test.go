@@ -43,7 +43,7 @@ func TestNarratorScenario_RealisticBackfill(t *testing.T) {
 		// Real narrator data has unique tool outputs per invocation.
 		content := fmt.Sprintf("Used tool '%s': unique output %d hash %d ts %d pid %d node %d shard %d region %d",
 			tool, i, rng.Intn(999999), i*1000+rng.Intn(1000), rng.Intn(65535), rng.Intn(100), rng.Intn(50), rng.Intn(10))
-		store.ExecContext(ctx,
+		_, _ = store.ExecContext(ctx,
 			`INSERT INTO episodic_memory (id, classification, content, importance)
 			 VALUES (?, 'tool_use', ?, ?)`,
 			db.NewID(), content, imp)
@@ -51,7 +51,7 @@ func TestNarratorScenario_RealisticBackfill(t *testing.T) {
 
 	// Seed semantic entries: 111 active, 1238 stale.
 	for i := 0; i < 111; i++ {
-		store.ExecContext(ctx,
+		_, _ = store.ExecContext(ctx,
 			`INSERT INTO semantic_memory (id, category, key, value, memory_state)
 			 VALUES (?, 'learned', ?, ?, 'active')`,
 			db.NewID(),
@@ -59,7 +59,7 @@ func TestNarratorScenario_RealisticBackfill(t *testing.T) {
 			fmt.Sprintf("distinct knowledge item %d about capability %d in domain %d", i, i*7, i*11))
 	}
 	for i := 0; i < 100; i++ { // Subset of stale (full 1238 would be slow)
-		store.ExecContext(ctx,
+		_, _ = store.ExecContext(ctx,
 			`INSERT INTO semantic_memory (id, category, key, value, memory_state)
 			 VALUES (?, 'learned', ?, ?, 'stale')`,
 			db.NewID(),
@@ -73,7 +73,7 @@ func TestNarratorScenario_RealisticBackfill(t *testing.T) {
 		"list_directory": {28, 11}, "get_runtime_context": {36, 0},
 	}
 	for name, stats := range toolStats {
-		store.ExecContext(ctx,
+		_, _ = store.ExecContext(ctx,
 			`INSERT INTO procedural_memory (id, name, steps, success_count, failure_count)
 			 VALUES (?, ?, '', ?, ?)`,
 			db.NewID(), name, stats[0], stats[1])
@@ -84,7 +84,7 @@ func TestNarratorScenario_RealisticBackfill(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		vec, _ := ec.EmbedSingle(ctx, fmt.Sprintf("turn content %d", i))
 		blob := db.EmbeddingToBlob(vec)
-		store.ExecContext(ctx,
+		_, _ = store.ExecContext(ctx,
 			`INSERT INTO embeddings (id, source_table, source_id, content_preview, embedding_blob, dimensions)
 			 VALUES (?, 'turn', ?, 'turn preview', ?, ?)`,
 			db.NewID(), db.NewID(), blob, len(vec))
@@ -92,9 +92,9 @@ func TestNarratorScenario_RealisticBackfill(t *testing.T) {
 
 	// Verify initial state: no memory-tier embeddings, no memory_index.
 	var memEmbeds, indexCount int
-	store.QueryRowContext(ctx,
+	_ = store.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM embeddings WHERE source_table IN ('episodic_memory', 'semantic_memory')`).Scan(&memEmbeds)
-	store.QueryRowContext(ctx,
+	_ = store.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM memory_index`).Scan(&indexCount)
 
 	if memEmbeds != 0 {
@@ -135,16 +135,16 @@ func TestNarratorScenario_RealisticBackfill(t *testing.T) {
 	// === Verify final state ===
 
 	var finalMemEmbeds, finalIndex int
-	store.QueryRowContext(ctx,
+	_ = store.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM embeddings WHERE source_table IN ('episodic_memory', 'semantic_memory')`).Scan(&finalMemEmbeds)
-	store.QueryRowContext(ctx,
+	_ = store.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM memory_index WHERE confidence > 0.1`).Scan(&finalIndex)
 
 	// Count remaining active entries (dedup may have reduced count).
 	var activeEpisodic, activeSemantic int
-	store.QueryRowContext(ctx,
+	_ = store.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM episodic_memory WHERE memory_state = 'active'`).Scan(&activeEpisodic)
-	store.QueryRowContext(ctx,
+	_ = store.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM semantic_memory WHERE memory_state = 'active'`).Scan(&activeSemantic)
 
 	t.Logf("Final state:")
@@ -155,7 +155,7 @@ func TestNarratorScenario_RealisticBackfill(t *testing.T) {
 
 	// Turn embeddings should be untouched.
 	var turnEmbeds int
-	store.QueryRowContext(ctx,
+	_ = store.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM embeddings WHERE source_table = 'turn'`).Scan(&turnEmbeds)
 	if turnEmbeds != 50 {
 		t.Errorf("turn embeddings should be untouched: expected 50, got %d", turnEmbeds)
@@ -185,7 +185,7 @@ func TestNarratorScenario_RealisticBackfill(t *testing.T) {
 
 	// FTS UPDATE triggers should exist (from migration 038).
 	var triggerCount int
-	store.QueryRowContext(ctx,
+	_ = store.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND name LIKE '%_fts_au'`).Scan(&triggerCount)
 	if triggerCount >= 2 {
 		t.Logf("✓ HIGH-4: %d FTS UPDATE triggers present", triggerCount)
@@ -195,7 +195,7 @@ func TestNarratorScenario_RealisticBackfill(t *testing.T) {
 
 	// Stale entries should NOT have embeddings (backfill only targets active).
 	var staleEmbeds int
-	store.QueryRowContext(ctx, `
+	_ = store.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM embeddings e
 		JOIN semantic_memory sm ON e.source_table = 'semantic_memory' AND e.source_id = sm.id
 		WHERE sm.memory_state = 'stale'
@@ -213,7 +213,7 @@ func TestNarratorScenario_RealisticBackfill(t *testing.T) {
 	// === Retrieval validation ===
 
 	sessionID := db.NewID()
-	store.ExecContext(ctx,
+	_, _ = store.ExecContext(ctx,
 		`INSERT INTO sessions (id, agent_id, status) VALUES (?, 'narrator', 'active')`, sessionID)
 
 	retriever := NewRetriever(DefaultRetrievalConfig(), DefaultTierBudget(), store)

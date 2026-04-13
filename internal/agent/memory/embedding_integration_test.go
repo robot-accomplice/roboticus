@@ -79,14 +79,14 @@ func TestIntegration_RealEmbeddingProvider(t *testing.T) {
 	mgr.IngestTurn(ctx, sess)
 
 	var embedCount int
-	store.QueryRowContext(ctx,
+	_ = store.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM embeddings WHERE source_table = 'episodic_memory'`).Scan(&embedCount)
 	if embedCount == 0 {
 		t.Error("CRITICAL-1: no episodic embeddings generated with real provider")
 	}
 
 	var dims int
-	store.QueryRowContext(ctx,
+	_ = store.QueryRowContext(ctx,
 		`SELECT dimensions FROM embeddings WHERE source_table = 'episodic_memory' LIMIT 1`).Scan(&dims)
 	if dims <= 128 {
 		t.Errorf("real provider should produce >128 dim embeddings, got %d", dims)

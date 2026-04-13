@@ -38,7 +38,7 @@ func TestLiveValidation_FullPipeline(t *testing.T) {
 	mgr.SetEmbeddingClient(ec)
 
 	sessionID := db.NewID()
-	store.ExecContext(ctx,
+	_, _ = store.ExecContext(ctx,
 		`INSERT INTO sessions (id, agent_id, status) VALUES (?, 'live-test', 'active')`, sessionID)
 
 	// Turn 1: Tool use (should create episodic + procedural)
@@ -77,9 +77,9 @@ func TestLiveValidation_FullPipeline(t *testing.T) {
 	// ═══════════════════════════════════════════════════════════════════
 
 	var episodicEmbedCount, semanticEmbedCount int
-	store.QueryRowContext(ctx,
+	_ = store.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM embeddings WHERE source_table = 'episodic_memory'`).Scan(&episodicEmbedCount)
-	store.QueryRowContext(ctx,
+	_ = store.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM embeddings WHERE source_table = 'semantic_memory'`).Scan(&semanticEmbedCount)
 
 	if episodicEmbedCount == 0 {
@@ -148,7 +148,7 @@ func TestLiveValidation_FullPipeline(t *testing.T) {
 	// ═══════════════════════════════════════════════════════════════════
 
 	var entityCount int
-	store.QueryRowContext(ctx,
+	_ = store.QueryRowContext(ctx,
 		`SELECT COUNT(DISTINCT entity_name) FROM relationship_memory`).Scan(&entityCount)
 
 	if entityCount == 0 {
@@ -159,7 +159,7 @@ func TestLiveValidation_FullPipeline(t *testing.T) {
 
 	// Check for "Sarah Chen" or "Sarah" specifically.
 	var sarahCount int
-	store.QueryRowContext(ctx,
+	_ = store.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM relationship_memory WHERE entity_name LIKE '%Sarah%'`).Scan(&sarahCount)
 	if sarahCount == 0 {
 		t.Log("  ⚠ 'Sarah Chen' not found — proper noun extraction may need tuning for this text pattern")
@@ -169,7 +169,7 @@ func TestLiveValidation_FullPipeline(t *testing.T) {
 
 	// Check for @devops (@ mention).
 	var devopsCount int
-	store.QueryRowContext(ctx,
+	_ = store.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM relationship_memory WHERE entity_name = 'devops'`).Scan(&devopsCount)
 	if devopsCount == 0 {
 		t.Error("  ✗ @devops mention not detected")
@@ -184,21 +184,21 @@ func TestLiveValidation_FullPipeline(t *testing.T) {
 	// Add some data to exercise consolidation phases.
 	// Seed similar episodic entries for dedup testing.
 	for i := 0; i < 3; i++ {
-		store.ExecContext(ctx,
+		_, _ = store.ExecContext(ctx,
 			`INSERT INTO episodic_memory (id, classification, content, importance)
 			 VALUES (?, 'tool_event', ?, 5)`,
 			db.NewID(), fmt.Sprintf("bash: deployed app to server variant %d with success confirmation", i))
 	}
 
 	// Seed contradicting semantic entries.
-	store.ExecContext(ctx,
+	_, _ = store.ExecContext(ctx,
 		`INSERT INTO semantic_memory (id, category, key, value, created_at)
 		 VALUES (?, 'knowledge', 'db_engine', 'the system uses PostgreSQL for persistence', datetime('now', '-1 hour'))`,
 		db.NewID())
-	store.ExecContext(ctx,
+	_, _ = store.ExecContext(ctx,
 		`INSERT INTO consolidation_log (id, indexed, deduped, promoted, confidence_decayed, importance_decayed, pruned, orphaned, created_at)
 		 VALUES (?, 0, 0, 0, 0, 0, 0, 0, datetime('now', '-30 minutes'))`, db.NewID())
-	store.ExecContext(ctx,
+	_, _ = store.ExecContext(ctx,
 		`INSERT INTO semantic_memory (id, category, key, value)
 		 VALUES (?, 'knowledge', 'db_system', 'the system uses SQLite for persistence')`,
 		db.NewID())
@@ -223,7 +223,7 @@ func TestLiveValidation_FullPipeline(t *testing.T) {
 
 	// Verify FTS UPDATE triggers work (HIGH-4).
 	var triggerCount int
-	store.QueryRowContext(ctx,
+	_ = store.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND name LIKE '%_fts_au'`).Scan(&triggerCount)
 	if triggerCount < 2 {
 		t.Errorf("  HIGH-4 REGRESSION: expected ≥2 FTS UPDATE triggers, found %d", triggerCount)
@@ -249,7 +249,7 @@ func TestLiveValidation_FullPipeline(t *testing.T) {
 
 	// Create a new session and verify "Previously:" injection.
 	newSessionID := db.NewID()
-	store.ExecContext(ctx,
+	_, _ = store.ExecContext(ctx,
 		`INSERT INTO sessions (id, agent_id, status) VALUES (?, 'live-test', 'active')`, newSessionID)
 
 	working := retriever.retrieveWorkingMemory(ctx, newSessionID, 500)
@@ -277,7 +277,7 @@ func TestLiveValidation_FullPipeline(t *testing.T) {
 	tierCounts := map[string]int{}
 	for _, table := range []string{"working_memory", "episodic_memory", "semantic_memory", "procedural_memory", "relationship_memory"} {
 		var count int
-		store.QueryRowContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s", table)).Scan(&count)
+		_ = store.QueryRowContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s", table)).Scan(&count)
 		tierCounts[table] = count
 	}
 
@@ -290,12 +290,12 @@ func TestLiveValidation_FullPipeline(t *testing.T) {
 	}
 
 	var totalEmbeddings int
-	store.QueryRowContext(ctx,
+	_ = store.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM embeddings WHERE source_table IN ('episodic_memory', 'semantic_memory')`).Scan(&totalEmbeddings)
 	t.Logf("  embeddings: %d total (episodic + semantic)", totalEmbeddings)
 
 	var totalIndex int
-	store.QueryRowContext(ctx, `SELECT COUNT(*) FROM memory_index`).Scan(&totalIndex)
+	_ = store.QueryRowContext(ctx, `SELECT COUNT(*) FROM memory_index`).Scan(&totalIndex)
 	t.Logf("  memory_index: %d entries", totalIndex)
 
 	// ═══════════════════════════════════════════════════════════════════
@@ -347,7 +347,7 @@ func getAllEpisodicIDs(ctx context.Context, store *db.Store) []string {
 	if err != nil {
 		return nil
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var ids []string
 	for rows.Next() {
 		var id string

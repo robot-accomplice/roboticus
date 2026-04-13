@@ -10,7 +10,7 @@ func TestArchiveSession_CallsPostHook(t *testing.T) {
 	ctx := context.Background()
 
 	sessionID := NewID()
-	store.ExecContext(ctx,
+	_, _ = store.ExecContext(ctx,
 		`INSERT INTO sessions (id, agent_id, status) VALUES (?, 'test', 'active')`, sessionID)
 
 	var hookedID string
@@ -31,7 +31,7 @@ func TestArchiveSession_HookFailureDoesNotBlockArchival(t *testing.T) {
 	ctx := context.Background()
 
 	sessionID := NewID()
-	store.ExecContext(ctx,
+	_, _ = store.ExecContext(ctx,
 		`INSERT INTO sessions (id, agent_id, status) VALUES (?, 'test', 'active')`, sessionID)
 
 	store.OnSessionArchived(func(ctx context.Context, id string) {
@@ -43,7 +43,7 @@ func TestArchiveSession_HookFailureDoesNotBlockArchival(t *testing.T) {
 	}
 
 	var status string
-	store.QueryRowContext(ctx,
+	_ = store.QueryRowContext(ctx,
 		`SELECT status FROM sessions WHERE id = ?`, sessionID).Scan(&status)
 	if status != "archived" {
 		t.Errorf("session should be archived, got %q", status)
@@ -55,14 +55,14 @@ func TestArchiveSession_MultipleHooks(t *testing.T) {
 	ctx := context.Background()
 
 	sessionID := NewID()
-	store.ExecContext(ctx,
+	_, _ = store.ExecContext(ctx,
 		`INSERT INTO sessions (id, agent_id, status) VALUES (?, 'test', 'active')`, sessionID)
 
 	var calls int
 	store.OnSessionArchived(func(ctx context.Context, id string) { calls++ })
 	store.OnSessionArchived(func(ctx context.Context, id string) { calls++ })
 
-	store.ArchiveSession(ctx, sessionID)
+	_ = store.ArchiveSession(ctx, sessionID)
 
 	if calls != 2 {
 		t.Errorf("expected 2 hook calls, got %d", calls)
