@@ -484,8 +484,8 @@
     .settings-input::placeholder { color: var(--muted); opacity: 0.45; font-style: italic; }
     .settings-input.warn { border-color: var(--error); background: rgba(239,68,68,0.06); }
     .settings-label.warn { color: var(--error); }
-    .settings-help-trigger { cursor: help; color: var(--muted); font-size: 0.65rem; display: inline-block; padding: 0 0.15rem; user-select: none; position: relative; }
-    .settings-help-trigger:hover { color: var(--accent); }
+    .settings-help-trigger { cursor: help; color: var(--accent); font-size: 0.65rem; display: inline-flex; align-items: center; justify-content: center; width: 1.1rem; height: 1.1rem; border-radius: 50%; background: rgba(var(--accent-rgb, 99,102,241), 0.15); border: 1px solid rgba(var(--accent-rgb, 99,102,241), 0.3); user-select: none; position: relative; vertical-align: middle; margin-left: 0.25rem; font-weight: 600; }
+    .settings-help-trigger:hover { background: rgba(var(--accent-rgb, 99,102,241), 0.3); border-color: var(--accent); }
     .settings-tooltip-popover {
       position: fixed; z-index: 9999; max-width: 320px; padding: 0.625rem 0.75rem;
       background: var(--surface-2); color: var(--text); border: 1px solid var(--accent-dim);
