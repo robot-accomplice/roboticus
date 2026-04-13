@@ -460,7 +460,7 @@
     .settings-form { display: flex; flex-direction: column; gap: 1.25rem; }
     .settings-section { background: var(--surface-2); border: 1px solid var(--border-ghost); border-radius: var(--radius); padding: 1.25rem; }
     .settings-section-title { font-family: var(--font-headline); font-size: 0.6875rem; text-transform: uppercase; letter-spacing: 0.15em; color: var(--accent); margin-bottom: 0.75rem; font-weight: 600; }
-    .settings-row { display: grid; grid-template-columns: minmax(140px, max-content) 1fr; gap: 0.75rem; align-items: center; margin-bottom: 0.5rem; }
+    .settings-row { display: grid; grid-template-columns: minmax(200px, max-content) 1fr; gap: 0.75rem; align-items: center; margin-bottom: 0.5rem; }
     .settings-row:last-child { margin-bottom: 0; }
     .settings-label { font-family: var(--font-headline); font-size: 0.625rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.1em; }
     .settings-input {
@@ -6149,15 +6149,24 @@
           planner: true, rate_limit: true, revenue: true, sandbox: true,
           self_funding: true, tier_adapt: true, workspace: true, yield: true
         };
-        // Group config sections by domain. Sections within each group are alphabetized.
+        // Section order per settings-page-overhaul-handoff.md — hand-crafted, not dynamic.
         var sectionGroups = [
-          { label: 'Agent & Identity', sections: ['agent', 'session'] },
-          { label: 'Inference & Routing', sections: ['cache', 'context_budget', 'models', 'providers'] },
-          { label: 'Memory & Skills', sections: ['memory', 'plugins', 'skills'] },
-          { label: 'Channels & Integrations', sections: ['channels', 'matrix', 'mcp'] },
-          { label: 'Security & Access', sections: ['security'] },
-          { label: 'Financial', sections: ['treasury', 'wallet'] },
-          { label: 'Runtime & System', sections: ['server', 'themes', 'update'] }
+          { label: 'Agent & Identity', sections: ['agent'] },
+          { label: 'Models & Routing', sections: ['models', 'providers'] },
+          { label: 'Security', sections: ['security'] },
+          { label: 'Memory', sections: ['memory'] },
+          { label: 'Context Budget', sections: ['context_budget'] },
+          { label: 'Session', sections: ['session'] },
+          { label: 'Cache', sections: ['cache'] },
+          { label: 'Channels', sections: ['channels'] },
+          { label: 'Matrix', sections: ['matrix'] },
+          { label: 'MCP Servers', sections: ['mcp'] },
+          { label: 'Plugins', sections: ['plugins'] },
+          { label: 'Skills', sections: ['skills'] },
+          { label: 'Server', sections: ['server'] },
+          { label: 'Wallet', sections: ['wallet'] },
+          { label: 'Treasury', sections: ['treasury'] },
+          { label: 'Advanced', sections: ['themes', 'update'] }
         ];
         // Collect any sections not in any group (future-proof).
         var grouped = {};
