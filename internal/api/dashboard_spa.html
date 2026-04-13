@@ -2827,6 +2827,10 @@
               + '<div style="height:2px;background:linear-gradient(90deg,' + v.accent + ',' + v.highlight + ',transparent);border-radius:1px;margin:0.1rem 0"></div>'
               // Description in theme's muted color.
               + '<div style="font-size:0.78rem;color:' + v.muted + ';line-height:1.4;flex:1">' + esc(desc) + '</div>'
+              // Font name.
+              + '<div style="font-size:0.62rem;color:' + v.accent + ';opacity:0.8">'
+              + (thFonts.length > 0 ? 'Font: ' + esc((thFonts[0].match(/family=([^:&]+)/) || ['','System'])[1].replace(/\+/g, ' ')) : 'Font: System Default')
+              + '</div>'
               // Author.
               + (author ? '<div style="font-size:0.62rem;color:' + v.muted + ';opacity:0.7">by ' + esc(author) + '</div>' : '')
               // Install button at bottom, themed.
