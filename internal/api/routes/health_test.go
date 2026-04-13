@@ -146,7 +146,7 @@ func TestGetSkillsCatalog(t *testing.T) {
 
 func TestTestChannel(t *testing.T) {
 	cfg := core.DefaultConfig()
-	cfg.Channels.TelegramTokenEnv = "TELEGRAM_TOKEN"
+	cfg.Channels.Telegram = &core.TelegramConfig{Enabled: true}
 	handler := TestChannel(&cfg)
 
 	// Use chi router to set URL param.

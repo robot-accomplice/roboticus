@@ -111,7 +111,6 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 			Name:             name,
 			URL:              pc.URL,
 			Format:           llm.APIFormat(pc.Format),
-			APIKeyEnv:        pc.APIKeyEnv,
 			APIKeyRef:        pc.APIKeyRef,
 			ChatPath:         pc.ChatPath,
 			EmbeddingPath:    pc.EmbeddingPath,
@@ -327,12 +326,8 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 	router := channel.NewRouter(dq)
 
 	// Register channel adapters from config + keystore.
-	// Rich sub-config takes precedence over legacy flat fields.
-	telegramTokenEnv := cfg.Channels.TelegramTokenEnv
-	if cfg.Channels.Telegram != nil && cfg.Channels.Telegram.TokenEnv != "" {
-		telegramTokenEnv = cfg.Channels.Telegram.TokenEnv
-	}
-	telegramToken := resolveChannelToken(telegramTokenEnv, "telegram_bot_token", ks)
+	// All tokens come from keystore — no env var fallback.
+	telegramToken := resolveChannelToken("", "telegram_bot_token", ks)
 	if telegramToken != "" {
 		// Discover allowed chat IDs from existing Telegram sessions in the DB,
 		// augmented with any explicitly configured in rich config.

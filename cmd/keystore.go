@@ -27,19 +27,19 @@ var keystoreStatusCmd = &cobra.Command{
 			return fmt.Errorf("failed to load config: %w", err)
 		}
 
-		// Check if any providers have API key env vars that resolve.
+		// Check providers with keystore references.
 		hasKeys := false
 		for name, prov := range cfg.Providers {
-			if prov.APIKeyEnv != "" {
+			if prov.APIKeyRef != "" {
 				hasKeys = true
-				fmt.Printf("  %-20s key env: %s\n", name, prov.APIKeyEnv)
+				fmt.Printf("  %-20s keystore ref: %s\n", name, prov.APIKeyRef)
 			}
 		}
 
 		if hasKeys {
 			fmt.Println("\nKeystore status: accessible (provider keys configured)")
 		} else {
-			fmt.Println("\nKeystore status: no keys configured")
+			fmt.Println("\nKeystore status: no keys configured — use the dashboard to add API keys")
 		}
 
 		return nil
@@ -58,8 +58,8 @@ var keystoreListCmd = &cobra.Command{
 		fmt.Println("Stored Key Names:")
 		count := 0
 		for name, prov := range cfg.Providers {
-			if prov.APIKeyEnv != "" {
-				fmt.Printf("  %s (env: %s)\n", name, prov.APIKeyEnv)
+			if prov.APIKeyRef != "" {
+				fmt.Printf("  %s (ref: %s)\n", name, prov.APIKeyRef)
 				count++
 			}
 		}

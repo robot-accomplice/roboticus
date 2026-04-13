@@ -106,7 +106,7 @@ func NewServer(ctx context.Context, cfg ServerConfig, state *AppState) *http.Ser
 		r.Get("/openapi.yaml", OpenAPIHandler())
 		r.Get("/api/docs", DocsHandler())
 		r.Post("/api/webhooks/telegram", routes.WebhookTelegram(state.Pipeline))
-		r.Get("/api/webhooks/whatsapp", routes.WebhookWhatsAppVerify(state.Config.Channels.WhatsAppTokenEnv))
+		r.Get("/api/webhooks/whatsapp", routes.WebhookWhatsAppVerify(""))
 		r.Post("/api/webhooks/whatsapp", routes.WebhookWhatsApp(state.Pipeline))
 
 		// MCP gateway — external MCP clients authenticate via their own mechanism.

@@ -438,7 +438,6 @@ func TestNewClient_EnvVarMissing(t *testing.T) {
 		Name:      "test",
 		URL:       "http://test",
 		Format:    FormatOpenAI,
-		APIKeyEnv: "NONEXISTENT_KEY_FOR_COVERAGE_TEST_XYZ",
 		IsLocal:   false,
 	})
 	if err != nil {
@@ -449,21 +448,27 @@ func TestNewClient_EnvVarMissing(t *testing.T) {
 	}
 }
 
-func TestNewClient_EnvVarPresent(t *testing.T) {
-	t.Setenv("TEST_LLM_KEY_COVERAGE", "sk-test-key")
+func TestNewClient_KeystorePresent(t *testing.T) {
+	origResolver := KeyResolver
+	defer func() { KeyResolver = origResolver }()
+	KeyResolver = func(key string) string {
+		if key == "test_api_key" {
+			return "sk-test-key"
+		}
+		return ""
+	}
 
 	client, err := NewClient(&Provider{
-		Name:      "test",
-		URL:       "http://test",
-		Format:    FormatOpenAI,
-		APIKeyEnv: "TEST_LLM_KEY_COVERAGE",
-		IsLocal:   false,
+		Name:    "test",
+		URL:     "http://test",
+		Format:  FormatOpenAI,
+		IsLocal: false,
 	})
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
 	if client.apiKey != "sk-test-key" {
-		t.Errorf("apiKey = %q", client.apiKey)
+		t.Errorf("apiKey = %q, want sk-test-key", client.apiKey)
 	}
 }
 
@@ -528,19 +533,17 @@ func TestNewClient_KeyResolutionCascade(t *testing.T) {
 		t.Errorf("case 2: apiKey = %q, want key-from-conventional-anthropic", c2.apiKey)
 	}
 
-	// Case 3: Env var fallback when keystore has no entry.
-	t.Setenv("MOONSHOT_KEY", "key-from-env")
+	// Case 3: No env var fallback — key must be empty when not in keystore.
 	c3, err := NewClient(&Provider{
-		Name:      "moonshot",
-		URL:       "http://test",
-		Format:    FormatOpenAI,
-		APIKeyEnv: "MOONSHOT_KEY",
+		Name:   "moonshot",
+		URL:    "http://test",
+		Format: FormatOpenAI,
 	})
 	if err != nil {
 		t.Fatalf("case 3: %v", err)
 	}
-	if c3.apiKey != "key-from-env" {
-		t.Errorf("case 3: apiKey = %q, want key-from-env", c3.apiKey)
+	if c3.apiKey != "" {
+		t.Errorf("case 3: apiKey = %q, want empty (no keystore entry, no env fallback)", c3.apiKey)
 	}
 
 	// Case 4: api_key_ref without "keystore:" prefix.

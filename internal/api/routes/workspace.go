@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"os"
 	"runtime"
 	"strings"
 	"time"
@@ -201,20 +200,20 @@ func TestChannel(cfg *core.Config) http.HandlerFunc {
 
 		switch platform {
 		case "telegram":
-			configured = cfg.Channels.TelegramTokenEnv != ""
-			enabled = configured && os.Getenv(cfg.Channels.TelegramTokenEnv) != ""
+			configured = cfg.Channels.Telegram != nil
+			enabled = configured && cfg.Channels.Telegram.Enabled
 		case "whatsapp":
-			configured = cfg.Channels.WhatsAppTokenEnv != ""
-			enabled = configured && os.Getenv(cfg.Channels.WhatsAppTokenEnv) != ""
+			configured = cfg.Channels.WhatsApp != nil
+			enabled = configured && cfg.Channels.WhatsApp.Enabled
 		case "discord":
-			configured = cfg.Channels.DiscordTokenEnv != ""
-			enabled = configured && os.Getenv(cfg.Channels.DiscordTokenEnv) != ""
+			configured = cfg.Channels.Discord != nil
+			enabled = configured && cfg.Channels.Discord.Enabled
 		case "signal":
-			configured = cfg.Channels.SignalDaemonURL != ""
-			enabled = configured && cfg.Channels.SignalAccount != ""
+			configured = cfg.Channels.Signal != nil
+			enabled = configured && cfg.Channels.Signal.Enabled
 		case "email":
-			configured = cfg.Channels.EmailFromAddress != ""
-			enabled = configured
+			configured = cfg.Channels.Email != nil
+			enabled = configured && cfg.Channels.Email.Enabled
 		case "matrix":
 			configured = cfg.Matrix.HomeserverURL != ""
 			enabled = cfg.Matrix.Enabled

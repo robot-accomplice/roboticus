@@ -189,7 +189,7 @@ type ProviderConfig struct {
 	URL                 string            `json:"url" toml:"url" mapstructure:"url"`
 	Tier                string            `json:"tier" toml:"tier" mapstructure:"tier"`
 	Format              string            `json:"format,omitempty" toml:"format" mapstructure:"format"`
-	APIKeyEnv           string            `json:"api_key_env,omitempty" toml:"api_key_env" mapstructure:"api_key_env"`
+	// APIKeyEnv removed — keys must come from the keystore, not environment variables.
 	ChatPath            string            `json:"chat_path,omitempty" toml:"chat_path" mapstructure:"chat_path"`
 	EmbeddingPath       string            `json:"embedding_path,omitempty" toml:"embedding_path" mapstructure:"embedding_path"`
 	EmbeddingModel      string            `json:"embedding_model,omitempty" toml:"embedding_model" mapstructure:"embedding_model"`
@@ -284,20 +284,14 @@ type ChannelsConfig struct {
 	Email    *EmailConfig    `json:"email,omitempty" toml:"email" mapstructure:"email"`
 	Voice    *VoiceConfig    `json:"voice,omitempty" toml:"voice" mapstructure:"voice"`
 
-	// Legacy flat fields — kept for backwards compatibility.
-	// When rich sub-configs are present, they take precedence.
-	TelegramTokenEnv string `json:"telegram_token_env" toml:"telegram_token_env" mapstructure:"telegram_token_env"`
-	WhatsAppTokenEnv string `json:"whatsapp_token_env" toml:"whatsapp_token_env" mapstructure:"whatsapp_token_env"`
-	DiscordTokenEnv  string `json:"discord_token_env" toml:"discord_token_env" mapstructure:"discord_token_env"`
-	SignalAccount    string `json:"signal_account" toml:"signal_account" mapstructure:"signal_account"`
-	SignalDaemonURL  string `json:"signal_daemon_url" toml:"signal_daemon_url" mapstructure:"signal_daemon_url"`
-	EmailFromAddress string `json:"email_from_address" toml:"email_from_address" mapstructure:"email_from_address"`
+	// Legacy flat fields removed — keys come from keystore, channel tokens
+	// are referenced via token_ref in per-channel configs.
 }
 
 // TelegramConfig holds Telegram bot adapter settings.
 type TelegramConfig struct {
 	Enabled            bool    `json:"enabled" toml:"enabled" mapstructure:"enabled"`
-	TokenEnv           string  `json:"token_env" toml:"token_env" mapstructure:"token_env"`
+	// TokenEnv removed — tokens come from keystore via token_ref.
 	TokenRef           string  `json:"token_ref,omitempty" toml:"token_ref" mapstructure:"token_ref"`
 	AllowedChatIDs     []int64 `json:"allowed_chat_ids,omitempty" toml:"allowed_chat_ids" mapstructure:"allowed_chat_ids"`
 	PollTimeoutSeconds int     `json:"poll_timeout_seconds" toml:"poll_timeout_seconds" mapstructure:"poll_timeout_seconds"`
@@ -309,7 +303,7 @@ type TelegramConfig struct {
 // WhatsAppConfig holds WhatsApp Cloud API adapter settings.
 type WhatsAppConfig struct {
 	Enabled        bool     `json:"enabled" toml:"enabled" mapstructure:"enabled"`
-	TokenEnv       string   `json:"token_env" toml:"token_env" mapstructure:"token_env"`
+	// TokenEnv removed — tokens come from keystore via token_ref.
 	TokenRef       string   `json:"token_ref,omitempty" toml:"token_ref" mapstructure:"token_ref"`
 	PhoneNumberID  string   `json:"phone_number_id" toml:"phone_number_id" mapstructure:"phone_number_id"`
 	VerifyToken    string   `json:"verify_token" toml:"verify_token" mapstructure:"verify_token"`
@@ -320,7 +314,7 @@ type WhatsAppConfig struct {
 // DiscordConfig holds Discord bot adapter settings.
 type DiscordConfig struct {
 	Enabled         bool     `json:"enabled" toml:"enabled" mapstructure:"enabled"`
-	TokenEnv        string   `json:"token_env" toml:"token_env" mapstructure:"token_env"`
+	// TokenEnv removed — tokens come from keystore via token_ref.
 	TokenRef        string   `json:"token_ref,omitempty" toml:"token_ref" mapstructure:"token_ref"`
 	ApplicationID   string   `json:"application_id" toml:"application_id" mapstructure:"application_id"`
 	AllowedGuildIDs []string `json:"allowed_guild_ids,omitempty" toml:"allowed_guild_ids" mapstructure:"allowed_guild_ids"`
@@ -342,7 +336,7 @@ type EmailConfig struct {
 	SMTPHost           string   `json:"smtp_host" toml:"smtp_host" mapstructure:"smtp_host"`
 	SMTPPort           int      `json:"smtp_port" toml:"smtp_port" mapstructure:"smtp_port"`
 	Username           string   `json:"username" toml:"username" mapstructure:"username"`
-	PasswordEnv        string   `json:"password_env" toml:"password_env" mapstructure:"password_env"`
+	// PasswordEnv removed — passwords come from keystore.
 	FromAddress        string   `json:"from_address" toml:"from_address" mapstructure:"from_address"`
 	AllowedSenders     []string `json:"allowed_senders,omitempty" toml:"allowed_senders" mapstructure:"allowed_senders"`
 	PollIntervalSecs   int      `json:"poll_interval_seconds" toml:"poll_interval_seconds" mapstructure:"poll_interval_seconds"`

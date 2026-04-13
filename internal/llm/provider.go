@@ -10,7 +10,7 @@ type Provider struct {
 	Name             string            `json:"name"`
 	URL              string            `json:"url"`
 	Format           APIFormat         `json:"format"`
-	APIKeyEnv        string            `json:"api_key_env,omitempty"`
+	// APIKeyEnv removed — keys come from keystore via KeyResolver only.
 	ChatPath         string            `json:"chat_path,omitempty"`
 	EmbeddingPath    string            `json:"embedding_path,omitempty"`
 	EmbeddingModel   string            `json:"embedding_model,omitempty"`
