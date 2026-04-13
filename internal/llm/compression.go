@@ -41,6 +41,8 @@ func (pc *PromptCompressor) Compress(messages []Message, tokenBudget int) []Mess
 		return pc.truncateOldest(messages, tokenBudget)
 	case StrategyDropLowRelevance:
 		return pc.truncateOldest(messages, tokenBudget) // same for now, upgradeable
+	case StrategyTopicAware:
+		return CompressWithTopicAwareness(messages, tokenBudget)
 	default:
 		return pc.truncateOldest(messages, tokenBudget)
 	}
