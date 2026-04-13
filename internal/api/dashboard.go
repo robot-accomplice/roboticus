@@ -32,9 +32,9 @@ func DashboardHandler() http.HandlerFunc {
 		csp := "default-src 'self'; " +
 			"script-src 'self' 'nonce-" + nonce + "'; " +
 			"style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
-			"img-src 'self' data:; " +
+			"img-src 'self' data: https://roboticus.ai; " +
 			"font-src 'self' https://fonts.gstatic.com; " +
-			"connect-src 'self' ws: wss:; " +
+			"connect-src 'self' ws: wss: https://roboticus.ai; " +
 			"frame-ancestors 'none'"
 
 		w.Header().Set("Content-Security-Policy", csp)
