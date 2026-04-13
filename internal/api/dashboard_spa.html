@@ -7186,12 +7186,18 @@
     fetch('/api/themes/catalog').then(function(r) { return r.json(); }).then(function(data) {
       var themes = data.themes || data || [];
       themes.forEach(function(t) {
-        if (themeNames[t.id]) return; // already registered from hardcoded builtins
-        // Only add installed catalog themes to the dropdown.
+        // Always update manifest data (textures may change after install).
         if (t.source === 'builtin' || t.installed) {
-          registerThemeManifest(t, { injectCss: true });
+          loadedThemes[t.id] = t; // update manifest even if already registered
+          if (!themeNames[t.id]) {
+            registerThemeManifest(t, { injectCss: true });
+          } else {
+            // Re-inject CSS in case variables changed.
+            injectExternalThemeCSS(t);
+          }
         }
       });
+      // Re-apply active theme so updated textures take effect immediately.
       var saved = localStorage.getItem('roboticus-theme');
       if (saved && loadedThemes[saved]) applyTheme(saved);
     }).catch(function(e) {
