@@ -6249,6 +6249,11 @@
         if (!groupSections.length) return;
         // Group label rendered only as a spacer between groups — the title lives inside the card.
         html += '<div style="margin-top:1.25rem"></div>';
+        // Display-friendly labels for config sections whose JSON key is misleading.
+        var sectionDisplayLabels = {
+          skills: 'Script Runtime',
+          mcp: 'MCP Servers'
+        };
         groupSections.forEach(function(section) {
           var sectionData = draft[section];
           if (typeof sectionData !== 'object' || sectionData === null) return;
@@ -6700,11 +6705,6 @@
               var step = (sf && sf.type === 'float') ? ' step="any"' : '';
               html += '<div class="settings-row"><div class="settings-label">' + esc(key) + tooltipHtml + immutableHint + '</div><input class="settings-input" type="' + type + '" data-settings-path="' + esc(path) + '" value="' + sv + '" placeholder="' + esc(placeholder) + '"' + step + disabledAttr + '></div>';
             }
-          };
-          // Display-friendly labels for config sections whose JSON key is misleading.
-          var sectionDisplayLabels = {
-            skills: 'Script Runtime',
-            mcp: 'MCP Servers'
           };
           // Use the group label as display name for single-section groups to avoid raw key names.
           var sectionTitle = sectionDisplayLabels[section] || (groupSections.length === 1 ? group.label : section);
