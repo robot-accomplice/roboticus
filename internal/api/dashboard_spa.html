@@ -6251,6 +6251,52 @@
         }).sort();
         if (ungrouped.length) sectionGroups.push({ label: 'Other', sections: ungrouped });
 
+        // Schema-driven field renderer — defined before sectionGroups loop so immutable sections can use it.
+        var _schemaIdx = self._schemaIndex || {};
+        var _renderSettingsField = function(key, val, path, tooltipHtml) {
+          var sf = _schemaIdx[path];
+          // Build tooltip from schema description if no static tooltip exists.
+          if (sf && sf.description && !tooltipHtml) {
+            tooltipHtml = ' <span class="settings-help-trigger" data-tooltip-text="' + esc(sf.description) + '">(?)</span>';
+          }
+          // Immutable field hint.
+          var immutableHint = (sf && sf.immutable) ? ' <span class="badge muted" style="font-size:0.55rem;vertical-align:middle">restart</span>' : '';
+          // Placeholder from schema default.
+          var placeholder = 'none';
+          if (sf && sf['default'] != null && sf['default'] !== '') {
+            placeholder = String(sf['default']);
+          }
+          // Enum from schema.
+          var enumValues = (sf && sf['enum'] && sf['enum'].length) ? sf['enum'] : null;
+
+          if (typeof val === 'boolean') {
+            html += '<div class="settings-row"><div class="settings-label">' + esc(key) + tooltipHtml + immutableHint + '</div><div class="settings-toggle-wrap"><label class="toggle"><input type="checkbox" data-settings-path="' + esc(path) + '"' + (val ? ' checked' : '') + '><span class="toggle-track"></span></label><span class="settings-toggle-label">' + (val ? 'On' : 'Off') + '</span></div></div>';
+          } else if (enumValues) {
+            var selHtml = '<select class="settings-input" data-settings-path="' + esc(path) + '" style="min-width:160px">';
+            enumValues.forEach(function(o) { selHtml += '<option value="' + esc(o) + '"' + (String(val) === o ? ' selected' : '') + '>' + esc(o) + '</option>'; });
+            selHtml += '</select>';
+            html += '<div class="settings-row"><div class="settings-label">' + esc(key) + tooltipHtml + immutableHint + '</div>' + selHtml + '</div>';
+          } else if (Array.isArray(val)) {
+            var joined = val.join('\n');
+            html += '<div class="settings-row"><div class="settings-label">' + esc(key) + tooltipHtml + immutableHint + '</div>'
+              + '<textarea class="settings-input" data-settings-path="' + esc(path) + '" data-settings-array="1" '
+              + 'rows="' + Math.max(2, Math.min(6, val.length + 1)) + '" placeholder="One entry per line" style="font-family:var(--font-mono);font-size:0.75rem">' + esc(joined) + '</textarea></div>';
+          } else if (typeof val === 'object' && val !== null) {
+            html += '<div class="settings-nested"><div style="font-size:0.625rem;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted);margin-bottom:0.5rem">' + esc(key) + '</div>';
+            Object.keys(val).forEach(function(subKey) {
+              var subVal = val[subKey]; var subPath = path + '.' + subKey;
+              var subTooltipHtml = tooltipSpan(subKey, subPath);
+              _renderSettingsField(subKey, subVal, subPath, subTooltipHtml);
+            });
+            html += '</div>';
+          } else {
+            var type = (sf && (sf.type === 'integer' || sf.type === 'float')) ? 'number' : (typeof val === 'number' ? 'number' : 'text');
+            var sv = (val == null || val === '') ? '' : esc(String(val));
+            var step = (sf && sf.type === 'float') ? ' step="any"' : '';
+            html += '<div class="settings-row"><div class="settings-label">' + esc(key) + tooltipHtml + immutableHint + '</div><input class="settings-input" type="' + type + '" data-settings-path="' + esc(path) + '" value="' + sv + '" placeholder="' + esc(placeholder) + '"' + step + '></div>';
+          }
+        };
+
         sectionGroups.forEach(function(group) {
         var groupSections = group.sections.filter(function(s) {
           return draft[s] && typeof draft[s] === 'object' && !hiddenSections[s];
@@ -6669,53 +6715,7 @@
             return;
           }
 
-          // Schema-driven field renderer. Uses _schemaIndex for enums, descriptions, defaults, immutability.
-          var _schemaIdx = self._schemaIndex || {};
-          var _renderSettingsField = function(key, val, path, tooltipHtml) {
-            var sf = _schemaIdx[path];
-            // Build tooltip from schema description if no static tooltip exists.
-            if (sf && sf.description && !fieldTooltips[key]) {
-              tooltipHtml = ' <span class="settings-help-trigger" data-tooltip-text="' + esc(sf.description) + '">(?)</span>';
-            }
-            // Immutable field hint.
-            var immutableHint = (sf && sf.immutable) ? ' <span class="badge muted" style="font-size:0.55rem;vertical-align:middle">restart</span>' : '';
-            // Immutable fields are editable but won't take effect until restart.
-            // The "restart" badge communicates this — don't disable the inputs.
-            // Placeholder from schema default.
-            var placeholder = 'none';
-            if (sf && sf['default'] != null && sf['default'] !== '') {
-              placeholder = String(sf['default']);
-            }
-            // Enum from schema.
-            var enumValues = (sf && sf['enum'] && sf['enum'].length) ? sf['enum'] : null;
-
-            if (typeof val === 'boolean') {
-              html += '<div class="settings-row"><div class="settings-label">' + esc(key) + tooltipHtml + immutableHint + '</div><div class="settings-toggle-wrap"><label class="toggle"><input type="checkbox" data-settings-path="' + esc(path) + '"' + (val ? ' checked' : '') + '><span class="toggle-track"></span></label><span class="settings-toggle-label">' + (val ? 'On' : 'Off') + '</span></div></div>';
-            } else if (enumValues) {
-              var selHtml = '<select class="settings-input" data-settings-path="' + esc(path) + '" style="min-width:160px"' + '>';
-              enumValues.forEach(function(o) { selHtml += '<option value="' + esc(o) + '"' + (String(val) === o ? ' selected' : '') + '>' + esc(o) + '</option>'; });
-              selHtml += '</select>';
-              html += '<div class="settings-row"><div class="settings-label">' + esc(key) + tooltipHtml + immutableHint + '</div>' + selHtml + '</div>';
-            } else if (Array.isArray(val)) {
-              var joined = val.join('\n');
-              html += '<div class="settings-row"><div class="settings-label">' + esc(key) + tooltipHtml + immutableHint + '</div>'
-                + '<textarea class="settings-input" data-settings-path="' + esc(path) + '" data-settings-array="1" '
-                + 'rows="' + Math.max(2, Math.min(6, val.length + 1)) + '" placeholder="One entry per line" style="font-family:var(--font-mono);font-size:0.75rem"' + '>' + esc(joined) + '</textarea></div>';
-            } else if (typeof val === 'object' && val !== null) {
-              html += '<div class="settings-nested"><div style="font-size:0.625rem;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted);margin-bottom:0.5rem">' + esc(key) + '</div>';
-              Object.keys(val).forEach(function(subKey) {
-                var subVal = val[subKey]; var subPath = path + '.' + subKey;
-                var subTooltipHtml = tooltipSpan(subKey);
-                _renderSettingsField(subKey, subVal, subPath, subTooltipHtml);
-              });
-              html += '</div>';
-            } else {
-              var type = (sf && (sf.type === 'integer' || sf.type === 'float')) ? 'number' : (typeof val === 'number' ? 'number' : 'text');
-              var sv = (val == null || val === '') ? '' : esc(String(val));
-              var step = (sf && sf.type === 'float') ? ' step="any"' : '';
-              html += '<div class="settings-row"><div class="settings-label">' + esc(key) + tooltipHtml + immutableHint + '</div><input class="settings-input" type="' + type + '" data-settings-path="' + esc(path) + '" value="' + sv + '" placeholder="' + esc(placeholder) + '"' + step + '></div>';
-            }
-          };
+          // _renderSettingsField and _schemaIdx are now defined above the sectionGroups loop.
 
           // ── Hand-crafted field orderings per section ──────────────────
           // Helper: render a list of fields in explicit order, falling back to
