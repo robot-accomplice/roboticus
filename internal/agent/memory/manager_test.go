@@ -72,6 +72,165 @@ func TestExtractEntities(t *testing.T) {
 	}
 }
 
+func TestExtractEntities_ProperNouns(t *testing.T) {
+	entities := extractEntities("Can you check with Sarah Chen about it?")
+	found := false
+	for _, e := range entities {
+		if e == "Sarah Chen" || e == "Sarah" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected to find 'Sarah Chen' or 'Sarah', got: %v", entities)
+	}
+}
+
+func TestExtractEntities_SentenceStart(t *testing.T) {
+	// "The" at start and "It" after period should be excluded.
+	entities := extractEntities("The server crashed. It was Sarah who fixed it.")
+	for _, e := range entities {
+		lower := strings.ToLower(e)
+		if lower == "the" || lower == "it" {
+			t.Errorf("sentence-start word should be excluded, got: %v", entities)
+		}
+	}
+	// Sarah should be found.
+	found := false
+	for _, e := range entities {
+		if e == "Sarah" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected 'Sarah' in entities, got: %v", entities)
+	}
+}
+
+func TestExtractEntities_Mixed(t *testing.T) {
+	entities := extractEntities("@bob talked to Sarah Chen about the API")
+	if len(entities) < 2 {
+		t.Errorf("expected at least 2 entities (@bob + Sarah Chen), got %d: %v", len(entities), entities)
+	}
+}
+
+func TestExtractEntities_AllCapsIgnored(t *testing.T) {
+	entities := extractEntities("THE DEPLOYMENT FAILED BECAUSE NGINX CRASHED")
+	if len(entities) != 0 {
+		t.Errorf("all-caps text should not extract entities, got: %v", entities)
+	}
+}
+
+func TestExtractEntities_MonthExcluded(t *testing.T) {
+	entities := extractEntities("Meeting with Sarah on Monday in January")
+	for _, e := range entities {
+		lower := strings.ToLower(e)
+		if lower == "monday" || lower == "january" {
+			t.Errorf("month/day should be excluded, got: %v", entities)
+		}
+	}
+}
+
+func TestExtractEntities_Cap5(t *testing.T) {
+	text := "talked to Alice about Bob then met Charlie and Dave with Eve and Frank plus Grace and Heidi"
+	entities := extractEntities(text)
+	if len(entities) > maxEntitiesPerMessage {
+		t.Errorf("expected at most %d entities, got %d: %v", maxEntitiesPerMessage, len(entities), entities)
+	}
+}
+
+func TestExtractEntities_SentenceStartRepeated(t *testing.T) {
+	// "Sarah" appears at sentence start twice — frequency pass should catch it.
+	entities := extractEntities("Sarah crashed the server. Later Sarah fixed it.")
+	found := false
+	for _, e := range entities {
+		if strings.ToLower(e) == "sarah" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected 'Sarah' detected via frequency pass (2 occurrences), got: %v", entities)
+	}
+}
+
+func TestExtractEntities_SentenceStartSingleton(t *testing.T) {
+	// "Alice" appears once at sentence start — should now be detected because
+	// "alice" is not in commonNonNameWords or entityExclusions.
+	entities := extractEntities("Alice checked the logs.")
+	found := false
+	for _, e := range entities {
+		if strings.ToLower(e) == "alice" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected 'Alice' detected at sentence start (not a common word), got: %v", entities)
+	}
+}
+
+func TestExtractEntities_SentenceStartCommonWord(t *testing.T) {
+	// "Check" at sentence start IS a common non-name word → should NOT be detected.
+	entities := extractEntities("Check the deployment status.")
+	for _, e := range entities {
+		if strings.ToLower(e) == "check" {
+			t.Errorf("common word 'Check' should not be detected as entity, got: %v", entities)
+		}
+	}
+}
+
+func TestExtractEntities_SentenceStartVerb(t *testing.T) {
+	// "Running" at sentence start is a common technical word → NOT a name.
+	entities := extractEntities("Running the tests now.")
+	for _, e := range entities {
+		if strings.ToLower(e) == "running" {
+			t.Errorf("common word 'Running' should not be detected, got: %v", entities)
+		}
+	}
+}
+
+func TestSemanticKey_StableForSameContent(t *testing.T) {
+	content := "the deployment uses Docker containers for isolation"
+	k1 := semanticKey(content)
+	k2 := semanticKey(content)
+	if k1 != k2 {
+		t.Errorf("same content should produce same key: %q != %q", k1, k2)
+	}
+}
+
+func TestSemanticKey_DifferentForRephrase(t *testing.T) {
+	k1 := semanticKey("the deployment uses Docker containers")
+	k2 := semanticKey("the deployment uses Podman containers")
+	if k1 == k2 {
+		t.Error("different content should produce different keys")
+	}
+}
+
+func TestSemanticKey_HumanReadablePrefix(t *testing.T) {
+	content := "the deployment pipeline uses a three-stage process for reliability and safety"
+	key := semanticKey(content)
+	if !strings.HasPrefix(key, "the deployment pipeline") {
+		t.Errorf("key should start with content prefix, got: %q", key)
+	}
+	// Key should contain the hash suffix.
+	if !strings.Contains(key, "_") {
+		t.Errorf("key should contain hash suffix separated by underscore, got: %q", key)
+	}
+}
+
+func TestSubjectSimilarity_SameSubject(t *testing.T) {
+	sim := subjectSimilarity("the deployment uses Docker containers", "the deployment uses Podman containers")
+	if sim < 0.5 {
+		t.Errorf("same subject should have high similarity, got %.4f", sim)
+	}
+}
+
+func TestSubjectSimilarity_DifferentSubject(t *testing.T) {
+	sim := subjectSimilarity("the deployment uses Docker containers", "the breakfast includes fresh fruit")
+	if sim > 0.3 {
+		t.Errorf("different subjects should have low similarity, got %.4f", sim)
+	}
+}
+
 func TestIsToolFailure(t *testing.T) {
 	failures := []string{
 		"error: file not found",

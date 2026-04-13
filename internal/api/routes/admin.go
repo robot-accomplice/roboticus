@@ -3,7 +3,6 @@ package routes
 import (
 	"encoding/json"
 	"net/http"
-	"os"
 	"path/filepath"
 	"time"
 
@@ -45,10 +44,8 @@ func GetAvailableModels(llmSvc *llm.Service) http.HandlerFunc {
 // Rust dashboard's expected shape: [{name, connected, last_error, ...}].
 func GetChannelsStatus(cfg *core.Config, ks *core.Keystore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		hasKey := func(envName, keystoreName string) bool {
-			if envName != "" && os.Getenv(envName) != "" {
-				return true
-			}
+		hasKey := func(_, keystoreName string) bool {
+			// Keys come from keystore only — no env var lookup.
 			if ks != nil && ks.IsUnlocked() && ks.GetOrEmpty(keystoreName) != "" {
 				return true
 			}
@@ -262,13 +259,7 @@ func resolveKeyStatus(providerName string, isLocal bool, apiKeyEnv string, ks *c
 		}
 	}
 
-	// Check environment variable.
-	if apiKeyEnv != "" {
-		if val := os.Getenv(apiKeyEnv); val != "" {
-			return "configured", "env"
-		}
-	}
-
+	// No env var fallback — keys come from keystore only.
 	return "missing", "none"
 }
 

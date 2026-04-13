@@ -460,11 +460,11 @@ func TestPipeline_Phase7_OrphanCleanup(t *testing.T) {
 	pipe.MinInterval = 0
 
 	// Create an embedding pointing to a non-existent episodic entry.
-	seedEmbedding(t, store, "emb1", "episodic", "nonexistent-id")
+	seedEmbedding(t, store, "emb1", "episodic_memory", "nonexistent-id")
 
 	// Also create a valid episodic + embedding pair.
 	seedEpisodic(t, store, "ep-real", "fact", "real entry", 5, nowStr())
-	seedEmbedding(t, store, "emb2", "episodic", "ep-real")
+	seedEmbedding(t, store, "emb2", "episodic_memory", "ep-real")
 
 	r := pipe.Run(ctx, store)
 	if r.Orphaned != 1 {
@@ -496,7 +496,7 @@ func TestPipeline_FullRun_Integration(t *testing.T) {
 	seedEpisodic(t, store, "ep2", "fact", "old forgotten trivia", 1, daysAgo(45))
 	seedSemantic(t, store, "sem1", "knowledge", "weather", "current weather patterns", 0.8, nowStr())
 	seedSemantic(t, store, "sem2", "knowledge", "low-conf", "barely remembered", 0.12, nowStr())
-	seedEmbedding(t, store, "emb-orphan", "semantic", "does-not-exist")
+	seedEmbedding(t, store, "emb-orphan", "semantic_memory", "does-not-exist")
 
 	r := pipe.Run(ctx, store)
 

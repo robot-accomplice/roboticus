@@ -152,6 +152,21 @@ type ModelsConfig struct {
 	ModelOverrides   map[string]ModelOverride  `json:"model_overrides,omitempty" toml:"model_overrides" mapstructure:"model_overrides"`
 	StreamByDefault  bool                     `json:"stream_by_default" toml:"stream_by_default" mapstructure:"stream_by_default"`
 	TieredInference  TieredInferenceConfig    `json:"tiered_inference" toml:"tiered_inference" mapstructure:"tiered_inference"`
+	Timeouts         map[string]int           `json:"timeouts,omitempty" toml:"timeouts" mapstructure:"timeouts"`
+	ToolBlocklist    []string                 `json:"tool_blocklist,omitempty" toml:"tool_blocklist" mapstructure:"tool_blocklist"`
+	ToolAllowlist    []string                 `json:"tool_allowlist,omitempty" toml:"tool_allowlist" mapstructure:"tool_allowlist"`
+}
+
+// ResolveModelTimeout returns the timeout for a specific model.
+// Priority: per-model Timeouts map → local provider default (300s) → global default (120s).
+func (mc ModelsConfig) ResolveModelTimeout(model string) int {
+	if mc.Timeouts != nil {
+		if t, ok := mc.Timeouts[model]; ok && t > 0 {
+			return t
+		}
+	}
+	// Default: 120s for cloud, 300s for local (caller determines based on provider).
+	return 0 // 0 means "use caller default"
 }
 
 // RoutingConfig holds model routing parameters.

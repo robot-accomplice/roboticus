@@ -40,6 +40,8 @@ type Service struct {
 	intentQuality *IntentQualityTracker
 	latency       *LatencyTracker
 	errBus        *core.ErrorBus
+	toolBlocklist []string // models that don't support tools (config override)
+	toolAllowlist []string // force tool support (config override)
 }
 
 // ServiceConfig holds configuration for the LLM service.
@@ -53,6 +55,8 @@ type ServiceConfig struct {
 	ConfidenceFloor float64                // minimum confidence to accept local response (0 = use default)
 	BGWorker        *core.BackgroundWorker // shared worker pool for async tasks
 	ErrBus          *core.ErrorBus         // centralized error reporting
+	ToolBlocklist   []string               // models that don't support tools (config override)
+	ToolAllowlist   []string               // force tool support (config override)
 }
 
 // NewService creates the LLM orchestrator.
@@ -133,6 +137,8 @@ func NewService(cfg ServiceConfig, store *db.Store) (*Service, error) {
 		intentQuality: NewIntentQualityTracker(100),
 		latency:       NewLatencyTracker(100),
 		errBus:        cfg.ErrBus,
+		toolBlocklist: cfg.ToolBlocklist,
+		toolAllowlist: cfg.ToolAllowlist,
 	}
 
 	// Metascore routing is always enabled when the service has quality/latency
@@ -291,7 +297,7 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 
 		// Skip models known to not support tools when tools are present.
 		// Avoids wasting fallback slots and latency on guaranteed 400s.
-		if len(req.Tools) > 0 && !modelSupportsTools(pm.model) {
+		if len(req.Tools) > 0 && !modelSupportsTools(pm.model, s.toolAllowlist, s.toolBlocklist) {
 			log.Debug().Str("model", pm.model).Str("provider", pm.provider).Msg("skipping model: does not support tools")
 			continue
 		}
@@ -785,10 +791,25 @@ func (s *Service) CapacityTracker() *CapacityTracker {
 }
 
 // modelSupportsTools returns false for models known to reject tool-use requests.
-// This prevents wasting fallback slots and latency on guaranteed 400 errors
-// when the inference request includes tool definitions.
-func modelSupportsTools(model string) bool {
+// Checks config overrides first (allowlist > blocklist > hardcoded fallback).
+func modelSupportsTools(model string, allowlist, blocklist []string) bool {
 	lower := strings.ToLower(model)
+
+	// Config allowlist takes precedence — force tool support.
+	for _, a := range allowlist {
+		if strings.Contains(lower, strings.ToLower(a)) {
+			return true
+		}
+	}
+
+	// Config blocklist — deny tool support.
+	for _, b := range blocklist {
+		if strings.Contains(lower, strings.ToLower(b)) {
+			return false
+		}
+	}
+
+	// Hardcoded fallback for models known to not support tools.
 	noToolModels := []string{
 		"phi4-reasoning", "gemma3:", "gemma2:", "llama-guard",
 		"nomic-embed", "mxbai-embed", "all-minilm",
