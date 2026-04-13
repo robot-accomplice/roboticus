@@ -200,7 +200,7 @@ func (p *Pipeline) stageDecomposition(_ context.Context, pc *pipelineContext) {
 		if pc.decomp.Decision == DecompDelegated && len(pc.decomp.Subtasks) > 0 {
 			pc.tr.Annotate("subtask_count", len(pc.decomp.Subtasks))
 			p.tasks.Delegate(pc.taskID, pc.input.AgentID, nil)
-			log.Info().
+			log.Debug().
 				Str("task", pc.taskID).
 				Str("session", pc.session.ID).
 				Str("agent", pc.input.AgentID).
@@ -232,12 +232,12 @@ func (p *Pipeline) stageDecomposition(_ context.Context, pc *pipelineContext) {
 		case ActionGateDelegate:
 			if pc.decomp.Decision == DecompCentralized {
 				pc.decomp.Decision = DecompDelegated
-				log.Info().Str("session", pc.session.ID).Msg("planner upgraded decision to delegation")
+				log.Debug().Str("session", pc.session.ID).Msg("planner upgraded decision to delegation")
 			}
 		case ActionGateSpecialistPropose:
 			if pc.decomp.Decision == DecompCentralized {
 				pc.decomp.Decision = DecompSpecialistProposal
-				log.Info().Str("session", pc.session.ID).Msg("planner upgraded decision to specialist proposal")
+				log.Debug().Str("session", pc.session.ID).Msg("planner upgraded decision to specialist proposal")
 			}
 		}
 	}
@@ -339,7 +339,7 @@ func (p *Pipeline) stageDelegation(ctx context.Context, pc *pipelineContext) (*O
 			pc.delegationResult = delegOutcome.Content
 			pc.tr.Annotate("delegation_complete", false)
 			pc.tr.Annotate("delegation_threaded", true)
-			log.Info().Str("session", pc.session.ID).Int("quality", delegOutcome.Quality.Score).Msg("delegation incomplete, threading to inference")
+			log.Debug().Str("session", pc.session.ID).Int("quality", delegOutcome.Quality.Score).Msg("delegation incomplete, threading to inference")
 		}
 		pc.tr.EndSpan("fallthrough")
 	}

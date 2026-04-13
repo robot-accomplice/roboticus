@@ -220,7 +220,7 @@ func (w *CronWorker) handleRetry(ctx context.Context, job *CronJob, now time.Tim
 		})
 		w.resetRetry(ctx, job.ID)
 		w.updateLastRun(ctx, job, now)
-		log.Warn().Str("job", job.Name).Int("retries", maxRetries).Msg("cron job retries exhausted")
+		log.Error().Str("job", job.Name).Int("retries", maxRetries).Msg("cron job retries exhausted")
 		return
 	}
 
@@ -242,7 +242,7 @@ func (w *CronWorker) handleRetry(ctx context.Context, job *CronJob, now time.Tim
 		w.errBus.ReportIfErr(err, "scheduler", "handle_retry", core.SevWarning)
 	}
 
-	log.Info().Str("job", job.Name).Int("retry", newCount).Time("retry_at", retryAt).Msg("cron job scheduled for retry")
+	log.Debug().Str("job", job.Name).Int("retry", newCount).Time("retry_at", retryAt).Msg("cron job scheduled for retry")
 }
 
 // resetRetry resets the retry counter on successful execution.
