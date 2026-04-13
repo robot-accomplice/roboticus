@@ -93,7 +93,7 @@ func (t *TelegramAdapter) apiURL(method string) string {
 
 // Recv polls getUpdates and returns the next buffered message.
 func (t *TelegramAdapter) Recv(ctx context.Context) (*InboundMessage, error) {
-	log.Debug().Msg("telegram: polling getUpdates")
+	log.Trace().Msg("telegram: polling getUpdates")
 	t.mu.Lock()
 	if len(t.messageBuffer) > 0 {
 		msg := t.messageBuffer[0]

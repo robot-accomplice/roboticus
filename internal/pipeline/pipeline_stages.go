@@ -32,7 +32,7 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 	if msgs := session.Messages(); len(msgs) > 0 {
 		compacted := CompactContext(msgs, defaultTokenBudget)
 		if len(compacted) < len(msgs) {
-			log.Debug().
+			log.Trace().
 				Int("before", len(msgs)).
 				Int("after", len(compacted)).
 				Msg("context compacted before inference")
@@ -99,7 +99,7 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 			))
 			retryContent, retryTurns, retryErr := p.executor.RunLoop(ctx, session)
 			if retryErr != nil {
-				log.Warn().Err(retryErr).Msg("guard retry inference failed, using original result")
+				log.Debug().Err(retryErr).Msg("guard retry inference failed, using original result")
 			} else {
 				turns += retryTurns
 				// Apply guards again on the retry result (no further retries).
@@ -340,7 +340,7 @@ func (p *Pipeline) PrepareForInference(ctx context.Context, session *Session, me
 		}
 		compacted := CompactContext(msgs, budget)
 		if len(compacted) < len(msgs) {
-			log.Debug().
+			log.Trace().
 				Int("before", len(msgs)).
 				Int("after", len(compacted)).
 				Int("budget_tier", budgetTier).
