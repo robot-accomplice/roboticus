@@ -86,7 +86,7 @@ func startWalletPoller(ctx context.Context, cfg *core.Config, store *db.Store, k
 					log.Info().Msg("wallet passphrase migrated from env var to keystore")
 				}
 			}
-			os.Unsetenv("ROBOTICUS_WALLET_PASSPHRASE")
+			_ = os.Unsetenv("ROBOTICUS_WALLET_PASSPHRASE") // Best-effort env cleanup after keystore migration.
 		}
 	}
 
