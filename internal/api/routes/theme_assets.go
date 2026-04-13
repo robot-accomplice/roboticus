@@ -63,7 +63,7 @@ func DownloadThemeTextures(themeID string, manifest *ThemeManifest) error {
 		if err != nil {
 			return fmt.Errorf("download texture %s: %w", name, err)
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		if resp.StatusCode != 200 {
 			return fmt.Errorf("download texture %s: HTTP %d", name, resp.StatusCode)
 		}
@@ -73,10 +73,12 @@ func DownloadThemeTextures(themeID string, manifest *ThemeManifest) error {
 			return fmt.Errorf("create texture file: %w", err)
 		}
 		if _, err := io.Copy(f, resp.Body); err != nil {
-			f.Close()
+			_ = f.Close()
 			return fmt.Errorf("write texture: %w", err)
 		}
-		f.Close()
+		if err := f.Close(); err != nil {
+			return fmt.Errorf("finalize texture file: %w", err)
+		}
 
 		// Update manifest entry to local file reference.
 		manifest.Textures[name] = ThemeTexture{Kind: "file", Value: filename}
