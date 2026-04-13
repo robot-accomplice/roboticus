@@ -8111,6 +8111,12 @@
       api('/api/themes/catalog/uninstall', { method: 'POST', body: JSON.stringify({ id: uninstallId }) })
         .then(function() {
           toast('Uninstalled theme: ' + uninstallId);
+          // If we just uninstalled the active theme, reset to default.
+          var activeTheme = localStorage.getItem('roboticus-theme');
+          if (activeTheme === uninstallId) {
+            applyTheme('ai-purple');
+            localStorage.setItem('roboticus-theme', 'ai-purple');
+          }
           loadExternalThemes(); // refresh dropdown to remove uninstalled theme
           App.refreshSkills();
         })
