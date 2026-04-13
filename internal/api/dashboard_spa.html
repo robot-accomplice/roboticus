@@ -6690,8 +6690,7 @@
             var enumValues = (sf && sf['enum'] && sf['enum'].length) ? sf['enum'] : null;
 
             if (typeof val === 'boolean') {
-              var toggleDisabled = isDisabled ? ' style="opacity:0.5;pointer-events:none"' : '';
-              html += '<div class="settings-row"><div class="settings-label">' + esc(key) + tooltipHtml + immutableHint + '</div><div class="settings-toggle-wrap"><label class="toggle"' + toggleDisabled + '><input type="checkbox" data-settings-path="' + esc(path) + '"' + (val ? ' checked' : '') + (isDisabled ? ' disabled' : '') + '><span class="toggle-track"></span></label><span class="settings-toggle-label">' + (val ? 'On' : 'Off') + '</span></div></div>';
+              html += '<div class="settings-row"><div class="settings-label">' + esc(key) + tooltipHtml + immutableHint + '</div><div class="settings-toggle-wrap"><label class="toggle"><input type="checkbox" data-settings-path="' + esc(path) + '"' + (val ? ' checked' : '') + '><span class="toggle-track"></span></label><span class="settings-toggle-label">' + (val ? 'On' : 'Off') + '</span></div></div>';
             } else if (enumValues) {
               var selHtml = '<select class="settings-input" data-settings-path="' + esc(path) + '" style="min-width:160px"' + '>';
               enumValues.forEach(function(o) { selHtml += '<option value="' + esc(o) + '"' + (String(val) === o ? ' selected' : '') + '>' + esc(o) + '</option>'; });
@@ -6714,7 +6713,7 @@
               var type = (sf && (sf.type === 'integer' || sf.type === 'float')) ? 'number' : (typeof val === 'number' ? 'number' : 'text');
               var sv = (val == null || val === '') ? '' : esc(String(val));
               var step = (sf && sf.type === 'float') ? ' step="any"' : '';
-              html += '<div class="settings-row"><div class="settings-label">' + esc(key) + tooltipHtml + immutableHint + '</div><input class="settings-input" type="' + type + '" data-settings-path="' + esc(path) + '" value="' + sv + '" placeholder="' + esc(placeholder) + '"' + step + disabledAttr + '></div>';
+              html += '<div class="settings-row"><div class="settings-label">' + esc(key) + tooltipHtml + immutableHint + '</div><input class="settings-input" type="' + type + '" data-settings-path="' + esc(path) + '" value="' + sv + '" placeholder="' + esc(placeholder) + '"' + step + '></div>';
             }
           };
 
