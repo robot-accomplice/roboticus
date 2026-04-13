@@ -88,14 +88,12 @@ var catalogThemes = []ThemeManifest{
 			"--bg": "#2a2118", "--surface": "#352a1f", "--surface-2": "#3f3326",
 			"--accent": "#c17f3a", "--text": "#f5e6c8", "--muted": "#b8a080",
 			"--border": "#6b5540",
-			"--theme-body-texture":    "repeating-linear-gradient(0deg, transparent, transparent 3px, rgba(139,94,60,0.03) 3px, rgba(139,94,60,0.03) 4px)",
 			"--theme-separator":       "linear-gradient(90deg, transparent, #8b5e3c 20%, #c17f3a 50%, #8b5e3c 80%, transparent)",
 			"--theme-separator-height": "2px",
 			"--theme-scrollbar":       "rgba(193,127,58,0.3)",
-			"--theme-card-border":     "linear-gradient(to bottom, #6b5540, #3f3326) 1",
 		},
 		Textures: map[string]ThemeTexture{
-			"body": {Kind: "css", Value: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10'%3E%3Crect width='10' height='10' fill='%232a2118'/%3E%3Crect x='1' y='3' width='2' height='1' fill='%238b5e3c' opacity='0.3'/%3E%3Crect x='6' y='7' width='1' height='2' fill='%236b5540' opacity='0.25'/%3E%3Crect x='4' y='1' width='1' height='1' fill='%23c17f3a' opacity='0.15'/%3E%3Crect x='8' y='5' width='2' height='1' fill='%238b5e3c' opacity='0.2'/%3E%3C/svg%3E\")"},
+			"body": {Kind: "css", Value: "repeating-linear-gradient(45deg, transparent, transparent 4px, rgba(139,94,60,0.12) 4px, rgba(139,94,60,0.12) 5px), repeating-linear-gradient(-45deg, transparent, transparent 4px, rgba(107,85,64,0.08) 4px, rgba(107,85,64,0.08) 5px)"},
 		},
 		Version: "1.0.0", Source: "catalog"},
 	{ID: "midnight-ocean", Name: "Midnight Ocean", Description: "Deep navy depths with teal accents and wave-inspired separators", Author: "Roboticus", Swatch: "#0d9488",
@@ -109,7 +107,7 @@ var catalogThemes = []ThemeManifest{
 			"--theme-scrollbar":    "rgba(13,148,136,0.3)",
 		},
 		Textures: map[string]ThemeTexture{
-			"body": {Kind: "css", Value: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='60' height='12'%3E%3Crect width='60' height='12' fill='%230e1f3a'/%3E%3Cpath d='M0 6 Q15 2 30 6 T60 6' fill='none' stroke='%230d9488' stroke-width='1'/%3E%3Cpath d='M0 10 Q15 6 30 10 T60 10' fill='none' stroke='%231e3a5f' stroke-width='0.7'/%3E%3C/svg%3E\")"},
+			"body": {Kind: "css", Value: "repeating-linear-gradient(0deg, transparent, transparent 8px, rgba(13,148,136,0.12) 8px, rgba(13,148,136,0.12) 9px), repeating-linear-gradient(90deg, transparent, transparent 20px, rgba(30,58,95,0.08) 20px, rgba(30,58,95,0.08) 21px)"},
 		},
 		Version: "1.0.0", Source: "catalog"},
 	{ID: "solarized-dark", Name: "Solarized Dark", Description: "Ethan Schoonover's precision-engineered dark palette for low-fatigue reading", Author: "Roboticus", Swatch: "#268bd2",
@@ -119,7 +117,7 @@ var catalogThemes = []ThemeManifest{
 			"--border": "#2aa198",
 		},
 		Textures: map[string]ThemeTexture{
-			"body": {Kind: "css", Value: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8'%3E%3Crect width='8' height='8' fill='%23073642'/%3E%3Ccircle cx='4' cy='4' r='1.2' fill='%23268bd2' opacity='0.25'/%3E%3Ccircle cx='0' cy='0' r='0.7' fill='%23268bd2' opacity='0.15'/%3E%3C/svg%3E\")"},
+			"body": {Kind: "css", Value: "repeating-linear-gradient(90deg, transparent, transparent 11px, rgba(38,139,210,0.1) 11px, rgba(38,139,210,0.1) 12px), repeating-linear-gradient(0deg, transparent, transparent 11px, rgba(42,161,152,0.07) 11px, rgba(42,161,152,0.07) 12px)"},
 		},
 		Version: "1.0.0", Source: "catalog"},
 	{ID: "dracula", Name: "Dracula", Description: "The beloved dark theme with purple, pink, and green highlights", Author: "Roboticus", Swatch: "#bd93f9",
@@ -145,7 +143,7 @@ var catalogThemes = []ThemeManifest{
 			"--border": "#586e75", "--highlight": "#b58900", "--secondary": "#268bd2",
 		},
 		Textures: map[string]ThemeTexture{
-			"body": {Kind: "css", Value: "url(data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='4' height='4'%3E%3Crect width='4' height='4' fill='%23002b36'/%3E%3Crect width='1' height='1' fill='%23073642' opacity='0.3'/%3E%3C/svg%3E)"},
+			"body": {Kind: "css", Value: "repeating-linear-gradient(135deg, transparent, transparent 6px, rgba(42,161,152,0.08) 6px, rgba(42,161,152,0.08) 7px), repeating-linear-gradient(45deg, transparent, transparent 6px, rgba(88,110,117,0.06) 6px, rgba(88,110,117,0.06) 7px)"},
 		},
 		Fonts:   []string{"https://fonts.googleapis.com/css2?family=Source+Code+Pro:wght@400;600&display=swap"},
 		Version: "1.0.0", Source: "catalog"},
@@ -156,7 +154,7 @@ var catalogThemes = []ThemeManifest{
 			"--border": "#3a1a5e", "--highlight": "#01ff70", "--secondary": "#05d9e8",
 		},
 		Textures: map[string]ThemeTexture{
-			"body": {Kind: "css", Value: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='4' height='4'%3E%3Crect width='4' height='4' fill='%231a0a2e'/%3E%3Crect y='2' width='4' height='1' fill='%23000'/%3E%3C/svg%3E\")"},
+			"body": {Kind: "css", Value: "repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.25) 2px, rgba(0,0,0,0.25) 4px)"},
 		},
 		Fonts:   []string{"https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap"},
 		Version: "1.0.0", Source: "catalog"},
@@ -174,7 +172,7 @@ var catalogThemes = []ThemeManifest{
 			"--border": "#3b4261", "--highlight": "#e0af68", "--secondary": "#9ece6a",
 		},
 		Textures: map[string]ThemeTexture{
-			"body": {Kind: "css", Value: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20'%3E%3Crect width='20' height='20' fill='%2324283b'/%3E%3Ccircle cx='3' cy='5' r='1.5' fill='%237aa2f7' opacity='0.2'/%3E%3Ccircle cx='14' cy='15' r='1' fill='%239ece6a' opacity='0.15'/%3E%3Crect x='8' y='2' width='1' height='1' fill='%23e0af68' opacity='0.1'/%3E%3C/svg%3E\")"},
+			"body": {Kind: "css", Value: "radial-gradient(ellipse at 20% 30%, rgba(122,162,247,0.12) 0%, transparent 50%), radial-gradient(ellipse at 80% 70%, rgba(158,206,106,0.08) 0%, transparent 50%)"},
 		},
 		Fonts:   []string{"https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap"},
 		Version: "1.0.0", Source: "catalog"},

@@ -2793,10 +2793,10 @@
               highlight: vars['--highlight'] || vars['--secondary'] || vars['--accent'] || '#888'
             };
 
-            // Texture: replace double quotes with single quotes for HTML style attr.
+            // Texture as card background. CSS gradients work directly; data URIs need quote escaping.
             var bodyTex = textures.body && textures.body.value ? textures.body.value.replace(/"/g, "'") : '';
             var bgStyle = bodyTex
-              ? 'background-image:' + bodyTex + ';background-color:' + v.bg
+              ? 'background:' + bodyTex + ',' + v.bg
               : 'background:' + v.bg;
 
             // Font from theme's Google Fonts URL.
