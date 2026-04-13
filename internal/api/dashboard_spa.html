@@ -462,7 +462,7 @@
     .settings-form { display: flex; flex-direction: column; gap: 1.25rem; }
     .settings-section { background: var(--surface-2); border: 1px solid var(--border-ghost); border-radius: var(--radius); padding: 1.25rem; }
     .settings-section-title { font-family: var(--font-headline); font-size: 0.6875rem; text-transform: uppercase; letter-spacing: 0.15em; color: var(--accent); margin-bottom: 0.75rem; font-weight: 600; }
-    .settings-row { display: grid; grid-template-columns: minmax(200px, max-content) 1fr; gap: 0.75rem; align-items: center; margin-bottom: 0.5rem; }
+    .settings-row { display: grid; grid-template-columns: 200px 1fr; gap: 0.75rem; align-items: center; margin-bottom: 0.5rem; }
     .settings-row:last-child { margin-bottom: 0; }
     .settings-label { font-family: var(--font-headline); font-size: 0.625rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.1em; }
     .settings-input {
@@ -471,7 +471,6 @@
       outline: none; transition: border-color 0.2s; width: 100%;
     }
     .settings-input:focus { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent-dim); }
-    .settings-input[type="number"] { max-width: 120px; }
     .settings-toggle-wrap { display: flex; align-items: center; gap: 0.5rem; }
     .settings-toggle-label { font-size: 0.75rem; color: var(--muted); }
     .settings-nested { margin-left: 0.75rem; padding-left: 0.75rem; border-left: 2px solid var(--border-ghost); }
