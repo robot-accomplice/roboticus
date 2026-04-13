@@ -15,7 +15,14 @@ import (
 // Arc<Mutex<Connection>>, Go's *sql.DB is already safe for concurrent use
 // and manages a connection pool internally.
 type Store struct {
-	db *sql.DB
+	db                 *sql.DB
+	onSessionArchived  []func(ctx context.Context, sessionID string)
+}
+
+// OnSessionArchived registers a callback that fires after a session is archived.
+// Used to trigger post-archival operations like memory summary promotion.
+func (s *Store) OnSessionArchived(fn func(ctx context.Context, sessionID string)) {
+	s.onSessionArchived = append(s.onSessionArchived, fn)
 }
 
 // Open creates a new Store, configures SQLite pragmas (WAL, foreign keys),

@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"roboticus/internal/core"
+	"roboticus/internal/llm"
 	"roboticus/internal/session"
 )
 
@@ -37,8 +38,7 @@ type ToolDef struct {
 
 // EstimateTokens returns a rough token count for this tool definition.
 func (td ToolDef) EstimateTokens() int {
-	// ~4 chars per token heuristic
-	return (len(td.Name) + len(td.Description) + len(td.ParametersJSON)) / 4
+	return llm.EstimateTokens(td.Name + td.Description + td.ParametersJSON)
 }
 
 // MemoryFragment represents a single retrieved memory chunk.

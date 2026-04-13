@@ -7,6 +7,7 @@ import (
 	"math"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog/log"
 
@@ -111,6 +112,7 @@ type RetrievalMetrics struct {
 	ProceduralCount int     `json:"procedural_count"`
 	RelationCount   int     `json:"relation_count"`
 	AmbientCount    int     `json:"ambient_count"`
+	RetrievalMode   string  `json:"retrieval_mode"`
 }
 
 // historyKeywords trigger inclusion of inactive/stale memories when present in query.
@@ -181,9 +183,25 @@ func (mr *Retriever) RetrieveWithMetrics(ctx context.Context, sessionID, query s
 	}
 	_ = includeInactive // Used in episodic/semantic retrieval below.
 
-	// Generate query embedding if embedding client is available.
+	// Select retrieval mode via strategy with real session age.
+	corpusSize := mr.estimateCorpusSize(ctx)
+	sessionAge := 10 * time.Minute // default for missing/unparseable sessions
+	if mr.store != nil && sessionID != "" {
+		var createdAt string
+		if err := mr.store.QueryRowContext(ctx,
+			`SELECT created_at FROM sessions WHERE id = ?`, sessionID).Scan(&createdAt); err == nil {
+			if t, err := time.Parse("2006-01-02 15:04:05", createdAt); err == nil {
+				sessionAge = time.Since(t)
+			}
+		}
+	}
+	strategy := NewRetrievalStrategy(mr.embedClient != nil, corpusSize)
+	mode := strategy.SelectMode(query, sessionAge)
+	metrics.RetrievalMode = mode.String()
+
+	// Generate query embedding if embedding client is available and mode uses it.
 	var queryEmbed []float32
-	if mr.embedClient != nil && query != "" {
+	if mr.embedClient != nil && query != "" && mode != RetrievalKeyword && mode != RetrievalRecency {
 		var err error
 		queryEmbed, err = mr.embedClient.EmbedSingle(ctx, query)
 		if err != nil {
@@ -214,42 +232,66 @@ func (mr *Retriever) RetrieveWithMetrics(ctx context.Context, sessionID, query s
 		metrics.AmbientCount = strings.Count(ambient, "\n- ") + 1
 	}
 
+	// Adaptive budget retrieval: each tier gets its initial allocation.
+	// Unused budget from one tier flows proportionally to subsequent tiers.
+	surplusChars := 0
+
 	// Episodic memory (with temporal decay + optional embedding re-rank).
-	if budget := int(float64(totalTokens) * mr.budgets.Episodic); budget > 0 {
-		episodic := mr.retrieveEpisodic(ctx, query, queryEmbed, budget)
+	episodicBudget := int(float64(totalTokens)*mr.budgets.Episodic) + surplusChars
+	if episodicBudget > 0 {
+		episodic := mr.retrieveEpisodic(ctx, query, queryEmbed, episodicBudget/mr.charsPerToken)
+		charsUsed := len(episodic)
+		surplusChars = (episodicBudget - charsUsed)
+		if surplusChars < 0 {
+			surplusChars = 0
+		}
 		if episodic != "" {
 			sections = append(sections, "[Relevant Memories]\n"+episodic)
-			totalCharsUsed += len(episodic)
+			totalCharsUsed += charsUsed
 			metrics.EpisodicCount = strings.Count(episodic, "\n- ") + 1
 		}
 	}
 
 	// Semantic memory.
-	if budget := int(float64(totalTokens) * mr.budgets.Semantic); budget > 0 {
-		semantic := mr.retrieveSemanticMemory(ctx, query, budget)
+	semanticBudget := int(float64(totalTokens)*mr.budgets.Semantic) + surplusChars
+	if semanticBudget > 0 {
+		semantic := mr.retrieveSemanticMemory(ctx, query, semanticBudget/mr.charsPerToken)
+		charsUsed := len(semantic)
+		surplusChars = (semanticBudget - charsUsed)
+		if surplusChars < 0 {
+			surplusChars = 0
+		}
 		if semantic != "" {
 			sections = append(sections, "[Knowledge]\n"+semantic)
-			totalCharsUsed += len(semantic)
+			totalCharsUsed += charsUsed
 			metrics.SemanticCount = strings.Count(semantic, "\n- ") + 1
 		}
 	}
 
 	// Procedural memory (tool stats).
-	if budget := int(float64(totalTokens) * mr.budgets.Procedural); budget > 0 {
-		procedural := mr.retrieveProceduralMemory(ctx, budget)
+	proceduralBudget := int(float64(totalTokens)*mr.budgets.Procedural) + surplusChars
+	if proceduralBudget > 0 {
+		procedural := mr.retrieveProceduralMemory(ctx, proceduralBudget/mr.charsPerToken)
+		charsUsed := len(procedural)
+		surplusChars = (proceduralBudget - charsUsed)
+		if surplusChars < 0 {
+			surplusChars = 0
+		}
 		if procedural != "" {
 			sections = append(sections, "[Tool Experience]\n"+procedural)
-			totalCharsUsed += len(procedural)
+			totalCharsUsed += charsUsed
 			metrics.ProceduralCount = strings.Count(procedural, "\n- ") + 1
 		}
 	}
 
 	// Relationship memory.
-	if budget := int(float64(totalTokens) * mr.budgets.Relationship); budget > 0 {
-		relationships := mr.retrieveRelationshipMemory(ctx, budget)
+	relationBudget := int(float64(totalTokens)*mr.budgets.Relationship) + surplusChars
+	if relationBudget > 0 {
+		relationships := mr.retrieveRelationshipMemory(ctx, relationBudget/mr.charsPerToken)
+		charsUsed := len(relationships)
 		if relationships != "" {
 			sections = append(sections, "[Relationships]\n"+relationships)
-			totalCharsUsed += len(relationships)
+			totalCharsUsed += charsUsed
 			metrics.RelationCount = strings.Count(relationships, "\n- ") + 1
 		}
 	}
@@ -329,6 +371,22 @@ func (mr *Retriever) retrieveWorkingMemory(ctx context.Context, sessionID string
 		b.WriteString("\n")
 		used += len(content)
 	}
+
+	// Cross-session continuity: if working memory is empty for this session,
+	// inject the most recent session summary to provide context.
+	if used == 0 && mr.store != nil {
+		var summary string
+		err := mr.store.QueryRowContext(ctx,
+			`SELECT value FROM semantic_memory
+			 WHERE category = 'session_summary' AND memory_state = 'active'
+			 ORDER BY updated_at DESC LIMIT 1`).Scan(&summary)
+		if err == nil && summary != "" {
+			b.WriteString("- Previously: ")
+			b.WriteString(summary)
+			b.WriteString("\n")
+		}
+	}
+
 	return b.String()
 }
 
@@ -403,6 +461,17 @@ func (mr *Retriever) retrieveEpisodic(ctx context.Context, query string, queryEm
 		return ""
 	}
 
+	// Pre-load stored embeddings for all candidates in a single query.
+	// This replaces the N+1 pattern of calling EmbedSingle per candidate.
+	storedEmbeds := make(map[string][]float32)
+	if queryEmbed != nil && mr.store != nil {
+		ids := make([]string, len(candidates))
+		for i, c := range candidates {
+			ids[i] = c.id
+		}
+		storedEmbeds = mr.loadStoredEmbeddings(ctx, "episodic_memory", ids)
+	}
+
 	// Score and rank: blend temporal decay, FTS relevance, and embedding similarity.
 	type scored struct {
 		content string
@@ -412,10 +481,9 @@ func (mr *Retriever) retrieveEpisodic(ctx context.Context, query string, queryEm
 	for _, c := range candidates {
 		score := scoreEpisodicCandidate(c.ageDays, c.ftsHit, mr.config)
 
-		// Blend with embedding similarity if available.
-		if queryEmbed != nil && mr.embedClient != nil {
-			textEmbed, err := mr.embedClient.EmbedSingle(ctx, c.content)
-			if err == nil {
+		// Blend with precomputed embedding similarity (no API calls).
+		if queryEmbed != nil {
+			if textEmbed, ok := storedEmbeds[c.id]; ok {
 				sim := llm.CosineSimilarity(queryEmbed, textEmbed)
 				score = (1-mr.config.HybridWeight)*score + mr.config.HybridWeight*sim
 			}
@@ -572,4 +640,60 @@ func (mr *Retriever) retrieveRelationshipMemory(ctx context.Context, budgetToken
 		used += len(line)
 	}
 	return b.String()
+}
+
+// estimateCorpusSize returns the approximate number of memory entries across tiers.
+func (mr *Retriever) estimateCorpusSize(ctx context.Context) int {
+	if mr.store == nil {
+		return 0
+	}
+	var count int
+	_ = mr.store.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM memory_index WHERE confidence > 0.1`).Scan(&count)
+	return count
+}
+
+// loadStoredEmbeddings bulk-loads precomputed embeddings from the embeddings table
+// for the given source IDs. Returns a map of sourceID → embedding vector.
+// This replaces the N+1 pattern of calling EmbedSingle per candidate at retrieval time.
+func (mr *Retriever) loadStoredEmbeddings(ctx context.Context, sourceTable string, ids []string) map[string][]float32 {
+	result := make(map[string][]float32, len(ids))
+	if len(ids) == 0 || mr.store == nil {
+		return result
+	}
+
+	// Build parameterized IN clause.
+	placeholders := make([]string, len(ids))
+	args := make([]any, 0, len(ids)+1)
+	args = append(args, sourceTable)
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args = append(args, id)
+	}
+
+	query := fmt.Sprintf(
+		`SELECT source_id, embedding_blob FROM embeddings
+		 WHERE source_table = ? AND source_id IN (%s)
+		 AND embedding_blob IS NOT NULL`,
+		strings.Join(placeholders, ","))
+
+	rows, err := mr.store.QueryContext(ctx, query, args...)
+	if err != nil {
+		log.Debug().Err(err).Msg("loadStoredEmbeddings: query failed")
+		return result
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var sourceID string
+		var blob []byte
+		if rows.Scan(&sourceID, &blob) != nil {
+			continue
+		}
+		vec := db.BlobToEmbedding(blob)
+		if len(vec) > 0 {
+			result[sourceID] = vec
+		}
+	}
+	return result
 }

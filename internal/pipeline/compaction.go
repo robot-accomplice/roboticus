@@ -53,7 +53,7 @@ func estimateTokens(messages []llm.Message) int {
 	for _, m := range messages {
 		// Each message has overhead (~4 tokens for role + framing).
 		total += 4
-		total += len(m.Content) / 4
+		total += llm.EstimateTokens(m.Content)
 	}
 	return total
 }

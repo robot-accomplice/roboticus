@@ -30,15 +30,16 @@ import (
 // Implements kardianos/service.Interface for cross-platform service management
 // (systemd on Linux, launchd on macOS, SCM on Windows).
 type Daemon struct {
-	cfg      *core.Config
-	store    *db.Store
-	llm      *llm.Service
-	pipe     *pipeline.Pipeline
-	router   *channel.Router
-	appState *api.AppState
-	eventBus *api.EventBus
-	bgWorker *core.BackgroundWorker
-	errBus   *core.ErrorBus
+	cfg         *core.Config
+	store       *db.Store
+	llm         *llm.Service
+	pipe        *pipeline.Pipeline
+	router      *channel.Router
+	appState    *api.AppState
+	eventBus    *api.EventBus
+	bgWorker    *core.BackgroundWorker
+	errBus      *core.ErrorBus
+	embedClient *llm.EmbeddingClient
 
 	startupStart time.Time
 	errBusCancel context.CancelFunc
@@ -153,11 +154,13 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 	}
 
 	llmSvc, err := llm.NewService(llm.ServiceConfig{
-		Providers: providers,
-		Primary:   cfg.Models.Primary,
-		Fallbacks: cfg.Models.Fallback,
-		BGWorker:  bgWorker,
-		ErrBus:    errBus,
+		Providers:     providers,
+		Primary:       cfg.Models.Primary,
+		Fallbacks:     cfg.Models.Fallback,
+		BGWorker:      bgWorker,
+		ErrBus:        errBus,
+		ToolBlocklist: cfg.Models.ToolBlocklist,
+		ToolAllowlist: cfg.Models.ToolAllowlist,
 	}, store)
 	if err != nil {
 		errBusCancel()
@@ -424,6 +427,15 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 		embedClient = llm.NewEmbeddingClient(nil)
 		log.Info().Msg("embedding client: using local n-gram fallback")
 	}
+	// Wire embedding client into the memory manager so that newly stored
+	// episodic and semantic memories are embedded at ingestion time.
+	memMgr.SetEmbeddingClient(embedClient)
+	// Wire session summary promotion: when a session is archived,
+	// promote its top working memory entries to semantic memory.
+	mgr := memMgr // capture for closure
+	store.OnSessionArchived(func(ctx context.Context, sessionID string) {
+		mgr.PromoteSessionSummary(ctx, sessionID)
+	})
 	bootStep(9, steps, "Embeddings configured")
 	if embedProviderName != "" {
 		bootDetail("provider", embedProviderName)
@@ -528,6 +540,7 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 		eventBus:     eventBus,
 		bgWorker:     bgWorker,
 		errBus:       errBus,
+		embedClient:  embedClient,
 		startupStart: startupStart,
 		errBusCancel: errBusCancel,
 	}, nil

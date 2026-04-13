@@ -9,6 +9,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"roboticus/internal/db"
+	"roboticus/internal/llm"
 )
 
 // ConsolidationEntry is a memory candidate for deduplication with a relevance score.
@@ -109,23 +110,41 @@ func jaccardSimilarity(a, b string) float64 {
 
 // ConsolidationReport holds per-phase counts from a consolidation run.
 type ConsolidationReport struct {
-	Indexed           int
-	Deduped           int
-	Promoted          int
-	ConfidenceDecayed int
-	ImportanceDecayed int
-	Pruned            int
-	Orphaned          int
-	DerivableStale    int
-	ObsidianScanned   int
-	TierSynced        int
-	SkillsConfSynced  int
+	Indexed            int
+	Deduped            int
+	Promoted           int
+	Superseded         int
+	ConfidenceDecayed  int
+	ImportanceDecayed  int
+	Pruned             int
+	Orphaned           int
+	DerivableStale     int
+	ObsidianScanned    int
+	TierSynced         int
+	SkillsConfSynced   int
+	EmbeddingsBackfill int
+}
+
+// LLMDistiller distills multiple episodic entries into a single semantic fact.
+// This interface enables LLM-assisted episodic-to-semantic promotion during
+// consolidation sleep-time compute.
+type LLMDistiller interface {
+	Distill(ctx context.Context, entries []string) (string, error)
 }
 
 // ConsolidationPipeline runs a multi-phase memory consolidation pipeline.
 type ConsolidationPipeline struct {
 	// MinInterval prevents running more than once per this duration.
 	MinInterval time.Duration
+	// EmbedClient is used for backfilling embeddings on entries that were stored
+	// before the embedding pipeline was connected. Nil disables backfill.
+	EmbedClient *llm.EmbeddingClient
+	// Distiller enables LLM-assisted episodic-to-semantic promotion.
+	// When nil, falls back to longest-entry heuristic.
+	Distiller LLMDistiller
+	// MaxDistillPerRun limits the number of LLM distillation calls per
+	// consolidation run for cost control. Default: 5.
+	MaxDistillPerRun int
 }
 
 // NewConsolidationPipeline creates a pipeline with a default 1-hour minimum interval.
@@ -157,6 +176,7 @@ func (p *ConsolidationPipeline) Run(ctx context.Context, store *db.Store) Consol
 	// Phases 0-2: always run (index maintenance, safe to run during active sessions).
 	report.DerivableStale = p.Phase0_MarkDerivableStale(ctx, store)
 	report.Indexed = p.phaseIndexBackfill(ctx, store)
+	report.EmbeddingsBackfill = p.phaseEmbeddingBackfill(ctx, store)
 	report.ObsidianScanned = p.Phase2_ObsidianVaultScan(ctx, store)
 
 	// Rust parity: quiescence gate — skip data-moving phases (3+) if a session
@@ -172,6 +192,7 @@ func (p *ConsolidationPipeline) Run(ctx context.Context, store *db.Store) Consol
 		report.Deduped = p.phaseWithinTierDedup(ctx, store)
 	}
 	report.Promoted = p.phaseEpisodicPromotion(ctx, store)
+	report.Superseded = p.phaseContradictionDetection(ctx, store)
 	report.ConfidenceDecayed = p.phaseConfidenceDecay(ctx, store)
 	report.TierSynced = p.Phase4_TierStateSync(ctx, store)
 	report.SkillsConfSynced = p.phaseSkillsConfidenceSync(ctx, store)
@@ -185,9 +206,11 @@ func (p *ConsolidationPipeline) Run(ctx context.Context, store *db.Store) Consol
 	log.Info().
 		Int("derivable_stale", report.DerivableStale).
 		Int("indexed", report.Indexed).
+		Int("embeddings_backfill", report.EmbeddingsBackfill).
 		Int("deduped", report.Deduped).
 		Int("obsidian_scanned", report.ObsidianScanned).
 		Int("promoted", report.Promoted).
+		Int("superseded", report.Superseded).
 		Int("confidence_decayed", report.ConfidenceDecayed).
 		Int("tier_synced", report.TierSynced).
 		Int("skills_conf_synced", report.SkillsConfSynced).

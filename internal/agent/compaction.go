@@ -40,7 +40,7 @@ func (c *Compactor) Compact(ctx context.Context, messages []llm.Message, budget 
 	splitIdx := len(messages)
 	recentTokens := 0
 	for i := len(messages) - 1; i >= 0; i-- {
-		msgTokens := len(messages[i].Content) / 4 // ~4 chars per token
+		msgTokens := llm.EstimateTokens(messages[i].Content)
 		if recentTokens+msgTokens > recentBudget {
 			splitIdx = i + 1
 			break
@@ -79,7 +79,7 @@ func (c *Compactor) Compact(ctx context.Context, messages []llm.Message, budget 
 func estimateTokens(messages []llm.Message) int {
 	total := 0
 	for _, m := range messages {
-		total += len(m.Content) / 4 // ~4 chars per token heuristic
+		total += llm.EstimateTokens(m.Content)
 	}
 	return total
 }
