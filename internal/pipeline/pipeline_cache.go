@@ -9,6 +9,7 @@
 package pipeline
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"strings"
@@ -30,7 +31,7 @@ type CacheHit struct {
 //   - Rejects cache hits that are pure acknowledgements
 //
 // Returns nil if no valid cache hit is found.
-func (p *Pipeline) CheckCache(content string) *CacheHit {
+func (p *Pipeline) CheckCache(ctx context.Context, content string) *CacheHit {
 	if p.store == nil {
 		return nil
 	}
@@ -38,7 +39,7 @@ func (p *Pipeline) CheckCache(content string) *CacheHit {
 	fp := cacheFingerprint(content)
 
 	var cached, model string
-	row := p.store.DB().QueryRow(
+	row := p.store.QueryRowContext(ctx,
 		`SELECT response, model FROM semantic_cache
 		 WHERE prompt_hash = ?
 		 ORDER BY created_at DESC LIMIT 1`,
@@ -70,7 +71,7 @@ func (p *Pipeline) CheckCache(content string) *CacheHit {
 	}
 
 	// Increment hit count.
-	_, _ = p.store.DB().Exec(
+	_, _ = p.store.ExecContext(ctx,
 		`UPDATE semantic_cache SET hit_count = hit_count + 1 WHERE prompt_hash = ?`, fp)
 
 	log.Debug().Str("prompt_hash", fp).Str("model", model).Msg("cache hit accepted")
@@ -83,7 +84,7 @@ func (p *Pipeline) CheckCache(content string) *CacheHit {
 
 // StoreInCache persists a response in the pipeline semantic cache.
 // Only stores responses that pass the same quality guards used by CheckCache.
-func (p *Pipeline) StoreInCache(content, response, model string) {
+func (p *Pipeline) StoreInCache(ctx context.Context, content, response, model string) {
 	if p.store == nil {
 		return
 	}
@@ -106,7 +107,7 @@ func (p *Pipeline) StoreInCache(content, response, model string) {
 	}
 
 	fp := cacheFingerprint(content)
-	_, err := p.store.DB().Exec(
+	_, err := p.store.ExecContext(ctx,
 		`INSERT OR REPLACE INTO semantic_cache (id, prompt_hash, response, model)
 		 VALUES (hex(randomblob(16)), ?, ?, ?)`,
 		fp, response, model,

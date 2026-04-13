@@ -384,7 +384,7 @@ func (p *Pipeline) stageShortcut(ctx context.Context, pc *pipelineContext) (*Out
 func (p *Pipeline) stageCacheCheck(ctx context.Context, pc *pipelineContext) (*Outcome, error) {
 	if pc.cfg.CacheEnabled && !pc.input.NoCache {
 		pc.tr.BeginSpan("cache_check")
-		if hit := p.CheckCache(pc.content); hit != nil {
+		if hit := p.CheckCache(ctx, pc.content); hit != nil {
 			pc.tr.Annotate("cache_hit", true)
 			pc.tr.Annotate("cache_model", hit.Model)
 			pc.tr.EndSpan("ok")
@@ -567,8 +567,8 @@ func (p *Pipeline) stageInference(ctx context.Context, pc *pipelineContext) (*Ou
 func (p *Pipeline) stagePostInference(ctx context.Context, pc *pipelineContext, outcome *Outcome) {
 	// Cache store (Rust: store_in_cache).
 	if pc.cfg.CacheEnabled && !pc.input.NoCache && outcome != nil && !outcome.Stream && outcome.Content != "" {
-		p.bgWorker.Submit("storeCache", func(_ context.Context) {
-			p.StoreInCache(pc.content, outcome.Content, outcome.Model)
+		p.bgWorker.Submit("storeCache", func(bgCtx context.Context) {
+			p.StoreInCache(bgCtx, pc.content, outcome.Content, outcome.Model)
 		})
 	}
 

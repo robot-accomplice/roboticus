@@ -2,14 +2,12 @@ package daemon
 
 import (
 	"context"
-	"encoding/hex"
 	"fmt"
 	"math/big"
 	"os"
 	"time"
 
 	"github.com/rs/zerolog/log"
-	"golang.org/x/crypto/sha3"
 
 	"roboticus/internal/core"
 	"roboticus/internal/db"
@@ -49,43 +47,53 @@ func startWalletPoller(ctx context.Context, cfg *core.Config, store *db.Store, k
 		log.Error().Err(err).Msg("wallet migration failed")
 	}
 
-	// Resolve passphrase: migration result > keystore > env > machine-derived.
+	// Resolve passphrase: keystore is the ONLY source. No env vars, no machine derivation.
 	passphrase := ""
+
+	// Step 1: If migration just happened, store passphrase in keystore.
 	if result != nil && result.Migrated {
 		passphrase = result.Passphrase
-
-		// Store in keystore for future auto-unlock.
 		if ks != nil && ks.IsUnlocked() {
 			if err := ks.Set("wallet_passphrase", passphrase); err == nil {
 				_ = ks.Save()
 				log.Info().Msg("wallet passphrase stored in keystore")
 			}
 		}
-
-		// Display the passphrase exactly once.
 		fmt.Println()
 		fmt.Println("╔══════════════════════════════════════════════════════════════════════╗")
 		fmt.Println("║  WALLET ENCRYPTED — SAVE THIS PASSPHRASE (shown once only):          ║")
 		fmt.Printf("║  %s    ║\n", passphrase)
 		fmt.Printf("║  Address: %-56s   ║\n", result.Address)
 		fmt.Println("║                                                                      ║")
-		fmt.Println("║  The passphrase has been stored in the keystore for auto-unlock.     ║")
-		fmt.Println("║  You can also set ROBOTICUS_WALLET_PASSPHRASE as a backup.           ║")
+		fmt.Println("║  The passphrase is stored in the encrypted keystore.                ║")
 		fmt.Println("╚══════════════════════════════════════════════════════════════════════╝")
 		fmt.Println()
 	}
 
-	// If no migration happened, resolve passphrase from existing sources.
+	// Step 2: If no migration, read from keystore.
+	if passphrase == "" && ks != nil && ks.IsUnlocked() {
+		passphrase = ks.GetOrEmpty("wallet_passphrase")
+	}
+
+	// Step 3: Auto-migrate env var into keystore (one-time), then clear it.
 	if passphrase == "" {
-		if ks != nil && ks.IsUnlocked() {
-			passphrase = ks.GetOrEmpty("wallet_passphrase")
+		if envPass := os.Getenv("ROBOTICUS_WALLET_PASSPHRASE"); envPass != "" {
+			log.Warn().Msg("ROBOTICUS_WALLET_PASSPHRASE env var is deprecated — migrating to keystore")
+			passphrase = envPass
+			if ks != nil && ks.IsUnlocked() {
+				if err := ks.Set("wallet_passphrase", passphrase); err == nil {
+					_ = ks.Save()
+					log.Info().Msg("wallet passphrase migrated from env var to keystore")
+				}
+			}
+			_ = os.Unsetenv("ROBOTICUS_WALLET_PASSPHRASE") // Best-effort env cleanup after keystore migration.
 		}
 	}
+
+	// Step 4: No passphrase available — fail clearly.
 	if passphrase == "" {
-		passphrase = os.Getenv("ROBOTICUS_WALLET_PASSPHRASE")
-	}
-	if passphrase == "" {
-		passphrase = walletMachinePassphrase()
+		log.Error().Msg("wallet: no passphrase found in keystore — unlock keystore or run wallet migration")
+		return
 	}
 
 	w, err := wallet.NewWallet(wallet.WalletConfig{
@@ -152,25 +160,8 @@ func upsertBalance(ctx context.Context, store *db.Store, symbol, name string, ba
 	}
 }
 
-// walletMachinePassphrase derives the wallet passphrase using the same algorithm
-// as Rust's Wallet::machine_passphrase(): keccak256("roboticus-wallet-machine-key::{hostname}::{user}").
-func walletMachinePassphrase() string {
-	hostname, err := os.Hostname()
-	if err != nil {
-		hostname = "unknown-host"
-	}
-	user := os.Getenv("USER")
-	if user == "" {
-		user = os.Getenv("USERNAME")
-	}
-	if user == "" {
-		user = "unknown-user"
-	}
-	input := fmt.Sprintf("roboticus-wallet-machine-key::%s::%s", hostname, user)
-	h := sha3.NewLegacyKeccak256()
-	h.Write([]byte(input))
-	return hex.EncodeToString(h.Sum(nil))
-}
+// walletMachinePassphrase was removed in v1.0.4 — deterministic derivation
+// from hostname is not real security. Passphrase must be in the keystore.
 
 func weiToEther(wei *big.Int) float64 {
 	if wei == nil {

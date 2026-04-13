@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 
@@ -25,7 +26,7 @@ func IsModelProxyRole(role string) bool {
 func SkillRegistryNamesFromDB(store *db.Store) map[string]struct{} {
 	names := make(map[string]struct{})
 
-	rows, err := store.DB().Query(
+	rows, err := store.QueryContext(context.Background(),
 		`SELECT name FROM skills WHERE enabled = 1`)
 	if err != nil {
 		log.Warn().Err(err).Msg("pipeline: failed to query skill names from DB")
