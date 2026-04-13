@@ -118,14 +118,23 @@ func ServeThemeTexture() http.HandlerFunc {
 func ResolveTextureURLs(themeID string, textures map[string]ThemeTexture) map[string]ThemeTexture {
 	resolved := make(map[string]ThemeTexture, len(textures))
 	for name, tex := range textures {
-		if tex.Kind == "file" {
-			// Convert file reference to URL that the dashboard can fetch.
+		switch tex.Kind {
+		case "file":
+			// Convert local file reference to servable URL.
 			resolved[name] = ThemeTexture{
 				Kind:  "css",
 				Value: fmt.Sprintf("url(/api/themes/%s/textures/%s)", themeID, tex.Value),
 				Tile:  tex.Tile,
 			}
-		} else {
+		case "url":
+			// Convert raw URL to CSS url() expression.
+			resolved[name] = ThemeTexture{
+				Kind:  "css",
+				Value: fmt.Sprintf("url(%s)", tex.Value),
+				Tile:  tex.Tile,
+			}
+		default:
+			// "css" kind — already a CSS expression, pass through.
 			resolved[name] = tex
 		}
 	}
