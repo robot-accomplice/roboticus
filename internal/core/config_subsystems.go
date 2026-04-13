@@ -142,8 +142,20 @@ type RevenueSwapChainConfig struct {
 
 // UpdateConfig holds auto-update settings.
 type UpdateConfig struct {
-	Enabled            bool `json:"enabled" toml:"enabled" mapstructure:"enabled"`
-	CheckIntervalHours int  `json:"check_interval_hours" toml:"check_interval_hours" mapstructure:"check_interval_hours"`
+	Enabled            bool     `json:"enabled" toml:"enabled" mapstructure:"enabled"`
+	CheckIntervalHours int      `json:"check_interval_hours" toml:"check_interval_hours" mapstructure:"check_interval_hours"`
+	Registries         []string `json:"registries,omitempty" toml:"registries" mapstructure:"registries"` // catalog sources; default: ["https://roboticus.ai/registry"]
+}
+
+// DefaultRegistryURL is the official roboticus registry.
+const DefaultRegistryURL = "https://roboticus.ai/registry"
+
+// EffectiveRegistries returns the configured registries, or the default if none set.
+func (c UpdateConfig) EffectiveRegistries() []string {
+	if len(c.Registries) > 0 {
+		return c.Registries
+	}
+	return []string{DefaultRegistryURL}
 }
 
 // DaemonConfig holds background daemon settings.
