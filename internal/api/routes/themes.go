@@ -19,7 +19,7 @@ type ThemeTexture struct {
 }
 
 // ThemeRegistryBaseURL is the base URL for the theme asset registry.
-const ThemeRegistryBaseURL = "https://roboticus.dev/registry/themes"
+const ThemeRegistryBaseURL = "https://roboticus.ai/registry/themes"
 
 // ThemeManifest describes a UI theme.
 type ThemeManifest struct {
