@@ -191,7 +191,10 @@ func (d *Daemon) runConsolidationHeartbeat(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			report := pipeline.RunMemoryConsolidation(ctx, d.store, false)
+			report := pipeline.RunMemoryConsolidation(ctx, d.store, false, pipeline.ConsolidationOpts{
+				EmbedClient: d.embedClient,
+				LLMService:  d.llm,
+			})
 			log.Info().
 				Int("indexed", report.Indexed).
 				Int("deduped", report.Deduped).

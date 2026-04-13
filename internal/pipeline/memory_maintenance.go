@@ -6,6 +6,7 @@ import (
 
 	agentmemory "roboticus/internal/agent/memory"
 	"roboticus/internal/db"
+	"roboticus/internal/llm"
 )
 
 // MemoryMaintenanceReport captures the outcome of operator-triggered memory maintenance.
@@ -15,12 +16,27 @@ type MemoryMaintenanceReport struct {
 	EntryCount    int                             `json:"entry_count"`
 }
 
+// ConsolidationOpts configures optional consolidation dependencies.
+type ConsolidationOpts struct {
+	EmbedClient *llm.EmbeddingClient
+	LLMService  *llm.Service
+}
+
 // RunMemoryConsolidation executes the production consolidation pipeline from the
 // canonical pipeline layer so API connectors stay thin.
-func RunMemoryConsolidation(ctx context.Context, store *db.Store, force bool) agentmemory.ConsolidationReport {
+func RunMemoryConsolidation(ctx context.Context, store *db.Store, force bool, opts ...ConsolidationOpts) agentmemory.ConsolidationReport {
 	pipe := agentmemory.NewConsolidationPipeline()
 	if force {
 		pipe.MinInterval = 0
+	}
+	if len(opts) > 0 {
+		o := opts[0]
+		if o.EmbedClient != nil {
+			pipe.EmbedClient = o.EmbedClient
+		}
+		if o.LLMService != nil {
+			pipe.Distiller = &agentmemory.ServiceDistiller{LLMSvc: o.LLMService}
+		}
 	}
 	return pipe.Run(ctx, store)
 }
