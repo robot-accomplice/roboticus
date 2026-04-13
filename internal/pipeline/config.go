@@ -75,6 +75,9 @@ type Config struct {
 	// Matches Rust's ContextBudgetConfig tiers.
 	BudgetTier int // 0=L0 (minimal), 1=L1 (standard), 2=L2 (extended), 3=L3 (maximum)
 
+	// BudgetTokens are per-tier token budgets from core config. If zero, defaults apply.
+	BudgetTokens [4]int // [L0, L1, L2, L3] — from ContextBudgetConfig
+
 	// Model routing overrides.
 	ModelOverride    string // Force a specific model, bypassing router
 	PreferLocalModel bool   // Prefer local models over cloud when quality is comparable
@@ -235,6 +238,21 @@ type ChannelClaimContext struct {
 // ResolveSecurityClaim resolves a full SecurityClaim using the core resolvers.
 // This replaces the former ResolveAuthority which only returned an AuthorityLevel.
 // The full claim carries source tracking for audit and ceiling enforcement.
+// ResolveBudget returns the token budget for the configured tier.
+// Uses BudgetTokens from core config if set, else falls back to defaults.
+func (c Config) ResolveBudget() int {
+	tier := c.BudgetTier
+	if tier < 0 || tier > 3 {
+		tier = 1
+	}
+	if c.BudgetTokens[tier] > 0 {
+		return c.BudgetTokens[tier]
+	}
+	// Fallback defaults (match core/config_defaults.go).
+	defaults := [4]int{8000, 8000, 16000, 32000}
+	return defaults[tier]
+}
+
 func ResolveSecurityClaim(mode AuthorityMode, claim *ChannelClaimContext) core.SecurityClaim {
 	sec := core.DefaultClaimSecurityConfig()
 

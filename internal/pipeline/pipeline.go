@@ -480,7 +480,7 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 		hitsPerTier := map[string]int{retrievalStrat.Strategy: fragmentCount}
 		budgetConsumed := 0
 		if memoryBlock != "" {
-			budgetConsumed = len(memoryBlock) / 4 // 4-char token heuristic
+			budgetConsumed = llm.EstimateTokens(memoryBlock)
 			// Detect tier markers if present (e.g. "[episodic]", "[semantic]", "[working]").
 			for _, tier := range []string{"episodic", "semantic", "working", "procedural"} {
 				count := strings.Count(memoryBlock, "["+tier+"]")
@@ -629,18 +629,10 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 
 	// Annotate context budget allocation so the dashboard shows where tokens go.
 	{
-		budget := defaultTokenBudget
-		switch cfg.BudgetTier {
-		case 0:
-			budget = 4096
-		case 2:
-			budget = 16384
-		case 3:
-			budget = 32768
-		}
+		budget := cfg.ResolveBudget()
 		var sysToks, memToks, histToks int
 		for _, m := range session.Messages() {
-			msgTokens := len(m.Content) / 4 // 4-char heuristic
+			msgTokens := llm.EstimateTokens(m.Content)
 			switch m.Role {
 			case "system":
 				sysToks += msgTokens
@@ -649,7 +641,7 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 			}
 		}
 		if memoryBlock != "" {
-			memToks = len(memoryBlock) / 4
+			memToks = llm.EstimateTokens(memoryBlock)
 		}
 		AnnotateContextBudgetTrace(tr, budget, sysToks, 0, memToks, histToks)
 	}

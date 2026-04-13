@@ -332,15 +332,11 @@ func (p *Pipeline) PrepareForInference(ctx context.Context, session *Session, me
 
 	// 2. Context compaction: trim to fit budget tier.
 	if msgs := session.Messages(); len(msgs) > 0 {
+		// Resolve budget from config tier — no more hardcoded values.
 		budget := defaultTokenBudget
-		// Adjust budget based on tier (L0=4096, L1=8192, L2=16384, L3=32768).
-		switch budgetTier {
-		case 0:
-			budget = 4096
-		case 2:
-			budget = 16384
-		case 3:
-			budget = 32768
+		cfg := Config{BudgetTier: budgetTier}
+		if resolved := cfg.ResolveBudget(); resolved > 0 {
+			budget = resolved
 		}
 		compacted := CompactContext(msgs, budget)
 		if len(compacted) < len(msgs) {

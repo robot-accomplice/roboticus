@@ -272,7 +272,7 @@ func qualityFromResponse(resp *Response) float64 {
 	tokens := resp.Usage.OutputTokens
 	if tokens <= 0 {
 		// Fall back to content length estimate (rough 4 chars per token).
-		tokens = len(resp.Content) / 4
+		tokens = EstimateTokens(resp.Content)
 	}
 	q := float64(tokens) / 100.0
 	if q > 1.0 {
