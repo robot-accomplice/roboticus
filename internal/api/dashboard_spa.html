@@ -5785,7 +5785,7 @@
           var autoCheckbox = '<div style="margin-top:0.75rem;display:flex;align-items:center;gap:0.5rem">'
             + '<input type="checkbox" id="model-order-auto"' + (autoOrder ? ' checked' : '') + '>'
             + '<label for="model-order-auto" style="font-size:0.8125rem;color:var(--text)">Auto</label>'
-            + '<span class="settings-help-trigger" onclick="showSettingsTooltip(this, \'When enabled, the model order is treated as a default and may be adjusted dynamically at runtime based on availability and performance.\'); event.stopPropagation();">(?)</span>'
+            + '<span class="settings-help-trigger" data-tooltip-text="When enabled, the model order is treated as a default and may be adjusted dynamically at runtime based on availability and performance.">(?)</span>'
             + '</div>';
           return tabs
             + '<div class="settings-form"><div class="settings-section"><div class="settings-section-title">Model Order</div>'
@@ -6199,8 +6199,8 @@
           }
         }
         function tooltipSpan(key) {
-          if (!fieldTooltips[key]) return '';
-          return ' <span class="settings-help-trigger" data-tooltip-key="' + esc(key) + '" onclick="showSettingsTooltip(this, fieldTooltips[\'' + key.replace(/'/g, "\\'") + '\']); event.stopPropagation();">(?)</span>';
+          if (!window.fieldTooltips[key]) return '';
+          return ' <span class="settings-help-trigger" data-tooltip-key="' + esc(key) + '">(?)</span>';
         }
         var html = tabs + '<div class="settings-form">';
         var specialSections = ['models', 'providers', 'wallet'];
@@ -6673,7 +6673,7 @@
             var sf = _schemaIdx[path];
             // Build tooltip from schema description if no static tooltip exists.
             if (sf && sf.description && !fieldTooltips[key]) {
-              tooltipHtml = ' <span class="settings-help-trigger" onclick="showSettingsTooltip(this, \'' + sf.description.replace(/'/g, "\\'") + '\'); event.stopPropagation();">(?)</span>';
+              tooltipHtml = ' <span class="settings-help-trigger" data-tooltip-text="' + esc(sf.description) + '">(?)</span>';
             }
             // Immutable field hint.
             var immutableHint = (sf && sf.immutable) ? ' <span class="badge muted" style="font-size:0.55rem;vertical-align:middle">restart</span>' : '';
@@ -10669,6 +10669,22 @@
     } catch (err) { var d = document.getElementById('ws-dot'); if (d) d.classList.add('off'); var l = document.getElementById('ws-label'); if (l) l.textContent = 'No WebSocket'; }
   };
   App._connectWs();
+
+  // Global click delegation for settings tooltips (CSP blocks inline onclick).
+  document.addEventListener('click', function(e) {
+    var trigger = e.target.closest('.settings-help-trigger');
+    if (!trigger) return;
+    e.stopPropagation();
+    var key = trigger.getAttribute('data-tooltip-key');
+    var text = trigger.getAttribute('data-tooltip-text');
+    if (!text && key && window.fieldTooltips) {
+      text = window.fieldTooltips[key];
+    }
+    if (text && window.showSettingsTooltip) {
+      window.showSettingsTooltip(trigger, text);
+    }
+  });
+
   // Sidebar identity and model refresh are now driven by WebSocket topic subscriptions
   // (agent.status, models) — no more HTTP polling intervals.
   App._loadAvailableModels({ nonBlocking: true, validationLevel: 'zero' }).catch(function() {});
