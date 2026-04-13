@@ -113,7 +113,7 @@ func (s *Store) GetSession(ctx context.Context, id string) (*Session, error) {
 	return sess, nil
 }
 
-// ArchiveSession sets a session's status to 'archived'.
+// ArchiveSession sets a session's status to 'archived' and fires post-archival hooks.
 func (s *Store) ArchiveSession(ctx context.Context, id string) error {
 	_, err := s.ExecContext(ctx,
 		`UPDATE sessions SET status = 'archived', updated_at = datetime('now') WHERE id = ?`,
@@ -121,6 +121,13 @@ func (s *Store) ArchiveSession(ctx context.Context, id string) error {
 	)
 	if err != nil {
 		return core.WrapError(core.ErrDatabase, "failed to archive session", err)
+	}
+	// Fire post-archival callbacks (best-effort — hook errors don't block archival).
+	for _, cb := range s.onSessionArchived {
+		func() {
+			defer func() { _ = recover() }() // Don't let panicking hooks block archival.
+			cb(ctx, id)
+		}()
 	}
 	return nil
 }

@@ -3,11 +3,100 @@ package memory
 import (
 	"context"
 	"database/sql"
+	"strings"
 
 	"github.com/rs/zerolog/log"
 
 	"roboticus/internal/db"
+	"roboticus/internal/llm"
 )
+
+// phaseEmbeddingBackfill generates embeddings for memory entries that were stored
+// before the embedding pipeline was connected. Processes up to 50 entries per run
+// to stay within rate limits and avoid blocking consolidation.
+func (p *ConsolidationPipeline) phaseEmbeddingBackfill(ctx context.Context, store *db.Store) int {
+	if p.EmbedClient == nil || store == nil {
+		return 0
+	}
+
+	backfilled := 0
+	// Backfill episodic entries missing embeddings.
+	backfilled += p.backfillTierEmbeddings(ctx, store, "episodic_memory",
+		`SELECT em.id, em.content FROM episodic_memory em
+		 WHERE em.memory_state = 'active'
+		 AND NOT EXISTS (SELECT 1 FROM embeddings e WHERE e.source_table = 'episodic_memory' AND e.source_id = em.id)
+		 LIMIT 25`)
+
+	// Backfill semantic entries missing embeddings.
+	backfilled += p.backfillTierEmbeddings(ctx, store, "semantic_memory",
+		`SELECT sm.id, sm.key || ': ' || sm.value FROM semantic_memory sm
+		 WHERE sm.memory_state = 'active'
+		 AND NOT EXISTS (SELECT 1 FROM embeddings e WHERE e.source_table = 'semantic_memory' AND e.source_id = sm.id)
+		 LIMIT 25`)
+
+	return backfilled
+}
+
+func (p *ConsolidationPipeline) backfillTierEmbeddings(ctx context.Context, store *db.Store, sourceTable, query string) int {
+	rows, err := store.QueryContext(ctx, query)
+	if err != nil {
+		log.Debug().Err(err).Str("tier", sourceTable).Msg("consolidation: embedding backfill query failed")
+		return 0
+	}
+	defer func() { _ = rows.Close() }()
+
+	count := 0
+	for rows.Next() {
+		var id, content string
+		if rows.Scan(&id, &content) != nil {
+			continue
+		}
+		vec, err := p.EmbedClient.EmbedSingle(ctx, content)
+		if err != nil {
+			log.Debug().Err(err).Str("id", id).Msg("consolidation: embedding backfill embed failed")
+			continue
+		}
+		if len(vec) == 0 {
+			continue
+		}
+		preview := content
+		if len(preview) > 200 {
+			preview = preview[:200]
+		}
+		blob := db.EmbeddingToBlob(vec)
+		_, err = store.ExecContext(ctx,
+			`INSERT OR IGNORE INTO embeddings (id, source_table, source_id, content_preview, embedding_blob, dimensions)
+			 VALUES (?, ?, ?, ?, ?, ?)`,
+			db.NewID(), sourceTable, id, preview, blob, len(vec))
+		if err != nil {
+			log.Debug().Err(err).Str("id", id).Msg("consolidation: embedding backfill insert failed")
+			continue
+		}
+		count++
+	}
+	return count
+}
+
+// subjectSimilarity extracts the first few words (the "subject") of two texts
+// and computes their Jaccard overlap. Used to distinguish contradictory facts
+// (same subject, different predicate) from complementary facts (different subject).
+func subjectSimilarity(a, b string) float64 {
+	subjectA := extractSubject(a)
+	subjectB := extractSubject(b)
+	if len(subjectA) == 0 && len(subjectB) == 0 {
+		return 1.0
+	}
+	return jaccardSimilarity(subjectA, subjectB)
+}
+
+// extractSubject returns the first 5 words of a text as the "subject" heuristic.
+func extractSubject(text string) string {
+	words := strings.Fields(strings.ToLower(text))
+	if len(words) > 5 {
+		words = words[:5]
+	}
+	return strings.Join(words, " ")
+}
 
 // Consolidation thresholds — Rust parity (consolidation.rs).
 const (
@@ -37,7 +126,7 @@ func (p *ConsolidationPipeline) phaseIndexBackfill(ctx context.Context, store *d
 	rows, err := store.QueryContext(ctx,
 		`SELECT em.id, em.content FROM episodic_memory em
 		 WHERE em.memory_state = 'active'
-		 AND NOT EXISTS (SELECT 1 FROM memory_index mi WHERE mi.source_table IN ('episodic', 'episodic_memory') AND mi.source_id = em.id)`)
+		 AND NOT EXISTS (SELECT 1 FROM memory_index mi WHERE mi.source_table = 'episodic_memory' AND mi.source_id = em.id)`)
 	if err != nil {
 		log.Warn().Err(err).Msg("consolidation: index backfill episodic query failed")
 		return count
@@ -48,7 +137,7 @@ func (p *ConsolidationPipeline) phaseIndexBackfill(ctx context.Context, store *d
 	rows, err = store.QueryContext(ctx,
 		`SELECT sm.id, sm.value FROM semantic_memory sm
 		 WHERE sm.memory_state = 'active'
-		 AND NOT EXISTS (SELECT 1 FROM memory_index mi WHERE mi.source_table IN ('semantic', 'semantic_memory') AND mi.source_id = sm.id)`)
+		 AND NOT EXISTS (SELECT 1 FROM memory_index mi WHERE mi.source_table = 'semantic_memory' AND mi.source_id = sm.id)`)
 	if err != nil {
 		log.Warn().Err(err).Msg("consolidation: index backfill semantic query failed")
 		return count
@@ -93,25 +182,25 @@ func (p *ConsolidationPipeline) phaseWithinTierDedup(ctx context.Context, store 
 	return deduped
 }
 
-// dedupWithinTier runs pairwise Jaccard dedup within a single tier.
-func (p *ConsolidationPipeline) dedupWithinTier(ctx context.Context, store *db.Store, tier string) int {
-	type memEntry struct {
-		id      string
-		content string
-		score   float64 // importance for episodic, confidence for semantic
-	}
+// DedupBatchCap is the maximum number of entries to process per tier per dedup run.
+// Processing the most recent entries first targets the most likely duplicates.
+const DedupBatchCap = 500
 
-	var entries []memEntry
+// dedupWithinTier uses MinHash/LSH for O(n) candidate generation followed by
+// exact Jaccard verification. This replaces the previous O(n²) pairwise comparison.
+func (p *ConsolidationPipeline) dedupWithinTier(ctx context.Context, store *db.Store, tier string) int {
 	var rows *sql.Rows
 	var err error
 
 	switch tier {
 	case "episodic":
 		rows, err = store.QueryContext(ctx,
-			`SELECT id, content, importance FROM episodic_memory WHERE memory_state = 'active'`)
+			`SELECT id, content, importance FROM episodic_memory
+			 WHERE memory_state = 'active' ORDER BY created_at DESC LIMIT ?`, DedupBatchCap)
 	case "semantic":
 		rows, err = store.QueryContext(ctx,
-			`SELECT id, value, confidence FROM semantic_memory WHERE memory_state = 'active'`)
+			`SELECT id, value, confidence FROM semantic_memory
+			 WHERE memory_state = 'active' ORDER BY updated_at DESC LIMIT ?`, DedupBatchCap)
 	default:
 		return 0
 	}
@@ -120,8 +209,9 @@ func (p *ConsolidationPipeline) dedupWithinTier(ctx context.Context, store *db.S
 	}
 	defer func() { _ = rows.Close() }()
 
+	var entries []dedupEntry
 	for rows.Next() {
-		var e memEntry
+		var e dedupEntry
 		if tier == "episodic" {
 			var imp int
 			if rows.Scan(&e.id, &e.content, &imp) == nil {
@@ -136,31 +226,35 @@ func (p *ConsolidationPipeline) dedupWithinTier(ctx context.Context, store *db.S
 	}
 	_ = rows.Close()
 
+	if len(entries) <= 1 {
+		return 0
+	}
+
+	// Compute MinHash signatures for all entries.
+	for i := range entries {
+		entries[i].sig = MinHashSignature(entries[i].content, DefaultNumHashes)
+	}
+
+	// Find candidate pairs via LSH and verify with exact Jaccard.
+	pairs := FindCandidatePairs(entries, DedupJaccardThreshold, DefaultLSHBands)
+
 	deduped := 0
 	removed := make(map[string]bool)
-	for i := 0; i < len(entries); i++ {
-		if removed[entries[i].id] {
+	for _, cp := range pairs {
+		a, b := entries[cp.i], entries[cp.j]
+		if removed[a.id] || removed[b.id] {
 			continue
 		}
-		for j := i + 1; j < len(entries); j++ {
-			if removed[entries[j].id] {
-				continue
-			}
-			sim := jaccardSimilarity(entries[i].content, entries[j].content)
-			if sim < DedupJaccardThreshold {
-				continue
-			}
-			// Keep the higher-scored entry, mark the other as deduped.
-			var loserIdx int
-			if entries[i].score >= entries[j].score {
-				loserIdx = j
-			} else {
-				loserIdx = i
-			}
-			p.markDeduped(ctx, store, tier, entries[loserIdx].id)
-			removed[entries[loserIdx].id] = true
-			deduped++
+		// Keep the higher-scored entry, mark the other as deduped.
+		var loserID string
+		if a.score >= b.score {
+			loserID = b.id
+		} else {
+			loserID = a.id
 		}
+		p.markDeduped(ctx, store, tier, loserID)
+		removed[loserID] = true
+		deduped++
 	}
 	return deduped
 }
@@ -228,11 +322,29 @@ func (p *ConsolidationPipeline) phaseEpisodicPromotion(ctx context.Context, stor
 			used[idx] = true
 		}
 
-		// Pick the longest entry content as the consolidated value.
+		// Pick the longest entry content as the representative.
 		best := entries[group[0]]
 		for _, idx := range group[1:] {
 			if len(entries[idx].content) > len(best.content) {
 				best = entries[idx]
+			}
+		}
+
+		// Determine the semantic value: LLM-distilled fact or raw longest entry.
+		maxDistill := p.MaxDistillPerRun
+		if maxDistill <= 0 {
+			maxDistill = 5
+		}
+		semanticValue := best.content
+		if p.Distiller != nil && promoted < maxDistill {
+			groupTexts := make([]string, len(group))
+			for gi, idx := range group {
+				groupTexts[gi] = entries[idx].content
+			}
+			if distilled, err := p.Distiller.Distill(ctx, groupTexts); err == nil && distilled != "" {
+				semanticValue = distilled
+			} else if err != nil {
+				log.Debug().Err(err).Msg("consolidation: LLM distillation failed, using longest entry")
 			}
 		}
 
@@ -247,7 +359,7 @@ func (p *ConsolidationPipeline) phaseEpisodicPromotion(ctx context.Context, stor
 			 ON CONFLICT(category, key) DO UPDATE SET
 			   confidence = MAX(confidence, 0.7),
 			   updated_at = datetime('now')`,
-			db.NewID(), best.classification, key, best.content)
+			db.NewID(), best.classification, key, semanticValue)
 		if err != nil {
 			log.Warn().Err(err).Msg("consolidation: promotion insert failed")
 			continue
@@ -264,6 +376,102 @@ func (p *ConsolidationPipeline) phaseEpisodicPromotion(ctx context.Context, stor
 		promoted++
 	}
 	return promoted
+}
+
+// phaseContradictionDetection finds semantic entries that contradict others
+// in the same category (based on embedding cosine similarity + subject overlap).
+// When two entries share a subject but differ in predicate, the older one is
+// marked superseded. This prevents the agent from holding mutually exclusive
+// beliefs simultaneously.
+//
+// Scope: checks ALL active semantic entries per category (not just new ones),
+// because rephrased entries from different sessions may both predate the last
+// consolidation cutoff. Bounded by LIMIT 50 per category scan.
+func (p *ConsolidationPipeline) phaseContradictionDetection(ctx context.Context, store *db.Store) int {
+	if p.EmbedClient == nil || store == nil {
+		return 0
+	}
+
+	// Get all active semantic entries, ordered newest first.
+	// We compare each entry against all others in the same category.
+	rows, err := store.QueryContext(ctx,
+		`SELECT id, category, key, value FROM semantic_memory
+		 WHERE memory_state = 'active'
+		 ORDER BY updated_at DESC LIMIT 50`)
+	if err != nil {
+		return 0
+	}
+	defer func() { _ = rows.Close() }()
+
+	type semEntry struct {
+		id, category, key, value string
+	}
+	var activeEntries []semEntry
+	for rows.Next() {
+		var e semEntry
+		if rows.Scan(&e.id, &e.category, &e.key, &e.value) == nil {
+			activeEntries = append(activeEntries, e)
+		}
+	}
+	_ = rows.Close()
+
+	if len(activeEntries) == 0 {
+		return 0
+	}
+
+	superseded := 0
+	alreadySuperseded := make(map[string]bool) // Track IDs superseded in this run.
+	for _, entry := range activeEntries {
+		if alreadySuperseded[entry.id] {
+			continue // This entry was already superseded by a newer one — skip.
+		}
+		newVec, err := p.EmbedClient.EmbedSingle(ctx, entry.value)
+		if err != nil || len(newVec) == 0 {
+			continue
+		}
+
+		// Find other active entries in the same category.
+		existRows, err := store.QueryContext(ctx,
+			`SELECT id, value FROM semantic_memory
+			 WHERE memory_state = 'active' AND category = ? AND id != ?
+			 ORDER BY updated_at DESC LIMIT 20`,
+			entry.category, entry.id)
+		if err != nil {
+			continue
+		}
+
+		for existRows.Next() {
+			var existID, existValue string
+			if existRows.Scan(&existID, &existValue) != nil {
+				continue
+			}
+			// Skip if values are identical (not a contradiction, just a duplicate).
+			if existValue == entry.value {
+				continue
+			}
+			existVec, err := p.EmbedClient.EmbedSingle(ctx, existValue)
+			if err != nil || len(existVec) == 0 {
+				continue
+			}
+			sim := llm.CosineSimilarity(newVec, existVec)
+			if sim > 0.7 {
+				// High similarity + different content → check if same subject (contradiction)
+				// vs different subject (complementary). Same-subject entries that differ
+				// in predicate are contradictions; different-subject entries are complementary.
+				if subjectSimilarity(entry.value, existValue) > 0.5 {
+					if _, err := store.ExecContext(ctx,
+						`UPDATE semantic_memory SET memory_state = 'stale', state_reason = 'superseded by newer entry'
+						 WHERE id = ?`, existID); err == nil {
+						alreadySuperseded[existID] = true
+						superseded++
+					}
+				}
+				// Different subjects → complementary facts → leave both active.
+			}
+		}
+		_ = existRows.Close()
+	}
+	return superseded
 }
 
 // Phase 4: Exponential confidence decay on semantic entries not recently accessed.
@@ -393,14 +601,14 @@ func (p *ConsolidationPipeline) phaseOrphanCleanup(ctx context.Context, store *d
 	total := 0
 
 	// 7a: Orphaned embeddings — source_id not in any memory table.
-	// Handles both legacy short and full table names.
+	// Migration 039 normalized all legacy short names; only full names remain.
 	res, err := store.ExecContext(ctx,
 		`DELETE FROM embeddings WHERE
-		 (source_table IN ('episodic', 'episodic_memory') AND source_id NOT IN (SELECT id FROM episodic_memory)) OR
-		 (source_table IN ('semantic', 'semantic_memory') AND source_id NOT IN (SELECT id FROM semantic_memory)) OR
-		 (source_table IN ('procedural', 'procedural_memory') AND source_id NOT IN (SELECT id FROM procedural_memory)) OR
-		 (source_table IN ('relationship', 'relationship_memory') AND source_id NOT IN (SELECT id FROM relationship_memory)) OR
-		 (source_table IN ('working', 'working_memory') AND source_id NOT IN (SELECT id FROM working_memory))`)
+		 (source_table = 'episodic_memory' AND source_id NOT IN (SELECT id FROM episodic_memory)) OR
+		 (source_table = 'semantic_memory' AND source_id NOT IN (SELECT id FROM semantic_memory)) OR
+		 (source_table = 'procedural_memory' AND source_id NOT IN (SELECT id FROM procedural_memory)) OR
+		 (source_table = 'relationship_memory' AND source_id NOT IN (SELECT id FROM relationship_memory)) OR
+		 (source_table = 'working_memory' AND source_id NOT IN (SELECT id FROM working_memory))`)
 	if err != nil {
 		log.Warn().Err(err).Msg("consolidation: orphan embedding cleanup failed")
 	} else {
@@ -411,10 +619,10 @@ func (p *ConsolidationPipeline) phaseOrphanCleanup(ctx context.Context, store *d
 	// 7b: Orphaned index entries — source_id not in source table.
 	res, err = store.ExecContext(ctx,
 		`DELETE FROM memory_index WHERE
-		 (source_table IN ('episodic', 'episodic_memory') AND source_id NOT IN (SELECT id FROM episodic_memory)) OR
-		 (source_table IN ('semantic', 'semantic_memory') AND source_id NOT IN (SELECT id FROM semantic_memory)) OR
-		 (source_table IN ('procedural', 'procedural_memory') AND source_id NOT IN (SELECT id FROM procedural_memory)) OR
-		 (source_table IN ('relationship', 'relationship_memory') AND source_id NOT IN (SELECT id FROM relationship_memory))`)
+		 (source_table = 'episodic_memory' AND source_id NOT IN (SELECT id FROM episodic_memory)) OR
+		 (source_table = 'semantic_memory' AND source_id NOT IN (SELECT id FROM semantic_memory)) OR
+		 (source_table = 'procedural_memory' AND source_id NOT IN (SELECT id FROM procedural_memory)) OR
+		 (source_table = 'relationship_memory' AND source_id NOT IN (SELECT id FROM relationship_memory))`)
 	if err != nil {
 		log.Warn().Err(err).Msg("consolidation: orphan index cleanup failed")
 	} else {
@@ -534,7 +742,7 @@ func (p *ConsolidationPipeline) Phase4_TierStateSync(ctx context.Context, store 
 	// Sync semantic entries.
 	res, err = store.ExecContext(ctx,
 		`UPDATE memory_index SET confidence = 0.1
-		 WHERE source_table IN ('semantic', 'semantic_memory')
+		 WHERE source_table = 'semantic_memory'
 		 AND source_id IN (
 			SELECT id FROM semantic_memory WHERE memory_state IN ('stale', 'deduped', 'pruned')
 		 )
@@ -547,7 +755,7 @@ func (p *ConsolidationPipeline) Phase4_TierStateSync(ctx context.Context, store 
 	// Boost confidence for recently verified active entries.
 	res, err = store.ExecContext(ctx,
 		`UPDATE memory_index SET confidence = MIN(1.0, confidence + 0.1)
-		 WHERE source_table IN ('semantic', 'semantic_memory')
+		 WHERE source_table = 'semantic_memory'
 		 AND source_id IN (
 			SELECT id FROM semantic_memory
 			WHERE memory_state = 'active' AND confidence > 0.7

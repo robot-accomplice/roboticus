@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -63,9 +64,11 @@ const (
 
 // Manager handles 5-tier memory ingestion and retrieval.
 type Manager struct {
-	config Config
-	store  *db.Store
-	errBus *core.ErrorBus
+	config      Config
+	store       *db.Store
+	errBus      *core.ErrorBus
+	embedClient *llm.EmbeddingClient
+	hnswIndex   *db.HNSWIndex
 }
 
 // NewManager creates a memory manager with the given config.
@@ -75,6 +78,101 @@ func NewManager(cfg Config, store *db.Store) *Manager {
 
 // SetErrBus wires the centralized error bus (called after construction in daemon).
 func (mm *Manager) SetErrBus(eb *core.ErrorBus) { mm.errBus = eb }
+
+// SetEmbeddingClient attaches an embedding client for ingestion-time embedding.
+// When set, newly stored episodic and semantic memories are embedded and persisted
+// to the embeddings table, enabling hybrid retrieval via cosine similarity.
+func (mm *Manager) SetEmbeddingClient(ec *llm.EmbeddingClient) { mm.embedClient = ec }
+
+// SetHNSWIndex attaches an HNSW index for incremental updates during ingestion.
+func (mm *Manager) SetHNSWIndex(idx *db.HNSWIndex) { mm.hnswIndex = idx }
+
+// embedAndStore generates an embedding for content and persists it to the
+// embeddings table. If an HNSW index is attached, the entry is also added
+// incrementally for immediate retrieval availability.
+//
+// This is a best-effort operation: embedding failures are logged and swallowed
+// so they never block memory ingestion. The consolidation pipeline backfills
+// any entries that were missed (e.g., due to transient provider errors).
+func (mm *Manager) embedAndStore(ctx context.Context, sourceTable, sourceID, content string) {
+	if mm.embedClient == nil || mm.store == nil {
+		return
+	}
+	vec, err := mm.embedClient.EmbedSingle(ctx, content)
+	if err != nil {
+		log.Debug().Err(err).Str("source", sourceTable).Msg("embedAndStore: embedding failed, will backfill later")
+		return
+	}
+	if len(vec) == 0 {
+		return
+	}
+
+	preview := content
+	if len(preview) > 200 {
+		preview = preview[:200]
+	}
+	blob := db.EmbeddingToBlob(vec)
+
+	_, err = mm.store.ExecContext(ctx,
+		`INSERT OR IGNORE INTO embeddings (id, source_table, source_id, content_preview, embedding_blob, dimensions)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		db.NewID(), sourceTable, sourceID, preview, blob, len(vec))
+	if err != nil {
+		log.Debug().Err(err).Str("source", sourceTable).Msg("embedAndStore: insert failed")
+		return
+	}
+
+	// Incremental HNSW update for immediate retrieval availability.
+	if mm.hnswIndex != nil {
+		embed64 := make([]float64, len(vec))
+		for i, v := range vec {
+			embed64[i] = float64(v)
+		}
+		mm.hnswIndex.AddEntry(db.HNSWEntry{
+			SourceTable:    sourceTable,
+			SourceID:       sourceID,
+			ContentPreview: preview,
+			Embedding:      embed64,
+		})
+	}
+}
+
+// PromoteSessionSummary extracts the top working memory entries for a session
+// and stores them as a semantic memory summary. Called on session archival so
+// new sessions can start with context from the previous session.
+func (mm *Manager) PromoteSessionSummary(ctx context.Context, sessionID string) {
+	if mm.store == nil {
+		return
+	}
+
+	rows, err := mm.store.QueryContext(ctx,
+		`SELECT content FROM working_memory WHERE session_id = ?
+		 ORDER BY importance DESC, created_at DESC LIMIT 5`, sessionID)
+	if err != nil {
+		return
+	}
+	defer func() { _ = rows.Close() }()
+
+	var parts []string
+	totalLen := 0
+	for rows.Next() {
+		var content string
+		if rows.Scan(&content) != nil {
+			continue
+		}
+		if totalLen+len(content) > 500 {
+			break
+		}
+		parts = append(parts, content)
+		totalLen += len(content)
+	}
+	if len(parts) == 0 {
+		return
+	}
+
+	summary := strings.Join(parts, "; ")
+	mm.storeSemanticMemory(ctx, "session_summary", sessionID, summary)
+}
 
 // derivableTools are tools whose output is ephemeral and should NOT be stored
 // as episodic memory (Rust: is_derivable). Storing these leads to stale-fact
@@ -107,6 +205,20 @@ func (mm *Manager) IngestTurn(ctx context.Context, session *session.Session) {
 
 	last := messages[len(messages)-1]
 	turnType := classifyTurn(messages)
+
+	// Embedding-based classification upgrade: if keyword-based classification
+	// returned a non-ToolUse type and an embed client is available, try
+	// embedding-based classification for better accuracy.
+	if turnType != TurnToolUse && mm.embedClient != nil {
+		for i := len(messages) - 1; i >= 0; i-- {
+			if messages[i].Role == "user" && messages[i].Content != "" {
+				if embType, ok := classifyTurnWithEmbeddings(ctx, mm.embedClient, messages[i].Content); ok {
+					turnType = embType
+				}
+				break
+			}
+		}
+	}
 
 	// Working memory: store turn summary with correct importance (Rust: importance=3).
 	if last.Role == "assistant" && last.Content != "" {
@@ -141,7 +253,7 @@ func (mm *Manager) IngestTurn(ctx context.Context, session *session.Session) {
 
 	// Semantic: long reasoning/creative responses (confidence=0.6).
 	if (turnType == TurnReasoning || turnType == TurnCreative) && len(last.Content) >= 100 {
-		key := extractFirstSentence(last.Content)
+		key := semanticKey(last.Content)
 		mm.storeSemanticMemory(ctx, "knowledge", key, safeUTF8Truncate(last.Content, 500))
 	}
 
@@ -192,12 +304,6 @@ func safeUTF8Truncate(s string, maxBytes int) string {
 	return s[:maxBytes]
 }
 
-// storeWorkingMemory writes to the working_memory table with default importance.
-// Retained as convenience wrapper for Rust parity; will be called from upcoming memory subsystem integration.
-func (mm *Manager) storeWorkingMemory(ctx context.Context, sessionID, entryType, content string) { //nolint:unused // Rust parity stub
-	mm.storeWorkingMemoryWithImportance(ctx, sessionID, entryType, content, 5)
-}
-
 // storeWorkingMemoryWithImportance writes to working_memory with explicit importance.
 func (mm *Manager) storeWorkingMemoryWithImportance(ctx context.Context, sessionID, entryType, content string, importance int) {
 	_, err := mm.store.ExecContext(ctx,
@@ -211,11 +317,6 @@ func (mm *Manager) storeWorkingMemoryWithImportance(ctx context.Context, session
 }
 
 // storeEpisodicMemory writes to the episodic_memory table with default importance.
-// Retained as convenience wrapper for Rust parity; will be called from upcoming memory subsystem integration.
-func (mm *Manager) storeEpisodicMemory(ctx context.Context, classification, content string) { //nolint:unused // Rust parity stub
-	mm.storeEpisodicMemoryWithImportance(ctx, classification, content, 5)
-}
-
 // storeEpisodicMemoryWithImportance writes with explicit importance (Rust parity).
 func (mm *Manager) storeEpisodicMemoryWithImportance(ctx context.Context, classification, content string, importance int) {
 	entryID := db.NewID()
@@ -229,6 +330,7 @@ func (mm *Manager) storeEpisodicMemoryWithImportance(ctx context.Context, classi
 		return
 	}
 	mm.autoIndex(ctx, "episodic_memory", entryID, content)
+	mm.embedAndStore(ctx, "episodic_memory", entryID, content)
 }
 
 // storeSemanticMemory writes to the semantic_memory table with UPSERT.
@@ -250,6 +352,7 @@ func (mm *Manager) storeSemanticMemory(ctx context.Context, category, key, value
 		return
 	}
 	mm.autoIndex(ctx, "semantic_memory", entryID, key+": "+value)
+	mm.embedAndStore(ctx, "semantic_memory", entryID, key+": "+value)
 }
 
 // MarkSemanticStale marks semantic entries as stale by category and key prefix.
@@ -287,12 +390,6 @@ func (mm *Manager) recordToolStat(ctx context.Context, toolName string, success 
 	}
 }
 
-// ingestRelationships extracts entity mentions from user messages and updates relationship memory.
-// Retained as convenience wrapper for Rust parity; will be called from upcoming memory subsystem integration.
-func (mm *Manager) ingestRelationships(ctx context.Context, messages []llm.Message) { //nolint:unused // Rust parity stub
-	mm.ingestRelationshipsWithTrust(ctx, messages, 0.5)
-}
-
 // ingestRelationshipsWithTrust extracts entities and sets trust score by turn type (Rust parity).
 func (mm *Manager) ingestRelationshipsWithTrust(ctx context.Context, messages []llm.Message, trustScore float64) {
 	for _, m := range messages {
@@ -318,7 +415,70 @@ func (mm *Manager) ingestRelationshipsWithTrust(ctx context.Context, messages []
 	}
 }
 
-// extractEntities finds potential entity references in text (@ mentions, capitalized names).
+// entityExclusions are words that commonly start sentences or are not proper nouns.
+var entityExclusions = map[string]bool{
+	"the": true, "this": true, "that": true, "these": true, "those": true,
+	"it": true, "its": true, "we": true, "they": true, "he": true, "she": true,
+	"however": true, "therefore": true, "furthermore": true, "meanwhile": true,
+	"also": true, "but": true, "and": true, "or": true, "so": true, "yet": true,
+	"if": true, "when": true, "where": true, "while": true, "because": true,
+	"after": true, "before": true, "since": true, "until": true,
+	// Months.
+	"january": true, "february": true, "march": true, "april": true,
+	"may": true, "june": true, "july": true, "august": true,
+	"september": true, "october": true, "november": true, "december": true,
+	// Days.
+	"monday": true, "tuesday": true, "wednesday": true, "thursday": true,
+	"friday": true, "saturday": true, "sunday": true,
+	// Common tech acronyms used as words.
+	"api": true, "url": true, "http": true, "https": true, "sql": true,
+	"css": true, "html": true, "json": true, "xml": true, "cli": true,
+	// Common sentence starters.
+	"yes": true, "no": true, "sure": true, "ok": true, "here": true,
+	"there": true, "what": true, "how": true, "why": true, "who": true,
+	"i": true, "my": true, "me": true, "your": true, "you": true,
+}
+
+// commonNonNameWords are words that frequently appear capitalized at sentence start
+// but are almost never proper nouns. Used to distinguish "Alice fixed the bug" (name)
+// from "After the deployment" (common word). If a sentence-start word is NOT in this
+// set and NOT in entityExclusions, it's likely a proper noun.
+var commonNonNameWords = map[string]bool{
+	// Verbs commonly starting sentences
+	"let": true, "make": true, "run": true, "try": true, "check": true,
+	"set": true, "get": true, "use": true, "add": true, "fix": true,
+	"see": true, "look": true, "just": true, "can": true, "should": true,
+	"will": true, "would": true, "could": true, "do": true, "did": true,
+	"have": true, "had": true, "has": true, "was": true, "were": true,
+	"been": true, "being": true, "is": true, "are": true, "am": true,
+	// Conjunctions and adverbs
+	"then": true, "next": true, "now": true, "first": true, "last": true,
+	"once": true, "still": true, "even": true, "each": true, "every": true,
+	"both": true, "either": true, "neither": true, "some": true, "any": true,
+	"all": true, "most": true, "many": true, "much": true, "more": true,
+	"less": true, "few": true, "other": true, "another": true, "such": true,
+	// Prepositions
+	"in": true, "on": true, "at": true, "to": true, "for": true,
+	"with": true, "from": true, "by": true, "about": true, "into": true,
+	// Pronouns and determiners (supplements entityExclusions)
+	"our": true, "their": true, "his": true, "her": true, "its": true,
+	"one": true, "two": true, "three": true, "four": true, "five": true,
+	// Common technical sentence starters
+	"note": true, "error": true, "warning": true, "update": true,
+	"found": true, "created": true, "deleted": true, "changed": true,
+	"started": true, "stopped": true, "running": true, "loading": true,
+	"tested": true, "deployed": true, "built": true, "installed": true,
+	// Greetings and social words
+	"hello": true, "hi": true, "hey": true, "thanks": true, "thank": true,
+	"please": true, "sorry": true, "great": true, "good": true, "ok": true,
+	"welcome": true, "bye": true, "goodbye": true,
+}
+
+// maxEntitiesPerMessage caps entity extraction to prevent noise from unusual text.
+const maxEntitiesPerMessage = 5
+
+// extractEntities finds potential entity references in text.
+// Extracts @mentions and sequences of capitalized proper nouns (not at sentence start).
 func extractEntities(text string) []string {
 	var entities []string
 	seen := make(map[string]bool)
@@ -328,13 +488,110 @@ func extractEntities(text string) []string {
 		// @mentions.
 		if strings.HasPrefix(w, "@") && len(w) > 1 {
 			name := strings.Trim(w[1:], ".,!?;:")
-			if name != "" && !seen[name] {
+			if name != "" && !seen[strings.ToLower(name)] {
 				entities = append(entities, name)
-				seen[name] = true
+				seen[strings.ToLower(name)] = true
 			}
 		}
 	}
+
+	// Proper noun extraction: find sequences of capitalized words not at sentence start.
+	// We skip words after sentence-ending punctuation (., !, ?) as they may just be
+	// regular sentence starts.
+	afterSentenceEnd := true // Start of text = start of sentence.
+	var currentName []string
+
+	for _, w := range words {
+		clean := strings.Trim(w, ".,!?;:\"'()[]")
+
+		// Check if this word ends a sentence.
+		endsSentence := strings.HasSuffix(w, ".") || strings.HasSuffix(w, "!") || strings.HasSuffix(w, "?")
+
+		// A capitalized word: first rune is uppercase, not all-uppercase (avoids ALL CAPS).
+		isCapitalized := len(clean) >= 2 && isUpperRune(rune(clean[0])) && !isAllUpper(clean)
+
+		// Allow capitalized words that are NOT at sentence start.
+		// Also allow sentence-start words if they pass the name filter
+		// (not a common non-name word, not in exclusions).
+		isLikelyName := isCapitalized && !entityExclusions[strings.ToLower(clean)]
+		if afterSentenceEnd && isLikelyName {
+			// Sentence-start: only allow if not a common non-name word.
+			isLikelyName = !commonNonNameWords[strings.ToLower(clean)]
+		}
+		if isLikelyName {
+			currentName = append(currentName, clean)
+		} else {
+			// Flush any accumulated proper noun sequence.
+			if len(currentName) >= 1 {
+				name := strings.Join(currentName, " ")
+				lower := strings.ToLower(name)
+				if !seen[lower] && !entityExclusions[lower] {
+					entities = append(entities, name)
+					seen[lower] = true
+				}
+			}
+			currentName = nil
+		}
+
+		afterSentenceEnd = endsSentence
+		if len(entities) >= maxEntitiesPerMessage {
+			break
+		}
+	}
+
+	// Flush final sequence.
+	if len(currentName) >= 1 && len(entities) < maxEntitiesPerMessage {
+		name := strings.Join(currentName, " ")
+		lower := strings.ToLower(name)
+		if !seen[lower] && !entityExclusions[lower] {
+			entities = append(entities, name)
+		}
+	}
+
+	// Frequency pass: words that appear 2+ times as capitalized (any position,
+	// including sentence start) are very likely proper nouns. This catches names
+	// at sentence start that the position-based filter would otherwise skip.
+	wordFreq := make(map[string]int)
+	for _, w := range words {
+		clean := strings.Trim(w, ".,!?;:\"'()[]")
+		if len(clean) >= 2 && isUpperRune(rune(clean[0])) && !isAllUpper(clean) {
+			wordFreq[strings.ToLower(clean)]++
+		}
+	}
+	for word, count := range wordFreq {
+		if count >= 2 && !entityExclusions[word] && !seen[word] && len(entities) < maxEntitiesPerMessage {
+			// Title-case the word for consistency.
+			titled := strings.ToUpper(word[:1]) + word[1:]
+			entities = append(entities, titled)
+			seen[word] = true
+		}
+	}
+
 	return entities
+}
+
+func isUpperRune(r rune) bool { return r >= 'A' && r <= 'Z' }
+func isAllUpper(s string) bool {
+	for _, r := range s {
+		if r >= 'a' && r <= 'z' {
+			return false
+		}
+	}
+	return true
+}
+
+// semanticKey produces a stable, human-readable key for semantic memory UPSERT.
+// Format: first 60 chars of content + 8-char FNV hash suffix.
+// This ensures exact-content matches dedup via UPSERT while rephrased content
+// gets a different key (caught later by contradiction detection).
+func semanticKey(content string) string {
+	prefix := content
+	if len(prefix) > 60 {
+		prefix = prefix[:60]
+	}
+	h := fnv.New32a()
+	h.Write([]byte(content))
+	return fmt.Sprintf("%s_%08x", prefix, h.Sum32())
 }
 
 // extractFirstSentence returns the first sentence (up to a period, question mark, or newline).
@@ -353,6 +610,45 @@ func extractFirstSentence(s string) string {
 		return s[:100]
 	}
 	return s
+}
+
+// classifyTurnPrototypes are prototype texts for each turn type, used for
+// embedding-based classification when an embed client is available.
+var classifyTurnPrototypes = map[TurnType]string{
+	TurnFinancial: "financial transaction payment transfer balance wallet money send receive funds",
+	TurnSocial:    "greeting hello thanks social conversation how are you good morning",
+	TurnCreative:  "create write design compose generate build make produce draft",
+	TurnReasoning: "analyze explain reason think evaluate compare understand research",
+}
+
+// classifyTurnWithEmbeddings uses cosine similarity against prototype embeddings.
+// Returns (type, true) if classification succeeded, (TurnReasoning, false) if below threshold.
+func classifyTurnWithEmbeddings(ctx context.Context, ec *llm.EmbeddingClient, text string) (TurnType, bool) {
+	queryVec, err := ec.EmbedSingle(ctx, text)
+	if err != nil || len(queryVec) == 0 {
+		return TurnReasoning, false
+	}
+
+	bestType := TurnReasoning
+	bestSim := float64(0)
+	const threshold = 0.3
+
+	for turnType, proto := range classifyTurnPrototypes {
+		protoVec, err := ec.EmbedSingle(ctx, proto)
+		if err != nil {
+			continue
+		}
+		sim := llm.CosineSimilarity(queryVec, protoVec)
+		if sim > bestSim {
+			bestSim = sim
+			bestType = turnType
+		}
+	}
+
+	if bestSim >= threshold {
+		return bestType, true
+	}
+	return TurnReasoning, false
 }
 
 // classifyTurn determines the type of the most recent exchange.
