@@ -2776,9 +2776,6 @@
               ? '<div style="margin-top:0.15rem;font-size:0.62rem;color:var(--accent-dim);text-transform:uppercase;letter-spacing:0.05em">\u2728 ' + textureNames.join(', ') + ' texture' + (textureNames.length > 1 ? 's' : '') + '</div>'
               : '';
             var fonts = th.fonts || [];
-            var fontHint = fonts.length > 0
-              ? '<div style="margin-top:0.1rem;font-size:0.62rem;color:var(--text-dim)">Font: ' + esc(fonts[0].split('family=')[1] || '').split('&')[0].split(':')[0].replace(/\+/g, ' ') + '</div>'
-              : '';
             _catalogThemeVars = _catalogThemeVars || [];
             var varIdx = _catalogThemeVars.length;
             _catalogThemeVars.push(vars);
@@ -2814,18 +2811,15 @@
               var fm = thFonts[0].match(/family=([^:&]+)/);
               if (fm) cardFont = "font-family:'" + fm[1].replace(/\+/g, ' ') + "',var(--font-mono);";
             }
-            return '<div style="display:flex;align-items:center;gap:0.6rem;padding:0.6rem 0.65rem;border:1px solid ' + cardBorder + ';border-radius:6px;' + cardBgStyle + ';' + cardFont + '">'
-              + '<div class="catalog-theme-preview" data-theme-var-idx="' + varIdx + '" style="flex-shrink:0"></div>'
-              + '<div style="min-width:0;flex:1">'
+            return '<div style="display:flex;flex-direction:column;gap:0.5rem;padding:0.65rem;border:1px solid ' + cardBorder + ';border-radius:6px;' + cardBgStyle + ';' + cardFont + ';min-height:180px">'
               + '<div style="display:flex;align-items:center;gap:0.4rem;flex-wrap:wrap">'
-              + '<span style="font-family:var(--font-mono);font-size:0.82rem;color:' + cardText + '">' + esc(name) + '</span>'
+              + '<span style="font-size:0.85rem;font-weight:600;color:' + cardText + '">' + esc(name) + '</span>'
               + sourceBadge
               + '</div>'
-              + '<div style="margin-top:0.18rem;font-size:0.75rem;color:' + cardMuted + ';line-height:1.35">' + esc(desc) + '</div>'
-              + fontHint
-              + (author ? '<div style="margin-top:0.15rem;font-size:0.68rem;color:' + cardMuted + '">by ' + esc(author) + '</div>' : '')
-              + '</div>'
-              + '<div style="flex-shrink:0">' + actionBtn + '</div>'
+              + '<div class="catalog-theme-preview" data-theme-var-idx="' + varIdx + '" style="flex-shrink:0;align-self:center"></div>'
+              + '<div style="font-size:0.75rem;color:' + cardMuted + ';line-height:1.35;flex:1">' + esc(desc) + '</div>'
+              + (author ? '<div style="font-size:0.65rem;color:' + cardMuted + '">by ' + esc(author) + '</div>' : '')
+              + '<div style="align-self:stretch;margin-top:auto">' + actionBtn + '</div>'
               + '</div>';
           }).join('');
           themesHtml = ''

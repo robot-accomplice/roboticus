@@ -95,8 +95,7 @@ var catalogThemes = []ThemeManifest{
 			"--theme-card-border":     "linear-gradient(to bottom, #6b5540, #3f3326) 1",
 		},
 		Textures: map[string]ThemeTexture{
-			"body": {Kind: "css", Value: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='0.08'/%3E%3C/svg%3E\")"},
-			"surface": {Kind: "css", Value: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8'%3E%3Crect width='8' height='8' fill='%23352a1f'/%3E%3Ccircle cx='4' cy='4' r='0.8' fill='%238b5e3c' opacity='0.12'/%3E%3C/svg%3E\")"},
+			"body": {Kind: "css", Value: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Crect width='200' height='200' fill='%232a2118'/%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='5' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='0.35'/%3E%3C/svg%3E\")"},
 		},
 		Version: "1.0.0", Source: "catalog"},
 	{ID: "midnight-ocean", Name: "Midnight Ocean", Description: "Deep navy depths with teal accents and wave-inspired separators", Author: "Roboticus", Swatch: "#0d9488",
@@ -110,7 +109,7 @@ var catalogThemes = []ThemeManifest{
 			"--theme-scrollbar":    "rgba(13,148,136,0.3)",
 		},
 		Textures: map[string]ThemeTexture{
-			"body": {Kind: "css", Value: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100' height='20'%3E%3Cpath d='M0 10 Q25 0 50 10 T100 10' fill='none' stroke='%230d9488' stroke-width='0.5' opacity='0.1'/%3E%3C/svg%3E\")"},
+			"body": {Kind: "css", Value: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='24'%3E%3Crect width='120' height='24' fill='%230e1f3a'/%3E%3Cpath d='M0 12 Q30 4 60 12 T120 12' fill='none' stroke='%230d9488' stroke-width='1.2'/%3E%3Cpath d='M0 18 Q30 10 60 18 T120 18' fill='none' stroke='%230d9488' stroke-width='0.6' opacity='0.5'/%3E%3C/svg%3E\")"},
 		},
 		Version: "1.0.0", Source: "catalog"},
 	{ID: "solarized-dark", Name: "Solarized Dark", Description: "Ethan Schoonover's precision-engineered dark palette for low-fatigue reading", Author: "Roboticus", Swatch: "#268bd2",
@@ -120,7 +119,7 @@ var catalogThemes = []ThemeManifest{
 			"--border": "#2aa198",
 		},
 		Textures: map[string]ThemeTexture{
-			"body": {Kind: "css", Value: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='6' height='6'%3E%3Crect width='6' height='6' fill='%23002b36'/%3E%3Crect x='2' y='2' width='1' height='1' fill='%23268bd2' opacity='0.06'/%3E%3C/svg%3E\")"},
+			"body": {Kind: "css", Value: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8'%3E%3Crect width='8' height='8' fill='%23073642'/%3E%3Ccircle cx='4' cy='4' r='1' fill='%23268bd2' opacity='0.2'/%3E%3Ccircle cx='0' cy='0' r='0.5' fill='%23268bd2' opacity='0.1'/%3E%3C/svg%3E\")"},
 		},
 		Version: "1.0.0", Source: "catalog"},
 	{ID: "dracula", Name: "Dracula", Description: "The beloved dark theme with purple, pink, and green highlights", Author: "Roboticus", Swatch: "#bd93f9",
@@ -157,7 +156,7 @@ var catalogThemes = []ThemeManifest{
 			"--border": "#3a1a5e", "--highlight": "#01ff70", "--secondary": "#05d9e8",
 		},
 		Textures: map[string]ThemeTexture{
-			"body": {Kind: "css", Value: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='4' height='4'%3E%3Crect width='4' height='2' fill='transparent'/%3E%3Crect y='2' width='4' height='2' fill='%23000' opacity='0.18'/%3E%3C/svg%3E\")"},
+			"body": {Kind: "css", Value: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='4' height='4'%3E%3Crect width='4' height='4' fill='%231a0a2e'/%3E%3Crect y='2' width='4' height='2' fill='%23000' opacity='0.3'/%3E%3C/svg%3E\")"},
 		},
 		Fonts:   []string{"https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap"},
 		Version: "1.0.0", Source: "catalog"},
@@ -175,7 +174,7 @@ var catalogThemes = []ThemeManifest{
 			"--border": "#3b4261", "--highlight": "#e0af68", "--secondary": "#9ece6a",
 		},
 		Textures: map[string]ThemeTexture{
-			"body": {Kind: "css", Value: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cdefs%3E%3CradialGradient id='g1'%3E%3Cstop offset='0' stop-color='%237aa2f7' stop-opacity='0.06'/%3E%3Cstop offset='1' stop-color='transparent'/%3E%3C/radialGradient%3E%3CradialGradient id='g2'%3E%3Cstop offset='0' stop-color='%239ece6a' stop-opacity='0.04'/%3E%3Cstop offset='1' stop-color='transparent'/%3E%3C/radialGradient%3E%3C/defs%3E%3Ccircle cx='30' cy='30' r='25' fill='url(%23g1)'/%3E%3Ccircle cx='90' cy='80' r='20' fill='url(%23g2)'/%3E%3C/svg%3E\")"},
+			"body": {Kind: "css", Value: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100' height='100'%3E%3Crect width='100' height='100' fill='%2324283b'/%3E%3Cdefs%3E%3CradialGradient id='g1'%3E%3Cstop offset='0' stop-color='%237aa2f7' stop-opacity='0.2'/%3E%3Cstop offset='1' stop-color='%2324283b'/%3E%3C/radialGradient%3E%3CradialGradient id='g2'%3E%3Cstop offset='0' stop-color='%239ece6a' stop-opacity='0.15'/%3E%3Cstop offset='1' stop-color='%2324283b'/%3E%3C/radialGradient%3E%3C/defs%3E%3Ccircle cx='25' cy='25' r='20' fill='url(%23g1)'/%3E%3Ccircle cx='75' cy='70' r='15' fill='url(%23g2)'/%3E%3C/svg%3E\")"},
 		},
 		Fonts:   []string{"https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap"},
 		Version: "1.0.0", Source: "catalog"},
