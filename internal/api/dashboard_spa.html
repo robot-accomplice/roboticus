@@ -2783,12 +2783,17 @@
             var varIdx = _catalogThemeVars.length;
             _catalogThemeVars.push(vars);
             _catalogThemeData.push({ textures: textures, fonts: th.fonts || [] });
-            // Card background: use theme's --bg color + body texture for live preview.
-            var cardBg = vars['--bg'] || 'rgba(255,255,255,0.01)';
+            // Card background: theme's bg + accent left border strip for strong visual identity.
+            var cardBg = vars['--bg'] || '#111';
+            var cardSurface = vars['--surface'] || '#222';
+            var cardAccent = vars['--accent'] || '#888';
             var bodyTexture = textures.body && textures.body.value ? textures.body.value : '';
-            var cardBgStyle = bodyTexture
-              ? 'background:' + bodyTexture + ',' + cardBg
-              : 'background:' + cardBg;
+            // Replace double quotes in texture URLs with single quotes so they survive HTML style="..." attribute.
+            var safeTexture = bodyTexture.replace(/"/g, "'");
+            var cardBgStyle = 'background:' + cardSurface + ';border-left:4px solid ' + cardAccent;
+            if (safeTexture) {
+              cardBgStyle = 'background-image:' + safeTexture + ';background-color:' + cardSurface + ';border-left:4px solid ' + cardAccent;
+            }
             // Action button: install, uninstall, or builtin badge.
             var actionBtn = '';
             if (source === 'builtin') {
