@@ -5820,6 +5820,8 @@
             + '<strong>Dangerous:</strong> run_script, shell execution.'
             + '</div></div>';
           accHtml += '<div class="settings-section"><div class="settings-section-title">Security Policy</div>'
+            + '<div style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:6px;padding:0.5rem 0.75rem;margin-bottom:0.75rem;font-size:0.75rem;color:#fca5a5">'
+            + '\u26a0 Changes to this section affect system security. Review carefully before saving.</div>'
             + '<div style="font-size:0.75rem;color:var(--muted);margin-bottom:0.75rem">'
             + 'Authority resolution: effective = min(max(positive grants\u2026), min(negative ceilings\u2026))'
             + '</div>';
@@ -6504,8 +6506,12 @@
                 return;
               }
 
+              var chEnabled = chData.enabled !== false;
               html += '<div class="channel-subsection">'
-                + '<div class="channel-subsection-title">' + esc(ch) + '</div>';
+                + '<div class="channel-subsection-title" style="display:flex;align-items:center;gap:0.75rem;justify-content:space-between;flex-wrap:wrap">'
+                + '<span>' + esc(ch) + '</span>'
+                + '<div class="settings-toggle-wrap" style="margin-left:auto"><label class="toggle"><input type="checkbox" data-settings-path="channels.' + esc(ch) + '.enabled"' + (chEnabled ? ' checked' : '') + '><span class="toggle-track"></span></label><span class="settings-toggle-label">' + (chEnabled ? 'On' : 'Off') + '</span></div>'
+                + '</div>';
 
               // Render the allow-list editor if this channel type has one
               if (meta.listField && chData) {
@@ -6517,6 +6523,7 @@
               // Render all other properties generically
               if (chData) {
                 Object.keys(chData).forEach(function(subKey) {
+                  if (subKey === 'enabled') return; // rendered in subsection header
                   if (meta.listField && subKey === meta.listField) return;
                   var subVal = chData[subKey]; var subPath = 'channels.' + ch + '.' + subKey;
                   var type = typeof subVal === 'number' ? 'number' : 'text';
@@ -6565,6 +6572,8 @@
 
           if (section === 'wallet') {
             html += '<div class="settings-section"><div class="settings-section-title">Wallet</div>';
+            html += '<div style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:6px;padding:0.5rem 0.75rem;margin-bottom:0.75rem;font-size:0.75rem;color:#fca5a5">'
+              + '\u26a0 Changes to this section affect system security. Review carefully before saving.</div>';
             var chainPresetBtns = '<div style="display:flex;gap:0.375rem;flex-wrap:wrap;margin-bottom:0.75rem">';
             Object.keys(self._CHAIN_PRESETS).forEach(function(name) {
               var preset = self._CHAIN_PRESETS[name];
@@ -6831,6 +6840,8 @@
           if (section === 'security') {
             var secData = draft.security || {};
             html += '<div class="settings-section"><div class="settings-section-title">' + esc(group.label) + '</div>';
+            html += '<div style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:6px;padding:0.5rem 0.75rem;margin-bottom:0.75rem;font-size:0.75rem;color:#fca5a5">'
+              + '\u26a0 Changes to this section affect system security. Review carefully before saving.</div>';
             html += '<div style="font-size:0.72rem;color:var(--muted);margin-bottom:0.75rem">Core security policy. For the full authority matrix, see the <strong>Access Control</strong> tab.</div>';
             var secFields = [
               'threat_caution_ceiling', 'allowlist_authority', 'trusted_authority',
@@ -9624,6 +9635,39 @@
       App._settingsDirty = JSON.stringify(draft) !== JSON.stringify(_cachedConfig); App._settingsRawText = null;
       if (formInput.type === 'checkbox') { var lbl = formInput.closest('.settings-toggle-wrap'); if (lbl) { var span = lbl.querySelector('.settings-toggle-label'); if (span) span.textContent = newVal ? 'On' : 'Off'; } }
       document.querySelectorAll('#settings-save,#settings-apply,#settings-cancel').forEach(function(b) { if (App._settingsDirty) { b.disabled = false; b.style.opacity = ''; b.style.pointerEvents = ''; } else { b.disabled = true; b.style.opacity = '0.4'; b.style.pointerEvents = 'none'; } });
+      // ── Inline validation against schema ──
+      (function validateField() {
+        var existingErr = formInput.parentNode.querySelector('.settings-validation-error');
+        if (existingErr) existingErr.remove();
+        formInput.style.borderColor = '';
+        if (!App._schemaIndex) return;
+        var sf = App._schemaIndex[path];
+        if (!sf) return;
+        var errMsg = null;
+        // Required check: non-checkbox, non-select, non-array text/number fields
+        if (sf.required && formInput.type !== 'checkbox' && formInput.tagName !== 'SELECT' && !formInput.hasAttribute('data-settings-array')) {
+          if (newVal == null || newVal === '' || (typeof newVal === 'number' && isNaN(newVal))) {
+            errMsg = 'This field is required';
+          }
+        }
+        // Number range check
+        if (!errMsg && formInput.type === 'number' && formInput.value !== '') {
+          var numVal = Number(formInput.value);
+          if (sf.min != null && numVal < sf.min) {
+            errMsg = 'Minimum value is ' + sf.min;
+          } else if (sf.max != null && numVal > sf.max) {
+            errMsg = 'Maximum value is ' + sf.max;
+          }
+        }
+        if (errMsg) {
+          formInput.style.borderColor = 'var(--error, #ef4444)';
+          var errEl = document.createElement('div');
+          errEl.className = 'settings-validation-error';
+          errEl.style.cssText = 'font-size:0.68rem;color:var(--error, #ef4444);margin-top:0.2rem;padding-left:0.25rem';
+          errEl.textContent = errMsg;
+          formInput.parentNode.appendChild(errEl);
+        }
+      })();
     }
     var revenueSwapChainInput = e.target.closest('[data-revenue-swap-chain-field]');
     if (revenueSwapChainInput && revenueSwapChainInput.getAttribute('data-revenue-swap-chain-field') === 'chain') {
