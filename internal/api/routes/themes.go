@@ -99,7 +99,7 @@ var catalogThemes = []ThemeManifest{
 			"--theme-scrollbar":       "rgba(193,127,58,0.3)",
 		},
 		Textures: map[string]ThemeTexture{
-			"body": {Kind: "url", Value: ThemeRegistryBaseURL + "/parchment/textures/textured-paper.png", Tile: true},
+			"body": {Kind: "url", Value: ThemeRegistryBaseURL + "/parchment/textures/parchment.jpg"},
 		},
 		Version: "1.0.0", Source: "catalog"},
 	{ID: "midnight-ocean", Name: "Midnight Ocean", Description: "Deep navy depths with teal accents and wave-inspired separators", Author: "Roboticus", Swatch: "#0d9488",
