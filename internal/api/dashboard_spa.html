@@ -2821,7 +2821,7 @@
               // Title row: name + badge.
               + '<div style="display:flex;align-items:center;gap:0.4rem;flex-wrap:wrap">'
               + '<span style="font-size:0.9rem;font-weight:700;color:' + v.text + ';letter-spacing:0.01em">' + esc(name) + '</span>'
-              + '<span style="font-size:0.58rem;padding:0.12rem 0.35rem;border-radius:3px;background:' + v.accent + ';color:' + v.bg + ';font-weight:600;text-transform:uppercase;letter-spacing:0.08em">' + esc(source) + '</span>'
+              + (installed ? '<span style="font-size:0.58rem;padding:0.12rem 0.35rem;border-radius:3px;background:' + v.accent + ';color:' + v.bg + ';font-weight:600;text-transform:uppercase;letter-spacing:0.08em">installed</span>' : '')
               + '</div>'
               // Accent divider line.
               + '<div style="height:2px;background:linear-gradient(90deg,' + v.accent + ',' + v.highlight + ',transparent);border-radius:1px;margin:0.1rem 0"></div>'
