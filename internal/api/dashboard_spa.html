@@ -2793,8 +2793,18 @@
               highlight: vars['--highlight'] || vars['--secondary'] || vars['--accent'] || '#888'
             };
 
-            // Texture as card background. CSS gradients and data URI images both supported.
-            var bodyTex = textures.body && textures.body.value ? textures.body.value.replace(/"/g, "'") : '';
+            // Texture as card background. Wrap raw URLs in url(); CSS values used as-is.
+            var bodyTex = '';
+            if (textures.body && textures.body.value) {
+              var rawVal = textures.body.value;
+              // If kind is "url", the value is a raw URL — wrap in css url().
+              // If kind is "css" or "file", the value is already a CSS expression (url() or gradient).
+              if (textures.body.kind === 'url' && rawVal.indexOf('url(') !== 0) {
+                bodyTex = "url('" + rawVal.replace(/'/g, "\\'") + "')";
+              } else {
+                bodyTex = rawVal.replace(/"/g, "'");
+              }
+            }
             var bgStyle;
             if (bodyTex) {
               var isTiled = textures.body && textures.body.tile;
@@ -7003,8 +7013,13 @@
     var ext = loadedThemes[themeId];
     if (!ext || !ext.textures) return;
     // Body texture
-    if (ext.textures.body && (ext.textures.body.kind === 'css' || ext.textures.body.type === 'css')) {
-      document.body.style.backgroundImage = ext.textures.body.value;
+    if (ext.textures.body && ext.textures.body.value) {
+      var texVal = ext.textures.body.value;
+      // Wrap raw URLs in url() for CSS background-image.
+      if ((ext.textures.body.kind === 'url' || ext.textures.body.kind === 'file') && texVal.indexOf('url(') !== 0) {
+        texVal = "url('" + texVal + "')";
+      }
+      document.body.style.backgroundImage = texVal;
       // Tiled textures repeat naturally. Photos use cover sizing.
       if (ext.textures.body.tile) {
         document.body.style.backgroundRepeat = 'repeat';
