@@ -2793,11 +2793,16 @@
               highlight: vars['--highlight'] || vars['--secondary'] || vars['--accent'] || '#888'
             };
 
-            // Texture as card background. CSS gradients work directly; data URIs need quote escaping.
+            // Texture as card background. CSS gradients and data URI images both supported.
             var bodyTex = textures.body && textures.body.value ? textures.body.value.replace(/"/g, "'") : '';
-            var bgStyle = bodyTex
-              ? 'background:' + bodyTex + ',' + v.bg
-              : 'background:' + v.bg;
+            var bgStyle;
+            if (bodyTex) {
+              // Photo textures (data:image/) use cover sizing; CSS patterns tile naturally.
+              var isPhoto = bodyTex.indexOf('data:image/jpeg') !== -1 || bodyTex.indexOf('data:image/png') !== -1;
+              bgStyle = 'background:' + bodyTex + ',' + v.bg + (isPhoto ? ';background-size:cover;background-position:center' : '');
+            } else {
+              bgStyle = 'background:' + v.bg;
+            }
 
             // Font from theme's Google Fonts URL.
             var fontStyle = '';
@@ -6991,14 +6996,23 @@
     // Remove any previous texture overlays
     document.querySelectorAll('.theme-texture-overlay').forEach(function(el) { el.remove(); });
     document.body.style.removeProperty('background-image');
+    document.body.style.removeProperty('background-size');
+    document.body.style.removeProperty('background-position');
+    document.body.style.removeProperty('background-attachment');
     var ext = loadedThemes[themeId];
     if (!ext || !ext.textures) return;
     // Body texture
-    if (ext.textures.body && ext.textures.body.type === 'css') {
+    if (ext.textures.body && (ext.textures.body.kind === 'css' || ext.textures.body.type === 'css')) {
       document.body.style.backgroundImage = ext.textures.body.value;
+      // Photo textures need cover sizing
+      if (ext.textures.body.value.indexOf('data:image/jpeg') !== -1) {
+        document.body.style.backgroundSize = 'cover';
+        document.body.style.backgroundPosition = 'center';
+        document.body.style.backgroundAttachment = 'fixed';
+      }
     }
     // Surface texture — inject a subtle pattern on card/surface elements via CSS
-    if (ext.textures.surface && ext.textures.surface.type === 'css') {
+    if (ext.textures.surface && (ext.textures.surface.kind === 'css' || ext.textures.surface.type === 'css')) {
       var style = document.getElementById('theme-texture-css');
       if (!style) { style = document.createElement('style'); style.id = 'theme-texture-css'; document.head.appendChild(style); }
       style.textContent = '[data-theme="' + themeId + '"] .card, [data-theme="' + themeId + '"] .surface { background-image: ' + ext.textures.surface.value + '; }';
@@ -8056,7 +8070,8 @@
       themeInstallBtn.textContent = 'Installing…';
       api('/api/themes/catalog/install', { method: 'POST', body: JSON.stringify({ id: themeId }) })
         .then(function(resp) {
-          toast('Installed theme: ' + (resp.theme && resp.theme.name || themeId));
+          toast('Installed theme: ' + (resp.theme && resp.theme.name || themeId), 'success');
+          loadExternalThemes(); // refresh the theme dropdown so newly installed theme appears
           App.refreshSkills(); // re-render the catalog page
         })
         .catch(function(err) {
