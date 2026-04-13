@@ -4966,6 +4966,7 @@
     _settingsDragModelIndex: null,
     _settingsRawText: null,
     _settingsDirty: false,
+    _settingsAdvancedExpanded: false,
     _getSettingsDraft: function() {
       if (!this._settingsDraft && _cachedConfig) this._settingsDraft = JSON.parse(JSON.stringify(_cachedConfig));
       return this._settingsDraft || {};
@@ -6706,7 +6707,209 @@
               html += '<div class="settings-row"><div class="settings-label">' + esc(key) + tooltipHtml + immutableHint + '</div><input class="settings-input" type="' + type + '" data-settings-path="' + esc(path) + '" value="' + sv + '" placeholder="' + esc(placeholder) + '"' + step + disabledAttr + '></div>';
             }
           };
-          // Use the group label as display name for single-section groups to avoid raw key names.
+
+          // ── Hand-crafted field orderings per section ──────────────────
+          // Helper: render a list of fields in explicit order, falling back to
+          // rendering any remaining keys that exist in the data but are not in the list.
+          var _renderFieldsInOrder = function(sectionKey, fieldNames, titleText) {
+            var sd = draft[sectionKey];
+            if (!sd || typeof sd !== 'object') return;
+            html += '<div class="settings-section"><div class="settings-section-title">' + esc(titleText) + '</div>';
+            var rendered = {};
+            fieldNames.forEach(function(key) {
+              var val = sd[key];
+              if (val === undefined) {
+                // Try to pull a default from schema so the field still appears.
+                var sf = _schemaIdx[sectionKey + '.' + key];
+                if (sf && sf['default'] != null) val = sf['default'];
+                else return; // Field does not exist in draft or schema — skip.
+              }
+              rendered[key] = true;
+              _renderSettingsField(key, val, sectionKey + '.' + key, tooltipSpan(key));
+            });
+            // Render any remaining keys not in the hand-crafted list (future-proofing).
+            Object.keys(sd).forEach(function(key) {
+              if (rendered[key]) return;
+              _renderSettingsField(key, sd[key], sectionKey + '.' + key, tooltipSpan(key));
+            });
+            html += '</div>';
+          };
+
+          // ── 1. Agent & Identity ────────────────────────────────────────
+          if (section === 'agent') {
+            _renderFieldsInOrder('agent', [
+              'name', 'id', 'workspace', 'delegation_enabled', 'delegation_min_complexity',
+              'delegation_min_utility_margin', 'specialist_creation_requires_approval',
+              'composition_policy', 'skill_creation_rigor', 'output_validation_policy',
+              'output_validation_sample_rate', 'max_output_retries',
+              'retirement_success_threshold', 'retirement_min_delegations',
+              'autonomy_max_react_turns', 'autonomy_max_turn_duration_seconds',
+              'log_level'
+            ], group.label);
+            return;
+          }
+
+          // ── 4. Memory ──────────────────────────────────────────────────
+          if (section === 'memory') {
+            _renderFieldsInOrder('memory', [
+              'working_budget', 'episodic_budget', 'semantic_budget',
+              'procedural_budget', 'relationship_budget',
+              'hybrid_weight', 'embedding_provider', 'embedding_model',
+              'similarity_threshold', 'ann_index', 'ann_activation_threshold',
+              'decay_half_life_days'
+            ], group.label);
+            return;
+          }
+
+          // ── 5. Context Budget ──────────────────────────────────────────
+          if (section === 'context_budget') {
+            _renderFieldsInOrder('context_budget', [
+              'l0', 'l1', 'l2', 'l3', 'channel_minimum', 'soul_max_context_pct'
+            ], group.label);
+            return;
+          }
+
+          // ── 6. Session ─────────────────────────────────────────────────
+          if (section === 'session') {
+            _renderFieldsInOrder('session', [
+              'scope_mode', 'ttl_seconds', 'reset_schedule'
+            ], group.label);
+            return;
+          }
+
+          // ── 7. Cache ───────────────────────────────────────────────────
+          if (section === 'cache') {
+            _renderFieldsInOrder('cache', [
+              'enabled', 'similarity_threshold', 'max_entries',
+              'prompt_compression', 'compression_target_ratio'
+            ], group.label);
+            return;
+          }
+
+          // ── 9. Matrix ──────────────────────────────────────────────────
+          if (section === 'matrix') {
+            _renderFieldsInOrder('matrix', [
+              'homeserver_url', 'user_id', 'access_token_env', 'access_token',
+              'device_id', 'device_display_name', 'device_store_path',
+              'allowed_rooms', 'auto_join', 'sync_timeout_seconds',
+              'e2ee_enabled'
+            ], group.label);
+            return;
+          }
+
+          // ── 11. Plugins ────────────────────────────────────────────────
+          if (section === 'plugins') {
+            _renderFieldsInOrder('plugins', [
+              'dir', 'strict_permissions', 'allow', 'deny'
+            ], group.label);
+            return;
+          }
+
+          // ── 12. Skills (Script Runtime) ────────────────────────────────
+          if (section === 'skills') {
+            _renderFieldsInOrder('skills', [
+              'directory', 'script_timeout_seconds', 'script_max_output_bytes',
+              'allowed_interpreters', 'sandbox_env', 'hot_reload',
+              'script_max_memory_bytes', 'network_allowed', 'workspace_dir',
+              'watch_mode'
+            ], 'Script Runtime');
+            return;
+          }
+
+          // ── 13. Server ─────────────────────────────────────────────────
+          if (section === 'server') {
+            _renderFieldsInOrder('server', [
+              'port', 'bind', 'api_key', 'log_dir', 'log_max_days',
+              'cron_max_concurrency',
+              'rate_limit_requests', 'rate_limit_window_secs',
+              'per_ip_rate_limit_requests', 'per_actor_rate_limit_requests',
+              'trusted_proxy_cidrs'
+            ], group.label);
+            return;
+          }
+
+          // ── 3. Security (form tab — non-access-control fields) ─────────
+          if (section === 'security') {
+            var secData = draft.security || {};
+            html += '<div class="settings-section"><div class="settings-section-title">' + esc(group.label) + '</div>';
+            html += '<div style="font-size:0.72rem;color:var(--muted);margin-bottom:0.75rem">Core security policy. For the full authority matrix, see the <strong>Access Control</strong> tab.</div>';
+            var secFields = [
+              'threat_caution_ceiling', 'allowlist_authority', 'trusted_authority',
+              'api_authority', 'deny_on_empty_allowlist', 'sandbox_required',
+              'trusted_sender_ids'
+            ];
+            var secRendered = {};
+            secFields.forEach(function(key) {
+              var val = secData[key];
+              if (val === undefined) {
+                var sf = _schemaIdx['security.' + key];
+                if (sf && sf['default'] != null) val = sf['default'];
+                else return;
+              }
+              secRendered[key] = true;
+              _renderSettingsField(key, val, 'security.' + key, tooltipSpan(key));
+            });
+            // Filesystem subsection
+            if (secData.filesystem && typeof secData.filesystem === 'object') {
+              secRendered.filesystem = true;
+              html += '<div class="settings-nested"><div style="font-size:0.625rem;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted);margin-bottom:0.5rem">filesystem</div>';
+              var fsFields = ['workspace_only', 'script_fs_confinement', 'protected_paths', 'extra_protected_paths', 'script_allowed_paths', 'tool_allowed_paths'];
+              var fsRendered = {};
+              var fsData = secData.filesystem;
+              fsFields.forEach(function(key) {
+                var val = fsData[key];
+                if (val === undefined) return;
+                fsRendered[key] = true;
+                _renderSettingsField(key, val, 'security.filesystem.' + key, tooltipSpan(key));
+              });
+              Object.keys(fsData).forEach(function(key) {
+                if (fsRendered[key]) return;
+                _renderSettingsField(key, fsData[key], 'security.filesystem.' + key, tooltipSpan(key));
+              });
+              html += '</div>';
+            }
+            // Remaining security keys not hand-crafted
+            Object.keys(secData).forEach(function(key) {
+              if (secRendered[key]) return;
+              _renderSettingsField(key, secData[key], 'security.' + key, tooltipSpan(key));
+            });
+            html += '</div>';
+            return;
+          }
+
+          // ── 15. Themes / Update (inside Advanced group) ────────────────
+          // The Advanced group may contain themes, update, and any future small sections.
+          // Render with a collapsible wrapper.
+          if (group.label === 'Advanced') {
+            var advExpanded = !!self._settingsAdvancedExpanded;
+            html += '<div class="settings-section">'
+              + '<div class="settings-section-title" style="cursor:pointer;user-select:none" data-settings-toggle-advanced>'
+              + (advExpanded ? '\u25be' : '\u25b8') + ' Advanced'
+              + ' <span class="badge muted" style="font-size:0.55rem;vertical-align:middle">' + groupSections.length + ' subsections</span>'
+              + '</div>';
+            html += '<div id="settings-advanced-body" style="' + (advExpanded ? '' : 'display:none') + '">';
+            // Also pull in the hidden sections so operators can inspect/edit them.
+            var advancedSections = groupSections.slice();
+            Object.keys(hiddenSections).forEach(function(hs) {
+              if (draft[hs] && typeof draft[hs] === 'object' && advancedSections.indexOf(hs) === -1) {
+                advancedSections.push(hs);
+              }
+            });
+            advancedSections.sort();
+            advancedSections.forEach(function(subSec) {
+              var subData = draft[subSec];
+              if (!subData || typeof subData !== 'object') return;
+              html += '<div class="settings-nested"><div style="font-size:0.625rem;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted);margin-bottom:0.5rem">' + esc(subSec) + '</div>';
+              Object.keys(subData).forEach(function(key) {
+                _renderSettingsField(key, subData[key], subSec + '.' + key, tooltipSpan(key));
+              });
+              html += '</div>';
+            });
+            html += '</div></div>';
+            return;
+          }
+
+          // ── Fallback: generic section rendering for any unhandled section ──
           var sectionTitle = sectionDisplayLabels[section] || (groupSections.length === 1 ? group.label : section);
           html += '<div class="settings-section"><div class="settings-section-title">' + esc(sectionTitle) + '</div>';
           Object.keys(sectionData).forEach(function(key) {
@@ -8552,6 +8755,11 @@
       if (App._settingsMode === 'raw' && newMode !== 'raw') App._settingsRawText = null;
       if (newMode === 'models') App._initModelOrderFromDraft();
       App._settingsMode = newMode; App.navigate('settings'); return;
+    }
+    if (e.target.closest('[data-settings-toggle-advanced]')) {
+      App._settingsAdvancedExpanded = !App._settingsAdvancedExpanded;
+      App.navigate('settings');
+      return;
     }
     if (e.target.closest('#hints-reset-dismissed')) {
       clearHintDismissals();
