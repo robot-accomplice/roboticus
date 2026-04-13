@@ -5962,7 +5962,7 @@
           if (draft[k] === undefined || draft[k] === null) draft[k] = JSON.parse(JSON.stringify(CONFIG_SCHEMA[k]));
         });
 
-        var fieldTooltips = {
+        window.fieldTooltips = {
             // --- Agent & Identity ---
             'name': 'The agent\'s display name, shown in chat and dashboard headers.',
             'id': 'Unique identifier for this agent instance. Used in logs and multi-agent coordination.',
@@ -6157,7 +6157,7 @@
 
         // --- Tooltip popover system ---
         var _activePopover = null;
-        function showSettingsTooltip(triggerEl, text) {
+        window.showSettingsTooltip = function(triggerEl, text) {
           hideSettingsTooltip();
           var pop = document.createElement('div');
           pop.className = 'settings-tooltip-popover';
@@ -6186,7 +6186,7 @@
             document.addEventListener('click', _closePopoverHandler, true);
           }, 0);
         }
-        function hideSettingsTooltip() {
+        window.hideSettingsTooltip = function() {
           if (_activePopover) {
             _activePopover.remove();
             _activePopover = null;
