@@ -38,12 +38,12 @@ func TestNewWallet_CustomChainID(t *testing.T) {
 	}
 }
 
-func TestNewWallet_PassphraseFromEnv(t *testing.T) {
+func TestNewWallet_PassphraseFromConfig(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "wallet.enc")
-	t.Setenv("ROBOTICUS_WALLET_PASSPHRASE", "test-secret-123")
 
-	w, err := NewWallet(WalletConfig{Path: path})
+	// Passphrase must be provided explicitly (from keystore) — env vars no longer work.
+	w, err := NewWallet(WalletConfig{Path: path, Passphrase: "test-secret-123"})
 	if err != nil {
 		t.Fatal(err)
 	}

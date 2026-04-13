@@ -146,6 +146,11 @@ func RunOAuthPKCEFlow(ctx context.Context, cfg OAuthPKCEConfig) (*OAuthToken, er
 
 	server := &http.Server{Handler: mux}
 	go func() { _ = server.Serve(listener) }()
+	// Ensure server shuts down when context cancels (belt-and-suspenders with defer).
+	go func() {
+		<-ctx.Done()
+		_ = server.Shutdown(context.Background())
+	}()
 	defer func() { _ = server.Shutdown(context.Background()) }()
 
 	// Return the authorization URL — caller must open it in a browser.

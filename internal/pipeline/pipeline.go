@@ -561,7 +561,7 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 	// ── Stage 11.5: Cache check (Rust: check_cache) ──────────────────────
 	if cfg.CacheEnabled && !input.NoCache {
 		tr.BeginSpan("cache_check")
-		if hit := p.CheckCache(content); hit != nil {
+		if hit := p.CheckCache(ctx, content); hit != nil {
 			tr.Annotate("cache_hit", true)
 			tr.Annotate("cache_model", hit.Model)
 			tr.EndSpan("ok")
@@ -742,8 +742,8 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 
 	// ── Stage 12.5: Cache store (Rust: store_in_cache) ────────────────────
 	if cfg.CacheEnabled && !input.NoCache && outcome != nil && !outcome.Stream && outcome.Content != "" {
-		p.bgWorker.Submit("storeCache", func(_ context.Context) {
-			p.StoreInCache(content, outcome.Content, outcome.Model)
+		p.bgWorker.Submit("storeCache", func(bgCtx context.Context) {
+			p.StoreInCache(bgCtx, content, outcome.Content, outcome.Model)
 		})
 	}
 

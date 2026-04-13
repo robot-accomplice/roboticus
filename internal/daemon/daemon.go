@@ -324,6 +324,15 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 
 	// ── Phase 8: Channel adapters ───────────────────────────────────────
 	dq := channel.NewDeliveryQueue(store)
+
+	// Recover stranded in-flight deliveries from previous unclean shutdown.
+	if recovered, err := store.ExecContext(context.Background(),
+		`UPDATE delivery_queue SET status = 'pending', next_retry_at = datetime('now', '+30 seconds') WHERE status = 'in_flight'`); err == nil {
+		if n, _ := recovered.RowsAffected(); n > 0 {
+			log.Warn().Int64("recovered", n).Msg("delivery queue: recovered stranded in-flight messages")
+		}
+	}
+
 	router := channel.NewRouter(dq)
 
 	// Register channel adapters from config + keystore.
