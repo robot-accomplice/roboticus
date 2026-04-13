@@ -2780,46 +2780,57 @@
             var varIdx = _catalogThemeVars.length;
             _catalogThemeVars.push(vars);
             _catalogThemeData.push({ textures: textures, fonts: th.fonts || [] });
-            // Card background: theme's bg + accent left border strip for strong visual identity.
-            var cardBg = vars['--bg'] || '#111';
-            var cardSurface = vars['--surface'] || '#222';
-            var cardAccent = vars['--accent'] || '#888';
-            var bodyTexture = textures.body && textures.body.value ? textures.body.value : '';
-            // Replace double quotes in texture URLs with single quotes so they survive HTML style="..." attribute.
-            var safeTexture = bodyTexture.replace(/"/g, "'");
-            var cardBgStyle = 'background:' + cardSurface + ';border-left:4px solid ' + cardAccent;
-            if (safeTexture) {
-              cardBgStyle = 'background-image:' + safeTexture + ';background-color:' + cardSurface + ';border-left:4px solid ' + cardAccent;
-            }
-            // Action button: install, uninstall, or builtin badge.
-            var actionBtn = '';
-            if (source === 'builtin') {
-              actionBtn = '<span class="badge" style="font-size:0.68rem;padding:0.2rem 0.45rem">builtin</span>';
-            } else if (installed) {
-              actionBtn = '<button class="btn secondary" data-theme-uninstall="' + esc(th.id) + '" style="font-size:0.72rem;padding:0.25rem 0.5rem;white-space:nowrap">Uninstall</button>';
-            } else {
-              actionBtn = '<button class="btn secondary" data-theme-install="' + esc(th.id) + '" style="font-size:0.72rem;padding:0.25rem 0.5rem;white-space:nowrap">' + uiBtnLabel('download', 'Install') + '</button>';
-            }
-            // Text color from theme vars so card content is readable against theme bg.
-            var cardText = vars['--text'] || 'var(--text)';
-            var cardMuted = vars['--muted'] || 'var(--muted)';
-            var cardBorder = vars['--border'] || 'var(--border-soft)';
-            // Use theme's font for all card text.
+
+            // ── The entire card IS the theme preview ──
+            // Every element uses the theme's own colors, font, and texture.
+            var v = {
+              bg:      vars['--bg'] || '#111',
+              surface: vars['--surface'] || '#222',
+              accent:  vars['--accent'] || '#888',
+              text:    vars['--text'] || '#eee',
+              muted:   vars['--muted'] || '#999',
+              border:  vars['--border'] || '#444',
+              highlight: vars['--highlight'] || vars['--secondary'] || vars['--accent'] || '#888'
+            };
+
+            // Texture: replace double quotes with single quotes for HTML style attr.
+            var bodyTex = textures.body && textures.body.value ? textures.body.value.replace(/"/g, "'") : '';
+            var bgStyle = bodyTex
+              ? 'background-image:' + bodyTex + ';background-color:' + v.bg
+              : 'background:' + v.bg;
+
+            // Font from theme's Google Fonts URL.
+            var fontStyle = '';
             var thFonts = th.fonts || [];
-            var cardFont = '';
             if (thFonts.length > 0) {
               var fm = thFonts[0].match(/family=([^:&]+)/);
-              if (fm) cardFont = "font-family:'" + fm[1].replace(/\+/g, ' ') + "',var(--font-mono);";
+              if (fm) fontStyle = "font-family:'" + fm[1].replace(/\+/g, ' ') + "',var(--font-mono);";
             }
-            return '<div style="display:flex;flex-direction:column;gap:0.5rem;padding:0.65rem;border:1px solid ' + cardBorder + ';border-radius:6px;' + cardBgStyle + ';' + cardFont + ';min-height:180px">'
+
+            // Action button styled in theme colors.
+            var actionBtn = '';
+            if (source === 'builtin') {
+              actionBtn = '<span style="display:inline-block;font-size:0.68rem;padding:0.2rem 0.5rem;border:1px solid ' + v.accent + ';border-radius:4px;color:' + v.accent + '">builtin</span>';
+            } else if (installed) {
+              actionBtn = '<button data-theme-uninstall="' + esc(th.id) + '" style="width:100%;padding:0.4rem;font-size:0.72rem;background:transparent;border:1px solid ' + v.muted + ';border-radius:4px;color:' + v.muted + ';cursor:pointer">Uninstall</button>';
+            } else {
+              actionBtn = '<button data-theme-install="' + esc(th.id) + '" style="width:100%;padding:0.4rem;font-size:0.72rem;background:' + v.accent + ';border:none;border-radius:4px;color:' + v.bg + ';cursor:pointer;font-weight:600">Install</button>';
+            }
+
+            return '<div style="display:flex;flex-direction:column;gap:0.4rem;padding:0.75rem;border:1px solid ' + v.border + ';border-radius:8px;' + bgStyle + ';' + fontStyle + ';min-height:180px">'
+              // Title row: name + badge.
               + '<div style="display:flex;align-items:center;gap:0.4rem;flex-wrap:wrap">'
-              + '<span style="font-size:0.85rem;font-weight:600;color:' + cardText + '">' + esc(name) + '</span>'
-              + sourceBadge
+              + '<span style="font-size:0.9rem;font-weight:700;color:' + v.text + ';letter-spacing:0.01em">' + esc(name) + '</span>'
+              + '<span style="font-size:0.58rem;padding:0.12rem 0.35rem;border-radius:3px;background:' + v.accent + ';color:' + v.bg + ';font-weight:600;text-transform:uppercase;letter-spacing:0.08em">' + esc(source) + '</span>'
               + '</div>'
-              + '<div class="catalog-theme-preview" data-theme-var-idx="' + varIdx + '" style="flex-shrink:0;align-self:center"></div>'
-              + '<div style="font-size:0.75rem;color:' + cardMuted + ';line-height:1.35;flex:1">' + esc(desc) + '</div>'
-              + (author ? '<div style="font-size:0.65rem;color:' + cardMuted + '">by ' + esc(author) + '</div>' : '')
-              + '<div style="align-self:stretch;margin-top:auto">' + actionBtn + '</div>'
+              // Accent divider line.
+              + '<div style="height:2px;background:linear-gradient(90deg,' + v.accent + ',' + v.highlight + ',transparent);border-radius:1px;margin:0.1rem 0"></div>'
+              // Description in theme's muted color.
+              + '<div style="font-size:0.78rem;color:' + v.muted + ';line-height:1.4;flex:1">' + esc(desc) + '</div>'
+              // Author.
+              + (author ? '<div style="font-size:0.62rem;color:' + v.muted + ';opacity:0.7">by ' + esc(author) + '</div>' : '')
+              // Install button at bottom, themed.
+              + '<div style="margin-top:auto;padding-top:0.3rem">' + actionBtn + '</div>'
               + '</div>';
           }).join('');
           themesHtml = ''
