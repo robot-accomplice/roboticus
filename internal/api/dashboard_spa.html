@@ -487,17 +487,17 @@
     .settings-help-trigger { cursor: help; color: var(--accent); font-size: 0.65rem; display: inline-flex; align-items: center; justify-content: center; width: 1.1rem; height: 1.1rem; border-radius: 50%; background: rgba(var(--accent-rgb, 99,102,241), 0.15); border: 1px solid rgba(var(--accent-rgb, 99,102,241), 0.3); user-select: none; position: relative; vertical-align: middle; margin-left: 0.25rem; font-weight: 600; }
     .settings-help-trigger:hover { background: rgba(var(--accent-rgb, 99,102,241), 0.3); border-color: var(--accent); }
     .settings-tooltip-popover {
-      position: fixed; z-index: 9999; max-width: 320px; padding: 0.625rem 0.75rem;
-      background: var(--surface-2); color: var(--text); border: 1px solid var(--accent-dim);
-      border-radius: var(--radius); font-size: 0.75rem; line-height: 1.5;
-      font-family: var(--font); box-shadow: 0 4px 16px rgba(0,0,0,0.25);
+      position: fixed; z-index: 9999; max-width: 360px; padding: 0.75rem 1rem;
+      background: var(--accent); color: var(--bg); border: 2px solid var(--accent);
+      border-radius: var(--radius); font-size: 0.8rem; line-height: 1.5;
+      font-family: var(--font); box-shadow: 0 6px 24px rgba(0,0,0,0.4); font-weight: 500;
       pointer-events: auto; opacity: 0; transform: translateY(4px);
       transition: opacity 0.15s, transform 0.15s;
     }
     .settings-tooltip-popover.visible { opacity: 1; transform: translateY(0); }
     .settings-tooltip-popover::before {
       content: ''; position: absolute; top: -5px; left: var(--arrow-left, 16px);
-      width: 8px; height: 8px; background: var(--surface-2);
+      width: 8px; height: 8px; background: var(--accent);
       border-left: 1px solid var(--accent-dim); border-top: 1px solid var(--accent-dim);
       transform: rotate(45deg);
     }
@@ -6148,6 +6148,39 @@
             'catalog_url': 'URL of the theme catalog for dashboard theme downloads.',
             // --- Update ---
             'check_interval_hours': 'Hours between automatic update checks.',
+            // --- Providers ---
+            'url': 'API endpoint URL for this provider.',
+            'tier': 'Provider tier for cost/quality classification (T1=premium, T2=standard, T3=budget).',
+            'format': 'API format: openai, anthropic, ollama, google.',
+            'api_key_ref': 'Keystore reference name for this provider\'s API key.',
+            'chat_path': 'API path for chat completions (e.g. /v1/chat/completions).',
+            'embedding_path': 'API path for embeddings (e.g. /v1/embeddings).',
+            'embedding_model': 'Model name to use for embedding requests.',
+            'embedding_dimensions': 'Output dimensions for embeddings. 0 = model default.',
+            'is_local': 'Whether this provider runs locally (Ollama, llama.cpp, vLLM).',
+            'cost_per_input_token': 'Cost in USD per input token for cost tracking.',
+            'cost_per_output_token': 'Cost in USD per output token for cost tracking.',
+            'auth_header': 'Custom header name for API key (default: Authorization: Bearer).',
+            'tpm_limit': 'Tokens-per-minute rate limit. 0 = unlimited.',
+            'timeout_seconds': 'Per-request timeout in seconds. 0 = use global default.',
+            // --- Revenue Swap ---
+            'target_symbol': 'Target token symbol for revenue swaps (e.g. USDC, PUSD).',
+            'default_chain': 'Default blockchain for swap execution (e.g. ETH, Base).',
+            // --- Heartbeat ---
+            'treasury_interval_seconds': 'Seconds between treasury balance sync cycles.',
+            'yield_interval_seconds': 'Seconds between yield strategy evaluation cycles.',
+            'memory_interval_seconds': 'Seconds between memory consolidation cycles.',
+            'maintenance_interval_seconds': 'Seconds between maintenance tasks (cleanup, compaction).',
+            'session_interval_seconds': 'Seconds between session expiry checks.',
+            'discovery_interval_seconds': 'Seconds between mDNS/agent discovery scans.',
+            // --- Approvals ---
+            'gated_tools': 'Tool names that require human approval before execution.',
+            'blocked_tools': 'Tool names permanently blocked from execution.',
+            'timeout_seconds': 'Seconds to wait for human approval before auto-denying.',
+            // --- Circuit Breaker ---
+            'failure_threshold': 'Consecutive failures before opening the breaker.',
+            'recovery_timeout_seconds': 'Seconds before a half-open probe is attempted.',
+            'half_open_max_requests': 'Max requests in half-open state before re-evaluating.',
             // --- Database ---
             'path': 'File path for data storage.',
             'database.path': 'SQLite database file path. Use :memory: for in-memory (dev only).',
@@ -6251,9 +6284,21 @@
         }).sort();
         if (ungrouped.length) sectionGroups.push({ label: 'Other', sections: ungrouped });
 
+        // Field display name overrides for ambiguous keys.
+        var _fieldDisplayNames = {
+          'database.path': 'database_path',
+          'wallet.path': 'wallet_keyfile_path',
+          'wallet.chain_id': 'blockchain_chain_id',
+          'wallet.rpc_url': 'blockchain_rpc_url',
+          'wallet.balance_poll_seconds': 'balance_poll_interval',
+          'plugins.dir': 'plugins_directory',
+          'skills.directory': 'skills_directory'
+        };
+
         // Schema-driven field renderer — defined before sectionGroups loop so immutable sections can use it.
         var _schemaIdx = self._schemaIndex || {};
         var _renderSettingsField = function(key, val, path, tooltipHtml) {
+          var displayKey = _fieldDisplayNames[path] || key;
           var sf = _schemaIdx[path];
           // Build tooltip from schema description if no static tooltip exists.
           if (sf && sf.description && !tooltipHtml) {
@@ -6270,15 +6315,15 @@
           var enumValues = (sf && sf['enum'] && sf['enum'].length) ? sf['enum'] : null;
 
           if (typeof val === 'boolean') {
-            html += '<div class="settings-row"><div class="settings-label">' + esc(key) + tooltipHtml + immutableHint + '</div><div class="settings-toggle-wrap"><label class="toggle"><input type="checkbox" data-settings-path="' + esc(path) + '"' + (val ? ' checked' : '') + '><span class="toggle-track"></span></label><span class="settings-toggle-label">' + (val ? 'On' : 'Off') + '</span></div></div>';
+            html += '<div class="settings-row"><div class="settings-label">' + esc(displayKey) + tooltipHtml + immutableHint + '</div><div class="settings-toggle-wrap"><label class="toggle"><input type="checkbox" data-settings-path="' + esc(path) + '"' + (val ? ' checked' : '') + '><span class="toggle-track"></span></label><span class="settings-toggle-label">' + (val ? 'On' : 'Off') + '</span></div></div>';
           } else if (enumValues) {
             var selHtml = '<select class="settings-input" data-settings-path="' + esc(path) + '" style="min-width:160px">';
             enumValues.forEach(function(o) { selHtml += '<option value="' + esc(o) + '"' + (String(val) === o ? ' selected' : '') + '>' + esc(o) + '</option>'; });
             selHtml += '</select>';
-            html += '<div class="settings-row"><div class="settings-label">' + esc(key) + tooltipHtml + immutableHint + '</div>' + selHtml + '</div>';
+            html += '<div class="settings-row"><div class="settings-label">' + esc(displayKey) + tooltipHtml + immutableHint + '</div>' + selHtml + '</div>';
           } else if (Array.isArray(val)) {
             var joined = val.join('\n');
-            html += '<div class="settings-row"><div class="settings-label">' + esc(key) + tooltipHtml + immutableHint + '</div>'
+            html += '<div class="settings-row"><div class="settings-label">' + esc(displayKey) + tooltipHtml + immutableHint + '</div>'
               + '<textarea class="settings-input" data-settings-path="' + esc(path) + '" data-settings-array="1" '
               + 'rows="' + Math.max(2, Math.min(6, val.length + 1)) + '" placeholder="One entry per line" style="font-family:var(--font-mono);font-size:0.75rem">' + esc(joined) + '</textarea></div>';
           } else if (typeof val === 'object' && val !== null) {
@@ -6293,7 +6338,7 @@
             var type = (sf && (sf.type === 'integer' || sf.type === 'float')) ? 'number' : (typeof val === 'number' ? 'number' : 'text');
             var sv = (val == null || val === '') ? '' : esc(String(val));
             var step = (sf && sf.type === 'float') ? ' step="any"' : '';
-            html += '<div class="settings-row"><div class="settings-label">' + esc(key) + tooltipHtml + immutableHint + '</div><input class="settings-input" type="' + type + '" data-settings-path="' + esc(path) + '" value="' + sv + '" placeholder="' + esc(placeholder) + '"' + step + '></div>';
+            html += '<div class="settings-row"><div class="settings-label">' + esc(displayKey) + tooltipHtml + immutableHint + '</div><input class="settings-input" type="' + type + '" data-settings-path="' + esc(path) + '" value="' + sv + '" placeholder="' + esc(placeholder) + '"' + step + '></div>';
           }
         };
 
@@ -6309,6 +6354,35 @@
           skills: 'Script Runtime',
           mcp: 'MCP Servers'
         };
+        // Advanced group: render once as a collapsible section, not per-section.
+        if (group.label === 'Advanced') {
+          var advExpanded = !!self._settingsAdvancedExpanded;
+          html += '<div class="settings-section">'
+            + '<div class="settings-section-title" style="cursor:pointer;user-select:none" data-settings-toggle-advanced>'
+            + (advExpanded ? '\u25be' : '\u25b8') + ' Advanced'
+            + ' <span class="badge muted" style="font-size:0.55rem;vertical-align:middle">' + groupSections.length + ' subsections</span>'
+            + '</div>';
+          html += '<div id="settings-advanced-body" style="' + (advExpanded ? '' : 'display:none') + '">';
+          var advancedSections = groupSections.slice();
+          Object.keys(hiddenSections).forEach(function(hs) {
+            if (draft[hs] && typeof draft[hs] === 'object' && advancedSections.indexOf(hs) === -1) {
+              advancedSections.push(hs);
+            }
+          });
+          advancedSections.sort();
+          advancedSections.forEach(function(subSec) {
+            var subData = draft[subSec];
+            if (!subData || typeof subData !== 'object') return;
+            html += '<div class="settings-nested"><div style="font-size:0.625rem;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted);margin-bottom:0.5rem">' + esc(subSec) + '</div>';
+            Object.keys(subData).forEach(function(key) {
+              _renderSettingsField(key, subData[key], subSec + '.' + key, tooltipSpan(key, subSec + '.' + key));
+            });
+            html += '</div>';
+          });
+          html += '</div></div>';
+          return; // skip per-section loop for Advanced group
+        }
+
         groupSections.forEach(function(section) {
           var sectionData = draft[section];
           if (typeof sectionData !== 'object' || sectionData === null) return;
@@ -6888,37 +6962,7 @@
             return;
           }
 
-          // ── 15. Themes / Update (inside Advanced group) ────────────────
-          // The Advanced group may contain themes, update, and any future small sections.
-          // Render with a collapsible wrapper.
-          if (group.label === 'Advanced') {
-            var advExpanded = !!self._settingsAdvancedExpanded;
-            html += '<div class="settings-section">'
-              + '<div class="settings-section-title" style="cursor:pointer;user-select:none" data-settings-toggle-advanced>'
-              + (advExpanded ? '\u25be' : '\u25b8') + ' Advanced'
-              + ' <span class="badge muted" style="font-size:0.55rem;vertical-align:middle">' + groupSections.length + ' subsections</span>'
-              + '</div>';
-            html += '<div id="settings-advanced-body" style="' + (advExpanded ? '' : 'display:none') + '">';
-            // Also pull in the hidden sections so operators can inspect/edit them.
-            var advancedSections = groupSections.slice();
-            Object.keys(hiddenSections).forEach(function(hs) {
-              if (draft[hs] && typeof draft[hs] === 'object' && advancedSections.indexOf(hs) === -1) {
-                advancedSections.push(hs);
-              }
-            });
-            advancedSections.sort();
-            advancedSections.forEach(function(subSec) {
-              var subData = draft[subSec];
-              if (!subData || typeof subData !== 'object') return;
-              html += '<div class="settings-nested"><div style="font-size:0.625rem;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted);margin-bottom:0.5rem">' + esc(subSec) + '</div>';
-              Object.keys(subData).forEach(function(key) {
-                _renderSettingsField(key, subData[key], subSec + '.' + key, tooltipSpan(key, subSec + '.' + key));
-              });
-              html += '</div>';
-            });
-            html += '</div></div>';
-            return;
-          }
+          // Advanced group is handled above the forEach loop — skip here.
 
           // ── Fallback: generic section rendering for any unhandled section ──
           var sectionTitle = sectionDisplayLabels[section] || (groupSections.length === 1 ? group.label : section);
