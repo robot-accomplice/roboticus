@@ -6141,15 +6141,20 @@
             'daily_transfer_limit': 'Maximum total transfers per day.',
             'daily_inference_budget': 'Maximum daily spend on LLM inference.',
             // --- Wallet ---
-            'chain_id': 'Blockchain chain ID (e.g. 1 = Ethereum mainnet, 137 = Polygon).',
-            'rpc_url': 'RPC endpoint URL for blockchain interactions.',
-            'balance_poll_seconds': 'Seconds between wallet balance checks. 0 = disabled.',
+            'chain_id': 'Blockchain chain ID (e.g. 8453 = Base, 1 = Ethereum, 137 = Polygon).',
+            'rpc_url': 'JSON-RPC endpoint URL for blockchain interactions.',
+            'balance_poll_seconds': 'Seconds between on-chain wallet balance checks. 0 = disabled.',
             // --- Themes ---
             'catalog_url': 'URL of the theme catalog for dashboard theme downloads.',
             // --- Update ---
             'check_interval_hours': 'Hours between automatic update checks.',
             // --- Database ---
-            'path': 'Database file path. Use :memory: for in-memory (dev only).',
+            'path': 'File path for data storage.',
+            'database.path': 'SQLite database file path. Use :memory: for in-memory (dev only).',
+            'wallet.path': 'Path to the encrypted wallet keyfile on disk.',
+            'wallet.chain_id': 'Blockchain chain ID (e.g. 8453 = Base, 1 = Ethereum, 137 = Polygon).',
+            'wallet.rpc_url': 'JSON-RPC endpoint URL for blockchain interactions.',
+            'wallet.balance_poll_seconds': 'Seconds between on-chain wallet balance checks. 0 = disabled.',
             // --- Personality (visible via context_budget) ---
             'tone': 'Personality tone directive for the agent.',
             'greeting': 'Initial greeting message for new conversations.'
@@ -6198,9 +6203,11 @@
             hideSettingsTooltip();
           }
         }
-        function tooltipSpan(key) {
-          if (!window.fieldTooltips[key]) return '';
-          return ' <span class="settings-help-trigger" data-tooltip-key="' + esc(key) + '">(?)</span>';
+        function tooltipSpan(key, fullPath) {
+          // Try full dotted path first (e.g. "wallet.path"), then short key (e.g. "path").
+          var tipKey = (fullPath && window.fieldTooltips[fullPath]) ? fullPath : key;
+          if (!window.fieldTooltips[tipKey]) return '';
+          return ' <span class="settings-help-trigger" data-tooltip-key="' + esc(tipKey) + '">(?)</span>';
         }
         var html = tabs + '<div class="settings-form">';
         var specialSections = ['models', 'providers', 'wallet'];
@@ -6265,17 +6272,12 @@
             var immSectionTitle = sectionDisplayLabels[section] || (groupSections.length === 1 ? group.label : section);
             html += '<div class="settings-section"><div class="settings-section-title">' + esc(immSectionTitle) + ' <span class="badge muted" style="font-size:0.6rem">restart required</span></div>'
               + '<div style="font-size:0.75rem;color:var(--muted);margin-bottom:0.5rem">This section is immutable at runtime. Edit &#96;roboticus.toml&#96; and restart.</div>';
-            // Render as disabled form fields instead of raw JSON
+            // Render as editable fields — changes save to TOML but require restart.
             Object.keys(sectionData).forEach(function(key) {
               var val = sectionData[key];
-              var displayVal = typeof val === 'object' && val !== null ? JSON.stringify(val) : String(val != null ? val : '');
-              if (typeof val === 'boolean') {
-                html += '<div class="settings-row"><div class="settings-label">' + esc(key) + '</div>'
-                  + '<div style="display:flex;align-items:center;gap:0.5rem"><div class="toggle ' + (val ? 'on' : '') + '" style="opacity:0.5;pointer-events:none"></div><span style="font-size:0.8125rem;color:var(--muted)">' + (val ? 'On' : 'Off') + '</span></div></div>';
-              } else {
-                html += '<div class="settings-row"><div class="settings-label">' + esc(key) + '</div>'
-                  + '<input type="text" class="settings-input" value="' + esc(displayVal) + '" disabled style="opacity:0.6;cursor:not-allowed"></div>';
-              }
+              var path = section + '.' + key;
+              var tip = tooltipSpan(key, section + '.' + key);
+              _renderSettingsField(key, val, path, tip);
             });
             html += '</div>';
             return;
@@ -6677,8 +6679,8 @@
             }
             // Immutable field hint.
             var immutableHint = (sf && sf.immutable) ? ' <span class="badge muted" style="font-size:0.55rem;vertical-align:middle">restart</span>' : '';
-            var isDisabled = sf && sf.immutable;
-            var disabledAttr = isDisabled ? ' disabled style="opacity:0.6;cursor:not-allowed"' : '';
+            // Immutable fields are editable but won't take effect until restart.
+            // The "restart" badge communicates this — don't disable the inputs.
             // Placeholder from schema default.
             var placeholder = 'none';
             if (sf && sf['default'] != null && sf['default'] !== '') {
@@ -6691,7 +6693,7 @@
               var toggleDisabled = isDisabled ? ' style="opacity:0.5;pointer-events:none"' : '';
               html += '<div class="settings-row"><div class="settings-label">' + esc(key) + tooltipHtml + immutableHint + '</div><div class="settings-toggle-wrap"><label class="toggle"' + toggleDisabled + '><input type="checkbox" data-settings-path="' + esc(path) + '"' + (val ? ' checked' : '') + (isDisabled ? ' disabled' : '') + '><span class="toggle-track"></span></label><span class="settings-toggle-label">' + (val ? 'On' : 'Off') + '</span></div></div>';
             } else if (enumValues) {
-              var selHtml = '<select class="settings-input" data-settings-path="' + esc(path) + '" style="min-width:160px"' + disabledAttr + '>';
+              var selHtml = '<select class="settings-input" data-settings-path="' + esc(path) + '" style="min-width:160px"' + '>';
               enumValues.forEach(function(o) { selHtml += '<option value="' + esc(o) + '"' + (String(val) === o ? ' selected' : '') + '>' + esc(o) + '</option>'; });
               selHtml += '</select>';
               html += '<div class="settings-row"><div class="settings-label">' + esc(key) + tooltipHtml + immutableHint + '</div>' + selHtml + '</div>';
@@ -6699,7 +6701,7 @@
               var joined = val.join('\n');
               html += '<div class="settings-row"><div class="settings-label">' + esc(key) + tooltipHtml + immutableHint + '</div>'
                 + '<textarea class="settings-input" data-settings-path="' + esc(path) + '" data-settings-array="1" '
-                + 'rows="' + Math.max(2, Math.min(6, val.length + 1)) + '" placeholder="One entry per line" style="font-family:var(--font-mono);font-size:0.75rem"' + disabledAttr + '>' + esc(joined) + '</textarea></div>';
+                + 'rows="' + Math.max(2, Math.min(6, val.length + 1)) + '" placeholder="One entry per line" style="font-family:var(--font-mono);font-size:0.75rem"' + '>' + esc(joined) + '</textarea></div>';
             } else if (typeof val === 'object' && val !== null) {
               html += '<div class="settings-nested"><div style="font-size:0.625rem;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted);margin-bottom:0.5rem">' + esc(key) + '</div>';
               Object.keys(val).forEach(function(subKey) {
@@ -6733,12 +6735,12 @@
                 else return; // Field does not exist in draft or schema — skip.
               }
               rendered[key] = true;
-              _renderSettingsField(key, val, sectionKey + '.' + key, tooltipSpan(key));
+              _renderSettingsField(key, val, sectionKey + '.' + key, tooltipSpan(key, sectionKey + '.' + key));
             });
             // Render any remaining keys not in the hand-crafted list (future-proofing).
             Object.keys(sd).forEach(function(key) {
               if (rendered[key]) return;
-              _renderSettingsField(key, sd[key], sectionKey + '.' + key, tooltipSpan(key));
+              _renderSettingsField(key, sd[key], sectionKey + '.' + key, tooltipSpan(key, sectionKey + '.' + key));
             });
             html += '</div>';
           };
@@ -6857,7 +6859,7 @@
                 else return;
               }
               secRendered[key] = true;
-              _renderSettingsField(key, val, 'security.' + key, tooltipSpan(key));
+              _renderSettingsField(key, val, 'security.' + key, tooltipSpan(key, 'security.' + key));
             });
             // Filesystem subsection
             if (secData.filesystem && typeof secData.filesystem === 'object') {
@@ -6870,18 +6872,18 @@
                 var val = fsData[key];
                 if (val === undefined) return;
                 fsRendered[key] = true;
-                _renderSettingsField(key, val, 'security.filesystem.' + key, tooltipSpan(key));
+                _renderSettingsField(key, val, 'security.filesystem.' + key, tooltipSpan(key, 'security.filesystem.' + key));
               });
               Object.keys(fsData).forEach(function(key) {
                 if (fsRendered[key]) return;
-                _renderSettingsField(key, fsData[key], 'security.filesystem.' + key, tooltipSpan(key));
+                _renderSettingsField(key, fsData[key], 'security.filesystem.' + key, tooltipSpan(key, 'security.filesystem.' + key));
               });
               html += '</div>';
             }
             // Remaining security keys not hand-crafted
             Object.keys(secData).forEach(function(key) {
               if (secRendered[key]) return;
-              _renderSettingsField(key, secData[key], 'security.' + key, tooltipSpan(key));
+              _renderSettingsField(key, secData[key], 'security.' + key, tooltipSpan(key, 'security.' + key));
             });
             html += '</div>';
             return;
@@ -6911,7 +6913,7 @@
               if (!subData || typeof subData !== 'object') return;
               html += '<div class="settings-nested"><div style="font-size:0.625rem;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted);margin-bottom:0.5rem">' + esc(subSec) + '</div>';
               Object.keys(subData).forEach(function(key) {
-                _renderSettingsField(key, subData[key], subSec + '.' + key, tooltipSpan(key));
+                _renderSettingsField(key, subData[key], subSec + '.' + key, tooltipSpan(key, subSec + '.' + key));
               });
               html += '</div>';
             });
@@ -6925,7 +6927,7 @@
           Object.keys(sectionData).forEach(function(key) {
             var val = sectionData[key];
             var path = section + '.' + key;
-            var tooltipHtml = tooltipSpan(key);
+            var tooltipHtml = tooltipSpan(key, section + '.' + key);
             _renderSettingsField(key, val, path, tooltipHtml);
           });
           html += '</div>';
