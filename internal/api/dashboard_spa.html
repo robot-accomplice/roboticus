@@ -4651,14 +4651,103 @@
       var m = document.getElementById('mcp-server-modal');
       if (m) m.remove();
     },
-    _mcpOpenModal: function(editIdx) {
+    _mcpBrowseCatalog: function() {
+      var self = this;
+      self._mcpCloseMod();
+      var modal = document.createElement('div');
+      modal.id = 'mcp-server-modal';
+      modal.style.cssText = 'position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,0.65);display:flex;align-items:center;justify-content:center;padding:1.5rem';
+
+      var contentHtml = '<div style="width:min(700px,100%);background:var(--bg);border:1px solid var(--border);border-radius:8px;box-shadow:0 20px 40px rgba(0,0,0,0.45);display:flex;flex-direction:column;max-height:calc(100vh - 3rem);overflow:auto">'
+        + '<div style="display:flex;align-items:center;justify-content:space-between;padding:0.75rem 1rem;border-bottom:1px solid var(--border-ghost)">'
+        + '<h3 style="font-size:0.8125rem;text-transform:uppercase;letter-spacing:0.06em;margin:0">MCP Server Catalog</h3>'
+        + '<button data-mcp-modal-close style="background:none;border:none;color:var(--muted);font-size:1.25rem;cursor:pointer;font-family:var(--font)">x</button></div>'
+        + '<div style="padding:1rem" id="mcp-catalog-body"><div style="color:var(--muted);font-size:0.8125rem">Loading catalog...</div></div></div>';
+
+      modal.innerHTML = contentHtml;
+      document.body.appendChild(modal);
+      modal.addEventListener('click', function(ev) {
+        if (ev.target === modal || ev.target.closest('[data-mcp-modal-close]')) { self._mcpCloseMod(); }
+        var addBtn = ev.target.closest('[data-mcp-catalog-add]');
+        if (addBtn) {
+          var idx = Number(addBtn.getAttribute('data-mcp-catalog-add'));
+          if (self._mcpCatalogData && self._mcpCatalogData[idx]) {
+            self._mcpCloseMod();
+            var tpl = self._mcpCatalogData[idx];
+            self._mcpOpenModal(null, {
+              name: tpl.id,
+              transport: tpl.transport || 'stdio',
+              command: tpl.command || '',
+              args: tpl.args || [],
+              url: tpl.url || '',
+              env: tpl.env || {},
+              auth_token_env: '',
+              enabled: true,
+              _setup_notes: tpl.setup_notes || ''
+            });
+          }
+        }
+      });
+
+      // Fetch catalog from registry.
+      fetch('https://roboticus.ai/registry/mcp-servers.json')
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          var servers = data.servers || [];
+          self._mcpCatalogData = servers;
+          // Check which are already configured.
+          var draft = self._getSettingsDraft();
+          var configured = {};
+          if (draft.mcp && Array.isArray(draft.mcp.servers)) {
+            draft.mcp.servers.forEach(function(s) { configured[s.name] = true; });
+          }
+          var body = document.getElementById('mcp-catalog-body');
+          if (!body) return;
+          if (servers.length === 0) {
+            body.textContent = 'No servers in catalog.';
+            return;
+          }
+          var categories = {};
+          servers.forEach(function(s, i) { s._idx = i; var cat = s.category || 'other'; if (!categories[cat]) categories[cat] = []; categories[cat].push(s); });
+          var html = '';
+          Object.keys(categories).sort().forEach(function(cat) {
+            html += '<div style="margin-bottom:1rem"><div style="font-size:0.625rem;text-transform:uppercase;letter-spacing:0.1em;color:var(--muted);margin-bottom:0.5rem">' + esc(cat) + '</div>';
+            html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:0.5rem">';
+            categories[cat].forEach(function(s) {
+              var isConfigured = configured[s.id];
+              var envKeys = Object.keys(s.env || {}).filter(function(k) { return !s.env[k]; });
+              var needsKey = envKeys.length > 0;
+              html += '<div style="border:1px solid var(--border-ghost);border-radius:6px;padding:0.6rem;display:flex;flex-direction:column;gap:0.3rem">'
+                + '<div style="display:flex;align-items:center;gap:0.4rem"><strong style="font-size:0.82rem;color:var(--text)">' + esc(s.name) + '</strong>'
+                + '<span class="badge muted" style="font-size:0.55rem">' + esc(s.transport) + '</span>'
+                + (isConfigured ? '<span class="badge success" style="font-size:0.55rem">configured</span>' : '')
+                + '</div>'
+                + '<div style="font-size:0.72rem;color:var(--muted);line-height:1.35;flex:1">' + esc(s.description) + '</div>'
+                + (needsKey ? '<div style="font-size:0.62rem;color:var(--accent)">Requires: ' + envKeys.join(', ') + '</div>' : '')
+                + '<div style="margin-top:auto;padding-top:0.3rem">'
+                + (isConfigured
+                  ? '<span style="font-size:0.72rem;color:var(--muted)">Already added</span>'
+                  : '<button class="btn secondary" data-mcp-catalog-add="' + s._idx + '" style="width:100%;font-size:0.72rem;padding:0.3rem">Add ' + esc(s.name) + '</button>')
+                + '</div></div>';
+            });
+            html += '</div></div>';
+          });
+          body.innerHTML = html;
+        })
+        .catch(function(err) {
+          var body = document.getElementById('mcp-catalog-body');
+          if (body) body.textContent = 'Failed to load catalog: ' + (err.message || err);
+        });
+    },
+
+    _mcpOpenModal: function(editIdx, template) {
       var self = this;
       self._mcpCloseMod();
       var draft = self._getSettingsDraft();
       if (!draft.mcp) draft.mcp = {};
       if (!Array.isArray(draft.mcp.servers)) draft.mcp.servers = [];
       var isEdit = editIdx != null && editIdx >= 0;
-      var srv = isEdit ? (draft.mcp.servers[editIdx] || {}) : {};
+      var srv = isEdit ? (draft.mcp.servers[editIdx] || {}) : (template || {});
       var transport = srv.transport || 'stdio';
       var envStr = '';
       if (srv.env && typeof srv.env === 'object') {
@@ -4695,6 +4784,11 @@
       // Auth token
       formHtml += '<div style="display:flex;flex-direction:column;gap:0.25rem"><label style="font-size:0.625rem;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted)">Auth Token Env Var Name (optional)</label>'
         + '<input id="mcp-f-auth" class="settings-input" type="text" value="' + esc(srv.auth_token_env || '') + '" placeholder="e.g. MCP_AUTH_TOKEN"></div>';
+      // Setup notes from catalog template.
+      if (srv._setup_notes) {
+        formHtml += '<div style="background:rgba(var(--accent-rgb,99,102,241),0.1);border:1px solid rgba(var(--accent-rgb,99,102,241),0.3);border-radius:6px;padding:0.5rem 0.75rem;font-size:0.75rem;color:var(--text);line-height:1.4">'
+          + '<strong style="color:var(--accent)">Setup:</strong> ' + esc(srv._setup_notes) + '</div>';
+      }
       // Enabled toggle
       formHtml += '<div style="display:flex;align-items:center;gap:0.5rem"><label class="toggle"><input type="checkbox" id="mcp-f-enabled"' + (isEdit ? (srv.enabled ? ' checked' : '') : ' checked') + '><span class="toggle-track"></span></label>'
         + '<span style="font-size:0.8125rem">Enabled</span></div>';
@@ -6753,7 +6847,10 @@
           // MCP Servers: full management UI with add/edit/delete/test/refresh.
           if (section === 'mcp') {
             html += '<div class="settings-section"><div class="settings-section-title" style="display:flex;justify-content:space-between;align-items:center">MCP Servers'
-              + '<button class="btn secondary" data-mcp-add style="font-size:0.72rem;padding:0.25rem 0.6rem">+ Add Server</button></div>';
+              + '<div style="display:flex;gap:0.35rem">'
+              + '<button class="btn secondary" data-mcp-browse-catalog style="font-size:0.72rem;padding:0.25rem 0.6rem">Browse Catalog</button>'
+              + '<button class="btn secondary" data-mcp-add style="font-size:0.72rem;padding:0.25rem 0.6rem">+ Add Server</button>'
+              + '</div></div>';
             var servers = sectionData.servers || [];
             if (!Array.isArray(servers) || servers.length === 0) {
               html += '<div style="padding:1rem 0;color:var(--muted);font-size:0.8125rem">'
@@ -9022,6 +9119,7 @@
       toast('Changes discarded'); App.navigate('settings'); return;
     }
     // --- MCP Server management event handlers ---
+    if (e.target.closest('[data-mcp-browse-catalog]')) { App._mcpBrowseCatalog(); return; }
     if (e.target.closest('[data-mcp-add]')) { App._mcpOpenModal(); return; }
     var mcpEditBtn = e.target.closest('[data-mcp-edit]');
     if (mcpEditBtn) { App._mcpOpenModal(Number(mcpEditBtn.getAttribute('data-mcp-edit'))); return; }
