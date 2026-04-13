@@ -8111,6 +8111,7 @@
       api('/api/themes/catalog/uninstall', { method: 'POST', body: JSON.stringify({ id: uninstallId }) })
         .then(function() {
           toast('Uninstalled theme: ' + uninstallId);
+          loadExternalThemes(); // refresh dropdown to remove uninstalled theme
           App.refreshSkills();
         })
         .catch(function(err) {

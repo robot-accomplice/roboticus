@@ -99,7 +99,7 @@ var catalogThemes = []ThemeManifest{
 			"--theme-scrollbar":       "rgba(193,127,58,0.3)",
 		},
 		Textures: map[string]ThemeTexture{
-			"body": {Kind: "url", Value: ThemeRegistryBaseURL + "/parchment/textures/natural-paper.png", Tile: true},
+			"body": {Kind: "url", Value: ThemeRegistryBaseURL + "/parchment/textures/textured-paper.png", Tile: true},
 		},
 		Version: "1.0.0", Source: "catalog"},
 	{ID: "midnight-ocean", Name: "Midnight Ocean", Description: "Deep navy depths with teal accents and wave-inspired separators", Author: "Roboticus", Swatch: "#0d9488",
@@ -175,6 +175,17 @@ var catalogThemes = []ThemeManifest{
 			"body": {Kind: "url", Value: ThemeRegistryBaseURL + "/tokyo-night/textures/skyline.jpg"},
 		},
 		Fonts:   []string{"https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap"},
+		Version: "1.0.0", Source: "catalog"},
+	{ID: "ancient-castle", Name: "Ancient Castle", Description: "Dark medieval fortress with stone and iron — for the keeper of secrets", Author: "Roboticus", Swatch: "#8b7355",
+		Variables: map[string]string{
+			"--bg": "#1a1510", "--surface": "#2a2318", "--surface-2": "#352d20",
+			"--accent": "#8b7355", "--text": "#d4c8a8", "--muted": "#9b8b6f",
+			"--border": "#5a4a35", "--highlight": "#c4a265", "--secondary": "#6b5b42",
+		},
+		Textures: map[string]ThemeTexture{
+			"body": {Kind: "url", Value: ThemeRegistryBaseURL + "/ancient-castle/textures/castle.jpg"},
+		},
+		Fonts:   []string{"https://fonts.googleapis.com/css2?family=MedievalSharp&display=swap"},
 		Version: "1.0.0", Source: "catalog"},
 }
 
