@@ -2802,7 +2802,14 @@
             var cardText = vars['--text'] || 'var(--text)';
             var cardMuted = vars['--muted'] || 'var(--muted)';
             var cardBorder = vars['--border'] || 'var(--border-soft)';
-            return '<div style="display:flex;align-items:center;gap:0.6rem;padding:0.6rem 0.65rem;border:1px solid ' + cardBorder + ';border-radius:6px;' + cardBgStyle + '">'
+            // Use theme's font for all card text.
+            var thFonts = th.fonts || [];
+            var cardFont = '';
+            if (thFonts.length > 0) {
+              var fm = thFonts[0].match(/family=([^:&]+)/);
+              if (fm) cardFont = "font-family:'" + fm[1].replace(/\+/g, ' ') + "',var(--font-mono);";
+            }
+            return '<div style="display:flex;align-items:center;gap:0.6rem;padding:0.6rem 0.65rem;border:1px solid ' + cardBorder + ';border-radius:6px;' + cardBgStyle + ';' + cardFont + '">'
               + '<div class="catalog-theme-preview" data-theme-var-idx="' + varIdx + '" style="flex-shrink:0"></div>'
               + '<div style="min-width:0;flex:1">'
               + '<div style="display:flex;align-items:center;gap:0.4rem;flex-wrap:wrap">'
@@ -7051,12 +7058,7 @@
     var content = document.createElement('div');
     content.className = 'theme-preview-content';
     content.style.background = surface2;
-    // Text sample in theme's font — makes the preview feel distinct.
-    var sample = document.createElement('div');
-    sample.style.cssText = 'font-family:' + fontFamily + ';font-size:6px;color:' + text + ';padding:1px 2px;white-space:nowrap;overflow:hidden;opacity:0.9';
-    sample.textContent = 'Abc';
-    content.appendChild(sample);
-    [[muted, '60%', 0.5], [accent, '45%', 0.9]].forEach(function(l) {
+    [[text, '70%', 0.6], [muted, '50%', 0.4], [accent, '45%', 0.9]].forEach(function(l) {
       var line = document.createElement('div');
       line.className = 'theme-preview-line';
       line.style.cssText = 'background:' + l[0] + ';width:' + l[1] + ';opacity:' + l[2];

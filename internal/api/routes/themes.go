@@ -95,8 +95,8 @@ var catalogThemes = []ThemeManifest{
 			"--theme-card-border":     "linear-gradient(to bottom, #6b5540, #3f3326) 1",
 		},
 		Textures: map[string]ThemeTexture{
-			"body":    {Kind: "css", Value: "repeating-linear-gradient(0deg, transparent, transparent 3px, rgba(139,94,60,0.03) 3px, rgba(139,94,60,0.03) 4px)"},
-			"surface": {Kind: "css", Value: "radial-gradient(ellipse at 20% 50%, rgba(193,127,58,0.06) 0%, transparent 70%)"},
+			"body": {Kind: "css", Value: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='0.08'/%3E%3C/svg%3E\")"},
+			"surface": {Kind: "css", Value: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8'%3E%3Crect width='8' height='8' fill='%23352a1f'/%3E%3Ccircle cx='4' cy='4' r='0.8' fill='%238b5e3c' opacity='0.12'/%3E%3C/svg%3E\")"},
 		},
 		Version: "1.0.0", Source: "catalog"},
 	{ID: "midnight-ocean", Name: "Midnight Ocean", Description: "Deep navy depths with teal accents and wave-inspired separators", Author: "Roboticus", Swatch: "#0d9488",
@@ -110,7 +110,7 @@ var catalogThemes = []ThemeManifest{
 			"--theme-scrollbar":    "rgba(13,148,136,0.3)",
 		},
 		Textures: map[string]ThemeTexture{
-			"body": {Kind: "css", Value: "radial-gradient(ellipse at 50% 0%, rgba(13,148,136,0.08) 0%, transparent 60%)"},
+			"body": {Kind: "css", Value: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100' height='20'%3E%3Cpath d='M0 10 Q25 0 50 10 T100 10' fill='none' stroke='%230d9488' stroke-width='0.5' opacity='0.1'/%3E%3C/svg%3E\")"},
 		},
 		Version: "1.0.0", Source: "catalog"},
 	{ID: "solarized-dark", Name: "Solarized Dark", Description: "Ethan Schoonover's precision-engineered dark palette for low-fatigue reading", Author: "Roboticus", Swatch: "#268bd2",
@@ -118,6 +118,9 @@ var catalogThemes = []ThemeManifest{
 			"--bg": "#002b36", "--surface": "#073642", "--surface-2": "#0a4050",
 			"--accent": "#268bd2", "--text": "#93a1a1", "--muted": "#657b83",
 			"--border": "#2aa198",
+		},
+		Textures: map[string]ThemeTexture{
+			"body": {Kind: "css", Value: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='6' height='6'%3E%3Crect width='6' height='6' fill='%23002b36'/%3E%3Crect x='2' y='2' width='1' height='1' fill='%23268bd2' opacity='0.06'/%3E%3C/svg%3E\")"},
 		},
 		Version: "1.0.0", Source: "catalog"},
 	{ID: "dracula", Name: "Dracula", Description: "The beloved dark theme with purple, pink, and green highlights", Author: "Roboticus", Swatch: "#bd93f9",
@@ -154,7 +157,7 @@ var catalogThemes = []ThemeManifest{
 			"--border": "#3a1a5e", "--highlight": "#01ff70", "--secondary": "#05d9e8",
 		},
 		Textures: map[string]ThemeTexture{
-			"body": {Kind: "css", Value: "repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.15) 2px, rgba(0,0,0,0.15) 4px)"},
+			"body": {Kind: "css", Value: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='4' height='4'%3E%3Crect width='4' height='2' fill='transparent'/%3E%3Crect y='2' width='4' height='2' fill='%23000' opacity='0.18'/%3E%3C/svg%3E\")"},
 		},
 		Fonts:   []string{"https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap"},
 		Version: "1.0.0", Source: "catalog"},
@@ -172,7 +175,7 @@ var catalogThemes = []ThemeManifest{
 			"--border": "#3b4261", "--highlight": "#e0af68", "--secondary": "#9ece6a",
 		},
 		Textures: map[string]ThemeTexture{
-			"body": {Kind: "css", Value: "linear-gradient(180deg, rgba(122,162,247,0.03) 0%, transparent 30%), linear-gradient(0deg, rgba(158,206,106,0.02) 0%, transparent 20%)"},
+			"body": {Kind: "css", Value: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cdefs%3E%3CradialGradient id='g1'%3E%3Cstop offset='0' stop-color='%237aa2f7' stop-opacity='0.06'/%3E%3Cstop offset='1' stop-color='transparent'/%3E%3C/radialGradient%3E%3CradialGradient id='g2'%3E%3Cstop offset='0' stop-color='%239ece6a' stop-opacity='0.04'/%3E%3Cstop offset='1' stop-color='transparent'/%3E%3C/radialGradient%3E%3C/defs%3E%3Ccircle cx='30' cy='30' r='25' fill='url(%23g1)'/%3E%3Ccircle cx='90' cy='80' r='20' fill='url(%23g2)'/%3E%3C/svg%3E\")"},
 		},
 		Fonts:   []string{"https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap"},
 		Version: "1.0.0", Source: "catalog"},
