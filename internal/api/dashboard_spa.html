@@ -6989,16 +6989,33 @@
     if (workspace) workspace._themeColors = null;
     // Apply textures if this is an external theme with textures
     applyTextures(theme);
-    // Load fonts if needed
+    // Load fonts and apply font-family override.
     var ext = loadedThemes[theme];
-    if (ext && ext.fonts && ext.fonts.length > 0 && !themeFontEls[theme]) {
-      ext.fonts.forEach(function(url) {
-        var link = document.createElement('link');
-        link.rel = 'stylesheet';
-        link.href = url;
-        document.head.appendChild(link);
-      });
-      themeFontEls[theme] = true;
+    // Remove previous theme font override.
+    var prevFontStyle = document.getElementById('theme-font-override');
+    if (prevFontStyle) prevFontStyle.remove();
+
+    if (ext && ext.fonts && ext.fonts.length > 0) {
+      // Load font stylesheet if not already loaded.
+      if (!themeFontEls[theme]) {
+        ext.fonts.forEach(function(url) {
+          var link = document.createElement('link');
+          link.rel = 'stylesheet';
+          link.href = url;
+          document.head.appendChild(link);
+        });
+        themeFontEls[theme] = true;
+      }
+      // Extract font family name and apply as override.
+      var fm = ext.fonts[0].match(/family=([^:&]+)/);
+      if (fm) {
+        var fontName = fm[1].replace(/\+/g, ' ');
+        var style = document.createElement('style');
+        style.id = 'theme-font-override';
+        style.textContent = '[data-theme="' + theme + '"] { --font-body: "' + fontName + '", var(--font-mono); --font-headline: "' + fontName + '", var(--font-headline); } '
+          + '[data-theme="' + theme + '"] body, [data-theme="' + theme + '"] .sidebar, [data-theme="' + theme + '"] #content { font-family: "' + fontName + '", system-ui, sans-serif; }';
+        document.head.appendChild(style);
+      }
     }
   }
 
