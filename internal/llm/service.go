@@ -298,7 +298,7 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 		// Skip models known to not support tools when tools are present.
 		// Avoids wasting fallback slots and latency on guaranteed 400s.
 		if len(req.Tools) > 0 && !modelSupportsTools(pm.model, s.toolAllowlist, s.toolBlocklist) {
-			log.Debug().Str("model", pm.model).Str("provider", pm.provider).Msg("skipping model: does not support tools")
+			log.Trace().Str("model", pm.model).Str("provider", pm.provider).Msg("skipping model: does not support tools")
 			continue
 		}
 
@@ -306,7 +306,7 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 		inferReq := *req
 		inferReq.Model = pm.model
 
-		log.Debug().
+		log.Trace().
 			Str("provider", pm.provider).
 			Str("model", pm.model).
 			Int("tools", len(inferReq.Tools)).
@@ -379,7 +379,7 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 			s.recordCostWithMeta(ctx, pName, resp, costMeta)
 		})
 
-		log.Info().Str("provider", pm.provider).Str("model", resp.Model).Int("tokens_in", resp.Usage.InputTokens).Int("tokens_out", resp.Usage.OutputTokens).Int64("latency_ms", latencyMs).Msg("inference completed")
+		log.Debug().Str("provider", pm.provider).Str("model", resp.Model).Int("tokens_in", resp.Usage.InputTokens).Int("tokens_out", resp.Usage.OutputTokens).Int64("latency_ms", latencyMs).Msg("inference completed")
 		return resp, nil
 	}
 
