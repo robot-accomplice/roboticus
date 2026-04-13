@@ -2797,9 +2797,9 @@
             var bodyTex = textures.body && textures.body.value ? textures.body.value.replace(/"/g, "'") : '';
             var bgStyle;
             if (bodyTex) {
-              // Photo textures (data:image/) use cover sizing; CSS patterns tile naturally.
-              var isPhoto = bodyTex.indexOf('data:image/jpeg') !== -1 || bodyTex.indexOf('data:image/png') !== -1;
-              bgStyle = 'background:' + bodyTex + ',' + v.bg + (isPhoto ? ';background-size:cover;background-position:center' : '');
+              var isTiled = textures.body && textures.body.tile;
+              bgStyle = 'background-image:' + bodyTex + ';background-color:' + v.bg
+                + (isTiled ? ';background-repeat:repeat' : ';background-size:cover;background-position:center');
             } else {
               bgStyle = 'background:' + v.bg;
             }
@@ -6999,13 +6999,16 @@
     document.body.style.removeProperty('background-size');
     document.body.style.removeProperty('background-position');
     document.body.style.removeProperty('background-attachment');
+    document.body.style.removeProperty('background-repeat');
     var ext = loadedThemes[themeId];
     if (!ext || !ext.textures) return;
     // Body texture
     if (ext.textures.body && (ext.textures.body.kind === 'css' || ext.textures.body.type === 'css')) {
       document.body.style.backgroundImage = ext.textures.body.value;
-      // Photo textures need cover sizing
-      if (ext.textures.body.value.indexOf('data:image/jpeg') !== -1) {
+      // Tiled textures repeat naturally. Photos use cover sizing.
+      if (ext.textures.body.tile) {
+        document.body.style.backgroundRepeat = 'repeat';
+      } else {
         document.body.style.backgroundSize = 'cover';
         document.body.style.backgroundPosition = 'center';
         document.body.style.backgroundAttachment = 'fixed';
