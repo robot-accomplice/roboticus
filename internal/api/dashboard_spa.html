@@ -6247,15 +6247,16 @@
           return draft[s] && typeof draft[s] === 'object' && !hiddenSections[s];
         });
         if (!groupSections.length) return;
-        html += '<div style="margin-top:1.25rem;margin-bottom:0.5rem;padding-bottom:0.35rem;border-bottom:1px solid var(--border-ghost)">'
-          + '<span style="font-family:var(--font-headline);font-size:0.6875rem;font-weight:600;text-transform:uppercase;letter-spacing:0.15em;color:var(--accent)">' + esc(group.label) + '</span></div>';
+        // Group label rendered only as a spacer between groups — the title lives inside the card.
+        html += '<div style="margin-top:1.25rem"></div>';
         groupSections.forEach(function(section) {
           var sectionData = draft[section];
           if (typeof sectionData !== 'object' || sectionData === null) return;
           var isImmutableSection = !!immutableSet[section];
 
           if (isImmutableSection) {
-            html += '<div class="settings-section"><div class="settings-section-title">' + esc(section) + ' <span class="badge muted" style="font-size:0.6rem">restart required</span></div>'
+            var immSectionTitle = sectionDisplayLabels[section] || (groupSections.length === 1 ? group.label : section);
+            html += '<div class="settings-section"><div class="settings-section-title">' + esc(immSectionTitle) + ' <span class="badge muted" style="font-size:0.6rem">restart required</span></div>'
               + '<div style="font-size:0.75rem;color:var(--muted);margin-bottom:0.5rem">This section is immutable at runtime. Edit &#96;roboticus.toml&#96; and restart.</div>';
             // Render as disabled form fields instead of raw JSON
             Object.keys(sectionData).forEach(function(key) {
@@ -6705,7 +6706,8 @@
             skills: 'Script Runtime',
             mcp: 'MCP Servers'
           };
-          var sectionTitle = sectionDisplayLabels[section] || section;
+          // Use the group label as display name for single-section groups to avoid raw key names.
+          var sectionTitle = sectionDisplayLabels[section] || (groupSections.length === 1 ? group.label : section);
           html += '<div class="settings-section"><div class="settings-section-title">' + esc(sectionTitle) + '</div>';
           Object.keys(sectionData).forEach(function(key) {
             var val = sectionData[key];
