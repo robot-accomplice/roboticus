@@ -153,11 +153,13 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 	}
 
 	llmSvc, err := llm.NewService(llm.ServiceConfig{
-		Providers: providers,
-		Primary:   cfg.Models.Primary,
-		Fallbacks: cfg.Models.Fallback,
-		BGWorker:  bgWorker,
-		ErrBus:    errBus,
+		Providers:     providers,
+		Primary:       cfg.Models.Primary,
+		Fallbacks:     cfg.Models.Fallback,
+		BGWorker:      bgWorker,
+		ErrBus:        errBus,
+		ToolBlocklist: cfg.Models.ToolBlocklist,
+		ToolAllowlist: cfg.Models.ToolAllowlist,
 	}, store)
 	if err != nil {
 		errBusCancel()

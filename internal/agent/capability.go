@@ -72,7 +72,7 @@ func (cr *CapabilityRegistry) DiscoverForPrompt(budget int) string {
 	total := len(cr.tools) + len(cr.skills) + len(cr.plugins) + len(cr.mcp)
 	fmt.Fprintf(&b, "You have %d capabilities available:\n", total)
 
-	remaining := budget * 4 // chars (4 chars/token heuristic)
+	remaining := budget * 4 // chars — rough inverse of EstimateTokens (budget is in tokens)
 	remaining -= b.Len()
 
 	writeSection := func(name string, caps []Capability) {

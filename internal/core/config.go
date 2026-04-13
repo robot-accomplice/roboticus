@@ -152,6 +152,21 @@ type ModelsConfig struct {
 	ModelOverrides   map[string]ModelOverride  `json:"model_overrides,omitempty" mapstructure:"model_overrides"`
 	StreamByDefault  bool                     `json:"stream_by_default" mapstructure:"stream_by_default"`
 	TieredInference  TieredInferenceConfig    `json:"tiered_inference" mapstructure:"tiered_inference"`
+	Timeouts         map[string]int           `json:"timeouts,omitempty" mapstructure:"timeouts"` // per-model timeout in seconds (e.g. "qwen2.5:32b": 300)
+	ToolBlocklist    []string                 `json:"tool_blocklist,omitempty" mapstructure:"tool_blocklist"` // models that don't support tools
+	ToolAllowlist    []string                 `json:"tool_allowlist,omitempty" mapstructure:"tool_allowlist"` // override: force tool support
+}
+
+// ResolveModelTimeout returns the timeout for a specific model.
+// Priority: per-model Timeouts map → local provider default (300s) → global default (120s).
+func (mc ModelsConfig) ResolveModelTimeout(model string) int {
+	if mc.Timeouts != nil {
+		if t, ok := mc.Timeouts[model]; ok && t > 0 {
+			return t
+		}
+	}
+	// Default: 120s for cloud, 300s for local (caller determines based on provider).
+	return 0 // 0 means "use caller default"
 }
 
 // RoutingConfig holds model routing parameters.
