@@ -405,7 +405,9 @@
     .chart-bars { display: flex; align-items: flex-end; gap: 4px; height: 120px; margin-top: 0.5rem; }
     .chart-bar { flex: 1; min-width: 8px; background: linear-gradient(180deg, var(--accent) 0%, rgba(193,128,255,0.3) 100%); border-radius: var(--radius-sm) var(--radius-sm) 0 0; transition: height 0.3s; }
     .toast-container { position: fixed; bottom: 1.5rem; right: 1.5rem; z-index: 1000; display: flex; flex-direction: column; gap: 0.5rem; }
-    .toast { padding: 0.75rem 1.25rem; background: var(--surface-3); border: 1px solid var(--border-ghost); border-radius: var(--radius); box-shadow: var(--shadow); font-size: 0.8125rem; animation: toastIn 0.25s ease; backdrop-filter: blur(20px); }
+    .toast { padding: 0.75rem 1.25rem; background: var(--surface-3); border: 1px solid var(--border-ghost); border-radius: var(--radius); box-shadow: var(--shadow); font-size: 0.8125rem; animation: toastIn 0.25s ease; backdrop-filter: blur(20px); max-width: 480px; line-height: 1.4; }
+    .toast.toast-error { background: rgba(239,68,68,0.15); border-color: #ef4444; color: #fca5a5; }
+    .toast.toast-success { background: rgba(34,197,94,0.15); border-color: #22c55e; color: #86efac; }
     @keyframes toastIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
     .mobile-nav { display: none; position: fixed; bottom: 0; left: 0; right: 0; background: rgba(6,14,32,0.9); backdrop-filter: blur(20px); border-top: 1px solid var(--border-ghost); padding: 0.375rem 0.25rem calc(0.375rem + env(safe-area-inset-bottom, 0px)); z-index: 100; overflow-x: auto; -webkit-overflow-scrolling: touch; }
     .mobile-nav a { flex: 0 0 auto; min-width: 3.5rem; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.25rem; padding: 0.375rem 0.5rem; font-family: var(--font-headline); font-size: 0.5625rem; letter-spacing: 0.05em; text-decoration: none; color: rgba(222, 229, 255, 0.4); cursor: pointer; white-space: nowrap; }
@@ -1523,10 +1525,22 @@
         + esc(snippet) + (full.length > 1200 ? '\n…' : '') + '</pre>';
     }
   }
-  function toast(msg) {
+  function toast(msg, type) {
     var c = document.getElementById('toasts'); if (!c) return;
-    var el = document.createElement('div'); el.className = 'toast'; el.textContent = msg;
-    c.appendChild(el); setTimeout(function() { el.remove(); }, 4000);
+    // Auto-detect error toasts from message content if type not specified.
+    if (!type) {
+      var lower = (msg || '').toLowerCase();
+      if (lower.indexOf('fail') !== -1 || lower.indexOf('error') !== -1 || lower.indexOf('denied') !== -1 || lower.indexOf('rejected') !== -1) {
+        type = 'error';
+      }
+    }
+    var el = document.createElement('div');
+    el.className = 'toast' + (type === 'error' ? ' toast-error' : type === 'success' ? ' toast-success' : '');
+    el.textContent = msg;
+    c.appendChild(el);
+    // Errors linger 8s so they can be read/captured. Normal toasts 4s.
+    var duration = type === 'error' ? 8000 : 4000;
+    setTimeout(function() { el.remove(); }, duration);
   }
 
   var AUTH_CHECKED = false;
@@ -1822,6 +1836,7 @@
   var _cachedCronJobs = [];
   var _cachedWorkspace = null;
   var _catalogThemeVars = [];
+  var _catalogThemeData = []; // parallel array: full theme objects (textures, fonts)
 
   var App = {
     page: 'overview',
@@ -2579,6 +2594,7 @@
 
     renderSkills: function() {
       _catalogThemeVars = [];
+      _catalogThemeData = [];
       var self = this;
       var tab = self._skillsTab || 'installed';
       if (tab !== 'installed' && tab !== 'catalog') tab = 'installed';
@@ -2766,6 +2782,7 @@
             _catalogThemeVars = _catalogThemeVars || [];
             var varIdx = _catalogThemeVars.length;
             _catalogThemeVars.push(vars);
+            _catalogThemeData.push({ textures: textures, fonts: th.fonts || [] });
             // Card background: use theme's --bg color + body texture for live preview.
             var cardBg = vars['--bg'] || 'rgba(255,255,255,0.01)';
             var bodyTexture = textures.body && textures.body.value ? textures.body.value : '';
@@ -2809,8 +2826,21 @@
             document.querySelectorAll('.catalog-theme-preview').forEach(function(el) {
               var idx = parseInt(el.getAttribute('data-theme-var-idx'), 10);
               if (_catalogThemeVars && _catalogThemeVars[idx]) {
-                var preview = buildThemePreview(_catalogThemeVars[idx]);
+                var preview = buildThemePreview(_catalogThemeVars[idx], _catalogThemeData[idx]);
                 el.appendChild(preview);
+              }
+            });
+            // Preload theme fonts so previews render with correct typography.
+            (_catalogThemeData || []).forEach(function(td) {
+              if (td.fonts && td.fonts.length > 0) {
+                td.fonts.forEach(function(url) {
+                  if (!document.querySelector('link[href="' + url + '"]')) {
+                    var link = document.createElement('link');
+                    link.rel = 'stylesheet';
+                    link.href = url;
+                    document.head.appendChild(link);
+                  }
+                });
               }
             });
           }, 0);
@@ -6971,7 +7001,8 @@
     themeStyleEl.textContent += css;
   }
 
-  function buildThemePreview(vars) {
+  function buildThemePreview(vars, themeData) {
+    themeData = themeData || {};
     var bg = vars['--bg'] || '#060e20';
     var surface = vars['--surface'] || '#081329';
     var surface2 = vars['--surface-2'] || '#0c1934';
@@ -6979,11 +7010,26 @@
     var text = vars['--text'] || '#dee5ff';
     var muted = vars['--muted'] || '#9baad6';
     var border = vars['--border'] || '#38476d';
+    var secondary = vars['--secondary'] || vars['--highlight'] || accent;
+    var textures = themeData.textures || {};
+    var fonts = themeData.fonts || [];
+    // Parse font family name from Google Fonts URL for preview text.
+    var fontFamily = 'var(--font-mono)';
+    if (fonts.length > 0) {
+      var match = fonts[0].match(/family=([^:&]+)/);
+      if (match) fontFamily = "'" + match[1].replace(/\+/g, ' ') + "', var(--font-mono)";
+    }
     var div = document.createElement('div');
     div.className = 'theme-preview';
     var inner = document.createElement('div');
     inner.className = 'theme-preview-inner';
-    inner.style.background = bg;
+    // Apply body texture over bg color for visible texture preview.
+    var bodyTex = textures.body && textures.body.value ? textures.body.value : '';
+    inner.style.background = bodyTex ? bodyTex + ',' + bg : bg;
+    // Bold accent stripe across the top — makes similar themes distinguishable.
+    var accentBar = document.createElement('div');
+    accentBar.style.cssText = 'height:4px;background:linear-gradient(90deg,' + accent + ',' + secondary + ');flex-shrink:0';
+    inner.appendChild(accentBar);
     // Header bar
     var header = document.createElement('div');
     header.className = 'theme-preview-header';
@@ -7005,7 +7051,12 @@
     var content = document.createElement('div');
     content.className = 'theme-preview-content';
     content.style.background = surface2;
-    [[text, '70%', 0.6], [muted, '50%', 0.4], [accent, '35%', 0.8]].forEach(function(l) {
+    // Text sample in theme's font — makes the preview feel distinct.
+    var sample = document.createElement('div');
+    sample.style.cssText = 'font-family:' + fontFamily + ';font-size:6px;color:' + text + ';padding:1px 2px;white-space:nowrap;overflow:hidden;opacity:0.9';
+    sample.textContent = 'Abc';
+    content.appendChild(sample);
+    [[muted, '60%', 0.5], [accent, '45%', 0.9]].forEach(function(l) {
       var line = document.createElement('div');
       line.className = 'theme-preview-line';
       line.style.cssText = 'background:' + l[0] + ';width:' + l[1] + ';opacity:' + l[2];
@@ -7993,7 +8044,7 @@
           App.refreshSkills(); // re-render the catalog page
         })
         .catch(function(err) {
-          toast(err.message || 'Theme install failed');
+          toast(err.message || 'Theme install failed', 'error');
         })
         .finally(function() {
           themeInstallBtn.disabled = false;

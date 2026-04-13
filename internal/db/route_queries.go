@@ -188,9 +188,17 @@ func (rq *RouteQueries) ListThemes(ctx context.Context) (*sql.Rows, error) {
 
 // InstallTheme inserts or replaces an installed theme.
 func (rq *RouteQueries) InstallTheme(ctx context.Context, id, name, content string) error {
+	// Try the full INSERT first. If it fails (older DB without `name` column),
+	// fall back to INSERT without name.
 	_, err := rq.q.ExecContext(ctx,
 		`INSERT OR REPLACE INTO installed_themes (id, name, source, version, active, content) VALUES (?, ?, 'catalog', '1.0.0', 0, ?)`,
 		id, name, content)
+	if err != nil {
+		// Fallback for older databases missing the `name` column.
+		_, err = rq.q.ExecContext(ctx,
+			`INSERT OR REPLACE INTO installed_themes (id, source, version, active, content) VALUES (?, 'catalog', '1.0.0', 0, ?)`,
+			id, content)
+	}
 	return err
 }
 
