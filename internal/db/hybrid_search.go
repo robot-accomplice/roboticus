@@ -62,7 +62,14 @@ func HybridSearch(
 				// BM25 returns negative values (more negative = better match).
 				// Normalize to (0, 1]: score = 1 / (1 - bm25).
 				// bm25=-10 → 0.09, bm25=-1 → 0.5, bm25=0 → 1.0.
-				ftsScore := 1.0 / (1.0 - bm25Score)
+				// Guard: bm25 >= 1.0 would cause div-by-zero (unreachable in
+				// SQLite's BM25 impl, but defensive).
+				var ftsScore float64
+				if bm25Score >= 1.0 {
+					ftsScore = 1.0
+				} else {
+					ftsScore = 1.0 / (1.0 - bm25Score)
+				}
 
 				preview := content
 				if len(preview) > 200 {
@@ -105,7 +112,7 @@ func HybridSearch(
 		}
 	}
 
-	// Blend scores and build result slice.
+	// Blend scores and build result slice with per-leg transparency.
 	results := make([]VectorSearchResult, 0, len(candidates))
 	for _, c := range candidates {
 		blended := c.ftsScore*(1.0-hybridWeight) + c.vecScore*hybridWeight
@@ -114,6 +121,8 @@ func HybridSearch(
 			SourceID:       c.sourceID,
 			ContentPreview: c.contentPreview,
 			Similarity:     blended,
+			FTSScore:       c.ftsScore,
+			VectorScore:    c.vecScore,
 		})
 	}
 

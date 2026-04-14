@@ -88,7 +88,11 @@ func (pi *PartitionedIndex) Search(query []float32, k int) []VectorSearchResult 
 	}
 	pi.mu.RUnlock()
 
-	// Collect results from all partitions.
+	// Collect results from built partitions only. Unbuilt partitions (below
+	// MinEntries threshold) are skipped — their entries are not yet reliable
+	// enough for similarity search. This is intentional: at small corpus sizes
+	// the episodic retrieval path uses direct FTS5 queries as a fallback,
+	// so these entries are still reachable through the text search leg.
 	var all []VectorSearchResult
 	for _, p := range parts {
 		if p.IsBuilt() {

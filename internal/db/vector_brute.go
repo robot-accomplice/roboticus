@@ -27,6 +27,8 @@ type VectorSearchResult struct {
 	SourceID       string  `json:"source_id"`
 	ContentPreview string  `json:"content_preview"`
 	Similarity     float64 `json:"similarity"`
+	FTSScore       float64 `json:"fts_score,omitempty"`    // per-leg score from FTS (0 if not found by FTS)
+	VectorScore    float64 `json:"vector_score,omitempty"` // per-leg score from vector search (0 if not found)
 }
 
 // BruteForceIndex is an in-memory exact nearest neighbor index.

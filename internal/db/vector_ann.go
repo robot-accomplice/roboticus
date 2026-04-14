@@ -67,6 +67,7 @@ func NewHNSWGraph(cfg VectorIndexConfig) *HNSWGraph {
 }
 
 // randomLevel generates a random layer assignment for a new node.
+// Caller MUST hold h.mu.Lock() — h.rng is not goroutine-safe.
 func (h *HNSWGraph) randomLevel() int {
 	r := h.rng.Float64()
 	return int(-math.Log(r) * h.mL)
@@ -76,7 +77,12 @@ func (h *HNSWGraph) randomLevel() int {
 func (h *HNSWGraph) AddEntry(entry VectorEntry) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	h.insertUnlocked(entry)
+}
 
+// insertUnlocked performs the actual HNSW insertion.
+// Caller MUST hold h.mu.Lock().
+func (h *HNSWGraph) insertUnlocked(entry VectorEntry) {
 	nodeIdx := len(h.nodes)
 	level := h.randomLevel()
 
@@ -172,6 +178,8 @@ func (h *HNSWGraph) greedyClosest(query []float32, start int, layer int) int {
 }
 
 // searchLayer performs a beam search at a given layer, returning the ef closest nodes.
+// TODO(perf): Replace sorted slice with container/heap for O(log c) vs O(c log c)
+// per expansion step. Not blocking at efSearch=50 but needed before tuning ef>100.
 func (h *HNSWGraph) searchLayer(query []float32, entryIdx int, ef int, layer int) []candidateItem {
 	visited := make(map[int]bool)
 	visited[entryIdx] = true
@@ -307,7 +315,8 @@ func (h *HNSWGraph) Search(query []float32, k int) []VectorSearchResult {
 	return out
 }
 
-// BuildFromStore loads all embeddings from the database and inserts them.
+// BuildFromStore loads all embeddings from the database and batch-inserts them.
+// Holds the write lock once for the entire batch — avoids N lock/unlock cycles.
 func (h *HNSWGraph) BuildFromStore(store *Store) error {
 	rows, err := store.db.Query(
 		`SELECT source_table, source_id, content_preview, embedding_blob
@@ -317,6 +326,8 @@ func (h *HNSWGraph) BuildFromStore(store *Store) error {
 	}
 	defer func() { _ = rows.Close() }()
 
+	// Collect entries first (rows iteration holds the DB cursor).
+	var entries []VectorEntry
 	for rows.Next() {
 		var entry VectorEntry
 		var blob []byte
@@ -327,7 +338,14 @@ func (h *HNSWGraph) BuildFromStore(store *Store) error {
 		if len(entry.Embedding) == 0 {
 			continue
 		}
-		h.AddEntry(entry)
+		entries = append(entries, entry)
+	}
+
+	// Single lock acquisition for the entire batch.
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, entry := range entries {
+		h.insertUnlocked(entry)
 	}
 	return nil
 }
