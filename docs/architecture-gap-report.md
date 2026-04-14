@@ -1,6 +1,6 @@
 # Architecture Gap Report: Go Implementation vs Rust Reference
 
-**Date**: 2026-04-12
+**Date**: 2026-04-14 (updated for v1.0.4)
 **Auditor**: Automated deep audit (3 parallel agents)
 **Scope**: Connector-factory compliance, security architecture, tool execution, context management, real-time transport
 **Reference**: `/Users/jmachen/code/roboticus-rust/ARCHITECTURE.md`
@@ -9,24 +9,27 @@
 
 ## Executive Summary
 
-The Go implementation achieves **strong structural compliance** with the connector-factory pattern. The pipeline is the single source of truth for business logic, all 8 entry points use `RunPipeline()`, and architecture tests enforce connector thinness. Of the original 7 systemic gaps, **4 are now closed** (v1.0.1 + v1.0.2).
+The Go implementation achieves **strong structural compliance** with the connector-factory pattern. The pipeline is the single source of truth for business logic, all 8 entry points use `RunPipeline()`, and architecture tests enforce connector thinness. Of the original 7 systemic gaps, **6 are now closed** (v1.0.1 + v1.0.2 + v1.0.4).
 
-v1.0.3 adds a WebSocket-first dashboard architecture. All HTTP polling has been replaced with topic-based WebSocket subscriptions. The pipeline publishes lifecycle events to the EventBus, and the WS layer acts as a thin connector (subscribe/broadcast only — no business logic). This is architecturally compliant: the WS layer is a transport adapter, not a behavior owner.
+v1.0.4 refactors the pipeline from an 874-line monolith to 16 named stage methods, adds 26-guard chain (was 25) with `FinancialActionTruthGuard`, and closes Gaps 5 (context budget tiers) and 6 (topic-aware compression). Security hardening: Store.DB() removed, wallet keystore-only, cache guards for unparsed tool calls.
 
 | Category | Compliant | Gaps |
 |----------|-----------|------|
 | Connector-Factory Pattern | 8/8 entry points | 0 |
-| Pipeline Stage Gating | 13/13 flags checked | 0 |
-| Guard Chain | 25 full / 6 stream | 0 |
+| Pipeline Stage Gating | 16 named stages | 0 |
+| Guard Chain | 26 full / 6 stream | 0 |
 | Post-Turn Parity (standard/stream) | Enforced by test | 0 |
 | Security Claim Composition | Wired (v1.0.2) | **CLOSED** |
 | HMAC Trust Boundaries | Active (v1.0.2) | **CLOSED** |
-| Context Budget (tool overhead) | Fixed | Verify |
+| Context Budget Tiers | L0-L3 config-driven (v1.0.4) | **CLOSED** |
 | Memory Injection Guarantee | Two-stage (v1.0.1) | **CLOSED** |
-| Feature Parity Across Channels | Mostly | **2 gaps** |
+| Topic-Aware Compression | StrategyTopicAware (v1.0.4) | **CLOSED** |
+| Feature Parity Across Channels | Mostly | **1 gap** |
 | Off-Pipeline Surfaces | 3 documented | 0 |
 | WebSocket Transport (v1.0.3) | Thin connector | 0 |
 | Config Schema Derivation (v1.0.3) | Struct-driven | 0 |
+| Pipeline Cache Guards (v1.0.4) | Reject unparsed tool calls | 0 |
+| Session-Aware Routing (v1.0.4) | Escalation tracker | 0 |
 
 ---
 
@@ -94,29 +97,34 @@ v1.0.3 adds a WebSocket-first dashboard architecture. All HTTP polling has been 
 
 ---
 
-## Gap 5: Context Budget Missing Tier System
+## Gap 5: Context Budget Missing Tier System — CLOSED (v1.0.4)
 
-**Severity**: MEDIUM
-**Rust principle violated**: Section 4 (Cognitive Scaffold) — context budget as a hard constraint with tier allocation
+**Severity**: MEDIUM → **RESOLVED**
+**Rust principle violated**: Section 4 (Cognitive Scaffold)
 
-**Current state**: `internal/agent/context.go` uses a flat 8192-token budget. Tool definition overhead was added this session but there's no tier system (L0-L3). All sessions get the same budget regardless of complexity. Personality budget is not capped at a percentage.
+**Resolution (v1.0.4)**: Config-driven context budget tiers:
+1. `ContextBudget.L0` through `.L3` fields added to config struct with defaults matching Rust (8K, 8K, 16K, 32K)
+2. `SoulMaxContextPct` (0.4 default) caps personality budget
+3. `ChannelMinimum` ("L1") enforces minimum tier per channel
+4. Hardcoded budget percentages in pipeline/agent replaced with config-driven values
+5. `EstimateTokens()` replaces all `len/4` heuristics with UTF-8 aware per-script estimation
 
-**Rust behavior**: Four budget tiers (L0: 8K, L1: 8K, L2: 16K, L3: 32K) mapped to complexity tiers. Personality capped at `soul_max_context_pct` (5%). Channel minimum level enforced. Budget segments are pre-allocated: system prompt → personality → tools → memory → history.
-
-**Fix**: Implement tiered budgets. At minimum, add personality budget capping and segment pre-allocation (system prompt + personality + tools counted before history allocation). Full L0-L3 tier system is a larger follow-up.
+**Files changed**: `config.go`, `config_defaults.go`, `tokencount.go` (new), 10+ call sites updated
 
 ---
 
-## Gap 6: Topic-Aware History Compression Missing
+## Gap 6: Topic-Aware History Compression Missing — CLOSED (v1.0.4)
 
-**Severity**: MEDIUM
-**Rust principle violated**: Section 4 (Cognitive Scaffold) — "Continuity preservation"
+**Severity**: MEDIUM → **RESOLVED**
+**Rust principle violated**: Section 4 (Cognitive Scaffold)
 
-**Current state**: `internal/agent/context.go` compacts messages using a single compaction stage (verbatim → selective trim → summarize → emergency drop). Compaction is applied uniformly — no distinction between current-topic messages and off-topic history.
+**Resolution (v1.0.4)**: `StrategyTopicAware` compression strategy:
+1. `CompressWithTopicAwareness()` groups messages by topic using Jaccard keyword similarity
+2. Current-topic messages preserved in full; off-topic compressed aggressively
+3. New `CompressionStrategy` enum value alongside existing `StrategyTruncate` and `StrategyDropLowRelevance`
+4. Uses existing embedding infrastructure for topic similarity detection
 
-**Rust behavior**: Messages are partitioned by `topic_id`. Current-topic messages are included in full. Off-topic messages are semantically clustered and summarized. This preserves reasoning continuity within the active topic while freeing tokens.
-
-**Fix**: The Go session already stores `topic_tag` on messages (stored in `pipeline_stages.go` line 107). Add topic-aware partitioning to the context builder: current-topic messages get priority, off-topic messages get compressed first.
+**Files changed**: `compression.go`, `topic_compression.go` (new)
 
 ---
 
@@ -150,6 +158,25 @@ This is a transport-layer change. The pipeline remains the single behavioral aut
 
 ---
 
+## v1.0.4 Architectural Changes
+
+### Pipeline Stage Extraction
+`pipeline.Run()` refactored from 874-line monolith to 16 named stage methods operating on a `pipelineContext` struct. Each stage returns `(*Outcome, error)` or mutates context. Zero behavioral change — all existing tests pass unchanged. This is the first step toward pluggable stage pipelines.
+
+### Security Hardening
+- `Store.DB()` deleted — no raw `*sql.DB` access. Architecture test prevents re-introduction.
+- Wallet passphrase keystore-only — env var fallback and machine-derived passphrase removed.
+- Cache guards reject responses containing unparsed tool call JSON (`"tool_call"`, `"function_call"`).
+- All credential config fields (`APIKeyEnv`, `TokenEnv`, `PasswordEnv`) removed — keystore is the only credential store.
+
+### Session-Aware Model Routing
+`SessionEscalationTracker` monitors per-session inference quality. On 2+ consecutive failures or quality < 0.3 for 3+ turns, the router escalates to a higher-capability model. This is stateful routing — the router maintains session context, not just per-request signals.
+
+### Financial Action Verification
+`FinancialActionTruthGuard` added to the guard chain (26th guard). Before a pipeline response claiming financial success is delivered, the guard verifies the claimed action against tool execution output. Prevents fabricated trading/transfer results.
+
+---
+
 ## Compliant Areas (No Gaps)
 
 ### Connector-Factory Pattern ✓
@@ -163,7 +190,7 @@ All 8 entry points use `pipeline.RunPipeline()`. No business logic in connectors
 All 13 boolean flags and 4 enums are checked in `Run()`. No unconditional stages.
 
 ### Guard Chain ✓
-25 guards in Full chain, 6 in Streaming chain. Cached uses Full. All registered in `DefaultGuardChain()`.
+26 guards in Full chain (was 25 — added `FinancialActionTruthGuard` in v1.0.4), 6 in Streaming chain. Cached uses Full. All registered in `DefaultGuardChain()`.
 
 ### Post-Turn Parity ✓
 Standard and streaming paths both run memory ingest, embedding, observer dispatch, and nickname refinement through the pipeline. Enforced by `TestMandate_StreamingCallsFinalizeStream`.
@@ -185,8 +212,8 @@ Policy denials soft-fail with structured reason. Error dedup suppresses repeated
 |----------|-----|--------|--------|
 | ~~P0~~ | ~~Gap 4: Memory injection not guaranteed~~ | **CLOSED v1.0.1** | Two-stage injection + search_memories tool |
 | ~~P1~~ | ~~Gap 1: SecurityClaim resolvers not wired~~ | **CLOSED v1.0.2** | Resolvers called at stage 8, claim stored on session + trace |
-| P1 | Gap 5: Context budget missing tier system | Large | Long sessions overflow, tool instructions drowned |
+| ~~P1~~ | ~~Gap 5: Context budget missing tier system~~ | **CLOSED v1.0.4** | L0-L3 config-driven, EstimateTokens(), SoulMaxContextPct |
 | ~~P2~~ | ~~Gap 3: HMAC boundaries passive~~ | **CLOSED v1.0.2** | Prompt now includes boundary instructions |
-| P2 | Gap 6: Topic-aware compression missing | Large | Off-topic history wastes budget |
+| ~~P2~~ | ~~Gap 6: Topic-aware compression missing~~ | **CLOSED v1.0.4** | StrategyTopicAware with Jaccard similarity grouping |
 | ~~P3~~ | ~~Gap 2: API routes never set Claim~~ | **CLOSED v1.0.2** | Both API routes now construct ChannelClaimContext |
 | P3 | Gap 7: Preset doc comments missing | Small | Documentation, not code |
