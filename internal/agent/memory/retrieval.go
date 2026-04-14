@@ -17,6 +17,7 @@ type RetrievalConfig struct {
 	HybridWeight     float64 // FTS vs embedding blend (0=FTS only, 1=embedding only, 0.5=balanced)
 	EpisodicHalfLife float64 // Days for episodic decay (default 7)
 	DecayFloor       float64 // Minimum decay factor (default 0.05)
+	Reranker         RerankerConfig // reranker tuning parameters
 }
 
 // DefaultRetrievalConfig returns sensible defaults.
@@ -25,6 +26,7 @@ func DefaultRetrievalConfig() RetrievalConfig {
 		HybridWeight:     0.5,
 		EpisodicHalfLife: 7.0,
 		DecayFloor:       0.05,
+		Reranker:         DefaultRerankerConfig(),
 	}
 }
 
@@ -35,6 +37,7 @@ type Retriever struct {
 	budgets       TierBudget
 	embedClient   *llm.EmbeddingClient
 	vectorIndex     db.VectorIndex
+	intents       []IntentSignal // set before retrieval if intent classifier available
 	charsPerToken int
 }
 
@@ -56,6 +59,12 @@ func (mr *Retriever) SetEmbeddingClient(ec *llm.EmbeddingClient) {
 // SetVectorIndex attaches a vector index for ANN-based retrieval.
 func (mr *Retriever) SetVectorIndex(idx db.VectorIndex) {
 	mr.vectorIndex = idx
+}
+
+// SetIntents provides intent classification results for the current query.
+// Called by the pipeline after Stage 7 (intent classification) before retrieval.
+func (mr *Retriever) SetIntents(intents []IntentSignal) {
+	mr.intents = intents
 }
 
 // MemoryEntry represents a memory result from ANN retrieval.
@@ -235,13 +244,11 @@ func (mr *Retriever) RetrieveWithMetrics(ctx context.Context, sessionID, query s
 	subgoals := Decompose(query)
 
 	// 2. Route each subgoal to the appropriate memory tiers.
-	// Build intent signals from the classifier (if available in context).
-	// For now, pass nil intents — the router falls back to keyword signals.
 	router := NewRouter(corpusSize)
 	var allEvidence []Evidence
 
 	for _, sg := range subgoals {
-		plan := router.Plan(sg.Question, nil)
+		plan := router.Plan(sg.Question, mr.intents)
 
 		// 3. Retrieve from each targeted tier.
 		for _, target := range plan.Targets {
@@ -251,24 +258,33 @@ func (mr *Retriever) RetrieveWithMetrics(ctx context.Context, sessionID, query s
 			}
 			tierResults := mr.retrieveTier(ctx, target.Tier, sg.Question, queryEmbed, tierBudget/mr.charsPerToken, corpusSize)
 			for i, content := range tierResults {
-				// Score = router weight * position decay (first result scores highest).
-				// This ensures different results get different scores, preventing
-				// the reranker from seeing zero spread and capping to 3.
-				positionDecay := 1.0 - (float64(i) * 0.05)
+				// Extract sim score from episodic format "(sim=0.85) content..."
+				score := target.Weight
+				if strings.HasPrefix(content, "(sim=") {
+					if end := strings.Index(content, ") "); end > 5 {
+						var parsed float64
+						if _, err := fmt.Sscanf(content[5:end], "%f", &parsed); err == nil {
+							score = parsed
+							content = content[end+2:] // strip sim prefix from display
+						}
+					}
+				}
+				// Position decay as tiebreaker for entries without sim scores.
+				positionDecay := 1.0 - (float64(i) * 0.02)
 				if positionDecay < 0.1 {
 					positionDecay = 0.1
 				}
 				allEvidence = append(allEvidence, Evidence{
 					Content:    content,
 					SourceTier: target.Tier,
-					Score:      target.Weight * positionDecay,
+					Score:      score * positionDecay,
 				})
 			}
 		}
 	}
 
 	// 4. Rerank: discard weak evidence, boost authority, penalize stale.
-	reranker := NewReranker(DefaultRerankerConfig())
+	reranker := NewReranker(mr.config.Reranker)
 	maxEvidence := totalCharsAllowed / (mr.charsPerToken * 50) // rough estimate: ~50 tokens per evidence item
 	if maxEvidence < 5 {
 		maxEvidence = 5

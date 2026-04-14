@@ -3,10 +3,12 @@ package pipeline
 import (
 	"context"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/rs/zerolog/log"
 
+	"roboticus/internal/agent"
 	agentmemory "roboticus/internal/agent/memory"
 	"roboticus/internal/core"
 	"roboticus/internal/db"
@@ -168,19 +170,39 @@ func (p *Pipeline) reflectOnTurn(ctx context.Context, userContent string, sessio
 	}
 
 	// Extract tool events from session messages.
+	// Track success/failure: a tool call is followed by a tool result message.
+	// If the result starts with error patterns, mark as failure.
 	var toolEvents []agentmemory.ToolEvent
-	for _, msg := range session.Messages() {
+	msgs := session.Messages()
+	for i, msg := range msgs {
 		if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
 			for _, tc := range msg.ToolCalls {
+				success := true
+				// Look ahead for the tool result message.
+				if i+1 < len(msgs) && msgs[i+1].Role == "tool" {
+					result := strings.ToLower(msgs[i+1].Content)
+					if strings.HasPrefix(result, "error") || strings.HasPrefix(result, "failed") ||
+						strings.HasPrefix(result, `{"error`) {
+						success = false
+					}
+				}
 				toolEvents = append(toolEvents, agentmemory.ToolEvent{
 					ToolName: tc.Function.Name,
-					Success:  true, // assume success; failures tracked separately
+					Success:  success,
 				})
 			}
 		}
 	}
 
-	summary := agentmemory.Reflect(userContent, toolEvents, 0)
+	// Estimate turn duration from session timestamps.
+	var turnDuration time.Duration
+	if len(msgs) >= 2 {
+		// Use session's created_at as proxy (actual turn timing would require
+		// the turn record, which isn't available in the session struct).
+		turnDuration = 0 // TODO: wire actual turn start time from pipeline context
+	}
+
+	summary := agentmemory.Reflect(userContent, toolEvents, turnDuration)
 	if summary == nil {
 		return
 	}
@@ -199,9 +221,9 @@ func (p *Pipeline) reflectOnTurn(ctx context.Context, userContent string, sessio
 	}
 }
 
-// detectAndPersistProcedures extracts tool call sequences from session messages
-// and persists any detected multi-step procedures as learned skills.
-// This activates the dormant learning.go pattern detection at the pipeline level.
+// detectAndPersistProcedures uses LearningExtractor's sliding-window procedure
+// detection to find recurring multi-step tool sequences and persist them.
+// This wires the full agent.LearningExtractor into production.
 func (p *Pipeline) detectAndPersistProcedures(ctx context.Context, session *Session) {
 	if p.store == nil {
 		return
@@ -212,42 +234,39 @@ func (p *Pipeline) detectAndPersistProcedures(ctx context.Context, session *Sess
 		return
 	}
 
-	// Extract tool call sequence from this turn's messages.
-	var toolNames []string
-	for _, msg := range msgs {
+	// Build tool call records from session messages.
+	var calls []agent.ToolCallRecord
+	for i, msg := range msgs {
 		if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
 			for _, tc := range msg.ToolCalls {
-				toolNames = append(toolNames, tc.Function.Name)
+				success := true
+				if i+1 < len(msgs) && msgs[i+1].Role == "tool" {
+					result := strings.ToLower(msgs[i+1].Content)
+					success = !strings.HasPrefix(result, "error") &&
+						!strings.HasPrefix(result, "failed") &&
+						!strings.HasPrefix(result, `{"error`)
+				}
+				calls = append(calls, agent.ToolCallRecord{
+					ToolName: tc.Function.Name,
+					Success:  success,
+				})
 			}
 		}
 	}
 
-	if len(toolNames) < 3 {
-		return // Need at least 3 tools for a meaningful procedure.
-	}
-
-	// Build a procedure key from the tool sequence.
-	procName := strings.Join(toolNames, "-")
-	procSteps := strings.Join(toolNames, ", ")
-
-	// Upsert into learned_skills: increment success_count if exists,
-	// create if not. This mirrors agent.PersistLearnedSkill without
-	// importing the agent package (architecture boundary).
-	_, err := p.store.ExecContext(ctx,
-		`INSERT INTO learned_skills (id, name, description, steps_json, source_session_id, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))
-		 ON CONFLICT(name) DO UPDATE SET
-		   success_count = success_count + 1,
-		   updated_at = datetime('now')`,
-		db.NewID(), procName, "auto-detected: "+procSteps, `["`+strings.Join(toolNames, `","`)+`"]`, session.ID)
-	if err != nil {
-		log.Debug().Err(err).Str("procedure", procName).
-			Msg("procedure detection: failed to persist learned skill")
+	if len(calls) < 3 {
 		return
 	}
 
-	log.Debug().Str("procedure", procName).Int("tools", len(toolNames)).
-		Msg("procedure detection: persisted learned skill")
+	// Use the full LearningExtractor for sliding-window detection.
+	extractor := agent.NewLearningExtractor()
+	candidates := extractor.DetectCandidateProcedures(calls)
+
+	for _, proc := range candidates {
+		agent.PersistLearnedSkill(ctx, p.store, proc)
+		log.Debug().Str("procedure", strings.Join(proc.Steps, "-")).Int("count", proc.Count).
+			Msg("procedure detection: persisted learned skill")
+	}
 }
 
 // truncatePreview truncates text for storage as a content preview.
