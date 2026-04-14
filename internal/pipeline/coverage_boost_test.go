@@ -279,6 +279,32 @@ func TestResolveSession_SessionFromBody_NewSession(t *testing.T) {
 	}
 }
 
+func TestResolveSession_PropagatesWorkspaceAndAllowedPaths(t *testing.T) {
+	store := testutil.TempStore(t)
+	allowed := []string{"/opt/vault", "/data/shared"}
+	pipe := New(PipelineDeps{
+		Store:        store,
+		Workspace:    "/home/agent/workspace",
+		AllowedPaths: allowed,
+	})
+	ctx := context.Background()
+
+	// New session should inherit workspace + allowed paths from pipeline.
+	sess, err := pipe.resolveSession(ctx, Config{SessionResolution: SessionFromBody}, Input{
+		AgentID:  "a1",
+		Platform: "test",
+	})
+	if err != nil {
+		t.Fatalf("resolveSession: %v", err)
+	}
+	if sess.Workspace != "/home/agent/workspace" {
+		t.Errorf("workspace = %q, want /home/agent/workspace", sess.Workspace)
+	}
+	if len(sess.AllowedPaths) != 2 || sess.AllowedPaths[0] != "/opt/vault" {
+		t.Errorf("AllowedPaths = %v, want [/opt/vault /data/shared]", sess.AllowedPaths)
+	}
+}
+
 func TestResolveSession_SessionFromBody_ExistingSession(t *testing.T) {
 	store := testutil.TempStore(t)
 	pipe := New(PipelineDeps{Store: store})

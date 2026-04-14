@@ -3,10 +3,13 @@ package pipeline
 import (
 	"context"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/rs/zerolog/log"
 
+	"roboticus/internal/agent"
+	agentmemory "roboticus/internal/agent/memory"
 	"roboticus/internal/core"
 	"roboticus/internal/db"
 )
@@ -50,7 +53,13 @@ func (p *Pipeline) PostTurnIngest(ctx context.Context, session *Session, turnID 
 		// 3. Observer subagent dispatch (Rust: role="observer" receives turn summary).
 		p.dispatchToObservers(bgCtx, sessionID, turnID, userContent, assistantContent)
 
-		// 4. Log the turn pair for analytics/debugging.
+		// 4. Reflection: generate structured episode summary (agentic architecture Layer 16).
+		p.reflectOnTurn(bgCtx, userContent, session)
+
+		// 5. Procedure detection: extract tool sequences and persist learned skills.
+		p.detectAndPersistProcedures(bgCtx, session)
+
+		// 6. Log the turn pair for analytics/debugging.
 		if userContent != "" {
 			log.Trace().
 				Str("session", sessionID).
@@ -150,6 +159,113 @@ func (p *Pipeline) storeChunkEmbedding(ctx context.Context, sessionID, turnID, c
 	)
 	if err != nil {
 		log.Warn().Err(err).Str("session", sessionID).Msg("embedding storage failed")
+	}
+}
+
+// reflectOnTurn generates a structured episode summary and stores it as
+// episodic memory. Wires reflection.go into the post-turn pipeline.
+func (p *Pipeline) reflectOnTurn(ctx context.Context, userContent string, session *Session) {
+	if p.store == nil || userContent == "" {
+		return
+	}
+
+	// Extract tool events from session messages.
+	// Track success/failure: a tool call is followed by a tool result message.
+	// If the result starts with error patterns, mark as failure.
+	var toolEvents []agentmemory.ToolEvent
+	msgs := session.Messages()
+	for i, msg := range msgs {
+		if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
+			for _, tc := range msg.ToolCalls {
+				success := true
+				// Look ahead for the tool result message.
+				if i+1 < len(msgs) && msgs[i+1].Role == "tool" {
+					result := strings.ToLower(msgs[i+1].Content)
+					if strings.HasPrefix(result, "error") || strings.HasPrefix(result, "failed") ||
+						strings.HasPrefix(result, `{"error`) {
+						success = false
+					}
+				}
+				toolEvents = append(toolEvents, agentmemory.ToolEvent{
+					ToolName: tc.Function.Name,
+					Success:  success,
+				})
+			}
+		}
+	}
+
+	// Estimate turn duration from session timestamps.
+	var turnDuration time.Duration
+	if len(msgs) >= 2 {
+		// Use session's created_at as proxy (actual turn timing would require
+		// the turn record, which isn't available in the session struct).
+		turnDuration = 0 // TODO: wire actual turn start time from pipeline context
+	}
+
+	summary := agentmemory.Reflect(userContent, toolEvents, turnDuration)
+	if summary == nil {
+		return
+	}
+
+	// Store as episodic memory with high importance.
+	formatted := summary.FormatForStorage()
+	_, err := p.store.ExecContext(ctx,
+		`INSERT INTO episodic_memory (id, classification, content, importance)
+		 VALUES (?, 'episode_summary', ?, 8)`,
+		db.NewID(), formatted)
+	if err != nil {
+		log.Debug().Err(err).Msg("reflection: failed to store episode summary")
+	} else {
+		log.Debug().Str("outcome", summary.Outcome).Int("actions", len(summary.Actions)).
+			Msg("reflection: episode summary stored")
+	}
+}
+
+// detectAndPersistProcedures uses LearningExtractor's sliding-window procedure
+// detection to find recurring multi-step tool sequences and persist them.
+// This wires the full agent.LearningExtractor into production.
+func (p *Pipeline) detectAndPersistProcedures(ctx context.Context, session *Session) {
+	if p.store == nil {
+		return
+	}
+
+	msgs := session.Messages()
+	if len(msgs) < 3 {
+		return
+	}
+
+	// Build tool call records from session messages.
+	var calls []agent.ToolCallRecord
+	for i, msg := range msgs {
+		if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
+			for _, tc := range msg.ToolCalls {
+				success := true
+				if i+1 < len(msgs) && msgs[i+1].Role == "tool" {
+					result := strings.ToLower(msgs[i+1].Content)
+					success = !strings.HasPrefix(result, "error") &&
+						!strings.HasPrefix(result, "failed") &&
+						!strings.HasPrefix(result, `{"error`)
+				}
+				calls = append(calls, agent.ToolCallRecord{
+					ToolName: tc.Function.Name,
+					Success:  success,
+				})
+			}
+		}
+	}
+
+	if len(calls) < 3 {
+		return
+	}
+
+	// Use the full LearningExtractor for sliding-window detection.
+	extractor := agent.NewLearningExtractor()
+	candidates := extractor.DetectCandidateProcedures(calls)
+
+	for _, proc := range candidates {
+		agent.PersistLearnedSkill(ctx, p.store, proc)
+		log.Debug().Str("procedure", strings.Join(proc.Steps, "-")).Int("count", proc.Count).
+			Msg("procedure detection: persisted learned skill")
 	}
 }
 

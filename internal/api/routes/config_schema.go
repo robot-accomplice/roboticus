@@ -85,7 +85,7 @@ var fieldDescriptions = map[string]string{
 	"memory.semantic_budget":                    "Percentage for semantic (knowledge) memory.",
 	"memory.procedural_budget":                  "Percentage for procedural (skill) memory.",
 	"memory.relationship_budget":                "Percentage for relationship memory.",
-	"memory.hybrid_weight":                      "Balance between keyword (0) and semantic (1) search.",
+	"memory.hybrid_weight_override":              "Manual override for hybrid search weight (0=adaptive, >0=fixed blend). Default: 0 (adaptive based on corpus size).",
 	"memory.decay_half_life_days":               "Half-life in days for memory recency decay.",
 	"session.scope_mode":                        "Session scoping: agent, peer, or group.",
 	"session.ttl_seconds":                       "Session time-to-live in seconds. 0 = no expiry.",

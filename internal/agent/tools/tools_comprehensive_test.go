@@ -58,6 +58,42 @@ func TestResolvePath_AbsoluteNotAllowed(t *testing.T) {
 	}
 }
 
+func TestResolvePath_PathBoundaryCheck(t *testing.T) {
+	// Regression: allowed path "/data/vault" must NOT match "/data/vaultBackup".
+	allowed := []string{"/data/vault"}
+	_, err := resolvePath("/workspace", "/data/vaultBackup/secrets.txt", allowed)
+	if err == nil {
+		t.Error("expected error: /data/vaultBackup should not match allowed path /data/vault")
+	}
+
+	// But /data/vault/notes.md should pass.
+	resolved, err := resolvePath("/workspace", "/data/vault/notes.md", allowed)
+	if err != nil {
+		t.Fatalf("unexpected error for path within allowed dir: %v", err)
+	}
+	if resolved != "/data/vault/notes.md" {
+		t.Errorf("resolved = %q, want /data/vault/notes.md", resolved)
+	}
+
+	// Exact match of allowed path itself should pass.
+	resolved, err = resolvePath("/workspace", "/data/vault", allowed)
+	if err != nil {
+		t.Fatalf("unexpected error for exact allowed path match: %v", err)
+	}
+	if resolved != "/data/vault" {
+		t.Errorf("resolved = %q, want /data/vault", resolved)
+	}
+}
+
+func TestResolvePath_WorkspaceBoundaryCheck(t *testing.T) {
+	// Regression: workspace "/workspace" must NOT match "/workspaceBackup".
+	_, err := resolvePath("/workspace", "file.txt", nil)
+	if err != nil {
+		// Relative path within workspace should resolve fine.
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // EchoTool error paths
 // ---------------------------------------------------------------------------

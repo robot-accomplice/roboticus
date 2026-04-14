@@ -261,6 +261,32 @@ Blocking commands for feature-complete releases:
 | R-REL-05 | `roboticus.ai` sync succeeds from the Go release source and publishes matching metadata | site-sync dry run + deploy gate | L4 |
 | R-REL-06 | Public installer scripts install the Go-based runtime without changing the operator contract unexpectedly | installer smoke on Unix + Windows | L3/L4 |
 
+### R-AGENT: Agentic Retrieval Architecture (v1.0.5)
+
+| ID | Regression Class | Required Coverage | Layer |
+| --- | --- | --- | --- |
+| R-AGENT-01 | Router produces different plans for different intent signals | `internal/agent/memory/router_test.go` | L1 |
+| R-AGENT-02 | Router never targets working memory (active state, not searched) | `internal/agent/memory/router_test.go` | L1 |
+| R-AGENT-03 | Router tier budgets sum to ~1.0 for all routing plans | `internal/agent/memory/router_test.go` | L1 |
+| R-AGENT-04 | Reranker discards evidence below MinScore threshold | `internal/agent/memory/reranker_test.go` | L1 |
+| R-AGENT-05 | Reranker authority boost promotes canonical sources | `internal/agent/memory/reranker_test.go` | L1 |
+| R-AGENT-06 | Reranker collapse detection caps results when spread < 0.05 | `internal/agent/memory/reranker_test.go` | L1 |
+| R-AGENT-07 | Decomposer splits compound queries (multiple ?'s, semicolons, conjunctions) | `internal/agent/memory/decomposer_test.go` | L1 |
+| R-AGENT-08 | Decomposer classifies subgoals to correct memory tiers | `internal/agent/memory/decomposer_test.go` | L1 |
+| R-AGENT-09 | Context assembly produces [Working State], [Evidence], [Gaps], [Contradictions] | `internal/agent/memory/context_assembly_test.go` | L1 |
+| R-AGENT-10 | Context assembly detects gaps when tiers return no results | `internal/agent/memory/context_assembly_test.go` | L1 |
+| R-AGENT-11 | Reflection generates structured episode summaries with outcome classification | `internal/agent/memory/reflection_test.go` | L1 |
+| R-AGENT-12 | Reflection detects retry patterns and all-fail scenarios | `internal/agent/memory/reflection_test.go` | L1 |
+| R-AGENT-13 | Working memory persisted on shutdown, vetted on startup | `internal/agent/memory/working_persistence_test.go` | L1 |
+| R-AGENT-14 | Startup vet retains goals/decisions, discards stale/low-importance entries | `internal/agent/memory/working_persistence_test.go` | L1 |
+| R-AGENT-15 | BM25 scoring in HybridSearch varies by term relevance | `internal/db/hybrid_search_test.go` | L1 |
+| R-AGENT-16 | HybridSearch deduplicates across FTS and vector legs | `internal/db/hybrid_search_test.go` | L1 |
+| R-AGENT-17 | Adaptive hybrid weight decreases monotonically with corpus size | `internal/agent/memory/adaptive_weight_test.go` | L1 |
+| R-AGENT-18 | Partitioned index routes entries to correct partition by source table | `internal/db/vector_partitioned_test.go` | L1 |
+| R-AGENT-19 | Collapse regression: ScoreSpread and adaptive weight match expectations at 100/1K scale | `internal/agent/memory/collapse_regression_test.go` | L1 |
+| R-AGENT-20 | Post-turn procedure detection persists learned skills from tool sequences | `internal/pipeline/post_turn.go` | L2 |
+| R-AGENT-21 | Post-turn reflection stores episode summaries as episodic_memory | `internal/pipeline/post_turn.go` | L2 |
+
 ## Governance Rules
 
 1. Every bug fix touching an advertised feature should add or update at least

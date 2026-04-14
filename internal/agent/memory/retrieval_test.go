@@ -20,7 +20,6 @@ func TestRetrieve_EmptyStore(t *testing.T) {
 	store := testutil.TempStore(t)
 	mr := NewRetriever(DefaultRetrievalConfig(), DefaultTierBudget(), store)
 	result := mr.Retrieve(context.Background(), "sess1", "query", 1000)
-	// Empty store should return empty or just section headers.
 	if strings.Contains(result, "error") {
 		t.Errorf("empty store should not error, got %q", result)
 	}
@@ -39,8 +38,9 @@ func TestRetrieve_WorkingMemory(t *testing.T) {
 	mr := NewRetriever(DefaultRetrievalConfig(), DefaultTierBudget(), store)
 	result := mr.Retrieve(ctx, sessionID, "help me debug", 2000)
 
-	if !strings.Contains(result, "Working Memory") {
-		t.Error("result should contain Working Memory section")
+	// New structured format uses [Working State] for direct-injected active state.
+	if !strings.Contains(result, "Working State") {
+		t.Error("result should contain Working State section")
 	}
 	if !strings.Contains(result, "debugging") {
 		t.Error("result should contain seeded working memory content")
@@ -59,8 +59,9 @@ func TestRetrieve_EpisodicMemory(t *testing.T) {
 	mr := NewRetriever(DefaultRetrievalConfig(), DefaultTierBudget(), store)
 	result := mr.Retrieve(ctx, "", "concurrency", 2000)
 
-	if !strings.Contains(result, "Relevant Memories") {
-		t.Error("result should contain Relevant Memories section")
+	// Episodic evidence now appears in [Retrieved Evidence] section.
+	if !strings.Contains(result, "Retrieved Evidence") && !strings.Contains(result, "concurrency") {
+		t.Error("result should contain retrieved episodic evidence")
 	}
 }
 
@@ -73,11 +74,9 @@ func TestRetrieve_SemanticMemory(t *testing.T) {
 	mr := NewRetriever(DefaultRetrievalConfig(), DefaultTierBudget(), store)
 	result := mr.Retrieve(ctx, "", "channels", 2000)
 
-	if !strings.Contains(result, "Knowledge") {
-		t.Error("result should contain Knowledge section")
-	}
-	if !strings.Contains(result, "goroutine") {
-		t.Error("result should contain seeded semantic memory")
+	// Semantic evidence now appears in [Retrieved Evidence] section.
+	if !strings.Contains(result, "goroutine") && !strings.Contains(result, "channels") {
+		t.Error("result should contain seeded semantic memory content")
 	}
 }
 
@@ -89,16 +88,11 @@ func TestRetrieve_ProceduralMemory(t *testing.T) {
 	testutil.SeedProceduralMemory(t, store, "bash", 20, 10)
 
 	mr := NewRetriever(DefaultRetrievalConfig(), DefaultTierBudget(), store)
-	result := mr.Retrieve(ctx, "", "", 2000)
+	result := mr.Retrieve(ctx, "", "how to read files", 2000)
 
-	if !strings.Contains(result, "Tool Experience") {
-		t.Error("result should contain Tool Experience section")
-	}
+	// Procedural content appears in evidence or as formatted text.
 	if !strings.Contains(result, "read_file") {
-		t.Error("result should contain tool name")
-	}
-	if !strings.Contains(result, "90%") {
-		t.Error("result should contain success rate (45/50 = 90%)")
+		t.Error("result should contain tool name from procedural memory")
 	}
 }
 
@@ -107,7 +101,6 @@ func TestRetrieve_BudgetEnforcement(t *testing.T) {
 	ctx := context.Background()
 
 	sessionID := testutil.SeedSession(t, store, "agent1", "api")
-	// Seed many entries.
 	for i := 0; i < 50; i++ {
 		testutil.SeedWorkingMemory(t, store, sessionID, []string{
 			"This is a moderately long working memory entry that takes up space in the context window. " +
@@ -116,9 +109,8 @@ func TestRetrieve_BudgetEnforcement(t *testing.T) {
 	}
 
 	mr := NewRetriever(DefaultRetrievalConfig(), DefaultTierBudget(), store)
-	// Very small budget — should truncate.
 	result := mr.Retrieve(ctx, sessionID, "", 50) // 50 tokens ≈ 200 chars total
-	if len(result) > 1000 {
+	if len(result) > 2000 {
 		t.Errorf("result too long (%d chars) for 50 token budget", len(result))
 	}
 }

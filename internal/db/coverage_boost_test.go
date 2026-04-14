@@ -552,10 +552,10 @@ func TestRevenueStrategyRepository_Empty(t *testing.T) {
 	}
 }
 
-// --- HNSW Index ---
+// --- BruteForce Vector Index ---
 
-func TestHNSWIndex_Basic(t *testing.T) {
-	idx := NewHNSWIndex(HNSWConfig{MinEntries: 2})
+func TestBruteForceIndex_Basic(t *testing.T) {
+	idx := NewBruteForceIndex(VectorIndexConfig{MinEntries: 2})
 
 	if idx.IsBuilt() {
 		t.Error("should not be built initially")
@@ -565,21 +565,21 @@ func TestHNSWIndex_Basic(t *testing.T) {
 	}
 
 	// Add entries.
-	idx.AddEntry(HNSWEntry{
+	idx.AddEntry(VectorEntry{
 		SourceTable:    "episodic_memory",
 		SourceID:       "e1",
 		ContentPreview: "hello world",
-		Embedding:      []float64{1, 0, 0},
+		Embedding:      []float32{1, 0, 0},
 	})
 	if idx.IsBuilt() {
 		t.Error("should not be built with 1 entry (min=2)")
 	}
 
-	idx.AddEntry(HNSWEntry{
+	idx.AddEntry(VectorEntry{
 		SourceTable:    "episodic_memory",
 		SourceID:       "e2",
 		ContentPreview: "goodbye world",
-		Embedding:      []float64{0, 1, 0},
+		Embedding:      []float32{0, 1, 0},
 	})
 	if !idx.IsBuilt() {
 		t.Error("should be built with 2 entries (min=2)")
@@ -589,27 +589,27 @@ func TestHNSWIndex_Basic(t *testing.T) {
 	}
 }
 
-func TestHNSWIndex_Search(t *testing.T) {
-	idx := NewHNSWIndex(HNSWConfig{MinEntries: 1})
+func TestBruteForceIndex_Search(t *testing.T) {
+	idx := NewBruteForceIndex(VectorIndexConfig{MinEntries: 1})
 
-	idx.AddEntry(HNSWEntry{
+	idx.AddEntry(VectorEntry{
 		SourceTable: "test", SourceID: "a",
 		ContentPreview: "vector A",
-		Embedding:      []float64{1, 0, 0},
+		Embedding:      []float32{1, 0, 0},
 	})
-	idx.AddEntry(HNSWEntry{
+	idx.AddEntry(VectorEntry{
 		SourceTable: "test", SourceID: "b",
 		ContentPreview: "vector B",
-		Embedding:      []float64{0, 1, 0},
+		Embedding:      []float32{0, 1, 0},
 	})
-	idx.AddEntry(HNSWEntry{
+	idx.AddEntry(VectorEntry{
 		SourceTable: "test", SourceID: "c",
 		ContentPreview: "vector C",
-		Embedding:      []float64{0.9, 0.1, 0},
+		Embedding:      []float32{0.9, 0.1, 0},
 	})
 
 	// Search for vector close to A.
-	results := idx.Search([]float64{1, 0, 0}, 2)
+	results := idx.Search([]float32{1, 0, 0}, 2)
 	if len(results) != 2 {
 		t.Fatalf("expected 2 results, got %d", len(results))
 	}
@@ -621,40 +621,40 @@ func TestHNSWIndex_Search(t *testing.T) {
 	}
 }
 
-func TestHNSWIndex_SearchEmpty(t *testing.T) {
-	idx := NewHNSWIndex(HNSWConfig{MinEntries: 1})
+func TestBruteForceIndex_SearchEmpty(t *testing.T) {
+	idx := NewBruteForceIndex(VectorIndexConfig{MinEntries: 1})
 
-	results := idx.Search([]float64{1, 0, 0}, 5)
+	results := idx.Search([]float32{1, 0, 0}, 5)
 	if results != nil {
 		t.Errorf("expected nil for empty index, got %v", results)
 	}
 }
 
-func TestHNSWIndex_SearchKZero(t *testing.T) {
-	idx := NewHNSWIndex(HNSWConfig{MinEntries: 1})
-	idx.AddEntry(HNSWEntry{Embedding: []float64{1, 0}})
+func TestBruteForceIndex_SearchKZero(t *testing.T) {
+	idx := NewBruteForceIndex(VectorIndexConfig{MinEntries: 1})
+	idx.AddEntry(VectorEntry{Embedding: []float32{1, 0}})
 
-	results := idx.Search([]float64{1, 0}, 0)
+	results := idx.Search([]float32{1, 0}, 0)
 	if results != nil {
 		t.Errorf("expected nil for k=0, got %v", results)
 	}
 }
 
-func TestHNSWIndex_SearchKLargerThanEntries(t *testing.T) {
-	idx := NewHNSWIndex(HNSWConfig{MinEntries: 1})
-	idx.AddEntry(HNSWEntry{
+func TestBruteForceIndex_SearchKLargerThanEntries(t *testing.T) {
+	idx := NewBruteForceIndex(VectorIndexConfig{MinEntries: 1})
+	idx.AddEntry(VectorEntry{
 		SourceTable: "t", SourceID: "1",
-		Embedding: []float64{1, 0},
+		Embedding: []float32{1, 0},
 	})
 
-	results := idx.Search([]float64{1, 0}, 100)
+	results := idx.Search([]float32{1, 0}, 100)
 	if len(results) != 1 {
 		t.Errorf("expected 1 result (only 1 entry), got %d", len(results))
 	}
 }
 
-func TestHNSWIndex_DefaultMinEntries(t *testing.T) {
-	idx := NewHNSWIndex(HNSWConfig{})
+func TestBruteForceIndex_DefaultMinEntries(t *testing.T) {
+	idx := NewBruteForceIndex(VectorIndexConfig{})
 	if idx.minEntries != 100 {
 		t.Errorf("default minEntries = %d, want 100", idx.minEntries)
 	}
@@ -662,31 +662,31 @@ func TestHNSWIndex_DefaultMinEntries(t *testing.T) {
 
 func TestCosineSimilarity(t *testing.T) {
 	// Identical vectors.
-	sim := cosineSimilarity([]float64{1, 0, 0}, []float64{1, 0, 0})
+	sim := CosineSimilarityF64([]float64{1, 0, 0}, []float64{1, 0, 0})
 	if sim < 0.999 {
 		t.Errorf("identical vectors: sim = %f, want ~1.0", sim)
 	}
 
 	// Orthogonal vectors.
-	sim = cosineSimilarity([]float64{1, 0, 0}, []float64{0, 1, 0})
+	sim = CosineSimilarityF64([]float64{1, 0, 0}, []float64{0, 1, 0})
 	if sim > 0.001 {
 		t.Errorf("orthogonal vectors: sim = %f, want ~0.0", sim)
 	}
 
 	// Different lengths.
-	sim = cosineSimilarity([]float64{1, 0}, []float64{1, 0, 0})
+	sim = CosineSimilarityF64([]float64{1, 0}, []float64{1, 0, 0})
 	if sim != 0 {
 		t.Errorf("different lengths: sim = %f, want 0", sim)
 	}
 
 	// Empty vectors.
-	sim = cosineSimilarity([]float64{}, []float64{})
+	sim = CosineSimilarityF64([]float64{}, []float64{})
 	if sim != 0 {
 		t.Errorf("empty vectors: sim = %f, want 0", sim)
 	}
 
 	// Zero vector.
-	sim = cosineSimilarity([]float64{0, 0, 0}, []float64{1, 0, 0})
+	sim = CosineSimilarityF64([]float64{0, 0, 0}, []float64{1, 0, 0})
 	if sim != 0 {
 		t.Errorf("zero vector: sim = %f, want 0", sim)
 	}
@@ -956,15 +956,15 @@ func TestHippocampusRegistry_SyncBuiltinTables(t *testing.T) {
 	}
 }
 
-// --- HNSW BuildFromStore ---
+// --- BruteForce BuildFromStore ---
 
-func TestHNSWIndex_BuildFromStore(t *testing.T) {
+func TestBruteForceIndex_BuildFromStore(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()
 
 	// G002 fix: BuildFromStore now reads from embedding_blob (binary LE), not embedding_json.
 
-	idx := NewHNSWIndex(HNSWConfig{MinEntries: 1})
+	idx := NewBruteForceIndex(VectorIndexConfig{MinEntries: 1})
 	err := idx.BuildFromStore(store)
 	if err != nil {
 		t.Fatalf("BuildFromStore: %v", err)
