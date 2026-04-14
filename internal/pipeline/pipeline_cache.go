@@ -55,6 +55,14 @@ func (p *Pipeline) CheckCache(ctx context.Context, content string) *CacheHit {
 		return nil
 	}
 
+	// Incomplete tool call guard: reject if cached response contains unparsed
+	// tool call JSON. This means the model tried to call a tool but the response
+	// was cached before execution — returning it would show raw JSON to the user.
+	if strings.Contains(cached, `"tool_call"`) || strings.Contains(cached, `"function_call"`) {
+		log.Debug().Str("prompt_hash", fp).Msg("cache hit rejected: contains unparsed tool call")
+		return nil
+	}
+
 	// Parroting guard: reject if cached response overlaps heavily with input.
 	overlap := textOverlapScore(cached, content)
 	if overlap > 0.6 {
@@ -91,6 +99,12 @@ func (p *Pipeline) StoreInCache(ctx context.Context, content, response, model st
 
 	// Don't cache very short responses.
 	if len(strings.TrimSpace(response)) < 20 {
+		return
+	}
+
+	// Don't cache responses with unparsed tool calls — these are incomplete
+	// (the tool was never executed, so the response is just raw JSON).
+	if strings.Contains(response, `"tool_call"`) || strings.Contains(response, `"function_call"`) {
 		return
 	}
 
