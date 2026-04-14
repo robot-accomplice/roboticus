@@ -188,9 +188,31 @@ func (rq *RouteQueries) ListThemes(ctx context.Context) (*sql.Rows, error) {
 
 // InstallTheme inserts or replaces an installed theme.
 func (rq *RouteQueries) InstallTheme(ctx context.Context, id, name, content string) error {
+	// Try the full INSERT first. If it fails (older DB schema), progressively
+	// fall back to simpler INSERTs that only use columns guaranteed to exist.
 	_, err := rq.q.ExecContext(ctx,
 		`INSERT OR REPLACE INTO installed_themes (id, name, source, version, active, content) VALUES (?, ?, 'catalog', '1.0.0', 0, ?)`,
 		id, name, content)
+	if err == nil {
+		return nil
+	}
+	// Fallback: try without name.
+	_, err = rq.q.ExecContext(ctx,
+		`INSERT OR REPLACE INTO installed_themes (id, source, version, active, content) VALUES (?, 'catalog', '1.0.0', 0, ?)`,
+		id, content)
+	if err == nil {
+		return nil
+	}
+	// Final fallback: minimal columns (id + content only — oldest schema).
+	_, err = rq.q.ExecContext(ctx,
+		`INSERT OR REPLACE INTO installed_themes (id, content) VALUES (?, ?)`,
+		id, content)
+	return err
+}
+
+// UninstallTheme removes a catalog theme from the installed_themes table.
+func (rq *RouteQueries) UninstallTheme(ctx context.Context, id string) error {
+	_, err := rq.q.ExecContext(ctx, `DELETE FROM installed_themes WHERE id = ?`, id)
 	return err
 }
 

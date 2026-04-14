@@ -59,14 +59,27 @@ func TestMandate_ConnectorsDoNotContainPipelineLogic(t *testing.T) {
 	}
 }
 
+// readPipelineRunFiles reads and concatenates pipeline.go and pipeline_run_stages.go.
+// Run() delegates to stage methods in pipeline_run_stages.go, so architecture checks
+// must cover both files to see all stage BeginSpan calls.
+func readPipelineRunFiles(t *testing.T) string {
+	t.Helper()
+	var combined strings.Builder
+	for _, name := range []string{"pipeline.go", "pipeline_run_stages.go"} {
+		data, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		combined.Write(data)
+		combined.WriteByte('\n')
+	}
+	return combined.String()
+}
+
 // TestMandate_PipelineOwnsAllDocumentedStages (Rule 4.2)
 // Verifies every stage listed in Run()'s docstring has a matching BeginSpan call.
 func TestMandate_PipelineOwnsAllDocumentedStages(t *testing.T) {
-	src, err := os.ReadFile("pipeline.go")
-	if err != nil {
-		t.Fatalf("read pipeline.go: %v", err)
-	}
-	content := string(src)
+	content := readPipelineRunFiles(t)
 
 	// Extract documented stages from the Run() docstring.
 	docStages := []string{
@@ -93,10 +106,10 @@ func TestMandate_PipelineOwnsAllDocumentedStages(t *testing.T) {
 // TestMandate_ConsentIsPipelineOwned (Rule 4.4)
 // Verifies cross-channel consent logic lives in the pipeline, not in connectors.
 func TestMandate_ConsentIsPipelineOwned(t *testing.T) {
-	// Consent MUST be called from pipeline.go.
-	src, _ := os.ReadFile("pipeline.go")
-	if !strings.Contains(string(src), "checkCrossChannelConsent") {
-		t.Error("pipeline.go does not call checkCrossChannelConsent — consent must be pipeline-owned (Rule 4.4)")
+	// Consent MUST be called from the pipeline's Run path (pipeline.go or pipeline_run_stages.go).
+	pipelineSrc := readPipelineRunFiles(t)
+	if !strings.Contains(pipelineSrc, "checkCrossChannelConsent") {
+		t.Error("pipeline Run path does not call checkCrossChannelConsent — consent must be pipeline-owned (Rule 4.4)")
 	}
 
 	// Consent MUST NOT be called from any connector file.

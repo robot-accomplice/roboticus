@@ -422,7 +422,7 @@ func TestFitness_CacheRoundTrip(t *testing.T) {
 	pipe.bgWorker.Drain(5 * time.Second)
 
 	// Manually verify cache was stored.
-	hit := pipe.CheckCache(input.Content)
+	hit := pipe.CheckCache(context.Background(),input.Content)
 	if hit == nil {
 		t.Fatal("cache should contain the response after first run")
 	}
@@ -440,10 +440,10 @@ func TestFitness_CacheRejectsShortResponses(t *testing.T) {
 	})
 
 	// Store a short response directly.
-	pipe.StoreInCache("test prompt for short rejection", "short", "mock")
+	pipe.StoreInCache(context.Background(),"test prompt for short rejection", "short", "mock")
 
 	// Check should return nil (rejected by length guard).
-	hit := pipe.CheckCache("test prompt for short rejection")
+	hit := pipe.CheckCache(context.Background(),"test prompt for short rejection")
 	if hit != nil {
 		t.Error("cache should reject responses shorter than 20 chars")
 	}
@@ -459,9 +459,9 @@ func TestFitness_CacheRejectsParroting(t *testing.T) {
 
 	prompt := "What is the meaning of life and the universe?"
 	// Try to store a response that heavily overlaps with the prompt.
-	pipe.StoreInCache(prompt, prompt, "mock")
+	pipe.StoreInCache(context.Background(),prompt, prompt, "mock")
 
-	hit := pipe.CheckCache(prompt)
+	hit := pipe.CheckCache(context.Background(),prompt)
 	if hit != nil {
 		t.Error("cache should reject parroting responses (>60% overlap)")
 	}
@@ -480,8 +480,8 @@ func TestFitness_CacheRejectsAcknowledgements(t *testing.T) {
 	// StoreInCache should reject these because TryMatch detects them.
 	ackResponses := []string{"ok", "thanks", "got it", "understood", "sure", "yep"}
 	for _, ack := range ackResponses {
-		pipe.StoreInCache("test ack rejection prompt "+ack, ack, "mock")
-		hit := pipe.CheckCache("test ack rejection prompt " + ack)
+		pipe.StoreInCache(context.Background(),"test ack rejection prompt "+ack, ack, "mock")
+		hit := pipe.CheckCache(context.Background(),"test ack rejection prompt " + ack)
 		if hit != nil {
 			t.Errorf("cache should not store/return acknowledgement response %q", ack)
 		}
@@ -538,7 +538,7 @@ func TestFitness_CacheHitRecordsFromCacheParam(t *testing.T) {
 	// Seed cache with a valid response.
 	prompt := "cache hit params fitness test input"
 	response := "This is a quality response for cache hit inference params fitness verification"
-	pipe.StoreInCache(prompt, response, "gpt-4")
+	pipe.StoreInCache(context.Background(),prompt, response, "gpt-4")
 
 	// Run pipeline — should hit cache.
 	outcome, err := RunPipeline(context.Background(), pipe, PresetAPI(), Input{

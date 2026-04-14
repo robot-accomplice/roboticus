@@ -172,7 +172,7 @@ func (d *HeartbeatDaemon) RunDistributed(ctx context.Context, intervals DomainIn
 			for {
 				select {
 				case <-ctx.Done():
-					log.Debug().Str("domain", domain).Msg("heartbeat domain stopping")
+					log.Info().Str("domain", domain).Msg("heartbeat domain stopping")
 					return
 				case <-ticker.C:
 					tctx := tickCtxFn()

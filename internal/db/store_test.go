@@ -23,7 +23,7 @@ func TestOpenAndClose(t *testing.T) {
 	store := testStore(t)
 
 	// Verify we can ping the database.
-	if err := store.DB().Ping(); err != nil {
+	if err := store.Ping(); err != nil {
 		t.Errorf("Ping() error: %v", err)
 	}
 }

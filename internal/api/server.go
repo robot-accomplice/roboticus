@@ -106,7 +106,7 @@ func NewServer(ctx context.Context, cfg ServerConfig, state *AppState) *http.Ser
 		r.Get("/openapi.yaml", OpenAPIHandler())
 		r.Get("/api/docs", DocsHandler())
 		r.Post("/api/webhooks/telegram", routes.WebhookTelegram(state.Pipeline))
-		r.Get("/api/webhooks/whatsapp", routes.WebhookWhatsAppVerify(state.Config.Channels.WhatsAppTokenEnv))
+		r.Get("/api/webhooks/whatsapp", routes.WebhookWhatsAppVerify(""))
 		r.Post("/api/webhooks/whatsapp", routes.WebhookWhatsApp(state.Pipeline))
 
 		// MCP gateway — external MCP clients authenticate via their own mechanism.
@@ -356,6 +356,8 @@ func NewServer(ctx context.Context, cfg ServerConfig, state *AppState) *http.Ser
 		r.Get("/api/themes", routes.GetThemesList())
 		r.Get("/api/themes/catalog", routes.GetThemeCatalog(state.Store))
 		r.Post("/api/themes/catalog/install", routes.InstallCatalogTheme(state.Store))
+		r.Post("/api/themes/catalog/uninstall", routes.UninstallCatalogTheme(state.Store))
+		r.Get("/api/themes/{id}/textures/{filename}", routes.ServeThemeTexture())
 		r.Get("/api/themes/active", routes.GetActiveTheme(state.Store))
 		r.Put("/api/themes/active", routes.SetActiveTheme(state.Store))
 

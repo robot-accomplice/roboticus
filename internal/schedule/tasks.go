@@ -243,7 +243,7 @@ func (t *SessionGovernorTask) Run(ctx context.Context, tctx *TickContext) TaskRe
 	}
 
 	if expired > 0 {
-		log.Info().Int64("expired", expired).Msg("session governor: expired stale sessions")
+		log.Debug().Int64("expired", expired).Msg("session governor: expired stale sessions")
 	}
 
 	// Session rotation via reset_schedule cron expression.
@@ -264,7 +264,7 @@ func (t *SessionGovernorTask) Run(ctx context.Context, tctx *TickContext) TaskRe
 				 VALUES (hex(randomblob(16)), 'active', datetime('now'), datetime('now'))`); err != nil {
 				log.Warn().Err(err).Msg("session governor: failed to create rotated session")
 			}
-			log.Info().Str("schedule", t.ResetSchedule).Msg("session governor: rotated session via reset_schedule")
+			log.Debug().Str("schedule", t.ResetSchedule).Msg("session governor: rotated session via reset_schedule")
 		}
 	}
 

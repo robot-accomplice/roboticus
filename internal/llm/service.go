@@ -35,11 +35,14 @@ type Service struct {
 	store         *db.Store
 	bgWorker      *core.BackgroundWorker
 	Confidence    *ConfidenceEvaluator
-	Escalation    *EscalationTracker
-	quality       *QualityTracker
+	Escalation        *EscalationTracker
+	SessionEscalation *SessionEscalationTracker
+	quality           *QualityTracker
 	intentQuality *IntentQualityTracker
 	latency       *LatencyTracker
 	errBus        *core.ErrorBus
+	toolBlocklist []string // models that don't support tools (config override)
+	toolAllowlist []string // force tool support (config override)
 }
 
 // ServiceConfig holds configuration for the LLM service.
@@ -53,6 +56,8 @@ type ServiceConfig struct {
 	ConfidenceFloor float64                // minimum confidence to accept local response (0 = use default)
 	BGWorker        *core.BackgroundWorker // shared worker pool for async tasks
 	ErrBus          *core.ErrorBus         // centralized error reporting
+	ToolBlocklist   []string               // models that don't support tools (config override)
+	ToolAllowlist   []string               // force tool support (config override)
 }
 
 // NewService creates the LLM orchestrator.
@@ -128,11 +133,14 @@ func NewService(cfg ServiceConfig, store *db.Store) (*Service, error) {
 		store:         store,
 		bgWorker:      bgw,
 		Confidence:    NewConfidenceEvaluator(floor),
-		Escalation:    NewEscalationTracker(),
+		Escalation:        NewEscalationTracker(),
+		SessionEscalation: NewSessionEscalationTracker(cfg.Fallbacks),
 		quality:       NewQualityTracker(100),
 		intentQuality: NewIntentQualityTracker(100),
 		latency:       NewLatencyTracker(100),
 		errBus:        cfg.ErrBus,
+		toolBlocklist: cfg.ToolBlocklist,
+		toolAllowlist: cfg.ToolAllowlist,
 	}
 
 	// Metascore routing is always enabled when the service has quality/latency
@@ -190,6 +198,17 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 	// Context-level model override (set by pipeline when API caller specifies a model).
 	if override := core.ModelOverrideFromCtx(ctx); override != "" && req.Model == "" {
 		req.Model = override
+	}
+
+	// Session-aware escalation: if this session has degraded quality, override
+	// the model with a higher-capability one from the fallback chain.
+	if req.Model == "" && !req.NoEscalate && s.SessionEscalation != nil {
+		if sid := core.SessionIDFromCtx(ctx); sid != "" {
+			if shouldEsc, suggested := s.SessionEscalation.ShouldEscalate(sid); shouldEsc && suggested != "" {
+				req.Model = suggested
+				log.Debug().Str("session", sid).Str("model", suggested).Msg("session escalation triggered")
+			}
+		}
 	}
 
 	// Route: select model if not explicitly set.
@@ -291,8 +310,8 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 
 		// Skip models known to not support tools when tools are present.
 		// Avoids wasting fallback slots and latency on guaranteed 400s.
-		if len(req.Tools) > 0 && !modelSupportsTools(pm.model) {
-			log.Debug().Str("model", pm.model).Str("provider", pm.provider).Msg("skipping model: does not support tools")
+		if len(req.Tools) > 0 && !modelSupportsTools(pm.model, s.toolAllowlist, s.toolBlocklist) {
+			log.Trace().Str("model", pm.model).Str("provider", pm.provider).Msg("skipping model: does not support tools")
 			continue
 		}
 
@@ -300,7 +319,7 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 		inferReq := *req
 		inferReq.Model = pm.model
 
-		log.Debug().
+		log.Trace().
 			Str("provider", pm.provider).
 			Str("model", pm.model).
 			Int("tools", len(inferReq.Tools)).
@@ -373,7 +392,7 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 			s.recordCostWithMeta(ctx, pName, resp, costMeta)
 		})
 
-		log.Info().Str("provider", pm.provider).Str("model", resp.Model).Int("tokens_in", resp.Usage.InputTokens).Int("tokens_out", resp.Usage.OutputTokens).Int64("latency_ms", latencyMs).Msg("inference completed")
+		log.Debug().Str("provider", pm.provider).Str("model", resp.Model).Int("tokens_in", resp.Usage.InputTokens).Int("tokens_out", resp.Usage.OutputTokens).Int64("latency_ms", latencyMs).Msg("inference completed")
 		return resp, nil
 	}
 
@@ -785,10 +804,25 @@ func (s *Service) CapacityTracker() *CapacityTracker {
 }
 
 // modelSupportsTools returns false for models known to reject tool-use requests.
-// This prevents wasting fallback slots and latency on guaranteed 400 errors
-// when the inference request includes tool definitions.
-func modelSupportsTools(model string) bool {
+// Checks config overrides first (allowlist > blocklist > hardcoded fallback).
+func modelSupportsTools(model string, allowlist, blocklist []string) bool {
 	lower := strings.ToLower(model)
+
+	// Config allowlist takes precedence — force tool support.
+	for _, a := range allowlist {
+		if strings.Contains(lower, strings.ToLower(a)) {
+			return true
+		}
+	}
+
+	// Config blocklist — deny tool support.
+	for _, b := range blocklist {
+		if strings.Contains(lower, strings.ToLower(b)) {
+			return false
+		}
+	}
+
+	// Hardcoded fallback for models known to not support tools.
 	noToolModels := []string{
 		"phi4-reasoning", "gemma3:", "gemma2:", "llama-guard",
 		"nomic-embed", "mxbai-embed", "all-minilm",

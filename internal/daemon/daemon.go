@@ -30,15 +30,16 @@ import (
 // Implements kardianos/service.Interface for cross-platform service management
 // (systemd on Linux, launchd on macOS, SCM on Windows).
 type Daemon struct {
-	cfg      *core.Config
-	store    *db.Store
-	llm      *llm.Service
-	pipe     *pipeline.Pipeline
-	router   *channel.Router
-	appState *api.AppState
-	eventBus *api.EventBus
-	bgWorker *core.BackgroundWorker
-	errBus   *core.ErrorBus
+	cfg         *core.Config
+	store       *db.Store
+	llm         *llm.Service
+	pipe        *pipeline.Pipeline
+	router      *channel.Router
+	appState    *api.AppState
+	eventBus    *api.EventBus
+	bgWorker    *core.BackgroundWorker
+	errBus      *core.ErrorBus
+	embedClient *llm.EmbeddingClient
 
 	startupStart time.Time
 	errBusCancel context.CancelFunc
@@ -111,7 +112,6 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 			Name:             name,
 			URL:              pc.URL,
 			Format:           llm.APIFormat(pc.Format),
-			APIKeyEnv:        pc.APIKeyEnv,
 			APIKeyRef:        pc.APIKeyRef,
 			ChatPath:         pc.ChatPath,
 			EmbeddingPath:    pc.EmbeddingPath,
@@ -153,11 +153,13 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 	}
 
 	llmSvc, err := llm.NewService(llm.ServiceConfig{
-		Providers: providers,
-		Primary:   cfg.Models.Primary,
-		Fallbacks: cfg.Models.Fallback,
-		BGWorker:  bgWorker,
-		ErrBus:    errBus,
+		Providers:     providers,
+		Primary:       cfg.Models.Primary,
+		Fallbacks:     cfg.Models.Fallback,
+		BGWorker:      bgWorker,
+		ErrBus:        errBus,
+		ToolBlocklist: cfg.Models.ToolBlocklist,
+		ToolAllowlist: cfg.Models.ToolAllowlist,
 	}, store)
 	if err != nil {
 		errBusCancel()
@@ -324,15 +326,20 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 
 	// ── Phase 8: Channel adapters ───────────────────────────────────────
 	dq := channel.NewDeliveryQueue(store)
+
+	// Recover stranded in-flight deliveries from previous unclean shutdown.
+	if recovered, err := store.ExecContext(context.Background(),
+		`UPDATE delivery_queue SET status = 'pending', next_retry_at = datetime('now', '+30 seconds') WHERE status = 'in_flight'`); err == nil {
+		if n, _ := recovered.RowsAffected(); n > 0 {
+			log.Warn().Int64("recovered", n).Msg("delivery queue: recovered stranded in-flight messages")
+		}
+	}
+
 	router := channel.NewRouter(dq)
 
 	// Register channel adapters from config + keystore.
-	// Rich sub-config takes precedence over legacy flat fields.
-	telegramTokenEnv := cfg.Channels.TelegramTokenEnv
-	if cfg.Channels.Telegram != nil && cfg.Channels.Telegram.TokenEnv != "" {
-		telegramTokenEnv = cfg.Channels.Telegram.TokenEnv
-	}
-	telegramToken := resolveChannelToken(telegramTokenEnv, "telegram_bot_token", ks)
+	// All tokens come from keystore — no env var fallback.
+	telegramToken := resolveChannelToken("", "telegram_bot_token", ks)
 	if telegramToken != "" {
 		// Discover allowed chat IDs from existing Telegram sessions in the DB,
 		// augmented with any explicitly configured in rich config.
@@ -348,7 +355,7 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 			Token:          telegramToken,
 			PollTimeout:    pollTimeout,
 			AllowedChatIDs: allowedChatIDs,
-			DenyOnEmpty:    cfg.Security.DenyOnEmptyAllowlist,
+			DenyOnEmpty:    cfg.Security.Filesystem.DenyOnEmptyAllowlist,
 		}
 		tgAdapter := channel.NewTelegramAdapter(tgCfg)
 		// Clear any stale webhook so getUpdates polling works.
@@ -415,6 +422,15 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 		embedClient = llm.NewEmbeddingClient(nil)
 		log.Info().Msg("embedding client: using local n-gram fallback")
 	}
+	// Wire embedding client into the memory manager so that newly stored
+	// episodic and semantic memories are embedded at ingestion time.
+	memMgr.SetEmbeddingClient(embedClient)
+	// Wire session summary promotion: when a session is archived,
+	// promote its top working memory entries to semantic memory.
+	mgr := memMgr // capture for closure
+	store.OnSessionArchived(func(ctx context.Context, sessionID string) {
+		mgr.PromoteSessionSummary(ctx, sessionID)
+	})
 	bootStep(9, steps, "Embeddings configured")
 	if embedProviderName != "" {
 		bootDetail("provider", embedProviderName)
@@ -519,6 +535,7 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 		eventBus:     eventBus,
 		bgWorker:     bgWorker,
 		errBus:       errBus,
+		embedClient:  embedClient,
 		startupStart: startupStart,
 		errBusCancel: errBusCancel,
 	}, nil

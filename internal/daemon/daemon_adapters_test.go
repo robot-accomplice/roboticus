@@ -743,7 +743,7 @@ func TestDaemon_RunWithSignalChannel(t *testing.T) {
 	dir := t.TempDir()
 	cfg := core.DefaultConfig()
 	cfg.Database.Path = dir + "/signal.db"
-	cfg.Channels.SignalAccount = "+1234567890" // Enables signal poller path.
+	cfg.Channels.Signal = &core.SignalConfig{Enabled: true, PhoneNumber: "+1234567890"}
 
 	d, err := New(&cfg, BootOptions{})
 	if err != nil {
@@ -768,7 +768,7 @@ func TestDaemon_RunWithEmailChannel(t *testing.T) {
 	dir := t.TempDir()
 	cfg := core.DefaultConfig()
 	cfg.Database.Path = dir + "/email.db"
-	cfg.Channels.EmailFromAddress = "bot@example.com" // Enables email poller path.
+	cfg.Channels.Email = &core.EmailConfig{Enabled: true, FromAddress: "bot@example.com"}
 
 	d, err := New(&cfg, BootOptions{})
 	if err != nil {

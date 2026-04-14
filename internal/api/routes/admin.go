@@ -3,7 +3,6 @@ package routes
 import (
 	"encoding/json"
 	"net/http"
-	"os"
 	"path/filepath"
 	"time"
 
@@ -45,10 +44,8 @@ func GetAvailableModels(llmSvc *llm.Service) http.HandlerFunc {
 // Rust dashboard's expected shape: [{name, connected, last_error, ...}].
 func GetChannelsStatus(cfg *core.Config, ks *core.Keystore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		hasKey := func(envName, keystoreName string) bool {
-			if envName != "" && os.Getenv(envName) != "" {
-				return true
-			}
+		hasKey := func(_, keystoreName string) bool {
+			// Keys come from keystore only — no env var lookup.
 			if ks != nil && ks.IsUnlocked() && ks.GetOrEmpty(keystoreName) != "" {
 				return true
 			}
@@ -63,19 +60,20 @@ func GetChannelsStatus(cfg *core.Config, ks *core.Keystore) http.HandlerFunc {
 
 		var channels []channelStatus
 
-		if hasKey(cfg.Channels.TelegramTokenEnv, "telegram_bot_token") {
-			channels = append(channels, channelStatus{Name: "telegram", Connected: true})
+		// Check channel status via per-channel config + keystore.
+		if cfg.Channels.Telegram != nil && cfg.Channels.Telegram.Enabled {
+			channels = append(channels, channelStatus{Name: "telegram", Connected: hasKey("", "telegram_bot_token")})
 		}
-		if hasKey(cfg.Channels.WhatsAppTokenEnv, "whatsapp_api_token") {
-			channels = append(channels, channelStatus{Name: "whatsapp", Connected: true})
+		if cfg.Channels.WhatsApp != nil && cfg.Channels.WhatsApp.Enabled {
+			channels = append(channels, channelStatus{Name: "whatsapp", Connected: hasKey("", "whatsapp_api_token")})
 		}
-		if hasKey(cfg.Channels.DiscordTokenEnv, "discord_bot_token") {
-			channels = append(channels, channelStatus{Name: "discord", Connected: true})
+		if cfg.Channels.Discord != nil && cfg.Channels.Discord.Enabled {
+			channels = append(channels, channelStatus{Name: "discord", Connected: hasKey("", "discord_bot_token")})
 		}
-		if cfg.Channels.SignalDaemonURL != "" {
+		if cfg.Channels.Signal != nil && cfg.Channels.Signal.Enabled {
 			channels = append(channels, channelStatus{Name: "signal", Connected: true})
 		}
-		if cfg.Channels.EmailFromAddress != "" {
+		if cfg.Channels.Email != nil && cfg.Channels.Email.Enabled {
 			channels = append(channels, channelStatus{Name: "email", Connected: true})
 		}
 		if cfg.Matrix.Enabled {
@@ -235,7 +233,7 @@ func GetConfig(cfg *core.Config, ks *core.Keystore) http.HandlerFunc {
 				}
 				// Look up is_local from the actual Config struct, not the JSON.
 				provCfg := cfg.Providers[name]
-				status, source := resolveKeyStatus(name, provCfg.IsLocal, provCfg.APIKeyEnv, ks)
+				status, source := resolveKeyStatus(name, provCfg.IsLocal, "", ks)
 				pMap["_key_status"] = status
 				pMap["_key_source"] = source
 				pMap["is_local"] = provCfg.IsLocal
@@ -261,13 +259,7 @@ func resolveKeyStatus(providerName string, isLocal bool, apiKeyEnv string, ks *c
 		}
 	}
 
-	// Check environment variable.
-	if apiKeyEnv != "" {
-		if val := os.Getenv(apiKeyEnv); val != "" {
-			return "configured", "env"
-		}
-	}
-
+	// No env var fallback — keys come from keystore only.
 	return "missing", "none"
 }
 

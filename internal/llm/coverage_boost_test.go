@@ -518,12 +518,17 @@ func TestEmbeddingClient_SetAuth(t *testing.T) {
 	req, _ := http.NewRequest("GET", "http://test", nil)
 	ec.setAuth(req) // should not panic
 
-	// With bearer default.
+	// With bearer default via keystore.
+	origResolver := KeyResolver
+	defer func() { KeyResolver = origResolver }()
+	KeyResolver = func(key string) string {
+		if key == "test-embed_api_key" { return "testkey123" }
+		return ""
+	}
 	ec = &EmbeddingClient{provider: &Provider{
-		APIKeyEnv:    "TEST_EMBED_KEY_COVERAGE",
+		Name: "test-embed",
 		ExtraHeaders: map[string]string{"X-Custom": "val"},
 	}}
-	t.Setenv("TEST_EMBED_KEY_COVERAGE", "testkey123")
 
 	req, _ = http.NewRequest("GET", "http://test", nil)
 	ec.setAuth(req)
@@ -536,7 +541,7 @@ func TestEmbeddingClient_SetAuth(t *testing.T) {
 
 	// With custom auth header.
 	ec = &EmbeddingClient{provider: &Provider{
-		APIKeyEnv:  "TEST_EMBED_KEY_COVERAGE",
+		Name:       "test-embed",
 		AuthHeader: "x-api-key",
 	}}
 	req, _ = http.NewRequest("GET", "http://test", nil)
@@ -547,7 +552,7 @@ func TestEmbeddingClient_SetAuth(t *testing.T) {
 }
 
 func TestEmbeddingClient_SetAuth_NoKey(t *testing.T) {
-	ec := &EmbeddingClient{provider: &Provider{APIKeyEnv: "NONEXISTENT_EMBED_KEY_COVERAGE"}}
+	ec := &EmbeddingClient{provider: &Provider{Name: "test-embed"}}
 	req, _ := http.NewRequest("GET", "http://test", nil)
 	ec.setAuth(req)
 	if req.Header.Get("Authorization") != "" {

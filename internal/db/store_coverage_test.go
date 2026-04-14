@@ -41,11 +41,11 @@ func TestStore_InTx_Rollback(t *testing.T) {
 	}
 }
 
-func TestStore_DB_Stats(t *testing.T) {
+func TestStore_ConnectionPool(t *testing.T) {
 	store := openTestStore(t)
-	db := store.DB()
-	if db == nil {
-		t.Fatal("DB() should not be nil")
+	stats := store.Stats()
+	if stats.OpenConnections < 1 {
+		t.Fatal("expected at least 1 open connection")
 	}
 }
 

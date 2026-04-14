@@ -32,7 +32,7 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 	if msgs := session.Messages(); len(msgs) > 0 {
 		compacted := CompactContext(msgs, defaultTokenBudget)
 		if len(compacted) < len(msgs) {
-			log.Debug().
+			log.Trace().
 				Int("before", len(msgs)).
 				Int("after", len(compacted)).
 				Msg("context compacted before inference")
@@ -99,7 +99,7 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 			))
 			retryContent, retryTurns, retryErr := p.executor.RunLoop(ctx, session)
 			if retryErr != nil {
-				log.Warn().Err(retryErr).Msg("guard retry inference failed, using original result")
+				log.Debug().Err(retryErr).Msg("guard retry inference failed, using original result")
 			} else {
 				turns += retryTurns
 				// Apply guards again on the retry result (no further retries).
@@ -332,19 +332,15 @@ func (p *Pipeline) PrepareForInference(ctx context.Context, session *Session, me
 
 	// 2. Context compaction: trim to fit budget tier.
 	if msgs := session.Messages(); len(msgs) > 0 {
+		// Resolve budget from config tier — no more hardcoded values.
 		budget := defaultTokenBudget
-		// Adjust budget based on tier (L0=4096, L1=8192, L2=16384, L3=32768).
-		switch budgetTier {
-		case 0:
-			budget = 4096
-		case 2:
-			budget = 16384
-		case 3:
-			budget = 32768
+		cfg := Config{BudgetTier: budgetTier}
+		if resolved := cfg.ResolveBudget(); resolved > 0 {
+			budget = resolved
 		}
 		compacted := CompactContext(msgs, budget)
 		if len(compacted) < len(msgs) {
-			log.Debug().
+			log.Trace().
 				Int("before", len(msgs)).
 				Int("after", len(compacted)).
 				Int("budget_tier", budgetTier).

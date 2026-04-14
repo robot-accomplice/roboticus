@@ -52,7 +52,7 @@ func (p *Pipeline) PostTurnIngest(ctx context.Context, session *Session, turnID 
 
 		// 4. Log the turn pair for analytics/debugging.
 		if userContent != "" {
-			log.Debug().
+			log.Trace().
 				Str("session", sessionID).
 				Str("turn", turnID).
 				Int("user_len", len(userContent)).
@@ -114,7 +114,7 @@ func (p *Pipeline) dispatchToObservers(ctx context.Context, sessionID, turnID, u
 			p.errBus.ReportIfErr(err, "pipeline", "touch_observer_timestamp", core.SevDebug)
 		}
 
-		log.Debug().Str("observer", observerName).Str("session", sessionID).Msg("observer subagent received turn summary")
+		log.Trace().Str("observer", observerName).Str("session", sessionID).Msg("observer subagent received turn summary")
 	}
 }
 

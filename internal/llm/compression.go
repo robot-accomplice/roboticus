@@ -41,6 +41,8 @@ func (pc *PromptCompressor) Compress(messages []Message, tokenBudget int) []Mess
 		return pc.truncateOldest(messages, tokenBudget)
 	case StrategyDropLowRelevance:
 		return pc.truncateOldest(messages, tokenBudget) // same for now, upgradeable
+	case StrategyTopicAware:
+		return CompressWithTopicAwareness(messages, tokenBudget)
 	default:
 		return pc.truncateOldest(messages, tokenBudget)
 	}
@@ -51,7 +53,7 @@ func (pc *PromptCompressor) truncateOldest(messages []Message, budget int) []Mes
 	var result []Message
 	tokens := 0
 	for i := len(messages) - 1; i >= 0; i-- {
-		msgTokens := len(messages[i].Content) / 4
+		msgTokens := EstimateTokens(messages[i].Content)
 		if tokens+msgTokens > budget {
 			break
 		}
@@ -67,7 +69,7 @@ func (pc *PromptCompressor) truncateOldest(messages []Message, budget int) []Mes
 func estimateMessageTokens(msgs []Message) int {
 	total := 0
 	for _, m := range msgs {
-		total += len(m.Content) / 4
+		total += EstimateTokens(m.Content)
 	}
 	return total
 }

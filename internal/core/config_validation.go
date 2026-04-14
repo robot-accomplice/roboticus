@@ -4,9 +4,7 @@ import (
 	"fmt"
 	"math"
 	"net"
-	"os"
 	"path/filepath"
-	"strings"
 )
 
 // Validate checks the config for required fields and constraint violations.
@@ -76,8 +74,8 @@ func (c *Config) Validate() error {
 	}
 
 	// Security.
-	if !c.Security.DenyOnEmptyAllowlist {
-		return fmt.Errorf("%w: security.deny_on_empty_allowlist=false is not allowed (removed feature)", ErrConfig)
+	if !c.Security.Filesystem.DenyOnEmptyAllowlist {
+		return fmt.Errorf("%w: security.filesystem.deny_on_empty_allowlist=false is not allowed (fail-open)", ErrConfig)
 	}
 	for _, p := range c.Security.ScriptAllowedPaths {
 		if !filepath.IsAbs(p) {
@@ -167,13 +165,7 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	// Channel phone number format warnings (E.164).
-	warnE164 := func(field, value string) {
-		if value != "" && !strings.HasPrefix(value, "+") {
-			fmt.Fprintf(os.Stderr, "warning: %s should be in E.164 format (e.g., +1234567890), got %q\n", field, value)
-		}
-	}
-	warnE164("channels.signal_account", c.Channels.SignalAccount)
+	// Legacy E.164 validation removed — signal_account field is gone.
 
 	return nil
 }

@@ -37,7 +37,7 @@ type WalletConfig struct {
 	Path       string `mapstructure:"path"`     // file path for encrypted key
 	ChainID    int64  `mapstructure:"chain_id"` // default 8453 (Base)
 	RPCURL     string `mapstructure:"rpc_url"`  // EVM JSON-RPC endpoint
-	Passphrase string `mapstructure:"-"`        // from env: ROBOTICUS_WALLET_PASSPHRASE
+	Passphrase string `mapstructure:"-"`        // from keystore only — never env vars
 }
 
 // Wallet manages an Ethereum-compatible HD wallet.
@@ -52,10 +52,7 @@ func NewWallet(cfg WalletConfig) (*Wallet, error) {
 	if cfg.ChainID == 0 {
 		cfg.ChainID = DefaultChainID
 	}
-	if cfg.Passphrase == "" {
-		cfg.Passphrase = os.Getenv("ROBOTICUS_WALLET_PASSPHRASE")
-	}
-
+	// Passphrase must be provided by caller (from keystore). No env var fallback.
 	w := &Wallet{cfg: cfg}
 
 	if cfg.Path != "" {
