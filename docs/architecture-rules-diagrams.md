@@ -115,13 +115,13 @@ behavior."
 C4Component
     title Component Diagram — Unified Pipeline Owns Shared Behavior
 
-    Container_Boundary(pipeline, "Unified Pipeline Factory") {
-        Component(defense, "Input Defense", "Go", "Injection defense, normalization, transport-independent safety prechecks")
-        Component(session, "Session And Consent", "Go", "Session resolution, continuity, cross-channel consent, turn creation")
-        Component(task, "Task State And Delegation", "Go", "Task synthesis, decomposition, delegation, specialist flow")
-        Component(dispatch, "Dispatch And Context", "Go", "Skill-first, shortcut dispatch, retrieval, context building, cache prep")
-        Component(infer, "Inference Orchestration", "Go", "Model selection, fallback inference, standard or streaming execution")
-        Component(post, "Post-Turn Processing", "Go", "Guards, ingest, nickname refinement, trace, cost, persistence")
+    Container_Boundary(pipeline, "Unified Pipeline Factory (v1.0.4: 16 named stages)") {
+        Component(defense, "Input Defense", "Go", "stageValidation, stageInjectionDefense, stageDedup — injection defense, normalization, transport-independent safety")
+        Component(session, "Session And Consent", "Go", "stageSessionResolution, stageUserMessage, stageTurnCreation — session resolution, continuity, cross-channel consent")
+        Component(task, "Task State And Delegation", "Go", "stageDecomposition, stageAuthority, stageDelegation — task synthesis, decomposition, delegation, specialist flow")
+        Component(dispatch, "Dispatch And Context", "Go", "stageSkillFirst, stageShortcut, stageCache — skill-first, shortcut dispatch, cache prep")
+        Component(infer, "Inference Orchestration", "Go", "stageInference — model selection via SessionEscalationTracker, fallback, standard or streaming")
+        Component(post, "Post-Turn Processing", "Go", "stagePostInference — 26-guard chain (incl. FinancialActionTruthGuard), ingest, trace, cost, persistence")
     }
 
     Container_Ext(connectors, "Connector Layer", "Routes and adapters")

@@ -170,6 +170,10 @@ Blocking commands for feature-complete releases:
 | R-THEME-02 | `parseThemeColors` is cached per frame and invalidated on theme change | unit tests | L1 |
 | R-THEME-03 | `_catalogThemeVars` does not crash when theme variables are undefined | route tests | L1/L2 |
 | R-THEME-04 | Catalog entries carry full theme metadata (variables, textures, fonts) | route tests | L2 |
+| R-THEME-05 | Theme install downloads textures to `~/.roboticus/themes/<name>/` and serves locally | theme route tests + smoke | L2/L3 |
+| R-THEME-06 | Theme uninstall switches to default theme if active, removes from dropdown | theme route tests + smoke | L2/L3 |
+| R-THEME-07 | Theme card previews use theme's own colors/fonts/textures, not current theme | dashboard smoke | L3 |
+| R-THEME-08 | Installed themes reload into dropdown on server restart | theme route tests | L2 |
 
 ### R-LAYOUT: Workspace And Layout
 
@@ -187,6 +191,53 @@ Blocking commands for feature-complete releases:
 | R-CFG-02 | Config defaults match `DefaultConfig()` output | unit tests | L1 |
 | R-CFG-03 | Config validation enforces constraints (ranges, enums, required) | unit tests | L1 |
 | R-CFG-04 | Settings UI derives from schema, not hardcoded TOML | smoke | L3 |
+| R-CFG-05 | TOML struct tags match Rust snake_case conventions (407 fields) | `internal/core/config_test.go` | L1 |
+| R-CFG-06 | `IsWorkspaceConfined()` resolves `filesystem.workspace_only` without contradiction | `internal/core/config_validation_test.go` | L1 |
+| R-CFG-07 | No `APIKeyEnv`, `TokenEnv`, `PasswordEnv` fields exist in config — keystore only | `internal/core/config_test.go` | L1 |
+
+### R-PIPE: Pipeline Stages (v1.0.4)
+
+| ID | Regression Class | Required Coverage | Layer |
+| --- | --- | --- | --- |
+| R-PIPE-01 | Pipeline `Run()` orchestrator delegates to 16 named stage methods | `internal/pipeline/pipeline_test.go` | L1/L2 |
+| R-PIPE-02 | All 8 pipeline trace annotations are wired into stage methods | `internal/pipeline/trace_test.go` | L1 |
+| R-PIPE-03 | `agentSkills` populated from `SkillMatcher.ListEnabled()`, not empty | `internal/pipeline/pipeline_test.go` | L1 |
+| R-PIPE-04 | Cache rejects responses containing `"tool_call"` or `"function_call"` | `internal/pipeline/pipeline_cache_test.go` | L1 |
+| R-PIPE-05 | Cache rejects parroting responses (>60% text overlap) | `internal/pipeline/pipeline_cache_test.go` | L1 |
+| R-PIPE-06 | `FinancialActionTruthGuard` verifies financial claims against tool output | `internal/pipeline/guards_financial_truth_test.go` | L1/L2 |
+
+### R-SEC: Security Hardening (v1.0.4)
+
+| ID | Regression Class | Required Coverage | Layer |
+| --- | --- | --- | --- |
+| R-SEC-01 | `Store.DB()` does not exist — no raw `*sql.DB` access | `internal/api/architecture_test.go` | L0 |
+| R-SEC-02 | Wallet passphrase resolved from keystore only — no env var fallback | `internal/wallet/wallet_test.go` | L1 |
+| R-SEC-03 | Delivery queue `in_flight` rows recovered to `pending` on startup | `internal/daemon/daemon_test.go` | L1/L2 |
+| R-SEC-04 | OAuth shutdown uses parent ctx, not `context.Background()` | `internal/core/oauth_test.go` | L1 |
+
+### R-ESC: Session Escalation And Compression (v1.0.4)
+
+| ID | Regression Class | Required Coverage | Layer |
+| --- | --- | --- | --- |
+| R-ESC-01 | Session escalation triggers on 2+ consecutive failures | `internal/llm/session_escalation_test.go` | L1 |
+| R-ESC-02 | Session escalation triggers on quality < 0.3 for 3+ turns | `internal/llm/session_escalation_test.go` | L1 |
+| R-ESC-03 | Topic-aware compression preserves current topic, compresses off-topic | `internal/llm/compression_test.go` | L1 |
+| R-ESC-04 | `EstimateTokens()` uses UTF-8 rune count, not `len/4` | `internal/llm/tokencount_test.go` | L1 |
+
+### R-SOAK: Behavior Soak Tests (v1.0.4)
+
+| ID | Regression Class | Required Coverage | Layer |
+| --- | --- | --- | --- |
+| R-SOAK-01 | Soak test default timeout is 1800s (30 min), not 240s | `scripts/run-agent-behavior-soak.py` | L4 |
+| R-SOAK-02 | Per-scenario `max_latency_s` override works for heavy scenarios | `scripts/run-agent-behavior-soak.py` | L4 |
+| R-SOAK-03 | 10/10 soak scenarios pass with local 32B model | behavior soak | L4 |
+
+### R-CMD: CLI Subpackages (v1.0.4)
+
+| ID | Regression Class | Required Coverage | Layer |
+| --- | --- | --- | --- |
+| R-CMD-01 | 12 cmd subpackages register all commands via `Commands()` | `cmd/*/commands_test.go` | L1 |
+| R-CMD-02 | Zero behavioral change — all CLI commands keep exact names and flags | CLI smoke | L3 |
 
 ### R-UX: Dashboard, TUI, CLI, Docs
 

@@ -99,7 +99,7 @@ func TestConfig_Validate_TreasuryLimitsPositive(t *testing.T) {
 
 func TestConfig_Validate_DenyOnEmptyAllowlist(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.Security.DenyOnEmptyAllowlist = false
+	cfg.Security.Filesystem.DenyOnEmptyAllowlist = false
 	err := cfg.Validate()
 	if err == nil {
 		t.Fatal("expected validation error for deny_on_empty_allowlist=false")
