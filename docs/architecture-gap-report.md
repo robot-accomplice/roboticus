@@ -9,9 +9,9 @@
 
 ## Executive Summary
 
-The Go implementation achieves **strong structural compliance** with the connector-factory pattern. The pipeline is the single source of truth for business logic, all 8 entry points use `RunPipeline()`, and architecture tests enforce connector thinness. Of the original 7 systemic gaps, **6 are now closed** (v1.0.1 + v1.0.2 + v1.0.4).
+The Go implementation achieves **full structural compliance** with the connector-factory pattern. The pipeline is the single source of truth for business logic, all 8 entry points use `RunPipeline()`, and architecture tests enforce connector thinness. **All 7 original systemic gaps are now CLOSED** (v1.0.1 + v1.0.2 + v1.0.4).
 
-v1.0.4 refactors the pipeline from an 874-line monolith to 16 named stage methods, adds 26-guard chain (was 25) with `FinancialActionTruthGuard`, and closes Gaps 5 (context budget tiers) and 6 (topic-aware compression). Security hardening: Store.DB() removed, wallet keystore-only, cache guards for unparsed tool calls.
+v1.0.4 refactors the pipeline from an 874-line monolith to 16 named stage methods, adds 26-guard chain (was 25) with `FinancialActionTruthGuard`, and closes Gaps 5 (context budget tiers), 6 (topic-aware compression), and 7 (preset doc comments). Security hardening: Store.DB() removed, wallet keystore-only, cache guards for unparsed tool calls.
 
 | Category | Compliant | Gaps |
 |----------|-----------|------|
@@ -24,7 +24,7 @@ v1.0.4 refactors the pipeline from an 874-line monolith to 16 named stage method
 | Context Budget Tiers | L0-L3 config-driven (v1.0.4) | **CLOSED** |
 | Memory Injection Guarantee | Two-stage (v1.0.1) | **CLOSED** |
 | Topic-Aware Compression | StrategyTopicAware (v1.0.4) | **CLOSED** |
-| Feature Parity Across Channels | Mostly | **1 gap** |
+| Feature Parity Across Channels | Documented rationale per preset (v1.0.4) | **CLOSED** |
 | Off-Pipeline Surfaces | 3 documented | 0 |
 | WebSocket Transport (v1.0.3) | Thin connector | 0 |
 | Config Schema Derivation (v1.0.3) | Struct-driven | 0 |
@@ -128,14 +128,16 @@ v1.0.4 refactors the pipeline from an 874-line monolith to 16 named stage method
 
 ---
 
-## Gap 7: Feature Parity — Channel Presets Missing Specialist/Skill
+## Gap 7: Feature Parity — Channel Presets Missing Specialist/Skill — CLOSED (v1.0.4)
 
-**Severity**: LOW
-**Rust principle violated**: Section 6 (Feature Parity) — "Disabling a stage for a channel requires a documented rationale"
+**Severity**: LOW → **RESOLVED**
+**Rust principle violated**: Section 6 (Feature Parity)
 
-**Current state**: `PresetChannel()` has `SpecialistControls: true` and `SkillFirstEnabled: true`. `PresetAPI()` has both `false`. `PresetStreaming()` has both `false`. The Rust reference documents exactly which stages differ and why (Table in Section 6).
-
-**Missing**: The Go preset constructors lack doc comments explaining *why* stages are disabled for each preset. The Rust architecture document requires documented rationale.
+**Resolution (v1.0.4)**: All four preset functions (`PresetAPI`, `PresetStreaming`, `PresetChannel`, `PresetCron`) now carry doc comments with explicit "Stage rationale for non-default values" sections documenting *why* each stage is enabled or disabled per preset:
+- `PresetAPI`: SpecialistControls/SkillFirst disabled — API clients manage their own specialist UX
+- `PresetStreaming`: GuardSetStream (6 guards) — retry-capable guards excluded from streaming; no nickname mid-stream
+- `PresetChannel`: SpecialistControls/SkillFirst enabled — interactive specialist creation + trigger-based skills
+- `PresetCron`: DedupTracking/Delegation/Shortcuts disabled — scheduler guarantees uniqueness, tasks self-contained
 
 **Fix**: Add doc comments to each preset function documenting the rationale for any disabled stage, matching the Rust architecture's table format.
 
@@ -216,4 +218,6 @@ Policy denials soft-fail with structured reason. Error dedup suppresses repeated
 | ~~P2~~ | ~~Gap 3: HMAC boundaries passive~~ | **CLOSED v1.0.2** | Prompt now includes boundary instructions |
 | ~~P2~~ | ~~Gap 6: Topic-aware compression missing~~ | **CLOSED v1.0.4** | StrategyTopicAware with Jaccard similarity grouping |
 | ~~P3~~ | ~~Gap 2: API routes never set Claim~~ | **CLOSED v1.0.2** | Both API routes now construct ChannelClaimContext |
-| P3 | Gap 7: Preset doc comments missing | Small | Documentation, not code |
+| ~~P3~~ | ~~Gap 7: Preset doc comments missing~~ | **CLOSED v1.0.4** | All 4 presets carry stage rationale doc comments |
+
+**All 7 original gaps are CLOSED.** No open architectural gaps remain.
