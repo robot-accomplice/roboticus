@@ -37,7 +37,7 @@ type Retriever struct {
 	store         *db.Store
 	budgets       TierBudget
 	embedClient   *llm.EmbeddingClient
-	hnswIndex     *db.HNSWIndex
+	vectorIndex     db.VectorIndex
 	charsPerToken int
 }
 
@@ -56,9 +56,9 @@ func (mr *Retriever) SetEmbeddingClient(ec *llm.EmbeddingClient) {
 	mr.embedClient = ec
 }
 
-// SetHNSWIndex attaches an HNSW index for ANN-based retrieval.
-func (mr *Retriever) SetHNSWIndex(idx *db.HNSWIndex) {
-	mr.hnswIndex = idx
+// SetVectorIndex attaches a vector index for ANN-based retrieval.
+func (mr *Retriever) SetVectorIndex(idx db.VectorIndex) {
+	mr.vectorIndex = idx
 }
 
 // MemoryEntry represents a memory result from ANN retrieval.
@@ -69,15 +69,15 @@ type MemoryEntry struct {
 	Similarity     float64 `json:"similarity"`
 }
 
-// RetrieveWithANN uses the HNSW index for O(log n) approximate nearest-neighbor
+// RetrieveWithANN uses the vector index for approximate nearest-neighbor
 // search over memory embeddings. Falls back to empty results if the index is
 // not built or has insufficient entries.
 func (mr *Retriever) RetrieveWithANN(ctx context.Context, embedding []float64, k int) []MemoryEntry {
-	if mr.hnswIndex == nil || !mr.hnswIndex.IsBuilt() || k <= 0 {
+	if mr.vectorIndex == nil || !mr.vectorIndex.IsBuilt() || k <= 0 {
 		return nil
 	}
 
-	results := mr.hnswIndex.Search(embedding, k)
+	results := mr.vectorIndex.Search(embedding, k)
 	entries := make([]MemoryEntry, len(results))
 	for i, r := range results {
 		entries[i] = MemoryEntry{

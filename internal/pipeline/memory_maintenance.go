@@ -47,7 +47,7 @@ func RebuildMemoryIndex(ctx context.Context, store *db.Store) (MemoryMaintenance
 		return MemoryMaintenanceReport{}, err
 	}
 
-	idx := db.NewHNSWIndex(db.HNSWConfig{})
+	idx := db.NewBruteForceIndex(db.VectorIndexConfig{})
 	if err := idx.BuildFromStore(store); err != nil {
 		return MemoryMaintenanceReport{}, err
 	}

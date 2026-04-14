@@ -21,13 +21,13 @@ func HybridSearch(
 	queryEmbedding []float32,
 	limit int,
 	hybridWeight float64,
-	hnswIndex *HNSWIndex,
-) []HNSWSearchResult {
+	vectorIndex VectorIndex,
+) []VectorSearchResult {
 	if limit <= 0 {
 		return nil
 	}
 
-	var results []HNSWSearchResult
+	var results []VectorSearchResult
 
 	// FTS5 leg: text search via memory_fts MATCH.
 	ftsQuery := SanitizeFTSQuery(queryText)
@@ -52,7 +52,7 @@ func HybridSearch(
 				if len(preview) > 200 {
 					preview = preview[:200]
 				}
-				results = append(results, HNSWSearchResult{
+				results = append(results, VectorSearchResult{
 					SourceTable:    sourceTable,
 					SourceID:       sourceID,
 					ContentPreview: preview,
@@ -63,15 +63,15 @@ func HybridSearch(
 		}
 	}
 
-	// Vector leg: cosine similarity via HNSW index.
-	if len(queryEmbedding) > 0 && hybridWeight > 0.0 && hnswIndex != nil && hnswIndex.IsBuilt() {
+	// Vector leg: cosine similarity via vector index.
+	if len(queryEmbedding) > 0 && hybridWeight > 0.0 && vectorIndex != nil && vectorIndex.IsBuilt() {
 		query64 := make([]float64, len(queryEmbedding))
 		for i, v := range queryEmbedding {
 			query64[i] = float64(v)
 		}
-		vecResults := hnswIndex.Search(query64, limit*2)
+		vecResults := vectorIndex.Search(query64, limit*2)
 		for _, r := range vecResults {
-			results = append(results, HNSWSearchResult{
+			results = append(results, VectorSearchResult{
 				SourceTable:    r.SourceTable,
 				SourceID:       r.SourceID,
 				ContentPreview: r.ContentPreview,

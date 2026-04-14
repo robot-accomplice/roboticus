@@ -9,7 +9,7 @@ const (
 	RetrievalHybrid   RetrievalMode = iota // FTS5 + cosine (default)
 	RetrievalSemantic                      // Cosine-only
 	RetrievalKeyword                       // FTS5-only
-	RetrievalANN                           // HNSW approximate
+	RetrievalANN                           // approximate nearest neighbor
 	RetrievalRecency                       // Time-sorted only
 )
 

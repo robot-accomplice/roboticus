@@ -15,10 +15,10 @@ func TestRetrieveWithANN_NoIndex(t *testing.T) {
 	store := testutil.TempStore(t)
 	r := NewRetriever(DefaultRetrievalConfig(), DefaultTierBudget(), store)
 
-	// No HNSW index attached — should return nil.
+	// No vector index attached — should return nil.
 	results := r.RetrieveWithANN(context.Background(), []float64{1, 0, 0}, 5)
 	if results != nil {
-		t.Errorf("expected nil results without HNSW index, got %d", len(results))
+		t.Errorf("expected nil results without vector index, got %d", len(results))
 	}
 }
 
@@ -26,21 +26,21 @@ func TestRetrieveWithANN_WithIndex(t *testing.T) {
 	store := testutil.TempStore(t)
 	r := NewRetriever(DefaultRetrievalConfig(), DefaultTierBudget(), store)
 
-	idx := db.NewHNSWIndex(db.HNSWConfig{MinEntries: 1})
-	idx.AddEntry(db.HNSWEntry{
+	idx := db.NewBruteForceIndex(db.VectorIndexConfig{MinEntries: 1})
+	idx.AddEntry(db.VectorEntry{
 		SourceTable:    "episodic",
 		SourceID:       "ep1",
 		ContentPreview: "the sky is blue",
 		Embedding:      []float64{1, 0, 0},
 	})
-	idx.AddEntry(db.HNSWEntry{
+	idx.AddEntry(db.VectorEntry{
 		SourceTable:    "semantic",
 		SourceID:       "sem1",
 		ContentPreview: "grass is green",
 		Embedding:      []float64{0, 1, 0},
 	})
 
-	r.SetHNSWIndex(idx)
+	r.SetVectorIndex(idx)
 
 	results := r.RetrieveWithANN(context.Background(), []float64{1, 0, 0}, 2)
 	if len(results) != 2 {
@@ -58,12 +58,12 @@ func TestRetrieveWithANN_WithIndex(t *testing.T) {
 func TestRetrieveWithANN_ZeroK(t *testing.T) {
 	store := testutil.TempStore(t)
 	r := NewRetriever(DefaultRetrievalConfig(), DefaultTierBudget(), store)
-	idx := db.NewHNSWIndex(db.HNSWConfig{MinEntries: 1})
-	idx.AddEntry(db.HNSWEntry{
+	idx := db.NewBruteForceIndex(db.VectorIndexConfig{MinEntries: 1})
+	idx.AddEntry(db.VectorEntry{
 		SourceTable: "episodic", SourceID: "ep1",
 		ContentPreview: "test", Embedding: []float64{1, 0},
 	})
-	r.SetHNSWIndex(idx)
+	r.SetVectorIndex(idx)
 
 	results := r.RetrieveWithANN(context.Background(), []float64{1, 0}, 0)
 	if results != nil {

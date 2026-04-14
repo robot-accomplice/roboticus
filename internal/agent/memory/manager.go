@@ -68,7 +68,7 @@ type Manager struct {
 	store       *db.Store
 	errBus      *core.ErrorBus
 	embedClient *llm.EmbeddingClient
-	hnswIndex   *db.HNSWIndex
+	vectorIndex   db.VectorIndex
 }
 
 // NewManager creates a memory manager with the given config.
@@ -84,11 +84,11 @@ func (mm *Manager) SetErrBus(eb *core.ErrorBus) { mm.errBus = eb }
 // to the embeddings table, enabling hybrid retrieval via cosine similarity.
 func (mm *Manager) SetEmbeddingClient(ec *llm.EmbeddingClient) { mm.embedClient = ec }
 
-// SetHNSWIndex attaches an HNSW index for incremental updates during ingestion.
-func (mm *Manager) SetHNSWIndex(idx *db.HNSWIndex) { mm.hnswIndex = idx }
+// SetVectorIndex attaches a vector index for incremental updates during ingestion.
+func (mm *Manager) SetVectorIndex(idx db.VectorIndex) { mm.vectorIndex = idx }
 
 // embedAndStore generates an embedding for content and persists it to the
-// embeddings table. If an HNSW index is attached, the entry is also added
+// embeddings table. If a vector index is attached, the entry is also added
 // incrementally for immediate retrieval availability.
 //
 // This is a best-effort operation: embedding failures are logged and swallowed
@@ -122,13 +122,13 @@ func (mm *Manager) embedAndStore(ctx context.Context, sourceTable, sourceID, con
 		return
 	}
 
-	// Incremental HNSW update for immediate retrieval availability.
-	if mm.hnswIndex != nil {
+	// Incremental vector index update for immediate retrieval availability.
+	if mm.vectorIndex != nil {
 		embed64 := make([]float64, len(vec))
 		for i, v := range vec {
 			embed64[i] = float64(v)
 		}
-		mm.hnswIndex.AddEntry(db.HNSWEntry{
+		mm.vectorIndex.AddEntry(db.VectorEntry{
 			SourceTable:    sourceTable,
 			SourceID:       sourceID,
 			ContentPreview: preview,

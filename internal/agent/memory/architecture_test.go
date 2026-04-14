@@ -15,7 +15,7 @@ func TestArchitecture_ManagerHasEmbedClient(t *testing.T) {
 	// Ensures the Manager struct retains its embedding capability.
 	mgr := NewManager(DefaultConfig(), nil)
 	mgr.SetEmbeddingClient(nil) // Must compile — proves the field exists.
-	mgr.SetHNSWIndex(nil)       // Must compile — proves the field exists.
+	mgr.SetVectorIndex(nil)       // Must compile — proves the field exists.
 }
 
 func TestArchitecture_ConsolidationHasEmbedClient(t *testing.T) {
