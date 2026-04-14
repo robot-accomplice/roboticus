@@ -299,7 +299,7 @@ func (p *Pipeline) stageMemoryRetrieval(ctx context.Context, pc *pipelineContext
 		hitsPerTier := map[string]int{retrievalStrat.Strategy: fragmentCount}
 		budgetConsumed := 0
 		if pc.memoryBlock != "" {
-			budgetConsumed = len(pc.memoryBlock) / 4
+			budgetConsumed = llm.EstimateTokens(pc.memoryBlock)
 			for _, tier := range []string{"episodic", "semantic", "working", "procedural"} {
 				count := strings.Count(pc.memoryBlock, "["+tier+"]")
 				if count > 0 {
@@ -461,7 +461,7 @@ func (p *Pipeline) stagePrepareInference(ctx context.Context, pc *pipelineContex
 		}
 		var sysToks, memToks, histToks int
 		for _, m := range pc.session.Messages() {
-			msgTokens := len(m.Content) / 4
+			msgTokens := llm.EstimateTokens(m.Content)
 			switch m.Role {
 			case "system":
 				sysToks += msgTokens
@@ -470,7 +470,7 @@ func (p *Pipeline) stagePrepareInference(ctx context.Context, pc *pipelineContex
 			}
 		}
 		if pc.memoryBlock != "" {
-			memToks = len(pc.memoryBlock) / 4
+			memToks = llm.EstimateTokens(pc.memoryBlock)
 		}
 		AnnotateContextBudgetTrace(pc.tr, budget, sysToks, 0, memToks, histToks)
 	}
