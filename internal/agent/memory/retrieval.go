@@ -214,136 +214,93 @@ func (mr *Retriever) RetrieveWithMetrics(ctx context.Context, sessionID, query s
 		}
 	}
 
-	var sections []string
-	totalCharsUsed := 0
 	totalCharsAllowed := totalTokens * mr.charsPerToken
 
-	// Working memory (filter out turn_summary entries — Rust parity).
+	// ── Working state (direct injection, NOT searched) ──────────────
+	// Working memory is active state, not a retrieval tier.
+	var workingText, ambientText string
 	if budget := int(float64(totalTokens) * mr.budgets.Working); budget > 0 {
-		working := mr.retrieveWorkingMemory(ctx, sessionID, budget)
-		if working != "" {
-			sections = append(sections, "[Working Memory]\n"+working)
-			totalCharsUsed += len(working)
-			metrics.WorkingCount = strings.Count(working, "\n- ") + 1
+		workingText = mr.retrieveWorkingMemory(ctx, sessionID, budget)
+		if workingText != "" {
+			metrics.WorkingCount = strings.Count(workingText, "\n- ") + 1
+		}
+	}
+	ambientText = mr.retrieveAmbientRecent(ctx, 2)
+	if ambientText != "" {
+		metrics.AmbientCount = strings.Count(ambientText, "\n- ") + 1
+	}
+
+	// ── Agentic retrieval pipeline ──────────────────────────────────
+	// 1. Decompose compound queries into subgoals.
+	subgoals := Decompose(query)
+
+	// 2. Route each subgoal to the appropriate memory tiers.
+	// Build intent signals from the classifier (if available in context).
+	// For now, pass nil intents — the router falls back to keyword signals.
+	router := NewRouter(corpusSize)
+	var allEvidence []Evidence
+
+	for _, sg := range subgoals {
+		plan := router.Plan(sg.Question, nil)
+
+		// 3. Retrieve from each targeted tier.
+		for _, target := range plan.Targets {
+			tierBudget := int(float64(totalTokens) * target.Budget)
+			if tierBudget <= 0 {
+				continue
+			}
+			tierResults := mr.retrieveTier(ctx, target.Tier, sg.Question, queryEmbed, tierBudget/mr.charsPerToken, corpusSize)
+			for i, content := range tierResults {
+				// Score = router weight * position decay (first result scores highest).
+				// This ensures different results get different scores, preventing
+				// the reranker from seeing zero spread and capping to 3.
+				positionDecay := 1.0 - (float64(i) * 0.05)
+				if positionDecay < 0.1 {
+					positionDecay = 0.1
+				}
+				allEvidence = append(allEvidence, Evidence{
+					Content:    content,
+					SourceTier: target.Tier,
+					Score:      target.Weight * positionDecay,
+				})
+			}
 		}
 	}
 
-	// Ambient recency: inject recent episodic memories (last 2 hours)
-	// regardless of query match (Rust parity: recent ambient context).
-	ambient := mr.retrieveAmbientRecent(ctx, 2)
-	if ambient != "" {
-		sections = append(sections, "[Recent Activity]\n"+ambient)
-		totalCharsUsed += len(ambient)
-		metrics.AmbientCount = strings.Count(ambient, "\n- ") + 1
+	// 4. Rerank: discard weak evidence, boost authority, penalize stale.
+	reranker := NewReranker(DefaultRerankerConfig())
+	maxEvidence := totalCharsAllowed / (mr.charsPerToken * 50) // rough estimate: ~50 tokens per evidence item
+	if maxEvidence < 5 {
+		maxEvidence = 5
 	}
+	filtered := reranker.Filter(allEvidence, maxEvidence)
 
-	// Adaptive budget retrieval: each tier gets its initial allocation.
-	// Unused budget from one tier flows proportionally to subsequent tiers.
-	surplusChars := 0
+	// 5. Structured context assembly: evidence + gaps + contradictions.
+	assembled := AssembleContext(ctx, mr.store, sessionID, filtered, workingText, ambientText)
 
-	// Episodic memory (with temporal decay + optional embedding re-rank).
-	episodicBudget := int(float64(totalTokens)*mr.budgets.Episodic) + surplusChars
-	if episodicBudget > 0 {
-		episodic := mr.retrieveEpisodic(ctx, query, queryEmbed, episodicBudget/mr.charsPerToken, corpusSize)
-		charsUsed := len(episodic)
-		surplusChars = (episodicBudget - charsUsed)
-		if surplusChars < 0 {
-			surplusChars = 0
-		}
-		if episodic != "" {
-			sections = append(sections, "[Relevant Memories]\n"+episodic)
-			totalCharsUsed += charsUsed
-			metrics.EpisodicCount = strings.Count(episodic, "\n- ") + 1
-		}
-	}
-
-	// Semantic memory.
-	semanticBudget := int(float64(totalTokens)*mr.budgets.Semantic) + surplusChars
-	if semanticBudget > 0 {
-		semantic := mr.retrieveSemanticMemory(ctx, query, semanticBudget/mr.charsPerToken)
-		charsUsed := len(semantic)
-		surplusChars = (semanticBudget - charsUsed)
-		if surplusChars < 0 {
-			surplusChars = 0
-		}
-		if semantic != "" {
-			sections = append(sections, "[Knowledge]\n"+semantic)
-			totalCharsUsed += charsUsed
-			metrics.SemanticCount = strings.Count(semantic, "\n- ") + 1
-		}
-	}
-
-	// Procedural memory (tool stats).
-	proceduralBudget := int(float64(totalTokens)*mr.budgets.Procedural) + surplusChars
-	if proceduralBudget > 0 {
-		procedural := mr.retrieveProceduralMemory(ctx, proceduralBudget/mr.charsPerToken)
-		charsUsed := len(procedural)
-		surplusChars = (proceduralBudget - charsUsed)
-		if surplusChars < 0 {
-			surplusChars = 0
-		}
-		if procedural != "" {
-			sections = append(sections, "[Tool Experience]\n"+procedural)
-			totalCharsUsed += charsUsed
-			metrics.ProceduralCount = strings.Count(procedural, "\n- ") + 1
-		}
-	}
-
-	// Relationship memory.
-	relationBudget := int(float64(totalTokens)*mr.budgets.Relationship) + surplusChars
-	if relationBudget > 0 {
-		relationships := mr.retrieveRelationshipMemory(ctx, relationBudget/mr.charsPerToken)
-		charsUsed := len(relationships)
-		if relationships != "" {
-			sections = append(sections, "[Relationships]\n"+relationships)
-			totalCharsUsed += charsUsed
-			metrics.RelationCount = strings.Count(relationships, "\n- ") + 1
-		}
-	}
-
+	// ── Metrics ─────────────────────────────────────────────────────
+	metrics.EpisodicCount = countByTier(filtered, TierEpisodic)
+	metrics.SemanticCount = countByTier(filtered, TierSemantic)
+	metrics.ProceduralCount = countByTier(filtered, TierProcedural)
+	metrics.RelationCount = countByTier(filtered, TierRelationship)
 	metrics.TotalEntries = metrics.WorkingCount + metrics.AmbientCount +
 		metrics.EpisodicCount + metrics.SemanticCount +
 		metrics.ProceduralCount + metrics.RelationCount
 	metrics.MatchedEntries = metrics.TotalEntries
+
+	result := assembled.Format()
 	if totalCharsAllowed > 0 {
-		metrics.BudgetUsedPct = float64(totalCharsUsed) / float64(totalCharsAllowed)
+		metrics.BudgetUsedPct = float64(len(result)) / float64(totalCharsAllowed)
 	}
 
-	// Collapse detection metrics.
+	// Collapse detection.
 	metrics.CorpusSize = corpusSize
 	metrics.HybridWeight = AdaptiveHybridWeight(corpusSize)
-
-	// ScoreSpread: probe HybridSearch for the score distribution.
-	// A spread approaching 0 means all results score alike (semantic collapse).
-	if query != "" {
-		probe := db.HybridSearch(ctx, mr.store, query, queryEmbed, 10, metrics.HybridWeight, mr.vectorIndex)
-		if len(probe) >= 2 {
-			metrics.ScoreSpread = probe[0].Similarity - probe[len(probe)-1].Similarity
-		}
-		var ftsSum, vecSum float64
-		var ftsCount, vecCount int
-		for _, r := range probe {
-			if r.FTSScore > 0 {
-				ftsSum += r.FTSScore
-				ftsCount++
-			}
-			if r.VectorScore > 0 {
-				vecSum += r.VectorScore
-				vecCount++
-			}
-		}
-		if ftsCount > 0 {
-			metrics.AvgFTSScore = ftsSum / float64(ftsCount)
-		}
-		if vecCount > 0 {
-			metrics.AvgVectorScore = vecSum / float64(vecCount)
-		}
+	if len(filtered) >= 2 {
+		metrics.ScoreSpread = filtered[0].Score - filtered[len(filtered)-1].Score
 	}
 
-	if len(sections) == 0 {
-		return "", metrics
-	}
-	return "[Active Memory]\n" + strings.Join(sections, "\n\n"), metrics
+	return result, metrics
 }
 
 // retrieveAmbientRecent fetches episodic memories from the last N hours,
@@ -424,6 +381,46 @@ func (mr *Retriever) retrieveWorkingMemory(ctx context.Context, sessionID string
 	}
 
 	return b.String()
+}
+
+// retrieveTier dispatches a query to a specific memory tier and returns content strings.
+func (mr *Retriever) retrieveTier(ctx context.Context, tier MemoryTier, query string, queryEmbed []float32, budgetTokens int, corpusSize int) []string {
+	var raw string
+	switch tier {
+	case TierEpisodic:
+		raw = mr.retrieveEpisodic(ctx, query, queryEmbed, budgetTokens, corpusSize)
+	case TierSemantic:
+		raw = mr.retrieveSemanticMemory(ctx, query, budgetTokens)
+	case TierProcedural:
+		raw = mr.retrieveProceduralMemory(ctx, budgetTokens)
+	case TierRelationship:
+		raw = mr.retrieveRelationshipMemory(ctx, budgetTokens)
+	default:
+		return nil
+	}
+	if raw == "" {
+		return nil
+	}
+	// Split tier output into individual entries.
+	var entries []string
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" && strings.HasPrefix(line, "- ") {
+			entries = append(entries, strings.TrimPrefix(line, "- "))
+		}
+	}
+	return entries
+}
+
+// countByTier counts evidence entries from a specific tier.
+func countByTier(evidence []Evidence, tier MemoryTier) int {
+	n := 0
+	for _, e := range evidence {
+		if e.SourceTier == tier {
+			n++
+		}
+	}
+	return n
 }
 
 // estimateCorpusSize returns the approximate number of memory entries across tiers.

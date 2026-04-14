@@ -39,13 +39,11 @@ type IntentSignal struct {
 }
 
 // Router selects memory tiers and retrieval modes based on intent and query signals.
-type Router struct {
-	corpusSize int
-}
+type Router struct{}
 
 // NewRouter creates a retrieval router.
-func NewRouter(corpusSize int) *Router {
-	return &Router{corpusSize: corpusSize}
+func NewRouter(_ int) *Router {
+	return &Router{}
 }
 
 // Plan produces a retrieval plan based on the query and intent signals.

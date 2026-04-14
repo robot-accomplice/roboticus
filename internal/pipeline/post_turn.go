@@ -7,6 +7,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	agentmemory "roboticus/internal/agent/memory"
 	"roboticus/internal/core"
 	"roboticus/internal/db"
 )
@@ -50,11 +51,13 @@ func (p *Pipeline) PostTurnIngest(ctx context.Context, session *Session, turnID 
 		// 3. Observer subagent dispatch (Rust: role="observer" receives turn summary).
 		p.dispatchToObservers(bgCtx, sessionID, turnID, userContent, assistantContent)
 
-		// 4. Procedure detection: extract tool sequences and persist learned skills.
-		// This wires the dormant learning.go into production (agentic architecture Layer 16).
+		// 4. Reflection: generate structured episode summary (agentic architecture Layer 16).
+		p.reflectOnTurn(bgCtx, userContent, session)
+
+		// 5. Procedure detection: extract tool sequences and persist learned skills.
 		p.detectAndPersistProcedures(bgCtx, session)
 
-		// 5. Log the turn pair for analytics/debugging.
+		// 6. Log the turn pair for analytics/debugging.
 		if userContent != "" {
 			log.Trace().
 				Str("session", sessionID).
@@ -154,6 +157,45 @@ func (p *Pipeline) storeChunkEmbedding(ctx context.Context, sessionID, turnID, c
 	)
 	if err != nil {
 		log.Warn().Err(err).Str("session", sessionID).Msg("embedding storage failed")
+	}
+}
+
+// reflectOnTurn generates a structured episode summary and stores it as
+// episodic memory. Wires reflection.go into the post-turn pipeline.
+func (p *Pipeline) reflectOnTurn(ctx context.Context, userContent string, session *Session) {
+	if p.store == nil || userContent == "" {
+		return
+	}
+
+	// Extract tool events from session messages.
+	var toolEvents []agentmemory.ToolEvent
+	for _, msg := range session.Messages() {
+		if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
+			for _, tc := range msg.ToolCalls {
+				toolEvents = append(toolEvents, agentmemory.ToolEvent{
+					ToolName: tc.Function.Name,
+					Success:  true, // assume success; failures tracked separately
+				})
+			}
+		}
+	}
+
+	summary := agentmemory.Reflect(userContent, toolEvents, 0)
+	if summary == nil {
+		return
+	}
+
+	// Store as episodic memory with high importance.
+	formatted := summary.FormatForStorage()
+	_, err := p.store.ExecContext(ctx,
+		`INSERT INTO episodic_memory (id, classification, content, importance)
+		 VALUES (?, 'episode_summary', ?, 8)`,
+		db.NewID(), formatted)
+	if err != nil {
+		log.Debug().Err(err).Msg("reflection: failed to store episode summary")
+	} else {
+		log.Debug().Str("outcome", summary.Outcome).Int("actions", len(summary.Actions)).
+			Msg("reflection: episode summary stored")
 	}
 }
 

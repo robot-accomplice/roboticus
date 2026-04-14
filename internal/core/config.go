@@ -245,6 +245,10 @@ type MemoryConfig struct {
 	DecayHalfLifeDays        float64 `json:"decay_half_life_days" toml:"decay_half_life_days" mapstructure:"decay_half_life_days"`
 	SimilarityThreshold      float64 `json:"similarity_threshold" toml:"similarity_threshold" mapstructure:"similarity_threshold"`
 	VectorIndexThreshold     int     `json:"vector_index_threshold" toml:"vector_index_threshold" mapstructure:"vector_index_threshold"` // corpus size for HNSW promotion (default 1000)
+	RerankerMinScore         float64 `json:"reranker_min_score" toml:"reranker_min_score" mapstructure:"reranker_min_score"`                   // discard evidence below this (default 0.1)
+	RerankerAuthorityBoost   float64 `json:"reranker_authority_boost" toml:"reranker_authority_boost" mapstructure:"reranker_authority_boost"`   // canonical source multiplier (default 1.5)
+	RerankerRecencyPenalty   float64 `json:"reranker_recency_penalty" toml:"reranker_recency_penalty" mapstructure:"reranker_recency_penalty"`   // old entry multiplier (default 0.8)
+	RerankerCollapseSpread   float64 `json:"reranker_collapse_spread" toml:"reranker_collapse_spread" mapstructure:"reranker_collapse_spread"`   // spread below which collapse detected (default 0.05)
 }
 
 // CacheConfig holds semantic cache settings.

@@ -16,6 +16,7 @@ package memory
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -95,13 +96,20 @@ func (mm *Manager) VetWorkingMemory(ctx context.Context, cfg VetConfig) VetResul
 
 	// Phase 2: Discard by importance (but not retained types).
 	if cfg.MinImportance > 0 && len(cfg.RetainTypes) > 0 {
-		// Build NOT IN clause for retained types.
+		// Build parameterized NOT IN clause from config.
+		placeholders := make([]string, len(cfg.RetainTypes))
+		args := []any{cfg.MinImportance}
+		for i, rt := range cfg.RetainTypes {
+			placeholders[i] = "?"
+			args = append(args, rt)
+		}
+		notIn := strings.Join(placeholders, ", ")
 		res, err = mm.store.ExecContext(ctx,
 			`DELETE FROM working_memory
 			 WHERE persisted_at IS NOT NULL
 			   AND importance <= ?
-			   AND entry_type NOT IN ('goal', 'decision', 'observation')`,
-			cfg.MinImportance)
+			   AND entry_type NOT IN (`+notIn+`)`,
+			args...)
 		if err == nil {
 			n, _ := res.RowsAffected()
 			result.Discarded += int(n)

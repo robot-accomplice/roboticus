@@ -67,9 +67,13 @@ func DefaultConfig() Config {
 			SemanticBudget:         20,
 			ProceduralBudget:       15,
 			RelationshipBudget:     10,
-			HybridWeightOverride:   0, // 0 = adaptive (corpus-size based)
-			DecayHalfLifeDays:      7.0,
-			VectorIndexThreshold:   1000,
+			HybridWeightOverride:     0, // 0 = adaptive (corpus-size based)
+			DecayHalfLifeDays:        7.0,
+			VectorIndexThreshold:     1000,
+			RerankerMinScore:         0.1,
+			RerankerAuthorityBoost:   1.5,
+			RerankerRecencyPenalty:   0.8,
+			RerankerCollapseSpread:   0.05,
 		},
 		Cache: CacheConfig{
 			Enabled:                true,

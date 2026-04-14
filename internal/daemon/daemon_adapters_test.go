@@ -65,10 +65,10 @@ func TestRetrieverAdapter_Retrieve(t *testing.T) {
 	}, store)
 	a := &retrieverAdapter{r: retriever}
 
-	// With empty store, should return empty string.
+	// With empty store, retrieval should not error. May return structured gaps.
 	result := a.Retrieve(context.Background(), "test-session", "hello", 1024)
-	if result != "" {
-		t.Errorf("expected empty retrieval from empty store, got: %s", result)
+	if strings.Contains(result, "error") {
+		t.Errorf("empty store should not produce errors, got: %s", result)
 	}
 }
 
