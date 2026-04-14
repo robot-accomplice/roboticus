@@ -25,9 +25,9 @@ import (
 
 
 var (
-	updateCheckURL    = "https://api.github.com/repos/roboticus/roboticus/releases/latest"
+	updateCheckURL    = "https://api.github.com/repos/robot-accomplice/roboticus/releases/latest"
 	UpdateHTTPClient  = &http.Client{Timeout: 30 * time.Second}
-	updateReleasesURL = "https://github.com/roboticus/roboticus/releases"
+	updateReleasesURL = "https://github.com/robot-accomplice/roboticus/releases"
 	UpdateRegistryURL = "https://roboticus.ai/registry/manifest.json"
 	updateBinaryFunc  = performUpdate
 	updateMaintenance = runUpdateMaintenance
