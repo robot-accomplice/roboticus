@@ -8,9 +8,9 @@ func TestGuardRegistry_Chain(t *testing.T) {
 		preset    GuardSetPreset
 		wantCount int
 	}{
-		{"full set", GuardSetFull, 25},
+		{"full set", GuardSetFull, 26},
 		{"stream set", GuardSetStream, 6},
-		{"cached set", GuardSetCached, 22}, // Rust parity: ActionVerificationGuard included in cached chain
+		{"cached set", GuardSetCached, 23}, // Includes FinancialActionTruthGuard
 		{"none set", GuardSetNone, 0},
 	}
 	for _, tt := range tests {
