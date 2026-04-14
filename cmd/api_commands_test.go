@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
 
@@ -31,6 +32,26 @@ func jsonHandler(data any) http.HandlerFunc {
 	}
 }
 
+// findSubCmd looks up a subcommand path like "cron list" on rootCmd.
+func findSubCmd(t *testing.T, path ...string) *cobra.Command {
+	t.Helper()
+	cmd := rootCmd
+	for _, name := range path {
+		var found *cobra.Command
+		for _, sub := range cmd.Commands() {
+			if sub.Name() == name {
+				found = sub
+				break
+			}
+		}
+		if found == nil {
+			t.Fatalf("subcommand %q not found under %q", name, cmd.Name())
+		}
+		cmd = found
+	}
+	return cmd
+}
+
 func TestCronListCmd_WithMockServer(t *testing.T) {
 	cleanup := setupMockAPI(t, jsonHandler(map[string]any{
 		"jobs": []any{
@@ -39,8 +60,8 @@ func TestCronListCmd_WithMockServer(t *testing.T) {
 	}))
 	defer cleanup()
 
-	err := cronListCmd.RunE(cronListCmd, nil)
-	if err != nil {
+	cmd := findSubCmd(t, "cron", "list")
+	if err := cmd.RunE(cmd, nil); err != nil {
 		t.Fatalf("cron list: %v", err)
 	}
 }
@@ -51,8 +72,8 @@ func TestCronListCmd_Empty(t *testing.T) {
 	}))
 	defer cleanup()
 
-	err := cronListCmd.RunE(cronListCmd, nil)
-	if err != nil {
+	cmd := findSubCmd(t, "cron", "list")
+	if err := cmd.RunE(cmd, nil); err != nil {
 		t.Fatalf("cron list empty: %v", err)
 	}
 }
@@ -63,8 +84,8 @@ func TestCronHistoryCmd_WithMockServer(t *testing.T) {
 	}))
 	defer cleanup()
 
-	err := cronHistoryCmd.RunE(cronHistoryCmd, nil)
-	if err != nil {
+	cmd := findSubCmd(t, "cron", "history")
+	if err := cmd.RunE(cmd, nil); err != nil {
 		t.Fatalf("cron history: %v", err)
 	}
 }
@@ -77,8 +98,8 @@ func TestSessionsListCmd_WithMockServer(t *testing.T) {
 	}))
 	defer cleanup()
 
-	err := sessionsListCmd.RunE(sessionsListCmd, nil)
-	if err != nil {
+	cmd := findSubCmd(t, "sessions", "list")
+	if err := cmd.RunE(cmd, nil); err != nil {
 		t.Fatalf("sessions list: %v", err)
 	}
 }
@@ -89,8 +110,8 @@ func TestSessionsListCmd_Empty(t *testing.T) {
 	}))
 	defer cleanup()
 
-	err := sessionsListCmd.RunE(sessionsListCmd, nil)
-	if err != nil {
+	cmd := findSubCmd(t, "sessions", "list")
+	if err := cmd.RunE(cmd, nil); err != nil {
 		t.Fatalf("sessions list empty: %v", err)
 	}
 }
@@ -103,8 +124,8 @@ func TestChannelsListCmd_WithMockServer(t *testing.T) {
 	}))
 	defer cleanup()
 
-	err := channelsListCmd.RunE(channelsListCmd, nil)
-	if err != nil {
+	cmd := findSubCmd(t, "channels", "list")
+	if err := cmd.RunE(cmd, nil); err != nil {
 		t.Fatalf("channels list: %v", err)
 	}
 }
@@ -115,8 +136,8 @@ func TestChannelsDeadLetterCmd_WithMockServer(t *testing.T) {
 	}))
 	defer cleanup()
 
-	err := channelsDeadLetterCmd.RunE(channelsDeadLetterCmd, nil)
-	if err != nil {
+	cmd := findSubCmd(t, "channels", "dead-letter")
+	if err := cmd.RunE(cmd, nil); err != nil {
 		t.Fatalf("channels dead-letter: %v", err)
 	}
 }
@@ -129,8 +150,8 @@ func TestChannelsDeadLetterCmd_WithEntries(t *testing.T) {
 	}))
 	defer cleanup()
 
-	err := channelsDeadLetterCmd.RunE(channelsDeadLetterCmd, nil)
-	if err != nil {
+	cmd := findSubCmd(t, "channels", "dead-letter")
+	if err := cmd.RunE(cmd, nil); err != nil {
 		t.Fatalf("channels dead-letter with entries: %v", err)
 	}
 }
@@ -143,8 +164,8 @@ func TestCircuitStatusCmd_WithMockServer(t *testing.T) {
 	}))
 	defer cleanup()
 
-	err := circuitStatusCmd.RunE(circuitStatusCmd, nil)
-	if err != nil {
+	cmd := findSubCmd(t, "circuit", "status")
+	if err := cmd.RunE(cmd, nil); err != nil {
 		t.Fatalf("circuit status: %v", err)
 	}
 }
@@ -157,8 +178,8 @@ func TestModelsListCmd_WithMockServer(t *testing.T) {
 	}))
 	defer cleanup()
 
-	err := modelsListCmd.RunE(modelsListCmd, nil)
-	if err != nil {
+	cmd := findSubCmd(t, "models", "list")
+	if err := cmd.RunE(cmd, nil); err != nil {
 		t.Fatalf("models list: %v", err)
 	}
 }
@@ -171,8 +192,8 @@ func TestMCPListCmd_WithMockServer(t *testing.T) {
 	}))
 	defer cleanup()
 
-	err := mcpListCmd.RunE(mcpListCmd, nil)
-	if err != nil {
+	cmd := findSubCmd(t, "mcp", "list")
+	if err := cmd.RunE(cmd, nil); err != nil {
 		t.Fatalf("mcp list: %v", err)
 	}
 }
@@ -183,8 +204,8 @@ func TestMCPListCmd_Empty(t *testing.T) {
 	}))
 	defer cleanup()
 
-	err := mcpListCmd.RunE(mcpListCmd, nil)
-	if err != nil {
+	cmd := findSubCmd(t, "mcp", "list")
+	if err := cmd.RunE(cmd, nil); err != nil {
 		t.Fatalf("mcp list empty: %v", err)
 	}
 }
@@ -195,8 +216,8 @@ func TestMemoryWorkingCmd_WithMockServer(t *testing.T) {
 	}))
 	defer cleanup()
 
-	err := memoryWorkingCmd.RunE(memoryWorkingCmd, nil)
-	if err != nil {
+	cmd := findSubCmd(t, "memory", "working")
+	if err := cmd.RunE(cmd, nil); err != nil {
 		t.Fatalf("memory working: %v", err)
 	}
 }
@@ -207,8 +228,8 @@ func TestMemoryEpisodicCmd_WithMockServer(t *testing.T) {
 	}))
 	defer cleanup()
 
-	err := memoryEpisodicCmd.RunE(memoryEpisodicCmd, nil)
-	if err != nil {
+	cmd := findSubCmd(t, "memory", "episodic")
+	if err := cmd.RunE(cmd, nil); err != nil {
 		t.Fatalf("memory episodic: %v", err)
 	}
 }
@@ -219,8 +240,8 @@ func TestMemorySemanticCmd_WithMockServer(t *testing.T) {
 	}))
 	defer cleanup()
 
-	err := memorySemanticCmd.RunE(memorySemanticCmd, nil)
-	if err != nil {
+	cmd := findSubCmd(t, "memory", "semantic")
+	if err := cmd.RunE(cmd, nil); err != nil {
 		t.Fatalf("memory semantic: %v", err)
 	}
 }
@@ -231,8 +252,8 @@ func TestMemorySearchCmd_WithMockServer(t *testing.T) {
 	}))
 	defer cleanup()
 
-	err := memorySearchCmd.RunE(memorySearchCmd, []string{"test-query"})
-	if err != nil {
+	cmd := findSubCmd(t, "memory", "search")
+	if err := cmd.RunE(cmd, []string{"test-query"}); err != nil {
 		t.Fatalf("memory search: %v", err)
 	}
 }
@@ -243,8 +264,8 @@ func TestMetricsCostsCmd_WithMockServer(t *testing.T) {
 	}))
 	defer cleanup()
 
-	err := metricsCostsCmd.RunE(metricsCostsCmd, nil)
-	if err != nil {
+	cmd := findSubCmd(t, "metrics", "costs")
+	if err := cmd.RunE(cmd, nil); err != nil {
 		t.Fatalf("metrics costs: %v", err)
 	}
 }
@@ -255,8 +276,8 @@ func TestMetricsCacheCmd_WithMockServer(t *testing.T) {
 	}))
 	defer cleanup()
 
-	err := metricsCacheCmd.RunE(metricsCacheCmd, nil)
-	if err != nil {
+	cmd := findSubCmd(t, "metrics", "cache")
+	if err := cmd.RunE(cmd, nil); err != nil {
 		t.Fatalf("metrics cache: %v", err)
 	}
 }
@@ -267,8 +288,8 @@ func TestMetricsCapacityCmd_WithMockServer(t *testing.T) {
 	}))
 	defer cleanup()
 
-	err := metricsCapacityCmd.RunE(metricsCapacityCmd, nil)
-	if err != nil {
+	cmd := findSubCmd(t, "metrics", "capacity")
+	if err := cmd.RunE(cmd, nil); err != nil {
 		t.Fatalf("metrics capacity: %v", err)
 	}
 }
@@ -279,8 +300,8 @@ func TestAdminRosterCmd_WithMockServer(t *testing.T) {
 	}))
 	defer cleanup()
 
-	err := adminRosterCmd.RunE(adminRosterCmd, nil)
-	if err != nil {
+	cmd := findSubCmd(t, "admin", "roster")
+	if err := cmd.RunE(cmd, nil); err != nil {
 		t.Fatalf("admin roster: %v", err)
 	}
 }
@@ -291,8 +312,8 @@ func TestAdminModelsCmd_WithMockServer(t *testing.T) {
 	}))
 	defer cleanup()
 
-	err := adminModelsCmd.RunE(adminModelsCmd, nil)
-	if err != nil {
+	cmd := findSubCmd(t, "admin", "models")
+	if err := cmd.RunE(cmd, nil); err != nil {
 		t.Fatalf("admin models: %v", err)
 	}
 }
@@ -303,8 +324,8 @@ func TestAdminSubagentsCmd_WithMockServer(t *testing.T) {
 	}))
 	defer cleanup()
 
-	err := adminSubagentsCmd.RunE(adminSubagentsCmd, nil)
-	if err != nil {
+	cmd := findSubCmd(t, "admin", "subagents")
+	if err := cmd.RunE(cmd, nil); err != nil {
 		t.Fatalf("admin subagents: %v", err)
 	}
 }
@@ -315,8 +336,8 @@ func TestSkillsListCmd_WithMockServer(t *testing.T) {
 	}))
 	defer cleanup()
 
-	err := skillsListCmd.RunE(skillsListCmd, nil)
-	if err != nil {
+	cmd := findSubCmd(t, "skills", "list")
+	if err := cmd.RunE(cmd, nil); err != nil {
 		t.Fatalf("skills list: %v", err)
 	}
 }
@@ -327,8 +348,8 @@ func TestSkillsReloadCmd_WithMockServer(t *testing.T) {
 	}))
 	defer cleanup()
 
-	err := skillsReloadCmd.RunE(skillsReloadCmd, nil)
-	if err != nil {
+	cmd := findSubCmd(t, "skills", "reload")
+	if err := cmd.RunE(cmd, nil); err != nil {
 		t.Fatalf("skills reload: %v", err)
 	}
 }
@@ -339,8 +360,8 @@ func TestSkillsCatalogCmd_WithMockServer(t *testing.T) {
 	}))
 	defer cleanup()
 
-	err := skillsCatalogCmd.RunE(skillsCatalogCmd, nil)
-	if err != nil {
+	cmd := findSubCmd(t, "skills", "catalog")
+	if err := cmd.RunE(cmd, nil); err != nil {
 		t.Fatalf("skills catalog: %v", err)
 	}
 }
@@ -351,8 +372,8 @@ func TestModelsDiagnosticsCmd_WithMockServer(t *testing.T) {
 	}))
 	defer cleanup()
 
-	err := modelsDiagnosticsCmd.RunE(modelsDiagnosticsCmd, nil)
-	if err != nil {
+	cmd := findSubCmd(t, "models", "diagnostics")
+	if err := cmd.RunE(cmd, nil); err != nil {
 		t.Fatalf("models diagnostics: %v", err)
 	}
 }
@@ -363,8 +384,8 @@ func TestWalletBalanceCmd_WithMockServer(t *testing.T) {
 	}))
 	defer cleanup()
 
-	err := walletBalanceCmd.RunE(walletBalanceCmd, nil)
-	if err != nil {
+	cmd := findSubCmd(t, "wallet", "balance")
+	if err := cmd.RunE(cmd, nil); err != nil {
 		t.Fatalf("wallet balance: %v", err)
 	}
 }
@@ -375,8 +396,8 @@ func TestWalletAddressCmd_WithMockServer(t *testing.T) {
 	}))
 	defer cleanup()
 
-	err := walletAddressCmd.RunE(walletAddressCmd, nil)
-	if err != nil {
+	cmd := findSubCmd(t, "wallet", "address")
+	if err := cmd.RunE(cmd, nil); err != nil {
 		t.Fatalf("wallet address: %v", err)
 	}
 }

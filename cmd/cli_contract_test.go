@@ -6,13 +6,25 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// commandMap returns a name→command map for all children of the given command.
+// commandMap returns a name->command map for all children of the given command.
 func commandMap(cmd *cobra.Command) map[string]*cobra.Command {
 	m := make(map[string]*cobra.Command)
 	for _, sub := range cmd.Commands() {
 		m[sub.Name()] = sub
 	}
 	return m
+}
+
+// findCmd looks up a top-level command by name on rootCmd.
+func findCmd(t *testing.T, name string) *cobra.Command {
+	t.Helper()
+	for _, sub := range rootCmd.Commands() {
+		if sub.Name() == name {
+			return sub
+		}
+	}
+	t.Fatalf("top-level command %q not found", name)
+	return nil
 }
 
 // TestCLI_GlobalFlags verifies all global persistent flags exist on rootCmd.
@@ -103,35 +115,35 @@ func TestCLI_Aliases(t *testing.T) {
 func TestCLI_SubcommandSets(t *testing.T) {
 	tests := []struct {
 		parentName string
-		parent     *cobra.Command
 		expected   []string
 	}{
-		{"update", updateCmd, []string{"check", "all", "binary"}},
-		{"upgrade", upgradeCmd, []string{"all"}},
-		{"admin", adminCmd, []string{"roster", "models", "subagents", "stats"}},
-		{"cron", cronCmd, []string{"list", "create", "delete", "run", "history"}},
-		{"schedule", scheduleCmd, []string{"list", "create", "delete", "run", "history"}},
-		{"sessions", sessionsCmd, []string{"list", "show", "delete", "export", "create"}},
-		{"memory", memoryCmd, []string{"working", "episodic", "semantic", "search", "stats"}},
-		{"models", modelsCmd, []string{"list", "diagnostics", "scan", "exercise", "suggest", "reset", "baseline"}},
-		{"config", configCmd, []string{"show", "get", "validate"}},
-		{"auth", authCmd, []string{"status", "login", "logout"}},
-		{"mcp", mcpCmd, []string{"list", "connect", "disconnect"}},
-		{"circuit", circuitCmd, []string{"status", "reset"}},
-		{"channels", channelsCmd, []string{"list", "test", "dead-letter"}},
-		{"profile", profileCmd, []string{"list", "create", "switch", "delete"}},
-		{"metrics", metricsCmd, []string{"costs", "cache", "capacity"}},
-		{"skills", skillsCmd, []string{"list", "reload", "catalog"}},
-		{"plugins", pluginsCmd, []string{"list", "info", "install", "uninstall", "enable", "disable", "search", "pack"}},
-		{"keystore", keystoreCmd, []string{"status", "list", "set", "get", "remove", "import", "rekey"}},
-		{"wallet", walletCmd, []string{"balance", "address"}},
-		{"service", serviceCmd, []string{"install", "uninstall", "start", "stop", "restart", "status"}},
-		{"daemon", daemonCmd, []string{"install", "uninstall", "start", "stop", "restart", "status"}},
-		{"security", securityCmd, []string{"show", "audit"}},
+		{"update", []string{"check", "all", "binary"}},
+		{"upgrade", []string{"all"}},
+		{"admin", []string{"roster", "models", "subagents", "stats"}},
+		{"cron", []string{"list", "create", "delete", "run", "history"}},
+		{"schedule", []string{"list", "create", "delete", "run", "history"}},
+		{"sessions", []string{"list", "show", "delete", "export", "create"}},
+		{"memory", []string{"working", "episodic", "semantic", "search", "stats"}},
+		{"models", []string{"list", "diagnostics", "scan", "exercise", "suggest", "reset", "baseline"}},
+		{"config", []string{"show", "get", "validate"}},
+		{"auth", []string{"status", "login", "logout"}},
+		{"mcp", []string{"list", "connect", "disconnect"}},
+		{"circuit", []string{"status", "reset"}},
+		{"channels", []string{"list", "test", "dead-letter"}},
+		{"profile", []string{"list", "create", "switch", "delete"}},
+		{"metrics", []string{"costs", "cache", "capacity"}},
+		{"skills", []string{"list", "reload", "catalog"}},
+		{"plugins", []string{"list", "info", "install", "uninstall", "enable", "disable", "search", "pack"}},
+		{"keystore", []string{"status", "list", "set", "get", "remove", "import", "rekey"}},
+		{"wallet", []string{"balance", "address"}},
+		{"service", []string{"install", "uninstall", "start", "stop", "restart", "status"}},
+		{"daemon", []string{"install", "uninstall", "start", "stop", "restart", "status"}},
+		{"security", []string{"show", "audit"}},
 	}
 
 	for _, tt := range tests {
-		subs := commandMap(tt.parent)
+		parent := findCmd(t, tt.parentName)
+		subs := commandMap(parent)
 		for _, name := range tt.expected {
 			if _, ok := subs[name]; !ok {
 				t.Errorf("%s command missing subcommand %q", tt.parentName, name)
@@ -142,12 +154,12 @@ func TestCLI_SubcommandSets(t *testing.T) {
 
 // TestCLI_UpdateAll verifies both `update all` and `upgrade all` exist.
 func TestCLI_UpdateAll(t *testing.T) {
-	updateSubs := commandMap(updateCmd)
+	updateSubs := commandMap(findCmd(t, "update"))
 	if _, ok := updateSubs["all"]; !ok {
 		t.Error("update command missing 'all' subcommand")
 	}
 
-	upgradeSubs := commandMap(upgradeCmd)
+	upgradeSubs := commandMap(findCmd(t, "upgrade"))
 	if _, ok := upgradeSubs["all"]; !ok {
 		t.Error("upgrade command missing 'all' subcommand")
 	}

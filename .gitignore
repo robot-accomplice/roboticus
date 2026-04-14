@@ -38,3 +38,31 @@ wallet.enc
 
 .serena/**
 roboticus
+
+# Ad-hoc ops/monitoring scripts (not part of the Go project)
+alert.sh
+check.py
+check_disk.sh
+collect_health_data.py
+config.yaml
+database_schema.sql
+debug_df.py
+disk_alert.py
+disk_monitor.sh
+disk_usage.sh
+duncan/
+duncan.yaml
+enhanced_capability_security_model.md
+capability_security_model.md
+health.json
+health_*.log
+health_check.py
+health_data.json
+health_runner.sh
+hourly_health_monitor.py
+hourly_health_results.json
+latest_health.json
+latest_health_summary.json
+monitor.py
+test_parse.py
+HEALTH_CHECK_README.md

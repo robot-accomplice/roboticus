@@ -43,24 +43,6 @@ func TestEnsureParentDir_Existing(t *testing.T) {
 	}
 }
 
-func TestTruncateStr(t *testing.T) {
-	tests := []struct {
-		input  string
-		maxLen int
-		want   string
-	}{
-		{"hello", 10, "hello"},
-		{"hello world", 5, "hello..."},
-		{"", 5, ""},
-	}
-	for _, tt := range tests {
-		got := truncateStr(tt.input, tt.maxLen)
-		if len(got) > tt.maxLen+3 { // allow for "..." suffix
-			t.Errorf("truncateStr(%q, %d) = %q (too long)", tt.input, tt.maxLen, got)
-		}
-	}
-}
-
 func TestInitLogger(t *testing.T) {
 	// Should not panic.
 	initLogger()

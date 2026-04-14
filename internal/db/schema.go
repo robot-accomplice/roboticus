@@ -1,3 +1,18 @@
+// Package db provides the SQLite database layer.
+//
+// Schema management follows a two-phase model:
+//   1. Baseline DDL (schemaDDL constant below): CREATE TABLE IF NOT EXISTS statements
+//      that establish the initial schema for fresh installs. This is "version 0".
+//   2. Numbered migrations (internal/db/migrations/*.sql): ALTER TABLE, CREATE INDEX,
+//      and other incremental changes applied on top of the baseline.
+//
+// Rules for contributors:
+//   - NEVER modify the baseline DDL to change existing tables (add/drop columns, etc.)
+//   - To add a NEW table: add it to schemaDDL AND create a migration for existing installs
+//   - To modify an existing table: create a numbered migration only
+//   - Migration filenames: NNN_description.sql (e.g., 040_add_foo_index.sql)
+//   - Migrations are embedded via go:embed and applied in filename order
+//   - ensureOptionalColumns handles backward-compatible column additions
 package db
 
 import (
