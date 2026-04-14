@@ -50,30 +50,49 @@ func (mr *Retriever) retrieveSemanticMemory(ctx context.Context, query string, b
 	return b.String()
 }
 
-// retrieveProceduralMemory formats tool success/failure statistics from procedural_memory.
+// retrieveProceduralMemory formats tool statistics from procedural_memory
+// and learned procedures from learned_skills.
 func (mr *Retriever) retrieveProceduralMemory(ctx context.Context, budgetTokens int) string {
+	var b strings.Builder
+
+	// Part 1: Tool success/failure stats from procedural_memory.
 	rows, err := mr.store.QueryContext(ctx,
 		`SELECT name, success_count, failure_count FROM procedural_memory
-		 ORDER BY (success_count + failure_count) DESC LIMIT 20`)
-	if err != nil {
-		return ""
+		 ORDER BY (success_count + failure_count) DESC LIMIT 15`)
+	if err == nil {
+		for rows.Next() {
+			var name string
+			var successCount, failureCount int
+			if rows.Scan(&name, &successCount, &failureCount) != nil {
+				continue
+			}
+			total := successCount + failureCount
+			if total == 0 {
+				continue
+			}
+			pct := float64(successCount) / float64(total) * 100
+			fmt.Fprintf(&b, "- %s: %d/%d (%.0f%% success)\n", name, successCount, total, pct)
+		}
+		_ = rows.Close()
 	}
-	defer func() { _ = rows.Close() }()
 
-	var b strings.Builder
-	for rows.Next() {
-		var name string
-		var successCount, failureCount int
-		if rows.Scan(&name, &successCount, &failureCount) != nil {
-			continue
+	// Part 2: Learned procedures from learned_skills (auto-detected tool sequences).
+	skillRows, err := mr.store.QueryContext(ctx,
+		`SELECT name, success_count, priority FROM learned_skills
+		 WHERE memory_state = 'active' AND success_count >= 2
+		 ORDER BY priority DESC, success_count DESC LIMIT 5`)
+	if err == nil {
+		for skillRows.Next() {
+			var name string
+			var successCount, priority int
+			if skillRows.Scan(&name, &successCount, &priority) != nil {
+				continue
+			}
+			fmt.Fprintf(&b, "- [learned] %s: %d runs, priority=%d\n", name, successCount, priority)
 		}
-		total := successCount + failureCount
-		if total == 0 {
-			continue
-		}
-		pct := float64(successCount) / float64(total) * 100
-		fmt.Fprintf(&b, "- %s: %d/%d (%.0f%% success)\n", name, successCount, total, pct)
+		_ = skillRows.Close()
 	}
+
 	return b.String()
 }
 

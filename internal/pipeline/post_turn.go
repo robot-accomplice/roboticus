@@ -50,7 +50,11 @@ func (p *Pipeline) PostTurnIngest(ctx context.Context, session *Session, turnID 
 		// 3. Observer subagent dispatch (Rust: role="observer" receives turn summary).
 		p.dispatchToObservers(bgCtx, sessionID, turnID, userContent, assistantContent)
 
-		// 4. Log the turn pair for analytics/debugging.
+		// 4. Procedure detection: extract tool sequences and persist learned skills.
+		// This wires the dormant learning.go into production (agentic architecture Layer 16).
+		p.detectAndPersistProcedures(bgCtx, session)
+
+		// 5. Log the turn pair for analytics/debugging.
 		if userContent != "" {
 			log.Trace().
 				Str("session", sessionID).
@@ -151,6 +155,57 @@ func (p *Pipeline) storeChunkEmbedding(ctx context.Context, sessionID, turnID, c
 	if err != nil {
 		log.Warn().Err(err).Str("session", sessionID).Msg("embedding storage failed")
 	}
+}
+
+// detectAndPersistProcedures extracts tool call sequences from session messages
+// and persists any detected multi-step procedures as learned skills.
+// This activates the dormant learning.go pattern detection at the pipeline level.
+func (p *Pipeline) detectAndPersistProcedures(ctx context.Context, session *Session) {
+	if p.store == nil {
+		return
+	}
+
+	msgs := session.Messages()
+	if len(msgs) < 3 {
+		return
+	}
+
+	// Extract tool call sequence from this turn's messages.
+	var toolNames []string
+	for _, msg := range msgs {
+		if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
+			for _, tc := range msg.ToolCalls {
+				toolNames = append(toolNames, tc.Function.Name)
+			}
+		}
+	}
+
+	if len(toolNames) < 3 {
+		return // Need at least 3 tools for a meaningful procedure.
+	}
+
+	// Build a procedure key from the tool sequence.
+	procName := strings.Join(toolNames, "-")
+	procSteps := strings.Join(toolNames, ", ")
+
+	// Upsert into learned_skills: increment success_count if exists,
+	// create if not. This mirrors agent.PersistLearnedSkill without
+	// importing the agent package (architecture boundary).
+	_, err := p.store.ExecContext(ctx,
+		`INSERT INTO learned_skills (id, name, description, steps_json, source_session_id, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+		 ON CONFLICT(name) DO UPDATE SET
+		   success_count = success_count + 1,
+		   updated_at = datetime('now')`,
+		db.NewID(), procName, "auto-detected: "+procSteps, `["`+strings.Join(toolNames, `","`)+`"]`, session.ID)
+	if err != nil {
+		log.Debug().Err(err).Str("procedure", procName).
+			Msg("procedure detection: failed to persist learned skill")
+		return
+	}
+
+	log.Debug().Str("procedure", procName).Int("tools", len(toolNames)).
+		Msg("procedure detection: persisted learned skill")
 }
 
 // truncatePreview truncates text for storage as a content preview.
