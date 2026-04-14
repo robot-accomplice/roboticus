@@ -183,7 +183,7 @@ func TestRetrieveEpisodic_UsesPrecomputedEmbeddings(t *testing.T) {
 
 	// Retrieve with a semantically related query.
 	queryVec, _ := ec.EmbedSingle(ctx, "production deployment error")
-	result := retriever.retrieveEpisodic(ctx, "production deployment error", queryVec, 500)
+	result := retriever.retrieveEpisodic(ctx, "production deployment error", queryVec, 500, 0)
 
 	if result == "" {
 		t.Error("expected non-empty episodic retrieval result")

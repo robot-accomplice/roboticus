@@ -14,6 +14,7 @@ type MemoryMaintenanceReport struct {
 	Consolidation agentmemory.ConsolidationReport `json:"consolidation"`
 	IndexBuilt    bool                            `json:"index_built"`
 	EntryCount    int                             `json:"entry_count"`
+	VectorIndex   db.VectorIndex                  `json:"-"` // built index for caller to attach to Retriever/Manager
 }
 
 // ConsolidationOpts configures optional consolidation dependencies.
@@ -60,8 +61,9 @@ func RebuildMemoryIndex(ctx context.Context, store *db.Store) (MemoryMaintenance
 	}
 
 	return MemoryMaintenanceReport{
-		IndexBuilt: idx.IsBuilt(),
-		EntryCount: idx.EntryCount(),
+		IndexBuilt:  idx.IsBuilt(),
+		EntryCount:  idx.EntryCount(),
+		VectorIndex: idx,
 	}, nil
 }
 

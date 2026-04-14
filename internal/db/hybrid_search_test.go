@@ -92,8 +92,17 @@ func TestHybridSearch_Deduplication(t *testing.T) {
 	}
 
 	// The blended score should be higher than either leg alone would give.
-	if len(results) > 0 && results[0].SourceID == "e1" && results[0].Similarity <= 0 {
-		t.Errorf("expected positive blended score, got %f", results[0].Similarity)
+	if len(results) > 0 && results[0].SourceID == "e1" {
+		if results[0].Similarity <= 0 {
+			t.Errorf("expected positive blended score, got %f", results[0].Similarity)
+		}
+		// Per-leg scores should be populated for a doc found by both legs.
+		if results[0].FTSScore <= 0 {
+			t.Errorf("expected positive FTSScore for deduped doc, got %f", results[0].FTSScore)
+		}
+		if results[0].VectorScore <= 0 {
+			t.Errorf("expected positive VectorScore for deduped doc, got %f", results[0].VectorScore)
+		}
 	}
 }
 

@@ -17,8 +17,16 @@ import (
 // 1. HybridSearch (BM25 + vector, deduplicated) for query-relevant results
 // 2. Recency results (recent, any content)
 // Re-ranked with temporal decay + adaptive hybrid weight.
-func (mr *Retriever) retrieveEpisodic(ctx context.Context, query string, queryEmbed []float32, budgetTokens int) string {
+func (mr *Retriever) retrieveEpisodic(ctx context.Context, query string, queryEmbed []float32, budgetTokens int, corpusSize int) string {
 	maxChars := budgetTokens * mr.charsPerToken
+
+	// Effective hybrid weight: config override takes precedence over adaptive.
+	effectiveWeight := func() float64 {
+		if mr.config.HybridWeight > 0 {
+			return mr.config.HybridWeight // manual override from config
+		}
+		return AdaptiveHybridWeight(corpusSize)
+	}
 
 	type candidate struct {
 		id      string
@@ -31,8 +39,7 @@ func (mr *Retriever) retrieveEpisodic(ctx context.Context, query string, queryEm
 
 	// Leg 1: HybridSearch — BM25 + vector, deduplicated, query-relevant.
 	if query != "" {
-		corpusSize := mr.estimateCorpusSize(ctx)
-		hybridWeight := AdaptiveHybridWeight(corpusSize)
+		hybridWeight := effectiveWeight()
 
 		hybridResults := db.HybridSearch(ctx, mr.store, query, queryEmbed, 20, hybridWeight, mr.vectorIndex)
 		if len(hybridResults) > 0 {
@@ -128,8 +135,7 @@ func (mr *Retriever) retrieveEpisodic(ctx context.Context, query string, queryEm
 	}
 
 	// Score and rank: blend temporal decay, FTS relevance, and embedding similarity.
-	corpusSize := mr.estimateCorpusSize(ctx)
-	hybridWeight := AdaptiveHybridWeight(corpusSize)
+	hybridWeight := effectiveWeight()
 
 	type scored struct {
 		content string

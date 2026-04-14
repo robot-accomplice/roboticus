@@ -19,6 +19,8 @@ import (
 	"math/rand"
 	"sort"
 	"sync"
+
+	"github.com/rs/zerolog/log"
 )
 
 // hnswNode represents a single element in the HNSW graph.
@@ -332,6 +334,7 @@ func (h *HNSWGraph) BuildFromStore(store *Store) error {
 		var entry VectorEntry
 		var blob []byte
 		if err := rows.Scan(&entry.SourceTable, &entry.SourceID, &entry.ContentPreview, &blob); err != nil {
+			log.Debug().Err(err).Msg("BuildFromStore: skipping unreadable embedding row")
 			continue
 		}
 		entry.Embedding = BlobToEmbedding(blob)

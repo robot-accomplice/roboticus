@@ -244,7 +244,7 @@ func (mr *Retriever) RetrieveWithMetrics(ctx context.Context, sessionID, query s
 	// Episodic memory (with temporal decay + optional embedding re-rank).
 	episodicBudget := int(float64(totalTokens)*mr.budgets.Episodic) + surplusChars
 	if episodicBudget > 0 {
-		episodic := mr.retrieveEpisodic(ctx, query, queryEmbed, episodicBudget/mr.charsPerToken)
+		episodic := mr.retrieveEpisodic(ctx, query, queryEmbed, episodicBudget/mr.charsPerToken, corpusSize)
 		charsUsed := len(episodic)
 		surplusChars = (episodicBudget - charsUsed)
 		if surplusChars < 0 {

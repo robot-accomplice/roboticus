@@ -10,6 +10,8 @@ package db
 import (
 	"sort"
 	"sync"
+
+	"github.com/rs/zerolog/log"
 )
 
 // PartitionConfig maps source table prefixes to partition names.
@@ -147,6 +149,7 @@ func (pi *PartitionedIndex) BuildFromStore(store *Store) error {
 		var entry VectorEntry
 		var blob []byte
 		if err := rows.Scan(&entry.SourceTable, &entry.SourceID, &entry.ContentPreview, &blob); err != nil {
+			log.Debug().Err(err).Msg("BuildFromStore: skipping unreadable embedding row")
 			continue
 		}
 		entry.Embedding = BlobToEmbedding(blob)
