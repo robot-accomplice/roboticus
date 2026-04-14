@@ -12,6 +12,18 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
+	"roboticus/cmd/admin"
+	"roboticus/cmd/agent"
+	"roboticus/cmd/channels"
+	"roboticus/cmd/configcmd"
+	"roboticus/cmd/internal/cmdutil"
+	"roboticus/cmd/models"
+	"roboticus/cmd/schedule"
+	"roboticus/cmd/servecmd"
+	"roboticus/cmd/skills"
+	"roboticus/cmd/tuicmd"
+	"roboticus/cmd/updatecmd"
+	"roboticus/cmd/wallet"
 	"roboticus/internal/core"
 )
 
@@ -53,6 +65,24 @@ func init() {
 	_ = viper.BindPFlag("quiet", rootCmd.PersistentFlags().Lookup("quiet"))
 	_ = viper.BindPFlag("json", rootCmd.PersistentFlags().Lookup("json"))
 	_ = viper.BindEnv("config", "ROBOTICUS_CONFIG")
+
+	// Register commands from domain subpackages.
+	registerSubpackageCommands()
+}
+
+// registerSubpackageCommands adds all commands from domain subpackages to rootCmd.
+func registerSubpackageCommands() {
+	rootCmd.AddCommand(agent.Commands()...)
+	rootCmd.AddCommand(models.Commands()...)
+	rootCmd.AddCommand(channels.Commands()...)
+	rootCmd.AddCommand(configcmd.Commands()...)
+	rootCmd.AddCommand(schedule.Commands()...)
+	rootCmd.AddCommand(wallet.Commands()...)
+	rootCmd.AddCommand(admin.Commands()...)
+	rootCmd.AddCommand(skills.Commands()...)
+	rootCmd.AddCommand(tuicmd.Commands()...)
+	rootCmd.AddCommand(updatecmd.Commands()...)
+	rootCmd.AddCommand(servecmd.Commands()...)
 }
 
 func initConfig() {
@@ -78,17 +108,9 @@ func initConfig() {
 }
 
 // loadConfig unmarshals viper config into a core.Config struct.
+// Deprecated: use cmdutil.LoadConfig() in subpackages.
 func loadConfig() (core.Config, error) {
-	cfg := core.DefaultConfig()
-	if err := viper.Unmarshal(&cfg); err != nil {
-		return cfg, fmt.Errorf("failed to parse config: %w", err)
-	}
-	cfg.MergeBundledProviders()
-	cfg.NormalizePaths()
-	if err := cfg.Validate(); err != nil {
-		return cfg, err
-	}
-	return cfg, nil
+	return cmdutil.LoadConfig()
 }
 
 func initLogger() {
@@ -126,6 +148,7 @@ func parseLogLevel(s string) zerolog.Level {
 }
 
 // ensureParentDir creates the parent directory for a file path.
+// Deprecated: use cmdutil.EnsureParentDir() in subpackages.
 func ensureParentDir(path string) error {
 	return os.MkdirAll(filepath.Dir(path), 0o700)
 }
