@@ -37,6 +37,16 @@ func TestArchitecture_RetrievalMetricsHasMode(t *testing.T) {
 	_ = m.RetrievalMode // Must compile — proves the field exists.
 }
 
+func TestArchitecture_RetrievalMetricsHasCollapseSignals(t *testing.T) {
+	// Ensures collapse detection fields exist on RetrievalMetrics.
+	var m RetrievalMetrics
+	_ = m.ScoreSpread
+	_ = m.AvgFTSScore
+	_ = m.AvgVectorScore
+	_ = m.CorpusSize
+	_ = m.HybridWeight
+}
+
 func TestArchitecture_ConsolidationReportHasSuperseded(t *testing.T) {
 	// Ensures contradiction detection is tracked in reports.
 	var r ConsolidationReport

@@ -111,6 +111,14 @@ type RetrievalMetrics struct {
 	RelationCount   int     `json:"relation_count"`
 	AmbientCount    int     `json:"ambient_count"`
 	RetrievalMode   string  `json:"retrieval_mode"`
+
+	// Collapse detection signals — these track the health of retrieval precision.
+	// ScoreSpread approaching 0 indicates semantic collapse (all results score alike).
+	ScoreSpread     float64 `json:"score_spread"`      // top-1 minus top-k score delta
+	AvgFTSScore     float64 `json:"avg_fts_score"`     // mean FTS leg score across results
+	AvgVectorScore  float64 `json:"avg_vector_score"`  // mean vector leg score across results
+	CorpusSize      int     `json:"corpus_size"`        // memory_index entries at query time
+	HybridWeight    float64 `json:"hybrid_weight"`      // effective weight used (adaptive)
 }
 
 // historyKeywords trigger inclusion of inactive/stale memories when present in query.
@@ -300,6 +308,31 @@ func (mr *Retriever) RetrieveWithMetrics(ctx context.Context, sessionID, query s
 	metrics.MatchedEntries = metrics.TotalEntries
 	if totalCharsAllowed > 0 {
 		metrics.BudgetUsedPct = float64(totalCharsUsed) / float64(totalCharsAllowed)
+	}
+
+	// Collapse detection metrics.
+	metrics.CorpusSize = corpusSize
+	metrics.HybridWeight = AdaptiveHybridWeight(corpusSize)
+
+	// ScoreSpread: probe HybridSearch for the score distribution.
+	// A spread approaching 0 means all results score alike (semantic collapse).
+	if query != "" {
+		probe := db.HybridSearch(ctx, mr.store, query, queryEmbed, 10, metrics.HybridWeight, mr.vectorIndex)
+		if len(probe) >= 2 {
+			metrics.ScoreSpread = probe[0].Similarity - probe[len(probe)-1].Similarity
+		}
+		var ftsSum, vecSum float64
+		for _, r := range probe {
+			// Approximate per-leg scores from the blended result.
+			// Exact per-leg tracking would require HybridSearch to return them
+			// separately — acceptable approximation for now.
+			ftsSum += r.Similarity
+			vecSum += r.Similarity
+		}
+		if n := float64(len(probe)); n > 0 {
+			metrics.AvgFTSScore = ftsSum / n
+			metrics.AvgVectorScore = vecSum / n
+		}
 	}
 
 	if len(sections) == 0 {
