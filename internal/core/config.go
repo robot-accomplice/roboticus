@@ -241,11 +241,10 @@ type MemoryConfig struct {
 	RelationshipBudget       float64 `json:"relationship_budget" toml:"relationship_budget" mapstructure:"relationship_budget"`
 	EmbeddingProvider        string  `json:"embedding_provider,omitempty" toml:"embedding_provider" mapstructure:"embedding_provider"`
 	EmbeddingModel           string  `json:"embedding_model,omitempty" toml:"embedding_model" mapstructure:"embedding_model"`
-	HybridWeight             float64 `json:"hybrid_weight" toml:"hybrid_weight" mapstructure:"hybrid_weight"`
-	AnnIndex                 bool    `json:"ann_index" toml:"ann_index" mapstructure:"ann_index"`
+	HybridWeightOverride     float64 `json:"hybrid_weight_override" toml:"hybrid_weight_override" mapstructure:"hybrid_weight_override"` // 0 = adaptive (default); >0 = manual override
 	DecayHalfLifeDays        float64 `json:"decay_half_life_days" toml:"decay_half_life_days" mapstructure:"decay_half_life_days"`
 	SimilarityThreshold      float64 `json:"similarity_threshold" toml:"similarity_threshold" mapstructure:"similarity_threshold"`
-	ANNActivationThreshold   int     `json:"ann_activation_threshold" toml:"ann_activation_threshold" mapstructure:"ann_activation_threshold"`
+	VectorIndexThreshold     int     `json:"vector_index_threshold" toml:"vector_index_threshold" mapstructure:"vector_index_threshold"` // corpus size for HNSW promotion (default 1000)
 }
 
 // CacheConfig holds semantic cache settings.
