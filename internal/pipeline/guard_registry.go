@@ -42,6 +42,7 @@ func NewDefaultGuardRegistry() *GuardRegistry {
 	r.Register(&DelegationMetadataGuard{})
 	r.Register(&FilesystemDenialGuard{})
 	r.Register(&ConfigProtectionGuard{})
+	r.Register(&FinancialActionTruthGuard{}) // Financial fabrication detection
 
 	return r
 }
@@ -83,7 +84,7 @@ func (r *GuardRegistry) Chain(preset GuardSetPreset) *GuardChain {
 			// Go-only guards (additive).
 			"content_classification", "repetition", "system_prompt_leak",
 			"internal_marker", "execution_block", "delegation_metadata",
-			"filesystem_denial", "config_protection",
+			"filesystem_denial", "config_protection", "financial_action_truth",
 		)
 	case GuardSetCached:
 		// Rust cached chain: full chain minus PerspectiveGuard, DeclaredActionGuard, UserEchoGuard.
@@ -97,7 +98,7 @@ func (r *GuardRegistry) Chain(preset GuardSetPreset) *GuardChain {
 			// Go-only guards (additive).
 			"content_classification", "repetition", "system_prompt_leak",
 			"internal_marker", "execution_block", "delegation_metadata",
-			"filesystem_denial", "config_protection",
+			"filesystem_denial", "config_protection", "financial_action_truth",
 		)
 	case GuardSetStream:
 		// Rust streaming chain: 6 guards.

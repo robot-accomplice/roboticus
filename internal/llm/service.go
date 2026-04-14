@@ -35,8 +35,9 @@ type Service struct {
 	store         *db.Store
 	bgWorker      *core.BackgroundWorker
 	Confidence    *ConfidenceEvaluator
-	Escalation    *EscalationTracker
-	quality       *QualityTracker
+	Escalation        *EscalationTracker
+	SessionEscalation *SessionEscalationTracker
+	quality           *QualityTracker
 	intentQuality *IntentQualityTracker
 	latency       *LatencyTracker
 	errBus        *core.ErrorBus
@@ -132,7 +133,8 @@ func NewService(cfg ServiceConfig, store *db.Store) (*Service, error) {
 		store:         store,
 		bgWorker:      bgw,
 		Confidence:    NewConfidenceEvaluator(floor),
-		Escalation:    NewEscalationTracker(),
+		Escalation:        NewEscalationTracker(),
+		SessionEscalation: NewSessionEscalationTracker(cfg.Fallbacks),
 		quality:       NewQualityTracker(100),
 		intentQuality: NewIntentQualityTracker(100),
 		latency:       NewLatencyTracker(100),
@@ -196,6 +198,17 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 	// Context-level model override (set by pipeline when API caller specifies a model).
 	if override := core.ModelOverrideFromCtx(ctx); override != "" && req.Model == "" {
 		req.Model = override
+	}
+
+	// Session-aware escalation: if this session has degraded quality, override
+	// the model with a higher-capability one from the fallback chain.
+	if req.Model == "" && !req.NoEscalate && s.SessionEscalation != nil {
+		if sid := core.SessionIDFromCtx(ctx); sid != "" {
+			if shouldEsc, suggested := s.SessionEscalation.ShouldEscalate(sid); shouldEsc && suggested != "" {
+				req.Model = suggested
+				log.Debug().Str("session", sid).Str("model", suggested).Msg("session escalation triggered")
+			}
+		}
 	}
 
 	// Route: select model if not explicitly set.
