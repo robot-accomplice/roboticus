@@ -124,15 +124,11 @@ func (mm *Manager) embedAndStore(ctx context.Context, sourceTable, sourceID, con
 
 	// Incremental vector index update for immediate retrieval availability.
 	if mm.vectorIndex != nil {
-		embed64 := make([]float64, len(vec))
-		for i, v := range vec {
-			embed64[i] = float64(v)
-		}
 		mm.vectorIndex.AddEntry(db.VectorEntry{
 			SourceTable:    sourceTable,
 			SourceID:       sourceID,
 			ContentPreview: preview,
-			Embedding:      embed64,
+			Embedding:      vec,
 		})
 	}
 }

@@ -65,11 +65,7 @@ func HybridSearch(
 
 	// Vector leg: cosine similarity via vector index.
 	if len(queryEmbedding) > 0 && hybridWeight > 0.0 && vectorIndex != nil && vectorIndex.IsBuilt() {
-		query64 := make([]float64, len(queryEmbedding))
-		for i, v := range queryEmbedding {
-			query64[i] = float64(v)
-		}
-		vecResults := vectorIndex.Search(query64, limit*2)
+		vecResults := vectorIndex.Search(queryEmbedding, limit*2)
 		for _, r := range vecResults {
 			results = append(results, VectorSearchResult{
 				SourceTable:    r.SourceTable,

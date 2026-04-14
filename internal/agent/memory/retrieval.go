@@ -72,7 +72,7 @@ type MemoryEntry struct {
 // RetrieveWithANN uses the vector index for approximate nearest-neighbor
 // search over memory embeddings. Falls back to empty results if the index is
 // not built or has insufficient entries.
-func (mr *Retriever) RetrieveWithANN(ctx context.Context, embedding []float64, k int) []MemoryEntry {
+func (mr *Retriever) RetrieveWithANN(ctx context.Context, embedding []float32, k int) []MemoryEntry {
 	if mr.vectorIndex == nil || !mr.vectorIndex.IsBuilt() || k <= 0 {
 		return nil
 	}

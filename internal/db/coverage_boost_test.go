@@ -569,7 +569,7 @@ func TestBruteForceIndex_Basic(t *testing.T) {
 		SourceTable:    "episodic_memory",
 		SourceID:       "e1",
 		ContentPreview: "hello world",
-		Embedding:      []float64{1, 0, 0},
+		Embedding:      []float32{1, 0, 0},
 	})
 	if idx.IsBuilt() {
 		t.Error("should not be built with 1 entry (min=2)")
@@ -579,7 +579,7 @@ func TestBruteForceIndex_Basic(t *testing.T) {
 		SourceTable:    "episodic_memory",
 		SourceID:       "e2",
 		ContentPreview: "goodbye world",
-		Embedding:      []float64{0, 1, 0},
+		Embedding:      []float32{0, 1, 0},
 	})
 	if !idx.IsBuilt() {
 		t.Error("should be built with 2 entries (min=2)")
@@ -595,21 +595,21 @@ func TestBruteForceIndex_Search(t *testing.T) {
 	idx.AddEntry(VectorEntry{
 		SourceTable: "test", SourceID: "a",
 		ContentPreview: "vector A",
-		Embedding:      []float64{1, 0, 0},
+		Embedding:      []float32{1, 0, 0},
 	})
 	idx.AddEntry(VectorEntry{
 		SourceTable: "test", SourceID: "b",
 		ContentPreview: "vector B",
-		Embedding:      []float64{0, 1, 0},
+		Embedding:      []float32{0, 1, 0},
 	})
 	idx.AddEntry(VectorEntry{
 		SourceTable: "test", SourceID: "c",
 		ContentPreview: "vector C",
-		Embedding:      []float64{0.9, 0.1, 0},
+		Embedding:      []float32{0.9, 0.1, 0},
 	})
 
 	// Search for vector close to A.
-	results := idx.Search([]float64{1, 0, 0}, 2)
+	results := idx.Search([]float32{1, 0, 0}, 2)
 	if len(results) != 2 {
 		t.Fatalf("expected 2 results, got %d", len(results))
 	}
@@ -624,7 +624,7 @@ func TestBruteForceIndex_Search(t *testing.T) {
 func TestBruteForceIndex_SearchEmpty(t *testing.T) {
 	idx := NewBruteForceIndex(VectorIndexConfig{MinEntries: 1})
 
-	results := idx.Search([]float64{1, 0, 0}, 5)
+	results := idx.Search([]float32{1, 0, 0}, 5)
 	if results != nil {
 		t.Errorf("expected nil for empty index, got %v", results)
 	}
@@ -632,9 +632,9 @@ func TestBruteForceIndex_SearchEmpty(t *testing.T) {
 
 func TestBruteForceIndex_SearchKZero(t *testing.T) {
 	idx := NewBruteForceIndex(VectorIndexConfig{MinEntries: 1})
-	idx.AddEntry(VectorEntry{Embedding: []float64{1, 0}})
+	idx.AddEntry(VectorEntry{Embedding: []float32{1, 0}})
 
-	results := idx.Search([]float64{1, 0}, 0)
+	results := idx.Search([]float32{1, 0}, 0)
 	if results != nil {
 		t.Errorf("expected nil for k=0, got %v", results)
 	}
@@ -644,10 +644,10 @@ func TestBruteForceIndex_SearchKLargerThanEntries(t *testing.T) {
 	idx := NewBruteForceIndex(VectorIndexConfig{MinEntries: 1})
 	idx.AddEntry(VectorEntry{
 		SourceTable: "t", SourceID: "1",
-		Embedding: []float64{1, 0},
+		Embedding: []float32{1, 0},
 	})
 
-	results := idx.Search([]float64{1, 0}, 100)
+	results := idx.Search([]float32{1, 0}, 100)
 	if len(results) != 1 {
 		t.Errorf("expected 1 result (only 1 entry), got %d", len(results))
 	}

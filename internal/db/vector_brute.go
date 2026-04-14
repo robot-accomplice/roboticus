@@ -13,11 +13,12 @@ type VectorIndexConfig struct {
 }
 
 // VectorEntry is a single indexed embedding with metadata.
+// Embeddings are stored as float32 — the native format from providers and SQLite blobs.
 type VectorEntry struct {
 	SourceTable    string    `json:"source_table"`
 	SourceID       string    `json:"source_id"`
 	ContentPreview string    `json:"content_preview"`
-	Embedding      []float64 `json:"embedding"`
+	Embedding      []float32 `json:"embedding"`
 }
 
 // VectorSearchResult is a search hit with similarity score.
@@ -69,14 +70,9 @@ func (h *BruteForceIndex) BuildFromStore(store *Store) error {
 		if err := rows.Scan(&entry.SourceTable, &entry.SourceID, &entry.ContentPreview, &blob); err != nil {
 			continue
 		}
-		f32s := BlobToEmbedding(blob)
-		if len(f32s) == 0 {
+		entry.Embedding = BlobToEmbedding(blob)
+		if len(entry.Embedding) == 0 {
 			continue
-		}
-		// Convert float32 to float64 for cosine similarity.
-		entry.Embedding = make([]float64, len(f32s))
-		for i, v := range f32s {
-			entry.Embedding[i] = float64(v)
 		}
 		h.entries = append(h.entries, entry)
 	}
@@ -92,7 +88,7 @@ func (h *BruteForceIndex) BuildFromStore(store *Store) error {
 }
 
 // Search returns the top-k nearest neighbors via exhaustive cosine similarity.
-func (h *BruteForceIndex) Search(query []float64, k int) []VectorSearchResult {
+func (h *BruteForceIndex) Search(query []float32, k int) []VectorSearchResult {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 
@@ -107,7 +103,7 @@ func (h *BruteForceIndex) Search(query []float64, k int) []VectorSearchResult {
 
 	var results []scored
 	for i, entry := range h.entries {
-		sim := CosineSimilarityF64(query, entry.Embedding)
+		sim := CosineSimilarityF32(query, entry.Embedding)
 		results = append(results, scored{i, sim})
 	}
 

@@ -16,7 +16,7 @@ func TestRetrieveWithANN_NoIndex(t *testing.T) {
 	r := NewRetriever(DefaultRetrievalConfig(), DefaultTierBudget(), store)
 
 	// No vector index attached — should return nil.
-	results := r.RetrieveWithANN(context.Background(), []float64{1, 0, 0}, 5)
+	results := r.RetrieveWithANN(context.Background(), []float32{1, 0, 0}, 5)
 	if results != nil {
 		t.Errorf("expected nil results without vector index, got %d", len(results))
 	}
@@ -31,18 +31,18 @@ func TestRetrieveWithANN_WithIndex(t *testing.T) {
 		SourceTable:    "episodic",
 		SourceID:       "ep1",
 		ContentPreview: "the sky is blue",
-		Embedding:      []float64{1, 0, 0},
+		Embedding:      []float32{1, 0, 0},
 	})
 	idx.AddEntry(db.VectorEntry{
 		SourceTable:    "semantic",
 		SourceID:       "sem1",
 		ContentPreview: "grass is green",
-		Embedding:      []float64{0, 1, 0},
+		Embedding:      []float32{0, 1, 0},
 	})
 
 	r.SetVectorIndex(idx)
 
-	results := r.RetrieveWithANN(context.Background(), []float64{1, 0, 0}, 2)
+	results := r.RetrieveWithANN(context.Background(), []float32{1, 0, 0}, 2)
 	if len(results) != 2 {
 		t.Fatalf("expected 2 results, got %d", len(results))
 	}
@@ -61,11 +61,11 @@ func TestRetrieveWithANN_ZeroK(t *testing.T) {
 	idx := db.NewBruteForceIndex(db.VectorIndexConfig{MinEntries: 1})
 	idx.AddEntry(db.VectorEntry{
 		SourceTable: "episodic", SourceID: "ep1",
-		ContentPreview: "test", Embedding: []float64{1, 0},
+		ContentPreview: "test", Embedding: []float32{1, 0},
 	})
 	r.SetVectorIndex(idx)
 
-	results := r.RetrieveWithANN(context.Background(), []float64{1, 0}, 0)
+	results := r.RetrieveWithANN(context.Background(), []float32{1, 0}, 0)
 	if results != nil {
 		t.Errorf("expected nil for k=0, got %d results", len(results))
 	}
