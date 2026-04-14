@@ -18,8 +18,10 @@ type ThemeTexture struct {
 	Tile  bool   `json:"tile,omitempty"`  // true = repeat/tile, false = cover (for photos)
 }
 
-// ThemeRegistryBaseURL is the base URL for the theme asset registry.
-const ThemeRegistryBaseURL = "https://roboticus.ai/registry/themes"
+// ThemeRegistryBaseURL returns the base URL for theme assets from the first configured registry.
+// This is used for hardcoded catalog theme texture URLs. For multi-registry support,
+// the dashboard fetches from all registries and merges results.
+var ThemeRegistryBaseURL = "https://roboticus.ai/registry/themes"
 
 // ThemeManifest describes a UI theme.
 type ThemeManifest struct {

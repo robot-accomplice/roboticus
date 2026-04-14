@@ -4689,8 +4689,29 @@
         }
       });
 
-      // Fetch catalog from registry.
-      fetch('https://roboticus.ai/registry/mcp-servers.json')
+      // Fetch catalog from all configured registries.
+      var registries = (_cachedConfig && _cachedConfig.update && _cachedConfig.update.registries && _cachedConfig.update.registries.length > 0)
+        ? _cachedConfig.update.registries
+        : ['https://roboticus.ai/registry'];
+
+      // Fetch from all registries in parallel, merge results.
+      Promise.all(registries.map(function(regUrl) {
+        return fetch(regUrl + '/mcp-servers.json')
+          .then(function(r) { return r.json(); })
+          .then(function(data) { return { registry: regUrl, servers: data.servers || [] }; })
+          .catch(function() { return { registry: regUrl, servers: [] }; });
+      })).then(function(results) {
+        // Flatten and tag each server with its source registry.
+        var allServers = [];
+        results.forEach(function(r) {
+          r.servers.forEach(function(s) {
+            s._registry = r.registry;
+            s._registryLabel = r.registry.replace(/https?:\/\//, '').replace(/\/registry$/, '');
+            allServers.push(s);
+          });
+        });
+        return { servers: allServers };
+      })
         .then(function(r) { return r.json(); })
         .then(function(data) {
           var servers = data.servers || [];
@@ -4707,11 +4728,27 @@
             body.textContent = 'No servers in catalog.';
             return;
           }
-          var categories = {};
-          servers.forEach(function(s, i) { s._idx = i; var cat = s.category || 'other'; if (!categories[cat]) categories[cat] = []; categories[cat].push(s); });
+          // Group by registry, then by category within each registry.
+          var byRegistry = {};
+          servers.forEach(function(s, i) {
+            s._idx = i;
+            var reg = s._registryLabel || 'local';
+            if (!byRegistry[reg]) byRegistry[reg] = {};
+            var cat = s.category || 'other';
+            if (!byRegistry[reg][cat]) byRegistry[reg][cat] = [];
+            byRegistry[reg][cat].push(s);
+          });
           var html = '';
-          Object.keys(categories).sort().forEach(function(cat) {
-            html += '<div style="margin-bottom:1rem"><div style="font-size:0.625rem;text-transform:uppercase;letter-spacing:0.1em;color:var(--muted);margin-bottom:0.5rem">' + esc(cat) + '</div>';
+          var regKeys = Object.keys(byRegistry).sort();
+          regKeys.forEach(function(reg) {
+            // Subtle registry separator — only shown when multiple registries.
+            if (regKeys.length > 1) {
+              html += '<div style="margin:0.75rem 0 0.5rem;padding-bottom:0.35rem;border-bottom:1px solid var(--border-ghost)">'
+                + '<span style="font-size:0.58rem;text-transform:uppercase;letter-spacing:0.12em;color:var(--accent);font-weight:600">' + esc(reg) + '</span></div>';
+            }
+            var categories = byRegistry[reg];
+            Object.keys(categories).sort().forEach(function(cat) {
+              html += '<div style="margin-bottom:1rem"><div style="font-size:0.625rem;text-transform:uppercase;letter-spacing:0.1em;color:var(--muted);margin-bottom:0.5rem">' + esc(cat) + '</div>';
             html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:0.5rem">';
             categories[cat].forEach(function(s) {
               var isConfigured = configured[s.id];
@@ -4731,6 +4768,7 @@
                 + '</div></div>';
             });
             html += '</div></div>';
+            });
           });
           body.innerHTML = html;
         })
