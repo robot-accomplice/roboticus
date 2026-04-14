@@ -1,8 +1,11 @@
 # Memory Architecture Specification
 
 > Authoritative reference for the Roboticus memory system.
-> Derived from exhaustive analysis of the Rust reference implementation (v0.11.4).
-> Use this document to audit the Go port for gaps and to reason about improvements.
+> Updated for v1.0.5 agentic retrieval architecture.
+> Derived from exhaustive analysis of the Rust reference implementation (v0.11.4)
+> and extended with the 13-layer agentic AI reference architecture.
+>
+> **Guiding principle**: Retrieve broadly, reason narrowly, act cautiously, learn continuously.
 
 ---
 
@@ -14,9 +17,10 @@
 4. [Consolidation Pipeline](#4-consolidation-pipeline)
 5. [Retrieval & Injection](#5-retrieval--injection)
 6. [Agent Tools & API](#6-agent-tools--api)
-7. [Known Design Gaps](#7-known-design-gaps)
-8. [Go Port Gap Audit](#8-go-port-gap-audit)
-9. [Beyond-Parity Improvements](#9-beyond-parity-improvements-go-only)
+7. [Agentic Retrieval Architecture (v1.0.5)](#7-agentic-retrieval-architecture)
+8. [Known Design Gaps](#8-known-design-gaps)
+9. [Go Port Gap Audit](#9-go-port-gap-audit)
+10. [Beyond-Parity Improvements](#10-beyond-parity-improvements-go-only)
 
 ---
 
@@ -552,7 +556,53 @@ roboticus memory reindex
 
 ---
 
-## 7. Known Design Gaps
+## 7. Agentic Retrieval Architecture
+
+> Added in v1.0.5. Replaces the previous "query all tiers with fixed budgets"
+> approach with intent-driven, multi-layer retrieval.
+
+### Design Principles
+
+- **Semantic memory** answers: "What is true?"
+- **Episodic memory** answers: "What happened before?"
+- **Procedural memory** answers: "How do I do this?"
+- **Relationship/graph memory** answers: "What depends on what?"
+- **Working memory** answers: "What am I doing right now?" (NOT searched — direct injection)
+
+### Retrieval Pipeline (v1.0.5)
+
+```
+Query → Decompose (compound → subgoals)
+      → Route (intent-driven tier selection)
+      → Retrieve (per-tier: BM25 + vector hybrid)
+      → Rerank (discard weak, boost authority, detect collapse)
+      → Assemble (evidence + gaps + contradictions)
+      → Working State (direct injection, not searched)
+      → LLM Reasoning
+```
+
+### Components
+
+| Layer | File | Purpose |
+|-------|------|---------|
+| Decomposer | `decomposer.go` | Splits compound queries into subgoals |
+| Router | `router.go` | Selects tiers + modes based on intent/keywords |
+| Retriever | `retrieval_episodic.go`, `retrieval_tiers.go` | Per-tier BM25+vector hybrid search |
+| Reranker | `reranker.go` | Evidence filter: authority, recency, collapse |
+| Assembler | `context_assembly.go` | Structured output: evidence + gaps + contradictions |
+| Reflection | `reflection.go` | Post-turn episode summaries |
+| Persistence | `working_persistence.go` | Working memory across restarts |
+
+### Working Memory Lifecycle
+
+- **Shutdown**: persist all active entries with `persisted_at` timestamp
+- **Startup**: vet entries (discard stale >24h, low importance ≤3, turn_summaries)
+- **Consolidation**: entries surviving multiple cycles promote to episodic memory
+- Not a retrieval tier — always injected directly into prompt as active state
+
+---
+
+## 8. Known Design Gaps
 
 These exist in the **Rust reference implementation**. Items marked FIXED have
 been addressed in the Go port as beyond-parity improvements.
@@ -602,7 +652,7 @@ tier-native index sync, not promotion.
 
 ---
 
-## 8. Go Port Gap Audit
+## 9. Go Port Gap Audit
 
 ### 8.1 All Fixes Applied (2026-04-11 / 2026-04-12)
 
@@ -650,7 +700,7 @@ tier-native index sync, not promotion.
 
 ---
 
-## 9. Beyond-Parity Improvements (Go-Only)
+## 10. Beyond-Parity Improvements (Go-Only)
 
 These improvements exist in the Go port but NOT in the Rust reference.
 
