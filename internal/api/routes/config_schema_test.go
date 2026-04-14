@@ -139,16 +139,16 @@ func TestGetConfigSchema(t *testing.T) {
 	// Verify float type.
 	var hybridWeight *SchemaField
 	for i, f := range result.Fields {
-		if f.Name == "memory.hybrid_weight" {
+		if f.Name == "memory.hybrid_weight_override" {
 			hybridWeight = &result.Fields[i]
 			break
 		}
 	}
 	if hybridWeight == nil {
-		t.Fatal("expected memory.hybrid_weight field in schema")
+		t.Fatal("expected memory.hybrid_weight_override field in schema")
 	}
 	if hybridWeight.Type != "float" {
-		t.Errorf("memory.hybrid_weight type = %q, want float", hybridWeight.Type)
+		t.Errorf("memory.hybrid_weight_override type = %q, want float", hybridWeight.Type)
 	}
 
 	// Verify descriptions exist for fields with known descriptions.

@@ -338,3 +338,67 @@ sequenceDiagram
 | Procedural stats | **Tool** (`recall_memory`) | `procedural_memory` by ID |
 | Relationship data | **Tool** (`recall_memory`) | `relationship_memory` by ID |
 | Topic search | **Tool** (`search_memories`) | FTS5 + LIKE across all tiers |
+
+---
+
+## 8. Agentic Retrieval Architecture (v1.0.5)
+
+```
+User Query
+    │
+    ▼
+┌────────────────────┐
+│ Intent Classifier   │ ← 9 categories (centroid-based)
+└────────┬───────────┘
+         │
+         ▼
+┌────────────────────┐
+│ Query Decomposer   │ ← splits compound queries into subgoals
+└────────┬───────────┘
+         │
+         ▼
+┌────────────────────┐
+│ Retrieval Router   │ ← selects tiers + modes per subgoal
+│ (11 routing plans) │
+└────────┬───────────┘
+         │
+    ┌────┴────────────────┐
+    │  Per-Tier Retrieval  │
+    │ ┌─────┐ ┌─────┐     │
+    │ │Epis.│ │Sem. │ ... │ ← BM25 + vector hybrid per tier
+    │ └──┬──┘ └──┬──┘     │
+    └────┼───────┼────────┘
+         │       │
+         ▼       ▼
+┌────────────────────┐
+│ Reranker / Filter  │ ← discard weak, boost authority, detect collapse
+└────────┬───────────┘
+         │
+         ▼
+┌────────────────────────────────────────┐
+│ Context Assembly                       │
+│ [Working State] ← direct injection     │
+│ [Evidence]      ← ranked with scores   │
+│ [Gaps]          ← missing tiers        │
+│ [Contradictions]← conflicting entries  │
+└────────┬───────────────────────────────┘
+         │
+         ▼
+    LLM Reasoning Engine
+         │
+         ▼
+    Post-Turn:
+    ├── Reflection (episode summary → episodic_memory)
+    ├── Procedure Detection (tool sequences → learned_skills)
+    └── Consolidation (dreaming: promote, decay, prune)
+```
+
+### Memory Type Roles
+
+| Memory | Question Answered | Retrieval Method | Searched? |
+|--------|-------------------|-----------------|-----------|
+| Semantic | "What is true?" | BM25 + vector hybrid | Yes (via router) |
+| Episodic | "What happened before?" | FTS + recency union | Yes (via router) |
+| Procedural | "How do I do this?" | Keyword + learned skills | Yes (via router) |
+| Relationship | "Who is involved?" | Keyword lookup | Yes (via router) |
+| Working | "What am I doing now?" | N/A — direct injection | **No** — active state |

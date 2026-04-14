@@ -9,7 +9,7 @@ const (
 	RetrievalHybrid   RetrievalMode = iota // FTS5 + cosine (default)
 	RetrievalSemantic                      // Cosine-only
 	RetrievalKeyword                       // FTS5-only
-	RetrievalANN                           // HNSW approximate
+	RetrievalANN                           // approximate nearest neighbor
 	RetrievalRecency                       // Time-sorted only
 )
 
@@ -43,6 +43,23 @@ func NewRetrievalStrategy(embeddingAvailable bool, corpusSize int) *RetrievalStr
 		EmbeddingAvailable: embeddingAvailable,
 		CorpusSize:         corpusSize,
 		ANNThreshold:       1000,
+	}
+}
+
+// AdaptiveHybridWeight returns a hybrid weight tuned to corpus size.
+// At small scale, dense vectors are reliable so we weight them heavily.
+// As corpus grows past ~10K entries, embeddings crowd in high-dimensional
+// space (semantic collapse) and lexical matching becomes more discriminative.
+func AdaptiveHybridWeight(corpusSize int) float64 {
+	switch {
+	case corpusSize < 1000:
+		return 0.7
+	case corpusSize < 5000:
+		return 0.5
+	case corpusSize < 10000:
+		return 0.4
+	default:
+		return 0.3
 	}
 }
 

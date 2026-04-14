@@ -15,7 +15,7 @@ import (
 // narrow. If someone adds a broad dependency, this test forces a conversation
 // about whether the dependency is justified by stage ownership (Rule 5.2).
 func TestBoundary_PipelineDepsFieldCount(t *testing.T) {
-	const maxFields = 15 // Currently 13. Ceiling of 15 before alarm.
+	const maxFields = 17 // Currently 17 (15 deps + Workspace + AllowedPaths). Ceiling of 17.
 
 	rt := reflect.TypeOf(PipelineDeps{})
 	if rt.NumField() > maxFields {

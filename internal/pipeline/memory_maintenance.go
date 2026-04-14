@@ -14,6 +14,7 @@ type MemoryMaintenanceReport struct {
 	Consolidation agentmemory.ConsolidationReport `json:"consolidation"`
 	IndexBuilt    bool                            `json:"index_built"`
 	EntryCount    int                             `json:"entry_count"`
+	VectorIndex   db.VectorIndex                  `json:"-"` // built index for caller to attach to Retriever/Manager
 }
 
 // ConsolidationOpts configures optional consolidation dependencies.
@@ -41,20 +42,28 @@ func RunMemoryConsolidation(ctx context.Context, store *db.Store, force bool, op
 	return pipe.Run(ctx, store)
 }
 
+// VectorIndexThreshold is the corpus size at which partitions use HNSW
+// instead of brute-force. Matches the adaptive weight inflection point.
+const VectorIndexThreshold = 1000
+
 // RebuildMemoryIndex rebuilds the ANN index from persisted embeddings.
+// Uses a PartitionedIndex that routes entries to hot (working + episodic)
+// and warm (semantic + procedural + relationship) partitions. Each partition
+// gets an HNSW graph when the total corpus exceeds the threshold.
 func RebuildMemoryIndex(ctx context.Context, store *db.Store) (MemoryMaintenanceReport, error) {
 	if err := ensureEmbeddingJSONColumn(ctx, store); err != nil {
 		return MemoryMaintenanceReport{}, err
 	}
 
-	idx := db.NewHNSWIndex(db.HNSWConfig{})
+	idx := db.NewPartitionedIndex(VectorIndexThreshold)
 	if err := idx.BuildFromStore(store); err != nil {
 		return MemoryMaintenanceReport{}, err
 	}
 
 	return MemoryMaintenanceReport{
-		IndexBuilt: idx.IsBuilt(),
-		EntryCount: idx.EntryCount(),
+		IndexBuilt:  idx.IsBuilt(),
+		EntryCount:  idx.EntryCount(),
+		VectorIndex: idx,
 	}, nil
 }
 

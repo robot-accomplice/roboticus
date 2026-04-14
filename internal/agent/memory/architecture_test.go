@@ -15,7 +15,7 @@ func TestArchitecture_ManagerHasEmbedClient(t *testing.T) {
 	// Ensures the Manager struct retains its embedding capability.
 	mgr := NewManager(DefaultConfig(), nil)
 	mgr.SetEmbeddingClient(nil) // Must compile — proves the field exists.
-	mgr.SetHNSWIndex(nil)       // Must compile — proves the field exists.
+	mgr.SetVectorIndex(nil)       // Must compile — proves the field exists.
 }
 
 func TestArchitecture_ConsolidationHasEmbedClient(t *testing.T) {
@@ -35,6 +35,16 @@ func TestArchitecture_RetrievalMetricsHasMode(t *testing.T) {
 	// Ensures retrieval metrics report the active retrieval mode.
 	var m RetrievalMetrics
 	_ = m.RetrievalMode // Must compile — proves the field exists.
+}
+
+func TestArchitecture_RetrievalMetricsHasCollapseSignals(t *testing.T) {
+	// Ensures collapse detection fields exist on RetrievalMetrics.
+	var m RetrievalMetrics
+	_ = m.ScoreSpread
+	_ = m.AvgFTSScore
+	_ = m.AvgVectorScore
+	_ = m.CorpusSize
+	_ = m.HybridWeight
 }
 
 func TestArchitecture_ConsolidationReportHasSuperseded(t *testing.T) {

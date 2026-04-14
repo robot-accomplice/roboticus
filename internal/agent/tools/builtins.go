@@ -464,10 +464,13 @@ Allowed Paths: %s`,
 // resolvePath safely resolves a path within the workspace.
 func resolvePath(workspace, path string, allowedPaths []string) (string, error) {
 	if filepath.IsAbs(path) {
-		// Check if absolute path is in allowed paths.
+		cleanPath := filepath.Clean(path)
+		// Check if absolute path is within an allowed path (exact match or proper subtree).
+		// Uses path-separator boundary check to prevent /vault matching /vaultBackup.
 		for _, allowed := range allowedPaths {
-			if strings.HasPrefix(path, allowed) {
-				return path, nil
+			cleanAllowed := filepath.Clean(allowed)
+			if cleanPath == cleanAllowed || strings.HasPrefix(cleanPath, cleanAllowed+string(filepath.Separator)) {
+				return cleanPath, nil
 			}
 		}
 		return "", fmt.Errorf("absolute paths must be in allowed_paths list")
@@ -486,7 +489,7 @@ func resolvePath(workspace, path string, allowedPaths []string) (string, error) 
 		return "", fmt.Errorf("invalid path: %w", err)
 	}
 
-	if !strings.HasPrefix(absResolved, absWorkspace) {
+	if absResolved != absWorkspace && !strings.HasPrefix(absResolved, absWorkspace+string(filepath.Separator)) {
 		return "", fmt.Errorf("path escapes workspace boundary")
 	}
 

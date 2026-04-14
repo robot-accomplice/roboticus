@@ -2,10 +2,7 @@ package memory
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
-	"math"
-	"sort"
 	"strings"
 	"time"
 
@@ -20,6 +17,7 @@ type RetrievalConfig struct {
 	HybridWeight     float64 // FTS vs embedding blend (0=FTS only, 1=embedding only, 0.5=balanced)
 	EpisodicHalfLife float64 // Days for episodic decay (default 7)
 	DecayFloor       float64 // Minimum decay factor (default 0.05)
+	Reranker         RerankerConfig // reranker tuning parameters
 }
 
 // DefaultRetrievalConfig returns sensible defaults.
@@ -28,6 +26,7 @@ func DefaultRetrievalConfig() RetrievalConfig {
 		HybridWeight:     0.5,
 		EpisodicHalfLife: 7.0,
 		DecayFloor:       0.05,
+		Reranker:         DefaultRerankerConfig(),
 	}
 }
 
@@ -37,7 +36,8 @@ type Retriever struct {
 	store         *db.Store
 	budgets       TierBudget
 	embedClient   *llm.EmbeddingClient
-	hnswIndex     *db.HNSWIndex
+	vectorIndex     db.VectorIndex
+	intents       []IntentSignal // set before retrieval if intent classifier available
 	charsPerToken int
 }
 
@@ -56,9 +56,15 @@ func (mr *Retriever) SetEmbeddingClient(ec *llm.EmbeddingClient) {
 	mr.embedClient = ec
 }
 
-// SetHNSWIndex attaches an HNSW index for ANN-based retrieval.
-func (mr *Retriever) SetHNSWIndex(idx *db.HNSWIndex) {
-	mr.hnswIndex = idx
+// SetVectorIndex attaches a vector index for ANN-based retrieval.
+func (mr *Retriever) SetVectorIndex(idx db.VectorIndex) {
+	mr.vectorIndex = idx
+}
+
+// SetIntents provides intent classification results for the current query.
+// Called by the pipeline after Stage 7 (intent classification) before retrieval.
+func (mr *Retriever) SetIntents(intents []IntentSignal) {
+	mr.intents = intents
 }
 
 // MemoryEntry represents a memory result from ANN retrieval.
@@ -69,15 +75,15 @@ type MemoryEntry struct {
 	Similarity     float64 `json:"similarity"`
 }
 
-// RetrieveWithANN uses the HNSW index for O(log n) approximate nearest-neighbor
+// RetrieveWithANN uses the vector index for approximate nearest-neighbor
 // search over memory embeddings. Falls back to empty results if the index is
 // not built or has insufficient entries.
-func (mr *Retriever) RetrieveWithANN(ctx context.Context, embedding []float64, k int) []MemoryEntry {
-	if mr.hnswIndex == nil || !mr.hnswIndex.IsBuilt() || k <= 0 {
+func (mr *Retriever) RetrieveWithANN(ctx context.Context, embedding []float32, k int) []MemoryEntry {
+	if mr.vectorIndex == nil || !mr.vectorIndex.IsBuilt() || k <= 0 {
 		return nil
 	}
 
-	results := mr.hnswIndex.Search(embedding, k)
+	results := mr.vectorIndex.Search(embedding, k)
 	entries := make([]MemoryEntry, len(results))
 	for i, r := range results {
 		entries[i] = MemoryEntry{
@@ -113,6 +119,14 @@ type RetrievalMetrics struct {
 	RelationCount   int     `json:"relation_count"`
 	AmbientCount    int     `json:"ambient_count"`
 	RetrievalMode   string  `json:"retrieval_mode"`
+
+	// Collapse detection signals — these track the health of retrieval precision.
+	// ScoreSpread approaching 0 indicates semantic collapse (all results score alike).
+	ScoreSpread     float64 `json:"score_spread"`      // top-1 minus top-k score delta
+	AvgFTSScore     float64 `json:"avg_fts_score"`     // mean FTS leg score across results
+	AvgVectorScore  float64 `json:"avg_vector_score"`  // mean vector leg score across results
+	CorpusSize      int     `json:"corpus_size"`        // memory_index entries at query time
+	HybridWeight    float64 `json:"hybrid_weight"`      // effective weight used (adaptive)
 }
 
 // historyKeywords trigger inclusion of inactive/stale memories when present in query.
@@ -209,105 +223,100 @@ func (mr *Retriever) RetrieveWithMetrics(ctx context.Context, sessionID, query s
 		}
 	}
 
-	var sections []string
-	totalCharsUsed := 0
 	totalCharsAllowed := totalTokens * mr.charsPerToken
 
-	// Working memory (filter out turn_summary entries — Rust parity).
+	// ── Working state (direct injection, NOT searched) ──────────────
+	// Working memory is active state, not a retrieval tier.
+	var workingText, ambientText string
 	if budget := int(float64(totalTokens) * mr.budgets.Working); budget > 0 {
-		working := mr.retrieveWorkingMemory(ctx, sessionID, budget)
-		if working != "" {
-			sections = append(sections, "[Working Memory]\n"+working)
-			totalCharsUsed += len(working)
-			metrics.WorkingCount = strings.Count(working, "\n- ") + 1
+		workingText = mr.retrieveWorkingMemory(ctx, sessionID, budget)
+		if workingText != "" {
+			metrics.WorkingCount = strings.Count(workingText, "\n- ") + 1
+		}
+	}
+	ambientText = mr.retrieveAmbientRecent(ctx, 2)
+	if ambientText != "" {
+		metrics.AmbientCount = strings.Count(ambientText, "\n- ") + 1
+	}
+
+	// ── Agentic retrieval pipeline ──────────────────────────────────
+	// 1. Decompose compound queries into subgoals.
+	subgoals := Decompose(query)
+
+	// 2. Route each subgoal to the appropriate memory tiers.
+	router := NewRouter(corpusSize)
+	var allEvidence []Evidence
+
+	for _, sg := range subgoals {
+		plan := router.Plan(sg.Question, mr.intents)
+
+		// 3. Retrieve from each targeted tier.
+		for _, target := range plan.Targets {
+			tierBudget := int(float64(totalTokens) * target.Budget)
+			if tierBudget <= 0 {
+				continue
+			}
+			tierResults := mr.retrieveTier(ctx, target.Tier, sg.Question, queryEmbed, tierBudget/mr.charsPerToken, corpusSize)
+			for i, content := range tierResults {
+				// Extract sim score from episodic format "(sim=0.85) content..."
+				score := target.Weight
+				if strings.HasPrefix(content, "(sim=") {
+					if end := strings.Index(content, ") "); end > 5 {
+						var parsed float64
+						if _, err := fmt.Sscanf(content[5:end], "%f", &parsed); err == nil {
+							score = parsed
+							content = content[end+2:] // strip sim prefix from display
+						}
+					}
+				}
+				// Position decay as tiebreaker for entries without sim scores.
+				positionDecay := 1.0 - (float64(i) * 0.02)
+				if positionDecay < 0.1 {
+					positionDecay = 0.1
+				}
+				allEvidence = append(allEvidence, Evidence{
+					Content:    content,
+					SourceTier: target.Tier,
+					Score:      score * positionDecay,
+				})
+			}
 		}
 	}
 
-	// Ambient recency: inject recent episodic memories (last 2 hours)
-	// regardless of query match (Rust parity: recent ambient context).
-	ambient := mr.retrieveAmbientRecent(ctx, 2)
-	if ambient != "" {
-		sections = append(sections, "[Recent Activity]\n"+ambient)
-		totalCharsUsed += len(ambient)
-		metrics.AmbientCount = strings.Count(ambient, "\n- ") + 1
+	// 4. Rerank: discard weak evidence, boost authority, penalize stale.
+	reranker := NewReranker(mr.config.Reranker)
+	maxEvidence := totalCharsAllowed / (mr.charsPerToken * 50) // rough estimate: ~50 tokens per evidence item
+	if maxEvidence < 5 {
+		maxEvidence = 5
 	}
+	filtered := reranker.Filter(allEvidence, maxEvidence)
 
-	// Adaptive budget retrieval: each tier gets its initial allocation.
-	// Unused budget from one tier flows proportionally to subsequent tiers.
-	surplusChars := 0
+	// 5. Structured context assembly: evidence + gaps + contradictions.
+	assembled := AssembleContext(ctx, mr.store, sessionID, filtered, workingText, ambientText)
 
-	// Episodic memory (with temporal decay + optional embedding re-rank).
-	episodicBudget := int(float64(totalTokens)*mr.budgets.Episodic) + surplusChars
-	if episodicBudget > 0 {
-		episodic := mr.retrieveEpisodic(ctx, query, queryEmbed, episodicBudget/mr.charsPerToken)
-		charsUsed := len(episodic)
-		surplusChars = (episodicBudget - charsUsed)
-		if surplusChars < 0 {
-			surplusChars = 0
-		}
-		if episodic != "" {
-			sections = append(sections, "[Relevant Memories]\n"+episodic)
-			totalCharsUsed += charsUsed
-			metrics.EpisodicCount = strings.Count(episodic, "\n- ") + 1
-		}
-	}
-
-	// Semantic memory.
-	semanticBudget := int(float64(totalTokens)*mr.budgets.Semantic) + surplusChars
-	if semanticBudget > 0 {
-		semantic := mr.retrieveSemanticMemory(ctx, query, semanticBudget/mr.charsPerToken)
-		charsUsed := len(semantic)
-		surplusChars = (semanticBudget - charsUsed)
-		if surplusChars < 0 {
-			surplusChars = 0
-		}
-		if semantic != "" {
-			sections = append(sections, "[Knowledge]\n"+semantic)
-			totalCharsUsed += charsUsed
-			metrics.SemanticCount = strings.Count(semantic, "\n- ") + 1
-		}
-	}
-
-	// Procedural memory (tool stats).
-	proceduralBudget := int(float64(totalTokens)*mr.budgets.Procedural) + surplusChars
-	if proceduralBudget > 0 {
-		procedural := mr.retrieveProceduralMemory(ctx, proceduralBudget/mr.charsPerToken)
-		charsUsed := len(procedural)
-		surplusChars = (proceduralBudget - charsUsed)
-		if surplusChars < 0 {
-			surplusChars = 0
-		}
-		if procedural != "" {
-			sections = append(sections, "[Tool Experience]\n"+procedural)
-			totalCharsUsed += charsUsed
-			metrics.ProceduralCount = strings.Count(procedural, "\n- ") + 1
-		}
-	}
-
-	// Relationship memory.
-	relationBudget := int(float64(totalTokens)*mr.budgets.Relationship) + surplusChars
-	if relationBudget > 0 {
-		relationships := mr.retrieveRelationshipMemory(ctx, relationBudget/mr.charsPerToken)
-		charsUsed := len(relationships)
-		if relationships != "" {
-			sections = append(sections, "[Relationships]\n"+relationships)
-			totalCharsUsed += charsUsed
-			metrics.RelationCount = strings.Count(relationships, "\n- ") + 1
-		}
-	}
-
+	// ── Metrics ─────────────────────────────────────────────────────
+	metrics.EpisodicCount = countByTier(filtered, TierEpisodic)
+	metrics.SemanticCount = countByTier(filtered, TierSemantic)
+	metrics.ProceduralCount = countByTier(filtered, TierProcedural)
+	metrics.RelationCount = countByTier(filtered, TierRelationship)
 	metrics.TotalEntries = metrics.WorkingCount + metrics.AmbientCount +
 		metrics.EpisodicCount + metrics.SemanticCount +
 		metrics.ProceduralCount + metrics.RelationCount
 	metrics.MatchedEntries = metrics.TotalEntries
+
+	result := assembled.Format()
 	if totalCharsAllowed > 0 {
-		metrics.BudgetUsedPct = float64(totalCharsUsed) / float64(totalCharsAllowed)
+		metrics.BudgetUsedPct = float64(len(result)) / float64(totalCharsAllowed)
 	}
 
-	if len(sections) == 0 {
-		return "", metrics
+	// Collapse detection.
+	metrics.CorpusSize = corpusSize
+	metrics.HybridWeight = AdaptiveHybridWeight(corpusSize)
+	if len(filtered) >= 2 {
+		metrics.ScoreSpread = filtered[0].Score - filtered[len(filtered)-1].Score
 	}
-	return "[Active Memory]\n" + strings.Join(sections, "\n\n"), metrics
+
+	return result, metrics
 }
 
 // retrieveAmbientRecent fetches episodic memories from the last N hours,
@@ -390,256 +399,44 @@ func (mr *Retriever) retrieveWorkingMemory(ctx context.Context, sessionID string
 	return b.String()
 }
 
-// retrieveEpisodic fetches from episodic_memory using a union strategy:
-// 1. FTS5-matched results (query-relevant, any age)
-// 2. Recency results (recent, any content)
-// Deduplicated and re-ranked with hybrid scoring (temporal decay + embedding similarity).
-func (mr *Retriever) retrieveEpisodic(ctx context.Context, query string, queryEmbed []float32, budgetTokens int) string {
-	maxChars := budgetTokens * mr.charsPerToken
-
-	type candidate struct {
-		id      string
-		content string
-		ageDays float64
-		ftsHit  bool // true if this came from FTS match
+// retrieveTier dispatches a query to a specific memory tier and returns content strings.
+func (mr *Retriever) retrieveTier(ctx context.Context, tier MemoryTier, query string, queryEmbed []float32, budgetTokens int, corpusSize int) []string {
+	var raw string
+	switch tier {
+	case TierEpisodic:
+		raw = mr.retrieveEpisodic(ctx, query, queryEmbed, budgetTokens, corpusSize)
+	case TierSemantic:
+		raw = mr.retrieveSemanticMemory(ctx, query, budgetTokens)
+	case TierProcedural:
+		raw = mr.retrieveProceduralMemory(ctx, budgetTokens)
+	case TierRelationship:
+		raw = mr.retrieveRelationshipMemory(ctx, budgetTokens)
+	default:
+		return nil
 	}
-	seen := make(map[string]struct{})
-	var candidates []candidate
-
-	// Leg 1: FTS5 match — query-relevant memories regardless of age.
-	if query != "" {
-		ftsQuery := db.SanitizeFTSQuery(query)
-		if ftsQuery != "" {
-			rows, err := mr.store.QueryContext(ctx,
-				`SELECT em.id, em.content, julianday('now') - julianday(em.created_at) as age_days
-				 FROM memory_fts fts
-				 JOIN episodic_memory em ON em.id = fts.source_id
-				 WHERE fts.source_table = 'episodic_memory'
-				   AND memory_fts MATCH ?
-				   AND em.memory_state = 'active'
-				 LIMIT 20`, ftsQuery)
-			if err != nil {
-				log.Debug().Err(err).Str("fts_query", ftsQuery).Msg("episodic FTS match failed, continuing with recency")
-			} else {
-				for rows.Next() {
-					var c candidate
-					if rows.Scan(&c.id, &c.content, &c.ageDays) != nil {
-						continue
-					}
-					c.ftsHit = true
-					seen[c.id] = struct{}{}
-					candidates = append(candidates, c)
-				}
-				_ = rows.Close()
-			}
+	if raw == "" {
+		return nil
+	}
+	// Split tier output into individual entries.
+	var entries []string
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" && strings.HasPrefix(line, "- ") {
+			entries = append(entries, strings.TrimPrefix(line, "- "))
 		}
 	}
-
-	// Leg 2: Recency — recent memories regardless of query match.
-	{
-		rows, err := mr.store.QueryContext(ctx,
-			`SELECT id, content, julianday('now') - julianday(created_at) as age_days
-			 FROM episodic_memory WHERE memory_state = 'active'
-			 ORDER BY created_at DESC LIMIT 20`)
-		if err == nil {
-			for rows.Next() {
-				var c candidate
-				if rows.Scan(&c.id, &c.content, &c.ageDays) != nil {
-					continue
-				}
-				if _, dup := seen[c.id]; dup {
-					continue // Already in FTS results.
-				}
-				seen[c.id] = struct{}{}
-				candidates = append(candidates, c)
-			}
-			_ = rows.Close()
-		}
-	}
-
-	if len(candidates) == 0 {
-		return ""
-	}
-
-	// Pre-load stored embeddings for all candidates in a single query.
-	// This replaces the N+1 pattern of calling EmbedSingle per candidate.
-	storedEmbeds := make(map[string][]float32)
-	if queryEmbed != nil && mr.store != nil {
-		ids := make([]string, len(candidates))
-		for i, c := range candidates {
-			ids[i] = c.id
-		}
-		storedEmbeds = mr.loadStoredEmbeddings(ctx, "episodic_memory", ids)
-	}
-
-	// Score and rank: blend temporal decay, FTS relevance, and embedding similarity.
-	type scored struct {
-		content string
-		score   float64
-	}
-	entries := make([]scored, 0, len(candidates))
-	for _, c := range candidates {
-		score := scoreEpisodicCandidate(c.ageDays, c.ftsHit, mr.config)
-
-		// Blend with precomputed embedding similarity (no API calls).
-		if queryEmbed != nil {
-			if textEmbed, ok := storedEmbeds[c.id]; ok {
-				sim := llm.CosineSimilarity(queryEmbed, textEmbed)
-				score = (1-mr.config.HybridWeight)*score + mr.config.HybridWeight*sim
-			}
-		}
-
-		entries = append(entries, scored{content: c.content, score: score})
-	}
-
-	// Sort by score descending.
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].score > entries[j].score
-	})
-
-	var b strings.Builder
-	used := 0
-	for _, e := range entries {
-		if used+len(e.content) > maxChars {
-			break
-		}
-		fmt.Fprintf(&b, "- (sim=%.2f) %s\n", e.score, e.content)
-		used += len(e.content)
-	}
-	return b.String()
+	return entries
 }
 
-// scoreEpisodicCandidate computes a base relevance score for an episodic memory.
-// FTS hits get a relevance boost that resists temporal decay, ensuring old but
-// query-matched memories can outrank recent but irrelevant ones.
-//
-// TODO(owner): This is the scoring blend — the key design knob. Current approach:
-//   - Decay:    0.5^(age/halfLife), floored at DecayFloor
-//   - FTS boost: 0.4 additive for text-matched results
-//   - The boost means a 6-month-old FTS hit scores ~0.45 vs a 1-day-old
-//     non-match at ~0.91. With embedding similarity blended in, the FTS hit
-//     can win when semantically relevant.
-func scoreEpisodicCandidate(ageDays float64, ftsHit bool, cfg RetrievalConfig) float64 {
-	decay := math.Pow(0.5, ageDays/cfg.EpisodicHalfLife)
-	if decay < cfg.DecayFloor {
-		decay = cfg.DecayFloor
-	}
-	if ftsHit {
-		// FTS relevance boost — resists decay so old memories surface when queried.
-		decay += 0.4
-		if decay > 1.0 {
-			decay = 1.0
+// countByTier counts evidence entries from a specific tier.
+func countByTier(evidence []Evidence, tier MemoryTier) int {
+	n := 0
+	for _, e := range evidence {
+		if e.SourceTier == tier {
+			n++
 		}
 	}
-	return decay
-}
-
-// retrieveSemanticMemory fetches from the semantic_memory table.
-func (mr *Retriever) retrieveSemanticMemory(ctx context.Context, query string, budgetTokens int) string {
-	maxChars := budgetTokens * mr.charsPerToken
-
-	var rows *sql.Rows
-	var err error
-	if query != "" {
-		rows, err = mr.store.QueryContext(ctx,
-			`SELECT category, key, value FROM semantic_memory
-			 WHERE memory_state = 'active' AND (value LIKE ? OR key LIKE ?)
-			 ORDER BY confidence DESC, updated_at DESC LIMIT 20`,
-			"%"+query+"%", "%"+query+"%")
-	}
-	if err != nil || rows == nil {
-		rows, err = mr.store.QueryContext(ctx,
-			`SELECT category, key, value FROM semantic_memory
-			 WHERE memory_state = 'active'
-			 ORDER BY confidence DESC, updated_at DESC LIMIT 20`)
-	}
-	if err != nil {
-		return ""
-	}
-	defer func() { _ = rows.Close() }()
-
-	var b strings.Builder
-	used := 0
-	for rows.Next() {
-		var category, key, value string
-		if rows.Scan(&category, &key, &value) != nil {
-			continue
-		}
-		line := fmt.Sprintf("[%s] %s: %s", category, key, value)
-		if used+len(line) > maxChars {
-			break
-		}
-		b.WriteString("- ")
-		b.WriteString(line)
-		b.WriteString("\n")
-		used += len(line)
-	}
-	return b.String()
-}
-
-// retrieveProceduralMemory formats tool success/failure statistics from procedural_memory.
-func (mr *Retriever) retrieveProceduralMemory(ctx context.Context, budgetTokens int) string {
-	rows, err := mr.store.QueryContext(ctx,
-		`SELECT name, success_count, failure_count FROM procedural_memory
-		 ORDER BY (success_count + failure_count) DESC LIMIT 20`)
-	if err != nil {
-		return ""
-	}
-	defer func() { _ = rows.Close() }()
-
-	var b strings.Builder
-	for rows.Next() {
-		var name string
-		var successCount, failureCount int
-		if rows.Scan(&name, &successCount, &failureCount) != nil {
-			continue
-		}
-		total := successCount + failureCount
-		if total == 0 {
-			continue
-		}
-		pct := float64(successCount) / float64(total) * 100
-		fmt.Fprintf(&b, "- %s: %d/%d (%.0f%% success)\n", name, successCount, total, pct)
-	}
-	return b.String()
-}
-
-// retrieveRelationshipMemory formats relationship data.
-func (mr *Retriever) retrieveRelationshipMemory(ctx context.Context, budgetTokens int) string {
-	maxChars := budgetTokens * mr.charsPerToken
-
-	rows, err := mr.store.QueryContext(ctx,
-		`SELECT entity_name, trust_score, interaction_count, last_interaction
-		 FROM relationship_memory
-		 ORDER BY interaction_count DESC LIMIT 20`)
-	if err != nil {
-		return ""
-	}
-	defer func() { _ = rows.Close() }()
-
-	var b strings.Builder
-	used := 0
-	for rows.Next() {
-		var entityName string
-		var trustScore float64
-		var interactionCount int
-		var lastInteraction *string
-		if rows.Scan(&entityName, &trustScore, &interactionCount, &lastInteraction) != nil {
-			continue
-		}
-		line := fmt.Sprintf("%s: trust=%.1f, interactions=%d", entityName, trustScore, interactionCount)
-		if lastInteraction != nil {
-			line += ", last=" + *lastInteraction
-		}
-		if used+len(line) > maxChars {
-			break
-		}
-		b.WriteString("- ")
-		b.WriteString(line)
-		b.WriteString("\n")
-		used += len(line)
-	}
-	return b.String()
+	return n
 }
 
 // estimateCorpusSize returns the approximate number of memory entries across tiers.
@@ -651,49 +448,4 @@ func (mr *Retriever) estimateCorpusSize(ctx context.Context) int {
 	_ = mr.store.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM memory_index WHERE confidence > 0.1`).Scan(&count)
 	return count
-}
-
-// loadStoredEmbeddings bulk-loads precomputed embeddings from the embeddings table
-// for the given source IDs. Returns a map of sourceID → embedding vector.
-// This replaces the N+1 pattern of calling EmbedSingle per candidate at retrieval time.
-func (mr *Retriever) loadStoredEmbeddings(ctx context.Context, sourceTable string, ids []string) map[string][]float32 {
-	result := make(map[string][]float32, len(ids))
-	if len(ids) == 0 || mr.store == nil {
-		return result
-	}
-
-	// Build parameterized IN clause.
-	placeholders := make([]string, len(ids))
-	args := make([]any, 0, len(ids)+1)
-	args = append(args, sourceTable)
-	for i, id := range ids {
-		placeholders[i] = "?"
-		args = append(args, id)
-	}
-
-	query := fmt.Sprintf(
-		`SELECT source_id, embedding_blob FROM embeddings
-		 WHERE source_table = ? AND source_id IN (%s)
-		 AND embedding_blob IS NOT NULL`,
-		strings.Join(placeholders, ","))
-
-	rows, err := mr.store.QueryContext(ctx, query, args...)
-	if err != nil {
-		log.Debug().Err(err).Msg("loadStoredEmbeddings: query failed")
-		return result
-	}
-	defer func() { _ = rows.Close() }()
-
-	for rows.Next() {
-		var sourceID string
-		var blob []byte
-		if rows.Scan(&sourceID, &blob) != nil {
-			continue
-		}
-		vec := db.BlobToEmbedding(blob)
-		if len(vec) > 0 {
-			result[sourceID] = vec
-		}
-	}
-	return result
 }

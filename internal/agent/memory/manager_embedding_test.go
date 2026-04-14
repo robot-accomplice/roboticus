@@ -132,19 +132,19 @@ func TestEmbedAndStore_BlobRoundTrip(t *testing.T) {
 	}
 }
 
-func TestEmbedAndStore_IncrementalHNSW(t *testing.T) {
+func TestEmbedAndStore_IncrementalVectorIndex(t *testing.T) {
 	store := testutil.TempStore(t)
 	mgr := NewManager(DefaultConfig(), store)
 	mgr.SetEmbeddingClient(ngramEmbedClient())
 
-	idx := db.NewHNSWIndex(db.HNSWConfig{MinEntries: 1})
-	mgr.SetHNSWIndex(idx)
+	idx := db.NewBruteForceIndex(db.VectorIndexConfig{MinEntries: 1})
+	mgr.SetVectorIndex(idx)
 	ctx := context.Background()
 
-	mgr.embedAndStore(ctx, "episodic_memory", "test-hnsw-1", "test content for HNSW indexing")
+	mgr.embedAndStore(ctx, "episodic_memory", "test-vec-1", "test content for vector indexing")
 
 	if idx.EntryCount() != 1 {
-		t.Errorf("expected 1 HNSW entry, got %d", idx.EntryCount())
+		t.Errorf("expected 1 vector index entry, got %d", idx.EntryCount())
 	}
 }
 
@@ -183,7 +183,7 @@ func TestRetrieveEpisodic_UsesPrecomputedEmbeddings(t *testing.T) {
 
 	// Retrieve with a semantically related query.
 	queryVec, _ := ec.EmbedSingle(ctx, "production deployment error")
-	result := retriever.retrieveEpisodic(ctx, "production deployment error", queryVec, 500)
+	result := retriever.retrieveEpisodic(ctx, "production deployment error", queryVec, 500, 0)
 
 	if result == "" {
 		t.Error("expected non-empty episodic retrieval result")

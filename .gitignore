@@ -66,3 +66,6 @@ latest_health_summary.json
 monitor.py
 test_parse.py
 HEALTH_CHECK_README.md
+
+# Private roadmap (not for public repo)
+.roadmap.priv

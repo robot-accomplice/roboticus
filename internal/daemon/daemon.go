@@ -40,6 +40,7 @@ type Daemon struct {
 	bgWorker    *core.BackgroundWorker
 	errBus      *core.ErrorBus
 	embedClient *llm.EmbeddingClient
+	memMgr      *memory.Manager
 
 	startupStart time.Time
 	errBusCancel context.CancelFunc
@@ -228,6 +229,8 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 	policyCfg := policy.DefaultConfig()
 	policyCfg.MaxTransferCents = int64(cfg.Treasury.PerPaymentCap * 100)
 	policyCfg.RateLimitPerMinute = 30
+	policyCfg.WorkspaceOnly = cfg.Security.IsWorkspaceConfined()
+	policyCfg.AllowedPaths = cfg.Security.AllowedPaths
 	policyEngine := policy.NewEngine(policyCfg)
 	memMgr := memory.NewManager(memory.Config{
 		TotalTokenBudget: 2048,
@@ -468,11 +471,13 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 			promptConfig: basePromptCfg,
 			budgetCfg:    &cfg.ContextBudget,
 		},
-		Guards:     guards,
-		BGWorker:   bgWorker,
-		Embeddings: embedClient,
-		ErrBus:     errBus,
-		Dashboard:  eventBus,
+		Guards:       guards,
+		BGWorker:     bgWorker,
+		Embeddings:   embedClient,
+		ErrBus:       errBus,
+		Dashboard:    eventBus,
+		Workspace:    cfg.Agent.Workspace,
+		AllowedPaths: cfg.Security.AllowedPaths,
 	})
 
 	bootStep(10, steps, "Pipeline assembled")
@@ -522,6 +527,17 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 	bootStep(11, steps, "Hippocampus, approvals, events ready")
 	log.Info().Msg("[startup 11/12] hippocampus, approvals, events ready")
 
+	// ── Phase 11.5: Working Memory Vet ────────────────────────────────
+	// Vet persisted working memory — discard stale/low-value entries,
+	// retain goals and active decisions. Like waking up after sleep.
+	vetCtx, vetCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	vetResult := memMgr.VetWorkingMemory(vetCtx, memory.DefaultVetConfig())
+	vetCancel()
+	if vetResult.Retained > 0 || vetResult.Discarded > 0 {
+		log.Info().Int("retained", vetResult.Retained).Int("discarded", vetResult.Discarded).
+			Msg("working memory vetted on startup")
+	}
+
 	// ── Phase 12: Complete ──────────────────────────────────────────────
 	log.Info().Int64("startup_ms", time.Since(startupStart).Milliseconds()).Msg("[startup 12/12] daemon initialization complete")
 
@@ -536,6 +552,7 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 		bgWorker:     bgWorker,
 		errBus:       errBus,
 		embedClient:  embedClient,
+		memMgr:       memMgr,
 		startupStart: startupStart,
 		errBusCancel: errBusCancel,
 	}, nil
@@ -558,6 +575,15 @@ func (d *Daemon) Start(s service.Service) error {
 // Stop implements service.Interface. Called by the OS service manager on shutdown.
 func (d *Daemon) Stop(s service.Service) error {
 	log.Info().Msg("roboticus stopping")
+
+	// Persist working memory before shutdown — like going to sleep.
+	// Must happen before context cancellation.
+	if d.memMgr != nil {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		d.memMgr.PersistWorkingMemory(shutdownCtx)
+		cancel()
+	}
+
 	if d.cancel != nil {
 		d.cancel()
 	}
