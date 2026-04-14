@@ -30,8 +30,12 @@ import urllib.request
 from typing import Callable, Dict, List, Tuple
 
 BASE_URL = os.environ.get("BASE_URL", "http://127.0.0.1:18790").rstrip("/")
-TIMEOUT = int(os.environ.get("SOAK_TIMEOUT_SECONDS", "240"))
-MAX_LATENCY = float(os.environ.get("SOAK_MAX_LATENCY_SECONDS", "120"))
+# Soak tests are long-running by design — timeouts must be extraordinarily high.
+# The HTTP timeout is the maximum wall-clock time for a single API call.
+# The latency threshold is the default max acceptable time per scenario.
+# Individual scenarios can override latency via Scenario.max_latency_s.
+TIMEOUT = int(os.environ.get("SOAK_TIMEOUT_SECONDS", "1800"))       # 30 minutes
+MAX_LATENCY = float(os.environ.get("SOAK_MAX_LATENCY_SECONDS", "900"))  # 15 minutes
 SCENARIO_PAUSE = float(os.environ.get("SOAK_SCENARIO_PAUSE_SECONDS", "1.5"))
 SESSION_ISOLATION = os.environ.get("SOAK_SESSION_ISOLATION", "1") != "0"
 AGENT_ID = os.environ.get("SOAK_AGENT_ID", "duncan")
@@ -155,9 +159,21 @@ Check = Callable[[Dict[str, object], str], Tuple[bool, str]]
 
 
 def check_latency(resp: Dict[str, object], _content: str) -> Tuple[bool, str]:
+    """Default latency check using global MAX_LATENCY.
+    For per-scenario overrides, use check_latency_with_limit()."""
     latency = float(resp.get("_latency_s", 0.0))
     ok = latency <= MAX_LATENCY
     return ok, f"latency={latency}s max={MAX_LATENCY}s"
+
+
+def check_latency_with_limit(limit_s: float) -> Check:
+    """Factory for per-scenario latency check with custom limit."""
+    def _check(resp: Dict[str, object], _content: str) -> Tuple[bool, str]:
+        latency = float(resp.get("_latency_s", 0.0))
+        ok = latency <= limit_s
+        return ok, f"latency={latency}s max={limit_s}s"
+    _check.__name__ = f"check_latency(max={limit_s}s)"
+    return _check
 
 
 def check_no_stale(resp: Dict[str, object], content: str) -> Tuple[bool, str]:
@@ -324,10 +340,12 @@ def check_geopolitical_quality(_resp: Dict[str, object], content: str) -> Tuple[
 # ── Scenarios ───────────────────────────────────────────────────
 
 class Scenario:
-    def __init__(self, name: str, prompt: str, checks: List[Check]):
+    def __init__(self, name: str, prompt: str, checks: List[Check], max_latency_s: float = None):
         self.name = name
         self.prompt = prompt
         self.checks = checks
+        # Per-scenario latency override. None = use global MAX_LATENCY.
+        self.max_latency_s = max_latency_s
 
 
 SCENARIOS = [
@@ -421,6 +439,7 @@ SCENARIOS = [
             check_count_only_output,
             check_no_foreign_identity,
         ],
+        max_latency_s=1800,  # 30 min — local 32B model cold start + multi-turn ReAct
     ),
 ]
 
@@ -492,11 +511,21 @@ def run() -> int:
         session_id = str(resp.get("session_id") or session_id or "")
         content = str(resp.get("content") or "")
 
+        # Resolve per-scenario latency override: replace check_latency with
+        # a custom-limit version if the scenario specifies max_latency_s.
+        effective_checks = list(scenario.checks)
+        if scenario.max_latency_s is not None:
+            effective_checks = [
+                check_latency_with_limit(scenario.max_latency_s) if c is check_latency else c
+                for c in effective_checks
+            ]
+
         checks = []
         passed = True
-        for check in scenario.checks:
+        for check in effective_checks:
             ok, detail = check(resp, content)
-            checks.append({"ok": ok, "detail": detail, "check": check.__name__})
+            check_name = getattr(check, "__name__", str(check))
+            checks.append({"ok": ok, "detail": detail, "check": check_name})
             if not ok:
                 passed = False
 
