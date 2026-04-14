@@ -34,8 +34,8 @@ var securityShowCmd = &cobra.Command{
 		}
 
 		fmt.Println("Security Configuration:")
-		fmt.Printf("  Workspace Only:        %v\n", cfg.Security.WorkspaceOnly)
-		fmt.Printf("  Deny on Empty Allowlist: %v\n", cfg.Security.DenyOnEmptyAllowlist)
+		fmt.Printf("  Workspace Only:        %v\n", cfg.Security.IsWorkspaceConfined())
+		fmt.Printf("  Deny on Empty Allowlist: %v\n", cfg.Security.Filesystem.DenyOnEmptyAllowlist)
 
 		if len(cfg.Security.AllowedPaths) > 0 {
 			fmt.Printf("  Allowed Paths:         %d entries\n", len(cfg.Security.AllowedPaths))

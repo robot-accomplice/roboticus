@@ -104,7 +104,7 @@ func (d *Daemon) isSenderAllowed(platform, senderID, chatID string) bool {
 	// If the message reached the daemon, the adapter already accepted it.
 	// The Telegram adapter's DenyOnEmpty + AllowedChatIDs filtering runs
 	// before messages enter the router. Trust that verdict.
-	if d.cfg.Security.DenyOnEmptyAllowlist {
+	if d.cfg.Security.Filesystem.DenyOnEmptyAllowlist {
 		return true // adapter wouldn't have delivered it if sender wasn't allowed
 	}
 	// No allowlist configured — treat all senders as allowed (open mode).

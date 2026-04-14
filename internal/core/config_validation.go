@@ -74,8 +74,8 @@ func (c *Config) Validate() error {
 	}
 
 	// Security.
-	if !c.Security.DenyOnEmptyAllowlist {
-		return fmt.Errorf("%w: security.deny_on_empty_allowlist=false is not allowed (removed feature)", ErrConfig)
+	if !c.Security.Filesystem.DenyOnEmptyAllowlist {
+		return fmt.Errorf("%w: security.filesystem.deny_on_empty_allowlist=false is not allowed (fail-open)", ErrConfig)
 	}
 	for _, p := range c.Security.ScriptAllowedPaths {
 		if !filepath.IsAbs(p) {

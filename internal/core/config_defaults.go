@@ -107,11 +107,13 @@ func DefaultConfig() Config {
 			CatalogURL:        "https://roboticus.ai/registry/plugins.json",
 		},
 		Security: SecurityConfig{
-			WorkspaceOnly:        true,
-			DenyOnEmptyAllowlist: true,
 			AllowlistAuthority:   "Peer",
 			TrustedAuthority:     "Creator",
 			APIAuthority:         "Creator",
+			Filesystem: FilesystemSecurityConfig{
+				WorkspaceOnly:        true,
+				DenyOnEmptyAllowlist: true,
+			},
 		},
 		Skills: SkillsConfig{
 			WatchMode:            true,

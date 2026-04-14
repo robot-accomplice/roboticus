@@ -355,7 +355,7 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 			Token:          telegramToken,
 			PollTimeout:    pollTimeout,
 			AllowedChatIDs: allowedChatIDs,
-			DenyOnEmpty:    cfg.Security.DenyOnEmptyAllowlist,
+			DenyOnEmpty:    cfg.Security.Filesystem.DenyOnEmptyAllowlist,
 		}
 		tgAdapter := channel.NewTelegramAdapter(tgCfg)
 		// Clear any stale webhook so getUpdates polling works.
