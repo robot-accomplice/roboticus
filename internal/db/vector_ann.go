@@ -121,7 +121,7 @@ func (h *HNSWGraph) insertUnlocked(entry VectorEntry) {
 		if lc == 0 {
 			maxConn = h.mMax0
 		}
-		neighbors := h.selectNeighborsSimple(candidates, maxConn)
+		neighbors := h.selectNeighborsHeuristic(candidates, maxConn)
 
 		// Connect the new node to its neighbors.
 		h.nodes[nodeIdx].neighbors[lc] = neighbors
@@ -232,20 +232,56 @@ func (h *HNSWGraph) searchLayer(query []float32, entryIdx int, ef int, layer int
 	return results
 }
 
-// selectNeighborsSimple picks the closest maxConn candidates (simple heuristic).
-func (h *HNSWGraph) selectNeighborsSimple(candidates []candidateItem, maxConn int) []int {
+// selectNeighborsHeuristic implements the diversity-promoting neighbor selection
+// from Algorithm 4 of Malkov & Yashunin (2018). A candidate is selected only
+// if it is closer to the target than to any already-selected neighbor. This
+// prevents the graph from degenerating into disconnected clusters in high
+// dimensions — the key failure mode of the "simple" (closest-M) heuristic.
+func (h *HNSWGraph) selectNeighborsHeuristic(candidates []candidateItem, maxConn int) []int {
 	sort.Slice(candidates, func(i, j int) bool {
 		return candidates[i].dist < candidates[j].dist
 	})
-	n := maxConn
-	if n > len(candidates) {
-		n = len(candidates)
+
+	var selected []int
+	for _, c := range candidates {
+		if len(selected) >= maxConn {
+			break
+		}
+		// Check if c is closer to the target than to any already-selected neighbor.
+		good := true
+		for _, sIdx := range selected {
+			interDist := 1.0 - CosineSimilarityF32(
+				h.nodes[c.idx].entry.Embedding,
+				h.nodes[sIdx].entry.Embedding,
+			)
+			if interDist < c.dist {
+				good = false
+				break
+			}
+		}
+		if good {
+			selected = append(selected, c.idx)
+		}
 	}
-	result := make([]int, n)
-	for i := 0; i < n; i++ {
-		result[i] = candidates[i].idx
+
+	// If the heuristic is too aggressive (selected fewer than maxConn),
+	// fill remaining slots with the closest unselected candidates.
+	if len(selected) < maxConn {
+		selectedSet := make(map[int]bool, len(selected))
+		for _, idx := range selected {
+			selectedSet[idx] = true
+		}
+		for _, c := range candidates {
+			if len(selected) >= maxConn {
+				break
+			}
+			if !selectedSet[c.idx] {
+				selected = append(selected, c.idx)
+			}
+		}
 	}
-	return result
+
+	return selected
 }
 
 // pruneNeighbors reduces a node's neighbor list to maxConn by keeping the closest.
