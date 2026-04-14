@@ -86,23 +86,25 @@ var _ Runner = (*Pipeline)(nil)
 // Pipeline is the unified factory. Connectors call Run() with a Config preset
 // and an Input — the pipeline handles everything else.
 type Pipeline struct {
-	store      *db.Store
-	llmSvc     *llm.Service
-	injection  InjectionChecker
-	retriever  MemoryRetriever
-	skills     SkillMatcher
-	executor   ToolExecutor
-	ingestor   Ingestor
-	refiner    NicknameRefiner
-	streamer   StreamPreparer
-	guards     *GuardChain
-	bgWorker   *core.BackgroundWorker
-	dedup      *DedupTracker
-	tasks      *TaskTracker
-	botCmds    *BotCommandHandler
-	embeddings *llm.EmbeddingClient
-	errBus     *core.ErrorBus
-	dashboard  DashboardNotifier
+	store        *db.Store
+	llmSvc       *llm.Service
+	injection    InjectionChecker
+	retriever    MemoryRetriever
+	skills       SkillMatcher
+	executor     ToolExecutor
+	ingestor     Ingestor
+	refiner      NicknameRefiner
+	streamer     StreamPreparer
+	guards       *GuardChain
+	bgWorker     *core.BackgroundWorker
+	dedup        *DedupTracker
+	tasks        *TaskTracker
+	botCmds      *BotCommandHandler
+	embeddings   *llm.EmbeddingClient
+	errBus       *core.ErrorBus
+	dashboard    DashboardNotifier
+	workspace    string   // agent workspace root — propagated to sessions for tool sandbox
+	allowedPaths []string // extra paths outside workspace that tools may access
 }
 
 // PipelineDeps bundles dependencies for the Pipeline.
@@ -121,6 +123,10 @@ type PipelineDeps struct {
 	Embeddings *llm.EmbeddingClient
 	ErrBus     *core.ErrorBus
 	Dashboard  DashboardNotifier
+
+	// Sandbox: workspace root and extra allowed paths propagated to every session.
+	Workspace    string
+	AllowedPaths []string
 }
 
 // New creates the unified pipeline.
@@ -143,10 +149,12 @@ func New(deps PipelineDeps) *Pipeline {
 		bgWorker:   bgw,
 		dedup:      NewDedupTracker(60 * time.Second),
 		tasks:      NewTaskTracker(),
-		embeddings: deps.Embeddings,
-		errBus:     deps.ErrBus,
-		dashboard:  deps.Dashboard,
-		botCmds:    NewBotCommandHandler(deps.LLM, deps.Store),
+		embeddings:   deps.Embeddings,
+		errBus:       deps.ErrBus,
+		dashboard:    deps.Dashboard,
+		botCmds:      NewBotCommandHandler(deps.LLM, deps.Store),
+		workspace:    deps.Workspace,
+		allowedPaths: deps.AllowedPaths,
 	}
 }
 

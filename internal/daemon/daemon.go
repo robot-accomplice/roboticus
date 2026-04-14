@@ -229,6 +229,8 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 	policyCfg := policy.DefaultConfig()
 	policyCfg.MaxTransferCents = int64(cfg.Treasury.PerPaymentCap * 100)
 	policyCfg.RateLimitPerMinute = 30
+	policyCfg.WorkspaceOnly = cfg.Security.IsWorkspaceConfined()
+	policyCfg.AllowedPaths = cfg.Security.AllowedPaths
 	policyEngine := policy.NewEngine(policyCfg)
 	memMgr := memory.NewManager(memory.Config{
 		TotalTokenBudget: 2048,
@@ -469,11 +471,13 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 			promptConfig: basePromptCfg,
 			budgetCfg:    &cfg.ContextBudget,
 		},
-		Guards:     guards,
-		BGWorker:   bgWorker,
-		Embeddings: embedClient,
-		ErrBus:     errBus,
-		Dashboard:  eventBus,
+		Guards:       guards,
+		BGWorker:     bgWorker,
+		Embeddings:   embedClient,
+		ErrBus:       errBus,
+		Dashboard:    eventBus,
+		Workspace:    cfg.Agent.Workspace,
+		AllowedPaths: cfg.Security.AllowedPaths,
 	})
 
 	bootStep(10, steps, "Pipeline assembled")
