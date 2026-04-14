@@ -369,9 +369,9 @@ type VoiceConfig struct {
 }
 
 // SecurityConfig holds filesystem and sandbox settings.
+// NOTE: workspace_only and deny_on_empty_allowlist live ONLY in Filesystem sub-config.
+// Top-level fields removed to eliminate contradictory dual-config.
 type SecurityConfig struct {
-	WorkspaceOnly        bool     `json:"workspace_only" toml:"workspace_only" mapstructure:"workspace_only"`
-	DenyOnEmptyAllowlist bool     `json:"deny_on_empty_allowlist" toml:"deny_on_empty_allowlist" mapstructure:"deny_on_empty_allowlist"`
 	AllowedPaths         []string `json:"allowed_paths" toml:"allowed_paths" mapstructure:"allowed_paths"`
 	ProtectedPaths       []string `json:"protected_paths" toml:"protected_paths" mapstructure:"protected_paths"`
 	ExtraProtectedPaths  []string `json:"extra_protected_paths,omitempty" toml:"extra_protected_paths" mapstructure:"extra_protected_paths"`
@@ -390,6 +390,11 @@ type SecurityConfig struct {
 	// Filesystem is a nested security section for fine-grained filesystem access control.
 	// Mirrors Rust's security.filesystem configuration.
 	Filesystem FilesystemSecurityConfig `json:"filesystem" toml:"filesystem" mapstructure:"filesystem"`
+}
+
+// IsWorkspaceConfined returns true if filesystem workspace_only is set.
+func (s SecurityConfig) IsWorkspaceConfined() bool {
+	return s.Filesystem.WorkspaceOnly
 }
 
 // RevenueConfig holds revenue settlement settings.
