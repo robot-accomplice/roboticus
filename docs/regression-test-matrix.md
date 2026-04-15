@@ -374,6 +374,11 @@ Blocking commands for feature-complete releases:
 | R-AGENT-107 | Standard and streaming sessions with identical memory state compute identical artifact hashes | `internal/pipeline/retrieval_parity_test.go` | L1 |
 | R-AGENT-108 | Parity fitness detects silent memory-context drift between standard and streaming paths | `internal/pipeline/retrieval_parity_test.go` | L1 |
 | R-AGENT-109 | `retrieval.*` trace namespace carries artifact_hash, per-field hashes, byte counts, and bounded previews | `internal/pipeline/retrieval_parity_test.go` | L1 |
+| R-AGENT-110 | `rankWorkflowMatches` blends Laplace-smoothed success rate, failure penalty, query-token overlap, tag fit, recency decay, and confidence into a single score | `internal/agent/tools/workflow_search_test.go` | L1 |
+| R-AGENT-111 | Ranker prefers larger sample sizes with identical apparent success rate (Laplace smoothing) and penalises failure counts | `internal/agent/tools/workflow_search_test.go` | L1 |
+| R-AGENT-112 | Ranker drops candidates below the ranking floor so the tool does not surface untrusted workflows | `internal/agent/tools/workflow_search_test.go` | L1 |
+| R-AGENT-113 | `find_workflow` tool returns ranked matches for `find`, fetches by exact name for `get`, and rejects unknown operations | `internal/agent/tools/workflow_search_test.go` | L1 |
+| R-AGENT-114 | `find_workflow` multi-word queries match hyphenated workflow names via longest-token SQL prefilter + in-memory multi-token ranker | `internal/agent/tools/workflow_search_test.go` | L1 |
 
 ## Governance Rules
 

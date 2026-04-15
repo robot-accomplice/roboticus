@@ -43,7 +43,7 @@ closed, or the critical path changes.
 | 1 | Unify The Production Retrieval Path | Acceptance met | Pipeline-prepared memory/index preferred by runtime; inference stage emits a `retrieval.*` artifact hash (context + index + combined) onto every trace; a parity fitness proves standard and streaming sessions compute identical hashes and detects drift |
 | 2 | Make Intent And Retrieval Routing Real Decision Inputs | Acceptance met | Unified `PerceptionArtifact` (intent, risk, source-of-truth, required tiers, decomposition, freshness, confidence) is computed in pipeline, stashed on session, and emitted to traces; retrieval modes already honour intent-driven routing |
 | 3 | Upgrade Semantic Memory Into A Canonical Knowledge Layer | Acceptance met | Schema now carries `version`, `effective_date`, and `superseded_by`; manager upsert bumps version on value change and keeps it stable on idempotent rewrites; consolidation contradiction phase sets supersession pointers; `CurrentSemanticValue` walks the chain with cycle + length guards |
-| 4 | Turn Procedural Memory Into Workflow Memory | Acceptance met | Workflow schema, Manager API, retrieval precedence over tool stats, post-turn promotion with auto-extracted error modes + preconditions + intent tags, and consolidation confidence sync now all land |
+| 4 | Turn Procedural Memory Into Workflow Memory | Acceptance met (follow-on closed) | Workflow schema, Manager API, retrieval precedence over tool stats, post-turn promotion with auto-extracted error modes + preconditions + intent tags, consolidation confidence sync, and an agent-facing `find_workflow` tool with Laplace-smoothed ranking all land |
 | 5 | Replace Relationship Memory With Persisted Relational Memory | Acceptance met | Persisted `knowledge_facts` store, graph-aware retrieval, reusable `KnowledgeGraph` API with multi-hop `ShortestPath` / `Impact` / `Dependencies`, and a `query_knowledge_graph` agent tool are all shipped |
 | 6 | Add A Real Verifier / Critic Stage | Acceptance met | Claim-level certainty classification, provenance coverage, contradiction reconciliation, per-intent proof obligations, and a structured claim-to-evidence trace map are all in place; semantic-classifier upgrade remains as quality work |
 | 7 | Deepen Working Memory Into Executive State | Acceptance met | Executive state is persisted, surfaced in context assembly, grows automatically in post-turn, survives restart with a cross-turn regression test, and emits operator-auditable trace/log writes; richer tool-output assumption extraction remains as follow-on work |
@@ -143,14 +143,12 @@ met. The only remaining items are quality follow-ons:
 2. **M7 follow-on** — extract assumptions from tool outputs (not only
    the agent's own response) and upgrade assumption confidence
    scoring based on evidence support.
-3. **M4 follow-on** — expose an agent-facing tool that lists / searches
-   workflows directly from the model.
-4. **M5 follow-on** — retire the permissive retrieval fallback now
+3. **M5 follow-on** — retire the permissive retrieval fallback now
    that the canonical relation set covers real-world paths.
-5. **M3 follow-on** — richer ingestion surface for docs / policy files
+4. **M3 follow-on** — richer ingestion surface for docs / policy files
    with version + effective-date population, and migrate semantic
    retrieval off the residual LIKE path onto hybrid FTS+vector.
-6. **Appendices A, B, C** — observability dashboards, evaluation
+5. **Appendices A, B, C** — observability dashboards, evaluation
    matrix, and fallback strategy spec work. These are sequenced
    after the quality follow-ons above complete.
 
@@ -420,7 +418,7 @@ knowledge instead of mostly long assistant responses.
 
 ## Milestone 4: Turn Procedural Memory Into Workflow Memory
 
-**Status**: Acceptance met (follow-on open: agent-facing workflow search tool)
+**Status**: Acceptance met (follow-ons closed)
 
 ### Goal
 
@@ -485,8 +483,15 @@ playbooks, and approved action sequences.
   deduplicated, capped) and seeds `preconditions` from the session's
   task intent, complexity, and subgoals so the workflow record carries
   the context that made it successful.
-- Follow-on open: an agent-facing tool to list / search workflows
-  directly from the model.
+- Agent-facing `find_workflow` tool now exposes both `find` and `get`
+  operations to the model. `find` over-fetches from `FindWorkflows`,
+  then re-ranks with a Laplace-smoothed blend: success rate with
+  add-one smoothing, failure penalty capped at -0.30, query-token
+  overlap across name/steps/tags/preconditions, tag fit weighted
+  above query fit (tags are explicit semantic signal), 30-day
+  half-life recency decay, and a confidence multiplier clamped to
+  [0.1, 1.0]. A ranking floor drops candidates below 0.15 so the
+  tool never surfaces workflows the model should not trust.
 
 ---
 
