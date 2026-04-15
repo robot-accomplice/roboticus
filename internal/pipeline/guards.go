@@ -276,6 +276,7 @@ func FullGuardChain() *GuardChain {
 		// Behavioral guards.
 		&SubagentClaimGuard{},
 		&TaskDeferralGuard{},
+		&ClarificationDeflectionGuard{},
 		&InternalJargonGuard{},
 		&DeclaredActionGuard{},
 		&PerspectiveGuard{},      // Wave 8, #78
@@ -309,6 +310,7 @@ func StreamGuardChain() *GuardChain {
 		&EmptyResponseGuard{},
 		&ExecutionTruthGuard{},
 		&TaskDeferralGuard{},
+		&ClarificationDeflectionGuard{},
 		&ModelIdentityTruthGuard{},
 		&InternalJargonGuard{},
 		&NonRepetitionGuardV2{},

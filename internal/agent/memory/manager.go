@@ -66,7 +66,7 @@ type Manager struct {
 	store       *db.Store
 	errBus      *core.ErrorBus
 	embedClient *llm.EmbeddingClient
-	vectorIndex   db.VectorIndex
+	vectorIndex db.VectorIndex
 }
 
 // NewManager creates a memory manager with the given config.
@@ -400,7 +400,8 @@ func (mm *Manager) ingestRelationshipsWithTrust(ctx context.Context, messages []
 				 ON CONFLICT(entity_id) DO UPDATE SET
 				   trust_score = MAX(trust_score, ?),
 				   interaction_count = interaction_count + 1,
-				   last_interaction = datetime('now')`,
+				   last_interaction = datetime('now'),
+				   updated_at = datetime('now')`,
 				db.NewID(), entity, entity, trustScore, trustScore,
 			); err != nil {
 				mm.errBus.ReportIfErr(err, "memory", "ingest_relationship", core.SevWarning)

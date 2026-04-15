@@ -1,6 +1,6 @@
 # Architecture Gap Report: Go Implementation vs Rust Reference
 
-**Date**: 2026-04-14 (updated for v1.0.5)
+**Date**: 2026-04-14 (updated for v1.0.6 work-in-progress)
 **Auditor**: Automated deep audit (3 parallel agents)
 **Scope**: Connector-factory compliance, security architecture, tool execution, context management, real-time transport, agentic retrieval architecture
 **Reference**: `/Users/jmachen/code/roboticus-rust/ARCHITECTURE.md`
@@ -11,7 +11,7 @@
 
 The Go implementation achieves **full structural compliance** with the connector-factory pattern. The pipeline is the single source of truth for business logic, all 8 entry points use `RunPipeline()`, and architecture tests enforce connector thinness. **All 7 original systemic gaps are now CLOSED** (v1.0.1 + v1.0.2 + v1.0.4).
 
-v1.0.5 introduces the **agentic retrieval architecture** — a 13-layer system that replaces the previous "embed query → search vector DB" approach with intent-driven routing, evidence filtering, query decomposition, structured context assembly, and post-turn reflection. Working memory persistence across restarts. All layers wired into production.
+v1.0.5 introduced the **agentic retrieval architecture** scaffold — decomposer, router, reranker, context assembly, reflection, and working-memory persistence. v1.0.6 work is focused on making that scaffold behaviorally real: router-selected retrieval modes now influence actual tier retrieval, semantic and relationship evidence preserve stronger provenance/freshness signals, and the verifier now consumes pipeline-computed task hints plus freshness/canonical-risk cues before final assistant output is persisted.
 
 | Category | Compliant | Gaps |
 |----------|-----------|------|
@@ -30,30 +30,33 @@ v1.0.5 introduces the **agentic retrieval architecture** — a 13-layer system t
 | Config Schema Derivation (v1.0.3) | Struct-driven | 0 |
 | Pipeline Cache Guards (v1.0.4) | Reject unparsed tool calls | 0 |
 | Session-Aware Routing (v1.0.4) | Escalation tracker | 0 |
-| **Agentic Retrieval Architecture (v1.0.5)** | **7 layers wired** | **0** |
+| **Agentic Retrieval Architecture (v1.0.5/v1.0.6)** | **9 layers partially wired** | **4 remain** |
 | **Working Memory Persistence (v1.0.5)** | **Shutdown/startup** | **0** |
 | **Post-Turn Reflection (v1.0.5)** | **Episode summaries** | **0** |
+| **Verifier/Critic (v1.0.6)** | **Structured retry gate** | **Partial** |
 
-### v1.0.5 Agentic Architecture Layers
+### v1.0.6 Agentic Architecture Layers
 
 | Layer | Component | File | Status |
 |-------|-----------|------|--------|
 | 2 | Query Decomposer | `decomposer.go` | Wired into RetrieveWithMetrics |
 | 5 | Procedural Memory | `retrieval_tiers.go` + migration 040 | Enriched schema + learned_skills |
-| 8 | Retrieval Router | `router.go` | Wired into RetrieveWithMetrics |
+| 8 | Retrieval Router | `router.go` + `daemon_adapters.go` | Wired into retrieval with production intent signals |
 | 11 | Reranker | `reranker.go` | Wired into RetrieveWithMetrics |
-| 12 | Context Assembly | `context_assembly.go` | Wired into RetrieveWithMetrics |
+| 12 | Context Assembly | `context_assembly.go` | Structured evidence with provenance/authority labels |
+| 14 | Verifier/Critic | `verifier.go` + `pipeline_stages.go` | Heuristic verifier with retry, task-hint inputs, action-plan and canonical-source checks |
 | 16 | Reflection | `reflection.go` | Wired into PostTurnIngest |
 | — | Working Memory Persistence | `working_persistence.go` | Wired into Daemon Stop/Start |
 
-### v1.1.0 Planned Additions (not yet built)
+### Remaining Gaps To Full Vision
 
 | Layer | Component | Status |
 |-------|-----------|--------|
 | 4 | Parallel Retrieval | Tiers queried sequentially |
-| 7 | Knowledge Graph Persistence | Ephemeral in-memory only |
-| 10 | Verifier/Critic | Guards exist; formal verification not yet |
-| 11 | LLM-based Reranking | Score-based only in v1.0.5 |
+| 7 | Knowledge Graph Persistence | Still no persisted multi-relation graph; relationship tier is now query-aware but not yet a full graph |
+| 10 | Fusion Layer | Provenance and freshness survive farther now, but fusion signals are still thin |
+| 11 | LLM-based Reranking | Score-based only in v1.0.6 |
+| 14 | Verifier/Critic depth | Heuristic retry gate only; no full evidence freshness audit or contradiction resolution yet |
 
 ---
 

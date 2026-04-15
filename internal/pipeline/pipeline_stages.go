@@ -109,6 +109,31 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 		}
 	}
 
+	// Lightweight verifier pass: if the answer ignores clear evidence gaps,
+	// contradictions, or multi-part coverage, request one revision before we
+	// persist the assistant message.
+	verifyCtx := BuildVerificationContext(session)
+	verifyResult := VerifyResponse(result, verifyCtx)
+	if !verifyResult.Passed {
+		log.Debug().
+			Str("session", session.ID).
+			Str("issues", verifyResult.RetryMessage()).
+			Msg("verifier requested retry")
+		session.AddSystemMessage(verifyResult.RetryMessage())
+		retryContent, retryTurns, retryErr := p.executor.RunLoop(ctx, session)
+		if retryErr != nil {
+			log.Debug().Err(retryErr).Msg("verifier retry inference failed, using pre-verifier result")
+		} else {
+			turns += retryTurns
+			if p.guards != nil && cfg.GuardSet != GuardSetNone {
+				guardCtx := p.buildGuardContext(session)
+				retryGuardResult := p.guards.ApplyFullWithContext(retryContent, guardCtx)
+				retryContent = retryGuardResult.Content
+			}
+			result = retryContent
+		}
+	}
+
 	// Store assistant response with topic tag (matching Rust: append_message_with_topic).
 	assistantMsgID := db.NewID()
 	topicTag := p.deriveTopicTag(session, result)

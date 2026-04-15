@@ -286,6 +286,15 @@ Blocking commands for feature-complete releases:
 | R-AGENT-19 | Collapse regression: ScoreSpread and adaptive weight match expectations at 100/1K scale | `internal/agent/memory/collapse_regression_test.go` | L1 |
 | R-AGENT-20 | Post-turn procedure detection persists learned skills from tool sequences | `internal/pipeline/post_turn.go` | L2 |
 | R-AGENT-21 | Post-turn reflection stores episode summaries as episodic_memory | `internal/pipeline/post_turn.go` | L2 |
+| R-AGENT-22 | Semantic evidence preserves source identity, canonical flag, and authority metadata | `internal/agent/memory/retrieval_test.go` | L1 |
+| R-AGENT-23 | Context assembly prints evidence provenance/authority instead of flattening all sources | `internal/agent/memory/context_assembly_test.go` | L1 |
+| R-AGENT-24 | Verifier retries when responses ignore explicit evidence gaps or contradictions | `internal/pipeline/verifier_test.go` | L1 |
+| R-AGENT-25 | Standard pipeline path revises output when verifier rejects unsupported certainty | `internal/pipeline/pipeline_run_test.go` | L2 |
+| R-AGENT-26 | Verifier prefers pipeline-computed task hints over prompt-only reconstruction | `internal/pipeline/verifier_test.go` | L1 |
+| R-AGENT-27 | Standard pipeline path revises output when remediation/next-step coverage is missing | `internal/pipeline/pipeline_run_test.go` | L2 |
+| R-AGENT-28 | Relationship retrieval preserves source identity, dependency summary, and evidence age | `internal/agent/memory/retrieval_test.go` | L1 |
+| R-AGENT-29 | Context assembly surfaces freshness risks for stale evidence | `internal/agent/memory/context_assembly_test.go` | L1 |
+| R-AGENT-30 | Verifier rejects overconfident “latest/current” answers when evidence is stale | `internal/pipeline/verifier_test.go` | L1 |
 
 ## Governance Rules
 

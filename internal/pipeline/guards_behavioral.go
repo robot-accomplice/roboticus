@@ -134,6 +134,54 @@ func (g *TaskDeferralGuard) CheckWithContext(content string, ctx *GuardContext) 
 	return GuardResult{Passed: true}
 }
 
+// --- ClarificationDeflectionGuard ---
+
+// ClarificationDeflectionGuard catches canned responses that ask the user to
+// restate context that is already present in the current prompt. This covers
+// boilerplate like "Please provide the last message or the context..." which
+// creates circular conversation flow instead of directly helping.
+type ClarificationDeflectionGuard struct{}
+
+var clarificationDeflectionMarkers = []string{
+	"please provide the last message",
+	"please provide the context you want me to respond to",
+	"please provide the last message or the context",
+	"and i will generate a revised",
+	"avoiding direct repetition or circular responses",
+	"you need me to address the conversation flow",
+}
+
+func (g *ClarificationDeflectionGuard) Name() string { return "clarification_deflection" }
+func (g *ClarificationDeflectionGuard) Check(content string) GuardResult {
+	return GuardResult{Passed: true}
+}
+func (g *ClarificationDeflectionGuard) CheckWithContext(content string, ctx *GuardContext) GuardResult {
+	if ctx == nil || strings.TrimSpace(ctx.UserPrompt) == "" {
+		return GuardResult{Passed: true}
+	}
+
+	lower := strings.ToLower(content)
+	matchCount := 0
+	for _, marker := range clarificationDeflectionMarkers {
+		if strings.Contains(lower, marker) {
+			matchCount++
+		}
+	}
+
+	// Require multiple markers so we catch canned boilerplate, not normal
+	// targeted clarification questions.
+	if matchCount >= 2 {
+		return GuardResult{
+			Passed:  false,
+			Retry:   true,
+			Reason:  "response deflected by asking the user to restate already-provided context",
+			Verdict: GuardRetryRequested,
+		}
+	}
+
+	return GuardResult{Passed: true}
+}
+
 // --- InternalJargonGuard ---
 
 // InternalJargonGuard strips internal infrastructure details from responses:

@@ -69,7 +69,8 @@ func (r *MemoryRepository) StoreProcedural(ctx context.Context, id, name, steps 
 func (r *MemoryRepository) StoreRelationship(ctx context.Context, id, entityID, entityName string, trustScore float64) error {
 	_, err := r.q.ExecContext(ctx,
 		`INSERT INTO relationship_memory (id, entity_id, entity_name, trust_score) VALUES (?, ?, ?, ?)
-		 ON CONFLICT(entity_id) DO UPDATE SET entity_name = excluded.entity_name, trust_score = excluded.trust_score`,
+		 ON CONFLICT(entity_id) DO UPDATE SET entity_name = excluded.entity_name, trust_score = excluded.trust_score,
+		 updated_at = datetime('now')`,
 		id, entityID, entityName, trustScore)
 	return err
 }

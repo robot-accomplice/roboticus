@@ -14,9 +14,9 @@ import (
 
 // RetrievalConfig controls hybrid RAG behavior.
 type RetrievalConfig struct {
-	HybridWeight     float64 // FTS vs embedding blend (0=FTS only, 1=embedding only, 0.5=balanced)
-	EpisodicHalfLife float64 // Days for episodic decay (default 7)
-	DecayFloor       float64 // Minimum decay factor (default 0.05)
+	HybridWeight     float64        // FTS vs embedding blend (0=FTS only, 1=embedding only, 0.5=balanced)
+	EpisodicHalfLife float64        // Days for episodic decay (default 7)
+	DecayFloor       float64        // Minimum decay factor (default 0.05)
 	Reranker         RerankerConfig // reranker tuning parameters
 }
 
@@ -36,7 +36,7 @@ type Retriever struct {
 	store         *db.Store
 	budgets       TierBudget
 	embedClient   *llm.EmbeddingClient
-	vectorIndex     db.VectorIndex
+	vectorIndex   db.VectorIndex
 	intents       []IntentSignal // set before retrieval if intent classifier available
 	charsPerToken int
 }
@@ -122,11 +122,11 @@ type RetrievalMetrics struct {
 
 	// Collapse detection signals — these track the health of retrieval precision.
 	// ScoreSpread approaching 0 indicates semantic collapse (all results score alike).
-	ScoreSpread     float64 `json:"score_spread"`      // top-1 minus top-k score delta
-	AvgFTSScore     float64 `json:"avg_fts_score"`     // mean FTS leg score across results
-	AvgVectorScore  float64 `json:"avg_vector_score"`  // mean vector leg score across results
-	CorpusSize      int     `json:"corpus_size"`        // memory_index entries at query time
-	HybridWeight    float64 `json:"hybrid_weight"`      // effective weight used (adaptive)
+	ScoreSpread    float64 `json:"score_spread"`     // top-1 minus top-k score delta
+	AvgFTSScore    float64 `json:"avg_fts_score"`    // mean FTS leg score across results
+	AvgVectorScore float64 `json:"avg_vector_score"` // mean vector leg score across results
+	CorpusSize     int     `json:"corpus_size"`      // memory_index entries at query time
+	HybridWeight   float64 `json:"hybrid_weight"`    // effective weight used (adaptive)
 }
 
 // historyKeywords trigger inclusion of inactive/stale memories when present in query.
@@ -256,29 +256,22 @@ func (mr *Retriever) RetrieveWithMetrics(ctx context.Context, sessionID, query s
 			if tierBudget <= 0 {
 				continue
 			}
-			tierResults := mr.retrieveTier(ctx, target.Tier, sg.Question, queryEmbed, tierBudget/mr.charsPerToken, corpusSize)
-			for i, content := range tierResults {
-				// Extract sim score from episodic format "(sim=0.85) content..."
-				score := target.Weight
-				if strings.HasPrefix(content, "(sim=") {
-					if end := strings.Index(content, ") "); end > 5 {
-						var parsed float64
-						if _, err := fmt.Sscanf(content[5:end], "%f", &parsed); err == nil {
-							score = parsed
-							content = content[end+2:] // strip sim prefix from display
-						}
-					}
+			tierResults := mr.retrieveTier(ctx, target.Tier, target.Mode, sg.Question, queryEmbed, tierBudget/mr.charsPerToken, corpusSize)
+			for i, ev := range tierResults {
+				if ev.Score == 0 {
+					ev.Score = target.Weight
 				}
-				// Position decay as tiebreaker for entries without sim scores.
+				// Position decay as tiebreaker for entries without explicit ranking metadata.
 				positionDecay := 1.0 - (float64(i) * 0.02)
 				if positionDecay < 0.1 {
 					positionDecay = 0.1
 				}
-				allEvidence = append(allEvidence, Evidence{
-					Content:    content,
-					SourceTier: target.Tier,
-					Score:      score * positionDecay,
-				})
+				ev.Score *= positionDecay
+				ev.SourceTier = target.Tier
+				if ev.RetrievalMode == "" {
+					ev.RetrievalMode = target.Mode.String()
+				}
+				allEvidence = append(allEvidence, ev)
 			}
 		}
 	}
@@ -400,30 +393,48 @@ func (mr *Retriever) retrieveWorkingMemory(ctx context.Context, sessionID string
 }
 
 // retrieveTier dispatches a query to a specific memory tier and returns content strings.
-func (mr *Retriever) retrieveTier(ctx context.Context, tier MemoryTier, query string, queryEmbed []float32, budgetTokens int, corpusSize int) []string {
-	var raw string
+func (mr *Retriever) retrieveTier(ctx context.Context, tier MemoryTier, mode RetrievalMode, query string, queryEmbed []float32, budgetTokens int, corpusSize int) []Evidence {
 	switch tier {
 	case TierEpisodic:
-		raw = mr.retrieveEpisodic(ctx, query, queryEmbed, budgetTokens, corpusSize)
+		return wrapTierEntries(tier, mode, mr.retrieveEpisodic(ctx, query, queryEmbed, budgetTokens, corpusSize))
 	case TierSemantic:
-		raw = mr.retrieveSemanticMemory(ctx, query, budgetTokens)
+		return mr.retrieveSemanticEvidence(ctx, query, queryEmbed, mode, budgetTokens)
 	case TierProcedural:
-		raw = mr.retrieveProceduralMemory(ctx, budgetTokens)
+		return wrapTierEntries(tier, mode, mr.retrieveProceduralMemory(ctx, query, mode, budgetTokens))
 	case TierRelationship:
-		raw = mr.retrieveRelationshipMemory(ctx, budgetTokens)
+		return mr.retrieveRelationshipEvidence(ctx, query, mode, budgetTokens)
 	default:
 		return nil
 	}
+}
+
+func wrapTierEntries(tier MemoryTier, mode RetrievalMode, raw string) []Evidence {
 	if raw == "" {
 		return nil
 	}
-	// Split tier output into individual entries.
-	var entries []string
+	var entries []Evidence
 	for _, line := range strings.Split(raw, "\n") {
 		line = strings.TrimSpace(line)
-		if line != "" && strings.HasPrefix(line, "- ") {
-			entries = append(entries, strings.TrimPrefix(line, "- "))
+		if line == "" || !strings.HasPrefix(line, "- ") {
+			continue
 		}
+		content := strings.TrimPrefix(line, "- ")
+		score := 0.0
+		if strings.HasPrefix(content, "(sim=") {
+			if end := strings.Index(content, ") "); end > 5 {
+				var parsed float64
+				if _, err := fmt.Sscanf(content[5:end], "%f", &parsed); err == nil {
+					score = parsed
+					content = content[end+2:]
+				}
+			}
+		}
+		entries = append(entries, Evidence{
+			Content:       content,
+			SourceTier:    tier,
+			Score:         score,
+			RetrievalMode: mode.String(),
+		})
 	}
 	return entries
 }

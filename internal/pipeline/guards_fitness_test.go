@@ -340,6 +340,7 @@ func TestGuardChain_Ordering(t *testing.T) {
 		// Behavioral
 		"subagent_claim",
 		"task_deferral",
+		"clarification_deflection",
 		"internal_jargon",
 		"declared_action",
 		"perspective",       // Wave 8, #78
@@ -595,6 +596,12 @@ func TestContextualGuard_UsesContext(t *testing.T) {
 			},
 		},
 		{
+			name:    "ClarificationDeflectionGuard uses UserPrompt",
+			guard:   &ClarificationDeflectionGuard{},
+			content: "I understand. You need me to address the conversation flow in a more natural and context-aware way. Please provide the last message or the context you want me to respond to, and I will generate a revised answer.",
+			ctx:     &GuardContext{UserPrompt: "Rewrite the reply to sound more natural."},
+		},
+		{
 			name:    "InternalJargonGuard uses SubagentNames",
 			guard:   &InternalJargonGuard{},
 			content: "The researcher agent completed the analysis.",
@@ -696,6 +703,7 @@ func TestContextualGuard_NilContextSafe(t *testing.T) {
 	guards := []ContextualGuard{
 		&SubagentClaimGuard{},
 		&TaskDeferralGuard{},
+		&ClarificationDeflectionGuard{},
 		&InternalJargonGuard{},
 		&DeclaredActionGuard{},
 		&LowValueParrotingGuard{},

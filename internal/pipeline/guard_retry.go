@@ -62,6 +62,11 @@ var guardRetryDirectives = map[string]RetryDirective{
 		TokenBudget: 512,
 		Instruction: "Cross-reference your financial claims against actual tool execution results.",
 	},
+	"clarification_deflection": {
+		GuardName:   "clarification_deflection",
+		TokenBudget: 0,
+		Instruction: "Do not ask the user to restate context that is already present in the conversation. Answer directly from the available context unless a truly missing detail blocks progress.",
+	},
 }
 
 // GetRetryDirective returns the retry directive for a guard, or nil if none exists.

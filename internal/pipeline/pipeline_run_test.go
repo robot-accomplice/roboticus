@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"roboticus/internal/agent"
@@ -22,6 +23,24 @@ func (s *stubExecutor) RunLoop(_ context.Context, session *Session) (string, int
 	if content == "" {
 		content = "stub response"
 	}
+	session.AddAssistantMessage(content, nil)
+	return content, 1, nil
+}
+
+type sequencedExecutor struct {
+	responses []string
+	calls     int
+}
+
+func (s *sequencedExecutor) RunLoop(_ context.Context, session *Session) (string, int, error) {
+	var content string
+	if s.calls < len(s.responses) {
+		content = s.responses[s.calls]
+	}
+	if content == "" {
+		content = "stub response"
+	}
+	s.calls++
 	session.AddAssistantMessage(content, nil)
 	return content, 1, nil
 }
@@ -147,6 +166,70 @@ func TestPipeline_Run_WithInjectionDefense(t *testing.T) {
 	}
 	if outcome == nil {
 		t.Fatal("should produce outcome")
+	}
+}
+
+func TestPipeline_Run_VerifierRequestsRevisionOnEvidenceGaps(t *testing.T) {
+	store := testutil.TempStore(t)
+	exec := &sequencedExecutor{responses: []string{
+		"The deployment failed because the canary rollout was misconfigured.",
+		"Based on the available evidence, I'm not certain yet. We need deployment logs to confirm the root cause.",
+	}}
+
+	pipe := New(PipelineDeps{
+		Store:     store,
+		Executor:  exec,
+		Guards:    DefaultGuardChain(),
+		Retriever: &stubRetriever{result: "[Active Memory]\n\n[Retrieved Evidence]\n1. [semantic, 0.90] deployment policy\n\n[Gaps]\n- No past experiences found for this query"},
+	})
+
+	cfg := PresetAPI()
+	input := Input{
+		Content: "Why did the deployment fail?",
+		AgentID: "test-agent",
+	}
+
+	outcome, err := pipe.Run(context.Background(), cfg, input)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if exec.calls != 2 {
+		t.Fatalf("expected verifier to trigger a second inference, got %d calls", exec.calls)
+	}
+	if !strings.Contains(strings.ToLower(outcome.Content), "not certain") {
+		t.Fatalf("expected revised content to acknowledge uncertainty, got %q", outcome.Content)
+	}
+}
+
+func TestPipeline_Run_VerifierRequestsRevisionForMissingActionPlan(t *testing.T) {
+	store := testutil.TempStore(t)
+	exec := &sequencedExecutor{responses: []string{
+		"The root cause was a stale cache entry in billing.",
+		"The root cause was a stale cache entry in billing. Recommended fix: invalidate the cache on deploy and add a consistency check before invoice generation.",
+	}}
+
+	pipe := New(PipelineDeps{
+		Store:    store,
+		Executor: exec,
+		Guards:   DefaultGuardChain(),
+	})
+
+	cfg := PresetAPI()
+	cfg.GuardSet = GuardSetNone
+	input := Input{
+		Content: "Explain the root cause and propose a remediation plan",
+		AgentID: "test-agent",
+	}
+
+	outcome, err := pipe.Run(context.Background(), cfg, input)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if exec.calls != 2 {
+		t.Fatalf("expected verifier to trigger a second inference, got %d calls", exec.calls)
+	}
+	if !strings.Contains(strings.ToLower(outcome.Content), "recommended fix") {
+		t.Fatalf("expected revised content to include an action plan, got %q", outcome.Content)
 	}
 }
 

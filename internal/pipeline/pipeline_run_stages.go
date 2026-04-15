@@ -8,6 +8,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	agenttools "roboticus/internal/agent/tools"
 	"roboticus/internal/core"
 	"roboticus/internal/db"
 	"roboticus/internal/llm"
@@ -192,9 +193,11 @@ func (p *Pipeline) stageTurnCreation(ctx context.Context, pc *pipelineContext) {
 func (p *Pipeline) stageDecomposition(_ context.Context, pc *pipelineContext) {
 	pc.tr.BeginSpan("decomposition_gate")
 	p.tasks.Start(pc.taskID, pc.msgID)
+	var verificationSubgoalsHint []string
 	if pc.cfg.DecompositionGate {
 		d := EvaluateDecomposition(pc.content, len(pc.session.Messages()))
 		pc.decomp = &d
+		verificationSubgoalsHint = append(verificationSubgoalsHint, d.Subtasks...)
 		p.tasks.Classify(pc.taskID, TaskClassification(pc.decomp.Decision))
 		pc.tr.Annotate("decision", pc.decomp.Decision.String())
 		if pc.decomp.Decision == DecompDelegated && len(pc.decomp.Subtasks) > 0 {
@@ -241,6 +244,18 @@ func (p *Pipeline) stageDecomposition(_ context.Context, pc *pipelineContext) {
 			}
 		}
 	}
+
+	if len(verificationSubgoalsHint) == 0 {
+		verificationSubgoalsHint = verificationSubgoals(pc.content)
+	}
+	if pc.session != nil {
+		pc.session.SetTaskVerificationHints(
+			pc.synthesis.Intent,
+			pc.synthesis.Complexity,
+			pc.synthesis.PlannedAction,
+			verificationSubgoalsHint,
+		)
+	}
 }
 
 // ── Stage 8: Authority resolution ──────────────────────────────────────
@@ -275,6 +290,17 @@ func (p *Pipeline) stageMemoryRetrieval(ctx context.Context, pc *pipelineContext
 		pc.memoryBlock = p.retriever.Retrieve(ctx, pc.session.ID, pc.content, retrievalStrat.Budget)
 		if pc.memoryBlock != "" {
 			pc.session.SetMemoryContext(pc.memoryBlock)
+		}
+		if p.store != nil {
+			index := agenttools.BuildMemoryIndex(ctx, p.store, 20, pc.content)
+			if index != "" {
+				pc.session.SetMemoryIndex(index)
+			} else {
+				pc.session.SetMemoryIndex("[Memory Index: No memories stored yet. " +
+					"Memories will accumulate as conversations continue. " +
+					"When a user asks about a past topic, use search_memories(query) to check, " +
+					"or be honest that you don't have stored memories about it yet.]")
+			}
 		}
 		fragmentCount := 0
 		if pc.memoryBlock != "" {

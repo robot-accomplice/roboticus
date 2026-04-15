@@ -653,6 +653,91 @@ func TestBuildAgentContext_NoUserMessages(t *testing.T) {
 	}
 }
 
+func TestBuildAgentContext_PrefersPipelineMemoryContext(t *testing.T) {
+	store := testutil.TempStore(t)
+	retriever := memory.NewRetriever(memory.DefaultRetrievalConfig(), memory.TierBudget{
+		Working: 0.5,
+	}, store)
+
+	sess := session.New("s1", "a1", "TestBot")
+	sess.AddUserMessage("query about something")
+	sess.SetMemoryContext("[Working State]\n- pipeline prepared memory")
+
+	_, err := store.ExecContext(context.Background(),
+		`INSERT INTO working_memory (id, session_id, entry_type, content, importance)
+		 VALUES ('wm1', 's1', 'note', 'fallback retrieval memory', 5)`)
+	if err != nil {
+		t.Fatalf("seed working memory: %v", err)
+	}
+
+	ctx := buildAgentContext(context.Background(), sess, nil, retriever, store, agent.PromptConfig{
+		AgentName: "TestBot",
+	}, nil)
+	req := ctx.BuildRequest(sess)
+
+	var sawPipeline bool
+	var sawFallback bool
+	for _, msg := range req.Messages {
+		if msg.Role != "system" {
+			continue
+		}
+		if strings.Contains(msg.Content, "pipeline prepared memory") {
+			sawPipeline = true
+		}
+		if strings.Contains(msg.Content, "fallback retrieval memory") {
+			sawFallback = true
+		}
+	}
+
+	if !sawPipeline {
+		t.Fatal("expected pipeline-prepared memory context in request")
+	}
+	if sawFallback {
+		t.Fatal("expected session memory context to win over retriever fallback")
+	}
+}
+
+func TestBuildAgentContext_PrefersPipelineMemoryIndex(t *testing.T) {
+	store := testutil.TempStore(t)
+
+	sess := session.New("s1", "a1", "TestBot")
+	sess.AddUserMessage("query about something")
+	sess.SetMemoryIndex("[Memory Index]\n- pipeline index entry")
+
+	_, err := store.ExecContext(context.Background(),
+		`INSERT INTO memory_index (id, source_table, source_id, summary, confidence)
+		 VALUES ('idx1', 'semantic_memory', 'sem1', 'fallback index entry', 0.9)`)
+	if err != nil {
+		t.Fatalf("seed memory index: %v", err)
+	}
+
+	ctx := buildAgentContext(context.Background(), sess, nil, nil, store, agent.PromptConfig{
+		AgentName: "TestBot",
+	}, nil)
+	req := ctx.BuildRequest(sess)
+
+	var sawPipeline bool
+	var sawFallback bool
+	for _, msg := range req.Messages {
+		if msg.Role != "system" {
+			continue
+		}
+		if strings.Contains(msg.Content, "pipeline index entry") {
+			sawPipeline = true
+		}
+		if strings.Contains(msg.Content, "fallback index entry") {
+			sawFallback = true
+		}
+	}
+
+	if !sawPipeline {
+		t.Fatal("expected pipeline-prepared memory index in request")
+	}
+	if sawFallback {
+		t.Fatal("expected session memory index to win over store-built fallback")
+	}
+}
+
 func TestBuildAgentContext_SetsAgentName(t *testing.T) {
 	sess := session.New("s1", "a1", "OverrideName")
 	sess.AddUserMessage("test")

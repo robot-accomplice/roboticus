@@ -8,9 +8,9 @@ func TestGuardRegistry_Chain(t *testing.T) {
 		preset    GuardSetPreset
 		wantCount int
 	}{
-		{"full set", GuardSetFull, 26},
-		{"stream set", GuardSetStream, 6},
-		{"cached set", GuardSetCached, 23}, // Includes FinancialActionTruthGuard
+		{"full set", GuardSetFull, 27},
+		{"stream set", GuardSetStream, 7},
+		{"cached set", GuardSetCached, 24}, // Includes FinancialActionTruthGuard + clarification_deflection
 		{"none set", GuardSetNone, 0},
 	}
 	for _, tt := range tests {

@@ -569,16 +569,17 @@ roboticus memory reindex
 - **Relationship/graph memory** answers: "What depends on what?"
 - **Working memory** answers: "What am I doing right now?" (NOT searched — direct injection)
 
-### Retrieval Pipeline (v1.0.5)
+### Retrieval Pipeline (v1.0.6)
 
 ```
 Query → Decompose (compound → subgoals)
       → Route (intent-driven tier selection)
-      → Retrieve (per-tier: BM25 + vector hybrid)
+      → Retrieve (per-tier: BM25 + vector hybrid, mode-aware by tier, relationship evidence with age/provenance)
       → Rerank (discard weak, boost authority, detect collapse)
-      → Assemble (evidence + gaps + contradictions)
+      → Assemble (evidence + freshness risks + gaps + contradictions)
       → Working State (direct injection, not searched)
       → LLM Reasoning
+      → Verify (unsupported certainty / stale-currentness / contradictions / coverage)
 ```
 
 ### Components
@@ -587,11 +588,21 @@ Query → Decompose (compound → subgoals)
 |-------|------|---------|
 | Decomposer | `decomposer.go` | Splits compound queries into subgoals |
 | Router | `router.go` | Selects tiers + modes based on intent/keywords |
-| Retriever | `retrieval_episodic.go`, `retrieval_tiers.go` | Per-tier BM25+vector hybrid search |
+| Retriever | `retrieval_episodic.go`, `retrieval_tiers.go` | Per-tier retrieval with mode-aware semantic/procedural/relationship paths |
 | Reranker | `reranker.go` | Evidence filter: authority, recency, collapse |
-| Assembler | `context_assembly.go` | Structured output: evidence + gaps + contradictions |
+| Assembler | `context_assembly.go` | Structured output: evidence + freshness risks + gaps + contradictions + provenance |
+| Verifier | `internal/pipeline/verifier.go` | Detects unsupported certainty, stale-currentness overclaim, ignored contradictions, missed multi-part coverage, missing action plans, and unanchored policy answers |
 | Reflection | `reflection.go` | Post-turn episode summaries |
 | Persistence | `working_persistence.go` | Working memory across restarts |
+
+### Current Behavioral Notes
+
+- Router intent signals are now propagated from production daemon retrieval into memory routing.
+- Semantic evidence retains source identity, source label, canonical status, and authority score through reranking and context assembly.
+- Relationship evidence now retains source identity, relationship summary, trust-derived score, and age through retrieval and assembly.
+- Context assembly surfaces explicit freshness risks when supporting evidence is stale instead of leaving recency buried in scores.
+- The verifier now consumes pipeline-computed task hints (intent, subgoals, planned action) when available instead of reconstructing everything from the raw prompt.
+- The verifier is currently heuristic, not model-based. It acts as a revision gate, not a final proof system.
 
 ### Working Memory Lifecycle
 

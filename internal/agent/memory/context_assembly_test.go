@@ -7,9 +7,9 @@ import (
 
 func TestAssembleContext_FullStructure(t *testing.T) {
 	evidence := []Evidence{
-		{Content: "deploy requires rolling updates", SourceTier: TierSemantic, Score: 0.87, IsCanonical: true},
+		{Content: "deploy requires rolling updates", SourceTier: TierSemantic, Score: 0.87, IsCanonical: true, AuthorityScore: 0.95, SourceLabel: "policy/deploy"},
 		{Content: "server crashed during deploy", SourceTier: TierEpisodic, Score: 0.92},
-		{Content: "deploy-to-prod: 4 runs", SourceTier: TierProcedural, Score: 0.71},
+		{Content: "deploy-to-prod: 4 runs", SourceTier: TierProcedural, Score: 0.71, AgeDays: 45},
 	}
 
 	ac := AssembleContext(nil, nil, "", evidence, "- goal: finish deployment", "- [14:32] checked logs")
@@ -30,6 +30,18 @@ func TestAssembleContext_FullStructure(t *testing.T) {
 	}
 	if !strings.Contains(formatted, "canonical") {
 		t.Error("canonical flag should appear in evidence")
+	}
+	if !strings.Contains(formatted, "source=policy/deploy") {
+		t.Error("source label should appear in evidence")
+	}
+	if !strings.Contains(formatted, "authority=") {
+		t.Error("authority score should appear in evidence")
+	}
+	if !strings.Contains(formatted, "[Freshness Risks]") {
+		t.Error("freshness risks should appear in evidence for stale entries")
+	}
+	if !strings.Contains(formatted, "age=45d") {
+		t.Error("evidence metadata should include age")
 	}
 }
 
@@ -123,5 +135,20 @@ func TestAssembleContext_WorkingStateOnly(t *testing.T) {
 	}
 	if !strings.Contains(formatted, "goal: test") {
 		t.Error("should contain the goal")
+	}
+}
+
+func TestAssembleContext_DetectsFreshnessRisk(t *testing.T) {
+	evidence := []Evidence{
+		{Content: "old policy", SourceTier: TierSemantic, Score: 0.8, AgeDays: 91},
+	}
+
+	ac := AssembleContext(nil, nil, "", evidence, "", "")
+
+	if ac.FreshnessRisks == "" {
+		t.Fatal("expected freshness risks for stale evidence")
+	}
+	if !strings.Contains(ac.FreshnessRisks, "91 days") {
+		t.Fatalf("expected age in freshness risk, got %q", ac.FreshnessRisks)
 	}
 }

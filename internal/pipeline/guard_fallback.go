@@ -12,6 +12,7 @@ var guardFallbackTemplates = map[string]string{
 	"content_classification": "I can't assist with that particular request. Please ask something else.",
 	"subagent_claim":         "I wasn't able to complete the delegation I mentioned. Let me try handling this directly instead.",
 	"task_deferral":          "I collected some information but didn't take the action you requested. Let me try again with a more direct approach.",
+	"clarification_deflection": "I asked you to restate context you had already provided. Let me answer directly from the information already in the conversation.",
 	"internal_jargon":        "My previous response contained technical details that aren't relevant to you. Let me rephrase.",
 	"declared_action":        "I described your action without resolving it. Let me properly determine the outcome.",
 	"non_repetition_v2":      "I was repeating content from earlier in our conversation. Let me provide fresh information.",

@@ -18,11 +18,16 @@ type Session struct {
 	Workspace     string
 	AllowedPaths  []string
 	Channel       string
-	ScopeKey     string // "platform:chatid" — used for cross-channel consent
+	ScopeKey      string // "platform:chatid" — used for cross-channel consent
 
-	messages      []llm.Message
-	pendingCalls  []llm.ToolCall
-	memoryContext string // Pre-retrieved memory block for cognitive scaffold (ARCHITECTURE.md §4).
+	messages          []llm.Message
+	pendingCalls      []llm.ToolCall
+	memoryContext     string // Pre-retrieved memory block for cognitive scaffold (ARCHITECTURE.md §4).
+	memoryIndex       string // Pre-built memory index block for recall/search tool guidance.
+	taskIntent        string
+	taskComplexity    string
+	taskPlannedAction string
+	taskSubgoals      []string
 }
 
 // New creates a session with the given identity.
@@ -55,6 +60,34 @@ func (s *Session) SetMemoryContext(block string) { s.memoryContext = block }
 
 // MemoryContext returns the pre-retrieved memory block, if any.
 func (s *Session) MemoryContext() string { return s.memoryContext }
+
+// SetMemoryIndex stores the pre-built memory index for prompt injection.
+func (s *Session) SetMemoryIndex(block string) { s.memoryIndex = block }
+
+// MemoryIndex returns the pre-built memory index block, if any.
+func (s *Session) MemoryIndex() string { return s.memoryIndex }
+
+// SetTaskVerificationHints stores pipeline-computed task state so later stages
+// can verify responses against structured intent/subgoals instead of re-deriving
+// everything from raw prompt text.
+func (s *Session) SetTaskVerificationHints(intent, complexity, plannedAction string, subgoals []string) {
+	s.taskIntent = intent
+	s.taskComplexity = complexity
+	s.taskPlannedAction = plannedAction
+	s.taskSubgoals = append([]string(nil), subgoals...)
+}
+
+// TaskIntent returns the pipeline-computed intent label, if any.
+func (s *Session) TaskIntent() string { return s.taskIntent }
+
+// TaskComplexity returns the pipeline-computed complexity label, if any.
+func (s *Session) TaskComplexity() string { return s.taskComplexity }
+
+// TaskPlannedAction returns the pipeline-computed planned action, if any.
+func (s *Session) TaskPlannedAction() string { return s.taskPlannedAction }
+
+// TaskSubgoals returns verifier-oriented subgoals computed by the pipeline.
+func (s *Session) TaskSubgoals() []string { return append([]string(nil), s.taskSubgoals...) }
 
 // AddAssistantMessage appends an assistant message with optional tool calls.
 func (s *Session) AddAssistantMessage(content string, toolCalls []llm.ToolCall) {

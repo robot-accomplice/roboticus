@@ -17,14 +17,19 @@ import (
 
 // Evidence represents a single retrieval result with provenance metadata.
 type Evidence struct {
-	Content    string
-	SourceTier MemoryTier
-	SourceID   string
-	Score      float64 // blended retrieval score from HybridSearch
-	FTSScore   float64 // per-leg FTS score (0 if not found by FTS)
-	VecScore   float64 // per-leg vector score (0 if not found by vector)
-	AgeDays    float64 // how old the entry is
-	IsCanonical bool   // true for authoritative/policy documents
+	Content        string
+	SourceTier     MemoryTier
+	SourceID       string
+	SourceTable    string
+	SourceLabel    string
+	SourceCategory string
+	Score          float64 // blended retrieval score from HybridSearch
+	FTSScore       float64 // per-leg FTS score (0 if not found by FTS)
+	VecScore       float64 // per-leg vector score (0 if not found by vector)
+	AgeDays        float64 // how old the entry is
+	IsCanonical    bool    // true for authoritative/policy documents
+	AuthorityScore float64 // 0-1 source authority signal
+	RetrievalMode  string  // hybrid / keyword / recency / semantic / ann
 }
 
 // RerankerConfig controls evidence filtering behavior.

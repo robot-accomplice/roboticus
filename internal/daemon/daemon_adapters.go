@@ -45,6 +45,14 @@ type retrieverAdapter struct {
 }
 
 func (a *retrieverAdapter) Retrieve(ctx context.Context, sessionID, query string, budget int) string {
+	if a.r != nil && strings.TrimSpace(query) != "" {
+		reg := pipeline.NewIntentRegistry()
+		intent, conf := reg.Classify(query)
+		a.r.SetIntents([]memory.IntentSignal{{
+			Label:      string(intent),
+			Confidence: conf,
+		}})
+	}
 	return a.r.Retrieve(ctx, sessionID, query, budget)
 }
 
@@ -116,7 +124,9 @@ func buildAgentContext(ctx context.Context, sess *session.Session, tools *agent.
 	// content. If the model sees a blob of "memories" it assumes that's
 	// everything and never calls recall_memory — leading to confabulation
 	// when the topic isn't in the injected block.
-	if retriever != nil {
+	if sess.MemoryContext() != "" {
+		ctxBuilder.SetMemory(sess.MemoryContext())
+	} else if retriever != nil {
 		msgs := sess.Messages()
 		var query string
 		for i := len(msgs) - 1; i >= 0; i-- {
@@ -136,7 +146,9 @@ func buildAgentContext(ctx context.Context, sess *session.Session, tools *agent.
 	// Rust: two-stage pattern — index always injected, full content on demand.
 	// Beyond-parity: query-aware index selection — when the user asks about a
 	// specific topic, FTS-matched entries are included alongside the global top-N.
-	if store != nil {
+	if sess.MemoryIndex() != "" {
+		ctxBuilder.SetMemoryIndex(sess.MemoryIndex())
+	} else if store != nil {
 		msgs := sess.Messages()
 		var userQuery string
 		for i := len(msgs) - 1; i >= 0; i-- {

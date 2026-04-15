@@ -7,6 +7,7 @@
 // Output structure:
 //   [Working State]    ← direct injection, not searched
 //   [Retrieved Evidence] ← ranked by relevance with source/score
+//   [Freshness Risks]  ← stale evidence / recency caveats
 //   [Gaps]             ← what's missing, prevents confabulation
 //   [Contradictions]   ← conflicting evidence, surfaces uncertainty
 
@@ -24,9 +25,10 @@ import (
 
 // AssembledContext is the structured output of the context assembler.
 type AssembledContext struct {
-	WorkingState  string // direct-injected active state
-	Evidence      string // ranked retrieval results with provenance
-	Gaps          string // detected information gaps
+	WorkingState   string // direct-injected active state
+	Evidence       string // ranked retrieval results with provenance
+	FreshnessRisks string // stale evidence or recency caveats
+	Gaps           string // detected information gaps
 	Contradictions string // conflicting evidence
 }
 
@@ -39,6 +41,9 @@ func (ac *AssembledContext) Format() string {
 	}
 	if ac.Evidence != "" {
 		sections = append(sections, "[Retrieved Evidence]\n"+ac.Evidence)
+	}
+	if ac.FreshnessRisks != "" {
+		sections = append(sections, "[Freshness Risks]\n"+ac.FreshnessRisks)
 	}
 	if ac.Gaps != "" {
 		sections = append(sections, "[Gaps]\n"+ac.Gaps)
@@ -79,11 +84,28 @@ func AssembleContext(
 		var b strings.Builder
 		for i, e := range evidence {
 			tier := e.SourceTier.String()
-			canonical := ""
+			var qualifiers []string
 			if e.IsCanonical {
-				canonical = ", canonical"
+				qualifiers = append(qualifiers, "canonical")
 			}
-			fmt.Fprintf(&b, "%d. [%s, %.2f%s] %s\n", i+1, tier, e.Score, canonical, e.Content)
+			if e.AuthorityScore > 0 {
+				qualifiers = append(qualifiers, fmt.Sprintf("authority=%.2f", e.AuthorityScore))
+			}
+			if e.SourceLabel != "" {
+				qualifiers = append(qualifiers, "source="+e.SourceLabel)
+			}
+			if e.RetrievalMode != "" {
+				qualifiers = append(qualifiers, "via="+e.RetrievalMode)
+			}
+			if e.AgeDays >= 1 {
+				qualifiers = append(qualifiers, fmt.Sprintf("age=%.0fd", e.AgeDays))
+			}
+
+			meta := fmt.Sprintf("%s, %.2f", tier, e.Score)
+			if len(qualifiers) > 0 {
+				meta += ", " + strings.Join(qualifiers, ", ")
+			}
+			fmt.Fprintf(&b, "%d. [%s] %s\n", i+1, meta, e.Content)
 		}
 		ac.Evidence = b.String()
 	}
@@ -91,14 +113,19 @@ func AssembleContext(
 	// Gaps: detect which tiers returned no results.
 	ac.Gaps = detectGaps(evidence)
 
+	// Freshness: explicitly call out stale supporting evidence.
+	ac.FreshnessRisks = detectFreshnessRisks(evidence)
+
 	// Contradictions: detect conflicting evidence.
 	ac.Contradictions = detectContradictions(evidence)
 
 	gapCount := strings.Count(ac.Gaps, "\n")
+	freshnessCount := strings.Count(ac.FreshnessRisks, "\n")
 	contradictionCount := strings.Count(ac.Contradictions, "\n")
 	log.Debug().
 		Int("evidence", len(evidence)).
 		Int("gaps", gapCount).
+		Int("freshness_risks", freshnessCount).
 		Int("contradictions", contradictionCount).
 		Msg("context assembly: structured context built")
 
@@ -137,6 +164,32 @@ func detectGaps(evidence []Evidence) string {
 		return ""
 	}
 	return strings.Join(gaps, "\n")
+}
+
+func detectFreshnessRisks(evidence []Evidence) string {
+	if len(evidence) == 0 {
+		return ""
+	}
+
+	staleByTier := make(map[MemoryTier]float64)
+	for _, e := range evidence {
+		if e.AgeDays < 30 {
+			continue
+		}
+		if current, ok := staleByTier[e.SourceTier]; !ok || e.AgeDays > current {
+			staleByTier[e.SourceTier] = e.AgeDays
+		}
+	}
+
+	if len(staleByTier) == 0 {
+		return ""
+	}
+
+	var risks []string
+	for tier, ageDays := range staleByTier {
+		risks = append(risks, fmt.Sprintf("- %s evidence may be stale (oldest supporting item is %.0f days old)", tier, ageDays))
+	}
+	return strings.Join(risks, "\n")
 }
 
 // detectContradictions finds evidence pairs that might conflict.
