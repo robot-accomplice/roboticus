@@ -427,6 +427,11 @@ Blocking commands for feature-complete releases:
 | R-UPGRADE-3 | `applyProvidersUpdate(refreshConfig=false)` preserves a customized local providers.toml: no fetch, no SHA check, no overwrite — even when the registry manifest declares a stale SHA. Local edits (API keys, custom providers) survive `roboticus upgrade all` | `cmd/updatecmd/update_parity_test.go` | L1 |
 | R-UPGRADE-4 | `applyProvidersUpdate(refreshConfig=true)` is the documented opt-in escape hatch: downloads, verifies the SHA, and overwrites the local file even when customized | `cmd/updatecmd/update_parity_test.go` | L1 |
 | R-UPGRADE-5 | `applySkillsUpdate(refreshConfig=false)` preserves per-file: a manifest-declared skill that exists locally is left untouched (no SHA check), while a manifest-declared skill that's missing locally is fresh-installed and SHA-verified in the same call | `cmd/updatecmd/update_parity_test.go` | L1 |
+| R-DBPERMS-1 | `db.Open()` tightens a fresh database file to mode 0o600 even when the process umask is 0022 (default umask would otherwise produce 0o644 — world-readable) | `internal/db/store_permissions_test.go` | L1 |
+| R-DBPERMS-2 | `db.Open()` tightens an existing 0o644 database file to 0o600 on next boot (upgrade-friendly: pre-v1.0.6 installs auto-fix without operator action) | `internal/db/store_permissions_test.go` | L1 |
+| R-DBPERMS-3 | WAL sidecar files (`<path>-wal`, `<path>-shm`) created by SQLite's WAL mode also receive 0o600 mode — they hold uncommitted page data and warrant the same protection as the main DB | `internal/db/store_permissions_test.go` | L1 |
+| R-DBPERMS-4 | `db.Open(":memory:")` short-circuits the chmod path silently — no stat error, no warning log — since there is no on-disk file to protect | `internal/db/store_permissions_test.go` | L1 |
+| R-DBMIG-042 | Migration 042 (relationship_memory.updated_at) uses the SQLite-compliant ADD COLUMN nullable + UPDATE backfill pattern; non-constant defaults are rejected by ALTER TABLE per SQLite spec, and the broken original migration is replaced (existing installs at schema_version >= 42 are skipped by the runner) | `internal/db/fts_trigger_completeness_test.go` (round-trip exercises the new column path on every migration run) | L1 |
 
 ## Governance Rules
 
