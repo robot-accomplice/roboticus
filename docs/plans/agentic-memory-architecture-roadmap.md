@@ -89,6 +89,12 @@ closed, or the critical path changes.
   `[Working State]` section and the verifier now consumes that section to
   reject responses that abandon unresolved questions or claim task completion
   without addressing the current stopping criteria.
+- Post-turn reflection now grows executive state automatically: verified
+  conclusions are recorded for subgoals that are both covered in the
+  response and supported by retrieved evidence, unresolved questions are
+  opened for subgoals the turn could not close, and prior unresolved
+  questions whose keywords appear in a confident response are resolved.
+  Growth is idempotent across repeated runs.
 
 ### Current Critical Path
 
@@ -570,9 +576,17 @@ short-term executive state described in the reference architecture.
   verified conclusions, decision checkpoints, and stopping criteria.
 - Task synthesis now records the synthesized plan as a structured plan entry
   in working memory on every turn it fires.
-- What still remains is wiring assumptions, verified conclusions, and
-  decision checkpoints into post-turn reflection/consolidation so executive
-  entries grow naturally during work rather than only at task-synthesis time.
+- Post-turn reflection now grows executive state automatically: verified
+  conclusions are recorded for subgoals that are both covered in the
+  response and supported by retrieved evidence, unresolved questions are
+  opened for subgoals the turn could not close, and prior unresolved
+  questions whose keywords appear in a confident response are resolved.
+- Growth is idempotent across repeated runs so the executive layer does not
+  churn on every turn.
+- What still remains is richer assumption extraction from tool outputs,
+  decision-checkpoint recording when the plan meaningfully changes, and a
+  trace annotation that surfaces every executive-state write so operators can
+  audit the growth decisions.
 
 ---
 

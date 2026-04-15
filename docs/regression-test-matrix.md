@@ -315,6 +315,11 @@ Blocking commands for feature-complete releases:
 | R-AGENT-48 | Verifier parses executive-state sections out of the memory context and extracts unresolved questions and stopping criteria | `internal/pipeline/verifier_test.go` | L1 |
 | R-AGENT-49 | Verifier rejects responses that abandon unresolved questions while answering a related prompt | `internal/pipeline/verifier_test.go` | L1 |
 | R-AGENT-50 | Verifier rejects "task complete" claims that do not address the active stopping criteria | `internal/pipeline/verifier_test.go` | L1 |
+| R-AGENT-51 | Post-turn growth records verified conclusions for covered + evidence-supported subgoals | `internal/pipeline/executive_growth_test.go` | L1 |
+| R-AGENT-52 | Post-turn growth opens unresolved questions for subgoals the turn could not close | `internal/pipeline/executive_growth_test.go` | L1 |
+| R-AGENT-53 | Post-turn growth resolves prior unresolved questions once the response answers them | `internal/pipeline/executive_growth_test.go` | L1 |
+| R-AGENT-54 | Post-turn growth does not auto-resolve open questions when the response is explicitly uncertain | `internal/pipeline/executive_growth_test.go` | L1 |
+| R-AGENT-55 | Post-turn growth is idempotent across repeated runs — no duplicate verified conclusions | `internal/pipeline/executive_growth_test.go` | L1 |
 
 ## Governance Rules
 

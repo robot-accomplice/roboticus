@@ -59,6 +59,12 @@ func (p *Pipeline) PostTurnIngest(ctx context.Context, session *Session, turnID 
 		// 5. Procedure detection: extract tool sequences and persist learned skills.
 		p.detectAndPersistProcedures(bgCtx, session)
 
+		// 5b. Executive state growth: record verified conclusions for answered
+		// subgoals that have evidence support, open unresolved questions for
+		// subgoals the turn could not close, and resolve any prior unresolved
+		// questions the agent has now answered.
+		p.growExecutiveState(bgCtx, session, assistantContent)
+
 		// 6. Log the turn pair for analytics/debugging.
 		if userContent != "" {
 			log.Trace().
@@ -218,6 +224,139 @@ func (p *Pipeline) reflectOnTurn(ctx context.Context, userContent string, sessio
 	} else {
 		log.Debug().Str("outcome", summary.Outcome).Int("actions", len(summary.Actions)).
 			Msg("reflection: episode summary stored")
+	}
+}
+
+// growExecutiveState converts the outcome of the current turn into structured
+// executive-state entries on the active task. Verified conclusions record the
+// subgoals that were both covered in the response and supported by retrieved
+// evidence. Unresolved questions record the subgoals the turn could not close.
+// Existing unresolved questions whose keywords now appear in the response are
+// resolved so the task graph stays current.
+func (p *Pipeline) growExecutiveState(ctx context.Context, session *Session, assistantContent string) {
+	if p.store == nil || session == nil {
+		return
+	}
+	content := strings.TrimSpace(assistantContent)
+	if content == "" {
+		return
+	}
+
+	vctx := BuildVerificationContext(session)
+	if len(vctx.Subgoals) == 0 {
+		return
+	}
+
+	mm := agentmemory.NewManager(agentmemory.DefaultConfig(), p.store)
+	state, err := mm.LoadExecutiveState(ctx, session.ID, "")
+	if err != nil {
+		log.Debug().Err(err).Msg("executive: load state for growth failed")
+		return
+	}
+	if state == nil || state.TaskID == "" {
+		return
+	}
+	taskID := state.TaskID
+	lowerResponse := strings.ToLower(content)
+
+	// Record verified conclusions for subgoals that pass the same support
+	// checks the verifier uses to avoid writing premature conclusions.
+	for _, goal := range vctx.Subgoals {
+		trimmed := strings.TrimSpace(goal)
+		if trimmed == "" {
+			continue
+		}
+		if !verificationGoalCovered(trimmed, lowerResponse) {
+			continue
+		}
+		if len(vctx.EvidenceItems) == 0 {
+			continue
+		}
+		if verificationGoalAllowsPlanInference(trimmed) {
+			// Remediation / plan subgoals get their own check — do not record
+			// them as verified conclusions unless tool-grounded.
+			continue
+		}
+		if !verificationGoalSupportedByEvidence(trimmed, lowerResponse, vctx.EvidenceItems) {
+			continue
+		}
+		contentEntry := "subgoal verified: " + truncate(trimmed, 120)
+		exists, err := mm.HasExecutiveEntry(ctx, session.ID, taskID, agentmemory.EntryVerifiedConclusion, contentEntry)
+		if err != nil {
+			log.Debug().Err(err).Msg("executive: duplicate check failed")
+			continue
+		}
+		if exists {
+			continue
+		}
+		payload := agentmemory.VerifiedConclusionPayload{
+			SupportingEvidence: vctx.EvidenceItems,
+			VerifiedAt:         time.Now().UTC().Format(time.RFC3339),
+		}
+		if err := mm.RecordVerifiedConclusion(ctx, session.ID, taskID, contentEntry, payload); err != nil {
+			log.Debug().Err(err).Msg("executive: record verified conclusion failed")
+		}
+	}
+
+	// Record unresolved questions for subgoals that are not covered by the
+	// response or that the response explicitly punted on.
+	uncertaintyPresent := containsAny(lowerResponse,
+		"don't know", "do not know", "unclear", "not enough", "insufficient",
+		"need more", "i'm not certain", "we're not certain", "cannot confirm",
+	)
+	for _, goal := range vctx.Subgoals {
+		trimmed := strings.TrimSpace(goal)
+		if trimmed == "" {
+			continue
+		}
+		covered := verificationGoalCovered(trimmed, lowerResponse)
+		if covered && !uncertaintyPresent {
+			continue
+		}
+		contentEntry := "unresolved: " + truncate(trimmed, 120)
+		exists, err := mm.HasExecutiveEntry(ctx, session.ID, taskID, agentmemory.EntryUnresolvedQuestion, contentEntry)
+		if err != nil {
+			log.Debug().Err(err).Msg("executive: duplicate check failed")
+			continue
+		}
+		if exists {
+			continue
+		}
+		payload := agentmemory.UnresolvedQuestionPayload{
+			BlockingSubgoal: truncate(trimmed, 120),
+		}
+		if err := mm.RecordUnresolvedQuestion(ctx, session.ID, taskID, contentEntry, payload); err != nil {
+			log.Debug().Err(err).Msg("executive: record unresolved question failed")
+		}
+	}
+
+	// Resolve any prior unresolved question whose keywords now appear in the
+	// response with enough confidence to consider it answered.
+	for _, q := range state.UnresolvedQuestions {
+		keywords := verificationKeywords(q.Content)
+		if len(keywords) == 0 {
+			continue
+		}
+		matches := 0
+		for _, kw := range keywords {
+			if strings.Contains(lowerResponse, kw) {
+				matches++
+			}
+		}
+		threshold := 1
+		if len(keywords) >= 4 {
+			threshold = 2
+		}
+		if matches < threshold {
+			continue
+		}
+		// Only resolve if the response is not itself uncertain about this item.
+		if uncertaintyPresent {
+			continue
+		}
+		if err := mm.ResolveQuestion(ctx, session.ID, taskID, q.ID); err != nil {
+			log.Debug().Err(err).Msg("executive: resolve question failed")
+		}
 	}
 }
 

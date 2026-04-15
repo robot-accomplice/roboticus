@@ -179,6 +179,34 @@ func (mm *Manager) RecordStoppingCriteria(ctx context.Context, sessionID, taskID
 	return mm.recordExecutiveEntry(ctx, sessionID, taskID, EntryStoppingCriteria, content, 7, payload, true)
 }
 
+// HasExecutiveEntry returns true when an executive-state entry already exists
+// for (session, task, entry_type) with content prefix matching contentPrefix.
+// Callers use this to avoid re-recording the same verified_conclusion or
+// unresolved_question on every turn.
+func (mm *Manager) HasExecutiveEntry(ctx context.Context, sessionID, taskID, entryType, contentPrefix string) (bool, error) {
+	if mm.store == nil || sessionID == "" || taskID == "" || entryType == "" {
+		return false, nil
+	}
+	prefix := strings.TrimSpace(contentPrefix)
+	if prefix == "" {
+		return false, nil
+	}
+	if len(prefix) > 80 {
+		prefix = prefix[:80]
+	}
+	like := prefix + "%"
+	var count int
+	row := mm.store.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM working_memory
+		  WHERE session_id = ? AND task_id = ? AND entry_type = ? AND content LIKE ?`,
+		sessionID, taskID, entryType, like,
+	)
+	if err := row.Scan(&count); err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
 // ResolveQuestion marks an unresolved question as resolved by deleting the row.
 // If id is empty, the question is matched by fuzzy content prefix within the task.
 func (mm *Manager) ResolveQuestion(ctx context.Context, sessionID, taskID, id string) error {
