@@ -109,6 +109,10 @@ closed, or the critical path changes.
 - Decision checkpoints are now recorded automatically when task synthesis
   produces a subgoal set different from the prior plan for the same task,
   with the add/remove diff preserved on the checkpoint payload.
+- Executive-state writes are now observable: plan + checkpoint writes are
+  annotated onto the pipeline trace under `executive.*`, and post-turn
+  growth emits structured log events with an `executive_write` category
+  so operators can audit every write.
 
 ### Current Critical Path
 
@@ -617,9 +621,14 @@ short-term executive state described in the reference architecture.
   produces a subgoal set that differs from the prior plan for the same task.
   The checkpoint payload carries the chosen subgoals, the prior subgoals as
   "considered", and a rationale describing the added/removed diff.
-- What still remains is richer assumption extraction from tool outputs and a
-  trace annotation that surfaces every executive-state write so operators can
-  audit the growth decisions.
+- Executive-state writes are now observable: task-synthesis plan writes are
+  annotated onto the pipeline trace under the `executive.*` namespace
+  (plan_recorded, subgoals, subgoals_added, subgoals_removed,
+  checkpoint_recorded, task_id), and post-turn growth emits structured log
+  events with an `executive_write` / `executive_growth` category that carry
+  the session, task, and subgoal for every write. `growExecutiveState` now
+  returns an `ExecutiveGrowthResult` with counts for tests and telemetry.
+- What still remains is richer assumption extraction from tool outputs.
 
 ---
 

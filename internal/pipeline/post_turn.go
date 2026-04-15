@@ -227,36 +227,51 @@ func (p *Pipeline) reflectOnTurn(ctx context.Context, userContent string, sessio
 	}
 }
 
+// ExecutiveGrowthResult reports what the auto-grow pass wrote for a turn.
+type ExecutiveGrowthResult struct {
+	TaskID             string
+	VerifiedRecorded   int
+	QuestionsOpened    int
+	QuestionsResolved  int
+}
+
 // growExecutiveState converts the outcome of the current turn into structured
 // executive-state entries on the active task. Verified conclusions record the
 // subgoals that were both covered in the response and supported by retrieved
 // evidence. Unresolved questions record the subgoals the turn could not close.
 // Existing unresolved questions whose keywords now appear in the response are
 // resolved so the task graph stays current.
-func (p *Pipeline) growExecutiveState(ctx context.Context, session *Session, assistantContent string) {
+//
+// Returns an ExecutiveGrowthResult so callers and tests can see what was
+// written. All writes are also surfaced via structured logs with the
+// "executive_write" category so operators can audit growth decisions even
+// though post-turn runs after the trace is closed.
+func (p *Pipeline) growExecutiveState(ctx context.Context, session *Session, assistantContent string) ExecutiveGrowthResult {
+	result := ExecutiveGrowthResult{}
 	if p.store == nil || session == nil {
-		return
+		return result
 	}
 	content := strings.TrimSpace(assistantContent)
 	if content == "" {
-		return
+		return result
 	}
 
 	vctx := BuildVerificationContext(session)
 	if len(vctx.Subgoals) == 0 {
-		return
+		return result
 	}
 
 	mm := agentmemory.NewManager(agentmemory.DefaultConfig(), p.store)
 	state, err := mm.LoadExecutiveState(ctx, session.ID, "")
 	if err != nil {
 		log.Debug().Err(err).Msg("executive: load state for growth failed")
-		return
+		return result
 	}
 	if state == nil || state.TaskID == "" {
-		return
+		return result
 	}
 	taskID := state.TaskID
+	result.TaskID = taskID
 	lowerResponse := strings.ToLower(content)
 
 	// Record verified conclusions for subgoals that pass the same support
@@ -295,7 +310,15 @@ func (p *Pipeline) growExecutiveState(ctx context.Context, session *Session, ass
 		}
 		if err := mm.RecordVerifiedConclusion(ctx, session.ID, taskID, contentEntry, payload); err != nil {
 			log.Debug().Err(err).Msg("executive: record verified conclusion failed")
+			continue
 		}
+		result.VerifiedRecorded++
+		log.Debug().
+			Str("session", session.ID).
+			Str("task", taskID).
+			Str("subgoal", trimmed).
+			Str("category", "executive_write").
+			Msg("executive verified_conclusion recorded")
 	}
 
 	// Record unresolved questions for subgoals that are not covered by the
@@ -327,7 +350,15 @@ func (p *Pipeline) growExecutiveState(ctx context.Context, session *Session, ass
 		}
 		if err := mm.RecordUnresolvedQuestion(ctx, session.ID, taskID, contentEntry, payload); err != nil {
 			log.Debug().Err(err).Msg("executive: record unresolved question failed")
+			continue
 		}
+		result.QuestionsOpened++
+		log.Debug().
+			Str("session", session.ID).
+			Str("task", taskID).
+			Str("subgoal", trimmed).
+			Str("category", "executive_write").
+			Msg("executive unresolved_question opened")
 	}
 
 	// Resolve any prior unresolved question whose keywords now appear in the
@@ -356,8 +387,28 @@ func (p *Pipeline) growExecutiveState(ctx context.Context, session *Session, ass
 		}
 		if err := mm.ResolveQuestion(ctx, session.ID, taskID, q.ID); err != nil {
 			log.Debug().Err(err).Msg("executive: resolve question failed")
+			continue
 		}
+		result.QuestionsResolved++
+		log.Debug().
+			Str("session", session.ID).
+			Str("task", taskID).
+			Str("question", q.Content).
+			Str("category", "executive_write").
+			Msg("executive unresolved_question resolved")
 	}
+
+	if result.VerifiedRecorded+result.QuestionsOpened+result.QuestionsResolved > 0 {
+		log.Info().
+			Str("session", session.ID).
+			Str("task", taskID).
+			Int("verified", result.VerifiedRecorded).
+			Int("questions_opened", result.QuestionsOpened).
+			Int("questions_resolved", result.QuestionsResolved).
+			Str("category", "executive_growth").
+			Msg("executive state grown after turn")
+	}
+	return result
 }
 
 // detectAndPersistProcedures uses LearningExtractor's sliding-window procedure

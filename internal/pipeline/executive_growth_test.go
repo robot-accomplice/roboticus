@@ -143,6 +143,72 @@ func TestGrowExecutiveState_DoesNotResolveWhenResponseIsUncertain(t *testing.T) 
 	}
 }
 
+func TestGrowExecutiveState_ReturnsCountsForTelemetry(t *testing.T) {
+	p := newGrowthTestPipeline(t)
+	ctx := context.Background()
+	seedPlan(t, p.store, "s1", "t1", []string{"identify affected systems", "propose remediation plan"})
+
+	sess := session.New("s1", "a1", "Bot")
+	sess.AddUserMessage("Identify affected systems and propose a remediation plan.")
+	sess.SetTaskVerificationHints("analysis", "complex", "execute_directly",
+		[]string{"identify affected systems", "propose remediation plan"})
+	sess.SetMemoryContext("[Active Memory]\n\n[Retrieved Evidence]\n1. [semantic, 0.9] Billing and ledger affected\n")
+
+	result := p.growExecutiveState(ctx, sess,
+		"The affected systems are billing and ledger.")
+
+	if result.TaskID != "t1" {
+		t.Fatalf("expected TaskID=t1, got %q", result.TaskID)
+	}
+	if result.VerifiedRecorded != 1 {
+		t.Fatalf("expected one verified recorded, got %+v", result)
+	}
+	if result.QuestionsOpened != 1 {
+		t.Fatalf("expected one question opened (remediation plan uncovered), got %+v", result)
+	}
+}
+
+func TestAnnotateExecutivePlanWrite_RecordsSubgoalsAndDiff(t *testing.T) {
+	tr := NewTraceRecorder()
+	tr.BeginSpan("task_synthesis")
+	AnnotateExecutivePlanWrite(tr, "t-1",
+		[]string{"diagnose", "remediate", "notify"},
+		[]string{"notify"},
+		[]string{"rollback"},
+	)
+	tr.EndSpan("ok")
+
+	trace := tr.Finish("turn-1", "test")
+	if len(trace.Stages) == 0 {
+		t.Fatal("expected stage to be recorded")
+	}
+	meta := trace.Stages[0].Metadata
+	if got, ok := meta["executive.plan_recorded"].(bool); !ok || !got {
+		t.Fatalf("expected executive.plan_recorded=true, got %+v", meta["executive.plan_recorded"])
+	}
+	if got, ok := meta["executive.checkpoint_recorded"].(bool); !ok || !got {
+		t.Fatalf("expected executive.checkpoint_recorded=true, got %+v", meta["executive.checkpoint_recorded"])
+	}
+	if _, ok := meta["executive.subgoals_added"]; !ok {
+		t.Fatalf("expected executive.subgoals_added annotation")
+	}
+	if _, ok := meta["executive.subgoals_removed"]; !ok {
+		t.Fatalf("expected executive.subgoals_removed annotation")
+	}
+}
+
+func TestAnnotateExecutivePlanWrite_OmitsCheckpointWhenUnchanged(t *testing.T) {
+	tr := NewTraceRecorder()
+	tr.BeginSpan("task_synthesis")
+	AnnotateExecutivePlanWrite(tr, "t-1", []string{"diagnose"}, nil, nil)
+	tr.EndSpan("ok")
+
+	meta := tr.Finish("turn-1", "test").Stages[0].Metadata
+	if _, ok := meta["executive.checkpoint_recorded"]; ok {
+		t.Fatal("should not annotate checkpoint when subgoals unchanged")
+	}
+}
+
 func TestGrowExecutiveState_IdempotentOnRepeatedRuns(t *testing.T) {
 	p := newGrowthTestPipeline(t)
 	ctx := context.Background()

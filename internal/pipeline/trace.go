@@ -17,6 +17,7 @@ const (
 	TraceNSDelegation = "delegation" // Subagent delegation spans
 	TraceNSTaskState  = "taskstate"  // Task state machine transition spans
 	TraceNSVerifier   = "verifier"   // Verification / critic stage annotations
+	TraceNSExecutive  = "executive"  // Executive working-memory write annotations
 )
 
 // PipelineTrace records per-stage timing for a single pipeline run.
@@ -137,6 +138,32 @@ func AnnotateVerifierTrace(tr *TraceRecorder, result VerificationResult) {
 		if buf, err := json.Marshal(result.ClaimAudits); err == nil {
 			tr.Annotate(TraceNSVerifier+".claim_map_json", string(buf))
 		}
+	}
+}
+
+// AnnotateExecutivePlanWrite records a plan (and optional checkpoint) write
+// onto the current trace span. Called by the task-synthesis stage so
+// operators can see the exact plan the agent committed to for this turn, and
+// the subgoal diff when the plan was revised.
+func AnnotateExecutivePlanWrite(tr *TraceRecorder, taskID string, subgoals, addedSubgoals, removedSubgoals []string) {
+	if tr == nil {
+		return
+	}
+	tr.Annotate(TraceNSExecutive+".plan_recorded", true)
+	if taskID != "" {
+		tr.Annotate(TraceNSExecutive+".task_id", taskID)
+	}
+	if len(subgoals) > 0 {
+		tr.Annotate(TraceNSExecutive+".subgoals", subgoals)
+	}
+	if len(addedSubgoals) > 0 || len(removedSubgoals) > 0 {
+		tr.Annotate(TraceNSExecutive+".checkpoint_recorded", true)
+	}
+	if len(addedSubgoals) > 0 {
+		tr.Annotate(TraceNSExecutive+".subgoals_added", addedSubgoals)
+	}
+	if len(removedSubgoals) > 0 {
+		tr.Annotate(TraceNSExecutive+".subgoals_removed", removedSubgoals)
 	}
 }
 

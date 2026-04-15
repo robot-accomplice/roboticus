@@ -299,13 +299,14 @@ func (p *Pipeline) recordTaskSynthesisPlan(ctx context.Context, pc *pipelineCont
 
 	// Before replacing the plan, detect a meaningful change vs any prior plan
 	// for this task so a decision_checkpoint can capture the revision.
+	var addedSubgoals, removedSubgoals []string
 	priorState, _ := mm.LoadExecutiveState(ctx, pc.session.ID, pc.taskID)
 	if priorState != nil && len(priorState.Plans) > 0 {
 		prior := priorState.Plans[0]
 		priorSubgoals := extractPlanSubgoals(prior)
-		added, removed := diffPlanSubgoals(priorSubgoals, subgoals)
-		if len(added) > 0 || len(removed) > 0 {
-			checkpointContent := summarizePlanChange(added, removed)
+		addedSubgoals, removedSubgoals = diffPlanSubgoals(priorSubgoals, subgoals)
+		if len(addedSubgoals) > 0 || len(removedSubgoals) > 0 {
+			checkpointContent := summarizePlanChange(addedSubgoals, removedSubgoals)
 			checkpointPayload := agentmemory.DecisionCheckpointPayload{
 				Chosen:     strings.Join(subgoals, " ; "),
 				Considered: priorSubgoals,
@@ -319,7 +320,17 @@ func (p *Pipeline) recordTaskSynthesisPlan(ctx context.Context, pc *pipelineCont
 
 	if err := mm.RecordPlan(ctx, pc.session.ID, pc.taskID, content, payload); err != nil {
 		log.Debug().Err(err).Msg("executive: record plan failed")
+		return
 	}
+	AnnotateExecutivePlanWrite(pc.tr, pc.taskID, subgoals, addedSubgoals, removedSubgoals)
+	log.Debug().
+		Str("session", pc.session.ID).
+		Str("task", pc.taskID).
+		Int("subgoal_count", len(subgoals)).
+		Int("added", len(addedSubgoals)).
+		Int("removed", len(removedSubgoals)).
+		Str("category", "executive_write").
+		Msg("executive plan recorded")
 }
 
 // extractPlanSubgoals pulls the subgoals slice out of a plan entry's payload,
