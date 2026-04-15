@@ -23,12 +23,22 @@ type ToolEvent struct {
 }
 
 // EpisodeSummary is a structured reflection on a completed turn.
+//
+// Milestone 8 enriches the summary beyond goal/actions/outcome so
+// consolidation can promote reusable learnings into longer-term memory
+// instead of only archiving episodes.
 type EpisodeSummary struct {
-	Goal      string        // what was being attempted
-	Actions   []string      // tool names in order
-	Outcome   string        // "success" / "partial" / "failure"
-	Learnings []string      // insights extracted
-	Duration  time.Duration // total turn duration
+	Goal             string        // what was being attempted
+	Actions          []string      // tool names in order
+	Outcome          string        // "success" / "partial" / "failure"
+	Learnings        []string      // insights extracted
+	Duration         time.Duration // total turn duration
+	EvidenceRefs     []string      // content previews of evidence items that shaped the answer
+	FailedHypotheses []string      // hypotheses the agent walked back
+	FixPatterns      []string      // tool sequences that succeeded after prior failures
+	ErrorsSeen       []string      // error messages from failed tool calls
+	ResultQuality    float64       // 0-1 blended signal: verifier pass + tool success rate
+	VerifierPassed   bool          // whether the verifier passed the final answer
 }
 
 // Reflect produces a structured episode summary from turn data.
@@ -101,11 +111,248 @@ func (es *EpisodeSummary) FormatForStorage() string {
 		b.WriteString(" | Learnings: ")
 		b.WriteString(strings.Join(es.Learnings, "; "))
 	}
+	if len(es.FailedHypotheses) > 0 {
+		b.WriteString(" | FailedHypotheses: ")
+		b.WriteString(strings.Join(es.FailedHypotheses, "; "))
+	}
+	if len(es.FixPatterns) > 0 {
+		b.WriteString(" | FixPatterns: ")
+		b.WriteString(strings.Join(es.FixPatterns, "; "))
+	}
+	if len(es.EvidenceRefs) > 0 {
+		b.WriteString(" | EvidenceRefs: ")
+		b.WriteString(strings.Join(es.EvidenceRefs, " | "))
+	}
+	if len(es.ErrorsSeen) > 0 {
+		b.WriteString(" | Errors: ")
+		b.WriteString(strings.Join(es.ErrorsSeen, "; "))
+	}
+	if es.ResultQuality > 0 {
+		b.WriteString(" | Quality: ")
+		b.WriteString(formatQuality(es.ResultQuality))
+	}
 	if es.Duration > 0 {
 		b.WriteString(" | Duration: ")
 		b.WriteString(es.Duration.Round(time.Second).String())
 	}
 	return b.String()
+}
+
+// EpisodeInput carries the extra context the enriched reflection needs
+// beyond the original user content and tool events.
+type EpisodeInput struct {
+	UserContent    string
+	AssistantAnswer string
+	ToolEvents     []ToolEvent
+	EvidenceItems  []string // retrieved-evidence items that reached the model
+	VerifierPassed bool
+	ErrorMessages  []string // stderr / failure outputs captured from tool calls
+	Duration       time.Duration
+}
+
+// AnalyzeEpisode is the enriched reflection entry point. It extends Reflect
+// with evidence tracking, failed-hypothesis detection, fix-pattern
+// extraction, and a blended result-quality score that combines verifier
+// pass with tool-success rate. The base Reflect() remains as a backward-
+// compatible shim for callers that do not have evidence/verifier data.
+func AnalyzeEpisode(input EpisodeInput) *EpisodeSummary {
+	summary := Reflect(input.UserContent, input.ToolEvents, input.Duration)
+	if summary == nil {
+		if input.AssistantAnswer == "" && len(input.EvidenceItems) == 0 {
+			return nil
+		}
+		summary = &EpisodeSummary{
+			Goal:     extractGoal(input.UserContent),
+			Outcome:  "conversation",
+			Duration: input.Duration,
+		}
+	}
+
+	summary.VerifierPassed = input.VerifierPassed
+	summary.EvidenceRefs = evidencePreviews(input.EvidenceItems, 3)
+	summary.FixPatterns = extractFixPatterns(input.ToolEvents)
+	summary.FailedHypotheses = extractFailedHypotheses(input.AssistantAnswer)
+	summary.ErrorsSeen = dedupeAndTrim(input.ErrorMessages, 3, 200)
+	summary.ResultQuality = computeResultQuality(input)
+
+	return summary
+}
+
+func computeResultQuality(input EpisodeInput) float64 {
+	// Tool component: success rate across all tools, default 1.0 when no tools ran.
+	toolComponent := 1.0
+	if len(input.ToolEvents) > 0 {
+		successes := 0
+		for _, ev := range input.ToolEvents {
+			if ev.Success {
+				successes++
+			}
+		}
+		toolComponent = float64(successes) / float64(len(input.ToolEvents))
+	}
+	// Verifier component: binary pass/fail.
+	verifierComponent := 0.5
+	if input.VerifierPassed {
+		verifierComponent = 1.0
+	}
+	// Evidence component: rewards answers that had evidence to draw from.
+	evidenceComponent := 0.5
+	if len(input.EvidenceItems) >= 3 {
+		evidenceComponent = 1.0
+	} else if len(input.EvidenceItems) >= 1 {
+		evidenceComponent = 0.75
+	}
+	blended := (toolComponent*0.5 + verifierComponent*0.3 + evidenceComponent*0.2)
+	if blended < 0 {
+		return 0
+	}
+	if blended > 1 {
+		return 1
+	}
+	return blended
+}
+
+// extractFixPatterns detects tool sequences where a failure was followed by
+// a success on the same tool, typically indicating a successful retry or
+// correction. Returns a short descriptor per detected pattern.
+func extractFixPatterns(events []ToolEvent) []string {
+	if len(events) < 2 {
+		return nil
+	}
+	var patterns []string
+	seen := make(map[string]bool)
+	for i := 1; i < len(events); i++ {
+		prev := events[i-1]
+		curr := events[i]
+		if prev.ToolName == curr.ToolName && !prev.Success && curr.Success {
+			key := curr.ToolName
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			patterns = append(patterns, key+": fail→success on retry")
+		}
+	}
+	return patterns
+}
+
+// extractFailedHypotheses detects explicit self-corrections in the assistant
+// response — phrases like "actually, I was wrong about X" or "on second
+// thought, Y is incorrect". These are hypotheses the agent walked back and
+// are worth remembering so the same mistake is not made twice.
+var hypothesisWalkbackMarkers = []string{
+	"actually, i was wrong",
+	"actually, i was incorrect",
+	"on second thought",
+	"correction:",
+	"my earlier statement",
+	"revising my answer",
+	"that was incorrect",
+	"i was mistaken",
+	"i need to correct",
+}
+
+func extractFailedHypotheses(answer string) []string {
+	if answer == "" {
+		return nil
+	}
+	lower := strings.ToLower(answer)
+	var out []string
+	for _, marker := range hypothesisWalkbackMarkers {
+		idx := strings.Index(lower, marker)
+		if idx < 0 {
+			continue
+		}
+		// Capture the sentence that contains the marker.
+		sentenceEnd := len(answer)
+		for j := idx + len(marker); j < len(answer); j++ {
+			r := answer[j]
+			if r == '.' || r == '!' || r == '?' || r == '\n' {
+				sentenceEnd = j
+				break
+			}
+		}
+		start := idx
+		for start > 0 {
+			r := answer[start-1]
+			if r == '.' || r == '!' || r == '?' || r == '\n' {
+				break
+			}
+			start--
+		}
+		clause := strings.TrimSpace(answer[start:sentenceEnd])
+		if clause == "" {
+			continue
+		}
+		if len(clause) > 200 {
+			clause = clause[:200]
+		}
+		out = append(out, clause)
+	}
+	return dedupeStrings(out)
+}
+
+func evidencePreviews(items []string, max int) []string {
+	if len(items) == 0 {
+		return nil
+	}
+	var out []string
+	for _, item := range items {
+		trimmed := strings.TrimSpace(item)
+		if trimmed == "" {
+			continue
+		}
+		if len(trimmed) > 120 {
+			trimmed = trimmed[:120] + "…"
+		}
+		out = append(out, trimmed)
+		if len(out) >= max {
+			break
+		}
+	}
+	return out
+}
+
+func dedupeStrings(items []string) []string {
+	seen := make(map[string]struct{}, len(items))
+	var out []string
+	for _, item := range items {
+		key := strings.ToLower(strings.TrimSpace(item))
+		if key == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, item)
+	}
+	return out
+}
+
+func dedupeAndTrim(items []string, max, maxChars int) []string {
+	trimmed := dedupeStrings(items)
+	if max > 0 && len(trimmed) > max {
+		trimmed = trimmed[:max]
+	}
+	for i, item := range trimmed {
+		if maxChars > 0 && len(item) > maxChars {
+			trimmed[i] = item[:maxChars]
+		}
+	}
+	return trimmed
+}
+
+func formatQuality(q float64) string {
+	switch {
+	case q >= 0.85:
+		return "high"
+	case q >= 0.60:
+		return "medium"
+	case q > 0:
+		return "low"
+	}
+	return "unknown"
 }
 
 // extractGoal gets the first sentence of user content as the goal.

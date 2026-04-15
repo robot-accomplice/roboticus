@@ -179,6 +179,7 @@ func (p *Pipeline) reflectOnTurn(ctx context.Context, userContent string, sessio
 	// Track success/failure: a tool call is followed by a tool result message.
 	// If the result starts with error patterns, mark as failure.
 	var toolEvents []agentmemory.ToolEvent
+	var errorMessages []string
 	msgs := session.Messages()
 	for i, msg := range msgs {
 		if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
@@ -190,6 +191,7 @@ func (p *Pipeline) reflectOnTurn(ctx context.Context, userContent string, sessio
 					if strings.HasPrefix(result, "error") || strings.HasPrefix(result, "failed") ||
 						strings.HasPrefix(result, `{"error`) {
 						success = false
+						errorMessages = append(errorMessages, strings.TrimSpace(msgs[i+1].Content))
 					}
 				}
 				toolEvents = append(toolEvents, agentmemory.ToolEvent{
@@ -208,7 +210,20 @@ func (p *Pipeline) reflectOnTurn(ctx context.Context, userContent string, sessio
 		turnDuration = 0 // TODO: wire actual turn start time from pipeline context
 	}
 
-	summary := agentmemory.Reflect(userContent, toolEvents, turnDuration)
+	// Enriched reflection: pass evidence items and verifier outcome so the
+	// summary captures evidence refs, fix patterns, failed hypotheses, and
+	// a blended result-quality score.
+	verifyCtx := BuildVerificationContext(session)
+	verifyResult := VerifyResponse(session.LastAssistantContent(), verifyCtx)
+	summary := agentmemory.AnalyzeEpisode(agentmemory.EpisodeInput{
+		UserContent:     userContent,
+		AssistantAnswer: session.LastAssistantContent(),
+		ToolEvents:      toolEvents,
+		EvidenceItems:   verifyCtx.EvidenceItems,
+		VerifierPassed:  verifyResult.Passed,
+		ErrorMessages:   errorMessages,
+		Duration:        turnDuration,
+	})
 	if summary == nil {
 		return
 	}

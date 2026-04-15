@@ -350,6 +350,10 @@ Blocking commands for feature-complete releases:
 | R-AGENT-83 | `RecordWorkflowSuccess` appends evidence uniquely and increments the success counter | `internal/agent/memory/workflow_test.go` | L1 |
 | R-AGENT-84 | `FindWorkflows` is query-sensitive across name / steps / preconditions / error_modes / context_tags | `internal/agent/memory/workflow_test.go` | L1 |
 | R-AGENT-85 | Procedural retrieval surfaces workflows before tool-stat rollups and falls back to tool stats when no workflow matches | `internal/agent/memory/workflow_test.go` | L1 |
+| R-AGENT-86 | `AnalyzeEpisode` carries evidence refs and verifier outcome into the episode summary with high result quality when tools and verifier all pass | `internal/agent/memory/reflection_episode_test.go` | L1 |
+| R-AGENT-87 | Enriched reflection detects fail→success fix patterns and extracts failed hypotheses from self-corrections in the answer | `internal/agent/memory/reflection_episode_test.go` | L1 |
+| R-AGENT-88 | Enriched reflection captures tool error messages, deduplicated, and produces low result quality when tools and verifier fail | `internal/agent/memory/reflection_episode_test.go` | L1 |
+| R-AGENT-89 | `FormatForStorage` includes enriched fields (FixPatterns, EvidenceRefs, FailedHypotheses, Errors, Quality label) | `internal/agent/memory/reflection_episode_test.go` | L1 |
 
 ## Governance Rules
 

@@ -47,7 +47,7 @@ closed, or the critical path changes.
 | 5 | Replace Relationship Memory With Persisted Relational Memory | In progress | Persisted `knowledge_facts` store, graph-aware retrieval, and first traversal semantics now shipped |
 | 6 | Add A Real Verifier / Critic Stage | Acceptance met | Claim-level certainty classification, provenance coverage, contradiction reconciliation, per-intent proof obligations, and a structured claim-to-evidence trace map are all in place; semantic-classifier upgrade remains as quality work |
 | 7 | Deepen Working Memory Into Executive State | Acceptance met | Executive state is persisted, surfaced in context assembly, grows automatically in post-turn, survives restart with a cross-turn regression test, and emits operator-auditable trace/log writes; richer tool-output assumption extraction remains as follow-on work |
-| 8 | Improve Reflection And Consolidation Quality | Not started | Reflection/consolidation still heuristic despite working scaffolding |
+| 8 | Improve Reflection And Consolidation Quality | In progress | Episode summaries now carry evidence refs, failed hypotheses, fix patterns, error messages, verifier outcome, and a blended result-quality score; cross-tier semantic promotion still pending |
 | A | Observability Dashboards (Appendix A) | Post-plan | Only pick up after milestones 1–8 complete; see Appendix A |
 | B | Evaluation Matrix and Test Harness (Appendix B) | Post-plan | Only pick up after milestones 1–8 complete; see Appendix B |
 | C | Fallback Strategy (Appendix C) | Post-plan | Verifier retry and routing modes cover some layers today; full fallback ladder only scheduled after milestones 1–8 complete; see Appendix C |
@@ -706,6 +706,8 @@ short-term executive state described in the reference architecture.
 
 ## Milestone 8: Improve Reflection And Consolidation Quality
 
+**Status**: In progress
+
 ### Goal
 
 Turn post-turn learning from heuristic logging into reusable memory shaping.
@@ -736,6 +738,23 @@ Turn post-turn learning from heuristic logging into reusable memory shaping.
 - Consolidation can promote into semantic, procedural, and relational stores
 - Repeat success patterns become reusable memory, not just archived episodes
 - Tests cover "episodic repeated success promotes to procedural/semantic"
+
+### Progress
+
+- `EpisodeSummary` now carries `EvidenceRefs`, `FailedHypotheses`,
+  `FixPatterns`, `ErrorsSeen`, `VerifierPassed`, and a blended
+  `ResultQuality` score in addition to the original goal/actions/outcome.
+- New `AnalyzeEpisode(EpisodeInput)` entry point is the enriched
+  reflection call path; the original `Reflect()` remains as a shim for
+  callers without evidence/verifier data.
+- Post-turn reflection now feeds evidence items, verifier outcome, and
+  captured tool error messages into `AnalyzeEpisode`, so the stored
+  episode summary records the information consolidation needs to
+  promote reusable patterns later.
+- What still remains (next M8 slice): a consolidation phase that reads
+  recent episode summaries and promotes repeated successful patterns
+  into semantic memory (and repeat dependencies into `knowledge_facts`),
+  with stricter promotion thresholds to prevent anecdote hijacking.
 
 ---
 
