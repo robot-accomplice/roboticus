@@ -409,6 +409,14 @@ Blocking commands for feature-complete releases:
 | R-AGENT-142 | M3.2 — LIKE safety net is exercised AND annotated as `like_fallback` (or matched via `fts`/`hybrid`) when the FTS leg can't tokenise the query directly; never silently falls through to `empty` while a matching workflow row exists | `internal/agent/memory/retrieval_path_test.go` | L1 |
 | R-AGENT-143 | M3.2 — `classifyHybridPath` is total over (ftsHits, vectorHits): both → `hybrid`, fts-only → `fts`, vector-only → `vector`, neither → empty string (signals caller to engage LIKE fallback) | `internal/agent/memory/retrieval_path_test.go` | L1 |
 | R-AGENT-144 | M3.2 — retrieval tier methods are safe to call without a tracer in context: results are identical whether `WithRetrievalTracer` was applied or not, only the annotation side-channel changes | `internal/agent/memory/retrieval_path_test.go` | L1 |
+| R-AGENT-145 | M8 — `EpisodeSummary.Relations` round-trip through `FormatForStorage` ↔ `parseEpisodeSummary` preserves every extracted (subject, relation, object) triple | `internal/agent/memory/m8_relational_distillation_test.go` | L1 |
+| R-AGENT-146 | M8 — recurring (≥`MinRelationDistillSupport`) high-quality canonical relations are promoted into `knowledge_facts` with `source_table='episodic_distillation'` and confidence ≤ `distilledRelationConfidenceCap` | `internal/agent/memory/m8_relational_distillation_test.go` | L1 |
+| R-AGENT-147 | M8 — relations observed in fewer than `MinRelationDistillSupport` episodes are NOT promoted (anecdote-hijacking guard) | `internal/agent/memory/m8_relational_distillation_test.go` | L1 |
+| R-AGENT-148 | M8 — failed / low-quality episodes do not drive relational promotion even when they recur many times | `internal/agent/memory/m8_relational_distillation_test.go` | L1 |
+| R-AGENT-149 | M8 — relational promotion is idempotent across repeated consolidation runs (UPSERT in place via stable `distill_…` fact id) | `internal/agent/memory/m8_relational_distillation_test.go` | L1 |
+| R-AGENT-150 | M8 — promoted relations are read by `KnowledgeGraph` as normal traversable edges; distillation source is invisible to graph reads | `internal/agent/memory/m8_relational_distillation_test.go` | L1 |
+| R-AGENT-151 | M8 — non-canonical relations in episode summaries are blocked at the canonical write gate; `phaseEpisodeDistillation` filters them and `StoreKnowledgeFact` rejects them as defense-in-depth | `internal/agent/memory/m8_relational_distillation_test.go` | L1 |
+| R-AGENT-152 | M8 — `parseRelationsList` drops malformed segments (wrong separator count, empty parts) without producing phantom triples | `internal/agent/memory/m8_relational_distillation_test.go` | L1 |
 
 ## Governance Rules
 

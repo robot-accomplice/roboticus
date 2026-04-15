@@ -186,7 +186,16 @@ meaningful work for FTS-covered tiers.
 
 ---
 
-## Track 2: M8 Relational Distillation
+## Track 2: M8 Relational Distillation — **Shipped**
+
+> Status: closed 2026-04-15. Implementation in
+> `internal/agent/memory/reflection.go` (`Relations` field +
+> `extractEpisodeRelations` + `FormatForStorage` round-trip),
+> `internal/agent/memory/consolidation_distillation.go`
+> (`MinRelationDistillSupport`, relation tally + `StoreKnowledgeFact`
+> upsert via the canonical write gate), and
+> `internal/agent/memory/m8_relational_distillation_test.go` (regressions
+> R-AGENT-145 through R-AGENT-152).
 
 ### Problem statement
 

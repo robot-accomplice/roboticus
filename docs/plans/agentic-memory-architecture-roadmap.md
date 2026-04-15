@@ -870,13 +870,23 @@ Turn post-turn learning from heuristic logging into reusable memory shaping.
   evidence, 2+ for fix patterns) to prevent anecdote hijacking. The
   phase is idempotent via UPSERT on `(category, key)` and the
   `Distilled` counter appears in the consolidation report.
-- Remaining work to close the milestone against its original acceptance
-  criteria:
-  - promote repeated entity-relation pairs observed in enriched summaries
-    into `knowledge_facts`, so consolidation genuinely promotes into the
-    relational store as well as semantic/procedural stores
+- **M8 relational distillation (shipped 2026-04-15):**
+  `EpisodeSummary.Relations` now carries canonical (subject, relation,
+  object) triples extracted from assistant answer + evidence items, the
+  triples round-trip through `FormatForStorage` ↔ `parseEpisodeSummary`,
+  and `phaseEpisodeDistillation` tallies them across high-quality
+  episodes. Triples observed in `MinRelationDistillSupport` (3) or more
+  episodes are upserted into `knowledge_facts` via the canonical write
+  gate `db.MemoryRepository.StoreKnowledgeFact` with
+  `source_table='episodic_distillation'` and confidence capped at
+  `distilledRelationConfidenceCap` (0.9). Promotion is idempotent by
+  stable `distill_…` fact id; non-canonical relations and below-
+  threshold or low-quality observations are filtered out. Promoted
+  rows are read by `KnowledgeGraph` as normal traversable edges.
+  Regressions R-AGENT-145 through R-AGENT-152 lock the contract.
+- Remaining work for full M8 closure:
   - add a dashboard surface for distilled patterns so operators can see
-    what the agent has generalized
+    what the agent has generalized (deferred to Appendix A)
 
 ---
 
@@ -959,7 +969,11 @@ Implementation order (per the development spec):
    pipeline wiring in `pipeline_run_stages.go`,
    regressions R-AGENT-138 through R-AGENT-144).
 3. **M8 relational distillation** — promote recurring entity-relation
-   patterns from enriched summaries into `knowledge_facts`
+   patterns from enriched summaries into `knowledge_facts` — **shipped**
+   (`Relations` field on `EpisodeSummary` round-tripped via
+   `FormatForStorage`; `phaseEpisodeDistillation` tallies and upserts
+   via the canonical write gate `db.MemoryRepository.StoreKnowledgeFact`;
+   regressions R-AGENT-145 through R-AGENT-152).
 4. **M3.3** — optional `LIKE` retirement after telemetry confirms the
    safety net is dormant
 5. **Appendices A, B, C** — observability dashboards, evaluation

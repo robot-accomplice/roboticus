@@ -39,6 +39,27 @@ type EpisodeSummary struct {
 	ErrorsSeen       []string      // error messages from failed tool calls
 	ResultQuality    float64       // 0-1 blended signal: verifier pass + tool success rate
 	VerifierPassed   bool          // whether the verifier passed the final answer
+
+	// Relations captures canonical (subject, relation, object) triples
+	// extracted from the episode's text — assistant answer, learnings, and
+	// evidence-ref content. These are the candidates M8 tallies across
+	// successful, high-quality episodes for promotion into knowledge_facts.
+	//
+	// The triples are extracted by the same canonical-relation extractor
+	// (extractKnowledgeFacts) the per-document semantic ingestion path uses,
+	// so the relation vocabulary is identical across both paths and
+	// `db.IsCanonicalGraphRelation` is the single write gate.
+	Relations []EpisodeRelation
+}
+
+// EpisodeRelation is a single canonical relation triple extracted from an
+// episode's textual evidence. The shape mirrors `extractedFact` but is an
+// exported type so the round-trip through episode_summary serialisation can
+// be tested directly.
+type EpisodeRelation struct {
+	Subject  string
+	Relation string
+	Object   string
 }
 
 // Reflect produces a structured episode summary from turn data.
@@ -127,6 +148,18 @@ func (es *EpisodeSummary) FormatForStorage() string {
 		b.WriteString(" | Errors: ")
 		b.WriteString(strings.Join(es.ErrorsSeen, "; "))
 	}
+	if len(es.Relations) > 0 {
+		// Wire format is `subject||relation||object` per triple, joined by
+		// "; " between triples. The "||" separator avoids collisions with
+		// the existing "; " and " | " separators used elsewhere in this
+		// summary line so parsing stays unambiguous.
+		var triples []string
+		for _, rel := range es.Relations {
+			triples = append(triples, rel.Subject+"||"+rel.Relation+"||"+rel.Object)
+		}
+		b.WriteString(" | Relations: ")
+		b.WriteString(strings.Join(triples, "; "))
+	}
 	if es.ResultQuality > 0 {
 		b.WriteString(" | Quality: ")
 		b.WriteString(formatQuality(es.ResultQuality))
@@ -174,8 +207,56 @@ func AnalyzeEpisode(input EpisodeInput) *EpisodeSummary {
 	summary.FailedHypotheses = extractFailedHypotheses(input.AssistantAnswer)
 	summary.ErrorsSeen = dedupeAndTrim(input.ErrorMessages, 3, 200)
 	summary.ResultQuality = computeResultQuality(input)
+	summary.Relations = extractEpisodeRelations(input)
 
 	return summary
+}
+
+// extractEpisodeRelations runs the canonical relation extractor over the
+// episode's textual surface (assistant answer, evidence refs, learnings)
+// and returns deduped triples. The same extractor that powers per-document
+// semantic ingestion is used here so the relation vocabulary stays
+// identical and `db.IsCanonicalGraphRelation` is the single write gate.
+//
+// A relation appearing more than once in the same episode is collapsed to
+// one occurrence here; the per-episode count is always 0 or 1 in the
+// distillation tally so a single chatty episode can't drive promotion on
+// its own. The promotion threshold cares about the number of distinct
+// episodes that observed the relation, not the per-episode hit count.
+func extractEpisodeRelations(input EpisodeInput) []EpisodeRelation {
+	var sources []string
+	if strings.TrimSpace(input.AssistantAnswer) != "" {
+		sources = append(sources, input.AssistantAnswer)
+	}
+	for _, item := range input.EvidenceItems {
+		if strings.TrimSpace(item) != "" {
+			sources = append(sources, item)
+		}
+	}
+	if len(sources) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]struct{})
+	var out []EpisodeRelation
+	for _, text := range sources {
+		// extractKnowledgeFacts expects (key, value); the empty key
+		// signals the extractor to use the text-derived subject only —
+		// no auto-substitution from a document key.
+		for _, fact := range extractKnowledgeFacts("", text) {
+			signature := strings.ToLower(fact.Subject) + "|" + fact.Relation + "|" + strings.ToLower(fact.Object)
+			if _, dup := seen[signature]; dup {
+				continue
+			}
+			seen[signature] = struct{}{}
+			out = append(out, EpisodeRelation{
+				Subject:  fact.Subject,
+				Relation: fact.Relation,
+				Object:   fact.Object,
+			})
+		}
+	}
+	return out
 }
 
 func computeResultQuality(input EpisodeInput) float64 {
