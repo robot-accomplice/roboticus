@@ -575,7 +575,7 @@ roboticus memory reindex
 ```
 Query → Decompose (compound → subgoals)
       → Route (intent-driven tier selection)
-      → Retrieve (per-tier: BM25 + vector hybrid, mode-aware by tier, relationship evidence with age/provenance, graph facts with typed relations)
+      → Retrieve (per-tier: BM25 + vector hybrid, mode-aware by tier, relationship evidence with age/provenance, graph facts with typed relations and traversal-aware chains)
       → Rerank (discard weak, boost authority, detect collapse)
       → Assemble (evidence + freshness risks + gaps + contradictions)
       → Working State (direct injection, not searched)
@@ -604,6 +604,7 @@ Query → Decompose (compound → subgoals)
 - Relationship evidence now retains source identity, relationship summary, trust-derived score, and age through retrieval and assembly.
 - Graph facts are now persisted in `knowledge_facts` with `subject` / `relation` / `object`, source provenance, confidence, and freshness metadata.
 - Semantic ingestion now extracts typed facts such as `depends_on`, `owned_by`, `uses`, `blocks`, `causes`, and `version_of` into the graph-fact store.
+- Graph retrieval can now synthesize explicit path evidence between named entities and reverse dependency chains for impact / blast-radius queries.
 - Context assembly surfaces explicit freshness risks when supporting evidence is stale instead of leaving recency buried in scores.
 - The verifier now consumes pipeline-computed task hints (intent, subgoals, planned action) when available instead of reconstructing everything from the raw prompt.
 - The verifier is currently heuristic, not model-based. It acts as a revision gate, not a final proof system.

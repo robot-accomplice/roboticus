@@ -11,7 +11,7 @@
 
 The Go implementation achieves **full structural compliance** with the connector-factory pattern. The pipeline is the single source of truth for business logic, all 8 entry points use `RunPipeline()`, and architecture tests enforce connector thinness. **All 7 original systemic gaps are now CLOSED** (v1.0.1 + v1.0.2 + v1.0.4).
 
-v1.0.5 introduced the **agentic retrieval architecture** scaffold — decomposer, router, reranker, context assembly, reflection, and working-memory persistence. v1.0.6 work is focused on making that scaffold behaviorally real: router-selected retrieval modes now influence actual tier retrieval, semantic and relationship evidence preserve stronger provenance/freshness signals, the verifier now consumes pipeline-computed task hints plus freshness/canonical-risk cues before final assistant output is persisted, and a first persisted graph-fact store now exists in production.
+v1.0.5 introduced the **agentic retrieval architecture** scaffold — decomposer, router, reranker, context assembly, reflection, and working-memory persistence. v1.0.6 work is focused on making that scaffold behaviorally real: router-selected retrieval modes now influence actual tier retrieval, semantic and relationship evidence preserve stronger provenance/freshness signals, the verifier now consumes pipeline-computed task hints plus freshness/canonical-risk cues before final assistant output is persisted, a persisted graph-fact store now exists in production, and graph retrieval can now synthesize path / impact chains over that stored relation data.
 
 | Category | Compliant | Gaps |
 |----------|-----------|------|
@@ -47,14 +47,14 @@ v1.0.5 introduced the **agentic retrieval architecture** scaffold — decomposer
 | 14 | Verifier/Critic | `verifier.go` + `pipeline_stages.go` | Heuristic verifier with retry, task-hint inputs, action-plan and canonical-source checks |
 | 16 | Reflection | `reflection.go` | Wired into PostTurnIngest |
 | — | Working Memory Persistence | `working_persistence.go` | Wired into Daemon Stop/Start |
-| 7 | Graph Facts Persistence | `043_knowledge_facts.sql`, `manager.go`, `retrieval_tiers.go` | Persisted typed relations with provenance/freshness, retrieved as first-class evidence |
+| 7 | Graph Facts Persistence | `043_knowledge_facts.sql`, `manager.go`, `retrieval_tiers.go` | Persisted typed relations with provenance/freshness, retrieved as first-class evidence with path/impact traversal |
 
 ### Remaining Gaps To Full Vision
 
 | Layer | Component | Status |
 |-------|-----------|--------|
 | 4 | Parallel Retrieval | Tiers queried sequentially |
-| 7 | Knowledge Graph Traversal | Persisted graph facts now exist, but no adjacency/traversal engine yet |
+| 7 | Knowledge Graph Traversal | First path/impact traversal exists over persisted graph facts, but there is still no richer reusable adjacency/path API |
 | 10 | Fusion Layer | Provenance and freshness survive farther now, but fusion signals are still thin |
 | 11 | LLM-based Reranking | Score-based only in v1.0.6 |
 | 14 | Verifier/Critic depth | Heuristic retry gate only; no full contradiction resolution or proof-style evidence audit yet |

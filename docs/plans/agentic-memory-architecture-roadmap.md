@@ -44,7 +44,7 @@ closed, or the critical path changes.
 | 2 | Make Intent And Retrieval Routing Real Decision Inputs | In progress | Intent signals now reach production retrieval; router modes now affect tier behavior |
 | 3 | Upgrade Semantic Memory Into A Canonical Knowledge Layer | In progress | Semantic provenance, canonical flags, authority scoring, and freshness cues now survive retrieval/assembly |
 | 4 | Turn Procedural Memory Into Workflow Memory | Not started | Still too stats-heavy; no true workflow records yet |
-| 5 | Replace Relationship Memory With Persisted Relational Memory | In progress | Persisted `knowledge_facts` store and first graph-aware retrieval path now shipped |
+| 5 | Replace Relationship Memory With Persisted Relational Memory | In progress | Persisted `knowledge_facts` store, graph-aware retrieval, and first traversal semantics now shipped |
 | 6 | Add A Real Verifier / Critic Stage | In progress | Heuristic verifier gate is live; not yet a full evidence-audit stage |
 | 7 | Deepen Working Memory Into Executive State | Not started | Persistence/vetting exists; executive task-state model still missing |
 | 8 | Improve Reflection And Consolidation Quality | Not started | Reflection/consolidation still heuristic despite working scaffolding |
@@ -67,13 +67,15 @@ closed, or the critical path changes.
   semantic memory.
 - Relationship routing now has a graph-aware retrieval mode with one-hop
   dependency expansion from matched entities.
+- Graph retrieval can now synthesize explicit path evidence between named
+  entities and reverse-dependency impact chains for blast-radius style queries.
 
 ### Current Critical Path
 
-1. Finish Milestone 5 by moving from ranked graph facts to explicit persisted
-   traversal semantics for adjacency, impact analysis, and path reasoning.
-2. Finish Milestone 6 by deepening the verifier from heuristic retry gate into
+1. Finish Milestone 6 by deepening the verifier from heuristic retry gate into
    a real evidence-audit stage with explicit support checks per subgoal.
+2. Finish Milestone 5 by moving from first traversal semantics to richer
+   persisted adjacency/path reasoning and multi-hop impact analysis.
 3. Start Milestone 7 by turning working memory into structured executive state
    instead of mainly turn summaries plus lightweight carryover.
 
@@ -405,8 +407,11 @@ capable of representing dependencies, ownership, chronology, and causality.
   `knowledge_facts` as a first-class store.
 - Relationship routing now uses graph-aware retrieval with one-hop expansion
   from matched entities.
-- What still remains is a true persisted adjacency/traversal model rather than
-  retrieval-time expansion over flat fact rows.
+- Graph retrieval can now synthesize explicit path and reverse-impact chain
+  evidence over persisted facts.
+- What still remains is richer persisted adjacency/path reasoning beyond
+  retrieval-time traversal over flat fact rows, especially for multi-hop
+  analysis and reusable graph APIs.
 
 ---
 
@@ -597,13 +602,13 @@ The roadmap should be considered complete when all of the following are true:
 
 ## Immediate Next Step
 
-Advance Milestone 5 and Milestone 6 together:
+Advance Milestone 6 and Milestone 7 together:
 
-- give graph memory explicit adjacency/path traversal semantics over persisted
-  facts, not just one-hop ranked expansion
 - teach the verifier to audit evidence support and subgoal coverage directly
   from structured retrieval/context artifacts
+- start turning working memory into structured executive state so multi-step
+  tasks preserve plans, assumptions, and blockers across turns and restarts
 
-Those two moves are the current highest-leverage path toward the full vision:
-dependable dependency reasoning plus a critic that can refuse unsupported
-answers before they ship.
+Those are now the highest-leverage moves after the graph traversal slice:
+better judgment about what the evidence supports, plus better continuity for
+long-running work.

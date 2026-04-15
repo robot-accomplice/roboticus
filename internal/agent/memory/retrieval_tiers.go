@@ -63,6 +63,21 @@ type graphFactRow struct {
 	AgeDays    float64
 }
 
+type graphTraversalIntent int
+
+const (
+	graphTraversalDirect graphTraversalIntent = iota
+	graphTraversalExpand
+	graphTraversalImpact
+	graphTraversalPath
+)
+
+type graphEdge struct {
+	From string
+	To   string
+	Fact graphFactRow
+}
+
 // retrieveSemanticEvidence fetches semantic memory with richer provenance preserved.
 func (mr *Retriever) retrieveSemanticEvidence(ctx context.Context, query string, queryEmbed []float32, mode RetrievalMode, budgetTokens int) []Evidence {
 	maxChars := budgetTokens * mr.charsPerToken
@@ -481,6 +496,9 @@ func (mr *Retriever) retrieveKnowledgeFactEvidence(ctx context.Context, query st
 
 	ordered := rankKnowledgeFactsForQuery(facts, query, mode)
 	var evidence []Evidence
+	for _, ev := range synthesizeGraphTraversalEvidence(facts, query, mode) {
+		evidence = appendEvidence(evidence, ev)
+	}
 	for _, fact := range ordered {
 		evidence = appendEvidence(evidence, Evidence{
 			Content:        fmt.Sprintf("%s %s %s", fact.Subject, fact.Relation, fact.Object),
@@ -609,6 +627,237 @@ func rankKnowledgeFactsForQuery(facts []graphFactRow, query string, mode Retriev
 		}
 	}
 	return ordered
+}
+
+func synthesizeGraphTraversalEvidence(facts []graphFactRow, query string, mode RetrievalMode) []Evidence {
+	if len(facts) == 0 || mode != RetrievalGraph || query == "" {
+		return nil
+	}
+
+	intent := detectGraphTraversalIntent(query)
+	matchedEntities := graphMatchedEntities(query, facts)
+	if len(matchedEntities) == 0 {
+		return nil
+	}
+
+	switch intent {
+	case graphTraversalPath:
+		if len(matchedEntities) < 2 {
+			return nil
+		}
+		return buildGraphPathEvidence(facts, matchedEntities[0], matchedEntities[1])
+	case graphTraversalImpact:
+		return buildGraphExpansionEvidence(facts, matchedEntities, true)
+	case graphTraversalExpand:
+		return buildGraphExpansionEvidence(facts, matchedEntities, false)
+	default:
+		return nil
+	}
+}
+
+func detectGraphTraversalIntent(query string) graphTraversalIntent {
+	lower := strings.ToLower(query)
+	switch {
+	case containsAny(lower, "path", "chain", "connect", "connection", "between", "through", "via"):
+		return graphTraversalPath
+	case containsAny(lower, "impact", "impacted", "affected", "blast radius", "what breaks", "breaks if"):
+		return graphTraversalImpact
+	case containsAny(lower, "depends on", "dependency", "dependencies", "upstream", "downstream", "blocked by", "blocks", "uses", "owner", "owned by"):
+		return graphTraversalExpand
+	default:
+		return graphTraversalDirect
+	}
+}
+
+func graphMatchedEntities(query string, facts []graphFactRow) []string {
+	lower := strings.ToLower(query)
+	seen := make(map[string]struct{})
+	var entities []string
+	for _, fact := range facts {
+		for _, entity := range []string{fact.Subject, fact.Object} {
+			if entity == "" {
+				continue
+			}
+			entityLower := strings.ToLower(entity)
+			if !strings.Contains(lower, entityLower) {
+				continue
+			}
+			if _, ok := seen[entityLower]; ok {
+				continue
+			}
+			seen[entityLower] = struct{}{}
+			entities = append(entities, entity)
+		}
+	}
+	return entities
+}
+
+func buildGraphPathEvidence(facts []graphFactRow, start, goal string) []Evidence {
+	adjacency := make(map[string][]graphEdge)
+	for _, fact := range facts {
+		from := strings.ToLower(fact.Subject)
+		to := strings.ToLower(fact.Object)
+		if from == "" || to == "" {
+			continue
+		}
+		adjacency[from] = append(adjacency[from], graphEdge{From: fact.Subject, To: fact.Object, Fact: fact})
+		adjacency[to] = append(adjacency[to], graphEdge{From: fact.Object, To: fact.Subject, Fact: fact})
+	}
+
+	startKey := strings.ToLower(start)
+	goalKey := strings.ToLower(goal)
+	type pathState struct {
+		Node  string
+		Edges []graphEdge
+	}
+	queue := []pathState{{Node: startKey}}
+	visited := map[string]struct{}{startKey: {}}
+
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		if current.Node == goalKey {
+			return []Evidence{graphPathEvidence(start, goal, current.Edges)}
+		}
+		for _, edge := range adjacency[current.Node] {
+			next := strings.ToLower(edge.To)
+			if _, ok := visited[next]; ok {
+				continue
+			}
+			visited[next] = struct{}{}
+			nextEdges := append(append([]graphEdge(nil), current.Edges...), edge)
+			queue = append(queue, pathState{Node: next, Edges: nextEdges})
+		}
+	}
+	return nil
+}
+
+func buildGraphExpansionEvidence(facts []graphFactRow, seeds []string, reverse bool) []Evidence {
+	adjacency := make(map[string][]graphEdge)
+	for _, fact := range facts {
+		if !isTraversableGraphRelation(fact.Relation) {
+			continue
+		}
+		forward := graphEdge{From: fact.Subject, To: fact.Object, Fact: fact}
+		backward := graphEdge{From: fact.Object, To: fact.Subject, Fact: fact}
+		if reverse {
+			adjacency[strings.ToLower(backward.From)] = append(adjacency[strings.ToLower(backward.From)], backward)
+		} else {
+			adjacency[strings.ToLower(forward.From)] = append(adjacency[strings.ToLower(forward.From)], forward)
+		}
+	}
+
+	type bfsState struct {
+		Node  string
+		Depth int
+		Edges []graphEdge
+	}
+	var queue []bfsState
+	visited := make(map[string]int)
+	for _, seed := range seeds {
+		key := strings.ToLower(seed)
+		queue = append(queue, bfsState{Node: key})
+		visited[key] = 0
+	}
+
+	var evidence []Evidence
+	for len(queue) > 0 && len(evidence) < 3 {
+		current := queue[0]
+		queue = queue[1:]
+		if current.Depth >= 2 {
+			continue
+		}
+		for _, edge := range adjacency[current.Node] {
+			next := strings.ToLower(edge.To)
+			nextDepth := current.Depth + 1
+			if prior, seen := visited[next]; seen && prior <= nextDepth {
+				continue
+			}
+			visited[next] = nextDepth
+			nextEdges := append(append([]graphEdge(nil), current.Edges...), edge)
+			if len(nextEdges) > 0 {
+				evidence = append(evidence, graphChainEvidence(seeds[0], nextEdges, reverse))
+			}
+			queue = append(queue, bfsState{Node: next, Depth: nextDepth, Edges: nextEdges})
+			if len(evidence) == 3 {
+				break
+			}
+		}
+	}
+	return evidence
+}
+
+func isTraversableGraphRelation(relation string) bool {
+	switch relation {
+	case "depends_on", "uses", "blocked_by", "blocks", "causes", "caused_by", "version_of", "owned_by":
+		return true
+	default:
+		return false
+	}
+}
+
+func graphPathEvidence(start, goal string, edges []graphEdge) Evidence {
+	if len(edges) == 0 {
+		return Evidence{}
+	}
+	parts := []string{start}
+	score := 0.0
+	ageDays := 0.0
+	var ids []string
+	for _, edge := range edges {
+		parts = append(parts, fmt.Sprintf("--%s--> %s", edge.Fact.Relation, edge.To))
+		score += edge.Fact.Confidence
+		if edge.Fact.AgeDays > ageDays {
+			ageDays = edge.Fact.AgeDays
+		}
+		ids = append(ids, edge.Fact.ID)
+	}
+	return Evidence{
+		Content:        fmt.Sprintf("Path between %s and %s: %s", start, goal, strings.Join(parts, " ")),
+		SourceTier:     TierRelationship,
+		SourceID:       strings.Join(ids, ","),
+		SourceTable:    "knowledge_facts",
+		SourceLabel:    fmt.Sprintf("%s->%s", start, goal),
+		SourceCategory: "graph_path",
+		Score:          score / float64(len(edges)),
+		AgeDays:        ageDays,
+		AuthorityScore: score / float64(len(edges)),
+		RetrievalMode:  RetrievalGraph.String(),
+	}
+}
+
+func graphChainEvidence(seed string, edges []graphEdge, reverse bool) Evidence {
+	if len(edges) == 0 {
+		return Evidence{}
+	}
+	label := "Dependency chain"
+	if reverse {
+		label = "Impact chain"
+	}
+	parts := []string{seed}
+	score := 0.0
+	ageDays := 0.0
+	var ids []string
+	for _, edge := range edges {
+		parts = append(parts, fmt.Sprintf("--%s--> %s", edge.Fact.Relation, edge.To))
+		score += edge.Fact.Confidence
+		if edge.Fact.AgeDays > ageDays {
+			ageDays = edge.Fact.AgeDays
+		}
+		ids = append(ids, edge.Fact.ID)
+	}
+	return Evidence{
+		Content:        fmt.Sprintf("%s from %s: %s", label, seed, strings.Join(parts, " ")),
+		SourceTier:     TierRelationship,
+		SourceID:       strings.Join(ids, ","),
+		SourceTable:    "knowledge_facts",
+		SourceLabel:    seed,
+		SourceCategory: "graph_chain",
+		Score:          score / float64(len(edges)),
+		AgeDays:        ageDays,
+		AuthorityScore: score / float64(len(edges)),
+		RetrievalMode:  RetrievalGraph.String(),
+	}
 }
 
 func graphQueryTokens(query string) []string {

@@ -229,11 +229,96 @@ func TestRetrieveKnowledgeFactEvidence_GraphTraversalExpandsDependencies(t *test
 	}
 
 	joined := results[0].Content + "\n" + results[1].Content + "\n" + results[2].Content
-	if !strings.Contains(joined, "Billing Service depends_on Ledger Service") {
-		t.Fatalf("expected seed dependency, got %q", joined)
+	if !strings.Contains(joined, "Dependency chain from Billing Service") {
+		t.Fatalf("expected graph expansion evidence, got %q", joined)
 	}
-	if !strings.Contains(joined, "Ledger Service uses Postgres") {
+	if !strings.Contains(joined, "Billing Service --depends_on--> Ledger Service") {
+		t.Fatalf("expected seed dependency chain, got %q", joined)
+	}
+	if !strings.Contains(joined, "Ledger Service --uses--> Postgres") {
 		t.Fatalf("expected connected dependency expansion, got %q", joined)
+	}
+}
+
+func TestRetrieveKnowledgeFactEvidence_GraphPathBetweenEntities(t *testing.T) {
+	store := testutil.TempStore(t)
+	ctx := context.Background()
+
+	seedFacts := []struct {
+		subject    string
+		relation   string
+		object     string
+		confidence float64
+	}{
+		{"Billing Service", "depends_on", "Ledger Service", 0.9},
+		{"Ledger Service", "uses", "Postgres", 0.8},
+		{"Customer Portal", "uses", "Redis", 0.7},
+	}
+	for _, fact := range seedFacts {
+		_, err := store.ExecContext(ctx,
+			`INSERT INTO knowledge_facts
+			 (id, subject, relation, object, confidence, updated_at)
+			 VALUES (?, ?, ?, ?, ?, datetime('now', '-1 day'))`,
+			db.NewID(), fact.subject, fact.relation, fact.object, fact.confidence)
+		if err != nil {
+			t.Fatalf("seed knowledge_facts: %v", err)
+		}
+	}
+
+	mr := NewRetriever(DefaultRetrievalConfig(), DefaultTierBudget(), store)
+	results := mr.retrieveKnowledgeFactEvidence(ctx, "what path connects Billing Service and Postgres?", RetrievalGraph, 400)
+
+	if len(results) == 0 {
+		t.Fatal("expected graph path evidence")
+	}
+	if !strings.Contains(results[0].Content, "Path between Billing Service and Postgres") {
+		t.Fatalf("expected path evidence first, got %q", results[0].Content)
+	}
+	if !strings.Contains(results[0].Content, "--depends_on--> Ledger Service --uses--> Postgres") {
+		t.Fatalf("expected full graph path, got %q", results[0].Content)
+	}
+}
+
+func TestRetrieveKnowledgeFactEvidence_GraphImpactTraversesReverseDependencies(t *testing.T) {
+	store := testutil.TempStore(t)
+	ctx := context.Background()
+
+	seedFacts := []struct {
+		subject    string
+		relation   string
+		object     string
+		confidence float64
+	}{
+		{"Billing Service", "depends_on", "Ledger Service", 0.9},
+		{"Invoice Worker", "depends_on", "Billing Service", 0.85},
+		{"Ledger Service", "uses", "Postgres", 0.8},
+	}
+	for _, fact := range seedFacts {
+		_, err := store.ExecContext(ctx,
+			`INSERT INTO knowledge_facts
+			 (id, subject, relation, object, confidence, updated_at)
+			 VALUES (?, ?, ?, ?, ?, datetime('now', '-1 day'))`,
+			db.NewID(), fact.subject, fact.relation, fact.object, fact.confidence)
+		if err != nil {
+			t.Fatalf("seed knowledge_facts: %v", err)
+		}
+	}
+
+	mr := NewRetriever(DefaultRetrievalConfig(), DefaultTierBudget(), store)
+	results := mr.retrieveKnowledgeFactEvidence(ctx, "what is the blast radius if Ledger Service fails?", RetrievalGraph, 400)
+
+	if len(results) == 0 {
+		t.Fatal("expected impact chain evidence")
+	}
+	if !strings.Contains(results[0].Content, "Impact chain from Ledger Service") {
+		t.Fatalf("expected impact chain evidence, got %q", results[0].Content)
+	}
+	joined := results[0].Content
+	if len(results) > 1 {
+		joined += "\n" + results[1].Content
+	}
+	if !strings.Contains(joined, "Ledger Service --depends_on--> Billing Service") {
+		t.Fatalf("expected reverse dependency to impacted service, got %q", joined)
 	}
 }
 
