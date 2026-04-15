@@ -306,6 +306,25 @@ func buildRuntimeMetadataBlock(cfg PromptConfig) string {
 	sb.WriteString("- `bash` executes in the workspace root. Check `get_runtime_context` for allowed paths.\n")
 	sb.WriteString("- When reporting tool output, attribute it: 'The bash command returned...' not 'I found...'\n")
 	sb.WriteString("- If a tool returns an error, report the error clearly — don't hide failures.\n")
+	// v1.0.6: attempt-then-report directive. The behavioral soak found
+	// the agent preemptively refusing to operate on paths outside its
+	// configured allowlist ("this operation involves an absolute path
+	// outside of my allowed workspace paths, it cannot be executed
+	// directly") WITHOUT actually invoking the tool. The policy engine
+	// is the source of truth for what's allowed; the agent should call
+	// the tool and surface the actual decision (permitted result, OR
+	// the policy's denial reason) rather than reasoning preemptively
+	// about the policy from its own model of the rules. Self-censoring
+	// produces wrong refusals when the model's understanding of the
+	// policy diverges from the real config — and operators have no
+	// way to act on a refusal that didn't surface a real denial reason.
+	sb.WriteString("- ATTEMPT then report. Do NOT refuse a tool operation based on your own assumptions about what the policy will allow. Call the tool; let the policy engine return the actual decision. If denied, surface the policy's exact reason so the operator can act on it.\n")
+	// The user's count-style asks (e.g., "return only the number")
+	// also revealed the agent narrating around minimal-output requests.
+	// The directive below covers the format-discipline gap: when the
+	// user explicitly asks for a specific output shape, deliver that
+	// shape — not commentary about how it'll be produced.
+	sb.WriteString("- Honor explicit output-format requests. If the user asks for 'only the number', 'just the answer', a single sentence, etc., deliver that shape verbatim. Don't preface, don't explain — produce the requested output.\n")
 	return sb.String()
 }
 
