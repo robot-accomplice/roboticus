@@ -122,6 +122,10 @@ closed, or the critical path changes.
 - Milestone 5 now ships a reusable `KnowledgeGraph` API
   (`internal/agent/memory/graph.go`) with multi-hop `ShortestPath`,
   `Impact`, and `Dependencies` traversals over persisted `knowledge_facts`.
+- The graph API is now surfaced to the model as the
+  `query_knowledge_graph` agent tool (`path`/`impact`/`dependencies`) so
+  multi-hop structural queries can be asked directly, not only through
+  semantic retrieval side effects.
 
 ### Current Critical Path
 
@@ -482,10 +486,14 @@ capable of representing dependencies, ownership, chronology, and causality.
   non-traversable relations to preserve historical retrieval behaviour.
   Impact / dependency queries delegate to `Impact` and `Dependencies` with
   the same depth-2 cap the retrieval tier had before.
-- What still remains is surfacing multi-hop graph queries via an agent tool
-  so the model can call them directly, and removing the permissive
-  retrieval fallback once the canonical relation set covers every path a
-  consumer needs.
+- Multi-hop graph queries are now exposed as an agent tool
+  (`query_knowledge_graph`) registered from the daemon. The tool supports
+  three operations — `path`, `impact`, `dependencies` — and caps both
+  the working-set size (500 facts) and max traversal depth (8 hops) so
+  large graphs stay responsive. Output is JSON with a `summary`, the
+  discovered hops or nodes, and graph stats for auditability.
+- What still remains is removing the permissive retrieval fallback once
+  the canonical relation set covers every path a consumer needs.
 
 ---
 

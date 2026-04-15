@@ -341,6 +341,10 @@ Blocking commands for feature-complete releases:
 | R-AGENT-74 | `KnowledgeGraph.ShortestPath` finds multi-hop paths within the max-depth bound and returns nil for missing paths or over-depth queries | `internal/agent/memory/graph_test.go` | L1 |
 | R-AGENT-75 | `KnowledgeGraph.Impact` and `Dependencies` return multi-hop reverse/forward traversals with correct depth bounding | `internal/agent/memory/graph_test.go` | L1 |
 | R-AGENT-76 | `LoadKnowledgeGraph` reads every persisted `knowledge_facts` row; `LoadKnowledgeGraphWithLimit` honors the limit | `internal/agent/memory/graph_test.go` | L1 |
+| R-AGENT-77 | `query_knowledge_graph` agent tool returns multi-hop path evidence and "no path" messages within the max-depth bound | `internal/agent/tools/graph_query_test.go` | L1 |
+| R-AGENT-78 | `query_knowledge_graph` impact and dependencies operations walk reverse / forward adjacency and return node lists with min depth | `internal/agent/tools/graph_query_test.go` | L1 |
+| R-AGENT-79 | `query_knowledge_graph` clamps max_depth and rejects unknown operations / missing required fields | `internal/agent/tools/graph_query_test.go` | L1 |
+| R-AGENT-80 | `query_knowledge_graph` publishes a valid JSON parameter schema and returns a friendly message when the store is nil | `internal/agent/tools/graph_query_test.go` | L1 |
 
 ## Governance Rules
 
