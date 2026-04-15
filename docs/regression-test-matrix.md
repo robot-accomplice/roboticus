@@ -460,6 +460,7 @@ Blocking commands for feature-complete releases:
 | R-PIPE-WATCHDOG-2 | `CurrentSpan().Duration` reflects live wall-clock time, not a snapshot — necessary for the watchdog's threshold check to ever trigger on a hung stage | `internal/pipeline/stage_watchdog_test.go` | L1 |
 | R-PIPE-WATCHDOG-3 | `CurrentSpan` is concurrent-safe with `BeginSpan`/`Annotate`/`EndSpan` — the watchdog goroutine reads while the pipeline goroutine writes; verified under `go test -race` | `internal/pipeline/stage_watchdog_test.go` | L1 |
 | R-PIPE-WATCHDOG-4 | `Pipeline.Run` spawns a stage liveness watchdog that logs `"pipeline stage running longer than expected"` after `stageLivenessThreshold` (20s) and re-logs every `stageLivenessProbeInterval` (10s) thereafter — turns cold-start hangs into actionable evidence of which stage is stuck | `internal/pipeline/pipeline.go` (instrumentation) + R-PIPE-WATCHDOG-1..3 (primitives); audit-only for the wiring | A |
+| R-MCP-CHECKLIST-3 | `ConnectSSE` round-trips end-to-end against an in-tree httptest fixture: initialize → tools/list (1 tool) → tools/call (echo) → result content includes the original payload — proves the SSE transport implementation is correct without depending on any external network or third-party server availability | `internal/mcp/sse_validation_test.go::TestSSEReleaseChecklist_FullValidation` | L1 |
 
 ## Governance Rules
 
