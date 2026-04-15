@@ -10,24 +10,41 @@ Adapted from roboticus/scripts/run-agent-behavior-soak.py.
 Usage:
   python3 scripts/run-agent-behavior-soak.py
   BASE_URL=http://localhost:18790 python3 scripts/run-agent-behavior-soak.py
+  SOAK_SERVER_MODE=clone python3 scripts/run-agent-behavior-soak.py
+  SOAK_SERVER_MODE=fresh python3 scripts/run-agent-behavior-soak.py
 
 Environment:
-  BASE_URL                     Server URL (default: http://127.0.0.1:18790)
-  SOAK_TIMEOUT_SECONDS         HTTP request timeout (default: 240)
-  SOAK_MAX_LATENCY_SECONDS     Max acceptable latency per scenario (default: 120)
-  SOAK_SCENARIO_PAUSE_SECONDS  Pause between scenarios (default: 1.5)
+  BASE_URL                      Server URL (default: http://127.0.0.1:18790)
+  SOAK_TIMEOUT_SECONDS          HTTP request timeout (default: 1800)
+  SOAK_MAX_LATENCY_SECONDS      Max acceptable latency per scenario (default: 900)
+  SOAK_SCENARIO_PAUSE_SECONDS   Pause between scenarios (default: 1.5)
   SOAK_SESSION_ISOLATION        1=new session per scenario (default: 1)
-  SOAK_AGENT_ID                Agent ID for session creation (default: duncan)
-  SOAK_REPORT_PATH             JSON report output path
+  SOAK_AGENT_ID                 Agent ID for session creation (default: duncan)
+  SOAK_REPORT_PATH              JSON report output path
+  SOAK_SERVER_MODE              external|clone|fresh (default: external)
+  SOAK_SOURCE_ROOT              Source roboticus home for clone/fresh (default: ~/.roboticus)
+  SOAK_REPO_ROOT                Repo root used to launch `go run . serve`
+  SOAK_SERVER_START_TIMEOUT     Seconds to wait for managed server health (default: 90)
+  SOAK_KEEP_ISOLATED_ROOT       1=keep isolated root after run (default: 0)
 """
+import atexit
+import hashlib
 import json
 import os
 import re
+import shutil
+import signal
+import socket
+import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
-from typing import Callable, Dict, List, Tuple
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 BASE_URL = os.environ.get("BASE_URL", "http://127.0.0.1:18790").rstrip("/")
 # Soak tests are long-running by design — timeouts must be extraordinarily high.
@@ -42,6 +59,33 @@ AGENT_ID = os.environ.get("SOAK_AGENT_ID", "duncan")
 REPORT_PATH = os.environ.get(
     "SOAK_REPORT_PATH", "/tmp/goboticus-agent-behavior-soak-report.json"
 )
+SERVER_MODE = os.environ.get("SOAK_SERVER_MODE", "external").strip().lower()
+SOURCE_ROOT = Path(os.environ.get("SOAK_SOURCE_ROOT", str(Path.home() / ".roboticus"))).expanduser()
+REPO_ROOT = Path(os.environ.get("SOAK_REPO_ROOT", str(Path(__file__).resolve().parents[1]))).resolve()
+SERVER_START_TIMEOUT = int(os.environ.get("SOAK_SERVER_START_TIMEOUT", "90"))
+KEEP_ISOLATED_ROOT = os.environ.get("SOAK_KEEP_ISOLATED_ROOT", "0") == "1"
+REAL_CONFIG = SOURCE_ROOT / "roboticus.toml"
+REAL_DB = SOURCE_ROOT / "state.db"
+REAL_WALLET = SOURCE_ROOT / "wallet.enc"
+REAL_PID = SOURCE_ROOT / "roboticus.pid"
+
+
+@dataclass
+class ManagedServer:
+    mode: str
+    source_root: Path
+    isolated_root: Path
+    config_path: Path
+    db_path: Path
+    workspace_path: Path
+    log_path: Path
+    pid_path: Path
+    wallet_path: Path
+    backup_dir: Path
+    before_hashes: Dict[str, Optional[str]]
+    process: Optional[subprocess.Popen] = None
+    server_log: Optional[Path] = None
+    restored_paths: Optional[List[str]] = None
 
 
 # ── Quality gate markers ────────────────────────────────────────
@@ -86,6 +130,344 @@ FILESYSTEM_DENIAL_MARKERS = [
 
 
 # ── HTTP helpers ────────────────────────────────────────────────
+
+def sha256_file(path: Path) -> Optional[str]:
+    if not path.exists():
+        return None
+    hasher = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
+def copy_if_exists(src: Path, dst: Path) -> None:
+    if src.exists():
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+
+
+def parse_base_url() -> Tuple[str, int]:
+    parsed = urllib.parse.urlparse(BASE_URL)
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port
+    if port is None:
+        port = 443 if parsed.scheme == "https" else 80
+    return host, port
+
+
+def wait_for_health(base_url: str, timeout_s: int) -> Dict[str, object]:
+    deadline = time.time() + timeout_s
+    last_err: Optional[Exception] = None
+    while time.time() < deadline:
+        try:
+            req = urllib.request.Request(base_url + "/api/health", method="GET")
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                return json.loads(resp.read().decode("utf-8", "replace"))
+        except Exception as err:  # pragma: no cover - exercised in live mode
+            last_err = err
+            time.sleep(1.0)
+    raise RuntimeError(f"managed server not healthy within {timeout_s}s: {last_err}")
+
+
+def ensure_free_port(host: str, port: int) -> None:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.5)
+        if sock.connect_ex((host, port)) == 0:
+            raise RuntimeError(f"{host}:{port} already has a listening server")
+
+
+def toml_literal(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    return json.dumps(str(value))
+
+
+def rewrite_toml_setting(content: str, key: str, value: Any) -> str:
+    pattern = re.compile(rf"(?m)^{re.escape(key)}\s*=.*$")
+    line = f"{key} = {toml_literal(value)}"
+    if pattern.search(content):
+        return pattern.sub(line, content)
+    return content + ("\n" if not content.endswith("\n") else "") + line + "\n"
+
+
+def set_toml_section(content: str, section: str, settings: Dict[str, Any]) -> str:
+    header = f"[{section}]"
+    pattern = re.compile(rf"(?ms)^\[{re.escape(section)}\]\n.*?(?=^\[|\Z)")
+    body_lines = [header] + [f"{k} = {toml_literal(v)}" for k, v in settings.items()]
+    body = "\n".join(body_lines) + "\n"
+    if pattern.search(content):
+        return pattern.sub(body, content)
+    prefix = "" if content.endswith("\n") else "\n"
+    return content + prefix + "\n" + body
+
+
+def build_isolated_config(mode: str, source_root: Path, isolated_root: Path, host: str, port: int) -> Path:
+    config_path = isolated_root / "roboticus.toml"
+    if mode == "clone":
+        if not REAL_CONFIG.exists():
+            raise RuntimeError(f"source config not found: {REAL_CONFIG}")
+        shutil.copy2(REAL_CONFIG, config_path)
+    else:
+        if not REAL_CONFIG.exists():
+            raise RuntimeError(f"source config not found: {REAL_CONFIG}")
+        shutil.copy2(REAL_CONFIG, config_path)
+
+    db_path = isolated_root / "state.db"
+    workspace_path = isolated_root / "workspace"
+    log_path = isolated_root / "logs"
+    pid_path = isolated_root / "roboticus.pid"
+    wallet_path = isolated_root / "wallet.enc"
+
+    if mode == "clone":
+        copy_if_exists(source_root / "state.db", db_path)
+        copy_if_exists(source_root / "state.db-wal", isolated_root / "state.db-wal")
+        copy_if_exists(source_root / "state.db-shm", isolated_root / "state.db-shm")
+        copy_if_exists(source_root / "wallet.enc", wallet_path)
+        if (source_root / "workspace").exists():
+            shutil.copytree(source_root / "workspace", workspace_path, dirs_exist_ok=True)
+        if (source_root / "logs").exists():
+            shutil.copytree(source_root / "logs", log_path, dirs_exist_ok=True)
+        # v1.0.6: clear the LLM response cache from the cloned state.db
+        # so the soak actually exercises the live model + prompt/policy
+        # path on every scenario. Without this, the clone replays
+        # cached responses (latency_s=0.0 across the board) and the
+        # soak ends up testing cache stability rather than agent
+        # behavior — masking real prompt/policy regressions like the
+        # v1.0.5 filesystem_count_only finding.
+        clear_response_cache(db_path)
+    else:
+        workspace_path.mkdir(parents=True, exist_ok=True)
+        log_path.mkdir(parents=True, exist_ok=True)
+
+    text = config_path.read_text(encoding="utf-8")
+    text = text.replace(str(source_root), str(isolated_root))
+    text = set_toml_section(text, "agent", {
+        "name": "Duncan Soak",
+        "id": "duncan-soak",
+        "workspace": str(workspace_path),
+    })
+    text = set_toml_section(text, "server", {
+        "bind": host,
+        "log_dir": str(log_path),
+    })
+    text = rewrite_toml_setting(text, "port", str(port))
+    text = set_toml_section(text, "database", {"path": str(db_path)})
+    text = set_toml_section(text, "daemon", {
+        "pid_file": str(pid_path),
+        "auto_restart": False,
+    })
+    if mode == "clone" and wallet_path.exists():
+        text = set_toml_section(text, "wallet", {"path": str(wallet_path)})
+    elif mode == "fresh":
+        text = set_toml_section(text, "wallet", {"path": str(wallet_path)})
+    # v1.0.6: extend allowed_paths in the ISOLATED config so the
+    # behavioral scenarios that legitimately need to read user dirs
+    # (filesystem_count_only counts markdown files in
+    # /Users/jmachen/code, etc.) succeed under the cloned policy.
+    # The user's LIVE config is untouched — this patch only applies
+    # to the isolated copy. Without this, the soak's policy gate
+    # denies the bash invocation and the agent has no way to
+    # produce the expected count-style answer.
+    text = extend_allowed_paths_for_soak(text, source_root)
+    config_path.write_text(text, encoding="utf-8")
+    return config_path
+
+
+def extend_allowed_paths_for_soak(text: str, source_root: Path) -> str:
+    """Append the soak's required test paths to allowed_paths and
+    tool_allowed_paths in the isolated config. Idempotent — paths
+    already present are not duplicated.
+
+    The soak scenarios assume the agent can read user-owned dirs
+    like ~/code (for filesystem_count_only) and ~/Downloads (for
+    folder_scan_downloads). Operators with restrictive live
+    policies (tool_allowed_paths = []) would otherwise see the
+    agent refused at the policy gate. The isolated config widens
+    just enough for the test scenarios to exercise real behavior.
+    """
+    home = str(Path.home())
+    extras = [
+        f"{home}/code",
+        f"{home}/Downloads",
+    ]
+
+    def _append_paths(text: str, key: str) -> str:
+        # Naive TOML editing: locate the line "key = [...]" and
+        # splice extras into the array. Idempotent if extras are
+        # already present.
+        pattern = re.compile(
+            rf"^(\s*){re.escape(key)}\s*=\s*\[([^\]]*)\]",
+            re.MULTILINE,
+        )
+        match = pattern.search(text)
+        if not match:
+            return text
+        indent = match.group(1)
+        existing_inner = match.group(2)
+        # Parse existing entries (single-quoted strings).
+        existing = re.findall(r"'([^']*)'", existing_inner)
+        added = list(existing)
+        for p in extras:
+            if p not in added:
+                added.append(p)
+        if added == existing:
+            return text  # no-op, already permissive enough
+        joined = ", ".join(f"'{p}'" for p in added)
+        replacement = f"{indent}{key} = [{joined}]"
+        return text[: match.start()] + replacement + text[match.end():]
+
+    text = _append_paths(text, "allowed_paths")
+    text = _append_paths(text, "tool_allowed_paths")
+    text = _append_paths(text, "script_allowed_paths")
+    return text
+
+
+def clear_response_cache(db_path: Path) -> None:
+    """Wipe semantic_cache rows from the cloned database so the soak
+    exercises live agent behavior on every scenario.
+
+    Without this, clone-mode reports show latency_s=0.0 across the
+    board — the daemon is replaying cached responses instead of
+    invoking the model. Pre-v1.0.6 this masked the
+    filesystem_count_only behavioral regression for multiple soak
+    runs because the agent's old (cached) response kept being
+    returned regardless of any prompt or policy fix.
+
+    Best-effort: missing table is fine (older clones), DB-locked
+    errors degrade to a printed warning rather than failing the
+    soak. The soak's value comes from running scenarios; cache
+    state is a setup detail.
+    """
+    if not db_path.exists():
+        return
+    try:
+        import sqlite3
+        conn = sqlite3.connect(str(db_path))
+        try:
+            cur = conn.cursor()
+            for table in ("semantic_cache",):
+                try:
+                    cur.execute(f"DELETE FROM {table}")
+                except sqlite3.OperationalError:
+                    # Table missing on older snapshots — fine.
+                    pass
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f"[behavior-soak] WARN could not clear response cache: {e}", file=sys.stderr)
+
+
+def backup_real_state() -> Tuple[Path, Dict[str, Optional[str]]]:
+    backup_dir = Path(tempfile.mkdtemp(prefix="roboticus-pre-soak-backup-"))
+    copy_if_exists(REAL_CONFIG, backup_dir / "roboticus.toml")
+    copy_if_exists(REAL_DB, backup_dir / "state.db")
+    before_hashes = {
+        "config": sha256_file(REAL_CONFIG),
+        "db": sha256_file(REAL_DB),
+    }
+    return backup_dir, before_hashes
+
+
+def verify_or_restore(managed: ManagedServer) -> List[str]:
+    restored: List[str] = []
+    config_hash = sha256_file(REAL_CONFIG)
+    db_hash = sha256_file(REAL_DB)
+    backup_config = managed.backup_dir / "roboticus.toml"
+    backup_db = managed.backup_dir / "state.db"
+
+    if config_hash != managed.before_hashes["config"] and backup_config.exists():
+        shutil.copy2(backup_config, REAL_CONFIG)
+        restored.append(str(REAL_CONFIG))
+    if db_hash != managed.before_hashes["db"] and backup_db.exists():
+        shutil.copy2(backup_db, REAL_DB)
+        restored.append(str(REAL_DB))
+    return restored
+
+
+def stop_managed_server(managed: ManagedServer) -> None:
+    if managed.process is None:
+        return
+    if managed.process.poll() is not None:
+        return
+    managed.process.send_signal(signal.SIGINT)
+    try:
+        managed.process.wait(timeout=20)
+    except subprocess.TimeoutExpired:
+        managed.process.terminate()
+        try:
+            managed.process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            managed.process.kill()
+            managed.process.wait(timeout=5)
+
+
+def cleanup_managed_server(managed: ManagedServer) -> None:
+    stop_managed_server(managed)
+    managed.restored_paths = verify_or_restore(managed)
+    if not KEEP_ISOLATED_ROOT:
+        shutil.rmtree(managed.isolated_root.parent if managed.mode == "clone" else managed.isolated_root.parent, ignore_errors=True)
+
+
+def prepare_managed_server() -> Optional[ManagedServer]:
+    if SERVER_MODE == "external":
+        return None
+    if SERVER_MODE not in {"clone", "fresh"}:
+        raise RuntimeError(f"unsupported SOAK_SERVER_MODE={SERVER_MODE!r}")
+
+    host, port = parse_base_url()
+    ensure_free_port(host, port)
+    backup_dir, before_hashes = backup_real_state()
+
+    if SERVER_MODE == "clone":
+        root_parent = Path(tempfile.mkdtemp(prefix="roboticus-agent-copy-"))
+    else:
+        root_parent = Path(tempfile.mkdtemp(prefix="roboticus-agent-fresh-"))
+    isolated_root = root_parent / ".roboticus"
+    isolated_root.mkdir(parents=True, exist_ok=True)
+    config_path = build_isolated_config(SERVER_MODE, SOURCE_ROOT, isolated_root, host, port)
+
+    managed = ManagedServer(
+        mode=SERVER_MODE,
+        source_root=SOURCE_ROOT,
+        isolated_root=isolated_root,
+        config_path=config_path,
+        db_path=isolated_root / "state.db",
+        workspace_path=isolated_root / "workspace",
+        log_path=isolated_root / "logs",
+        pid_path=isolated_root / "roboticus.pid",
+        wallet_path=isolated_root / "wallet.enc",
+        backup_dir=backup_dir,
+        before_hashes=before_hashes,
+        server_log=isolated_root / "behavior-soak-server.log",
+    )
+
+    assert managed.server_log is not None
+    log_fh = managed.server_log.open("w", encoding="utf-8")
+    managed.process = subprocess.Popen(
+        [
+            "go",
+            "run",
+            ".",
+            "serve",
+            "--config",
+            str(managed.config_path),
+            "--port",
+            str(port),
+            "--bind",
+            host,
+        ],
+        cwd=str(REPO_ROOT),
+        stdout=log_fh,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    atexit.register(cleanup_managed_server, managed)
+    wait_for_health(BASE_URL, SERVER_START_TIMEOUT)
+    return managed
 
 def send_message(prompt: str, session_id: str = None, retries: int = 6) -> Dict[str, object]:
     payload: Dict[str, object] = {"content": prompt}
@@ -447,11 +829,18 @@ SCENARIOS = [
 # ── Runner ──────────────────────────────────────────────────────
 
 def run() -> int:
+    managed = prepare_managed_server()
     print(f"[behavior-soak] base_url={BASE_URL}")
     print(
         f"[behavior-soak] timeout={TIMEOUT}s max_latency={MAX_LATENCY}s "
         f"pause={SCENARIO_PAUSE}s isolated_sessions={SESSION_ISOLATION}"
     )
+    print(f"[behavior-soak] server_mode={SERVER_MODE}")
+    if managed is not None:
+        print(f"[behavior-soak] isolated_root={managed.isolated_root}")
+        print(f"[behavior-soak] isolated_config={managed.config_path}")
+        print(f"[behavior-soak] isolated_db={managed.db_path}")
+        print(f"[behavior-soak] backup_dir={managed.backup_dir}")
 
     # Pre-flight: check server is reachable.
     try:
@@ -555,6 +944,7 @@ def run() -> int:
     report = {
         "runtime": "goboticus",
         "base_url": BASE_URL,
+        "server_mode": SERVER_MODE,
         "timeout_s": TIMEOUT,
         "max_latency_s": MAX_LATENCY,
         "total": total,
@@ -563,6 +953,19 @@ def run() -> int:
         "results": results,
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
+    if managed is not None:
+        report["managed_server"] = {
+            "mode": managed.mode,
+            "isolated_root": str(managed.isolated_root),
+            "config_path": str(managed.config_path),
+            "db_path": str(managed.db_path),
+            "workspace_path": str(managed.workspace_path),
+            "pid_path": str(managed.pid_path),
+            "server_log": str(managed.server_log),
+            "backup_dir": str(managed.backup_dir),
+            "real_config_sha256_before": managed.before_hashes["config"],
+            "real_db_sha256_before": managed.before_hashes["db"],
+        }
 
     with open(REPORT_PATH, "w", encoding="utf-8") as f:
         json.dump(report, f, indent=2)

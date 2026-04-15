@@ -325,6 +325,19 @@ func buildRuntimeMetadataBlock(cfg PromptConfig) string {
 	// user explicitly asks for a specific output shape, deliver that
 	// shape — not commentary about how it'll be produced.
 	sb.WriteString("- Honor explicit output-format requests. If the user asks for 'only the number', 'just the answer', a single sentence, etc., deliver that shape verbatim. Don't preface, don't explain — produce the requested output.\n")
+	// v1.0.6 third iteration on filesystem_count_only: even after
+	// the path-allowlisting fix and the attempt-then-report
+	// directive, the agent still produced acknowledgement-without-
+	// execution responses ("Got it. I'll count..."). The model
+	// interpreted "perform a task" as "accept the task, defer the
+	// execution to a future turn." For action verbs the user issues
+	// in the imperative ("count X", "list Y", "find Z", "run W"),
+	// the right behavior is a single-turn execute-then-report cycle:
+	// call the tool, get the result, return the result. Acknowledging
+	// without executing wastes a turn AND hides whatever the
+	// underlying tool would have surfaced (real errors, real counts,
+	// etc.).
+	sb.WriteString("- EXECUTE IMMEDIATELY for imperative requests. When the user asks you to perform a discrete action (count X, list Y, find Z, run W, fetch V), do it in this turn — call the tool, observe the result, and return the result in this same response. Do NOT acknowledge intent (\"Got it, I'll do that\") and stop — that strands the user waiting for an execution that never comes.\n")
 	return sb.String()
 }
 
