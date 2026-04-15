@@ -323,6 +323,8 @@ Blocking commands for feature-complete releases:
 | R-AGENT-56 | Verifier emits per-claim `ClaimAudit` records (certainty, supported, anchored, reconciled, issue code) | `internal/pipeline/verifier_trace_test.go` | L1 |
 | R-AGENT-57 | `SummarizeVerification` produces claim count / absolute count / coverage ratio / flagged count | `internal/pipeline/verifier_trace_test.go` | L1 |
 | R-AGENT-58 | Pipeline trace carries a `verifier.*` annotation group including a JSON claim map | `internal/pipeline/verifier_trace_test.go` | L1 |
+| R-AGENT-59 | Multi-step task resumes across a simulated shutdown/startup cycle with plan, unresolved question, stopping criterion, and assumption intact | `internal/agent/memory/executive_restart_test.go` | L1 |
+| R-AGENT-60 | Restart vet keeps executive and goal entries while discarding transient turn summaries and notes | `internal/agent/memory/executive_restart_test.go` | L1 |
 
 ## Governance Rules
 

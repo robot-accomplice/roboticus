@@ -98,6 +98,10 @@ closed, or the critical path changes.
 - Pipeline traces now carry a `verifier.*` annotation group with per-claim
   audits (`claim_map_json`), coverage ratio, and counts so operators can
   audit exactly which claims were supported, anchored, or flagged.
+- Cross-turn restart regression now proves that a multi-step task survives a
+  simulated shutdown/startup cycle with plan, unresolved question,
+  assumption, and stopping criterion intact, while transient turn-summary
+  and note entries are discarded by the default vet rules.
 
 ### Current Critical Path
 
@@ -592,6 +596,10 @@ short-term executive state described in the reference architecture.
   questions whose keywords appear in a confident response are resolved.
 - Growth is idempotent across repeated runs so the executive layer does not
   churn on every turn.
+- A cross-turn restart regression test now proves that a multi-step task
+  resumes after a simulated shutdown/startup cycle with the same plan,
+  unresolved question, assumption, and stopping criterion, and that the
+  assembled-context block for the next turn renders exactly those items.
 - What still remains is richer assumption extraction from tool outputs,
   decision-checkpoint recording when the plan meaningfully changes, and a
   trace annotation that surfaces every executive-state write so operators can
