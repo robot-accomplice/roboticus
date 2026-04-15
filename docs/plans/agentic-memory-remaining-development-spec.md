@@ -154,6 +154,17 @@ relationship, and workflow retrieval.
 
 ### Slice M3.3: Telemetry-Backed LIKE Retirement
 
+#### Status (2026-04-15)
+
+**Telemetry-collection surface shipped; deletion correctly gated on
+production observation.** The dormancy-establishment work is in place
+(`internal/agent/memory/retrieval_path_telemetry.go`,
+regressions R-AGENT-153 through R-AGENT-157). The literal LIKE-block
+removal step deliberately remains pending — the dev spec gates it on
+"telemetry shows fallback is effectively unused before removal," and
+that is an empirical condition that requires observed production
+traces, not a decision the agent can make from a fresh fixture corpus.
+
 #### Goal
 
 Delete the `LIKE` safety net only after evidence shows it is no longer doing
@@ -161,28 +172,59 @@ meaningful work for FTS-covered tiers.
 
 #### File targets
 
-- [internal/agent/memory/retrieval_tiers.go](/Users/jmachen/code/roboticus/internal/agent/memory/retrieval_tiers.go)
-- [internal/agent/tools/memory_recall.go](/Users/jmachen/code/roboticus/internal/agent/tools/memory_recall.go)
+- [internal/agent/memory/retrieval_path_telemetry.go](/Users/jmachen/code/roboticus/internal/agent/memory/retrieval_path_telemetry.go) — dormancy aggregator (shipped)
+- [internal/agent/memory/retrieval_tiers.go](/Users/jmachen/code/roboticus/internal/agent/memory/retrieval_tiers.go) — LIKE block removal target (pending observation)
+- [internal/agent/tools/memory_recall.go](/Users/jmachen/code/roboticus/internal/agent/tools/memory_recall.go) — LIKE block removal target (pending observation)
 - release docs / roadmap
 
 #### Required work
 
-- Use the trace path annotations from Slice M3.2 to establish whether
-  fallback is effectively dormant.
-- Remove `LIKE` blocks only for tiers with complete FTS coverage.
-- Leave non-covered tiers alone until they get explicit FTS support.
+- ✅ Use the trace path annotations from Slice M3.2 to establish whether
+  fallback is effectively dormant. — `AggregateRetrievalPaths(ctx, store, limit)`
+  scans persisted `pipeline_traces.stages_json`, parses each
+  `retrieval.path.<tier>` annotation, and returns a per-tier
+  `RetrievalPathTierStats` with `LikeFallbackPct` and a derived
+  `IsDormant` flag. The flag is gated on BOTH a fallback share at or
+  below `RetrievalPathRetirementThreshold` (1%) AND a sample size of
+  at least `minSampleForDormancy` (200 observations), so a barely-
+  queried tier can't be retired on weak evidence.
+- ⏳ Remove `LIKE` blocks only for tiers whose `IsDormant` flag has
+  been true across a meaningful operator-observed window. The
+  retirement procedure is:
+    1. Operator runs `AggregateRetrievalPaths` against production
+       traces from a recent N-day window (suggested: 7 days minimum).
+    2. For each tier where `IsDormant` is true with TotalMeasured
+       comfortably above `minSampleForDormancy`, the operator deletes
+       the corresponding LIKE block in `retrieval_tiers.go` and
+       updates the tier method's docstring to note that the safety
+       net was retired and on what evidence.
+    3. After deletion, the existing M3.2 path-classification regression
+       (R-AGENT-138 through R-AGENT-144) MUST still pass — the
+       expectation flips so `like_fallback` becomes unreachable for
+       the deleted tier.
+    4. The retirement is recorded in the release notes and the dev
+       spec is updated to mark the slice fully closed.
+- ⏳ Leave non-covered tiers alone until they get explicit FTS support.
 
 #### Acceptance criteria
 
-- `LIKE` no longer appears in the covered retrieval paths except for
-  comments or intentionally out-of-scope helpers.
-- Telemetry shows fallback is effectively unused before removal.
-- Regression tests still pass after removal.
+- ✅ Telemetry surface available before removal: `AggregateRetrievalPaths`
+  reports per-tier `LikeFallbackPct` with a sample-size guard so the
+  dormancy decision is evidence-backed.
+- ⏳ `LIKE` no longer appears in the covered retrieval paths except for
+  comments or intentionally out-of-scope helpers (pending operator-
+  observed dormancy).
+- ⏳ Telemetry shows fallback is effectively unused before removal
+  (pending observation window).
+- Regression tests still pass after removal (will be checked at the
+  retirement step).
 
 #### Non-goals
 
 - No expansion into tables that still lack FTS coverage such as
   `learned_skills`.
+- No removal of the safety net based on test-fixture corpora alone —
+  the empirical-evidence gate is the whole point of M3.3.
 
 ---
 

@@ -975,17 +975,26 @@ Implementation order (per the development spec):
    via the canonical write gate `db.MemoryRepository.StoreKnowledgeFact`;
    regressions R-AGENT-145 through R-AGENT-152).
 4. **M3.3** — optional `LIKE` retirement after telemetry confirms the
-   safety net is dormant
+   safety net is dormant — **telemetry surface shipped, deletion
+   correctly gated on production observation**
+   (`AggregateRetrievalPaths` aggregator in
+   `internal/agent/memory/retrieval_path_telemetry.go`,
+   regressions R-AGENT-153 through R-AGENT-157). The literal LIKE-block
+   removal step deliberately remains pending — the dev spec gates it on
+   "telemetry shows fallback is effectively unused before removal,"
+   which is an empirical condition that must be observed against
+   production traces, not declared from a fresh-fixture corpus. The
+   retirement procedure is documented in the dev spec.
 5. **Appendices A, B, C** — observability dashboards, evaluation
    matrix, and fallback strategy spec work, sequenced after the
    M3 and M8 work above closes.
 
-M3 stays marked "In progress" until M3.3 retires the LIKE safety
-net (or the dev spec is updated to declare M3.2's HybridSearch-first
-behavior plus the dormant safety net as the closure state); M8
-remains "In progress" pending the relational distillation work
-above. Neither milestone may be marked closed until the acceptance
-criteria in the development spec are met.
+With M8 relational distillation shipped, M3.2 HybridSearch-first
+shipped, and the M3.3 dormancy-establishment surface available, the
+remaining open work is operator-driven: collect production telemetry,
+verify per-tier dormancy via `AggregateRetrievalPaths`, and remove
+each tier's LIKE block once its `IsDormant` flag has been true across
+a meaningful observation window.
 
 ---
 

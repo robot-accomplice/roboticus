@@ -417,6 +417,11 @@ Blocking commands for feature-complete releases:
 | R-AGENT-150 | M8 — promoted relations are read by `KnowledgeGraph` as normal traversable edges; distillation source is invisible to graph reads | `internal/agent/memory/m8_relational_distillation_test.go` | L1 |
 | R-AGENT-151 | M8 — non-canonical relations in episode summaries are blocked at the canonical write gate; `phaseEpisodeDistillation` filters them and `StoreKnowledgeFact` rejects them as defense-in-depth | `internal/agent/memory/m8_relational_distillation_test.go` | L1 |
 | R-AGENT-152 | M8 — `parseRelationsList` drops malformed segments (wrong separator count, empty parts) without producing phantom triples | `internal/agent/memory/m8_relational_distillation_test.go` | L1 |
+| R-AGENT-153 | M3.3 — `AggregateRetrievalPaths` flags a tier as `IsDormant=true` only when both the LIKE-fallback share is at or below `RetrievalPathRetirementThreshold` AND the total observation count clears `minSampleForDormancy` | `internal/agent/memory/retrieval_path_telemetry_test.go` | L1 |
+| R-AGENT-154 | M3.3 — a tier with fallback share above the retirement threshold is NOT dormant, even with thousands of observations | `internal/agent/memory/retrieval_path_telemetry_test.go` | L1 |
+| R-AGENT-155 | M3.3 — a tier observed below the sample minimum is NOT dormant even if every observation was on the FTS path (small-sample guard) | `internal/agent/memory/retrieval_path_telemetry_test.go` | L1 |
+| R-AGENT-156 | M3.3 — multiple `retrieval.path.<tier>` annotations within the same trace span are tallied independently across tiers | `internal/agent/memory/retrieval_path_telemetry_test.go` | L1 |
+| R-AGENT-157 | M3.3 — `RetrievalPathDistribution.SortedTiers` returns deterministic alphabetical ordering for stable dashboard / report output | `internal/agent/memory/retrieval_path_telemetry_test.go` | L1 |
 
 ## Governance Rules
 
