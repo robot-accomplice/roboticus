@@ -43,8 +43,8 @@ closed, or the critical path changes.
 | 1 | Unify The Production Retrieval Path | In progress | Pipeline-prepared memory/index now preferred by runtime context assembly |
 | 2 | Make Intent And Retrieval Routing Real Decision Inputs | In progress | Intent signals now reach production retrieval; router modes now affect tier behavior |
 | 3 | Upgrade Semantic Memory Into A Canonical Knowledge Layer | In progress | Semantic provenance, canonical flags, authority scoring, and freshness cues now survive retrieval/assembly |
-| 4 | Turn Procedural Memory Into Workflow Memory | In progress | Workflow schema shipped with confidence/memory_state/version/category/success+failure evidence; Manager exposes RecordWorkflow / Find / Get and outcome recording; retrieval prefers workflows over tool-stat rollups; post-turn detection promotes repeated tool chains |
-| 5 | Replace Relationship Memory With Persisted Relational Memory | In progress | Persisted `knowledge_facts` store, graph-aware retrieval, and first traversal semantics now shipped |
+| 4 | Turn Procedural Memory Into Workflow Memory | Acceptance met | Workflow schema, Manager API, retrieval precedence over tool stats, post-turn promotion with auto-extracted error modes + preconditions + intent tags, and consolidation confidence sync now all land |
+| 5 | Replace Relationship Memory With Persisted Relational Memory | Acceptance met | Persisted `knowledge_facts` store, graph-aware retrieval, reusable `KnowledgeGraph` API with multi-hop `ShortestPath` / `Impact` / `Dependencies`, and a `query_knowledge_graph` agent tool are all shipped |
 | 6 | Add A Real Verifier / Critic Stage | Acceptance met | Claim-level certainty classification, provenance coverage, contradiction reconciliation, per-intent proof obligations, and a structured claim-to-evidence trace map are all in place; semantic-classifier upgrade remains as quality work |
 | 7 | Deepen Working Memory Into Executive State | Acceptance met | Executive state is persisted, surfaced in context assembly, grows automatically in post-turn, survives restart with a cross-turn regression test, and emits operator-auditable trace/log writes; richer tool-output assumption extraction remains as follow-on work |
 | 8 | Improve Reflection And Consolidation Quality | Acceptance met | Enriched episode summaries (evidence refs, failed hypotheses, fix patterns, result quality) land in post-turn reflection; a dedicated consolidation distillation phase promotes repeated fix patterns and recurring evidence into semantic memory with stricter thresholds so anecdotes do not get promoted |
@@ -382,7 +382,7 @@ knowledge instead of mostly long assistant responses.
 
 ## Milestone 4: Turn Procedural Memory Into Workflow Memory
 
-**Status**: In progress
+**Status**: Acceptance met (follow-on open: agent-facing workflow search tool)
 
 ### Goal
 
@@ -439,18 +439,22 @@ playbooks, and approved action sequences.
   only when no workflow matches the query.
 - Post-turn procedure detection now promotes a detected tool chain into
   a workflow entry once its count hits 3, tagging it
-  `auto_promoted,tool_chain` and recording the session ID as success
-  evidence so operators can audit why the promotion fired.
-- What still remains: richer preconditions / error-modes extraction from
-  actual turn failures (today they default to empty lists unless the
-  caller populates them) and an agent-facing tool to list / search
-  workflows directly.
+  `auto_promoted,tool_chain,intent:*,complexity:*` and recording the
+  session ID as success evidence so operators can audit why the promotion
+  fired.
+- Auto-extraction during promotion now populates `error_modes` from any
+  failing tool-result messages in the session (first line per step,
+  deduplicated, capped) and seeds `preconditions` from the session's
+  task intent, complexity, and subgoals so the workflow record carries
+  the context that made it successful.
+- Follow-on open: an agent-facing tool to list / search workflows
+  directly from the model.
 
 ---
 
 ## Milestone 5: Replace Relationship Memory With Persisted Relational Memory
 
-**Status**: In progress
+**Status**: Acceptance met (follow-on open: retire the permissive retrieval fallback)
 
 ### Goal
 

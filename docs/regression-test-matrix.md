@@ -358,6 +358,9 @@ Blocking commands for feature-complete releases:
 | R-AGENT-91 | `phaseEpisodeDistillation` promotes fix patterns seen in 2+ successful episodes into `semantic_memory` under `fix_pattern` and is idempotent across re-runs | `internal/agent/memory/consolidation_distillation_test.go` | L1 |
 | R-AGENT-92 | `phaseEpisodeDistillation` promotes evidence references seen in 3+ successful episodes into `semantic_memory` under `learned_fact` | `internal/agent/memory/consolidation_distillation_test.go` | L1 |
 | R-AGENT-93 | `phaseEpisodeDistillation` ignores evidence below the support threshold and skips failure-outcome episodes | `internal/agent/memory/consolidation_distillation_test.go` | L1 |
+| R-AGENT-94 | Workflow promotion extracts the first error line per failing step into `error_modes`, deduplicated and prefixed with the tool name | `internal/pipeline/workflow_promotion_test.go` | L1 |
+| R-AGENT-95 | Workflow promotion seeds `preconditions` from the session's task intent, complexity, and subgoals | `internal/pipeline/workflow_promotion_test.go` | L1 |
+| R-AGENT-96 | Workflow promotion tags the record with `auto_promoted` and an `intent:*` context tag derived from task state | `internal/pipeline/workflow_promotion_test.go` | L1 |
 
 ## Governance Rules
 

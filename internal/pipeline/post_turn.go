@@ -606,13 +606,29 @@ func (p *Pipeline) promoteProcedureToWorkflow(ctx context.Context, session *Sess
 	if name == "" {
 		return
 	}
+
+	// Derive richer contextual metadata so the promoted workflow is more than
+	// a step list — operators need to see why this workflow is worth
+	// recalling and what has gone wrong with it historically.
+	errorModes := extractErrorModesFromSession(session, proc.Steps)
+	preconditions := extractPreconditionsFromSession(session)
+	contextTags := []string{"auto_promoted", "tool_chain"}
+	if intent := session.TaskIntent(); intent != "" {
+		contextTags = append(contextTags, "intent:"+intent)
+	}
+	if complexity := session.TaskComplexity(); complexity != "" {
+		contextTags = append(contextTags, "complexity:"+complexity)
+	}
+
 	mm := agentmemory.NewManager(agentmemory.DefaultConfig(), p.store)
 	if err := mm.RecordWorkflow(ctx, agentmemory.Workflow{
-		Name:        name,
-		Steps:       append([]string(nil), proc.Steps...),
-		Category:    agentmemory.WorkflowCategoryWorkflow,
-		Confidence:  0.75,
-		ContextTags: []string{"auto_promoted", "tool_chain"},
+		Name:          name,
+		Steps:         append([]string(nil), proc.Steps...),
+		Preconditions: preconditions,
+		ErrorModes:    errorModes,
+		Category:      agentmemory.WorkflowCategoryWorkflow,
+		Confidence:    0.75,
+		ContextTags:   contextTags,
 	}); err != nil {
 		log.Debug().Err(err).Str("workflow", name).Msg("workflow: promotion failed")
 		return
@@ -705,4 +721,97 @@ func findSentenceBoundary(text string, maxChars int) int {
 
 	// Hard cut as last resort.
 	return maxChars
+}
+
+// extractErrorModesFromSession pulls error summaries from tool-result messages
+// for any step in the promoted chain. Only the first error line is kept per
+// step so the error_modes list stays scannable. Duplicates across the chain
+// collapse via a seen-map.
+func extractErrorModesFromSession(session *Session, steps []string) []string {
+	if session == nil || len(steps) == 0 {
+		return nil
+	}
+	stepSet := make(map[string]struct{}, len(steps))
+	for _, step := range steps {
+		stepSet[step] = struct{}{}
+	}
+
+	seen := make(map[string]struct{})
+	var out []string
+	msgs := session.Messages()
+	for i, msg := range msgs {
+		if msg.Role != "assistant" || len(msg.ToolCalls) == 0 {
+			continue
+		}
+		for _, tc := range msg.ToolCalls {
+			if _, ok := stepSet[tc.Function.Name]; !ok {
+				continue
+			}
+			if i+1 >= len(msgs) || msgs[i+1].Role != "tool" {
+				continue
+			}
+			lower := strings.ToLower(msgs[i+1].Content)
+			if !strings.HasPrefix(lower, "error") && !strings.HasPrefix(lower, "failed") && !strings.HasPrefix(lower, `{"error`) {
+				continue
+			}
+			firstLine := strings.TrimSpace(msgs[i+1].Content)
+			if newline := strings.Index(firstLine, "\n"); newline >= 0 {
+				firstLine = firstLine[:newline]
+			}
+			if len(firstLine) > 160 {
+				firstLine = firstLine[:160]
+			}
+			entry := tc.Function.Name + ": " + firstLine
+			key := strings.ToLower(entry)
+			if _, dup := seen[key]; dup {
+				continue
+			}
+			seen[key] = struct{}{}
+			out = append(out, entry)
+			if len(out) >= 4 {
+				return out
+			}
+		}
+	}
+	return out
+}
+
+// extractPreconditionsFromSession derives a small set of preconditions from
+// the session's task state and user prompt intent signals. The goal is to
+// capture what was true at the time the workflow succeeded so later callers
+// can judge whether it applies to their situation.
+func extractPreconditionsFromSession(session *Session) []string {
+	if session == nil {
+		return nil
+	}
+	var out []string
+	seen := make(map[string]struct{})
+	add := func(s string) {
+		trimmed := strings.TrimSpace(s)
+		if trimmed == "" {
+			return
+		}
+		key := strings.ToLower(trimmed)
+		if _, dup := seen[key]; dup {
+			return
+		}
+		seen[key] = struct{}{}
+		out = append(out, trimmed)
+	}
+	if intent := session.TaskIntent(); intent != "" {
+		add("intent = " + intent)
+	}
+	if complexity := session.TaskComplexity(); complexity != "" {
+		add("complexity = " + complexity)
+	}
+	for _, goal := range session.TaskSubgoals() {
+		if len(out) >= 4 {
+			break
+		}
+		if len(goal) > 120 {
+			goal = goal[:120]
+		}
+		add("subgoal: " + goal)
+	}
+	return out
 }
