@@ -15,6 +15,21 @@ type VerificationIssue struct {
 type VerificationResult struct {
 	Passed bool
 	Issues []VerificationIssue
+	// ClaimAudits carries per-claim provenance judgments so traces and
+	// observability layers can show exactly which claims were supported,
+	// anchored, or flagged. Populated even on passing runs.
+	ClaimAudits []ClaimAudit
+}
+
+// ClaimAudit is a structured record of a verifier decision on a single claim.
+type ClaimAudit struct {
+	Sentence    string `json:"sentence"`
+	Certainty   string `json:"certainty"`
+	Supported   bool   `json:"supported"`
+	Anchored    bool   `json:"anchored"`
+	Reconciled  bool   `json:"reconciled"`
+	IssueCode   string `json:"issue_code,omitempty"`
+	KeywordHits int    `json:"keyword_hits"`
 }
 
 // VerificationContext carries the minimum state needed to sanity-check

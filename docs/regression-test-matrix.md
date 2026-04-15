@@ -320,6 +320,9 @@ Blocking commands for feature-complete releases:
 | R-AGENT-53 | Post-turn growth resolves prior unresolved questions once the response answers them | `internal/pipeline/executive_growth_test.go` | L1 |
 | R-AGENT-54 | Post-turn growth does not auto-resolve open questions when the response is explicitly uncertain | `internal/pipeline/executive_growth_test.go` | L1 |
 | R-AGENT-55 | Post-turn growth is idempotent across repeated runs — no duplicate verified conclusions | `internal/pipeline/executive_growth_test.go` | L1 |
+| R-AGENT-56 | Verifier emits per-claim `ClaimAudit` records (certainty, supported, anchored, reconciled, issue code) | `internal/pipeline/verifier_trace_test.go` | L1 |
+| R-AGENT-57 | `SummarizeVerification` produces claim count / absolute count / coverage ratio / flagged count | `internal/pipeline/verifier_trace_test.go` | L1 |
+| R-AGENT-58 | Pipeline trace carries a `verifier.*` annotation group including a JSON claim map | `internal/pipeline/verifier_trace_test.go` | L1 |
 
 ## Governance Rules
 

@@ -114,6 +114,7 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 	// persist the assistant message.
 	verifyCtx := BuildVerificationContext(session)
 	verifyResult := VerifyResponse(result, verifyCtx)
+	AnnotateVerifierTrace(tr, verifyResult)
 	if !verifyResult.Passed {
 		log.Debug().
 			Str("session", session.ID).

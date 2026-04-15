@@ -16,6 +16,7 @@ const (
 	TraceNSMCP        = "mcp"        // MCP server interaction spans
 	TraceNSDelegation = "delegation" // Subagent delegation spans
 	TraceNSTaskState  = "taskstate"  // Task state machine transition spans
+	TraceNSVerifier   = "verifier"   // Verification / critic stage annotations
 )
 
 // PipelineTrace records per-stage timing for a single pipeline run.
@@ -113,6 +114,31 @@ func (t *PipelineTrace) StagesJSON() string {
 // These functions write trace annotations under consistent namespace prefixes,
 // matching Rust's annotate_task_state_trace(), annotate_delegation_trace(), and
 // annotate_retrieval_strategy().
+
+// AnnotateVerifierTrace writes structured verifier output onto the current
+// span. The full claim-to-evidence map is embedded as JSON so operators can
+// audit every unsupported-claim decision without re-running the verifier.
+func AnnotateVerifierTrace(tr *TraceRecorder, result VerificationResult) {
+	if tr == nil {
+		return
+	}
+	summary := SummarizeVerification(result)
+	tr.Annotate(TraceNSVerifier+".passed", summary.Passed)
+	if len(summary.IssueCodes) > 0 {
+		tr.Annotate(TraceNSVerifier+".issue_codes", summary.IssueCodes)
+	}
+	tr.Annotate(TraceNSVerifier+".claim_count", summary.ClaimCount)
+	tr.Annotate(TraceNSVerifier+".absolute_count", summary.AbsoluteCount)
+	tr.Annotate(TraceNSVerifier+".anchored_count", summary.AnchoredCount)
+	tr.Annotate(TraceNSVerifier+".unsupported_absolute_count", summary.UnsupportedAbs)
+	tr.Annotate(TraceNSVerifier+".coverage_ratio", summary.CoverageRatio)
+	tr.Annotate(TraceNSVerifier+".flagged_claims", summary.FlaggedClaims)
+	if len(result.ClaimAudits) > 0 {
+		if buf, err := json.Marshal(result.ClaimAudits); err == nil {
+			tr.Annotate(TraceNSVerifier+".claim_map_json", string(buf))
+		}
+	}
+}
 
 // AnnotateTaskStateTrace writes task synthesis results as namespaced trace
 // annotations. Groups annotations under the "task_state" namespace.

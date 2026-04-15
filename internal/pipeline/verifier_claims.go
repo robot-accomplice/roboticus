@@ -293,10 +293,29 @@ func claimEchoesContestedEvidence(claim VerifiedClaim, evidenceItems []string) b
 
 // verifyClaimLevel runs the claim-oriented checks and appends issues to result.
 // The base VerifyResponse function remains authoritative — this function is a
-// pure additive pass so the existing tests keep passing.
+// pure additive pass so the existing tests keep passing. Every claim observed
+// is also written to result.ClaimAudits so traces can surface the full map.
 func verifyClaimLevel(content string, ctx VerificationContext, claims []VerifiedClaim, result *VerificationResult) {
 	if len(claims) == 0 {
 		return
+	}
+
+	// Build a baseline audit for every claim so traces carry the full picture,
+	// not just the flagged subset. Issue codes are overlaid below when the
+	// relevant checks fire.
+	auditIndex := make(map[string]int, len(claims))
+	for _, claim := range claims {
+		hits := claimEvidenceSupport(claim, ctx.EvidenceItems)
+		audit := ClaimAudit{
+			Sentence:    truncate(claim.Sentence, 200),
+			Certainty:   claim.Certainty.String(),
+			Supported:   ClaimSupportedByEvidence(claim, ctx.EvidenceItems),
+			Anchored:    claim.HasCanonicalAnchor,
+			Reconciled:  ClaimAcknowledgesConflict(claim),
+			KeywordHits: hits,
+		}
+		result.ClaimAudits = append(result.ClaimAudits, audit)
+		auditIndex[claim.Sentence] = len(result.ClaimAudits) - 1
 	}
 
 	highRisk := isHighRiskQuery(ctx)
@@ -326,6 +345,9 @@ func verifyClaimLevel(content string, ctx VerificationContext, claims []Verified
 				continue
 			}
 			unresolved = append(unresolved, truncate(claim.Sentence, 120))
+			if idx, ok := auditIndex[claim.Sentence]; ok {
+				result.ClaimAudits[idx].IssueCode = "unresolved_contradicted_claim"
+			}
 		}
 		if len(unresolved) > 0 {
 			result.Passed = false
@@ -392,6 +414,9 @@ func verifyClaimLevel(content string, ctx VerificationContext, claims []Verified
 				continue
 			}
 			orphaned = append(orphaned, truncate(claim.Sentence, 120))
+			if idx, ok := auditIndex[claim.Sentence]; ok && result.ClaimAudits[idx].IssueCode == "" {
+				result.ClaimAudits[idx].IssueCode = "unsupported_absolute_claim"
+			}
 		}
 		if len(orphaned) > 0 {
 			// Only add this issue if the broader coverage failure did not already
@@ -412,4 +437,47 @@ func verifyClaimLevel(content string, ctx VerificationContext, claims []Verified
 			}
 		}
 	}
+}
+
+// VerifierSummary distills a VerificationResult into compact counters suitable
+// for trace annotations. It is the backbone of AnnotateVerifierTrace.
+type VerifierSummary struct {
+	Passed           bool     `json:"passed"`
+	IssueCodes       []string `json:"issue_codes,omitempty"`
+	ClaimCount       int      `json:"claim_count"`
+	AbsoluteCount    int      `json:"absolute_count"`
+	SupportedCount   int      `json:"supported_count"`
+	AnchoredCount    int      `json:"anchored_count"`
+	UnsupportedAbs   int      `json:"unsupported_absolute_count"`
+	CoverageRatio    float64  `json:"coverage_ratio"`
+	FlaggedClaims    int      `json:"flagged_claims"`
+}
+
+// SummarizeVerification computes a compact summary from a VerificationResult.
+func SummarizeVerification(result VerificationResult) VerifierSummary {
+	summary := VerifierSummary{Passed: result.Passed}
+	for _, issue := range result.Issues {
+		summary.IssueCodes = append(summary.IssueCodes, issue.Code)
+	}
+	summary.ClaimCount = len(result.ClaimAudits)
+	for _, audit := range result.ClaimAudits {
+		if audit.Certainty == CertaintyAbsolute.String() {
+			summary.AbsoluteCount++
+			if audit.Supported || audit.Anchored {
+				summary.SupportedCount++
+			} else {
+				summary.UnsupportedAbs++
+			}
+		}
+		if audit.Anchored {
+			summary.AnchoredCount++
+		}
+		if audit.IssueCode != "" {
+			summary.FlaggedClaims++
+		}
+	}
+	if summary.AbsoluteCount > 0 {
+		summary.CoverageRatio = float64(summary.SupportedCount) / float64(summary.AbsoluteCount)
+	}
+	return summary
 }

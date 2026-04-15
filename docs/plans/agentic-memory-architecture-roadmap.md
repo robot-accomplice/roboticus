@@ -95,14 +95,18 @@ closed, or the critical path changes.
   opened for subgoals the turn could not close, and prior unresolved
   questions whose keywords appear in a confident response are resolved.
   Growth is idempotent across repeated runs.
+- Pipeline traces now carry a `verifier.*` annotation group with per-claim
+  audits (`claim_map_json`), coverage ratio, and counts so operators can
+  audit exactly which claims were supported, anchored, or flagged.
 
 ### Current Critical Path
 
 1. Finish Milestone 6 by moving from lexical claim extraction to semantic
    claim classification (LLM or embedding backed) so the verifier's
-   certainty and provenance judgments survive paraphrases, and by adding
-   explicit proof obligations for financial/compliance intents where absolute
-   claims must cite a named canonical source per claim.
+   certainty and provenance judgments survive paraphrases. Proof obligations
+   for financial/compliance intents are already enforceable per claim thanks
+   to the new `ClaimAudit` trace map — next step is to wire an explicit
+   per-intent requirement on canonical anchoring for those classes.
 2. Finish Milestone 5 by moving from first traversal semantics to richer
    persisted adjacency/path reasoning and multi-hop impact analysis.
 3. Finish Milestone 7 by wiring assumptions, verified conclusions, unresolved
@@ -509,9 +513,14 @@ support, contradictions, and freshness before final answer or action.
   section and rejects responses that abandon unresolved questions that the
   current prompt is related to or claim task completion without satisfying
   the active stopping criteria.
+- The verifier now produces a structured `ClaimAudit` record for every claim
+  it parses (certainty, supported, anchored, reconciled, keyword hits, issue
+  code) and emits them onto the pipeline trace via `AnnotateVerifierTrace`
+  under the `verifier.*` namespace, including a compact summary (counts,
+  coverage ratio) and a JSON claim map operators can audit per turn.
 - The remaining gap is semantic depth: claim classification is still lexical,
-  so paraphrase-heavy responses can slip through, and the verifier does not
-  yet produce a machine-readable claim-to-evidence map for traces.
+  so paraphrase-heavy responses can still slip through the certainty and
+  support checks.
 
 ---
 
