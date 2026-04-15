@@ -20,7 +20,7 @@ type MemoryRow struct {
 	CreatedAt  string
 }
 
-// MemoryRepository handles 5-tier memory persistence.
+// MemoryRepository handles persisted memory-store writes.
 type MemoryRepository struct {
 	q Querier
 }
@@ -72,6 +72,23 @@ func (r *MemoryRepository) StoreRelationship(ctx context.Context, id, entityID, 
 		 ON CONFLICT(entity_id) DO UPDATE SET entity_name = excluded.entity_name, trust_score = excluded.trust_score,
 		 updated_at = datetime('now')`,
 		id, entityID, entityName, trustScore)
+	return err
+}
+
+// StoreKnowledgeFact upserts a typed graph fact.
+func (r *MemoryRepository) StoreKnowledgeFact(ctx context.Context, id, subject, relation, object, sourceTable, sourceID string, confidence float64) error {
+	_, err := r.q.ExecContext(ctx,
+		`INSERT INTO knowledge_facts (id, subject, relation, object, source_table, source_id, confidence)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(id) DO UPDATE SET
+		   subject = excluded.subject,
+		   relation = excluded.relation,
+		   object = excluded.object,
+		   source_table = excluded.source_table,
+		   source_id = excluded.source_id,
+		   confidence = excluded.confidence,
+		   updated_at = datetime('now')`,
+		id, subject, relation, object, sourceTable, sourceID, confidence)
 	return err
 }
 

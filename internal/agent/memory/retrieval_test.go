@@ -166,6 +166,77 @@ func TestRetrieveRelationshipEvidence_PreservesSourceAndAge(t *testing.T) {
 	}
 }
 
+func TestRetrieveKnowledgeFactEvidence(t *testing.T) {
+	store := testutil.TempStore(t)
+	ctx := context.Background()
+
+	_, err := store.ExecContext(ctx,
+		`INSERT INTO knowledge_facts
+		 (id, subject, relation, object, confidence, updated_at)
+		 VALUES (?, ?, ?, ?, ?, datetime('now', '-12 days'))`,
+		db.NewID(), "Billing Service", "depends_on", "Ledger Service", 0.82)
+	if err != nil {
+		t.Fatalf("seed knowledge_facts: %v", err)
+	}
+
+	mr := NewRetriever(DefaultRetrievalConfig(), DefaultTierBudget(), store)
+	results := mr.retrieveKnowledgeFactEvidence(ctx, "ledger", RetrievalKeyword, 200)
+
+	if len(results) == 0 {
+		t.Fatal("expected graph evidence")
+	}
+	if results[0].SourceTable != "knowledge_facts" {
+		t.Fatalf("expected knowledge_facts source, got %+v", results[0])
+	}
+	if !strings.Contains(results[0].Content, "Billing Service depends_on Ledger Service") {
+		t.Fatalf("unexpected graph content: %q", results[0].Content)
+	}
+	if results[0].AgeDays < 11 {
+		t.Fatalf("expected preserved fact age, got %.2f", results[0].AgeDays)
+	}
+}
+
+func TestRetrieveKnowledgeFactEvidence_GraphTraversalExpandsDependencies(t *testing.T) {
+	store := testutil.TempStore(t)
+	ctx := context.Background()
+
+	seedFacts := []struct {
+		subject    string
+		relation   string
+		object     string
+		confidence float64
+	}{
+		{"Billing Service", "depends_on", "Ledger Service", 0.9},
+		{"Ledger Service", "uses", "Postgres", 0.8},
+		{"Billing Service", "owned_by", "Revenue Platform", 0.75},
+	}
+	for _, fact := range seedFacts {
+		_, err := store.ExecContext(ctx,
+			`INSERT INTO knowledge_facts
+			 (id, subject, relation, object, confidence, updated_at)
+			 VALUES (?, ?, ?, ?, ?, datetime('now', '-1 day'))`,
+			db.NewID(), fact.subject, fact.relation, fact.object, fact.confidence)
+		if err != nil {
+			t.Fatalf("seed knowledge_facts: %v", err)
+		}
+	}
+
+	mr := NewRetriever(DefaultRetrievalConfig(), DefaultTierBudget(), store)
+	results := mr.retrieveKnowledgeFactEvidence(ctx, "what depends on billing service?", RetrievalGraph, 400)
+
+	if len(results) < 2 {
+		t.Fatalf("expected graph traversal results, got %+v", results)
+	}
+
+	joined := results[0].Content + "\n" + results[1].Content + "\n" + results[2].Content
+	if !strings.Contains(joined, "Billing Service depends_on Ledger Service") {
+		t.Fatalf("expected seed dependency, got %q", joined)
+	}
+	if !strings.Contains(joined, "Ledger Service uses Postgres") {
+		t.Fatalf("expected connected dependency expansion, got %q", joined)
+	}
+}
+
 func TestRetrieveSemanticEvidence_PreservesAuthorityMetadata(t *testing.T) {
 	store := testutil.TempStore(t)
 	ctx := context.Background()

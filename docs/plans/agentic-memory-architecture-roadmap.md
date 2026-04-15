@@ -3,7 +3,7 @@
 > Purpose: turn the hybrid-memory / retrieval audit into a concrete delivery
 > plan with milestones, file targets, and acceptance criteria.
 >
-> Status: Draft
+> Status: Active execution document
 > Date: 2026-04-14
 > Scope: perception/intent, planning, multi-store retrieval, context assembly,
 > verification, learning loop, and memory persistence.
@@ -27,6 +27,55 @@ The biggest remaining gap is not "missing concepts" so much as "runtime
 decisiveness." Several layers exist in code but are not yet the authoritative
 production path for reasoning and action. The roadmap below focuses on fixing
 that first.
+
+---
+
+## Execution Tracker
+
+This document is the working source of truth for `v1.0.6` execution. It should
+be updated whenever a milestone meaningfully advances, acceptance criteria are
+closed, or the critical path changes.
+
+### Milestone Status
+
+| Milestone | Title | Status | Notes |
+|-----------|-------|--------|-------|
+| 1 | Unify The Production Retrieval Path | In progress | Pipeline-prepared memory/index now preferred by runtime context assembly |
+| 2 | Make Intent And Retrieval Routing Real Decision Inputs | In progress | Intent signals now reach production retrieval; router modes now affect tier behavior |
+| 3 | Upgrade Semantic Memory Into A Canonical Knowledge Layer | In progress | Semantic provenance, canonical flags, authority scoring, and freshness cues now survive retrieval/assembly |
+| 4 | Turn Procedural Memory Into Workflow Memory | Not started | Still too stats-heavy; no true workflow records yet |
+| 5 | Replace Relationship Memory With Persisted Relational Memory | In progress | Persisted `knowledge_facts` store and first graph-aware retrieval path now shipped |
+| 6 | Add A Real Verifier / Critic Stage | In progress | Heuristic verifier gate is live; not yet a full evidence-audit stage |
+| 7 | Deepen Working Memory Into Executive State | Not started | Persistence/vetting exists; executive task-state model still missing |
+| 8 | Improve Reflection And Consolidation Quality | Not started | Reflection/consolidation still heuristic despite working scaffolding |
+
+### Completed Slices
+
+- Pipeline-prepared memory context and memory index are now carried through
+  session state and preferred by daemon inference assembly.
+- Clarification-deflection canned responses are now guarded against when the
+  required context is already present.
+- Production retrieval now receives intent signals and honors routed retrieval
+  modes instead of treating them as advisory only.
+- Semantic evidence now preserves provenance, canonical markers, authority
+  scoring, and freshness signals through reranking and context assembly.
+- The verifier now runs as a retry gate with checks for unsupported certainty,
+  contradiction handling, policy anchoring, remediation coverage, and stale
+  "current/latest" claims.
+- Relationship evidence now preserves provenance and age, and a persisted
+  `knowledge_facts` store now captures typed graph facts extracted from
+  semantic memory.
+- Relationship routing now has a graph-aware retrieval mode with one-hop
+  dependency expansion from matched entities.
+
+### Current Critical Path
+
+1. Finish Milestone 5 by moving from ranked graph facts to explicit persisted
+   traversal semantics for adjacency, impact analysis, and path reasoning.
+2. Finish Milestone 6 by deepening the verifier from heuristic retry gate into
+   a real evidence-audit stage with explicit support checks per subgoal.
+3. Start Milestone 7 by turning working memory into structured executive state
+   instead of mainly turn summaries plus lightweight carryover.
 
 ---
 
@@ -88,6 +137,8 @@ the persistence mechanism.
 
 ## Milestone 1: Unify The Production Retrieval Path
 
+**Status**: In progress
+
 ### Goal
 
 Make the pipeline-owned retrieval path authoritative so decomposition, routing,
@@ -134,9 +185,19 @@ behavior.
 - A pipeline trace can show the exact retrieval artifact that reached the model
 - Existing smoke and pipeline parity tests remain green
 
+### Progress
+
+- Pipeline-prepared direct memory and memory index are now stored in session
+  state and preferred by daemon context assembly.
+- Regression coverage exists for preferring pipeline-prepared memory artifacts.
+- Full retrieval parity between all runtime paths still needs to be proven more
+  explicitly in traces and stream/non-stream comparisons.
+
 ---
 
 ## Milestone 2: Make Intent And Retrieval Routing Real Decision Inputs
+
+**Status**: In progress
 
 ### Goal
 
@@ -178,9 +239,22 @@ that controls memory selection, retrieval mode, and risk posture.
   anecdotal episodic recall
 - Debugging-style queries show a different tier mix than policy queries
 
+### Progress
+
+- Production daemon retrieval now classifies the query and passes intent
+  signals into the retriever.
+- `RetrievalTarget.Mode` now affects semantic, procedural, and relationship
+  retrieval behavior.
+- Relationship-oriented queries now route to `graph` mode instead of plain
+  keyword-only lookup.
+- Risk level and explicit source-of-truth classification are still not emitted
+  as a unified perception artifact.
+
 ---
 
 ## Milestone 3: Upgrade Semantic Memory Into A Canonical Knowledge Layer
+
+**Status**: In progress
 
 ### Goal
 
@@ -223,6 +297,16 @@ knowledge instead of mostly long assistant responses.
 - Semantic memory entries carry enough metadata to distinguish current truth
   from stale but related knowledge
 - Tests cover "current canonical source outranks archived source"
+
+### Progress
+
+- Semantic evidence now carries source identity, labels, canonical flags,
+  authority scores, and age through retrieval and context assembly.
+- Context assembly and verifier now surface freshness risks and canonical-risk
+  failures instead of burying them in scoring.
+- Semantic retrieval still needs a stronger source model around versioning,
+  effective dates, and supersession, and it still falls back to SQL matching
+  more often than the final architecture should allow.
 
 ---
 
@@ -269,6 +353,8 @@ playbooks, and approved action sequences.
 
 ## Milestone 5: Replace Relationship Memory With Persisted Relational Memory
 
+**Status**: In progress
+
 ### Goal
 
 Move from lightweight entity trust tracking to a persisted relational layer
@@ -309,9 +395,24 @@ capable of representing dependencies, ownership, chronology, and causality.
 - The in-memory `KnowledgeGraph` is either retired or reduced to a cache over
   persisted data
 
+### Progress
+
+- `knowledge_facts` now exists as a persisted store with provenance,
+  confidence, and freshness metadata.
+- Semantic ingestion extracts typed facts like `depends_on`, `owned_by`,
+  `uses`, `blocks`, `causes`, and `version_of` into that store.
+- Retrieval, search, recall, indexing, and stats tooling now treat
+  `knowledge_facts` as a first-class store.
+- Relationship routing now uses graph-aware retrieval with one-hop expansion
+  from matched entities.
+- What still remains is a true persisted adjacency/traversal model rather than
+  retrieval-time expansion over flat fact rows.
+
 ---
 
 ## Milestone 6: Add A Real Verifier / Critic Stage
+
+**Status**: In progress
 
 ### Goal
 
@@ -348,6 +449,17 @@ support, contradictions, and freshness before final answer or action.
   - unsupported leap
   - contradiction left unresolved
   - stale source beats current source
+
+### Progress
+
+- A verifier stage now runs before final output persistence and can request a
+  revision pass.
+- The verifier already checks unsupported certainty, missed multi-part
+  coverage, contradiction handling, policy anchoring, remediation/next-step
+  coverage, and stale "latest/current" claims.
+- The remaining gap is depth: claim-by-claim evidence support, explicit
+  subgoal coverage accounting, and richer contradiction resolution are still
+  incomplete.
 
 ---
 
@@ -485,7 +597,13 @@ The roadmap should be considered complete when all of the following are true:
 
 ## Immediate Next Step
 
-Start with Milestone 1 and treat it as the architectural forcing function for
-the rest of the roadmap. If retrieval, assembly, and runtime prompt injection
-are not unified, later improvements to routing, verification, and memory
-quality will continue to land off the main path.
+Advance Milestone 5 and Milestone 6 together:
+
+- give graph memory explicit adjacency/path traversal semantics over persisted
+  facts, not just one-hop ranked expansion
+- teach the verifier to audit evidence support and subgoal coverage directly
+  from structured retrieval/context artifacts
+
+Those two moves are the current highest-leverage path toward the full vision:
+dependable dependency reasoning plus a critic that can refuse unsupported
+answers before they ship.

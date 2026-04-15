@@ -15,8 +15,8 @@ import (
 // Arc<Mutex<Connection>>, Go's *sql.DB is already safe for concurrent use
 // and manages a connection pool internally.
 type Store struct {
-	db                 *sql.DB
-	onSessionArchived  []func(ctx context.Context, sessionID string)
+	db                *sql.DB
+	onSessionArchived []func(ctx context.Context, sessionID string)
 }
 
 // OnSessionArchived registers a callback that fires after a session is archived.
@@ -100,7 +100,7 @@ func (s *Store) TruncateAllData() error {
 	tables := []string{
 		"session_messages", "turns", "tool_calls", "policy_decisions",
 		"working_memory", "episodic_memory", "semantic_memory",
-		"procedural_memory", "relationship_memory",
+		"procedural_memory", "relationship_memory", "knowledge_facts",
 		"tasks", "cron_runs", "cron_jobs",
 		"transactions", "service_requests", "revenue_opportunities", "revenue_feedback",
 		"inference_costs", "semantic_cache",

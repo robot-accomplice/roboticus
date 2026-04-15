@@ -76,7 +76,7 @@ func (t *IntrospectionTool) capabilities() string {
 	return fmt.Sprintf(`## Capabilities
 - Agent: %s (v%s)
 - Multi-model inference with cascade routing
-- 5-tier memory system (working, episodic, semantic, procedural, relationship)
+- 6-store memory system (working, episodic, semantic, procedural, relationship, graph facts)
 - Multi-channel delivery (Telegram, Discord, Signal, WhatsApp, Voice, A2A)
 - Tool execution with sandboxed filesystem access
 - Cron scheduling with durable execution
@@ -122,7 +122,8 @@ func (t *IntrospectionTool) memoryInfo() string {
 - Episodic: Past events with temporal decay re-ranking
 - Semantic: Structured knowledge (category/key/value with confidence)
 - Procedural: Tool usage statistics (success/failure rates)
-- Relationship: Entity interaction tracking (trust scores, frequency)`
+- Relationship: Entity interaction tracking (trust scores, frequency)
+- Graph Facts: Typed dependencies and relations (subject/relation/object with provenance)`
 }
 
 // --- MemoryStatsTool ---
@@ -167,6 +168,7 @@ func (t *MemoryStatsTool) Execute(ctx context.Context, params string, tctx *Cont
 		{"semantic_memory", "SELECT COUNT(*) FROM semantic_memory"},
 		{"procedural_memory", "SELECT COUNT(*) FROM procedural_memory"},
 		{"relationship_memory", "SELECT COUNT(*) FROM relationship_memory"},
+		{"knowledge_facts", "SELECT COUNT(*) FROM knowledge_facts"},
 	}
 
 	// If a session_id is provided, scope working_memory to that session.

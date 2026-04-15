@@ -520,8 +520,8 @@ func TestMemoryStatsTool_WithStore(t *testing.T) {
 	if err := json.Unmarshal([]byte(result.Output), &stats); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if len(stats) != 5 {
-		t.Errorf("expected 5 tiers, got %d", len(stats))
+	if len(stats) != 6 {
+		t.Errorf("expected 6 tiers, got %d", len(stats))
 	}
 }
 

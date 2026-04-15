@@ -83,7 +83,7 @@ func (r *Router) Plan(query string, intents []IntentSignal) RetrievalPlan {
 	if containsAny(lower, "how to", "how do i", "steps to", "process for", "procedure") {
 		return r.planProceduralQuery()
 	}
-	if containsAny(lower, "who is", "relationship", "trust", "interact") {
+	if containsAny(lower, "who is", "relationship", "trust", "interact", "depends on", "dependency", "impact", "blocked by", "owner", "owned by") {
 		return r.planRelationshipQuery()
 	}
 	if containsAny(lower, "policy", "rule", "compliance", "must", "required", "allowed") {
@@ -138,7 +138,7 @@ func (r *Router) planProceduralQuery() RetrievalPlan {
 func (r *Router) planRelationshipQuery() RetrievalPlan {
 	log.Debug().Msg("router: plan=relationship → relationship(primary) + episodic(secondary)")
 	return RetrievalPlan{Targets: []RetrievalTarget{
-		{Tier: TierRelationship, Mode: RetrievalKeyword, Weight: 0.6, Budget: 0.4},
+		{Tier: TierRelationship, Mode: RetrievalGraph, Weight: 0.6, Budget: 0.4},
 		{Tier: TierEpisodic, Mode: RetrievalHybrid, Weight: 0.3, Budget: 0.35},
 		{Tier: TierSemantic, Mode: RetrievalHybrid, Weight: 0.1, Budget: 0.25},
 	}}

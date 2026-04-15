@@ -50,6 +50,7 @@ func TestTablesExist(t *testing.T) {
 		"sessions", "session_messages", "turns", "tool_calls",
 		"policy_decisions", "working_memory", "episodic_memory",
 		"semantic_memory", "procedural_memory", "relationship_memory",
+		"knowledge_facts",
 		"cron_jobs", "cron_runs", "transactions", "inference_costs",
 		"semantic_cache", "delivery_queue", "approval_requests",
 		"plugins", "embeddings", "sub_agents", "skills",

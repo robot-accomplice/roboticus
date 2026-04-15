@@ -525,7 +525,7 @@ This is enforced in `marshalOpenAI()` via explicit message construction
 back to the originating tool call.
 
 **File**: `internal/llm/client_formats.go`
-| `get_memory_stats` | none | Returns 5-tier budget allocations + live health snapshot. | Rust parity |
+| `get_memory_stats` | none | Returns 6-store memory counts + live health snapshot. | Go beyond-parity |
 | `get_runtime_context` | none | Includes hippocampus table listing. | Rust parity |
 
 ### 6.2 API Routes
@@ -566,7 +566,8 @@ roboticus memory reindex
 - **Semantic memory** answers: "What is true?"
 - **Episodic memory** answers: "What happened before?"
 - **Procedural memory** answers: "How do I do this?"
-- **Relationship/graph memory** answers: "What depends on what?"
+- **Relationship memory** answers: "Who interacts with whom, and how strongly?"
+- **Graph facts** answer: "What explicitly depends on what?"
 - **Working memory** answers: "What am I doing right now?" (NOT searched — direct injection)
 
 ### Retrieval Pipeline (v1.0.6)
@@ -574,7 +575,7 @@ roboticus memory reindex
 ```
 Query → Decompose (compound → subgoals)
       → Route (intent-driven tier selection)
-      → Retrieve (per-tier: BM25 + vector hybrid, mode-aware by tier, relationship evidence with age/provenance)
+      → Retrieve (per-tier: BM25 + vector hybrid, mode-aware by tier, relationship evidence with age/provenance, graph facts with typed relations)
       → Rerank (discard weak, boost authority, detect collapse)
       → Assemble (evidence + freshness risks + gaps + contradictions)
       → Working State (direct injection, not searched)
@@ -594,12 +595,15 @@ Query → Decompose (compound → subgoals)
 | Verifier | `internal/pipeline/verifier.go` | Detects unsupported certainty, stale-currentness overclaim, ignored contradictions, missed multi-part coverage, missing action plans, and unanchored policy answers |
 | Reflection | `reflection.go` | Post-turn episode summaries |
 | Persistence | `working_persistence.go` | Working memory across restarts |
+| Graph Facts | `043_knowledge_facts.sql`, `manager.go`, `retrieval_tiers.go` | Persisted typed relations extracted from semantic knowledge and surfaced as first-class evidence |
 
 ### Current Behavioral Notes
 
 - Router intent signals are now propagated from production daemon retrieval into memory routing.
 - Semantic evidence retains source identity, source label, canonical status, and authority score through reranking and context assembly.
 - Relationship evidence now retains source identity, relationship summary, trust-derived score, and age through retrieval and assembly.
+- Graph facts are now persisted in `knowledge_facts` with `subject` / `relation` / `object`, source provenance, confidence, and freshness metadata.
+- Semantic ingestion now extracts typed facts such as `depends_on`, `owned_by`, `uses`, `blocks`, `causes`, and `version_of` into the graph-fact store.
 - Context assembly surfaces explicit freshness risks when supporting evidence is stale instead of leaving recency buried in scores.
 - The verifier now consumes pipeline-computed task hints (intent, subgoals, planned action) when available instead of reconstructing everything from the raw prompt.
 - The verifier is currently heuristic, not model-based. It acts as a revision gate, not a final proof system.
@@ -643,8 +647,9 @@ organic differentiation over time.
 
 ### 7.4 ~~FTS Coverage Gaps~~ FIXED (Go v1.0.2)
 
-All 5 tiers now have FTS triggers: episodic, semantic, working (pre-existing),
-procedural and relationship (added in v1.0.2 via migration 037).
+All memory-backed stores now have FTS coverage: episodic, semantic, working
+(pre-existing), procedural and relationship (added in v1.0.2 via migration 037),
+plus `knowledge_facts` (added in v1.0.6 via migration 043).
 
 ### 7.5 No UPDATE Trigger on Episodic FTS (OPEN)
 

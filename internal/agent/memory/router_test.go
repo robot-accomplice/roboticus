@@ -64,6 +64,9 @@ func TestRouter_RelationshipKeywords(t *testing.T) {
 	if plan.Targets[0].Tier != TierRelationship {
 		t.Errorf("relationship query should route primarily to relationship, got %s", plan.Targets[0].Tier)
 	}
+	if plan.Targets[0].Mode != RetrievalGraph {
+		t.Errorf("relationship query should use graph mode, got %s", plan.Targets[0].Mode)
+	}
 }
 
 func TestRouter_PolicyKeywords(t *testing.T) {

@@ -1,10 +1,10 @@
 // Package db provides the SQLite database layer.
 //
 // Schema management follows a two-phase model:
-//   1. Baseline DDL (schemaDDL constant below): CREATE TABLE IF NOT EXISTS statements
-//      that establish the initial schema for fresh installs. This is "version 0".
-//   2. Numbered migrations (internal/db/migrations/*.sql): ALTER TABLE, CREATE INDEX,
-//      and other incremental changes applied on top of the baseline.
+//  1. Baseline DDL (schemaDDL constant below): CREATE TABLE IF NOT EXISTS statements
+//     that establish the initial schema for fresh installs. This is "version 0".
+//  2. Numbered migrations (internal/db/migrations/*.sql): ALTER TABLE, CREATE INDEX,
+//     and other incremental changes applied on top of the baseline.
 //
 // Rules for contributors:
 //   - NEVER modify the baseline DDL to change existing tables (add/drop columns, etc.)
@@ -160,6 +160,22 @@ CREATE TABLE IF NOT EXISTS relationship_memory (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS knowledge_facts (
+    id TEXT PRIMARY KEY,
+    subject TEXT NOT NULL,
+    relation TEXT NOT NULL,
+    object TEXT NOT NULL,
+    source_table TEXT,
+    source_id TEXT,
+    confidence REAL NOT NULL DEFAULT 0.7,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_knowledge_facts_subject ON knowledge_facts(subject);
+CREATE INDEX IF NOT EXISTS idx_knowledge_facts_relation ON knowledge_facts(relation);
+CREATE INDEX IF NOT EXISTS idx_knowledge_facts_object ON knowledge_facts(object);
+CREATE INDEX IF NOT EXISTS idx_knowledge_facts_source ON knowledge_facts(source_table, source_id);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
     content,
     category,
@@ -196,6 +212,23 @@ END;
 
 CREATE TRIGGER IF NOT EXISTS relationship_ad AFTER DELETE ON relationship_memory BEGIN
     DELETE FROM memory_fts WHERE source_table = 'relationship_memory' AND source_id = old.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS knowledge_facts_ai AFTER INSERT ON knowledge_facts BEGIN
+    INSERT INTO memory_fts(content, category, source_table, source_id)
+    VALUES (new.subject || ' ' || new.relation || ' ' || new.object,
+            'graph', 'knowledge_facts', new.id);
+END;
+
+CREATE TRIGGER IF NOT EXISTS knowledge_facts_au AFTER UPDATE ON knowledge_facts BEGIN
+    DELETE FROM memory_fts WHERE source_table = 'knowledge_facts' AND source_id = old.id;
+    INSERT INTO memory_fts(content, category, source_table, source_id)
+    VALUES (new.subject || ' ' || new.relation || ' ' || new.object,
+            'graph', 'knowledge_facts', new.id);
+END;
+
+CREATE TRIGGER IF NOT EXISTS knowledge_facts_ad AFTER DELETE ON knowledge_facts BEGIN
+    DELETE FROM memory_fts WHERE source_table = 'knowledge_facts' AND source_id = old.id;
 END;
 
 CREATE TABLE IF NOT EXISTS tasks (

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sort"
 	"strings"
 
 	"roboticus/internal/db"
@@ -47,6 +48,19 @@ func relationshipSourceLabel(entityName, entityID string) string {
 		return entityName
 	}
 	return entityName + "/" + entityID
+}
+
+func knowledgeFactSourceLabel(subject, relation, object string) string {
+	return subject + " " + relation + " " + object
+}
+
+type graphFactRow struct {
+	ID         string
+	Subject    string
+	Relation   string
+	Object     string
+	Confidence float64
+	AgeDays    float64
 }
 
 // retrieveSemanticEvidence fetches semantic memory with richer provenance preserved.
@@ -328,6 +342,11 @@ func (mr *Retriever) retrieveRelationshipEvidence(ctx context.Context, query str
 		return append(dst, ev)
 	}
 
+	var evidence []Evidence
+	for _, ev := range mr.retrieveKnowledgeFactEvidence(ctx, query, mode, budgetTokens/2) {
+		evidence = appendEvidence(evidence, ev)
+	}
+
 	var rows *sql.Rows
 	var err error
 	if query != "" && mode != RetrievalRecency {
@@ -351,7 +370,6 @@ func (mr *Retriever) retrieveRelationshipEvidence(ctx context.Context, query str
 	}
 	defer func() { _ = rows.Close() }()
 
-	var evidence []Evidence
 	emitted := 0
 	for rows.Next() {
 		var id, entityID, entityName string
@@ -426,4 +444,208 @@ func (mr *Retriever) retrieveRelationshipEvidence(ctx context.Context, query str
 		}
 	}
 	return evidence
+}
+
+func (mr *Retriever) retrieveKnowledgeFactEvidence(ctx context.Context, query string, mode RetrievalMode, budgetTokens int) []Evidence {
+	maxChars := budgetTokens * mr.charsPerToken
+	used := 0
+	appendEvidence := func(dst []Evidence, ev Evidence) []Evidence {
+		if ev.Content == "" {
+			return dst
+		}
+		if used+len(ev.Content) > maxChars {
+			return dst
+		}
+		used += len(ev.Content)
+		return append(dst, ev)
+	}
+
+	rows, err := mr.store.QueryContext(ctx,
+		`SELECT id, subject, relation, object, confidence,
+		        julianday('now') - julianday(updated_at) AS age_days
+		 FROM knowledge_facts
+		 ORDER BY updated_at DESC, confidence DESC LIMIT 200`)
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = rows.Close() }()
+
+	var facts []graphFactRow
+	for rows.Next() {
+		var fact graphFactRow
+		if rows.Scan(&fact.ID, &fact.Subject, &fact.Relation, &fact.Object, &fact.Confidence, &fact.AgeDays) != nil {
+			continue
+		}
+		facts = append(facts, fact)
+	}
+
+	ordered := rankKnowledgeFactsForQuery(facts, query, mode)
+	var evidence []Evidence
+	for _, fact := range ordered {
+		evidence = appendEvidence(evidence, Evidence{
+			Content:        fmt.Sprintf("%s %s %s", fact.Subject, fact.Relation, fact.Object),
+			SourceTier:     TierRelationship,
+			SourceID:       fact.ID,
+			SourceTable:    "knowledge_facts",
+			SourceLabel:    knowledgeFactSourceLabel(fact.Subject, fact.Relation, fact.Object),
+			SourceCategory: "graph",
+			Score:          fact.Confidence,
+			AgeDays:        fact.AgeDays,
+			AuthorityScore: fact.Confidence,
+			RetrievalMode:  mode.String(),
+		})
+	}
+	return evidence
+}
+
+func rankKnowledgeFactsForQuery(facts []graphFactRow, query string, mode RetrievalMode) []graphFactRow {
+	if len(facts) == 0 {
+		return nil
+	}
+
+	if query == "" || mode == RetrievalRecency {
+		ordered := append([]graphFactRow(nil), facts...)
+		sort.SliceStable(ordered, func(i, j int) bool {
+			if ordered[i].Confidence == ordered[j].Confidence {
+				return ordered[i].AgeDays < ordered[j].AgeDays
+			}
+			return ordered[i].Confidence > ordered[j].Confidence
+		})
+		if len(ordered) > 20 {
+			ordered = ordered[:20]
+		}
+		return ordered
+	}
+
+	tokens := graphQueryTokens(query)
+	if len(tokens) == 0 {
+		return rankKnowledgeFactsForQuery(facts, "", mode)
+	}
+
+	type scoredFact struct {
+		fact         graphFactRow
+		seedScore    float64
+		connected    bool
+		connectScore float64
+	}
+
+	scored := make([]scoredFact, 0, len(facts))
+	seedEntities := make(map[string]struct{})
+	for _, fact := range facts {
+		subject := strings.ToLower(fact.Subject)
+		relation := strings.ToLower(fact.Relation)
+		object := strings.ToLower(fact.Object)
+
+		score := 0.0
+		for _, token := range tokens {
+			if strings.Contains(subject, token) || strings.Contains(object, token) {
+				score += 2.0
+			}
+			if strings.Contains(relation, token) {
+				score += 1.0
+			}
+		}
+		if score > 0 {
+			scored = append(scored, scoredFact{fact: fact, seedScore: score})
+			seedEntities[strings.ToLower(fact.Subject)] = struct{}{}
+			seedEntities[strings.ToLower(fact.Object)] = struct{}{}
+		}
+	}
+
+	if len(scored) == 0 {
+		return rankKnowledgeFactsForQuery(facts, "", mode)
+	}
+
+	if mode == RetrievalGraph {
+		for _, fact := range facts {
+			subject := strings.ToLower(fact.Subject)
+			object := strings.ToLower(fact.Object)
+			_, subjectHit := seedEntities[subject]
+			_, objectHit := seedEntities[object]
+			if !subjectHit && !objectHit {
+				continue
+			}
+
+			alreadySeed := false
+			for _, candidate := range scored {
+				if candidate.fact.ID == fact.ID {
+					alreadySeed = true
+					break
+				}
+			}
+			if alreadySeed {
+				continue
+			}
+
+			connectScore := 1.0
+			if subjectHit && objectHit {
+				connectScore = 2.0
+			}
+			scored = append(scored, scoredFact{
+				fact:         fact,
+				connected:    true,
+				connectScore: connectScore,
+			})
+		}
+	}
+
+	sort.SliceStable(scored, func(i, j int) bool {
+		left := scored[i]
+		right := scored[j]
+
+		leftScore := left.seedScore*10 + left.connectScore*5 + left.fact.Confidence - left.fact.AgeDays/365
+		rightScore := right.seedScore*10 + right.connectScore*5 + right.fact.Confidence - right.fact.AgeDays/365
+		if leftScore == rightScore {
+			return left.fact.ID < right.fact.ID
+		}
+		return leftScore > rightScore
+	})
+
+	ordered := make([]graphFactRow, 0, minInt(len(scored), 20))
+	for _, item := range scored {
+		ordered = append(ordered, item.fact)
+		if len(ordered) == 20 {
+			break
+		}
+	}
+	return ordered
+}
+
+func graphQueryTokens(query string) []string {
+	stopwords := map[string]struct{}{
+		"the": {}, "and": {}, "for": {}, "with": {}, "that": {}, "this": {},
+		"what": {}, "which": {}, "who": {}, "does": {}, "did": {}, "from": {},
+		"have": {}, "has": {}, "into": {}, "than": {}, "when": {}, "where": {},
+		"why": {}, "how": {}, "again": {}, "keep": {}, "give": {}, "latest": {},
+		"current": {}, "plan": {}, "debug": {}, "issue": {}, "error": {},
+	}
+
+	normalized := strings.ToLower(query)
+	replacer := strings.NewReplacer("?", " ", ".", " ", ",", " ", ":", " ", ";", " ", "/", " ", "-", " ")
+	normalized = replacer.Replace(normalized)
+	fields := strings.Fields(normalized)
+
+	seen := make(map[string]struct{}, len(fields))
+	tokens := make([]string, 0, len(fields))
+	for _, field := range fields {
+		if len(field) < 3 {
+			continue
+		}
+		if _, stop := stopwords[field]; stop {
+			continue
+		}
+		if _, exists := seen[field]; exists {
+			continue
+		}
+		seen[field] = struct{}{}
+		tokens = append(tokens, field)
+	}
+	return tokens
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

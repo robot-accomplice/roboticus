@@ -295,6 +295,10 @@ Blocking commands for feature-complete releases:
 | R-AGENT-28 | Relationship retrieval preserves source identity, dependency summary, and evidence age | `internal/agent/memory/retrieval_test.go` | L1 |
 | R-AGENT-29 | Context assembly surfaces freshness risks for stale evidence | `internal/agent/memory/context_assembly_test.go` | L1 |
 | R-AGENT-30 | Verifier rejects overconfident “latest/current” answers when evidence is stale | `internal/pipeline/verifier_test.go` | L1 |
+| R-AGENT-31 | Semantic ingestion extracts typed graph facts into persisted `knowledge_facts` rows | `internal/agent/memory/manager_test.go` | L1 |
+| R-AGENT-32 | Relationship-tier retrieval can surface persisted graph facts with provenance | `internal/agent/memory/retrieval_test.go` | L1 |
+| R-AGENT-33 | `recall_memory` can fetch `knowledge_facts` rows directly | `internal/agent/tools/memory_recall_test.go` | L1 |
+| R-AGENT-34 | `search_memories` can find persisted graph facts | `internal/agent/tools/memory_search_test.go` | L1 |
 
 ## Governance Rules
 
