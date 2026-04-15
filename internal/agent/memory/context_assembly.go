@@ -58,7 +58,10 @@ func (ac *AssembledContext) Format() string {
 	return "[Active Memory]\n\n" + strings.Join(sections, "\n\n")
 }
 
-// AssembleContext builds structured context from working memory + ranked evidence.
+// AssembleContext builds structured context from working memory + ranked
+// evidence. Executive state (plan, assumptions, unresolved questions, verified
+// conclusions, decision checkpoints, stopping criteria) is fetched from the
+// working_memory store and surfaced at the top of the [Working State] section.
 func AssembleContext(
 	ctx context.Context,
 	store *db.Store,
@@ -69,8 +72,11 @@ func AssembleContext(
 ) *AssembledContext {
 	ac := &AssembledContext{}
 
-	// Working state: direct injection (goals, assumptions, recent activity).
+	// Working state: direct injection (plan, assumptions, recent activity).
 	var workingParts []string
+	if executive := loadExecutiveStateBlock(ctx, store, sessionID); executive != "" {
+		workingParts = append(workingParts, executive)
+	}
 	if workingMemory != "" {
 		workingParts = append(workingParts, workingMemory)
 	}
@@ -130,6 +136,32 @@ func AssembleContext(
 		Msg("context assembly: structured context built")
 
 	return ac
+}
+
+// loadExecutiveStateBlock reads the latest executive state for a session and
+// renders it for the working-state section. Returns an empty string if the
+// session has no executive state yet or the store is nil.
+func loadExecutiveStateBlock(ctx context.Context, store *db.Store, sessionID string) string {
+	if store == nil || sessionID == "" {
+		return ""
+	}
+	// Use a minimal manager shim so executive loading does not require a fully
+	// configured Manager instance. This keeps AssembleContext usable from the
+	// tests and from code paths that construct contexts without a full agent.
+	shim := &Manager{store: store}
+	state, err := shim.LoadExecutiveState(ctx, sessionID, "")
+	if err != nil {
+		log.Debug().Err(err).Msg("context assembly: executive state load failed")
+		return ""
+	}
+	if state == nil || state.IsEmpty() {
+		return ""
+	}
+	block := state.FormatForContext()
+	if block == "" {
+		return ""
+	}
+	return "Executive State:\n" + block
 }
 
 // detectGaps identifies which memory tiers were queried but returned no results.

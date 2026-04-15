@@ -192,6 +192,67 @@ func TestVerifyResponse_FailsWhenAnsweredSubgoalLacksEvidenceSupport(t *testing.
 	}
 }
 
+func TestBuildVerificationContext_ExtractsExecutiveSections(t *testing.T) {
+	sess := session.New("s1", "a1", "Bot")
+	sess.AddUserMessage("Is the rollout blocked by legal review?")
+	sess.SetMemoryContext("[Active Memory]\n\n[Working State]\nExecutive State:\nTask: t-1\n" +
+		"Plan:\n- Investigate auth outage\n" +
+		"Unresolved questions:\n- is rollout blocked by legal?\n" +
+		"Stopping criteria:\n- ship PR with tests (all tests green)\n" +
+		"\n[Retrieved Evidence]\n1. [semantic, 0.9] deploy doc\n")
+
+	ctx := BuildVerificationContext(sess)
+	if len(ctx.UnresolvedQuestions) != 1 {
+		t.Fatalf("expected 1 unresolved question, got %+v", ctx.UnresolvedQuestions)
+	}
+	if len(ctx.StoppingCriteria) != 1 {
+		t.Fatalf("expected 1 stopping criterion, got %+v", ctx.StoppingCriteria)
+	}
+	if ctx.StoppingCriteria[0] != "ship PR with tests" {
+		t.Fatalf("expected stopping criterion to strip payload parenthetical, got %q", ctx.StoppingCriteria[0])
+	}
+}
+
+func TestVerifyResponse_FailsWhenUnresolvedQuestionAbandoned(t *testing.T) {
+	ctx := VerificationContext{
+		UserPrompt:          "Is the rollout blocked by legal review?",
+		UnresolvedQuestions: []string{"is rollout blocked by legal"},
+	}
+	// Response ignores the legal-rollout question entirely.
+	result := VerifyResponse("The deploy pipeline is green and the build artifact is ready.", ctx)
+	if result.Passed {
+		t.Fatalf("expected abandoned-question failure, got pass")
+	}
+	if !hasIssue(result, "abandoned_unresolved_question") {
+		t.Fatalf("expected abandoned_unresolved_question issue, got %+v", result.Issues)
+	}
+}
+
+func TestVerifyResponse_FailsWhenStoppingCriteriaUnmet(t *testing.T) {
+	ctx := VerificationContext{
+		UserPrompt:       "Are we ready to ship?",
+		StoppingCriteria: []string{"ship a PR with tests"},
+	}
+	result := VerifyResponse("Task complete. We are done.", ctx)
+	if result.Passed {
+		t.Fatalf("expected stopping-criteria failure, got pass")
+	}
+	if !hasIssue(result, "stopping_criteria_unmet") {
+		t.Fatalf("expected stopping_criteria_unmet issue, got %+v", result.Issues)
+	}
+}
+
+func TestVerifyResponse_PassesWhenStoppingCriteriaAddressed(t *testing.T) {
+	ctx := VerificationContext{
+		UserPrompt:       "Are we ready to ship?",
+		StoppingCriteria: []string{"ship a PR with tests"},
+	}
+	result := VerifyResponse("Task complete. The PR is ready and the tests all pass.", ctx)
+	if !result.Passed {
+		t.Fatalf("expected criteria-addressed response to pass, got %+v", result.Issues)
+	}
+}
+
 func TestVerifyResponse_PassesWhenAnsweredSubgoalsAreEvidenceSupported(t *testing.T) {
 	ctx := VerificationContext{
 		UserPrompt: "Find the root cause and identify affected systems",

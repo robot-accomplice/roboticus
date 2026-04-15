@@ -45,8 +45,8 @@ closed, or the critical path changes.
 | 3 | Upgrade Semantic Memory Into A Canonical Knowledge Layer | In progress | Semantic provenance, canonical flags, authority scoring, and freshness cues now survive retrieval/assembly |
 | 4 | Turn Procedural Memory Into Workflow Memory | Not started | Still too stats-heavy; no true workflow records yet |
 | 5 | Replace Relationship Memory With Persisted Relational Memory | In progress | Persisted `knowledge_facts` store, graph-aware retrieval, and first traversal semantics now shipped |
-| 6 | Add A Real Verifier / Critic Stage | In progress | Verifier now parses retrieved evidence and checks answered subgoals for support; still not a full proof-style audit |
-| 7 | Deepen Working Memory Into Executive State | Not started | Persistence/vetting exists; executive task-state model still missing |
+| 6 | Add A Real Verifier / Critic Stage | In progress | Verifier now does claim-level certainty classification, provenance coverage accounting, and contradicted-claim reconciliation |
+| 7 | Deepen Working Memory Into Executive State | In progress | Working memory now persists plans, assumptions, unresolved questions, verified conclusions, decision checkpoints, and stopping criteria; executive state survives restart and is surfaced in context assembly |
 | 8 | Improve Reflection And Consolidation Quality | Not started | Reflection/consolidation still heuristic despite working scaffolding |
 
 ### Completed Slices
@@ -72,16 +72,37 @@ closed, or the critical path changes.
   dependency expansion from matched entities.
 - Graph retrieval can now synthesize explicit path evidence between named
   entities and reverse-dependency impact chains for blast-radius style queries.
+- The verifier now parses responses into structured claims with certainty
+  (hedged, moderate, high, absolute) and checks each absolute claim for
+  evidence support, canonical anchoring, and contradiction reconciliation.
+- High-risk queries now fail verification when absolute-claim provenance
+  coverage falls below 50% (weak_provenance_coverage) or when individual
+  absolute claims lack both evidence support and canonical anchors
+  (unsupported_absolute_claim).
+- Working memory is now an executive-state store with structured entry types
+  for plan, assumption, unresolved_question, verified_conclusion,
+  decision_checkpoint, and stopping_criteria, each persisted with a JSON
+  payload and grouped by task_id.
+- Executive state now survives shutdown/startup vetting under a longer max-age
+  cutoff, while transient turn summaries and notes are still discarded.
+- Context assembly now surfaces executive state at the top of the
+  `[Working State]` section and the verifier now consumes that section to
+  reject responses that abandon unresolved questions or claim task completion
+  without addressing the current stopping criteria.
 
 ### Current Critical Path
 
-1. Finish Milestone 6 by moving from subgoal support checks to richer
-   claim-level contradiction resolution, provenance coverage, and explicit
-   proof obligations for high-risk answers.
+1. Finish Milestone 6 by moving from lexical claim extraction to semantic
+   claim classification (LLM or embedding backed) so the verifier's
+   certainty and provenance judgments survive paraphrases, and by adding
+   explicit proof obligations for financial/compliance intents where absolute
+   claims must cite a named canonical source per claim.
 2. Finish Milestone 5 by moving from first traversal semantics to richer
    persisted adjacency/path reasoning and multi-hop impact analysis.
-3. Start Milestone 7 by turning working memory into structured executive state
-   instead of mainly turn summaries plus lightweight carryover.
+3. Finish Milestone 7 by wiring assumptions, verified conclusions, unresolved
+   questions, and decision checkpoints into the executing pipeline stages
+   (post-turn reflection, consolidation) so executive entries grow naturally
+   during work rather than only when task synthesis fires.
 
 ---
 
@@ -469,13 +490,28 @@ support, contradictions, and freshness before final answer or action.
 - The verifier now parses `[Retrieved Evidence]` items from the assembled
   context and checks answered subgoals for explicit support before allowing
   them to stand as resolved.
-- The remaining gap is depth: claim-level contradiction resolution,
-  provenance coverage accounting, and stronger proof obligations for
-  high-risk answers are still incomplete.
+- The verifier now parses each response into structured claims with certainty
+  levels (hedged, moderate, high, absolute) and canonical-anchor metadata,
+  and runs three additional claim-level checks:
+  - `unresolved_contradicted_claim` when an absolute claim echoes contested
+    evidence without reconciliation.
+  - `weak_provenance_coverage` when fewer than half the absolute claims on a
+    high-risk query trace back to evidence or a canonical anchor.
+  - `unsupported_absolute_claim` when a single absolute claim on a high-risk
+    query has no evidence support and no canonical anchor.
+- The verifier also consumes executive state from the `[Working State]`
+  section and rejects responses that abandon unresolved questions that the
+  current prompt is related to or claim task completion without satisfying
+  the active stopping criteria.
+- The remaining gap is semantic depth: claim classification is still lexical,
+  so paraphrase-heavy responses can slip through, and the verifier does not
+  yet produce a machine-readable claim-to-evidence map for traces.
 
 ---
 
 ## Milestone 7: Deepen Working Memory Into Executive State
+
+**Status**: In progress
 
 ### Goal
 
@@ -513,6 +549,30 @@ short-term executive state described in the reference architecture.
 - Startup vetting retains active executive state across restarts
 - Long multi-step tasks resume coherently after restart
 - Tests cover restore/resume of an unfinished multi-step task
+
+### Progress
+
+- Migration `044_working_memory_executive_state.sql` expands the
+  `working_memory` table with `task_id` and JSON `payload` columns and
+  extends the `entry_type` CHECK to include the executive-state types.
+- `internal/agent/memory/executive.go` introduces the executive-state types
+  (`plan`, `assumption`, `unresolved_question`, `verified_conclusion`,
+  `decision_checkpoint`, `stopping_criteria`) and `RecordPlan`,
+  `RecordAssumption`, `RecordUnresolvedQuestion`, `RecordVerifiedConclusion`,
+  `RecordDecisionCheckpoint`, `RecordStoppingCriteria`, `ResolveQuestion`,
+  `LoadExecutiveState`, and `LoadAllExecutiveState` methods on the Manager.
+- `DefaultVetConfig` now retains every executive-state type across startup
+  vetting by default, and executive entries get a longer `ExecutiveMaxAge`
+  cutoff (7 days default) so multi-day tasks resume coherently after restart.
+- `AssembleContext` now loads the latest executive state for the session and
+  renders it at the top of the `[Working State]` section so the model and the
+  verifier both see the current plan, assumptions, unresolved questions,
+  verified conclusions, decision checkpoints, and stopping criteria.
+- Task synthesis now records the synthesized plan as a structured plan entry
+  in working memory on every turn it fires.
+- What still remains is wiring assumptions, verified conclusions, and
+  decision checkpoints into post-turn reflection/consolidation so executive
+  entries grow naturally during work rather than only at task-synthesis time.
 
 ---
 
@@ -609,13 +669,17 @@ The roadmap should be considered complete when all of the following are true:
 
 ## Immediate Next Step
 
-Advance Milestone 6 and Milestone 7 together:
+Continue advancing Milestone 6 and Milestone 7:
 
-- teach the verifier to audit evidence support and subgoal coverage directly
-  from structured retrieval/context artifacts
-- start turning working memory into structured executive state so multi-step
-  tasks preserve plans, assumptions, and blockers across turns and restarts
-
-Those are now the highest-leverage moves after the graph traversal slice:
-better judgment about what the evidence supports, plus better continuity for
-long-running work.
+- replace the lexical claim extractor with a semantic classifier so
+  paraphrased absolute claims are still flagged, and emit a machine-readable
+  claim-to-evidence map into the trace so operators can audit every
+  unsupported-claim decision.
+- extend post-turn reflection and consolidation to grow executive state on
+  its own: record new assumptions when tool outputs surface untested facts,
+  record verified conclusions when the verifier passes a subgoal with
+  evidence support, and resolve or age out unresolved questions once the
+  agent answers them.
+- add cross-turn tests that prove a multi-step task resumes after restart
+  with the same plan, same open questions, and the same stopping criteria
+  as the pre-restart run.

@@ -36,6 +36,13 @@ type VerificationContext struct {
 	RequiresActionPlan   bool
 	Subgoals             []string
 	EvidenceItems        []string
+
+	// Executive state surfaces the current plan, assumptions, unresolved
+	// questions, verified conclusions, decision checkpoints, and stopping
+	// criteria so the verifier can check a response against durable task state.
+	UnresolvedQuestions []string
+	VerifiedConclusions []string
+	StoppingCriteria    []string
 }
 
 func BuildVerificationContext(session *Session) VerificationContext {
@@ -76,6 +83,12 @@ func BuildVerificationContext(session *Session) VerificationContext {
 	ctx.PolicySensitive = verificationPolicySensitive(ctx.UserPrompt, ctx.Intent)
 	ctx.RequiresFreshness = verificationRequiresFreshness(ctx.UserPrompt, ctx.Intent)
 	ctx.RequiresActionPlan = verificationRequiresActionPlan(ctx.UserPrompt, ctx.Subgoals)
+
+	// Executive state is rendered into the memory context by the assembler.
+	// Parse the named subsections so the verifier can honor them.
+	ctx.UnresolvedQuestions = verificationExecutiveSection(ctx.MemoryContext, "Unresolved questions")
+	ctx.VerifiedConclusions = verificationExecutiveSection(ctx.MemoryContext, "Verified conclusions")
+	ctx.StoppingCriteria = verificationExecutiveSection(ctx.MemoryContext, "Stopping criteria")
 	return ctx
 }
 
@@ -128,6 +141,7 @@ func VerifyResponse(content string, ctx VerificationContext) VerificationResult 
 
 	if ctx.HasContradictions && !containsAny(lowerContent,
 		"conflict", "contradict", "inconsistent", "unclear", "mixed evidence", "however",
+		"sources disagree", "depending on", "disagree", "differs", "differ ",
 	) {
 		result.Passed = false
 		result.Issues = append(result.Issues, VerificationIssue{
@@ -204,7 +218,160 @@ func VerifyResponse(content string, ctx VerificationContext) VerificationResult 
 		})
 	}
 
+	// Claim-level verification: parse the response into individual claims with
+	// certainty metadata and check each absolute claim for evidence support,
+	// contradiction reconciliation, and canonical anchoring on high-risk queries.
+	claims := ExtractClaims(content)
+	verifyClaimLevel(content, ctx, claims, &result)
+	verifyExecutiveState(lowerContent, ctx, &result)
+
 	return result
+}
+
+// verifyExecutiveState checks that the response honors durable executive-state
+// artifacts from prior turns: unresolved questions should not be silently
+// dropped when the response is materially related to them, and stopping
+// criteria should shape the agent's commitments.
+func verifyExecutiveState(lowerContent string, ctx VerificationContext, result *VerificationResult) {
+	if len(ctx.UnresolvedQuestions) == 0 && len(ctx.StoppingCriteria) == 0 {
+		return
+	}
+
+	var abandoned []string
+	for _, question := range ctx.UnresolvedQuestions {
+		trimmed := strings.TrimSpace(question)
+		if trimmed == "" {
+			continue
+		}
+		keywords := verificationKeywords(trimmed)
+		if len(keywords) == 0 {
+			continue
+		}
+		// If the response does not even mention the keywords of a still-open
+		// question that the prompt is now asking to close, flag it — the agent
+		// is drifting away from its own prior task state.
+		promptRelated := verificationKeywordsOverlap(keywords, ctx.UserPrompt) > 0
+		if !promptRelated {
+			continue
+		}
+		matches := 0
+		for _, kw := range keywords {
+			if strings.Contains(lowerContent, kw) {
+				matches++
+			}
+		}
+		if matches == 0 {
+			abandoned = append(abandoned, trimmed)
+		}
+	}
+	if len(abandoned) > 0 {
+		result.Passed = false
+		result.Issues = append(result.Issues, VerificationIssue{
+			Code:   "abandoned_unresolved_question",
+			Detail: "the response ignores unresolved executive-state questions that the current prompt is related to: " + strings.Join(abandoned, "; "),
+		})
+	}
+
+	// Stopping criteria surfaced in executive state should be honored. When a
+	// response declares a high-certainty claim to "complete" something while
+	// the stopping criterion has not been met, flag it. The check is narrow:
+	// only trips when the stopping criterion keywords are absent from the
+	// response AND the response claims completion.
+	if len(ctx.StoppingCriteria) > 0 && containsAny(lowerContent,
+		"task complete", "task completed", "done.", "finished.", "we are done",
+		"we're done", "work is complete",
+	) {
+		var missing []string
+		for _, criterion := range ctx.StoppingCriteria {
+			crit := strings.TrimSpace(criterion)
+			if crit == "" {
+				continue
+			}
+			keywords := verificationKeywords(crit)
+			matches := 0
+			for _, kw := range keywords {
+				if strings.Contains(lowerContent, kw) {
+					matches++
+				}
+			}
+			threshold := 1
+			if len(keywords) >= 4 {
+				threshold = 2
+			}
+			if matches < threshold {
+				missing = append(missing, crit)
+			}
+		}
+		if len(missing) > 0 {
+			result.Passed = false
+			result.Issues = append(result.Issues, VerificationIssue{
+				Code:   "stopping_criteria_unmet",
+				Detail: "the response declares the task complete without addressing the stopping criteria: " + strings.Join(missing, "; "),
+			})
+		}
+	}
+}
+
+func verificationKeywordsOverlap(keywords []string, text string) int {
+	if len(keywords) == 0 || text == "" {
+		return 0
+	}
+	lower := strings.ToLower(text)
+	overlap := 0
+	for _, kw := range keywords {
+		if strings.Contains(lower, kw) {
+			overlap++
+		}
+	}
+	return overlap
+}
+
+// verificationExecutiveSection parses a labeled subsection out of the working
+// state block rendered by the memory assembler (see executive.go::FormatForContext).
+// The block has the shape:
+//
+//	Executive State:
+//	Plan:
+//	- ...
+//	Unresolved questions:
+//	- ...
+//
+// Each bullet becomes a returned string.
+func verificationExecutiveSection(memoryContext, label string) []string {
+	if memoryContext == "" || label == "" {
+		return nil
+	}
+	needle := label + ":"
+	idx := strings.Index(memoryContext, needle)
+	if idx < 0 {
+		return nil
+	}
+	rest := memoryContext[idx+len(needle):]
+	// Terminate at the next labeled subsection or blank line.
+	lines := strings.Split(rest, "\n")
+	var items []string
+	for i, line := range lines {
+		if i == 0 {
+			continue // skip the label line tail
+		}
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			break
+		}
+		if !strings.HasPrefix(trimmed, "-") {
+			// Next labeled section such as "Verified conclusions:".
+			break
+		}
+		item := strings.TrimSpace(strings.TrimPrefix(trimmed, "-"))
+		// Strip trailing parenthetical metadata "(steps=..., ...)".
+		if paren := strings.LastIndex(item, " ("); paren > 0 {
+			item = item[:paren]
+		}
+		if item != "" {
+			items = append(items, item)
+		}
+	}
+	return items
 }
 
 func verificationGoalCovered(goal, response string) bool {

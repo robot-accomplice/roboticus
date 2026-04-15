@@ -8,6 +8,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	agentmemory "roboticus/internal/agent/memory"
 	agenttools "roboticus/internal/agent/tools"
 	"roboticus/internal/core"
 	"roboticus/internal/db"
@@ -190,7 +191,7 @@ func (p *Pipeline) stageTurnCreation(ctx context.Context, pc *pipelineContext) {
 
 // ── Stage 7: Decomposition gate + 7.5 task synthesis ──────────────────
 
-func (p *Pipeline) stageDecomposition(_ context.Context, pc *pipelineContext) {
+func (p *Pipeline) stageDecomposition(ctx context.Context, pc *pipelineContext) {
 	pc.tr.BeginSpan("decomposition_gate")
 	p.tasks.Start(pc.taskID, pc.msgID)
 	var verificationSubgoalsHint []string
@@ -255,6 +256,47 @@ func (p *Pipeline) stageDecomposition(_ context.Context, pc *pipelineContext) {
 			pc.synthesis.PlannedAction,
 			verificationSubgoalsHint,
 		)
+	}
+
+	// Persist the synthesis as a plan entry in working memory so later turns
+	// and the verifier can see the current task's executive state. Record only
+	// when we have real subgoals so we do not spam the table with trivial plans.
+	if len(verificationSubgoalsHint) > 0 && pc.session != nil && p.store != nil {
+		p.recordTaskSynthesisPlan(ctx, pc, verificationSubgoalsHint)
+	}
+}
+
+// recordTaskSynthesisPlan persists the synthesized plan into working memory
+// so that context assembly, the verifier, and subsequent turns can consume
+// structured executive state.
+func (p *Pipeline) recordTaskSynthesisPlan(ctx context.Context, pc *pipelineContext, subgoals []string) {
+	mm := agentmemory.NewManager(agentmemory.DefaultConfig(), p.store)
+	payload := agentmemory.PlanPayload{
+		Subgoals:   append([]string(nil), subgoals...),
+		Intent:     pc.synthesis.Intent,
+		Complexity: pc.synthesis.Complexity,
+	}
+	if pc.decomp != nil && len(pc.decomp.Subtasks) > 0 {
+		steps := make([]string, 0, len(pc.decomp.Subtasks))
+		for _, sub := range pc.decomp.Subtasks {
+			trimmed := strings.TrimSpace(sub)
+			if trimmed != "" {
+				steps = append(steps, trimmed)
+			}
+		}
+		payload.Steps = steps
+	}
+
+	content := strings.TrimSpace(pc.content)
+	if content == "" {
+		content = "task plan"
+	}
+	if len(content) > 200 {
+		content = content[:200]
+	}
+
+	if err := mm.RecordPlan(ctx, pc.session.ID, pc.taskID, content, payload); err != nil {
+		log.Debug().Err(err).Msg("executive: record plan failed")
 	}
 }
 

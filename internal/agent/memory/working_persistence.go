@@ -24,19 +24,26 @@ import (
 
 // VetConfig controls which working memory entries survive startup vetting.
 type VetConfig struct {
-	MaxAge       time.Duration // discard entries older than this
-	MinImportance int          // discard entries with importance <= this
-	RetainTypes  []string      // always retain these entry types
-	DiscardTypes []string      // always discard these entry types
+	MaxAge           time.Duration // discard entries older than this
+	ExecutiveMaxAge  time.Duration // same, but applied to executive-state entries
+	MinImportance    int           // discard entries with importance <= this
+	RetainTypes      []string      // always retain these entry types
+	DiscardTypes     []string      // always discard these entry types
 }
 
 // DefaultVetConfig returns sensible defaults for working memory vetting.
+// Executive-state entries (plan, assumption, unresolved_question,
+// verified_conclusion, decision_checkpoint, stopping_criteria) are retained by
+// default so long multi-step tasks resume coherently after restart.
 func DefaultVetConfig() VetConfig {
+	retain := []string{"goal", "decision", "observation"}
+	retain = append(retain, ExecutiveEntryKinds...)
 	return VetConfig{
-		MaxAge:        24 * time.Hour,
-		MinImportance: 3,
-		RetainTypes:   []string{"goal", "decision", "observation"},
-		DiscardTypes:  []string{"turn_summary", "note"},
+		MaxAge:          24 * time.Hour,
+		ExecutiveMaxAge: 7 * 24 * time.Hour,
+		MinImportance:   3,
+		RetainTypes:     retain,
+		DiscardTypes:    []string{"turn_summary", "note"},
 	}
 }
 
@@ -85,10 +92,42 @@ func (mm *Manager) VetWorkingMemory(ctx context.Context, cfg VetConfig) VetResul
 	}
 
 	// Phase 1: Discard by age.
+	// Executive-state entries use a longer cutoff so multi-step tasks persist
+	// across restart. The standard cutoff still applies to everything else.
 	cutoff := time.Now().Add(-cfg.MaxAge).Format("2006-01-02 15:04:05")
+	executiveCutoff := cutoff
+	if cfg.ExecutiveMaxAge > 0 {
+		executiveCutoff = time.Now().Add(-cfg.ExecutiveMaxAge).Format("2006-01-02 15:04:05")
+	}
+	executivePlaceholders := make([]string, len(ExecutiveEntryKinds))
+	executiveArgs := make([]any, 0, len(ExecutiveEntryKinds)+1)
+	for i, kind := range ExecutiveEntryKinds {
+		executivePlaceholders[i] = "?"
+		executiveArgs = append(executiveArgs, kind)
+	}
+	executiveIn := strings.Join(executivePlaceholders, ", ")
+
+	nonExecArgs := append([]any{cutoff}, executiveArgs...)
 	res, err := mm.store.ExecContext(ctx,
 		`DELETE FROM working_memory
-		 WHERE persisted_at IS NOT NULL AND created_at < ?`, cutoff)
+		 WHERE persisted_at IS NOT NULL
+		   AND created_at < ?
+		   AND entry_type NOT IN (`+executiveIn+`)`,
+		nonExecArgs...,
+	)
+	if err == nil {
+		n, _ := res.RowsAffected()
+		result.Discarded += int(n)
+	}
+
+	execArgs := append([]any{executiveCutoff}, executiveArgs...)
+	res, err = mm.store.ExecContext(ctx,
+		`DELETE FROM working_memory
+		 WHERE persisted_at IS NOT NULL
+		   AND created_at < ?
+		   AND entry_type IN (`+executiveIn+`)`,
+		execArgs...,
+	)
 	if err == nil {
 		n, _ := res.RowsAffected()
 		result.Discarded += int(n)

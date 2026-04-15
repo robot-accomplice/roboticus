@@ -304,6 +304,17 @@ Blocking commands for feature-complete releases:
 | R-AGENT-37 | Verifier extracts structured retrieved-evidence items from assembled memory context | `internal/pipeline/verifier_test.go` | L1 |
 | R-AGENT-38 | Verifier rejects answered subgoals that lack supporting retrieved evidence | `internal/pipeline/verifier_test.go` | L1 |
 | R-AGENT-39 | Standard pipeline path revises output when verifier detects unsupported answered-subgoal evidence | `internal/pipeline/pipeline_run_test.go` | L2 |
+| R-AGENT-40 | Verifier extracts structured claims from responses and classifies certainty | `internal/pipeline/verifier_claims_test.go` | L1 |
+| R-AGENT-41 | Verifier rejects weak provenance coverage when absolute claims outnumber evidence-supported claims on high-risk queries | `internal/pipeline/verifier_claims_test.go` | L1 |
+| R-AGENT-42 | Verifier rejects unresolved contradicted claims when the response states absolutes on contested evidence without reconciliation | `internal/pipeline/verifier_claims_test.go` | L1 |
+| R-AGENT-43 | Verifier rejects unsupported absolute claims on high-risk queries that lack evidence support and canonical anchors | `internal/pipeline/verifier_claims_test.go` | L1 |
+| R-AGENT-44 | Working memory carries structured executive state (plan, assumptions, unresolved questions, verified conclusions, decision checkpoints, stopping criteria) | `internal/agent/memory/executive_test.go` | L1 |
+| R-AGENT-45 | Executive state survives shutdown/startup vetting while transient turn summaries and notes are discarded | `internal/agent/memory/executive_test.go` | L1 |
+| R-AGENT-46 | Executive-state entries honor a longer max-age cutoff than transient working memory entries | `internal/agent/memory/executive_test.go` | L1 |
+| R-AGENT-47 | Context assembly surfaces executive state (plan, assumptions, unresolved questions, stopping criteria) in the Working State section | `internal/agent/memory/context_assembly_test.go` | L1 |
+| R-AGENT-48 | Verifier parses executive-state sections out of the memory context and extracts unresolved questions and stopping criteria | `internal/pipeline/verifier_test.go` | L1 |
+| R-AGENT-49 | Verifier rejects responses that abandon unresolved questions while answering a related prompt | `internal/pipeline/verifier_test.go` | L1 |
+| R-AGENT-50 | Verifier rejects "task complete" claims that do not address the active stopping criteria | `internal/pipeline/verifier_test.go` | L1 |
 
 ## Governance Rules
 

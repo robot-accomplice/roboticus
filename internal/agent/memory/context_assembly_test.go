@@ -1,8 +1,11 @@
 package memory
 
 import (
+	"context"
 	"strings"
 	"testing"
+
+	"roboticus/testutil"
 )
 
 func TestAssembleContext_FullStructure(t *testing.T) {
@@ -94,6 +97,40 @@ func TestAssembleContext_EmptyFormat(t *testing.T) {
 	ac := &AssembledContext{}
 	if formatted := ac.Format(); formatted != "" {
 		t.Errorf("empty context should format to empty string, got %q", formatted)
+	}
+}
+
+func TestAssembleContext_SurfacesExecutiveStateFromStore(t *testing.T) {
+	store := testutil.TempStore(t)
+	mm := NewManager(DefaultConfig(), store)
+	ctx := context.Background()
+
+	if err := mm.RecordPlan(ctx, "s-exec", "t-1", "investigate auth outage", PlanPayload{
+		Subgoals: []string{"root cause", "remediation"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := mm.RecordUnresolvedQuestion(ctx, "s-exec", "t-1", "is rollout blocked by legal?", UnresolvedQuestionPayload{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := mm.RecordStoppingCriteria(ctx, "s-exec", "t-1", "ship a PR with tests", StoppingCriteriaPayload{Condition: "all tests green"}); err != nil {
+		t.Fatal(err)
+	}
+
+	ac := AssembleContext(ctx, store, "s-exec",
+		[]Evidence{{Content: "deploy doc", SourceTier: TierSemantic, Score: 0.9}},
+		"", "",
+	)
+	formatted := ac.Format()
+
+	if !strings.Contains(formatted, "Executive State:") {
+		t.Fatalf("expected executive state header, got %q", formatted)
+	}
+	if !strings.Contains(formatted, "is rollout blocked by legal?") {
+		t.Fatalf("expected unresolved question surfaced, got %q", formatted)
+	}
+	if !strings.Contains(formatted, "Stopping criteria:") {
+		t.Fatalf("expected stopping criteria surfaced, got %q", formatted)
 	}
 }
 
