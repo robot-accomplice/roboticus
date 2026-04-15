@@ -568,7 +568,51 @@ func (p *Pipeline) detectAndPersistProcedures(ctx context.Context, session *Sess
 		agent.PersistLearnedSkill(ctx, p.store, proc)
 		log.Debug().Str("procedure", strings.Join(proc.Steps, "-")).Int("count", proc.Count).
 			Msg("procedure detection: persisted learned skill")
+
+		// Promote repeatedly-observed procedures into a reusable workflow
+		// record so procedural retrieval can surface them with steps and
+		// metadata instead of only a tool-stat rollup.
+		if proc.Count >= 3 {
+			p.promoteProcedureToWorkflow(ctx, session, proc)
+		}
 	}
+}
+
+// promoteProcedureToWorkflow records a detected tool chain as a reusable
+// workflow in procedural_memory. The session ID is written into the
+// success_evidence list so operators can audit which run confirmed the
+// promotion. Failures on the promotion path are logged but non-fatal — the
+// learned_skills row is already persisted by the time we get here.
+func (p *Pipeline) promoteProcedureToWorkflow(ctx context.Context, session *Session, proc agent.Procedure) {
+	if p.store == nil {
+		return
+	}
+	name := strings.Join(proc.Steps, " → ")
+	if name == "" {
+		return
+	}
+	mm := agentmemory.NewManager(agentmemory.DefaultConfig(), p.store)
+	if err := mm.RecordWorkflow(ctx, agentmemory.Workflow{
+		Name:        name,
+		Steps:       append([]string(nil), proc.Steps...),
+		Category:    agentmemory.WorkflowCategoryWorkflow,
+		Confidence:  0.75,
+		ContextTags: []string{"auto_promoted", "tool_chain"},
+	}); err != nil {
+		log.Debug().Err(err).Str("workflow", name).Msg("workflow: promotion failed")
+		return
+	}
+	evidence := session.ID
+	if err := mm.RecordWorkflowSuccess(ctx, name, evidence); err != nil {
+		log.Debug().Err(err).Str("workflow", name).Msg("workflow: success record failed")
+		return
+	}
+	log.Info().
+		Str("workflow", name).
+		Int("count", proc.Count).
+		Str("session", session.ID).
+		Str("category", "workflow_promoted").
+		Msg("procedure promoted to workflow")
 }
 
 // truncatePreview truncates text for storage as a content preview.

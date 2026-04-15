@@ -43,7 +43,7 @@ closed, or the critical path changes.
 | 1 | Unify The Production Retrieval Path | In progress | Pipeline-prepared memory/index now preferred by runtime context assembly |
 | 2 | Make Intent And Retrieval Routing Real Decision Inputs | In progress | Intent signals now reach production retrieval; router modes now affect tier behavior |
 | 3 | Upgrade Semantic Memory Into A Canonical Knowledge Layer | In progress | Semantic provenance, canonical flags, authority scoring, and freshness cues now survive retrieval/assembly |
-| 4 | Turn Procedural Memory Into Workflow Memory | Not started | Still too stats-heavy; no true workflow records yet |
+| 4 | Turn Procedural Memory Into Workflow Memory | In progress | Workflow schema shipped with confidence/memory_state/version/category/success+failure evidence; Manager exposes RecordWorkflow / Find / Get and outcome recording; retrieval prefers workflows over tool-stat rollups; post-turn detection promotes repeated tool chains |
 | 5 | Replace Relationship Memory With Persisted Relational Memory | In progress | Persisted `knowledge_facts` store, graph-aware retrieval, and first traversal semantics now shipped |
 | 6 | Add A Real Verifier / Critic Stage | Acceptance met | Claim-level certainty classification, provenance coverage, contradiction reconciliation, per-intent proof obligations, and a structured claim-to-evidence trace map are all in place; semantic-classifier upgrade remains as quality work |
 | 7 | Deepen Working Memory Into Executive State | Acceptance met | Executive state is persisted, surfaced in context assembly, grows automatically in post-turn, survives restart with a cross-turn regression test, and emits operator-auditable trace/log writes; richer tool-output assumption extraction remains as follow-on work |
@@ -126,6 +126,11 @@ closed, or the critical path changes.
   `query_knowledge_graph` agent tool (`path`/`impact`/`dependencies`) so
   multi-hop structural queries can be asked directly, not only through
   semantic retrieval side effects.
+- Milestone 4 now ships a workflow-memory schema upgrade and a first
+  iteration of the workflow manager: procedural retrieval prefers
+  workflows over bare tool stats, post-turn detection promotes repeated
+  tool chains into versioned workflow entries, and consolidation's
+  confidence sync lands instead of silently skipping.
 
 ### Current Critical Path
 
@@ -377,6 +382,8 @@ knowledge instead of mostly long assistant responses.
 
 ## Milestone 4: Turn Procedural Memory Into Workflow Memory
 
+**Status**: In progress
+
 ### Goal
 
 Evolve procedural memory from tool counters into reusable workflows, SOPs,
@@ -413,6 +420,31 @@ playbooks, and approved action sequences.
 - Consolidation no longer silently skips procedural confidence/state sync due
   to missing columns
 - Tests cover retrieval of the right workflow for a matching procedural query
+
+### Progress
+
+- Migration `045_workflow_memory.sql` adds the missing columns the runtime
+  has been expecting (`confidence`, `memory_state`, `state_reason`,
+  `version`, `category`, `success_evidence`, `failure_evidence`) plus
+  supporting indexes on `category` and `last_used_at`. Consolidation's
+  confidence sync now lands instead of silently skipping because the
+  column "may not exist".
+- `internal/agent/memory/workflow.go` introduces a `Workflow` type and
+  Manager methods `RecordWorkflow`, `RecordWorkflowSuccess`,
+  `RecordWorkflowFailure`, `GetWorkflow`, and `FindWorkflows`. Updates to
+  an existing workflow bump `version` and preserve success/failure
+  counters + evidence so the track record survives revisions.
+- `retrieveProceduralMemory` now surfaces workflows first (with steps,
+  preconditions, tags, success rate) and falls back to tool statistics
+  only when no workflow matches the query.
+- Post-turn procedure detection now promotes a detected tool chain into
+  a workflow entry once its count hits 3, tagging it
+  `auto_promoted,tool_chain` and recording the session ID as success
+  evidence so operators can audit why the promotion fired.
+- What still remains: richer preconditions / error-modes extraction from
+  actual turn failures (today they default to empty lists unless the
+  caller populates them) and an agent-facing tool to list / search
+  workflows directly.
 
 ---
 

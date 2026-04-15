@@ -211,26 +211,42 @@ func (mr *Retriever) retrieveSemanticMemory(ctx context.Context, query string, q
 	return b.String()
 }
 
-// retrieveProceduralMemory formats tool statistics from procedural_memory
-// and learned procedures from learned_skills.
+// retrieveProceduralMemory formats procedural memory for a query. Rich
+// workflows (category='workflow') are surfaced first — they carry steps,
+// preconditions, error modes, and context tags. Bare tool statistics
+// (category='tool' or unset) are retained as a lower-priority fallback so
+// procedural retrieval never silently disappears when no workflow matches.
 func (mr *Retriever) retrieveProceduralMemory(ctx context.Context, query string, mode RetrievalMode, budgetTokens int) string {
 	var b strings.Builder
 
 	filtered := query != "" && mode != RetrievalRecency
 
-	// Part 1: Tool success/failure stats from procedural_memory.
+	// Part 0: Reusable workflows (rich records with steps + preconditions).
+	workflows, wfErr := (&Manager{store: mr.store}).FindWorkflows(ctx, workflowQueryHint(query, filtered), 5)
+	if wfErr == nil {
+		for _, wf := range workflows {
+			writeWorkflowSummary(&b, wf)
+		}
+	}
+
+	// Part 1: Tool success/failure stats from procedural_memory. These rows
+	// sit under category='tool' (or NULL for pre-migration data). We skip
+	// category='workflow' here to avoid double-reporting a workflow that
+	// Part 0 already surfaced.
 	var rows *sql.Rows
 	var err error
 	if filtered {
 		like := "%" + query + "%"
 		rows, err = mr.store.QueryContext(ctx,
 			`SELECT name, success_count, failure_count FROM procedural_memory
-			 WHERE name LIKE ? OR steps LIKE ? OR preconditions LIKE ? OR error_modes LIKE ?
+			 WHERE (category IS NULL OR category != 'workflow')
+			   AND (name LIKE ? OR steps LIKE ? OR preconditions LIKE ? OR error_modes LIKE ?)
 			 ORDER BY (success_count + failure_count) DESC LIMIT 15`,
 			like, like, like, like)
 	} else {
 		rows, err = mr.store.QueryContext(ctx,
 			`SELECT name, success_count, failure_count FROM procedural_memory
+			 WHERE category IS NULL OR category != 'workflow'
 			 ORDER BY (success_count + failure_count) DESC LIMIT 15`)
 	}
 	if err == nil {
@@ -250,9 +266,10 @@ func (mr *Retriever) retrieveProceduralMemory(ctx context.Context, query string,
 			emitted++
 		}
 		_ = rows.Close()
-		if filtered && emitted == 0 {
+		if filtered && emitted == 0 && len(workflows) == 0 {
 			rows, err = mr.store.QueryContext(ctx,
 				`SELECT name, success_count, failure_count FROM procedural_memory
+				 WHERE category IS NULL OR category != 'workflow'
 				 ORDER BY (success_count + failure_count) DESC LIMIT 15`)
 			if err == nil {
 				for rows.Next() {

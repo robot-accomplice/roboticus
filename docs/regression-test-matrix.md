@@ -345,6 +345,11 @@ Blocking commands for feature-complete releases:
 | R-AGENT-78 | `query_knowledge_graph` impact and dependencies operations walk reverse / forward adjacency and return node lists with min depth | `internal/agent/tools/graph_query_test.go` | L1 |
 | R-AGENT-79 | `query_knowledge_graph` clamps max_depth and rejects unknown operations / missing required fields | `internal/agent/tools/graph_query_test.go` | L1 |
 | R-AGENT-80 | `query_knowledge_graph` publishes a valid JSON parameter schema and returns a friendly message when the store is nil | `internal/agent/tools/graph_query_test.go` | L1 |
+| R-AGENT-81 | Workflow-memory schema carries confidence / memory_state / version / category / success+failure evidence columns, and the consolidation confidence-sync query runs without silent skip | `internal/agent/memory/workflow_test.go` | L1 |
+| R-AGENT-82 | `RecordWorkflow` persists full metadata and updates bump version while preserving success/failure counters | `internal/agent/memory/workflow_test.go` | L1 |
+| R-AGENT-83 | `RecordWorkflowSuccess` appends evidence uniquely and increments the success counter | `internal/agent/memory/workflow_test.go` | L1 |
+| R-AGENT-84 | `FindWorkflows` is query-sensitive across name / steps / preconditions / error_modes / context_tags | `internal/agent/memory/workflow_test.go` | L1 |
+| R-AGENT-85 | Procedural retrieval surfaces workflows before tool-stat rollups and falls back to tool stats when no workflow matches | `internal/agent/memory/workflow_test.go` | L1 |
 
 ## Governance Rules
 
