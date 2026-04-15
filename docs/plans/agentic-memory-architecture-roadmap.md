@@ -116,6 +116,9 @@ closed, or the critical path changes.
 - Post-turn growth now also records assumptions the agent names explicitly
   in the response, so the next turn's context carries forward the state the
   agent was taking for granted.
+- Milestone 5 now ships a reusable `KnowledgeGraph` API
+  (`internal/agent/memory/graph.go`) with multi-hop `ShortestPath`,
+  `Impact`, and `Dependencies` traversals over persisted `knowledge_facts`.
 
 ### Current Critical Path
 
@@ -462,9 +465,17 @@ capable of representing dependencies, ownership, chronology, and causality.
   from matched entities.
 - Graph retrieval can now synthesize explicit path and reverse-impact chain
   evidence over persisted facts.
-- What still remains is richer persisted adjacency/path reasoning beyond
-  retrieval-time traversal over flat fact rows, especially for multi-hop
-  analysis and reusable graph APIs.
+- `internal/agent/memory/graph.go` now exposes a reusable `KnowledgeGraph`
+  API with forward + reverse adjacency, configurable-depth `ShortestPath`,
+  `Impact` (multi-hop reverse traversal), `Dependencies` (multi-hop forward
+  traversal), and `LoadKnowledgeGraph` / `LoadKnowledgeGraphWithLimit`
+  helpers that read straight from `knowledge_facts`. The API supports
+  arbitrary depth (not the previous hard-coded 2 hops) and is exported so
+  tools and tests can traverse the persisted graph without rebuilding BFS
+  each call.
+- What still remains is migrating the retrieval tier to consume the new
+  API (currently it keeps a private walker), and surfacing multi-hop graph
+  queries via an agent tool so the model can call them directly.
 
 ---
 

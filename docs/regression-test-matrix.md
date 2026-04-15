@@ -337,6 +337,10 @@ Blocking commands for feature-complete releases:
 | R-AGENT-70 | `extractAssumptions` is word-boundary aware — no false positives on words containing an assumption marker | `internal/pipeline/executive_growth_test.go` | L1 |
 | R-AGENT-71 | `extractAssumptions` deduplicates equivalent clauses within a single turn | `internal/pipeline/executive_growth_test.go` | L1 |
 | R-AGENT-72 | Post-turn growth persists assumption entries extracted from the response into working memory under the active task | `internal/pipeline/executive_growth_test.go` | L1 |
+| R-AGENT-73 | `KnowledgeGraph` reports accurate node/edge counts and only indexes traversable relations | `internal/agent/memory/graph_test.go` | L1 |
+| R-AGENT-74 | `KnowledgeGraph.ShortestPath` finds multi-hop paths within the max-depth bound and returns nil for missing paths or over-depth queries | `internal/agent/memory/graph_test.go` | L1 |
+| R-AGENT-75 | `KnowledgeGraph.Impact` and `Dependencies` return multi-hop reverse/forward traversals with correct depth bounding | `internal/agent/memory/graph_test.go` | L1 |
+| R-AGENT-76 | `LoadKnowledgeGraph` reads every persisted `knowledge_facts` row; `LoadKnowledgeGraphWithLimit` honors the limit | `internal/agent/memory/graph_test.go` | L1 |
 
 ## Governance Rules
 
