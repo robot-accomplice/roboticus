@@ -40,7 +40,7 @@ closed, or the critical path changes.
 
 | Milestone | Title | Status | Notes |
 |-----------|-------|--------|-------|
-| 1 | Unify The Production Retrieval Path | In progress | Pipeline-prepared memory/index now preferred by runtime context assembly |
+| 1 | Unify The Production Retrieval Path | Acceptance met | Pipeline-prepared memory/index preferred by runtime; inference stage emits a `retrieval.*` artifact hash (context + index + combined) onto every trace; a parity fitness proves standard and streaming sessions compute identical hashes and detects drift |
 | 2 | Make Intent And Retrieval Routing Real Decision Inputs | Acceptance met | Unified `PerceptionArtifact` (intent, risk, source-of-truth, required tiers, decomposition, freshness, confidence) is computed in pipeline, stashed on session, and emitted to traces; retrieval modes already honour intent-driven routing |
 | 3 | Upgrade Semantic Memory Into A Canonical Knowledge Layer | Acceptance met | Schema now carries `version`, `effective_date`, and `superseded_by`; manager upsert bumps version on value change and keeps it stable on idempotent rewrites; consolidation contradiction phase sets supersession pointers; `CurrentSemanticValue` walks the chain with cycle + length guards |
 | 4 | Turn Procedural Memory Into Workflow Memory | Acceptance met | Workflow schema, Manager API, retrieval precedence over tool stats, post-turn promotion with auto-extracted error modes + preconditions + intent tags, and consolidation confidence sync now all land |
@@ -134,18 +134,25 @@ closed, or the critical path changes.
 
 ### Current Critical Path
 
-1. Milestone 6 acceptance criteria are met. Remaining quality work is a
-   semantic claim classifier (LLM or embedding backed) so certainty and
-   provenance survive paraphrases rather than relying only on lexical
-   markers.
-2. Milestone 7 acceptance criteria are met. Remaining quality work is
-   extracting assumptions from tool outputs (not just the agent's own
-   response) and upgrading assumption confidence scoring based on evidence.
-3. Finish Milestone 5 by moving from first traversal semantics to richer
-   persisted adjacency/path reasoning and multi-hop impact analysis.
-4. Start Milestone 4 (turn procedural memory into workflow memory) so the
-   reusable-workflow gap is closed before Milestone 8 attempts to promote
-   episodic patterns into procedures.
+All eight core milestones (M1–M8) now have their acceptance criteria
+met. The only remaining items are quality follow-ons:
+
+1. **M6 follow-on** — replace the lexical claim extractor with an
+   embedding-backed semantic classifier so certainty and provenance
+   judgments survive paraphrased claims.
+2. **M7 follow-on** — extract assumptions from tool outputs (not only
+   the agent's own response) and upgrade assumption confidence
+   scoring based on evidence support.
+3. **M4 follow-on** — expose an agent-facing tool that lists / searches
+   workflows directly from the model.
+4. **M5 follow-on** — retire the permissive retrieval fallback now
+   that the canonical relation set covers real-world paths.
+5. **M3 follow-on** — richer ingestion surface for docs / policy files
+   with version + effective-date population, and migrate semantic
+   retrieval off the residual LIKE path onto hybrid FTS+vector.
+6. **Appendices A, B, C** — observability dashboards, evaluation
+   matrix, and fallback strategy spec work. These are sequenced
+   after the quality follow-ons above complete.
 
 ---
 
@@ -207,7 +214,7 @@ the persistence mechanism.
 
 ## Milestone 1: Unify The Production Retrieval Path
 
-**Status**: In progress
+**Status**: Acceptance met
 
 ### Goal
 
@@ -260,8 +267,17 @@ behavior.
 - Pipeline-prepared direct memory and memory index are now stored in session
   state and preferred by daemon context assembly.
 - Regression coverage exists for preferring pipeline-prepared memory artifacts.
-- Full retrieval parity between all runtime paths still needs to be proven more
-  explicitly in traces and stream/non-stream comparisons.
+- The inference stage now emits a `RetrievalArtifact` (SHA1 of the session's
+  memory context + memory index, a combined hash, byte counts, and
+  bounded previews) onto the pipeline trace under the `retrieval.*`
+  namespace, so operators can see the exact artifact that reached the
+  model on every turn.
+- A parity fitness
+  (`TestRetrievalArtifact_StandardAndStreamingSessionsMatch`) proves
+  standard and streaming sessions that carry identical memory state
+  produce identical artifact hashes, and
+  `TestRetrievalArtifact_DetectsContextDrift` proves the fitness
+  actually catches silent drift between the two paths.
 
 ---
 
@@ -850,26 +866,20 @@ The roadmap should be considered complete when all of the following are true:
 
 ## Immediate Next Step
 
-Milestones 6 and 7 acceptance criteria are now met. Shift the critical
-path to Milestones 5 and 4:
+All eight core milestones (M1–M8) are now acceptance-met. The roadmap's
+main arc is complete. Remaining work is quality follow-ons listed in
+the **Current Critical Path** section above, followed by Appendices A,
+B, and C once the follow-ons close.
 
-- **Milestone 5 (relational memory)** — finish persisted adjacency/path
-  reasoning by promoting the current retrieval-time graph traversal into a
-  first-class persisted graph API so multi-hop impact analysis and
-  dependency-chain queries do not rebuild on every retrieval.
-- **Milestone 4 (workflow memory)** — introduce structured workflow records
-  (name, steps, preconditions, failure modes, context tags, version,
-  success/failure evidence) so procedural retrieval returns reusable
-  workflows instead of tool statistics.
-- **Milestone 6 quality follow-on** — replace the lexical claim extractor
-  with an embedding-backed semantic classifier so paraphrased absolute
-  claims are still flagged by the verifier.
-- **Milestone 7 quality follow-on** — extract assumptions from tool outputs
-  (not only the agent's own response) and upgrade assumption confidence
-  based on evidence support.
-Appendices A, B, and C are **post-plan** work. They are **not** part of the
-current critical path and should only be picked up once every core
-milestone (1–8) and the M5/M4/M6/M7 follow-ons above are closed.
+The highest-leverage follow-on to tackle first is the **semantic
+classifier** upgrade for the verifier (M6 follow-on). Lexical marker
+matching lets paraphrased claims slip through the current checks, and
+embedding-backed classification would close that gap without expanding
+the acceptance surface.
+
+Appendices A, B, and C remain **post-plan** work. They are **not** part
+of the current critical path and should only be picked up once the
+follow-ons above are closed.
 
 ---
 

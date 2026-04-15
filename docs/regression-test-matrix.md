@@ -370,6 +370,10 @@ Blocking commands for feature-complete releases:
 | R-AGENT-103 | `CurrentSemanticValue` handles supersession cycles by returning `ErrSemanticChainCycle` with the partial revision | `internal/agent/memory/semantic_supersession_test.go` | L1 |
 | R-AGENT-104 | `MarkSemanticSuperseded` flips an entry to stale, sets the pointer, and rejects inactive replacements | `internal/agent/memory/semantic_supersession_test.go` | L1 |
 | R-AGENT-105 | Consolidation contradiction phase populates `superseded_by` on newly stale semantic rows | `internal/agent/memory/semantic_supersession_test.go` | L1 |
+| R-AGENT-106 | `BuildRetrievalArtifact` hashes memory context + memory index deterministically and distinguishes different inputs | `internal/pipeline/retrieval_parity_test.go` | L1 |
+| R-AGENT-107 | Standard and streaming sessions with identical memory state compute identical artifact hashes | `internal/pipeline/retrieval_parity_test.go` | L1 |
+| R-AGENT-108 | Parity fitness detects silent memory-context drift between standard and streaming paths | `internal/pipeline/retrieval_parity_test.go` | L1 |
+| R-AGENT-109 | `retrieval.*` trace namespace carries artifact_hash, per-field hashes, byte counts, and bounded previews | `internal/pipeline/retrieval_parity_test.go` | L1 |
 
 ## Governance Rules
 

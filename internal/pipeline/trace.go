@@ -1,6 +1,8 @@
 package pipeline
 
 import (
+	"crypto/sha1"
+	"encoding/hex"
 	"encoding/json"
 	"time"
 )
@@ -140,6 +142,77 @@ func AnnotateVerifierTrace(tr *TraceRecorder, result VerificationResult) {
 			tr.Annotate(TraceNSVerifier+".claim_map_json", string(buf))
 		}
 	}
+}
+
+// RetrievalArtifact is the compact signature of what retrieval produced
+// for a turn. It is the authoritative record Milestone 1 relies on for
+// proving that streaming and non-streaming runs consume identical state.
+type RetrievalArtifact struct {
+	MemoryContextHash string `json:"memory_context_hash"`
+	MemoryIndexHash   string `json:"memory_index_hash"`
+	ArtifactHash      string `json:"artifact_hash"` // combined hash of both
+	ContextBytes      int    `json:"context_bytes"`
+	IndexBytes        int    `json:"index_bytes"`
+	ContextPreview    string `json:"context_preview"`
+	IndexPreview      string `json:"index_preview"`
+}
+
+// BuildRetrievalArtifact computes the artifact signature from a session's
+// pipeline-prepared memory state. The combined `ArtifactHash` is
+// deterministic across process restarts so external log pipelines can
+// detect drift between runs.
+func BuildRetrievalArtifact(memoryContext, memoryIndex string) RetrievalArtifact {
+	ctxHash := sha1Hex(memoryContext)
+	idxHash := sha1Hex(memoryIndex)
+	combined := sha1Hex(ctxHash + "|" + idxHash)
+	return RetrievalArtifact{
+		MemoryContextHash: ctxHash,
+		MemoryIndexHash:   idxHash,
+		ArtifactHash:      combined,
+		ContextBytes:      len(memoryContext),
+		IndexBytes:        len(memoryIndex),
+		ContextPreview:    previewForTrace(memoryContext, 200),
+		IndexPreview:      previewForTrace(memoryIndex, 200),
+	}
+}
+
+// AnnotateRetrievalArtifact writes the retrieval artifact signature onto
+// the current trace span under the `retrieval.*` namespace. This is how a
+// pipeline trace proves which retrieval state reached the model on every
+// turn, standard or streaming.
+func AnnotateRetrievalArtifact(tr *TraceRecorder, artifact RetrievalArtifact) {
+	if tr == nil {
+		return
+	}
+	tr.Annotate(TraceNSRetrieval+".artifact_hash", artifact.ArtifactHash)
+	tr.Annotate(TraceNSRetrieval+".memory_context_hash", artifact.MemoryContextHash)
+	tr.Annotate(TraceNSRetrieval+".memory_index_hash", artifact.MemoryIndexHash)
+	tr.Annotate(TraceNSRetrieval+".context_bytes", artifact.ContextBytes)
+	tr.Annotate(TraceNSRetrieval+".index_bytes", artifact.IndexBytes)
+	if artifact.ContextPreview != "" {
+		tr.Annotate(TraceNSRetrieval+".context_preview", artifact.ContextPreview)
+	}
+	if artifact.IndexPreview != "" {
+		tr.Annotate(TraceNSRetrieval+".index_preview", artifact.IndexPreview)
+	}
+}
+
+func sha1Hex(s string) string {
+	if s == "" {
+		return ""
+	}
+	sum := sha1.Sum([]byte(s))
+	return hex.EncodeToString(sum[:])
+}
+
+func previewForTrace(s string, max int) string {
+	if s == "" {
+		return ""
+	}
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "…"
 }
 
 // AnnotatePerceptionTrace writes the unified perception artifact onto the

@@ -721,6 +721,11 @@ func (p *Pipeline) stageInference(ctx context.Context, pc *pipelineContext) (*Ou
 	p.dashNotify("stream_start", map[string]string{
 		"session_id": pc.session.ID, "agent_id": pc.input.AgentID,
 	})
+	// Milestone 1: record the exact retrieval artifact reaching the model so
+	// standard and streaming runs can be compared trace-to-trace.
+	AnnotateRetrievalArtifact(pc.tr,
+		BuildRetrievalArtifact(pc.session.MemoryContext(), pc.session.MemoryIndex()),
+	)
 	var outcome *Outcome
 	var err error
 	switch pc.cfg.InferenceMode {
