@@ -106,6 +106,9 @@ closed, or the critical path changes.
   obligations: absolute claims must either explicitly anchor themselves or
   trace back to canonical-marked evidence, and failures surface as
   `proof_obligation_unmet` in both verifier issues and the trace claim map.
+- Decision checkpoints are now recorded automatically when task synthesis
+  produces a subgoal set different from the prior plan for the same task,
+  with the add/remove diff preserved on the checkpoint payload.
 
 ### Current Critical Path
 
@@ -610,8 +613,11 @@ short-term executive state described in the reference architecture.
   resumes after a simulated shutdown/startup cycle with the same plan,
   unresolved question, assumption, and stopping criterion, and that the
   assembled-context block for the next turn renders exactly those items.
-- What still remains is richer assumption extraction from tool outputs,
-  decision-checkpoint recording when the plan meaningfully changes, and a
+- Decision checkpoints are now recorded automatically whenever task synthesis
+  produces a subgoal set that differs from the prior plan for the same task.
+  The checkpoint payload carries the chosen subgoals, the prior subgoals as
+  "considered", and a rationale describing the added/removed diff.
+- What still remains is richer assumption extraction from tool outputs and a
   trace annotation that surfaces every executive-state write so operators can
   audit the growth decisions.
 

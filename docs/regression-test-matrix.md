@@ -328,6 +328,8 @@ Blocking commands for feature-complete releases:
 | R-AGENT-61 | Verifier rejects unanchored absolute claims on financial/compliance/security queries (`proof_obligation_unmet`) | `internal/pipeline/verifier_claims_test.go` | L1 |
 | R-AGENT-62 | Verifier accepts absolute claims whose supporting evidence carries a canonical marker, even without explicit in-response attribution | `internal/pipeline/verifier_claims_test.go` | L1 |
 | R-AGENT-63 | Per-intent proof obligation does not fire on low-risk intents | `internal/pipeline/verifier_claims_test.go` | L1 |
+| R-AGENT-64 | Plan subgoal diff is case-insensitive and whitespace-normalized | `internal/pipeline/plan_checkpoint_test.go` | L1 |
+| R-AGENT-65 | Task synthesis records a decision checkpoint when subgoals change vs. the prior plan and skips the checkpoint when subgoals are identical | `internal/pipeline/plan_checkpoint_test.go` | L1 |
 
 ## Governance Rules
 

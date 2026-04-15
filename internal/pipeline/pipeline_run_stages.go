@@ -268,7 +268,9 @@ func (p *Pipeline) stageDecomposition(ctx context.Context, pc *pipelineContext) 
 
 // recordTaskSynthesisPlan persists the synthesized plan into working memory
 // so that context assembly, the verifier, and subsequent turns can consume
-// structured executive state.
+// structured executive state. When the new plan differs from a prior plan
+// for the same task, a decision_checkpoint is also recorded capturing the
+// subgoal diff so operators can audit every plan revision.
 func (p *Pipeline) recordTaskSynthesisPlan(ctx context.Context, pc *pipelineContext, subgoals []string) {
 	mm := agentmemory.NewManager(agentmemory.DefaultConfig(), p.store)
 	payload := agentmemory.PlanPayload{
@@ -295,9 +297,96 @@ func (p *Pipeline) recordTaskSynthesisPlan(ctx context.Context, pc *pipelineCont
 		content = content[:200]
 	}
 
+	// Before replacing the plan, detect a meaningful change vs any prior plan
+	// for this task so a decision_checkpoint can capture the revision.
+	priorState, _ := mm.LoadExecutiveState(ctx, pc.session.ID, pc.taskID)
+	if priorState != nil && len(priorState.Plans) > 0 {
+		prior := priorState.Plans[0]
+		priorSubgoals := extractPlanSubgoals(prior)
+		added, removed := diffPlanSubgoals(priorSubgoals, subgoals)
+		if len(added) > 0 || len(removed) > 0 {
+			checkpointContent := summarizePlanChange(added, removed)
+			checkpointPayload := agentmemory.DecisionCheckpointPayload{
+				Chosen:     strings.Join(subgoals, " ; "),
+				Considered: priorSubgoals,
+				Rationale:  "task synthesis revised plan subgoals",
+			}
+			if err := mm.RecordDecisionCheckpoint(ctx, pc.session.ID, pc.taskID, checkpointContent, checkpointPayload); err != nil {
+				log.Debug().Err(err).Msg("executive: record decision checkpoint failed")
+			}
+		}
+	}
+
 	if err := mm.RecordPlan(ctx, pc.session.ID, pc.taskID, content, payload); err != nil {
 		log.Debug().Err(err).Msg("executive: record plan failed")
 	}
+}
+
+// extractPlanSubgoals pulls the subgoals slice out of a plan entry's payload,
+// returning nil if the payload is missing or malformed.
+func extractPlanSubgoals(entry agentmemory.ExecutiveEntry) []string {
+	if entry.Payload == nil {
+		return nil
+	}
+	raw, ok := entry.Payload["subgoals"].([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(raw))
+	for _, item := range raw {
+		if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// diffPlanSubgoals returns the subgoals added and removed between two
+// plan revisions. Comparison is case-insensitive and whitespace-normalized.
+func diffPlanSubgoals(before, after []string) (added, removed []string) {
+	normalize := func(items []string) map[string]string {
+		out := make(map[string]string, len(items))
+		for _, item := range items {
+			key := strings.TrimSpace(strings.ToLower(item))
+			if key != "" {
+				out[key] = item
+			}
+		}
+		return out
+	}
+	beforeSet := normalize(before)
+	afterSet := normalize(after)
+	for key, original := range afterSet {
+		if _, ok := beforeSet[key]; !ok {
+			added = append(added, original)
+		}
+	}
+	for key, original := range beforeSet {
+		if _, ok := afterSet[key]; !ok {
+			removed = append(removed, original)
+		}
+	}
+	return added, removed
+}
+
+// summarizePlanChange builds a short human-readable content string for a
+// decision_checkpoint entry.
+func summarizePlanChange(added, removed []string) string {
+	var parts []string
+	if len(added) > 0 {
+		parts = append(parts, "added: "+strings.Join(added, ", "))
+	}
+	if len(removed) > 0 {
+		parts = append(parts, "removed: "+strings.Join(removed, ", "))
+	}
+	if len(parts) == 0 {
+		return "plan revised"
+	}
+	summary := "plan revised: " + strings.Join(parts, "; ")
+	if len(summary) > 200 {
+		summary = summary[:200]
+	}
+	return summary
 }
 
 // ── Stage 8: Authority resolution ──────────────────────────────────────
