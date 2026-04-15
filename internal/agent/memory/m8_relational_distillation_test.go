@@ -1,6 +1,6 @@
 // m8_relational_distillation_test.go is the regression suite for the M8
 // relational distillation phase. Each subtest pins one acceptance criterion
-// from agentic-memory-remaining-development-spec.md:
+// of the shipped M8 behavior:
 //
 //   - Relations round-trip through FormatForStorage ↔ parseEpisodeSummary
 //   - Recurring high-quality episodes promote a (subject, relation, object)

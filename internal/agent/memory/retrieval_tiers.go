@@ -78,7 +78,7 @@ const (
 
 // retrieveSemanticEvidence fetches semantic memory with richer provenance preserved.
 //
-// M3.2 (semantic-retrieval-fts-vector-migration.md): HybridSearch is the
+// M3.2: HybridSearch is the
 // primary read path. The residual LIKE branch only fires as a safety net
 // when the hybrid leg returned zero candidates for a real search query.
 // The unfiltered "newest 20" branch is retained for the no-query / non-search

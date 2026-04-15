@@ -589,13 +589,13 @@ Query → Decompose (compound → subgoals)
 |-------|------|---------|
 | Decomposer | `decomposer.go` | Splits compound queries into subgoals |
 | Router | `router.go` | Selects tiers + modes based on intent/keywords |
-| Retriever | `retrieval_episodic.go`, `retrieval_tiers.go` | Per-tier retrieval with mode-aware semantic/procedural/relationship paths |
+| Retriever | `retrieval_episodic.go`, `retrieval_tiers.go`, `retrieval_path.go`, `retrieval_path_telemetry.go` | Per-tier retrieval with HybridSearch-first semantic/procedural/relationship/workflow paths, per-tier path attribution, and telemetry-gated LIKE retirement support |
 | Reranker | `reranker.go` | Evidence filter: authority, recency, collapse |
 | Assembler | `context_assembly.go` | Structured output: evidence + freshness risks + gaps + contradictions + provenance |
 | Verifier | `internal/pipeline/verifier.go` | Detects unsupported certainty, stale-currentness overclaim, ignored contradictions, missed multi-part coverage, missing action plans, unanchored policy answers, and answered subgoals that lack supporting retrieved evidence |
 | Reflection | `reflection.go` | Post-turn episode summaries |
 | Persistence | `working_persistence.go` | Working memory across restarts |
-| Graph Facts | `043_knowledge_facts.sql`, `manager.go`, `retrieval_tiers.go` | Persisted typed relations extracted from semantic knowledge and surfaced as first-class evidence |
+| Graph Facts | `043_knowledge_facts.sql`, `manager.go`, `retrieval_tiers.go`, `graph.go`, `consolidation_distillation.go` | Persisted typed relations extracted from semantic knowledge and enriched episode distillation, surfaced as first-class evidence and traversable graph structure |
 
 ### Current Behavioral Notes
 
@@ -604,7 +604,10 @@ Query → Decompose (compound → subgoals)
 - Relationship evidence now retains source identity, relationship summary, trust-derived score, and age through retrieval and assembly.
 - Graph facts are now persisted in `knowledge_facts` with `subject` / `relation` / `object`, source provenance, confidence, and freshness metadata.
 - Semantic ingestion now extracts typed facts such as `depends_on`, `owned_by`, `uses`, `blocks`, `causes`, and `version_of` into the graph-fact store.
+- Semantic / procedural / relationship / workflow retrieval are now HybridSearch-first; residual `LIKE` paths remain only as telemetry-gated safety nets.
+- Retrieval tier methods emit `retrieval.path.<tier>` annotations (`fts`, `vector`, `hybrid`, `like_fallback`, `empty`) through a per-call tracer carried on `context.Context`, so concurrent calls stay isolated without retriever-global state.
 - Graph retrieval can now synthesize explicit path evidence between named entities and reverse dependency chains for impact / blast-radius queries.
+- Enriched episode distillation now promotes recurring canonical `(subject, relation, object)` triples into `knowledge_facts` via the same canonical write gate used by direct graph ingestion.
 - Context assembly surfaces explicit freshness risks when supporting evidence is stale instead of leaving recency buried in scores.
 - The verifier now consumes pipeline-computed task hints (intent, subgoals, planned action) when available instead of reconstructing everything from the raw prompt.
 - The verifier now parses structured `[Retrieved Evidence]` items from the assembled context and checks answered subgoals for explicit support before letting them stand as resolved.
@@ -647,11 +650,13 @@ Rust starts all entries at 1.0 and recall resets to 1.0.
 **Go fix**: Default 0.8, recall reinforces +0.1 (capped at 1.0). Creates
 organic differentiation over time.
 
-### 7.4 ~~FTS Coverage Gaps~~ FIXED (Go v1.0.2)
+### 7.4 ~~FTS Coverage Gaps~~ FIXED (Go v1.0.6)
 
 All memory-backed stores now have FTS coverage: episodic, semantic, working
 (pre-existing), procedural and relationship (added in v1.0.2 via migration 037),
-plus `knowledge_facts` (added in v1.0.6 via migration 043).
+plus `knowledge_facts` (added in v1.0.6 via migration 043). Migration 048
+completed the missing trigger surface so INSERT/UPDATE/DELETE synchronization
+now holds across the FTS-covered tiers used by HybridSearch-first retrieval.
 
 ### 7.5 No UPDATE Trigger on Episodic FTS (OPEN)
 
@@ -667,6 +672,13 @@ retained for legacy data safety. JOIN simplified to direct match.
 
 Consolidation doc comments mention promotion but Phase 4 is actually
 tier-native index sync, not promotion.
+
+### 7.8 Telemetry-Gated LIKE Retirement (OPEN, operator-driven)
+
+HybridSearch-first retrieval is shipped for semantic, procedural,
+relationship, and workflow tiers, but residual `LIKE` blocks remain as safety
+nets until production trace telemetry shows they are dormant enough to retire
+per tier. `AggregateRetrievalPaths()` is the operator-facing gate.
 
 ---
 
@@ -685,12 +697,17 @@ tier-native index sync, not promotion.
 | Query-aware memory index (beyond-parity) | FIXED | `internal/agent/tools/memory_recall.go`, `internal/daemon/daemon.go` |
 | Confidence normalization (beyond-parity) | FIXED | `internal/agent/tools/memory_recall.go`, `internal/db/schema.go` |
 | OpenAI tool_call_id serialization | FIXED | `internal/llm/client_formats.go` |
+| FTS trigger completeness + backfill (M3.1) | FIXED | `internal/db/migrations/048_fts_trigger_completeness.sql`, `internal/db/fts_trigger_completeness_test.go` |
+| HybridSearch-first retrieval + per-tier path telemetry (M3.2) | FIXED | `internal/agent/memory/retrieval_tiers.go`, `internal/agent/memory/retrieval_path.go`, `internal/agent/memory/workflow.go` |
+| Relational distillation into `knowledge_facts` (M8) | FIXED | `internal/agent/memory/reflection.go`, `internal/agent/memory/consolidation_distillation.go` |
+| Telemetry-backed dormancy aggregator for LIKE retirement (M3.3) | FIXED | `internal/agent/memory/retrieval_path_telemetry.go` |
 
 ### 8.2 Remaining Gaps
 
 | Priority | Gap | Notes |
 |----------|-----|-------|
 | **P1** | Model tool-calling reliability | `gemma4` doesn't reliably call `search_memories` -- addressed by IntentMemoryRecall baselining (router escalates) |
+| **P2** | Telemetry-backed LIKE retirement still requires operator observation | `AggregateRetrievalPaths` shipped; tier-by-tier deletion is intentionally gated on production traces |
 | ~~P1~~ | ~~FTS table name mismatch~~ | **CLOSED v1.0.2** -- migration 037 normalizes to full names |
 | **P2** | Episodic-to-semantic promotion | Consolidation Phase 4 |
 | ~~P2~~ | ~~No FTS for procedural/relationship~~ | **CLOSED v1.0.2** -- triggers added |
