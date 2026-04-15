@@ -233,6 +233,39 @@ func TestPipeline_Run_VerifierRequestsRevisionForMissingActionPlan(t *testing.T)
 	}
 }
 
+func TestPipeline_Run_VerifierRequestsRevisionForUnsupportedSubgoalEvidence(t *testing.T) {
+	store := testutil.TempStore(t)
+	exec := &sequencedExecutor{responses: []string{
+		"The root cause was a stale billing cache, and the affected systems were billing and ledger.",
+		"The root cause was a stale billing cache. The available evidence confirms impact to billing, but ledger still needs verification.",
+	}}
+
+	pipe := New(PipelineDeps{
+		Store:    store,
+		Executor: exec,
+		Guards:   DefaultGuardChain(),
+		Retriever: &stubRetriever{result: "[Active Memory]\n\n[Retrieved Evidence]\n1. [semantic, 0.90] Billing service cache invalidation failed after deploy\n\n[Gaps]\n- No relationship/entity data found"},
+	})
+
+	cfg := PresetAPI()
+	cfg.GuardSet = GuardSetNone
+	input := Input{
+		Content: "What was the root cause, and which systems were affected?",
+		AgentID: "test-agent",
+	}
+
+	outcome, err := pipe.Run(context.Background(), cfg, input)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if exec.calls != 2 {
+		t.Fatalf("expected verifier to trigger a second inference, got %d calls", exec.calls)
+	}
+	if !strings.Contains(strings.ToLower(outcome.Content), "needs verification") {
+		t.Fatalf("expected revised content to acknowledge unsupported affected-system claim, got %q", outcome.Content)
+	}
+}
+
 func TestPipeline_Run_Shortcut(t *testing.T) {
 	store := testutil.TempStore(t)
 	pipe := New(PipelineDeps{Store: store})

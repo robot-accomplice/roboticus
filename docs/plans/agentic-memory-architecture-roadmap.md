@@ -45,7 +45,7 @@ closed, or the critical path changes.
 | 3 | Upgrade Semantic Memory Into A Canonical Knowledge Layer | In progress | Semantic provenance, canonical flags, authority scoring, and freshness cues now survive retrieval/assembly |
 | 4 | Turn Procedural Memory Into Workflow Memory | Not started | Still too stats-heavy; no true workflow records yet |
 | 5 | Replace Relationship Memory With Persisted Relational Memory | In progress | Persisted `knowledge_facts` store, graph-aware retrieval, and first traversal semantics now shipped |
-| 6 | Add A Real Verifier / Critic Stage | In progress | Heuristic verifier gate is live; not yet a full evidence-audit stage |
+| 6 | Add A Real Verifier / Critic Stage | In progress | Verifier now parses retrieved evidence and checks answered subgoals for support; still not a full proof-style audit |
 | 7 | Deepen Working Memory Into Executive State | Not started | Persistence/vetting exists; executive task-state model still missing |
 | 8 | Improve Reflection And Consolidation Quality | Not started | Reflection/consolidation still heuristic despite working scaffolding |
 
@@ -62,6 +62,9 @@ closed, or the critical path changes.
 - The verifier now runs as a retry gate with checks for unsupported certainty,
   contradiction handling, policy anchoring, remediation coverage, and stale
   "current/latest" claims.
+- The verifier now parses structured retrieved-evidence items and can reject
+  answers that claim a subgoal is resolved without support in the assembled
+  evidence.
 - Relationship evidence now preserves provenance and age, and a persisted
   `knowledge_facts` store now captures typed graph facts extracted from
   semantic memory.
@@ -72,8 +75,9 @@ closed, or the critical path changes.
 
 ### Current Critical Path
 
-1. Finish Milestone 6 by deepening the verifier from heuristic retry gate into
-   a real evidence-audit stage with explicit support checks per subgoal.
+1. Finish Milestone 6 by moving from subgoal support checks to richer
+   claim-level contradiction resolution, provenance coverage, and explicit
+   proof obligations for high-risk answers.
 2. Finish Milestone 5 by moving from first traversal semantics to richer
    persisted adjacency/path reasoning and multi-hop impact analysis.
 3. Start Milestone 7 by turning working memory into structured executive state
@@ -462,9 +466,12 @@ support, contradictions, and freshness before final answer or action.
 - The verifier already checks unsupported certainty, missed multi-part
   coverage, contradiction handling, policy anchoring, remediation/next-step
   coverage, and stale "latest/current" claims.
-- The remaining gap is depth: claim-by-claim evidence support, explicit
-  subgoal coverage accounting, and richer contradiction resolution are still
-  incomplete.
+- The verifier now parses `[Retrieved Evidence]` items from the assembled
+  context and checks answered subgoals for explicit support before allowing
+  them to stand as resolved.
+- The remaining gap is depth: claim-level contradiction resolution,
+  provenance coverage accounting, and stronger proof obligations for
+  high-risk answers are still incomplete.
 
 ---
 

@@ -156,3 +156,57 @@ func TestVerifyResponse_PassesWhenFreshnessRiskAcknowledged(t *testing.T) {
 		t.Fatalf("expected freshness-aware caution to pass, got %+v", result.Issues)
 	}
 }
+
+func TestBuildVerificationContext_ExtractsEvidenceItems(t *testing.T) {
+	sess := session.New("s1", "a1", "Bot")
+	sess.AddUserMessage("Find the root cause and identify the affected systems.")
+	sess.SetMemoryContext("[Active Memory]\n\n[Retrieved Evidence]\n1. [semantic, 0.90] Billing service cache invalidation failed\n2. [relationship, 0.80] Billing Service depends_on Ledger Service\n\n[Gaps]\n- No relevant procedures or workflows found")
+
+	ctx := BuildVerificationContext(sess)
+	if len(ctx.EvidenceItems) != 2 {
+		t.Fatalf("expected 2 evidence items, got %+v", ctx.EvidenceItems)
+	}
+	if ctx.EvidenceItems[0] == "" || ctx.EvidenceItems[1] == "" {
+		t.Fatalf("expected non-empty evidence items, got %+v", ctx.EvidenceItems)
+	}
+}
+
+func TestVerifyResponse_FailsWhenAnsweredSubgoalLacksEvidenceSupport(t *testing.T) {
+	ctx := VerificationContext{
+		UserPrompt: "Find the root cause and identify affected systems",
+		Subgoals: []string{
+			"find the root cause",
+			"identify affected systems",
+		},
+		EvidenceItems: []string{
+			"Billing service cache invalidation failed after deploy",
+		},
+	}
+
+	result := VerifyResponse("The root cause was a stale billing cache, and the affected systems were billing and ledger.", ctx)
+	if result.Passed {
+		t.Fatal("expected unsupported evidence failure")
+	}
+	if len(result.Issues) == 0 || result.Issues[len(result.Issues)-1].Code != "unsupported_subgoal" {
+		t.Fatalf("expected unsupported_subgoal issue, got %+v", result.Issues)
+	}
+}
+
+func TestVerifyResponse_PassesWhenAnsweredSubgoalsAreEvidenceSupported(t *testing.T) {
+	ctx := VerificationContext{
+		UserPrompt: "Find the root cause and identify affected systems",
+		Subgoals: []string{
+			"find the root cause",
+			"identify affected systems",
+		},
+		EvidenceItems: []string{
+			"Billing service cache invalidation failed after deploy",
+			"Billing Service depends_on Ledger Service",
+		},
+	}
+
+	result := VerifyResponse("The root cause was a stale billing cache, and the affected systems were billing and ledger.", ctx)
+	if !result.Passed {
+		t.Fatalf("expected evidence-supported response to pass, got %+v", result.Issues)
+	}
+}

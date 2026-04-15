@@ -301,6 +301,9 @@ Blocking commands for feature-complete releases:
 | R-AGENT-34 | `search_memories` can find persisted graph facts | `internal/agent/tools/memory_search_test.go` | L1 |
 | R-AGENT-35 | Graph retrieval can synthesize explicit path evidence between named entities | `internal/agent/memory/retrieval_test.go` | L1 |
 | R-AGENT-36 | Graph retrieval can synthesize reverse dependency impact chains for blast-radius queries | `internal/agent/memory/retrieval_test.go` | L1 |
+| R-AGENT-37 | Verifier extracts structured retrieved-evidence items from assembled memory context | `internal/pipeline/verifier_test.go` | L1 |
+| R-AGENT-38 | Verifier rejects answered subgoals that lack supporting retrieved evidence | `internal/pipeline/verifier_test.go` | L1 |
+| R-AGENT-39 | Standard pipeline path revises output when verifier detects unsupported answered-subgoal evidence | `internal/pipeline/pipeline_run_test.go` | L2 |
 
 ## Governance Rules
 

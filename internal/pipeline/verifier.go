@@ -35,6 +35,7 @@ type VerificationContext struct {
 	RequiresFreshness    bool
 	RequiresActionPlan   bool
 	Subgoals             []string
+	EvidenceItems        []string
 }
 
 func BuildVerificationContext(session *Session) VerificationContext {
@@ -67,6 +68,7 @@ func BuildVerificationContext(session *Session) VerificationContext {
 	ctx.HasFreshnessRisk = strings.Contains(ctx.MemoryContext, "[Freshness Risks]")
 	ctx.HasContradictions = strings.Contains(ctx.MemoryContext, "[Contradictions]")
 	ctx.HasCanonicalEvidence = strings.Contains(strings.ToLower(ctx.MemoryContext), "canonical")
+	ctx.EvidenceItems = verificationSectionItems(ctx.MemoryContext, "[Retrieved Evidence]")
 	ctx.Subgoals = session.TaskSubgoals()
 	if len(ctx.Subgoals) == 0 {
 		ctx.Subgoals = verificationSubgoals(ctx.UserPrompt)
@@ -162,6 +164,28 @@ func VerifyResponse(content string, ctx VerificationContext) VerificationResult 
 		}
 	}
 
+	if len(ctx.Subgoals) > 0 && len(ctx.EvidenceItems) > 0 {
+		var unsupported []string
+		for _, goal := range ctx.Subgoals {
+			if !verificationGoalCovered(goal, lowerContent) {
+				continue
+			}
+			if verificationGoalAllowsPlanInference(goal) {
+				continue
+			}
+			if !verificationGoalSupportedByEvidence(goal, lowerContent, ctx.EvidenceItems) {
+				unsupported = append(unsupported, goal)
+			}
+		}
+		if len(unsupported) > 0 {
+			result.Passed = false
+			result.Issues = append(result.Issues, VerificationIssue{
+				Code:   "unsupported_subgoal",
+				Detail: "the response answers requested parts that are not supported by the retrieved evidence: " + strings.Join(unsupported, "; "),
+			})
+		}
+	}
+
 	if ctx.RequiresActionPlan && !verificationHasActionPlan(lowerContent) {
 		result.Passed = false
 		result.Issues = append(result.Issues, VerificationIssue{
@@ -222,6 +246,90 @@ func verificationKeywords(goal string) []string {
 	return out
 }
 
+func verificationGoalSupportedByEvidence(goal, response string, evidenceItems []string) bool {
+	if len(evidenceItems) == 0 {
+		return false
+	}
+
+	if verificationGoalNeedsEntitySupport(goal) {
+		responseKeywords := verificationEntityKeywords(response)
+		if len(responseKeywords) == 0 {
+			responseKeywords = verificationKeywords(goal)
+		}
+		matches := verificationKeywordEvidenceMatches(responseKeywords, evidenceItems)
+		threshold := 1
+		if len(responseKeywords) >= 2 {
+			threshold = 2
+		}
+		return matches >= threshold
+	}
+
+	goalMatches := verificationKeywordEvidenceMatches(verificationKeywords(goal), evidenceItems)
+	responseMatches := verificationKeywordEvidenceMatches(verificationKeywords(response), evidenceItems)
+
+	if goalMatches >= 1 {
+		return true
+	}
+	return responseMatches >= 2
+}
+
+func verificationGoalAllowsPlanInference(goal string) bool {
+	lower := strings.ToLower(goal)
+	return containsAny(lower,
+		"remediation", "fix", "mitigation", "next step", "next steps",
+		"recommend", "recommendation", "plan", "propose", "action", "actions",
+	)
+}
+
+func verificationGoalNeedsEntitySupport(goal string) bool {
+	lower := strings.ToLower(goal)
+	return containsAny(lower,
+		"affected system", "affected systems", "impacted system", "impacted systems",
+		"affected component", "affected components", "impacted component", "impacted components",
+		"affected service", "affected services", "dependency", "dependencies", "blast radius",
+		"what breaks", "impact",
+	)
+}
+
+func verificationEntityKeywords(text string) []string {
+	stop := map[string]struct{}{
+		"root": {}, "cause": {}, "affected": {}, "systems": {}, "system": {},
+		"services": {}, "service": {}, "components": {}, "component": {},
+		"impact": {}, "impacted": {}, "because": {}, "stale": {}, "cache": {},
+		"entry": {}, "deploy": {}, "after": {}, "before": {}, "during": {},
+	}
+
+	var out []string
+	seen := make(map[string]struct{})
+	for _, token := range verificationKeywords(text) {
+		if _, skip := stop[token]; skip {
+			continue
+		}
+		if _, ok := seen[token]; ok {
+			continue
+		}
+		seen[token] = struct{}{}
+		out = append(out, token)
+	}
+	return out
+}
+
+func verificationKeywordEvidenceMatches(keywords []string, evidenceItems []string) int {
+	if len(keywords) == 0 {
+		return 0
+	}
+	matches := 0
+	for _, kw := range keywords {
+		for _, item := range evidenceItems {
+			if strings.Contains(strings.ToLower(item), kw) {
+				matches++
+				break
+			}
+		}
+	}
+	return matches
+}
+
 func containsAny(s string, needles ...string) bool {
 	for _, needle := range needles {
 		if strings.Contains(s, needle) {
@@ -280,6 +388,36 @@ func verificationMentionsCanonical(response string) bool {
 		"according to", "current policy", "current rule", "policy says",
 		"canonical", "documented", "source", "official", "current documentation",
 	)
+}
+
+func verificationSectionItems(memoryContext, header string) []string {
+	if memoryContext == "" {
+		return nil
+	}
+	idx := strings.Index(memoryContext, header)
+	if idx < 0 {
+		return nil
+	}
+	rest := memoryContext[idx+len(header):]
+	if next := strings.Index(rest, "\n["); next >= 0 {
+		rest = rest[:next]
+	}
+
+	var items []string
+	for _, line := range strings.Split(rest, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		line = strings.TrimLeft(line, "- ")
+		if dot := strings.Index(line, "] "); strings.HasPrefix(line, "1.") || strings.HasPrefix(line, "2.") || strings.HasPrefix(line, "3.") || strings.HasPrefix(line, "4.") || strings.HasPrefix(line, "5.") {
+			if dot >= 0 && dot+2 < len(line) {
+				line = line[dot+2:]
+			}
+		}
+		items = append(items, line)
+	}
+	return items
 }
 
 func (vr VerificationResult) RetryMessage() string {

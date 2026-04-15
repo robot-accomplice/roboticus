@@ -580,7 +580,7 @@ Query → Decompose (compound → subgoals)
       → Assemble (evidence + freshness risks + gaps + contradictions)
       → Working State (direct injection, not searched)
       → LLM Reasoning
-      → Verify (unsupported certainty / stale-currentness / contradictions / coverage)
+      → Verify (unsupported certainty / stale-currentness / contradictions / coverage / unsupported answered subgoals)
 ```
 
 ### Components
@@ -592,7 +592,7 @@ Query → Decompose (compound → subgoals)
 | Retriever | `retrieval_episodic.go`, `retrieval_tiers.go` | Per-tier retrieval with mode-aware semantic/procedural/relationship paths |
 | Reranker | `reranker.go` | Evidence filter: authority, recency, collapse |
 | Assembler | `context_assembly.go` | Structured output: evidence + freshness risks + gaps + contradictions + provenance |
-| Verifier | `internal/pipeline/verifier.go` | Detects unsupported certainty, stale-currentness overclaim, ignored contradictions, missed multi-part coverage, missing action plans, and unanchored policy answers |
+| Verifier | `internal/pipeline/verifier.go` | Detects unsupported certainty, stale-currentness overclaim, ignored contradictions, missed multi-part coverage, missing action plans, unanchored policy answers, and answered subgoals that lack supporting retrieved evidence |
 | Reflection | `reflection.go` | Post-turn episode summaries |
 | Persistence | `working_persistence.go` | Working memory across restarts |
 | Graph Facts | `043_knowledge_facts.sql`, `manager.go`, `retrieval_tiers.go` | Persisted typed relations extracted from semantic knowledge and surfaced as first-class evidence |
@@ -607,6 +607,7 @@ Query → Decompose (compound → subgoals)
 - Graph retrieval can now synthesize explicit path evidence between named entities and reverse dependency chains for impact / blast-radius queries.
 - Context assembly surfaces explicit freshness risks when supporting evidence is stale instead of leaving recency buried in scores.
 - The verifier now consumes pipeline-computed task hints (intent, subgoals, planned action) when available instead of reconstructing everything from the raw prompt.
+- The verifier now parses structured `[Retrieved Evidence]` items from the assembled context and checks answered subgoals for explicit support before letting them stand as resolved.
 - The verifier is currently heuristic, not model-based. It acts as a revision gate, not a final proof system.
 
 ### Working Memory Lifecycle
