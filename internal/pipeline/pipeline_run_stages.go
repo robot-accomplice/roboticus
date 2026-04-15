@@ -440,6 +440,10 @@ func (p *Pipeline) stageMemoryRetrieval(ctx context.Context, pc *pipelineContext
 	retrievalStrat := DecideRetrievalStrategy(pc.synthesis, pc.session.TurnCount(), 2048)
 	if p.retriever != nil && retrievalStrat.Strategy != "none" {
 		pc.tr.BeginSpan("memory_retrieval")
+		// M3.2: attach the active trace recorder to ctx so memory tier
+		// methods can emit per-tier "retrieval.path.<tier>" annotations.
+		// TraceRecorder satisfies memory.RetrievalTracer structurally.
+		ctx = agentmemory.WithRetrievalTracer(ctx, pc.tr)
 		pc.memoryBlock = p.retriever.Retrieve(ctx, pc.session.ID, pc.content, retrievalStrat.Budget)
 		if pc.memoryBlock != "" {
 			pc.session.SetMemoryContext(pc.memoryBlock)

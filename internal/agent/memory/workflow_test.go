@@ -164,7 +164,7 @@ func TestRetrieveProceduralMemory_PrefersWorkflowsOverToolStats(t *testing.T) {
 	}
 
 	retriever := NewRetriever(DefaultRetrievalConfig(), DefaultTierBudget(), store)
-	block := retriever.retrieveProceduralMemory(ctx, "deploy", RetrievalHybrid, 512)
+	block := retriever.retrieveProceduralMemory(ctx, "deploy", nil, RetrievalHybrid, 512)
 	if !strings.Contains(block, "canary-deploy") {
 		t.Fatalf("expected workflow surfaced in procedural block, got:\n%s", block)
 	}
@@ -185,7 +185,7 @@ func TestRetrieveProceduralMemory_FallsBackToToolStatsWhenNoWorkflow(t *testing.
 	mm.recordToolStat(ctx, "deploy_cli", true)
 
 	retriever := NewRetriever(DefaultRetrievalConfig(), DefaultTierBudget(), store)
-	block := retriever.retrieveProceduralMemory(ctx, "deploy", RetrievalHybrid, 512)
+	block := retriever.retrieveProceduralMemory(ctx, "deploy", nil, RetrievalHybrid, 512)
 	if !strings.Contains(block, "deploy_cli") {
 		t.Fatalf("expected fallback to tool stats when no workflow matches, got:\n%s", block)
 	}

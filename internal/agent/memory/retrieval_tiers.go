@@ -77,6 +77,18 @@ const (
 )
 
 // retrieveSemanticEvidence fetches semantic memory with richer provenance preserved.
+//
+// M3.2 (semantic-retrieval-fts-vector-migration.md): HybridSearch is the
+// primary read path. The residual LIKE branch only fires as a safety net
+// when the hybrid leg returned zero candidates for a real search query.
+// The unfiltered "newest 20" branch is retained for the no-query / non-search
+// browse path (mode=Recency or empty query) and is not classified as a
+// fallback — it is the intended browse behavior.
+//
+// Trace annotation: every hybrid-mode search emits "retrieval.path.semantic"
+// = "fts" | "vector" | "hybrid" | "like_fallback" | "empty" so M3.3 can
+// measure whether the LIKE safety net is doing meaningful work before
+// removal.
 func (mr *Retriever) retrieveSemanticEvidence(ctx context.Context, query string, queryEmbed []float32, mode RetrievalMode, budgetTokens int) []Evidence {
 	maxChars := budgetTokens * mr.charsPerToken
 	used := 0
@@ -93,74 +105,85 @@ func (mr *Retriever) retrieveSemanticEvidence(ctx context.Context, query string,
 
 	var evidence []Evidence
 	seen := make(map[string]struct{})
+	isHybridMode := mode == RetrievalHybrid || mode == RetrievalSemantic || mode == RetrievalANN
+	isSearch := query != ""
 
-	switch mode {
-	case RetrievalHybrid, RetrievalSemantic, RetrievalANN:
-		if query != "" {
-			weight := mr.config.HybridWeight
-			if weight <= 0 {
-				weight = AdaptiveHybridWeight(mr.estimateCorpusSize(ctx))
-			}
-			if mode == RetrievalSemantic || mode == RetrievalANN {
-				weight = 1.0
-			}
-			results := db.HybridSearch(ctx, mr.store, query, queryEmbed, 20, weight, mr.vectorIndex)
-			for _, hr := range results {
-				if hr.SourceTable != "semantic_memory" {
-					continue
-				}
-				var (
-					id         string
-					category   string
-					key        string
-					value      string
-					confidence      float64
-					ageDays         float64
-					isCanonicalCol  sql.NullInt64
-					sourceLabelCol  sql.NullString
-				)
-				err := mr.store.QueryRowContext(ctx,
-					`SELECT id, category, key, value, confidence,
-					        julianday('now') - julianday(updated_at),
-					        is_canonical, source_label
-					   FROM semantic_memory
-					  WHERE id = ? AND memory_state = 'active'`,
-					hr.SourceID).Scan(&id, &category, &key, &value, &confidence, &ageDays, &isCanonicalCol, &sourceLabelCol)
-				if err != nil {
-					continue
-				}
-				seen[id] = struct{}{}
-				persistedCanonical := isCanonicalCol.Valid && isCanonicalCol.Int64 != 0
-				isCanonical, authority := semanticAuthority(persistedCanonical, confidence)
-				label := semanticSourceLabel(category, key)
-				if sourceLabelCol.Valid && sourceLabelCol.String != "" {
-					label = sourceLabelCol.String
-				}
-				evidence = appendEvidence(evidence, Evidence{
-					Content:        fmt.Sprintf("[%s] %s: %s", category, key, value),
-					SourceTier:     TierSemantic,
-					SourceID:       id,
-					SourceTable:    "semantic_memory",
-					SourceLabel:    label,
-					SourceCategory: category,
-					Score:          hr.Similarity,
-					FTSScore:       hr.FTSScore,
-					VecScore:       hr.VectorScore,
-					AgeDays:        ageDays,
-					IsCanonical:    isCanonical,
-					AuthorityScore: authority,
-					RetrievalMode:  mode.String(),
-				})
-			}
-			if len(evidence) > 0 {
-				return evidence
-			}
+	if isHybridMode && isSearch {
+		weight := mr.config.HybridWeight
+		if weight <= 0 {
+			weight = AdaptiveHybridWeight(mr.estimateCorpusSize(ctx))
 		}
+		if mode == RetrievalSemantic || mode == RetrievalANN {
+			weight = 1.0
+		}
+		results := db.HybridSearch(ctx, mr.store, query, queryEmbed, 20, weight, mr.vectorIndex)
+		var ftsHits, vecHits int
+		for _, hr := range results {
+			if hr.SourceTable != "semantic_memory" {
+				continue
+			}
+			var (
+				id             string
+				category       string
+				key            string
+				value          string
+				confidence     float64
+				ageDays        float64
+				isCanonicalCol sql.NullInt64
+				sourceLabelCol sql.NullString
+			)
+			err := mr.store.QueryRowContext(ctx,
+				`SELECT id, category, key, value, confidence,
+				        julianday('now') - julianday(updated_at),
+				        is_canonical, source_label
+				   FROM semantic_memory
+				  WHERE id = ? AND memory_state = 'active'`,
+				hr.SourceID).Scan(&id, &category, &key, &value, &confidence, &ageDays, &isCanonicalCol, &sourceLabelCol)
+			if err != nil {
+				continue
+			}
+			seen[id] = struct{}{}
+			if hr.FTSScore > 0 {
+				ftsHits++
+			}
+			if hr.VectorScore > 0 {
+				vecHits++
+			}
+			persistedCanonical := isCanonicalCol.Valid && isCanonicalCol.Int64 != 0
+			isCanonical, authority := semanticAuthority(persistedCanonical, confidence)
+			label := semanticSourceLabel(category, key)
+			if sourceLabelCol.Valid && sourceLabelCol.String != "" {
+				label = sourceLabelCol.String
+			}
+			evidence = appendEvidence(evidence, Evidence{
+				Content:        fmt.Sprintf("[%s] %s: %s", category, key, value),
+				SourceTier:     TierSemantic,
+				SourceID:       id,
+				SourceTable:    "semantic_memory",
+				SourceLabel:    label,
+				SourceCategory: category,
+				Score:          hr.Similarity,
+				FTSScore:       hr.FTSScore,
+				VecScore:       hr.VectorScore,
+				AgeDays:        ageDays,
+				IsCanonical:    isCanonical,
+				AuthorityScore: authority,
+				RetrievalMode:  mode.String(),
+			})
+		}
+		if len(evidence) > 0 {
+			annotateRetrievalPath(ctx, RetrievalTierSemantic, classifyHybridPath(ftsHits, vecHits))
+			return evidence
+		}
+		// Hybrid produced zero rows for this tier — fall through to the
+		// LIKE safety net. The annotation is deferred to the bottom of
+		// this function once we know whether LIKE produced anything.
 	}
 
 	var rows *sql.Rows
 	var err error
-	if query != "" {
+	likeAttempted := isSearch
+	if isSearch {
 		rows, err = mr.store.QueryContext(ctx,
 			`SELECT id, category, key, value, confidence,
 			        julianday('now') - julianday(updated_at) AS age_days,
@@ -180,10 +203,14 @@ func (mr *Retriever) retrieveSemanticEvidence(ctx context.Context, query string,
 			  ORDER BY is_canonical DESC, confidence DESC, updated_at DESC LIMIT 20`)
 	}
 	if err != nil {
+		if isHybridMode && isSearch {
+			annotateRetrievalPath(ctx, RetrievalTierSemantic, RetrievalPathEmpty)
+		}
 		return nil
 	}
 	defer func() { _ = rows.Close() }()
 
+	likeProduced := 0
 	for rows.Next() {
 		var (
 			id             string
@@ -207,6 +234,7 @@ func (mr *Retriever) retrieveSemanticEvidence(ctx context.Context, query string,
 		if sourceLabelCol.Valid && sourceLabelCol.String != "" {
 			label = sourceLabelCol.String
 		}
+		before := len(evidence)
 		evidence = appendEvidence(evidence, Evidence{
 			Content:        fmt.Sprintf("[%s] %s: %s", category, key, value),
 			SourceTier:     TierSemantic,
@@ -220,6 +248,18 @@ func (mr *Retriever) retrieveSemanticEvidence(ctx context.Context, query string,
 			AuthorityScore: authority,
 			RetrievalMode:  mode.String(),
 		})
+		if len(evidence) > before {
+			likeProduced++
+		}
+	}
+
+	if isHybridMode && isSearch {
+		switch {
+		case likeAttempted && likeProduced > 0:
+			annotateRetrievalPath(ctx, RetrievalTierSemantic, RetrievalPathLikeFallback)
+		default:
+			annotateRetrievalPath(ctx, RetrievalTierSemantic, RetrievalPathEmpty)
+		}
 	}
 	return evidence
 }
@@ -240,13 +280,38 @@ func (mr *Retriever) retrieveSemanticMemory(ctx context.Context, query string, q
 // preconditions, error modes, and context tags. Bare tool statistics
 // (category='tool' or unset) are retained as a lower-priority fallback so
 // procedural retrieval never silently disappears when no workflow matches.
-func (mr *Retriever) retrieveProceduralMemory(ctx context.Context, query string, mode RetrievalMode, budgetTokens int) string {
+//
+// M3.2: HybridSearch (FTS + vector) is the primary read path for both the
+// workflow leg and the tool-stat leg. The residual LIKE block is kept as
+// a safety net that only fires when the hybrid leg returns zero candidates
+// for a real search query. Two trace annotations are emitted:
+//
+//   retrieval.path.workflow    — workflow-tier path classification
+//   retrieval.path.procedural  — procedural-tier path classification
+//
+// The workflow annotation comes from findWorkflowsHybrid; the procedural
+// annotation is emitted by this function based on which leg produced the
+// tool-stat rows.
+//
+// learned_skills (Part 2) is intentionally out of M3.2 scope — it has no
+// FTS coverage today and the dev spec defers it to a later milestone, so
+// its retrieval shape is unchanged.
+func (mr *Retriever) retrieveProceduralMemory(ctx context.Context, query string, queryEmbed []float32, mode RetrievalMode, budgetTokens int) string {
 	var b strings.Builder
 
 	filtered := query != "" && mode != RetrievalRecency
+	isHybridMode := mode == RetrievalHybrid || mode == RetrievalSemantic || mode == RetrievalANN
+	isSearch := query != ""
 
 	// Part 0: Reusable workflows (rich records with steps + preconditions).
-	workflows, wfErr := (&Manager{store: mr.store}).FindWorkflows(ctx, workflowQueryHint(query, filtered), 5)
+	// Use the hybrid-first variant so workflow retrieval rides FTS+vector
+	// instead of a single LIKE prefilter.
+	weight := mr.config.HybridWeight
+	if weight <= 0 {
+		weight = AdaptiveHybridWeight(mr.estimateCorpusSize(ctx))
+	}
+	workflows, wfErr := (&Manager{store: mr.store}).findWorkflowsHybrid(
+		ctx, workflowQueryHint(query, filtered), queryEmbed, mr.vectorIndex, weight, 5)
 	if wfErr == nil {
 		for _, wf := range workflows {
 			writeWorkflowSummary(&b, wf)
@@ -257,28 +322,32 @@ func (mr *Retriever) retrieveProceduralMemory(ctx context.Context, query string,
 	// sit under category='tool' (or NULL for pre-migration data). We skip
 	// category='workflow' here to avoid double-reporting a workflow that
 	// Part 0 already surfaced.
-	var rows *sql.Rows
-	var err error
-	if filtered {
-		like := "%" + query + "%"
-		rows, err = mr.store.QueryContext(ctx,
-			`SELECT name, success_count, failure_count FROM procedural_memory
-			 WHERE (category IS NULL OR category != 'workflow')
-			   AND (name LIKE ? OR steps LIKE ? OR preconditions LIKE ? OR error_modes LIKE ?)
-			 ORDER BY (success_count + failure_count) DESC LIMIT 15`,
-			like, like, like, like)
-	} else {
-		rows, err = mr.store.QueryContext(ctx,
-			`SELECT name, success_count, failure_count FROM procedural_memory
-			 WHERE category IS NULL OR category != 'workflow'
-			 ORDER BY (success_count + failure_count) DESC LIMIT 15`)
-	}
-	if err == nil {
-		emitted := 0
-		for rows.Next() {
-			var name string
-			var successCount, failureCount int
-			if rows.Scan(&name, &successCount, &failureCount) != nil {
+	//
+	// HybridSearch primary path: pull candidates via FTS+vector, filter to
+	// non-workflow procedural rows, emit success/failure summaries. If
+	// hybrid returned no relevant rows for this tier, fall through to the
+	// existing LIKE safety net.
+	hybridEmitted := 0
+	var hybridFTS, hybridVec int
+	if isHybridMode && isSearch {
+		results := db.HybridSearch(ctx, mr.store, query, queryEmbed, 30, weight, mr.vectorIndex)
+		for _, hr := range results {
+			if hr.SourceTable != "procedural_memory" {
+				continue
+			}
+			var (
+				name         string
+				category     sql.NullString
+				successCount int
+				failureCount int
+			)
+			err := mr.store.QueryRowContext(ctx,
+				`SELECT name, category, success_count, failure_count
+				   FROM procedural_memory
+				  WHERE id = ? AND (category IS NULL OR category != 'workflow')`,
+				hr.SourceID,
+			).Scan(&name, &category, &successCount, &failureCount)
+			if err != nil {
 				continue
 			}
 			total := successCount + failureCount
@@ -287,30 +356,90 @@ func (mr *Retriever) retrieveProceduralMemory(ctx context.Context, query string,
 			}
 			pct := float64(successCount) / float64(total) * 100
 			fmt.Fprintf(&b, "- %s: %d/%d (%.0f%% success)\n", name, successCount, total, pct)
-			emitted++
+			hybridEmitted++
+			if hr.FTSScore > 0 {
+				hybridFTS++
+			}
+			if hr.VectorScore > 0 {
+				hybridVec++
+			}
 		}
-		_ = rows.Close()
-		if filtered && emitted == 0 && len(workflows) == 0 {
+	}
+
+	var rows *sql.Rows
+	var err error
+	likeEmitted := 0
+	likeAttempted := false
+	if hybridEmitted == 0 {
+		// Hybrid leg returned zero relevant procedural rows; engage the
+		// LIKE safety net (or the no-search browse path).
+		if filtered {
+			likeAttempted = true
+			like := "%" + query + "%"
+			rows, err = mr.store.QueryContext(ctx,
+				`SELECT name, success_count, failure_count FROM procedural_memory
+				 WHERE (category IS NULL OR category != 'workflow')
+				   AND (name LIKE ? OR steps LIKE ? OR preconditions LIKE ? OR error_modes LIKE ?)
+				 ORDER BY (success_count + failure_count) DESC LIMIT 15`,
+				like, like, like, like)
+		} else {
 			rows, err = mr.store.QueryContext(ctx,
 				`SELECT name, success_count, failure_count FROM procedural_memory
 				 WHERE category IS NULL OR category != 'workflow'
 				 ORDER BY (success_count + failure_count) DESC LIMIT 15`)
-			if err == nil {
-				for rows.Next() {
-					var name string
-					var successCount, failureCount int
-					if rows.Scan(&name, &successCount, &failureCount) != nil {
-						continue
-					}
-					total := successCount + failureCount
-					if total == 0 {
-						continue
-					}
-					pct := float64(successCount) / float64(total) * 100
-					fmt.Fprintf(&b, "- %s: %d/%d (%.0f%% success)\n", name, successCount, total, pct)
+		}
+		if err == nil {
+			for rows.Next() {
+				var name string
+				var successCount, failureCount int
+				if rows.Scan(&name, &successCount, &failureCount) != nil {
+					continue
 				}
-				_ = rows.Close()
+				total := successCount + failureCount
+				if total == 0 {
+					continue
+				}
+				pct := float64(successCount) / float64(total) * 100
+				fmt.Fprintf(&b, "- %s: %d/%d (%.0f%% success)\n", name, successCount, total, pct)
+				likeEmitted++
 			}
+			_ = rows.Close()
+			if filtered && likeEmitted == 0 && len(workflows) == 0 {
+				// Final browse fallback when filtered LIKE matched nothing
+				// and the workflow tier was empty too — keeps procedural
+				// retrieval from silently disappearing.
+				rows, err = mr.store.QueryContext(ctx,
+					`SELECT name, success_count, failure_count FROM procedural_memory
+					 WHERE category IS NULL OR category != 'workflow'
+					 ORDER BY (success_count + failure_count) DESC LIMIT 15`)
+				if err == nil {
+					for rows.Next() {
+						var name string
+						var successCount, failureCount int
+						if rows.Scan(&name, &successCount, &failureCount) != nil {
+							continue
+						}
+						total := successCount + failureCount
+						if total == 0 {
+							continue
+						}
+						pct := float64(successCount) / float64(total) * 100
+						fmt.Fprintf(&b, "- %s: %d/%d (%.0f%% success)\n", name, successCount, total, pct)
+					}
+					_ = rows.Close()
+				}
+			}
+		}
+	}
+
+	if isHybridMode && isSearch {
+		switch {
+		case hybridEmitted > 0:
+			annotateRetrievalPath(ctx, RetrievalTierProcedural, classifyHybridPath(hybridFTS, hybridVec))
+		case likeAttempted && likeEmitted > 0:
+			annotateRetrievalPath(ctx, RetrievalTierProcedural, RetrievalPathLikeFallback)
+		default:
+			annotateRetrievalPath(ctx, RetrievalTierProcedural, RetrievalPathEmpty)
 		}
 	}
 
@@ -365,9 +494,9 @@ func (mr *Retriever) retrieveProceduralMemory(ctx context.Context, query string,
 }
 
 // retrieveRelationshipMemory formats relationship data.
-func (mr *Retriever) retrieveRelationshipMemory(ctx context.Context, query string, mode RetrievalMode, budgetTokens int) string {
+func (mr *Retriever) retrieveRelationshipMemory(ctx context.Context, query string, queryEmbed []float32, mode RetrievalMode, budgetTokens int) string {
 	var b strings.Builder
-	for _, ev := range mr.retrieveRelationshipEvidence(ctx, query, mode, budgetTokens) {
+	for _, ev := range mr.retrieveRelationshipEvidence(ctx, query, queryEmbed, mode, budgetTokens) {
 		b.WriteString("- ")
 		b.WriteString(ev.Content)
 		b.WriteString("\n")
@@ -375,7 +504,24 @@ func (mr *Retriever) retrieveRelationshipMemory(ctx context.Context, query strin
 	return b.String()
 }
 
-func (mr *Retriever) retrieveRelationshipEvidence(ctx context.Context, query string, mode RetrievalMode, budgetTokens int) []Evidence {
+// retrieveRelationshipEvidence returns relationship evidence using the
+// HybridSearch primary path with a LIKE safety net.
+//
+// M3.2: relationship_memory rows became FTS-discoverable in migration 048
+// (the missing relationship_memory_fts_au UPDATE trigger was added there).
+// HybridSearch is now the primary read path; the residual LIKE block only
+// fires when the hybrid leg returns zero candidates for a real search query.
+// The unfiltered "newest 20" branch is the no-search browse path and is
+// retained unchanged.
+//
+// Trace annotation: emits "retrieval.path.relationship" when a search was
+// attempted in a hybrid mode, with values fts | vector | hybrid |
+// like_fallback | empty.
+//
+// The graph leg (retrieveKnowledgeFactEvidence) is annotated separately
+// inside its own function — knowledge_facts is structurally different from
+// the FTS-backed tiers and gets its own path classification later if needed.
+func (mr *Retriever) retrieveRelationshipEvidence(ctx context.Context, query string, queryEmbed []float32, mode RetrievalMode, budgetTokens int) []Evidence {
 	maxChars := budgetTokens * mr.charsPerToken
 	used := 0
 	appendEvidence := func(dst []Evidence, ev Evidence) []Evidence {
@@ -394,9 +540,89 @@ func (mr *Retriever) retrieveRelationshipEvidence(ctx context.Context, query str
 		evidence = appendEvidence(evidence, ev)
 	}
 
+	isHybridMode := mode == RetrievalHybrid || mode == RetrievalSemantic || mode == RetrievalANN
+	isSearch := query != "" && mode != RetrievalRecency
+	seenRel := make(map[string]struct{})
+	hybridEmitted := 0
+	var hybridFTS, hybridVec int
+
+	if isHybridMode && isSearch {
+		weight := mr.config.HybridWeight
+		if weight <= 0 {
+			weight = AdaptiveHybridWeight(mr.estimateCorpusSize(ctx))
+		}
+		results := db.HybridSearch(ctx, mr.store, query, queryEmbed, 30, weight, mr.vectorIndex)
+		for _, hr := range results {
+			if hr.SourceTable != "relationship_memory" {
+				continue
+			}
+			var (
+				id, entityID, entityName string
+				trustScore               float64
+				interactionSummary       sql.NullString
+				interactionCount         int
+				lastInteraction          sql.NullString
+				ageDays                  float64
+			)
+			err := mr.store.QueryRowContext(ctx,
+				`SELECT id, entity_id, entity_name, trust_score, interaction_summary,
+				        interaction_count, last_interaction,
+				        julianday('now') - julianday(COALESCE(updated_at, created_at))
+				   FROM relationship_memory
+				  WHERE id = ?`,
+				hr.SourceID,
+			).Scan(&id, &entityID, &entityName, &trustScore, &interactionSummary,
+				&interactionCount, &lastInteraction, &ageDays)
+			if err != nil {
+				continue
+			}
+			seenRel[id] = struct{}{}
+			if hr.FTSScore > 0 {
+				hybridFTS++
+			}
+			if hr.VectorScore > 0 {
+				hybridVec++
+			}
+			line := fmt.Sprintf("%s: trust=%.1f, interactions=%d", entityName, trustScore, interactionCount)
+			if interactionSummary.Valid && interactionSummary.String != "" {
+				line += ", relation=" + interactionSummary.String
+			}
+			if lastInteraction.Valid {
+				line += ", last=" + lastInteraction.String
+			}
+			before := len(evidence)
+			evidence = appendEvidence(evidence, Evidence{
+				Content:        line,
+				SourceTier:     TierRelationship,
+				SourceID:       id,
+				SourceTable:    "relationship_memory",
+				SourceLabel:    relationshipSourceLabel(entityName, entityID),
+				SourceCategory: "relationship",
+				Score:          trustScore,
+				FTSScore:       hr.FTSScore,
+				VecScore:       hr.VectorScore,
+				AgeDays:        ageDays,
+				AuthorityScore: trustScore,
+				RetrievalMode:  mode.String(),
+			})
+			if len(evidence) > before {
+				hybridEmitted++
+			}
+		}
+		if hybridEmitted > 0 {
+			annotateRetrievalPath(ctx, RetrievalTierRelationship, classifyHybridPath(hybridFTS, hybridVec))
+			return evidence
+		}
+		// Hybrid produced zero relationship rows — fall through to LIKE
+		// safety net. Annotation deferred until we know whether LIKE
+		// produced anything.
+	}
+
 	var rows *sql.Rows
 	var err error
+	likeAttempted := false
 	if query != "" && mode != RetrievalRecency {
+		likeAttempted = true
 		like := "%" + query + "%"
 		rows, err = mr.store.QueryContext(ctx,
 			`SELECT id, entity_id, entity_name, trust_score, interaction_summary, interaction_count, last_interaction,
@@ -413,11 +639,14 @@ func (mr *Retriever) retrieveRelationshipEvidence(ctx context.Context, query str
 			 ORDER BY interaction_count DESC, COALESCE(updated_at, created_at) DESC LIMIT 20`)
 	}
 	if err != nil {
-		return nil
+		if isHybridMode && isSearch {
+			annotateRetrievalPath(ctx, RetrievalTierRelationship, RetrievalPathEmpty)
+		}
+		return evidence
 	}
 	defer func() { _ = rows.Close() }()
 
-	emitted := 0
+	likeEmitted := 0
 	for rows.Next() {
 		var id, entityID, entityName string
 		var trustScore float64
@@ -428,6 +657,9 @@ func (mr *Retriever) retrieveRelationshipEvidence(ctx context.Context, query str
 		if rows.Scan(&id, &entityID, &entityName, &trustScore, &interactionSummary, &interactionCount, &lastInteraction, &ageDays) != nil {
 			continue
 		}
+		if _, dup := seenRel[id]; dup {
+			continue
+		}
 		line := fmt.Sprintf("%s: trust=%.1f, interactions=%d", entityName, trustScore, interactionCount)
 		if interactionSummary.Valid && interactionSummary.String != "" {
 			line += ", relation=" + interactionSummary.String
@@ -435,6 +667,7 @@ func (mr *Retriever) retrieveRelationshipEvidence(ctx context.Context, query str
 		if lastInteraction != nil {
 			line += ", last=" + *lastInteraction
 		}
+		before := len(evidence)
 		evidence = appendEvidence(evidence, Evidence{
 			Content:        line,
 			SourceTier:     TierRelationship,
@@ -447,15 +680,25 @@ func (mr *Retriever) retrieveRelationshipEvidence(ctx context.Context, query str
 			AuthorityScore: trustScore,
 			RetrievalMode:  mode.String(),
 		})
-		emitted++
+		if len(evidence) > before {
+			likeEmitted++
+		}
 	}
-	if query != "" && mode != RetrievalRecency && emitted == 0 {
+
+	if query != "" && mode != RetrievalRecency && likeEmitted == 0 {
+		// Final browse fallback when both hybrid and filtered-LIKE found
+		// nothing for this entity. Mirrors the pre-M3.2 behaviour so we
+		// never silently lose relationship context for searches that
+		// don't lexically match.
 		rows, err = mr.store.QueryContext(ctx,
 			`SELECT id, entity_id, entity_name, trust_score, interaction_summary, interaction_count, last_interaction,
 			        julianday('now') - julianday(COALESCE(updated_at, created_at)) AS age_days
 			 FROM relationship_memory
 			 ORDER BY interaction_count DESC, COALESCE(updated_at, created_at) DESC LIMIT 20`)
 		if err != nil {
+			if isHybridMode && isSearch {
+				annotateRetrievalPath(ctx, RetrievalTierRelationship, RetrievalPathEmpty)
+			}
 			return evidence
 		}
 		defer func() { _ = rows.Close() }()
@@ -467,6 +710,9 @@ func (mr *Retriever) retrieveRelationshipEvidence(ctx context.Context, query str
 			var lastInteraction *string
 			var ageDays float64
 			if rows.Scan(&id, &entityID, &entityName, &trustScore, &interactionSummary, &interactionCount, &lastInteraction, &ageDays) != nil {
+				continue
+			}
+			if _, dup := seenRel[id]; dup {
 				continue
 			}
 			line := fmt.Sprintf("%s: trust=%.1f, interactions=%d", entityName, trustScore, interactionCount)
@@ -488,6 +734,15 @@ func (mr *Retriever) retrieveRelationshipEvidence(ctx context.Context, query str
 				AuthorityScore: trustScore,
 				RetrievalMode:  mode.String(),
 			})
+		}
+	}
+
+	if isHybridMode && isSearch {
+		switch {
+		case likeAttempted && likeEmitted > 0:
+			annotateRetrievalPath(ctx, RetrievalTierRelationship, RetrievalPathLikeFallback)
+		default:
+			annotateRetrievalPath(ctx, RetrievalTierRelationship, RetrievalPathEmpty)
 		}
 	}
 	return evidence

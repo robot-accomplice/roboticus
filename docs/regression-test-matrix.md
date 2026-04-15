@@ -402,6 +402,13 @@ Blocking commands for feature-complete releases:
 | R-AGENT-135 | `ingest_policy` agent tool round-trips with explicit provenance, blocks self-asserter for canonical, rejects silent overwrites, and exposes RiskDangerous | `internal/agent/tools/policy_ingest_test.go` | L1 |
 | R-AGENT-136 | M3.1 — every FTS-covered tier (`episodic_memory`, `semantic_memory`, `procedural_memory`, `relationship_memory`) keeps `memory_fts` synchronized across INSERT, UPDATE, and DELETE; future migrations cannot silently regress this contract | `internal/db/fts_trigger_completeness_test.go` | L1 |
 | R-AGENT-137 | M3.1 — migration 048's `memory_fts` backfill is idempotent on already-current data (re-running the SQL produces zero new rows) | `internal/db/fts_trigger_completeness_test.go` | L1 |
+| R-AGENT-138 | M3.2 — semantic retrieval emits `retrieval.path.semantic` annotation: `fts` when the FTS leg matches a stored row, `empty` when no leg matches an unmatchable query, and no annotation in non-search browse modes (recency / empty query) | `internal/agent/memory/retrieval_path_test.go` | L1 |
+| R-AGENT-139 | M3.2 — procedural retrieval emits `retrieval.path.procedural` and exercises HybridSearch primary path; `deploy_cli`-style FTS-tokenisable queries surface via the FTS leg without falling through to LIKE | `internal/agent/memory/retrieval_path_test.go` | L1 |
+| R-AGENT-140 | M3.2 — relationship retrieval emits `retrieval.path.relationship` and uses HybridSearch primary; the `relationship_memory` rows added by migration 048's INSERT/UPDATE triggers are surfaced via FTS | `internal/agent/memory/retrieval_path_test.go` | L1 |
+| R-AGENT-141 | M3.2 — workflow retrieval emits `retrieval.path.workflow` and `findWorkflowsHybrid` returns workflows for query lexically matching the workflow name/tags via the FTS leg | `internal/agent/memory/retrieval_path_test.go` | L1 |
+| R-AGENT-142 | M3.2 — LIKE safety net is exercised AND annotated as `like_fallback` (or matched via `fts`/`hybrid`) when the FTS leg can't tokenise the query directly; never silently falls through to `empty` while a matching workflow row exists | `internal/agent/memory/retrieval_path_test.go` | L1 |
+| R-AGENT-143 | M3.2 — `classifyHybridPath` is total over (ftsHits, vectorHits): both → `hybrid`, fts-only → `fts`, vector-only → `vector`, neither → empty string (signals caller to engage LIKE fallback) | `internal/agent/memory/retrieval_path_test.go` | L1 |
+| R-AGENT-144 | M3.2 — retrieval tier methods are safe to call without a tracer in context: results are identical whether `WithRetrievalTracer` was applied or not, only the annotation side-channel changes | `internal/agent/memory/retrieval_path_test.go` | L1 |
 
 ## Governance Rules
 

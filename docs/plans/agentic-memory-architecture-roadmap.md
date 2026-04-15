@@ -949,8 +949,15 @@ roadmap.
 
 Implementation order (per the development spec):
 
-1. **M3.1** — FTS trigger completeness and backfill correctness
-2. **M3.2** — HybridSearch-first retrieval with `retrieval.path` trace
+1. **M3.1** — FTS trigger completeness and backfill correctness — **shipped**
+   (migration `048_fts_trigger_completeness.sql`,
+   `internal/db/fts_trigger_completeness_test.go`, regressions
+   R-AGENT-136 / R-AGENT-137).
+2. **M3.2** — HybridSearch-first retrieval with `retrieval.path` trace — **shipped**
+   (`internal/agent/memory/retrieval_path.go`,
+   rewrites in `retrieval_tiers.go` and `workflow.go`,
+   pipeline wiring in `pipeline_run_stages.go`,
+   regressions R-AGENT-138 through R-AGENT-144).
 3. **M8 relational distillation** — promote recurring entity-relation
    patterns from enriched summaries into `knowledge_facts`
 4. **M3.3** — optional `LIKE` retirement after telemetry confirms the
@@ -959,9 +966,12 @@ Implementation order (per the development spec):
    matrix, and fallback strategy spec work, sequenced after the
    M3 and M8 work above closes.
 
-M3 and M8 remain marked "In progress" in the status table above and
-in their own milestone sections, and must not be marked closed until
-the acceptance criteria in the development spec are met.
+M3 stays marked "In progress" until M3.3 retires the LIKE safety
+net (or the dev spec is updated to declare M3.2's HybridSearch-first
+behavior plus the dormant safety net as the closure state); M8
+remains "In progress" pending the relational distillation work
+above. Neither milestone may be marked closed until the acceptance
+criteria in the development spec are met.
 
 ---
 

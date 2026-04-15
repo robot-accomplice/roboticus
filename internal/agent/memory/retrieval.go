@@ -400,9 +400,9 @@ func (mr *Retriever) retrieveTier(ctx context.Context, tier MemoryTier, mode Ret
 	case TierSemantic:
 		return mr.retrieveSemanticEvidence(ctx, query, queryEmbed, mode, budgetTokens)
 	case TierProcedural:
-		return wrapTierEntries(tier, mode, mr.retrieveProceduralMemory(ctx, query, mode, budgetTokens))
+		return wrapTierEntries(tier, mode, mr.retrieveProceduralMemory(ctx, query, queryEmbed, mode, budgetTokens))
 	case TierRelationship:
-		return mr.retrieveRelationshipEvidence(ctx, query, mode, budgetTokens)
+		return mr.retrieveRelationshipEvidence(ctx, query, queryEmbed, mode, budgetTokens)
 	default:
 		return nil
 	}

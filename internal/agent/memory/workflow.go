@@ -168,11 +168,162 @@ func (mm *Manager) RecordWorkflowFailure(ctx context.Context, name, evidence str
 	return mm.recordWorkflowOutcome(ctx, name, evidence, false)
 }
 
+// findWorkflowsHybrid is the M3.2 HybridSearch-first variant of FindWorkflows.
+// It matches workflow rows in procedural_memory via memory_fts (BM25 +
+// vector cosine), filters to category='workflow', and hydrates the full
+// Workflow records by ID. When both legs return zero workflow candidates it
+// falls back to the existing LIKE-based FindWorkflows so retrieval never
+// disappears for queries with no embedding or no FTS coverage.
+//
+// The retrieval-path annotation is emitted under
+// "retrieval.path.workflow" with the same value vocabulary as the other
+// tiers (fts | vector | hybrid | like_fallback | empty) so M3.3 can
+// retire LIKE only after evidence shows it is dormant for workflow
+// queries too.
+//
+// query="" is treated as a non-search browse and bypasses the hybrid leg,
+// matching the LIKE-version's "list active workflows by confidence" behavior
+// — no annotation is emitted for that case (consistent with the other tiers).
+func (mm *Manager) findWorkflowsHybrid(
+	ctx context.Context,
+	query string,
+	queryEmbed []float32,
+	vectorIndex db.VectorIndex,
+	hybridWeight float64,
+	limit int,
+) ([]Workflow, error) {
+	if mm.store == nil {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 5
+	}
+	trimmed := strings.TrimSpace(query)
+	if trimmed == "" {
+		// No-query browse — go straight to LIKE-version's empty-query
+		// behavior (sorted by confidence/recency).
+		return mm.FindWorkflows(ctx, "", limit)
+	}
+
+	// HybridSearch is over the full memory_fts index. We pull a wider
+	// candidate set (limit*4) so the workflow-only filter has enough
+	// headroom to find category='workflow' rows even when other tiers
+	// also match the query.
+	results := db.HybridSearch(ctx, mm.store, trimmed, queryEmbed, limit*4, hybridWeight, vectorIndex)
+
+	// Per-leg hit counts feed the path classification. Only count rows
+	// that actually correspond to a workflow procedural row so the
+	// annotation reflects what the workflow tier observed, not what the
+	// other tiers did.
+	var ftsHits, vecHits int
+	var workflowIDs []string
+	seen := make(map[string]struct{})
+	for _, hr := range results {
+		if hr.SourceTable != "procedural_memory" {
+			continue
+		}
+		if _, dup := seen[hr.SourceID]; dup {
+			continue
+		}
+		seen[hr.SourceID] = struct{}{}
+		workflowIDs = append(workflowIDs, hr.SourceID)
+		if hr.FTSScore > 0 {
+			ftsHits++
+		}
+		if hr.VectorScore > 0 {
+			vecHits++
+		}
+	}
+
+	if len(workflowIDs) > 0 {
+		hydrated, err := mm.loadWorkflowsByIDs(ctx, workflowIDs, limit)
+		if err == nil && len(hydrated) > 0 {
+			annotateRetrievalPath(ctx, RetrievalTierWorkflow, classifyHybridPath(ftsHits, vecHits))
+			return hydrated, nil
+		}
+		// Fall through to LIKE if hydration filtered everything out
+		// (e.g. all matched rows were tool-stats, not workflows).
+	}
+
+	// LIKE safety net.
+	likeResults, err := mm.FindWorkflows(ctx, trimmed, limit)
+	if err != nil {
+		annotateRetrievalPath(ctx, RetrievalTierWorkflow, RetrievalPathEmpty)
+		return nil, err
+	}
+	if len(likeResults) > 0 {
+		annotateRetrievalPath(ctx, RetrievalTierWorkflow, RetrievalPathLikeFallback)
+	} else {
+		annotateRetrievalPath(ctx, RetrievalTierWorkflow, RetrievalPathEmpty)
+	}
+	return likeResults, nil
+}
+
+// loadWorkflowsByIDs hydrates Workflow records for a set of procedural_memory
+// IDs, preserving the order in which IDs were supplied (which is the order
+// HybridSearch ranked them) and dropping any IDs that don't correspond to
+// category='workflow' rows. The returned slice is capped at limit.
+//
+// We hydrate one row at a time rather than via SQL IN (...) so the workflow
+// scan helper (scanWorkflowRow) can be reused unchanged. That keeps the JSON
+// decoding of steps/preconditions/error_modes/context_tags/evidence in one
+// place; building a parameterised IN query just to share it would duplicate
+// scanning logic for marginal speedup at this corpus size.
+func (mm *Manager) loadWorkflowsByIDs(ctx context.Context, ids []string, limit int) ([]Workflow, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = len(ids)
+	}
+	out := make([]Workflow, 0, limit)
+	for _, id := range ids {
+		if len(out) >= limit {
+			break
+		}
+		rows, err := mm.store.QueryContext(ctx,
+			`SELECT id, name, steps, preconditions, error_modes, context_tags,
+			        category, version, confidence, memory_state,
+			        success_count, failure_count, avg_duration_ms,
+			        last_used_at, created_at, updated_at,
+			        success_evidence, failure_evidence
+			   FROM procedural_memory
+			  WHERE id = ?
+			    AND category = ?
+			    AND memory_state = 'active'
+			  LIMIT 1`,
+			id, WorkflowCategoryWorkflow,
+		)
+		if err != nil {
+			continue
+		}
+		if rows.Next() {
+			workflow, scanErr := scanWorkflowRow(rows)
+			_ = rows.Close()
+			if scanErr != nil {
+				log.Debug().Err(scanErr).Str("id", id).Msg("workflow: hydrate scan failed")
+				continue
+			}
+			out = append(out, workflow)
+			continue
+		}
+		_ = rows.Close()
+	}
+	return out, nil
+}
+
 // FindWorkflows returns workflows whose metadata overlaps the query. Matches
 // against name, steps, preconditions, error_modes, and context_tags so a
 // query like "rollout" surfaces workflows tagged "release" or with a
 // precondition that mentions rollout staging. Results are ordered by
 // confidence * success_rate, then by recency.
+//
+// M3.2 note: this LIKE-based path remains the safety-net fallback used by
+// findWorkflowsHybrid and is also the direct entry point for the
+// WorkflowSearchTool (internal/agent/tools/workflow_search.go), which
+// re-ranks candidates in memory and doesn't carry a query embedding. The
+// LIKE behavior here is deliberately preserved unchanged so external
+// callers don't regress while M3.2 promotes HybridSearch to primary.
 func (mm *Manager) FindWorkflows(ctx context.Context, query string, limit int) ([]Workflow, error) {
 	if mm.store == nil {
 		return nil, nil

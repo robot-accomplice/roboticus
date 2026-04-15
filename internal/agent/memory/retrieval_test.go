@@ -105,7 +105,7 @@ func TestRetrieveProceduralMemory_FallsBackWhenQueryFilterMisses(t *testing.T) {
 	testutil.SeedProceduralMemory(t, store, "bash", 20, 10)
 
 	mr := NewRetriever(DefaultRetrievalConfig(), DefaultTierBudget(), store)
-	result := mr.retrieveProceduralMemory(ctx, "how to read files", RetrievalKeyword, 200)
+	result := mr.retrieveProceduralMemory(ctx, "how to read files", nil, RetrievalKeyword, 200)
 
 	if !strings.Contains(result, "read_file") {
 		t.Fatalf("expected fallback procedural retrieval to include read_file, got %q", result)
@@ -126,7 +126,7 @@ func TestRetrieveRelationshipMemory_FallsBackWhenQueryFilterMisses(t *testing.T)
 	}
 
 	mr := NewRetriever(DefaultRetrievalConfig(), DefaultTierBudget(), store)
-	result := mr.retrieveRelationshipMemory(ctx, "who handles login incidents?", RetrievalKeyword, 200)
+	result := mr.retrieveRelationshipMemory(ctx, "who handles login incidents?", nil, RetrievalKeyword, 200)
 
 	if !strings.Contains(result, "Auth Service") {
 		t.Fatalf("expected fallback relationship retrieval to include Auth Service, got %q", result)
@@ -147,7 +147,7 @@ func TestRetrieveRelationshipEvidence_PreservesSourceAndAge(t *testing.T) {
 	}
 
 	mr := NewRetriever(DefaultRetrievalConfig(), DefaultTierBudget(), store)
-	results := mr.retrieveRelationshipEvidence(ctx, "ledger", RetrievalKeyword, 200)
+	results := mr.retrieveRelationshipEvidence(ctx, "ledger", nil, RetrievalKeyword, 200)
 
 	if len(results) == 0 {
 		t.Fatal("expected relationship evidence")

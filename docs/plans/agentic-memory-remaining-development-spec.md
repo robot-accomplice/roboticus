@@ -98,7 +98,16 @@ can become the real primary read path without silently losing rows.
 - No retrieval ranking changes yet.
 - No `LIKE` removal yet.
 
-### Slice M3.2: HybridSearch-First Retrieval
+### Slice M3.2: HybridSearch-First Retrieval — **Shipped**
+
+> Status: closed 2026-04-15. Implementation in
+> `internal/agent/memory/retrieval_path.go` (trace surface),
+> `internal/agent/memory/retrieval_tiers.go` (semantic / procedural /
+> relationship rewrites), `internal/agent/memory/workflow.go`
+> (`findWorkflowsHybrid` + `loadWorkflowsByIDs`), and
+> `internal/pipeline/pipeline_run_stages.go` (per-turn tracer wiring).
+> Regressions R-AGENT-138 through R-AGENT-144 lock the path-classification
+> contract in.
 
 #### Goal
 
