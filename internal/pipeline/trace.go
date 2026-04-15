@@ -18,6 +18,7 @@ const (
 	TraceNSTaskState  = "taskstate"  // Task state machine transition spans
 	TraceNSVerifier   = "verifier"   // Verification / critic stage annotations
 	TraceNSExecutive  = "executive"  // Executive working-memory write annotations
+	TraceNSPerception = "perception" // Unified perception artifact annotations
 )
 
 // PipelineTrace records per-stage timing for a single pipeline run.
@@ -139,6 +140,31 @@ func AnnotateVerifierTrace(tr *TraceRecorder, result VerificationResult) {
 			tr.Annotate(TraceNSVerifier+".claim_map_json", string(buf))
 		}
 	}
+}
+
+// AnnotatePerceptionTrace writes the unified perception artifact onto the
+// current span under the perception.* namespace so operators can see the
+// exact risk, source-of-truth, and tier requirements the pipeline used for
+// every turn.
+func AnnotatePerceptionTrace(tr *TraceRecorder, artifact PerceptionArtifact) {
+	if tr == nil {
+		return
+	}
+	if artifact.Intent != "" {
+		tr.Annotate(TraceNSPerception+".intent", artifact.Intent)
+	}
+	if artifact.Risk != "" {
+		tr.Annotate(TraceNSPerception+".risk", string(artifact.Risk))
+	}
+	if artifact.SourceOfTruth != "" {
+		tr.Annotate(TraceNSPerception+".source_of_truth", string(artifact.SourceOfTruth))
+	}
+	if len(artifact.RequiredMemoryTiers) > 0 {
+		tr.Annotate(TraceNSPerception+".required_tiers", artifact.RequiredMemoryTiers)
+	}
+	tr.Annotate(TraceNSPerception+".decomposition_needed", artifact.DecompositionNeeded)
+	tr.Annotate(TraceNSPerception+".freshness_required", artifact.FreshnessRequired)
+	tr.Annotate(TraceNSPerception+".confidence", artifact.Confidence)
 }
 
 // AnnotateExecutivePlanWrite records a plan (and optional checkpoint) write

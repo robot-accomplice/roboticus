@@ -41,7 +41,7 @@ closed, or the critical path changes.
 | Milestone | Title | Status | Notes |
 |-----------|-------|--------|-------|
 | 1 | Unify The Production Retrieval Path | In progress | Pipeline-prepared memory/index now preferred by runtime context assembly |
-| 2 | Make Intent And Retrieval Routing Real Decision Inputs | In progress | Intent signals now reach production retrieval; router modes now affect tier behavior |
+| 2 | Make Intent And Retrieval Routing Real Decision Inputs | Acceptance met | Unified `PerceptionArtifact` (intent, risk, source-of-truth, required tiers, decomposition, freshness, confidence) is computed in pipeline, stashed on session, and emitted to traces; retrieval modes already honour intent-driven routing |
 | 3 | Upgrade Semantic Memory Into A Canonical Knowledge Layer | In progress | Semantic provenance, canonical flags, authority scoring, and freshness cues now survive retrieval/assembly |
 | 4 | Turn Procedural Memory Into Workflow Memory | Acceptance met | Workflow schema, Manager API, retrieval precedence over tool stats, post-turn promotion with auto-extracted error modes + preconditions + intent tags, and consolidation confidence sync now all land |
 | 5 | Replace Relationship Memory With Persisted Relational Memory | Acceptance met | Persisted `knowledge_facts` store, graph-aware retrieval, reusable `KnowledgeGraph` API with multi-hop `ShortestPath` / `Impact` / `Dependencies`, and a `query_knowledge_graph` agent tool are all shipped |
@@ -267,7 +267,7 @@ behavior.
 
 ## Milestone 2: Make Intent And Retrieval Routing Real Decision Inputs
 
-**Status**: In progress
+**Status**: Acceptance met
 
 ### Goal
 
@@ -317,8 +317,16 @@ that controls memory selection, retrieval mode, and risk posture.
   retrieval behavior.
 - Relationship-oriented queries now route to `graph` mode instead of plain
   keyword-only lookup.
-- Risk level and explicit source-of-truth classification are still not emitted
-  as a unified perception artifact.
+- `internal/pipeline/perception.go` now builds a unified `PerceptionArtifact`
+  (intent, risk, source-of-truth, required_memory_tiers, decomposition_needed,
+  freshness_required, confidence) from the task synthesis. High-risk queries
+  automatically pull in semantic + relationship tiers; decomposition-heavy
+  queries pull in procedural; current-state queries route to an external
+  source-of-truth and flag freshness.
+- The artifact is stashed on session state (`TaskRisk`, `TaskSourceOfTruth`,
+  `TaskRequiredTiers`, `TaskFreshness`) and emitted to pipeline traces under
+  the `perception.*` namespace so operators can audit the exact
+  classification on every turn.
 
 ---
 

@@ -28,6 +28,14 @@ type Session struct {
 	taskComplexity    string
 	taskPlannedAction string
 	taskSubgoals      []string
+
+	// Perception artifact (Milestone 2): unified decision record produced
+	// after task synthesis. Later stages read these fields instead of
+	// re-classifying intent / risk / source-of-truth independently.
+	taskRisk          string
+	taskSourceOfTruth string
+	taskRequiredTiers []string
+	taskFreshness     bool
 }
 
 // New creates a session with the given identity.
@@ -88,6 +96,30 @@ func (s *Session) TaskPlannedAction() string { return s.taskPlannedAction }
 
 // TaskSubgoals returns verifier-oriented subgoals computed by the pipeline.
 func (s *Session) TaskSubgoals() []string { return append([]string(nil), s.taskSubgoals...) }
+
+// SetPerception stores the pipeline-computed perception artifact so later
+// stages can consume risk, source-of-truth, required tiers, and freshness
+// without re-classifying.
+func (s *Session) SetPerception(risk, sourceOfTruth string, requiredTiers []string, freshness bool) {
+	s.taskRisk = risk
+	s.taskSourceOfTruth = sourceOfTruth
+	s.taskRequiredTiers = append([]string(nil), requiredTiers...)
+	s.taskFreshness = freshness
+}
+
+// TaskRisk returns the perception risk label (low / medium / high).
+func (s *Session) TaskRisk() string { return s.taskRisk }
+
+// TaskSourceOfTruth returns the perception source-of-truth label.
+func (s *Session) TaskSourceOfTruth() string { return s.taskSourceOfTruth }
+
+// TaskRequiredTiers returns the memory tiers retrieval must consult.
+func (s *Session) TaskRequiredTiers() []string {
+	return append([]string(nil), s.taskRequiredTiers...)
+}
+
+// TaskFreshness returns whether the answer depends on current state.
+func (s *Session) TaskFreshness() bool { return s.taskFreshness }
 
 // AddAssistantMessage appends an assistant message with optional tool calls.
 func (s *Session) AddAssistantMessage(content string, toolCalls []llm.ToolCall) {

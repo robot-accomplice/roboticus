@@ -361,6 +361,10 @@ Blocking commands for feature-complete releases:
 | R-AGENT-94 | Workflow promotion extracts the first error line per failing step into `error_modes`, deduplicated and prefixed with the tool name | `internal/pipeline/workflow_promotion_test.go` | L1 |
 | R-AGENT-95 | Workflow promotion seeds `preconditions` from the session's task intent, complexity, and subgoals | `internal/pipeline/workflow_promotion_test.go` | L1 |
 | R-AGENT-96 | Workflow promotion tags the record with `auto_promoted` and an `intent:*` context tag derived from task state | `internal/pipeline/workflow_promotion_test.go` | L1 |
+| R-AGENT-97 | `BuildPerception` classifies financial/production queries as high-risk and forces semantic + relationship tiers | `internal/pipeline/perception_test.go` | L1 |
+| R-AGENT-98 | `BuildPerception` resolves policy queries to semantic source-of-truth, procedural "how to" to procedural, dependency queries to relationship, and current-state to external | `internal/pipeline/perception_test.go` | L1 |
+| R-AGENT-99 | `BuildPerception` is deterministic and skips retrieval for conversational turns | `internal/pipeline/perception_test.go` | L1 |
+| R-AGENT-100 | Pipeline trace carries a full `perception.*` annotation group (intent, risk, source-of-truth, required tiers, decomposition, freshness, confidence) | `internal/pipeline/perception_test.go` | L1 |
 
 ## Governance Rules
 

@@ -256,6 +256,17 @@ func (p *Pipeline) stageDecomposition(ctx context.Context, pc *pipelineContext) 
 			pc.synthesis.PlannedAction,
 			verificationSubgoalsHint,
 		)
+
+		// Build and stash the unified perception artifact (Milestone 2)
+		// so downstream stages consume a single classifier output.
+		perception := BuildPerception(pc.content, pc.synthesis)
+		pc.session.SetPerception(
+			string(perception.Risk),
+			string(perception.SourceOfTruth),
+			perception.RequiredMemoryTiers,
+			perception.FreshnessRequired,
+		)
+		AnnotatePerceptionTrace(pc.tr, perception)
 	}
 
 	// Persist the synthesis as a plan entry in working memory so later turns
