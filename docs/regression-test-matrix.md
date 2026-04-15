@@ -424,6 +424,9 @@ Blocking commands for feature-complete releases:
 | R-AGENT-157 | M3.3 — `RetrievalPathDistribution.SortedTiers` returns deterministic alphabetical ordering for stable dashboard / report output | `internal/agent/memory/retrieval_path_telemetry_test.go` | L1 |
 | R-UPGRADE-1 | `applyProvidersUpdate` mismatch error is self-describing: includes URL fetched, expected hash from manifest, and received hash computed from downloaded bytes — symmetric with the binary-update narration so operators can triage without re-running curl | `cmd/updatecmd/update_parity_test.go` | L1 |
 | R-UPGRADE-2 | `applySkillsUpdate` mismatch error identifies the specific skill file plus URL / expected / received hashes so operators can tell whether one file or the whole pack is misaligned | `cmd/updatecmd/update_parity_test.go` | L1 |
+| R-UPGRADE-3 | `applyProvidersUpdate(refreshConfig=false)` preserves a customized local providers.toml: no fetch, no SHA check, no overwrite — even when the registry manifest declares a stale SHA. Local edits (API keys, custom providers) survive `roboticus upgrade all` | `cmd/updatecmd/update_parity_test.go` | L1 |
+| R-UPGRADE-4 | `applyProvidersUpdate(refreshConfig=true)` is the documented opt-in escape hatch: downloads, verifies the SHA, and overwrites the local file even when customized | `cmd/updatecmd/update_parity_test.go` | L1 |
+| R-UPGRADE-5 | `applySkillsUpdate(refreshConfig=false)` preserves per-file: a manifest-declared skill that exists locally is left untouched (no SHA check), while a manifest-declared skill that's missing locally is fresh-installed and SHA-verified in the same call | `cmd/updatecmd/update_parity_test.go` | L1 |
 
 ## Governance Rules
 

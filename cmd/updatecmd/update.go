@@ -310,7 +310,48 @@ func safeSkillPath(baseDir, name string) bool {
 	return full == cleanBase || strings.HasPrefix(full, cleanBase+string(os.PathSeparator))
 }
 
-func applyProvidersUpdate(ctx context.Context, registryURL, configPath string) (bool, error) {
+// applyProvidersUpdate writes the registry's providers.toml only when the
+// caller explicitly asks for a refresh OR there is no local copy yet.
+//
+// Design principle (set 2026-04-15 after the v1.0.5 incident): SHA
+// verification is appropriate for IMMUTABLE downloaded artifacts — the
+// binary, plugin archives, theme bundles. It is NOT appropriate for living
+// configuration the user edits — providers.toml, skills/*.md. Once a user
+// adds an API key, changes a tier, or adds a custom provider, the local
+// hash will diverge from the registry's by design. Force-overwriting on
+// every `roboticus upgrade all` would silently destroy that customization;
+// SHA-locking it would surface a "checksum mismatch" failure that's just
+// noise (the file is supposed to drift).
+//
+// Behavior matrix:
+//
+//   refreshConfig=false, local file exists  → SKIP download entirely.
+//                                              No fetch, no SHA check, no
+//                                              error. Print preservation
+//                                              notice. Returns changed=false.
+//   refreshConfig=false, local file missing → FRESH INSTALL: download +
+//                                              verify + write. SHA check
+//                                              is meaningful here because
+//                                              there is no user content to
+//                                              clobber.
+//   refreshConfig=true                       → ALWAYS download + verify +
+//                                              write, overwriting any local
+//                                              edits. The caller passing
+//                                              refreshConfig=true is the
+//                                              user opting in.
+//
+// SHA verification only fires on the download paths (cases 2 and 3); the
+// preservation path skips it entirely so a stale registry SHA can't break
+// a customized install.
+func applyProvidersUpdate(ctx context.Context, registryURL, configPath string, refreshConfig bool) (bool, error) {
+	path := providersLocalPath(configPath)
+	if !refreshConfig {
+		if _, err := os.Stat(path); err == nil {
+			fmt.Printf("Provider config preserved at %s (use --refresh-config to overwrite from registry).\n", path)
+			return false, nil
+		}
+	}
+
 	manifest, err := FetchRegistryManifest(ctx, registryURL)
 	if err != nil {
 		return false, err
@@ -340,7 +381,6 @@ func applyProvidersUpdate(ctx context.Context, registryURL, configPath string) (
 	}
 	fmt.Println("Provider pack checksum verified.")
 
-	path := providersLocalPath(configPath)
 	if data, err := os.ReadFile(path); err == nil && BytesSHA256(data) == hash {
 		return false, nil
 	}
@@ -365,7 +405,22 @@ func applyProvidersUpdate(ctx context.Context, registryURL, configPath string) (
 	return true, saveUpdateState(state)
 }
 
-func applySkillsUpdate(ctx context.Context, registryURL, configPath string) (bool, error) {
+// applySkillsUpdate applies the same fresh-install + opt-in-refresh
+// principle as applyProvidersUpdate, but per-file: each skill manifest
+// entry is independently preserved (when a local copy exists and the
+// caller didn't pass refreshConfig) or refreshed (fresh install or
+// explicit refresh).
+//
+// A user can have authored their own custom skill files under the same
+// directory, intermixed with registry-published ones. The per-file
+// preservation path makes sure those custom skills are never observed by
+// the upgrade pipeline at all — we only look at filenames the manifest
+// declares, and even those we leave alone unless they're missing or the
+// caller asked for a refresh.
+//
+// SHA verification semantics match providers: only fires on download
+// paths (fresh install or refresh), never on the preservation path.
+func applySkillsUpdate(ctx context.Context, registryURL, configPath string, refreshConfig bool) (bool, error) {
 	manifest, err := FetchRegistryManifest(ctx, registryURL)
 	if err != nil {
 		return false, err
@@ -394,12 +449,40 @@ func applySkillsUpdate(ctx context.Context, registryURL, configPath string) (boo
 	// observability.
 	downloaded := 0
 	cached := 0
+	preserved := 0
 	changed := false
 	for name, expectedHash := range manifest.Packs.Skills.Files {
 		if !safeSkillPath(dir, name) {
 			return false, fmt.Errorf("unsafe skill path %q", name)
 		}
 		path := filepath.Join(dir, name)
+
+		// Preservation path: a local copy exists and the caller did not
+		// request a refresh. Skip the download entirely so user edits
+		// are never observed (and therefore never flagged as drift).
+		// We deliberately do NOT recompute the local hash here — that
+		// would defeat the purpose of treating the file as user-owned.
+		if !refreshConfig {
+			if _, statErr := os.Stat(path); statErr == nil {
+				preserved++
+				if existing, ok := fileHashes[name]; ok && existing != "" {
+					// keep prior recorded hash unchanged
+				} else {
+					// First-seen preserved file: stash the manifest's
+					// expected hash as a soft reference so the state
+					// file still tells operators which version was the
+					// most recent registry-known version of this file.
+					fileHashes[name] = expectedHash
+				}
+				continue
+			}
+		}
+
+		// Already-cached path: local copy exists AND its bytes match
+		// the manifest's expected hash exactly. This still applies on
+		// refreshConfig runs — re-downloading bytes that already match
+		// would be wasted work, and it also avoids a noisy "downloaded
+		// X" message when nothing actually changed.
 		if data, err := os.ReadFile(path); err == nil && strings.EqualFold(BytesSHA256(data), expectedHash) {
 			fileHashes[name] = expectedHash
 			cached++
@@ -434,17 +517,20 @@ func applySkillsUpdate(ctx context.Context, registryURL, configPath string) (boo
 
 	// Symmetric end-of-step narration with the providers-pack
 	// "Provider pack checksum verified." line. Quiet on no-op runs
-	// (nothing downloaded AND nothing newly cached) so subsequent
-	// re-runs don't spam the operator with redundant chatter.
-	if downloaded > 0 || cached > 0 {
-		switch {
-		case downloaded == 0:
-			fmt.Printf("Skill pack already current (%d files cached).\n", cached)
-		case cached == 0:
-			fmt.Printf("Skill pack updated: %d file(s) downloaded and verified.\n", downloaded)
-		default:
-			fmt.Printf("Skill pack updated: %d file(s) downloaded and verified, %d already cached.\n", downloaded, cached)
-		}
+	// (nothing downloaded AND nothing newly cached AND nothing
+	// preserved) so subsequent re-runs don't spam the operator with
+	// redundant chatter.
+	switch {
+	case downloaded == 0 && preserved == 0 && cached == 0:
+		// no-op
+	case downloaded == 0 && preserved > 0:
+		fmt.Printf("Skills preserved (%d file(s) kept; use --refresh-config to overwrite from registry).\n", preserved)
+	case downloaded == 0:
+		fmt.Printf("Skill pack already current (%d files cached).\n", cached)
+	case cached == 0 && preserved == 0:
+		fmt.Printf("Skill pack updated: %d file(s) downloaded and verified.\n", downloaded)
+	default:
+		fmt.Printf("Skill pack updated: %d downloaded, %d cached, %d preserved.\n", downloaded, cached, preserved)
 	}
 
 	state.LastCheck = nowRFC3339()
@@ -457,7 +543,7 @@ func applySkillsUpdate(ctx context.Context, registryURL, configPath string) (boo
 	return changed, saveUpdateState(state)
 }
 
-func runUpdateAll(ctx context.Context, currentVersion string, yes bool) error {
+func runUpdateAll(ctx context.Context, currentVersion string, yes, refreshConfig bool) error {
 	fmt.Printf("roboticus %s (%s/%s)\n", currentVersion, runtime.GOOS, runtime.GOARCH)
 
 	rel, upToDate, err := checkForUpdate(ctx, currentVersion)
@@ -479,27 +565,32 @@ func runUpdateAll(ctx context.Context, currentVersion string, yes bool) error {
 	prevState, _ := loadUpdateState()
 	manifest, manifestErr := FetchRegistryManifest(ctx, registryURL)
 
+	// The "already at version X" short-circuits below ONLY apply when the
+	// caller didn't ask for a refresh. With --refresh-config the user has
+	// explicitly opted in to re-pulling the registry-published file, so we
+	// must run the underlying apply* function rather than skipping it on
+	// the basis of a matching state-file version.
 	var providersChanged bool
-	if manifestErr == nil && prevState.InstalledContent.Providers != nil &&
+	if !refreshConfig && manifestErr == nil && prevState.InstalledContent.Providers != nil &&
 		prevState.InstalledContent.Providers.Version == manifest.Version {
 		fmt.Println("Provider pack already at version " + manifest.Version + ", skipping.")
 		providersChanged = false
 	} else {
 		var pErr error
-		providersChanged, pErr = applyProvidersUpdate(ctx, registryURL, configPath)
+		providersChanged, pErr = applyProvidersUpdate(ctx, registryURL, configPath, refreshConfig)
 		if pErr != nil {
 			return fmt.Errorf("provider update failed: %w", pErr)
 		}
 	}
 
 	var skillsChanged bool
-	if manifestErr == nil && prevState.InstalledContent.Skills != nil &&
+	if !refreshConfig && manifestErr == nil && prevState.InstalledContent.Skills != nil &&
 		prevState.InstalledContent.Skills.Version == manifest.Version {
 		fmt.Println("Skills pack already at version " + manifest.Version + ", skipping.")
 		skillsChanged = false
 	} else {
 		var sErr error
-		skillsChanged, sErr = applySkillsUpdate(ctx, registryURL, configPath)
+		skillsChanged, sErr = applySkillsUpdate(ctx, registryURL, configPath, refreshConfig)
 		if sErr != nil {
 			return fmt.Errorf("skills update failed: %w", sErr)
 		}
@@ -960,9 +1051,19 @@ var updateCheckCmd = &cobra.Command{
 var updateAllCmd = &cobra.Command{
 	Use:   "all",
 	Short: "Download and install the latest release",
+	Long: `Download and install the latest binary release.
+
+Provider config (providers.toml) and skills are treated as user-owned
+data. By default they are PRESERVED across upgrades — only the binary
+is updated, and only the binary's checksum is verified.
+
+Pass --refresh-config to also overwrite providers.toml and skills/*.md
+with the registry-published versions (this DOES verify their checksums
+and WILL clobber any local edits to those files).`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		yes, _ := cmd.Flags().GetBool("yes")
-		return runUpdateAll(cmd.Context(), cmdutil.Version, yes)
+		refreshConfig, _ := cmd.Flags().GetBool("refresh-config")
+		return runUpdateAll(cmd.Context(), cmdutil.Version, yes, refreshConfig)
 	},
 }
 
@@ -980,6 +1081,7 @@ var upgradeCmd = &cobra.Command{
 var upgradeAllCmd = &cobra.Command{
 	Use:   "all",
 	Short: "Upgrade to the latest release (alias for 'update all')",
+	Long:  updateAllCmd.Long,
 	RunE:  updateAllCmd.RunE,
 }
 
@@ -993,15 +1095,19 @@ var versionCmd = &cobra.Command{
 	},
 }
 
-// updateProvidersCmd exposes the provider pack update as a standalone command.
-// The backend logic already exists in applyProvidersUpdate (used by `update all`).
+// updateProvidersCmd exposes the provider pack update as a standalone
+// command. Invoking this command directly is itself the explicit refresh
+// signal (the user is going out of their way to ask for the pack), so
+// applyProvidersUpdate is called with refreshConfig=true. The standalone
+// path is the documented escape hatch for users who want to overwrite
+// their local providers.toml without re-running a binary upgrade.
 var updateProvidersCmd = &cobra.Command{
 	Use:   "providers",
-	Short: "Update provider pack from registry",
+	Short: "Refresh provider pack from registry (overwrites local providers.toml)",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		configPath := cmdutil.EffectiveConfigPath()
 		registryURL := ResolveRegistryURL(configPath)
-		changed, err := applyProvidersUpdate(cmd.Context(), registryURL, configPath)
+		changed, err := applyProvidersUpdate(cmd.Context(), registryURL, configPath, true)
 		if err != nil {
 			return err
 		}
@@ -1015,14 +1121,14 @@ var updateProvidersCmd = &cobra.Command{
 }
 
 // updateSkillsCmd exposes the skills update as a standalone command.
-// The backend logic already exists in applySkillsUpdate (used by `update all`).
+// Same explicit-refresh semantics as updateProvidersCmd.
 var updateSkillsCmd = &cobra.Command{
 	Use:   "skills",
-	Short: "Update skills from registry",
+	Short: "Refresh skills from registry (overwrites local skill files)",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		configPath := cmdutil.EffectiveConfigPath()
 		registryURL := ResolveRegistryURL(configPath)
-		changed, err := applySkillsUpdate(cmd.Context(), registryURL, configPath)
+		changed, err := applySkillsUpdate(cmd.Context(), registryURL, configPath, true)
 		if err != nil {
 			return err
 		}
@@ -1037,7 +1143,12 @@ var updateSkillsCmd = &cobra.Command{
 
 func init() {
 	updateAllCmd.Flags().Bool("yes", false, "Skip confirmation prompt")
+	updateAllCmd.Flags().Bool("refresh-config", false,
+		"Also overwrite providers.toml and skills/*.md with the registry-published versions (clobbers local edits)")
 	upgradeAllCmd.Flags().Bool("yes", false, "Skip confirmation prompt")
+	upgradeAllCmd.Flags().Bool("refresh-config", false,
+		"Also overwrite providers.toml and skills/*.md with the registry-published versions (clobbers local edits)")
 
 	updateCmd.AddCommand(updateCheckCmd, updateAllCmd, updateBinaryCmd, updateProvidersCmd, updateSkillsCmd)
-	upgradeCmd.AddCommand(upgradeAllCmd)}
+	upgradeCmd.AddCommand(upgradeAllCmd)
+}
