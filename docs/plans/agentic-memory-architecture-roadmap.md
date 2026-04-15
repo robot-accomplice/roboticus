@@ -149,7 +149,11 @@ met. The only remaining items are quality follow-ons:
    residual `LIKE` path onto hybrid FTS+vector. The ingestion surface
    is now closed; this remaining piece touches every consumer of
    `retrieveSemanticEvidence` and needs careful FTS5 schema work, so
-   it is sequenced as its own slice.
+   it is sequenced as its own slice. Scoping document:
+   [semantic-retrieval-fts-vector-migration.md](semantic-retrieval-fts-vector-migration.md).
+   Note: the scoping pass surfaced a hidden correctness gap (missing
+   INSERT trigger on `semantic_memory` → `memory_fts`) which becomes
+   Slice 1 of that plan.
 2. **Appendices A, B, C** — observability dashboards, evaluation
    matrix, and fallback strategy spec work. These are sequenced
    after the quality follow-ons above complete.
