@@ -365,6 +365,11 @@ Blocking commands for feature-complete releases:
 | R-AGENT-98 | `BuildPerception` resolves policy queries to semantic source-of-truth, procedural "how to" to procedural, dependency queries to relationship, and current-state to external | `internal/pipeline/perception_test.go` | L1 |
 | R-AGENT-99 | `BuildPerception` is deterministic and skips retrieval for conversational turns | `internal/pipeline/perception_test.go` | L1 |
 | R-AGENT-100 | Pipeline trace carries a full `perception.*` annotation group (intent, risk, source-of-truth, required tiers, decomposition, freshness, confidence) | `internal/pipeline/perception_test.go` | L1 |
+| R-AGENT-101 | Semantic upsert bumps `version` when a key's value changes and leaves it stable on idempotent rewrites | `internal/agent/memory/semantic_supersession_test.go` | L1 |
+| R-AGENT-102 | `CurrentSemanticValue` walks multi-hop `superseded_by` chains and reaches the active revision with correct depth | `internal/agent/memory/semantic_supersession_test.go` | L1 |
+| R-AGENT-103 | `CurrentSemanticValue` handles supersession cycles by returning `ErrSemanticChainCycle` with the partial revision | `internal/agent/memory/semantic_supersession_test.go` | L1 |
+| R-AGENT-104 | `MarkSemanticSuperseded` flips an entry to stale, sets the pointer, and rejects inactive replacements | `internal/agent/memory/semantic_supersession_test.go` | L1 |
+| R-AGENT-105 | Consolidation contradiction phase populates `superseded_by` on newly stale semantic rows | `internal/agent/memory/semantic_supersession_test.go` | L1 |
 
 ## Governance Rules
 

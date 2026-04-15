@@ -329,16 +329,32 @@ func (mm *Manager) storeEpisodicMemoryWithImportance(ctx context.Context, classi
 
 // storeSemanticMemory writes to the semantic_memory table with UPSERT.
 // When a key is superseded, the old entry is marked stale rather than deleted.
+//
+// Milestone 3 (canonical knowledge layer):
+//   - When an existing key's value changes, bump version and refresh
+//     effective_date so retrieval can prefer the latest authoritative
+//     revision.
+//   - When the new value matches the existing value, leave version alone so
+//     idempotent re-writes do not inflate the revision counter.
 func (mm *Manager) storeSemanticMemory(ctx context.Context, category, key, value string) {
 	entryID := db.NewID()
 	_, err := mm.store.ExecContext(ctx,
-		`INSERT INTO semantic_memory (id, category, key, value)
-		 VALUES (?, ?, ?, ?)
+		`INSERT INTO semantic_memory (id, category, key, value, version, effective_date)
+		 VALUES (?, ?, ?, ?, 1, datetime('now'))
 		 ON CONFLICT(category, key) DO UPDATE SET
 		     value = excluded.value,
 		     updated_at = datetime('now'),
 		     memory_state = 'active',
-		     state_reason = NULL`,
+		     state_reason = NULL,
+		     superseded_by = NULL,
+		     version = CASE
+		         WHEN semantic_memory.value = excluded.value THEN semantic_memory.version
+		         ELSE semantic_memory.version + 1
+		     END,
+		     effective_date = CASE
+		         WHEN semantic_memory.value = excluded.value THEN semantic_memory.effective_date
+		         ELSE datetime('now')
+		     END`,
 		entryID, category, key, value,
 	)
 	if err != nil {

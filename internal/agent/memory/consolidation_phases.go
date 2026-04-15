@@ -469,8 +469,11 @@ func (p *ConsolidationPipeline) phaseContradictionDetection(ctx context.Context,
 				// in predicate are contradictions; different-subject entries are complementary.
 				if subjectSimilarity(entry.value, existValue) > 0.5 {
 					if _, err := store.ExecContext(ctx,
-						`UPDATE semantic_memory SET memory_state = 'stale', state_reason = 'superseded by newer entry'
-						 WHERE id = ?`, existID); err == nil {
+						`UPDATE semantic_memory
+						    SET memory_state = 'stale',
+						        state_reason = 'superseded by newer entry',
+						        superseded_by = ?
+						  WHERE id = ?`, entry.id, existID); err == nil {
 						alreadySuperseded[existID] = true
 						superseded++
 					}

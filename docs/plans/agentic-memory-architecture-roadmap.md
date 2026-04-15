@@ -42,7 +42,7 @@ closed, or the critical path changes.
 |-----------|-------|--------|-------|
 | 1 | Unify The Production Retrieval Path | In progress | Pipeline-prepared memory/index now preferred by runtime context assembly |
 | 2 | Make Intent And Retrieval Routing Real Decision Inputs | Acceptance met | Unified `PerceptionArtifact` (intent, risk, source-of-truth, required tiers, decomposition, freshness, confidence) is computed in pipeline, stashed on session, and emitted to traces; retrieval modes already honour intent-driven routing |
-| 3 | Upgrade Semantic Memory Into A Canonical Knowledge Layer | In progress | Semantic provenance, canonical flags, authority scoring, and freshness cues now survive retrieval/assembly |
+| 3 | Upgrade Semantic Memory Into A Canonical Knowledge Layer | Acceptance met | Schema now carries `version`, `effective_date`, and `superseded_by`; manager upsert bumps version on value change and keeps it stable on idempotent rewrites; consolidation contradiction phase sets supersession pointers; `CurrentSemanticValue` walks the chain with cycle + length guards |
 | 4 | Turn Procedural Memory Into Workflow Memory | Acceptance met | Workflow schema, Manager API, retrieval precedence over tool stats, post-turn promotion with auto-extracted error modes + preconditions + intent tags, and consolidation confidence sync now all land |
 | 5 | Replace Relationship Memory With Persisted Relational Memory | Acceptance met | Persisted `knowledge_facts` store, graph-aware retrieval, reusable `KnowledgeGraph` API with multi-hop `ShortestPath` / `Impact` / `Dependencies`, and a `query_knowledge_graph` agent tool are all shipped |
 | 6 | Add A Real Verifier / Critic Stage | Acceptance met | Claim-level certainty classification, provenance coverage, contradiction reconciliation, per-intent proof obligations, and a structured claim-to-evidence trace map are all in place; semantic-classifier upgrade remains as quality work |
@@ -332,7 +332,7 @@ that controls memory selection, retrieval mode, and risk posture.
 
 ## Milestone 3: Upgrade Semantic Memory Into A Canonical Knowledge Layer
 
-**Status**: In progress
+**Status**: Acceptance met (follow-on open: richer ingestion surface for docs / policy files)
 
 ### Goal
 
@@ -382,9 +382,23 @@ knowledge instead of mostly long assistant responses.
   authority scores, and age through retrieval and context assembly.
 - Context assembly and verifier now surface freshness risks and canonical-risk
   failures instead of burying them in scoring.
-- Semantic retrieval still needs a stronger source model around versioning,
-  effective dates, and supersession, and it still falls back to SQL matching
-  more often than the final architecture should allow.
+- Migration `046_semantic_supersession.sql` adds `version`,
+  `effective_date`, and `superseded_by` to `semantic_memory` with
+  supporting indexes. The manager's upsert bumps `version` on value
+  change, keeps it stable on idempotent rewrites, and refreshes
+  `effective_date` only when a fact actually changes.
+- The consolidation contradiction phase now writes `superseded_by`
+  alongside the existing `memory_state = 'stale'` flip so retrieval
+  and audit tooling can follow the chain.
+- `internal/agent/memory/semantic_supersession.go` adds
+  `CurrentSemanticValue` (walks the chain with cycle + length guards)
+  and `MarkSemanticSuperseded` (manual supersession with replacement
+  liveness validation).
+- Follow-on open: richer ingestion surface so docs / policy files and
+  normalized distilled summaries can land directly into semantic memory
+  with the new version and effective-date fields populated, and a full
+  migration of semantic retrieval off the residual LIKE path onto
+  hybrid FTS+vector.
 
 ---
 
