@@ -42,12 +42,12 @@ closed, or the critical path changes.
 |-----------|-------|--------|-------|
 | 1 | Unify The Production Retrieval Path | Acceptance met | Pipeline-prepared memory/index preferred by runtime; inference stage emits a `retrieval.*` artifact hash (context + index + combined) onto every trace; a parity fitness proves standard and streaming sessions compute identical hashes and detects drift |
 | 2 | Make Intent And Retrieval Routing Real Decision Inputs | Acceptance met | Unified `PerceptionArtifact` (intent, risk, source-of-truth, required tiers, decomposition, freshness, confidence) is computed in pipeline, stashed on session, and emitted to traces; retrieval modes already honour intent-driven routing |
-| 3 | Upgrade Semantic Memory Into A Canonical Knowledge Layer | Acceptance met (follow-on closed) | Schema now carries `version`, `effective_date`, `superseded_by`, `is_canonical`, `source_label`, and `asserter_id`; canonical is a caller-asserted persisted flag (no more inference by category substring); `IngestPolicyDocument` + `ingest_policy` agent tool provide an end-to-end ingestion surface with null-default effective_date, explicit canonical provenance, and no-silent-overwrite guardrails |
+| 3 | Upgrade Semantic Memory Into A Canonical Knowledge Layer | In progress | Ingestion-side follow-on is closed: schema now carries `version`, `effective_date`, `superseded_by`, `is_canonical`, `source_label`, and `asserter_id`; canonical is a caller-asserted persisted flag; `IngestPolicyDocument` + `ingest_policy` provide an end-to-end ingestion surface with null-default effective_date, explicit canonical provenance, and no-silent-overwrite guardrails. Read-path migration off residual `LIKE` remains open and is scoped in `semantic-retrieval-fts-vector-migration.md` |
 | 4 | Turn Procedural Memory Into Workflow Memory | Acceptance met (follow-on closed) | Workflow schema, Manager API, retrieval precedence over tool stats, post-turn promotion with auto-extracted error modes + preconditions + intent tags, consolidation confidence sync, and an agent-facing `find_workflow` tool with Laplace-smoothed ranking all land |
 | 5 | Replace Relationship Memory With Persisted Relational Memory | Acceptance met (follow-ons closed) | Persisted `knowledge_facts` store, graph-aware retrieval, reusable `KnowledgeGraph` API with multi-hop `ShortestPath` / `Impact` / `Dependencies`, a `query_knowledge_graph` agent tool, and a retired permissive path-search fallback with a single canonical-relation source of truth enforced at the write gate |
 | 6 | Add A Real Verifier / Critic Stage | Acceptance met (follow-ons closed) | Claim-level certainty classification, provenance coverage, contradiction reconciliation, per-intent proof obligations, a structured claim-to-evidence trace map, and an embedding-backed semantic certainty classifier (lexical-first, semantic-second) that catches paraphrased absolute / hedged claims the lexical markers miss |
 | 7 | Deepen Working Memory Into Executive State | Acceptance met (follow-ons closed) | Executive state is persisted, surfaced in context assembly, grows automatically in post-turn, survives restart with a cross-turn regression test, emits operator-auditable trace/log writes, and harvests tool-output facts via a narrow allowlist (recall_memory / search_memories / read_file / query_knowledge_graph / find_workflow) gated on whether the final response actually references them |
-| 8 | Improve Reflection And Consolidation Quality | Acceptance met | Enriched episode summaries (evidence refs, failed hypotheses, fix patterns, result quality) land in post-turn reflection; a dedicated consolidation distillation phase promotes repeated fix patterns and recurring evidence into semantic memory with stricter thresholds so anecdotes do not get promoted |
+| 8 | Improve Reflection And Consolidation Quality | In progress | Enriched episode summaries and semantic distillation are in place, but relational promotion from enriched summaries into `knowledge_facts` remains open, so the milestone is not yet fully closed against its original acceptance criteria |
 | A | Observability Dashboards (Appendix A) | Post-plan | Only pick up after milestones 1–8 complete; see Appendix A |
 | B | Evaluation Matrix and Test Harness (Appendix B) | Post-plan | Only pick up after milestones 1–8 complete; see Appendix B |
 | C | Fallback Strategy (Appendix C) | Post-plan | Verifier retry and routing modes cover some layers today; full fallback ladder only scheduled after milestones 1–8 complete; see Appendix C |
@@ -142,21 +142,25 @@ closed, or the critical path changes.
 
 ### Current Critical Path
 
-All eight core milestones (M1–M8) now have their acceptance criteria
-met. The only remaining items are quality follow-ons:
+The remaining core execution work is concentrated in two milestone
+follow-ons plus the post-plan appendices:
 
 1. **M3 follow-on (read path)** — migrate semantic retrieval off the
    residual `LIKE` path onto hybrid FTS+vector. The ingestion surface
-   is now closed; this remaining piece touches every consumer of
-   `retrieveSemanticEvidence` and needs careful FTS5 schema work, so
-   it is sequenced as its own slice. Scoping document:
+   is closed, but the read path is still open. Scoping document:
    [semantic-retrieval-fts-vector-migration.md](semantic-retrieval-fts-vector-migration.md).
-   Note: the scoping pass surfaced a hidden correctness gap (missing
-   INSERT trigger on `semantic_memory` → `memory_fts`) which becomes
-   Slice 1 of that plan.
-2. **Appendices A, B, C** — observability dashboards, evaluation
-   matrix, and fallback strategy spec work. These are sequenced
-   after the quality follow-ons above complete.
+   That plan is currently sequenced as:
+   - Slice 1: FTS trigger completeness and backfill correctness
+   - Slice 2: HybridSearch-first migration for semantic / procedural /
+     relationship / workflow retrieval
+   - Slice 3: optional LIKE removal after telemetry
+2. **M8 follow-on (relational distillation)** — promote recurring
+   entity-relation pairs from enriched episode summaries into
+   `knowledge_facts` so consolidation genuinely promotes into semantic,
+   procedural, and relational stores.
+3. **Appendices A, B, C** — observability dashboards, evaluation
+   matrix, and fallback strategy spec work remain sequenced after the
+   M3/M8 follow-ons above complete.
 
 ---
 
@@ -172,19 +176,22 @@ met. The only remaining items are quality follow-ons:
 
 ### Partial Today
 
-- Intent/perception exists, but not as a unified "intent + risk + source of
-  truth + required memory types" decision artifact
-- Planner/decomposer exists, but is still heuristic and shallow
-- Router exists, but retrieval modes are not fully honored by the runtime
-- Context assembly exists, but evidence structure is still fairly thin
-- Verification exists mostly as output guards, not as a real evidence critic
+- Semantic retrieval still relies on a residual `LIKE` safety path, and
+  the FTS trigger surface is not yet complete for every covered tier
+- Planner/decomposer exists and is useful, but remains heuristic rather
+  than an explicit dependency/stopping-criteria task graph
+- Context assembly is structured and provenance-aware, but still thinner
+  than the full claim/source/chronology model in the reference design
+- Consolidation now promotes into semantic and procedural memory, but
+  relational promotion from enriched episode summaries is still open
 
-### Weak Today
+### Remaining Gaps
 
-- Semantic memory as a canonical fact/policy system
-- Procedural memory as reusable workflows/SOPs rather than mostly tool stats
-- Relational memory as a persisted dependency/causality graph
-- End-to-end use of provenance, authority, recency, and contradiction signals
+- Semantic read-path migration to hybrid FTS+vector with complete trigger
+  coverage and telemetry-backed LIKE retirement
+- Relational distillation from enriched episodic summaries into
+  `knowledge_facts`
+- Appendix work for dashboards, evaluation harnesses, and fallback policy
 
 ---
 
@@ -352,7 +359,7 @@ that controls memory selection, retrieval mode, and risk posture.
 
 ## Milestone 3: Upgrade Semantic Memory Into A Canonical Knowledge Layer
 
-**Status**: Acceptance met (follow-ons closed)
+**Status**: In progress
 
 ### Goal
 
@@ -438,10 +445,14 @@ knowledge instead of mostly long assistant responses.
   directly and prefers the persisted source label when present;
   ordering puts canonical rows ahead of non-canonical at equal
   confidence.
-- Follow-on still open: migrating semantic retrieval off the residual
-  `LIKE` path onto hybrid FTS+vector. Tracked separately because it
-  touches every consumer of `retrieveSemanticEvidence` and needs
-  careful FTS5 schema work.
+- Read-path follow-on remains open: migrating semantic retrieval off the
+  residual `LIKE` path onto hybrid FTS+vector. This work is now scoped in
+  [semantic-retrieval-fts-vector-migration.md](semantic-retrieval-fts-vector-migration.md)
+  because investigation surfaced a correctness gap, not just a quality
+  cleanup: `semantic_memory` is missing an INSERT trigger into `memory_fts`,
+  and `procedural_memory` / `relationship_memory` are missing UPDATE
+  triggers, so the current LIKE blocks are masking real discoverability
+  holes.
 
 ---
 
@@ -806,7 +817,7 @@ short-term executive state described in the reference architecture.
 
 ## Milestone 8: Improve Reflection And Consolidation Quality
 
-**Status**: Acceptance met (follow-on cleanup open)
+**Status**: In progress
 
 ### Goal
 
@@ -859,10 +870,13 @@ Turn post-turn learning from heuristic logging into reusable memory shaping.
   evidence, 2+ for fix patterns) to prevent anecdote hijacking. The
   phase is idempotent via UPSERT on `(category, key)` and the
   `Distilled` counter appears in the consolidation report.
-- Follow-on quality work (not blocking acceptance): promote repeated
-  entity-relation pairs observed in enriched summaries into
-  `knowledge_facts`, and add a dashboard surface for the distilled
-  patterns so operators can see what the agent has generalized.
+- Remaining work to close the milestone against its original acceptance
+  criteria:
+  - promote repeated entity-relation pairs observed in enriched summaries
+    into `knowledge_facts`, so consolidation genuinely promotes into the
+    relational store as well as semantic/procedural stores
+  - add a dashboard surface for distilled patterns so operators can see
+    what the agent has generalized
 
 ---
 
