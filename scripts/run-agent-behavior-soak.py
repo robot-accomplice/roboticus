@@ -60,6 +60,35 @@ REPORT_PATH = os.environ.get(
     "SOAK_REPORT_PATH", "/tmp/goboticus-agent-behavior-soak-report.json"
 )
 SERVER_MODE = os.environ.get("SOAK_SERVER_MODE", "external").strip().lower()
+
+# v1.0.6: orthogonal cache toggles for "the same soak in two states."
+# These let operators evaluate cache efficacy AND uncached agent
+# efficacy against the same build, so a regression in EITHER surface
+# is catchable independently. Pre-v1.0.6 the soak's clone-mode
+# replayed cached responses with latency_s=0.0 across the board,
+# masking real agent behavioral regressions for releases at a time.
+#
+#   SOAK_CLEAR_CACHE: 1=wipe semantic_cache from cloned state.db
+#                     before run (default 1 in clone mode, 0 in
+#                     external mode). "Do we start with a clean
+#                     slate?"
+#   SOAK_BYPASS_CACHE: 1=send no_cache=true on every /api/agent/
+#                      message request so the daemon serves uncached
+#                      every time (default 0). "Do requests use
+#                      the cache when it has entries?"
+#
+# Useful combinations:
+#   (clear=1, bypass=0) → cache efficacy: starts clean, verifies the
+#                         agent populates + replays cache correctly
+#   (clear=1, bypass=1) → pure agent efficacy: cache existence
+#                         doesn't matter; every request hits the
+#                         live model
+#   (clear=0, bypass=0) → carry-over: replays whatever cache was
+#                         already there (the pre-v1.0.6 default that
+#                         masked behavioral regressions)
+_default_clear = "1" if SERVER_MODE in ("clone", "fresh") else "0"
+CLEAR_CACHE = os.environ.get("SOAK_CLEAR_CACHE", _default_clear) == "1"
+BYPASS_CACHE = os.environ.get("SOAK_BYPASS_CACHE", "0") == "1"
 SOURCE_ROOT = Path(os.environ.get("SOAK_SOURCE_ROOT", str(Path.home() / ".roboticus"))).expanduser()
 REPO_ROOT = Path(os.environ.get("SOAK_REPO_ROOT", str(Path(__file__).resolve().parents[1]))).resolve()
 SERVER_START_TIMEOUT = int(os.environ.get("SOAK_SERVER_START_TIMEOUT", "90"))
@@ -230,14 +259,17 @@ def build_isolated_config(mode: str, source_root: Path, isolated_root: Path, hos
             shutil.copytree(source_root / "workspace", workspace_path, dirs_exist_ok=True)
         if (source_root / "logs").exists():
             shutil.copytree(source_root / "logs", log_path, dirs_exist_ok=True)
-        # v1.0.6: clear the LLM response cache from the cloned state.db
-        # so the soak actually exercises the live model + prompt/policy
-        # path on every scenario. Without this, the clone replays
-        # cached responses (latency_s=0.0 across the board) and the
-        # soak ends up testing cache stability rather than agent
-        # behavior — masking real prompt/policy regressions like the
-        # v1.0.5 filesystem_count_only finding.
-        clear_response_cache(db_path)
+        # v1.0.6: optionally clear the LLM response cache from the
+        # cloned state.db so the soak actually exercises the live
+        # model on every scenario. Default in clone-mode is to
+        # clear (CLEAR_CACHE=1 default) since the alternative
+        # (replaying cached responses with latency_s=0.0 across
+        # the board) hides real agent behavioral regressions.
+        # Set SOAK_CLEAR_CACHE=0 to deliberately preserve the
+        # cloned cache state — useful for evaluating cache
+        # efficacy specifically.
+        if CLEAR_CACHE:
+            clear_response_cache(db_path)
     else:
         workspace_path.mkdir(parents=True, exist_ok=True)
         log_path.mkdir(parents=True, exist_ok=True)
@@ -473,6 +505,12 @@ def send_message(prompt: str, session_id: str = None, retries: int = 6) -> Dict[
     payload: Dict[str, object] = {"content": prompt}
     if session_id:
         payload["session_id"] = session_id
+    # v1.0.6: BYPASS_CACHE makes every request explicitly opt out of
+    # cache reads on the daemon side. Combined with CLEAR_CACHE this
+    # gives operators four orthogonal soak modes against the same
+    # build (see env-var docstring at top of file).
+    if BYPASS_CACHE:
+        payload["no_cache"] = True
     req = urllib.request.Request(
         BASE_URL + "/api/agent/message",
         data=json.dumps(payload).encode("utf-8"),
@@ -836,6 +874,11 @@ def run() -> int:
         f"pause={SCENARIO_PAUSE}s isolated_sessions={SESSION_ISOLATION}"
     )
     print(f"[behavior-soak] server_mode={SERVER_MODE}")
+    # v1.0.6: surface the cache-toggle state in the report header so
+    # results are unambiguous about which mode generated them.
+    # Operators reading old reports can immediately see whether the
+    # soak was exercising cached or uncached behavior.
+    print(f"[behavior-soak] clear_cache={CLEAR_CACHE} bypass_cache={BYPASS_CACHE}")
     if managed is not None:
         print(f"[behavior-soak] isolated_root={managed.isolated_root}")
         print(f"[behavior-soak] isolated_config={managed.config_path}")

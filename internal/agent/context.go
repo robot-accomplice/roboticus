@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/rs/zerolog/log"
+
 	"roboticus/internal/core"
 	"roboticus/internal/llm"
 )
@@ -215,16 +217,87 @@ func (cb *ContextBuilder) BuildRequest(session *Session) *llm.Request {
 	stage := stageFromExcess(ratio)
 
 	// Load current-topic messages newest-first within budget.
+	//
+	// CRITICAL INVARIANT (v1.0.6 fix): the LATEST USER MESSAGE must
+	// ALWAYS be included, even when the budget is tight. Pre-v1.0.6
+	// this loop blindly broke at the first over-budget message, which
+	// meant when the system prompt + memory + tool defs ate the entire
+	// budget (system prompt ~2200 tok + memory cap ~2048 tok + 45
+	// tool defs ~4500 tok = ~8750 tok against an 8192 budget →
+	// `remaining = -556`), historyMessages stayed empty AND THE LLM
+	// NEVER SAW THE USER'S PROMPT. The agent's response was then
+	// "the user has not provided instructions" — exactly the
+	// behavioral pattern that surfaced in the v1.0.6 cache-cleared
+	// soak run for 6 of 10 scenarios.
+	//
+	// The fix has two parts:
+	//   (a) Identify the index of the latest user message in
+	//       currentTopicMsgs so we never break before including it.
+	//   (b) When budget runs out partway through history, drop OLDER
+	//       messages first while keeping the latest user message —
+	//       that's the message the user is actively waiting for a
+	//       response to; older history is context that helps but is
+	//       not the request.
 	var historyMessages []llm.Message
 	usedTokens := 0
+
+	latestUserIdx := -1
+	for i := len(currentTopicMsgs) - 1; i >= 0; i-- {
+		if currentTopicMsgs[i].Role == "user" {
+			latestUserIdx = i
+			break
+		}
+	}
 
 	for i := len(currentTopicMsgs) - 1; i >= 0; i-- {
 		m := currentTopicMsgs[i]
 		content := cb.compact(m, stage)
 		tokens := cb.estimateTokens(content)
 
+		// Latest user message: include unconditionally AND verbatim.
+		// Two distinct invariants here:
+		//   (1) The message survives even if the budget is exhausted
+		//       (older history gets dropped instead of the request
+		//       the user is actively waiting for).
+		//   (2) The message content is NOT compacted, regardless of
+		//       compaction stage. Pre-v1.0.6 this was the layered
+		//       bug behind the empty-prompt failure: even when the
+		//       user message survived the budget loop, `compact()`
+		//       at StageSkeleton replaced its content with the
+		//       literal string "[user message]" — so the LLM saw
+		//       "[user message]" instead of the actual prompt and
+		//       responded "the user has not provided instructions."
+		//       The user's prompt is the smallest, most important
+		//       payload in the whole request; compacting it makes
+		//       no sense regardless of pressure.
+		if i == latestUserIdx {
+			verbatim := m.Content
+			tokens = cb.estimateTokens(verbatim)
+			if usedTokens+tokens > remaining {
+				log.Warn().
+					Int("budget", remaining).
+					Int("used", usedTokens).
+					Int("user_msg_tokens", tokens).
+					Int("system_prompt_tokens", sysTokCount).
+					Int("memory_tokens", memTokCount).
+					Int("tool_def_tokens", toolTokCount).
+					Msg("context budget exhausted by system prompt + memory + tool defs; including latest user message anyway (the alternative — dropping it — produces 'no user instructions' replies). Consider reducing system prompt, memory cap, or tool count.")
+			}
+			historyMessages = append(historyMessages, llm.Message{
+				Role:       m.Role,
+				Content:    verbatim,
+				ToolCalls:  m.ToolCalls,
+				ToolCallID: m.ToolCallID,
+				Name:       m.Name,
+			})
+			usedTokens += tokens
+			continue
+		}
+
+		// Non-latest-user message: subject to budget. Older history
+		// gets dropped first when the budget is tight.
 		if usedTokens+tokens > remaining {
-			break
+			continue
 		}
 
 		historyMessages = append(historyMessages, llm.Message{
