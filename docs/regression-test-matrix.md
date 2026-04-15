@@ -325,6 +325,9 @@ Blocking commands for feature-complete releases:
 | R-AGENT-58 | Pipeline trace carries a `verifier.*` annotation group including a JSON claim map | `internal/pipeline/verifier_trace_test.go` | L1 |
 | R-AGENT-59 | Multi-step task resumes across a simulated shutdown/startup cycle with plan, unresolved question, stopping criterion, and assumption intact | `internal/agent/memory/executive_restart_test.go` | L1 |
 | R-AGENT-60 | Restart vet keeps executive and goal entries while discarding transient turn summaries and notes | `internal/agent/memory/executive_restart_test.go` | L1 |
+| R-AGENT-61 | Verifier rejects unanchored absolute claims on financial/compliance/security queries (`proof_obligation_unmet`) | `internal/pipeline/verifier_claims_test.go` | L1 |
+| R-AGENT-62 | Verifier accepts absolute claims whose supporting evidence carries a canonical marker, even without explicit in-response attribution | `internal/pipeline/verifier_claims_test.go` | L1 |
+| R-AGENT-63 | Per-intent proof obligation does not fire on low-risk intents | `internal/pipeline/verifier_claims_test.go` | L1 |
 
 ## Governance Rules
 

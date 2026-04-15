@@ -102,6 +102,10 @@ closed, or the critical path changes.
   simulated shutdown/startup cycle with plan, unresolved question,
   assumption, and stopping criterion intact, while transient turn-summary
   and note entries are discarded by the default vet rules.
+- Financial/compliance/security queries now enforce per-claim proof
+  obligations: absolute claims must either explicitly anchor themselves or
+  trace back to canonical-marked evidence, and failures surface as
+  `proof_obligation_unmet` in both verifier issues and the trace claim map.
 
 ### Current Critical Path
 
@@ -522,6 +526,12 @@ support, contradictions, and freshness before final answer or action.
   code) and emits them onto the pipeline trace via `AnnotateVerifierTrace`
   under the `verifier.*` namespace, including a compact summary (counts,
   coverage ratio) and a JSON claim map operators can audit per turn.
+- Financial, compliance, security, and explicit policy-sensitive queries now
+  enforce a per-claim proof obligation: every absolute claim must be anchored
+  to a canonical source either via explicit in-response attribution or via
+  evidence that itself carries a canonical marker (`canonical`, `policy`,
+  `documentation`, `runbook`, `standard`, `authoritative`, etc.). Violations
+  fail with `proof_obligation_unmet` and are surfaced in the claim trace map.
 - The remaining gap is semantic depth: claim classification is still lexical,
   so paraphrase-heavy responses can still slip through the certainty and
   support checks.

@@ -155,6 +155,70 @@ func TestVerifyResponse_ClaimLevelChecksSilentWithoutEvidence(t *testing.T) {
 	}
 }
 
+func TestVerifyResponse_FailsProofObligationOnFinancialIntent(t *testing.T) {
+	ctx := VerificationContext{
+		UserPrompt:    "Is this refund financially compliant with our accounting controls?",
+		Intents:       []string{"financial_action"},
+		EvidenceItems: []string{"Ledger reconciliation batch 42 completed"},
+	}
+	// Absolute claim, no canonical anchor, evidence does not carry a
+	// canonical marker — fails the per-intent proof obligation.
+	response := "Yes, the refund is always compliant with the accounting controls. It is definitely within every audit bucket."
+	result := VerifyResponse(response, ctx)
+	if result.Passed {
+		t.Fatalf("expected proof-obligation failure on financial intent, got pass with %+v", result.Issues)
+	}
+	if !hasIssue(result, "proof_obligation_unmet") {
+		t.Fatalf("expected proof_obligation_unmet issue, got %+v", result.Issues)
+	}
+}
+
+func TestVerifyResponse_PassesProofObligationWithCanonicalEvidence(t *testing.T) {
+	ctx := VerificationContext{
+		UserPrompt: "Does the refund flow satisfy our compliance policy?",
+		Intents:    []string{"compliance"},
+		EvidenceItems: []string{
+			"Refund compliance policy v3 authoritative documentation covers refund timing",
+		},
+	}
+	// Absolute claim with evidence that carries the canonical marker — passes
+	// the per-intent proof obligation without needing explicit anchor text.
+	response := "The refund flow always satisfies the compliance policy for the documented refund timing."
+	result := VerifyResponse(response, ctx)
+	if !result.Passed {
+		t.Fatalf("expected canonical-evidence-supported response to pass, got %+v", result.Issues)
+	}
+}
+
+func TestVerifyResponse_PassesProofObligationWithExplicitAnchor(t *testing.T) {
+	ctx := VerificationContext{
+		UserPrompt:    "Is this payout compliant with KYC rules?",
+		Intents:       []string{"financial_action"},
+		EvidenceItems: []string{"Payout batch 17 recorded in ledger"},
+	}
+	// Absolute claim with explicit "according to ..." anchor — passes.
+	response := "According to the current policy, the payout is always compliant with KYC rules for verified counterparties."
+	result := VerifyResponse(response, ctx)
+	if !result.Passed {
+		t.Fatalf("expected explicitly anchored response to pass, got %+v", result.Issues)
+	}
+}
+
+func TestVerifyResponse_ProofObligationSilentWithoutHighRiskIntent(t *testing.T) {
+	ctx := VerificationContext{
+		UserPrompt:    "What's the weather like?",
+		Intents:       []string{"conversation"},
+		EvidenceItems: []string{"Weather report for Berlin"},
+	}
+	response := "It is always sunny in the afternoon. Weather is definitely warm."
+	result := VerifyResponse(response, ctx)
+	for _, issue := range result.Issues {
+		if issue.Code == "proof_obligation_unmet" {
+			t.Fatalf("should not fire proof obligation on low-risk intent, got %+v", result.Issues)
+		}
+	}
+}
+
 func hasIssue(result VerificationResult, code string) bool {
 	for _, issue := range result.Issues {
 		if issue.Code == code {

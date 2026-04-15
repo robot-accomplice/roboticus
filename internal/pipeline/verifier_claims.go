@@ -244,6 +244,67 @@ func ClaimAcknowledgesConflict(claim VerifiedClaim) bool {
 	)
 }
 
+// requiresPerClaimAnchoring returns true for intent classes whose absolute
+// claims must each be anchored to a canonical source — financial actions,
+// security audits, and explicitly policy-sensitive prompts. These are the
+// intents where a single unsupported absolute claim is a real liability.
+func requiresPerClaimAnchoring(ctx VerificationContext) bool {
+	if ctx.PolicySensitive {
+		return true
+	}
+	for _, intent := range ctx.Intents {
+		switch strings.ToLower(intent) {
+		case "financial_action", "financial_verification",
+			"security_audit", "security",
+			"compliance", "policy":
+			return true
+		}
+	}
+	lower := strings.ToLower(ctx.UserPrompt)
+	if containsAny(lower,
+		"financial", "compliance", "audit", "security",
+		"refund", "chargeback", "kyc", "aml", "gdpr", "hipaa", "sox",
+	) {
+		return true
+	}
+	return false
+}
+
+// canonicalEvidenceMarkers identify evidence items that represent a canonical
+// source. When an absolute claim's supporting evidence includes such an item,
+// the claim is considered anchored even without explicit in-response wording.
+var canonicalEvidenceMarkers = []string{
+	"canonical", "policy", "policies", "documentation", "spec ",
+	"specification", "runbook", "standard", "rfc ", "compliance",
+	"authoritative", "official",
+}
+
+// claimEvidenceIsCanonical reports whether the evidence items overlapping with
+// a claim include a canonical marker.
+func claimEvidenceIsCanonical(claim VerifiedClaim, evidenceItems []string) bool {
+	if len(claim.Keywords) == 0 || len(evidenceItems) == 0 {
+		return false
+	}
+	for _, item := range evidenceItems {
+		lower := strings.ToLower(item)
+		overlap := 0
+		for _, kw := range claim.Keywords {
+			if strings.Contains(lower, kw) {
+				overlap++
+			}
+		}
+		if overlap == 0 {
+			continue
+		}
+		for _, marker := range canonicalEvidenceMarkers {
+			if strings.Contains(lower, marker) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // isHighRiskQuery returns true when the verification context contains at least
 // one high-risk signal that demands evidence-anchored claims.
 func isHighRiskQuery(ctx VerificationContext) bool {
@@ -436,6 +497,49 @@ func verifyClaimLevel(content string, ctx VerificationContext, claims []Verified
 				})
 			}
 		}
+	}
+
+	verifyProofObligations(ctx, claims, auditIndex, result)
+}
+
+// (4) Per-intent proof obligation: for financial, compliance, security, or
+// explicit policy-sensitive queries, every absolute claim must be anchored
+// to a canonical source — either via explicit in-response attribution or
+// via evidence that itself carries a canonical marker.
+func verifyProofObligations(ctx VerificationContext, claims []VerifiedClaim, auditIndex map[string]int, result *VerificationResult) {
+	if !requiresPerClaimAnchoring(ctx) {
+		return
+	}
+	if len(ctx.EvidenceItems) == 0 {
+		return
+	}
+	var unmet []string
+	for _, claim := range claims {
+		if claim.Certainty != CertaintyAbsolute {
+			continue
+		}
+		if claim.HasCanonicalAnchor {
+			continue
+		}
+		if ClaimAcknowledgesConflict(claim) {
+			// A claim that names the disagreement is already hedged-by-
+			// reconciliation and does not need a canonical anchor.
+			continue
+		}
+		if claimEvidenceIsCanonical(claim, ctx.EvidenceItems) {
+			continue
+		}
+		unmet = append(unmet, truncate(claim.Sentence, 120))
+		if idx, ok := auditIndex[claim.Sentence]; ok && result.ClaimAudits[idx].IssueCode == "" {
+			result.ClaimAudits[idx].IssueCode = "proof_obligation_unmet"
+		}
+	}
+	if len(unmet) > 0 {
+		result.Passed = false
+		result.Issues = append(result.Issues, VerificationIssue{
+			Code:   "proof_obligation_unmet",
+			Detail: "financial/compliance/security claims must anchor each absolute assertion to a canonical source: " + strings.Join(unmet, " || "),
+		})
 	}
 }
 
