@@ -4,6 +4,7 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
+	"sync"
 	"time"
 )
 
@@ -41,7 +42,16 @@ type TraceSpan struct {
 }
 
 // TraceRecorder accumulates spans during a pipeline run.
+//
+// v1.0.6: TraceRecorder now exposes the in-flight span (CurrentSpan)
+// so an external watchdog (see pipeline.go's Run) can log "stage X
+// has been running for Y seconds" while a stage is hung. Pre-v1.0.6
+// a hung stage produced no observable signal until the surrounding
+// timeout fired (or never, for stages without timeouts) — operators
+// hitting the cold-start hang reported in the v1.0.5 soak had no way
+// to identify which stage was stalling.
 type TraceRecorder struct {
+	mu      sync.RWMutex
 	start   time.Time
 	current *spanState
 	spans   []TraceSpan
@@ -53,6 +63,29 @@ type spanState struct {
 	meta  map[string]any
 }
 
+// CurrentSpanInfo is the read-side view of the in-flight span. Empty
+// Name means no span is currently active (between stages or after
+// Finish has been called).
+type CurrentSpanInfo struct {
+	Name     string
+	Duration time.Duration
+}
+
+// CurrentSpan returns a snapshot of the in-flight span. Used by the
+// pipeline run-loop watchdog to log which stage is running while a
+// hang is unfolding (rather than only after the hang resolves).
+func (r *TraceRecorder) CurrentSpan() CurrentSpanInfo {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.current == nil {
+		return CurrentSpanInfo{}
+	}
+	return CurrentSpanInfo{
+		Name:     r.current.name,
+		Duration: time.Since(r.current.start),
+	}
+}
+
 // NewTraceRecorder starts a new pipeline trace.
 func NewTraceRecorder() *TraceRecorder {
 	return &TraceRecorder{start: time.Now()}
@@ -60,14 +93,18 @@ func NewTraceRecorder() *TraceRecorder {
 
 // BeginSpan starts a named timing span. Any active span is auto-ended first.
 func (r *TraceRecorder) BeginSpan(name string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.current != nil {
-		r.endCurrentSpan("ok")
+		r.endCurrentSpanLocked("ok")
 	}
 	r.current = &spanState{name: name, start: time.Now()}
 }
 
 // Annotate adds metadata to the current span.
 func (r *TraceRecorder) Annotate(key string, value any) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.current == nil {
 		return
 	}
@@ -79,12 +116,15 @@ func (r *TraceRecorder) Annotate(key string, value any) {
 
 // EndSpan finishes the current span with the given outcome.
 func (r *TraceRecorder) EndSpan(outcome string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.current != nil {
-		r.endCurrentSpan(outcome)
+		r.endCurrentSpanLocked(outcome)
 	}
 }
 
-func (r *TraceRecorder) endCurrentSpan(outcome string) {
+// endCurrentSpanLocked must be called with r.mu held.
+func (r *TraceRecorder) endCurrentSpanLocked(outcome string) {
 	dur := time.Since(r.current.start).Milliseconds()
 	r.spans = append(r.spans, TraceSpan{
 		Name:       r.current.name,
@@ -97,8 +137,10 @@ func (r *TraceRecorder) endCurrentSpan(outcome string) {
 
 // Finish closes any active span and returns the completed trace.
 func (r *TraceRecorder) Finish(turnID, channel string) *PipelineTrace {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.current != nil {
-		r.endCurrentSpan("ok")
+		r.endCurrentSpanLocked("ok")
 	}
 	return &PipelineTrace{
 		TurnID:  turnID,

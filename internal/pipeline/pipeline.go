@@ -168,6 +168,77 @@ func RunPipeline(ctx context.Context, p Runner, cfg Config, input Input) (*Outco
 	return p.Run(ctx, cfg, input)
 }
 
+// stageLivenessThreshold is the minimum stage duration before the
+// watchdog starts logging "stage X has been running for Y" warnings.
+// Set generously: most stages complete in milliseconds, but
+// stage_inference legitimately takes 30s+ for cold-start LLM loads
+// (especially Ollama 32B-class models). A 20s threshold catches real
+// hangs without spamming on legitimate slow stages — the first probe
+// fires at 20s, the second at 30s, etc.
+const stageLivenessThreshold = 20 * time.Second
+
+// stageLivenessProbeInterval is how often the watchdog checks the
+// in-flight stage. Short enough that operators see updates roughly
+// every 10s during a hang; long enough that the watchdog adds no
+// observable load on healthy runs (which complete sub-second).
+const stageLivenessProbeInterval = 10 * time.Second
+
+// runStageWatchdog logs a warning when a single pipeline stage runs
+// longer than stageLivenessThreshold. Exits when done is closed
+// (set up by Pipeline.Run via defer) or when the pipeline context
+// is cancelled.
+//
+// The function is intentionally simple: it does not attempt to
+// interrupt the stage. Operators get loud signal; the surrounding
+// timeout / context-cancel infrastructure handles the actual
+// recovery. This keeps the watchdog out of the hot path and out of
+// the recovery decisions (which are already nuanced — a cold-start
+// LLM is "slow" but not "stuck").
+func (p *Pipeline) runStageWatchdog(ctx context.Context, tr *TraceRecorder, done <-chan struct{}) {
+	if tr == nil {
+		return
+	}
+	ticker := time.NewTicker(stageLivenessProbeInterval)
+	defer ticker.Stop()
+
+	// Track the previous span so we don't re-log the same warning
+	// every probe. We log the FIRST time a stage exceeds the
+	// threshold, then again every probe interval thereafter — that
+	// gives operators a fresh "still hung" signal without blasting
+	// duplicates.
+	var lastLoggedSpan string
+	var lastLogTime time.Time
+
+	for {
+		select {
+		case <-done:
+			return
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			cs := tr.CurrentSpan()
+			if cs.Name == "" {
+				lastLoggedSpan = ""
+				continue
+			}
+			if cs.Duration < stageLivenessThreshold {
+				continue
+			}
+			// Log on first detection OR after another probe
+			// interval has elapsed. Prevents both spam (every
+			// probe) and silence (only on transitions).
+			if cs.Name != lastLoggedSpan || time.Since(lastLogTime) >= stageLivenessProbeInterval {
+				log.Warn().
+					Str("stage", cs.Name).
+					Dur("running_for", cs.Duration).
+					Msg("pipeline stage running longer than expected — possible cold-start latency or hang")
+				lastLoggedSpan = cs.Name
+				lastLogTime = time.Now()
+			}
+		}
+	}
+}
+
 // dashNotify publishes a typed event to the dashboard if a notifier is configured.
 func (p *Pipeline) dashNotify(eventType string, data any) {
 	if p.dashboard != nil {
@@ -207,6 +278,25 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 	p.dashNotify("agent_working", map[string]string{
 		"agent_id": pc.input.AgentID, "workstation": "llm", "skill": "inference",
 	})
+
+	// v1.0.6: per-stage liveness watchdog. If any single stage runs
+	// longer than stageLivenessThreshold, a goroutine logs which
+	// stage is in-flight and how long it's been running. This turns
+	// the cold-start hang reported in the v1.0.5 fresh-state soak
+	// (where the first turn started but never completed and the
+	// operator had no signal about which stage was stalling) into
+	// an actionable log line: operators can now identify the stuck
+	// stage from the daemon's running output rather than having to
+	// kill -QUIT and parse a goroutine dump.
+	//
+	// The watchdog runs at stageLivenessProbeInterval and re-checks
+	// the in-flight span; if it's the SAME span as the previous
+	// probe AND it's exceeded the threshold, log it. Polls are
+	// cheap (one RWMutex.RLock + tiny snapshot copy) so the
+	// instrumentation has no measurable steady-state cost.
+	watchdogDone := make(chan struct{})
+	go p.runStageWatchdog(ctx, pc.tr, watchdogDone)
+	defer close(watchdogDone)
 
 	// Stages 1-2: validation + injection defense.
 	if err := p.stageValidation(ctx, pc); err != nil {
