@@ -229,10 +229,11 @@ func (p *Pipeline) reflectOnTurn(ctx context.Context, userContent string, sessio
 
 // ExecutiveGrowthResult reports what the auto-grow pass wrote for a turn.
 type ExecutiveGrowthResult struct {
-	TaskID             string
-	VerifiedRecorded   int
-	QuestionsOpened    int
-	QuestionsResolved  int
+	TaskID              string
+	VerifiedRecorded    int
+	QuestionsOpened     int
+	QuestionsResolved   int
+	AssumptionsRecorded int
 }
 
 // growExecutiveState converts the outcome of the current turn into structured
@@ -398,17 +399,128 @@ func (p *Pipeline) growExecutiveState(ctx context.Context, session *Session, ass
 			Msg("executive unresolved_question resolved")
 	}
 
-	if result.VerifiedRecorded+result.QuestionsOpened+result.QuestionsResolved > 0 {
+	// Record assumptions the agent named explicitly in the response.
+	for _, assumption := range extractAssumptions(content) {
+		trimmed := strings.TrimSpace(assumption)
+		if trimmed == "" {
+			continue
+		}
+		entryContent := "assumption: " + truncate(trimmed, 160)
+		exists, err := mm.HasExecutiveEntry(ctx, session.ID, taskID, agentmemory.EntryAssumption, entryContent)
+		if err != nil {
+			log.Debug().Err(err).Msg("executive: duplicate check failed for assumption")
+			continue
+		}
+		if exists {
+			continue
+		}
+		payload := agentmemory.AssumptionPayload{
+			Source:     "response",
+			Confidence: 0.5,
+		}
+		if err := mm.RecordAssumption(ctx, session.ID, taskID, entryContent, payload); err != nil {
+			log.Debug().Err(err).Msg("executive: record assumption failed")
+			continue
+		}
+		result.AssumptionsRecorded++
+		log.Debug().
+			Str("session", session.ID).
+			Str("task", taskID).
+			Str("assumption", trimmed).
+			Str("category", "executive_write").
+			Msg("executive assumption recorded")
+	}
+
+	if result.VerifiedRecorded+result.QuestionsOpened+result.QuestionsResolved+result.AssumptionsRecorded > 0 {
 		log.Info().
 			Str("session", session.ID).
 			Str("task", taskID).
 			Int("verified", result.VerifiedRecorded).
 			Int("questions_opened", result.QuestionsOpened).
 			Int("questions_resolved", result.QuestionsResolved).
+			Int("assumptions", result.AssumptionsRecorded).
 			Str("category", "executive_growth").
 			Msg("executive state grown after turn")
 	}
 	return result
+}
+
+// assumptionMarkers are phrases that frequently precede an explicit
+// assumption in natural-language text. The scan is case-insensitive.
+var assumptionMarkers = []string{
+	"assuming that ",
+	"i'll assume ",
+	"i will assume ",
+	"i am assuming ",
+	"i'm assuming ",
+	"my assumption is that ",
+	"we assume ",
+	"assuming ",
+	"presuming that ",
+	"presumably, ",
+	"if we assume ",
+	"based on the assumption that ",
+}
+
+// extractAssumptions scans a response for explicit assumption markers and
+// returns the clause following each marker. Returned clauses are deduplicated
+// and trimmed to sentence-length content.
+func extractAssumptions(response string) []string {
+	lower := strings.ToLower(response)
+	seen := make(map[string]struct{})
+	var out []string
+	for _, marker := range assumptionMarkers {
+		start := 0
+		for {
+			idx := strings.Index(lower[start:], marker)
+			if idx < 0 {
+				break
+			}
+			abs := start + idx + len(marker)
+			if abs >= len(response) {
+				break
+			}
+			// Skip word-boundary false positives (e.g., "reassuming").
+			if idx > 0 {
+				prev := lower[start+idx-1]
+				if (prev >= 'a' && prev <= 'z') || (prev >= '0' && prev <= '9') {
+					start = abs
+					continue
+				}
+			}
+			clause := extractAssumptionClause(response[abs:])
+			if clause != "" {
+				key := strings.ToLower(strings.TrimSpace(clause))
+				if _, ok := seen[key]; !ok {
+					seen[key] = struct{}{}
+					out = append(out, clause)
+				}
+			}
+			start = abs
+		}
+	}
+	return out
+}
+
+// extractAssumptionClause returns the clause following an assumption marker,
+// bounded by sentence-ending punctuation or a newline.
+func extractAssumptionClause(rest string) string {
+	end := len(rest)
+	for i, r := range rest {
+		if r == '.' || r == '\n' || r == '!' || r == '?' || r == ';' {
+			end = i
+			break
+		}
+	}
+	clause := strings.TrimSpace(rest[:end])
+	if clause == "" || len(clause) < 4 {
+		return ""
+	}
+	// Avoid picking up purely modal leftovers like "we are" after "assuming".
+	if len(clause) > 200 {
+		clause = clause[:200]
+	}
+	return clause
 }
 
 // detectAndPersistProcedures uses LearningExtractor's sliding-window procedure

@@ -113,6 +113,9 @@ closed, or the critical path changes.
   annotated onto the pipeline trace under `executive.*`, and post-turn
   growth emits structured log events with an `executive_write` category
   so operators can audit every write.
+- Post-turn growth now also records assumptions the agent names explicitly
+  in the response, so the next turn's context carries forward the state the
+  agent was taking for granted.
 
 ### Current Critical Path
 
@@ -628,7 +631,15 @@ short-term executive state described in the reference architecture.
   events with an `executive_write` / `executive_growth` category that carry
   the session, task, and subgoal for every write. `growExecutiveState` now
   returns an `ExecutiveGrowthResult` with counts for tests and telemetry.
-- What still remains is richer assumption extraction from tool outputs.
+- Post-turn growth now also extracts assumptions the agent named explicitly
+  in the response (markers like "assuming that", "I'll assume",
+  "presumably", etc.) and records each as an `assumption` executive entry
+  with source `response` so the agent's own stated assumptions survive into
+  the next turn's context and into startup vetting. The extractor is
+  word-boundary aware (so "reassuming" is not a match) and deduplicates
+  equivalent clauses within a single turn.
+- What still remains is richer assumption extraction from tool outputs — the
+  current extractor only picks up assumptions the agent names explicitly.
 
 ---
 

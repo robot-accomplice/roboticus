@@ -209,6 +209,57 @@ func TestAnnotateExecutivePlanWrite_OmitsCheckpointWhenUnchanged(t *testing.T) {
 	}
 }
 
+func TestExtractAssumptions_PicksUpExplicitMarkers(t *testing.T) {
+	response := "I'll assume that production uses postgres 15. Presumably, the ledger service is available. Assuming we have admin access, the upgrade is straightforward."
+	got := extractAssumptions(response)
+	if len(got) != 3 {
+		t.Fatalf("expected 3 assumptions, got %d: %+v", len(got), got)
+	}
+}
+
+func TestExtractAssumptions_IgnoresFalsePositives(t *testing.T) {
+	response := "Reassuming the prior session is a bad idea."
+	got := extractAssumptions(response)
+	if len(got) != 0 {
+		t.Fatalf("expected no assumptions (word-boundary false positive), got %+v", got)
+	}
+}
+
+func TestExtractAssumptions_Deduplicates(t *testing.T) {
+	response := "I'll assume the service is up. I will assume the service is up."
+	got := extractAssumptions(response)
+	if len(got) != 1 {
+		t.Fatalf("expected deduplicated assumptions, got %+v", got)
+	}
+}
+
+func TestGrowExecutiveState_RecordsAssumptionsFromResponse(t *testing.T) {
+	p := newGrowthTestPipeline(t)
+	ctx := context.Background()
+	seedPlan(t, p.store, "s1", "t1", []string{"migrate auth service"})
+
+	sess := session.New("s1", "a1", "Bot")
+	sess.AddUserMessage("Migrate the auth service.")
+	sess.SetTaskVerificationHints("analysis", "complex", "execute_directly", []string{"migrate auth service"})
+	sess.SetMemoryContext("[Active Memory]\n\n[Retrieved Evidence]\n1. [semantic, 0.9] auth service migration runbook\n")
+
+	result := p.growExecutiveState(ctx, sess,
+		"I'll assume that the new auth service runs on the same ports. Presumably, the ledger team has signed off on the rollout.")
+
+	if result.AssumptionsRecorded != 2 {
+		t.Fatalf("expected 2 assumptions recorded, got %+v", result)
+	}
+
+	mm := agentmemory.NewManager(agentmemory.DefaultConfig(), p.store)
+	state, err := mm.LoadExecutiveState(ctx, "s1", "t1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Assumptions) != 2 {
+		t.Fatalf("expected two assumption entries persisted, got %+v", state.Assumptions)
+	}
+}
+
 func TestGrowExecutiveState_IdempotentOnRepeatedRuns(t *testing.T) {
 	p := newGrowthTestPipeline(t)
 	ctx := context.Background()

@@ -332,7 +332,11 @@ Blocking commands for feature-complete releases:
 | R-AGENT-65 | Task synthesis records a decision checkpoint when subgoals change vs. the prior plan and skips the checkpoint when subgoals are identical | `internal/pipeline/plan_checkpoint_test.go` | L1 |
 | R-AGENT-66 | Pipeline trace carries an `executive.*` annotation group on plan write with subgoals, added/removed diff, and checkpoint flag | `internal/pipeline/executive_growth_test.go` | L1 |
 | R-AGENT-67 | Executive plan trace omits checkpoint annotation when subgoals are unchanged | `internal/pipeline/executive_growth_test.go` | L1 |
-| R-AGENT-68 | `growExecutiveState` returns structured counts (verified, questions opened, questions resolved) suitable for telemetry | `internal/pipeline/executive_growth_test.go` | L1 |
+| R-AGENT-68 | `growExecutiveState` returns structured counts (verified, questions opened, questions resolved, assumptions) suitable for telemetry | `internal/pipeline/executive_growth_test.go` | L1 |
+| R-AGENT-69 | `extractAssumptions` picks up explicit assumption markers in the response and returns each clause | `internal/pipeline/executive_growth_test.go` | L1 |
+| R-AGENT-70 | `extractAssumptions` is word-boundary aware — no false positives on words containing an assumption marker | `internal/pipeline/executive_growth_test.go` | L1 |
+| R-AGENT-71 | `extractAssumptions` deduplicates equivalent clauses within a single turn | `internal/pipeline/executive_growth_test.go` | L1 |
+| R-AGENT-72 | Post-turn growth persists assumption entries extracted from the response into working memory under the active task | `internal/pipeline/executive_growth_test.go` | L1 |
 
 ## Governance Rules
 
