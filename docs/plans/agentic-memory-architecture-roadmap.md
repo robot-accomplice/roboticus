@@ -48,6 +48,9 @@ closed, or the critical path changes.
 | 6 | Add A Real Verifier / Critic Stage | Acceptance met | Claim-level certainty classification, provenance coverage, contradiction reconciliation, per-intent proof obligations, and a structured claim-to-evidence trace map are all in place; semantic-classifier upgrade remains as quality work |
 | 7 | Deepen Working Memory Into Executive State | Acceptance met | Executive state is persisted, surfaced in context assembly, grows automatically in post-turn, survives restart with a cross-turn regression test, and emits operator-auditable trace/log writes; richer tool-output assumption extraction remains as follow-on work |
 | 8 | Improve Reflection And Consolidation Quality | Not started | Reflection/consolidation still heuristic despite working scaffolding |
+| A | Observability Dashboards (Appendix A) | Not started | Extends cross-cutting trace work; unified event schema across variants; see Appendix A |
+| B | Evaluation Matrix and Test Harness (Appendix B) | Not started | Comparison matrix across V0–V4 RAG variants with six task buckets; see Appendix B |
+| C | Fallback Strategy (Appendix C) | Partial | Verifier retry and routing modes cover some layers; need independently testable router / planner / retrieval / reranker / action fallbacks; see Appendix C |
 
 ### Completed Slices
 
@@ -771,3 +774,201 @@ path to Milestones 5 and 4:
 - **Milestone 7 quality follow-on** — extract assumptions from tool outputs
   (not only the agent's own response) and upgrade assumption confidence
   based on evidence support.
+- **Appendix B (Evaluation Matrix)** — stand up the one-command V0–V4
+  comparison harness with deterministic test cases across the six buckets
+  so every subsequent change can be measured, not argued about.
+- **Appendix A (Observability Dashboards)** — emit the unified run event
+  schema on every turn (run_id, variant, task_bucket, quality scores,
+  fallback breakdown, latency and cost) so the harness in Appendix B has
+  something to aggregate and the dashboards have a single source of truth.
+- **Appendix C (Fallback Strategy)** — formalize the router / planner /
+  retrieval / reranker / action fallbacks to match the verifier retry
+  that already exists, with each fallback independently testable and
+  logged with reason + outcome.
+
+---
+
+## Appendix A: Observability Dashboards (Spec 1)
+
+Ties into the cross-cutting trace work and the Milestone 6 verifier
+claim-to-evidence map. The `verifier.*` trace namespace already emits
+coverage_ratio, flagged_claims, issue_codes, and a JSON claim map; the
+`executive.*` namespace already emits plan_recorded / subgoals /
+subgoals_added / subgoals_removed. Dashboards below will pull from those
+and from new event fields we still need to emit (router confidence,
+retrieval call count, fallback breakdown, quality scores).
+
+### Goal
+Build dashboards that measure quality, latency, cost, and fallback behavior.
+
+### Event Schema
+```json
+{{
+  "run_id": "uuid",
+  "timestamp": "iso8601",
+  "variant": "V0|V1|V2|V3|V4",
+  "task_bucket": "simple|ambiguous|multihop|conflict|policy|action",
+  "query": "string",
+  "risk_level": "low|medium|high",
+  "router_confidence": 0.0,
+  "num_subqueries": 0,
+  "retrieval_calls": 0,
+  "retrieval_latency_ms": 0,
+  "reranker_latency_ms": 0,
+  "verification_latency_ms": 0,
+  "end_to_end_latency_ms": 0,
+  "tokens_input": 0,
+  "tokens_output": 0,
+  "cost_usd": 0.0,
+  "fallbacks_triggered": [],
+  "fallback_count": 0,
+  "answer_correctness_score": 0,
+  "faithfulness_score": 0,
+  "authority_score": 0,
+  "completeness_score": 0,
+  "reasoning_score": 0,
+  "safety_score": 0
+}}
+```
+
+### Dashboards
+#### Quality
+- correctness
+- faithfulness
+- authority usage
+- abstention rate
+
+#### Performance
+- p50 / p95 latency
+- cost per run
+- tokens
+
+#### Fallbacks
+- trigger rate
+- success rate
+- latency overhead
+
+### Acceptance Criteria
+- Unified schema across all variants
+- Filterable by variant and task bucket
+- Exportable data
+
+---
+
+## Appendix B: Evaluation Matrix and Test Harness (Spec 2)
+
+Cross-cutting work that supports every milestone — the comparison matrix
+is how we will prove the `v1.0.x` memory architecture investment
+actually wins on quality, safety, latency, and cost versus baselines.
+The `authority` and `completeness` metrics map directly onto M6 proof
+obligations and subgoal coverage; the `multihop` and `conflict` buckets
+exercise M5 graph reasoning and M6 contradiction reconciliation; the
+`policy` and `action` buckets exercise the per-intent proof obligations.
+
+### Goal
+Compare RAG variants on quality, safety, latency, and cost.
+
+### Variants
+- V0: Classic RAG
+- V1: Hybrid
+- V2: Hybrid + Rerank
+- V3: Reasoning-Orchestrated
+- V4: Reasoning + Fallbacks
+
+### Test Case Format
+```json
+{{
+  "test_id": "A-001",
+  "bucket": "simple|ambiguous|multihop|conflict|policy|action",
+  "question": "string",
+  "gold_answer": "string",
+  "canonical_sources": []
+}}
+```
+
+### Buckets
+- simple
+- ambiguous
+- multihop
+- conflict
+- policy
+- action
+
+### Metrics
+- correctness
+- faithfulness
+- authority
+- completeness
+- reasoning
+- safety
+
+### Reports
+- aggregate scores
+- latency p50/p95
+- cost per correct run
+
+### Acceptance Criteria
+- One-command execution
+- Deterministic comparison
+- Machine-readable outputs
+
+---
+
+## Appendix C: Fallback Strategy (Spec 3)
+
+Extends the runtime-decisiveness arc of this roadmap. Routing and
+verification already have partial fallback paths — the verifier issues
+a retry on issue codes like `weak_provenance_coverage` or
+`proof_obligation_unmet`, and Milestone 2 routing distinguishes
+advisory from authoritative retrieval modes. Spec 3 formalizes the
+fallback ladder across router, planner, retrieval, reranker,
+verification, and action stages so every layer has an independently
+testable degrade path.
+
+### Goal
+Improve reliability via controlled fallback logic.
+
+### Principles
+Fallbacks must:
+- broaden recall
+- reduce complexity
+- increase safety
+
+### Fallback Types
+
+#### Router
+Trigger: low confidence
+Action: dual-route retrieval
+
+#### Planner
+Trigger: too many subqueries
+Action: collapse to simpler query
+
+#### Retrieval
+Trigger: weak relevance
+Action: brute-force / expanded search
+
+#### Reranker
+Trigger: timeout
+Action: heuristic ranking
+
+#### Verification
+Trigger: weak evidence
+Action: narrow answer or abstain
+
+#### Action
+Trigger: low confidence
+Action: dry-run or recommendation-only
+
+### Config
+```json
+{{
+  "router_confidence_min": 0.7,
+  "max_subqueries": 5
+}}
+```
+
+### Acceptance Criteria
+- Fallbacks independently testable
+- Logged with reason and outcome
+- Improves robustness in benchmarks
