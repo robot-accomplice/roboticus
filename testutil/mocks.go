@@ -186,7 +186,9 @@ func SeedEpisodicMemory(t *testing.T, store *db.Store, entries []string) {
 	}
 }
 
-// SeedSemanticMemory adds a key-value pair to semantic_memory.
+// SeedSemanticMemory adds a key-value pair to semantic_memory. The
+// resulting row is NOT canonical by default — pass through
+// SeedCanonicalSemanticMemory when a test needs an authoritative source.
 func SeedSemanticMemory(t *testing.T, store *db.Store, category, key, value string) {
 	t.Helper()
 	_, err := store.ExecContext(context.Background(),
@@ -194,6 +196,23 @@ func SeedSemanticMemory(t *testing.T, store *db.Store, category, key, value stri
 		db.NewID(), category, key, value)
 	if err != nil {
 		t.Fatalf("seed semantic memory: %v", err)
+	}
+}
+
+// SeedCanonicalSemanticMemory adds an explicitly canonical semantic_memory
+// row with a caller-supplied source_label. This is the helper every test
+// that relies on canonical-source behaviour should use — after the
+// Milestone 3 follow-on, canonical is a persisted caller-asserted flag,
+// not an inference from category/key contents.
+func SeedCanonicalSemanticMemory(t *testing.T, store *db.Store, category, key, value, sourceLabel string) {
+	t.Helper()
+	_, err := store.ExecContext(context.Background(),
+		`INSERT INTO semantic_memory (id, category, key, value, confidence,
+		   is_canonical, source_label, asserter_id, version)
+		 VALUES (?, ?, ?, ?, 0.95, 1, ?, 'testutil', 1)`,
+		db.NewID(), category, key, value, sourceLabel)
+	if err != nil {
+		t.Fatalf("seed canonical semantic memory: %v", err)
 	}
 }
 

@@ -326,7 +326,12 @@ func TestRetrieveSemanticEvidence_PreservesAuthorityMetadata(t *testing.T) {
 	store := testutil.TempStore(t)
 	ctx := context.Background()
 
-	testutil.SeedSemanticMemory(t, store, "policy", "refund_window", "Refunds are available for 30 days")
+	// After Milestone 3 follow-on: canonical status is an explicit persisted
+	// flag, not an inference from category/key. Tests that expect an
+	// authoritative ranking must seed a canonically-asserted row and supply
+	// the source_label directly.
+	testutil.SeedCanonicalSemanticMemory(t, store, "policy", "refund_window",
+		"Refunds are available for 30 days", "policy/refund-v1")
 
 	mr := NewRetriever(DefaultRetrievalConfig(), DefaultTierBudget(), store)
 	results := mr.retrieveSemanticEvidence(ctx, "refund", nil, RetrievalKeyword, 200)
@@ -337,14 +342,34 @@ func TestRetrieveSemanticEvidence_PreservesAuthorityMetadata(t *testing.T) {
 	if results[0].SourceID == "" {
 		t.Fatal("expected source ID to be preserved")
 	}
-	if results[0].SourceLabel == "" {
-		t.Fatal("expected source label to be populated")
+	if results[0].SourceLabel != "policy/refund-v1" {
+		t.Fatalf("expected persisted source_label to be used verbatim, got %q", results[0].SourceLabel)
 	}
 	if !results[0].IsCanonical {
-		t.Fatal("policy category should be treated as canonical")
+		t.Fatal("caller-asserted canonical row should surface as canonical")
 	}
 	if results[0].AuthorityScore <= 0 {
 		t.Fatal("expected positive authority score")
+	}
+}
+
+func TestRetrieveSemanticEvidence_NonCanonicalStaysNonCanonical(t *testing.T) {
+	store := testutil.TempStore(t)
+	ctx := context.Background()
+
+	// Pre-migration behaviour inferred canonical from the word "policy" in
+	// the category. That inference is gone — a row seeded without the
+	// explicit canonical flag must NOT come back marked canonical even if
+	// its category says "policy".
+	testutil.SeedSemanticMemory(t, store, "policy", "refund_window", "Refunds are available for 30 days")
+
+	mr := NewRetriever(DefaultRetrievalConfig(), DefaultTierBudget(), store)
+	results := mr.retrieveSemanticEvidence(ctx, "refund", nil, RetrievalKeyword, 200)
+	if len(results) == 0 {
+		t.Fatal("expected semantic evidence")
+	}
+	if results[0].IsCanonical {
+		t.Fatal("row without explicit canonical flag must not surface as canonical")
 	}
 }
 

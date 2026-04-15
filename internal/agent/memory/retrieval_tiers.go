@@ -10,13 +10,20 @@ import (
 	"roboticus/internal/db"
 )
 
-func semanticAuthority(category string, confidence float64) (bool, float64) {
-	lower := strings.ToLower(category)
-	canonical := strings.Contains(lower, "policy") ||
-		strings.Contains(lower, "architecture") ||
-		strings.Contains(lower, "procedure") ||
-		strings.Contains(lower, "canonical")
-
+// semanticAuthority returns the (is_canonical, authority_score) pair for a
+// semantic_memory row given its persisted canonical flag and confidence.
+//
+// Milestone 3 follow-on: canonical is now a caller-asserted persisted flag
+// (see internal/db/migrations/047_policy_ingestion.sql and
+// Manager.IngestPolicyDocument). The inference-by-substring path the old
+// implementation used is gone — authority is an explicit claim backed by
+// provenance, never a guess from how a row happens to be named.
+//
+// The authority floor of 0.85 for canonical rows is retained: even a
+// barely-indexed canonical doc should rank above generic high-confidence
+// non-canonical entries so policy queries find the authoritative source
+// first.
+func semanticAuthority(isCanonical bool, confidence float64) (bool, float64) {
 	score := confidence
 	if score < 0 {
 		score = 0
@@ -24,10 +31,10 @@ func semanticAuthority(category string, confidence float64) (bool, float64) {
 	if score > 1 {
 		score = 1
 	}
-	if canonical && score < 0.85 {
+	if isCanonical && score < 0.85 {
 		score = 0.85
 	}
-	return canonical, score
+	return isCanonical, score
 }
 
 func semanticSourceLabel(category, key string) string {
@@ -107,26 +114,34 @@ func (mr *Retriever) retrieveSemanticEvidence(ctx context.Context, query string,
 					category   string
 					key        string
 					value      string
-					confidence float64
-					ageDays    float64
+					confidence      float64
+					ageDays         float64
+					isCanonicalCol  sql.NullInt64
+					sourceLabelCol  sql.NullString
 				)
 				err := mr.store.QueryRowContext(ctx,
 					`SELECT id, category, key, value, confidence,
-					        julianday('now') - julianday(updated_at)
+					        julianday('now') - julianday(updated_at),
+					        is_canonical, source_label
 					   FROM semantic_memory
 					  WHERE id = ? AND memory_state = 'active'`,
-					hr.SourceID).Scan(&id, &category, &key, &value, &confidence, &ageDays)
+					hr.SourceID).Scan(&id, &category, &key, &value, &confidence, &ageDays, &isCanonicalCol, &sourceLabelCol)
 				if err != nil {
 					continue
 				}
 				seen[id] = struct{}{}
-				isCanonical, authority := semanticAuthority(category, confidence)
+				persistedCanonical := isCanonicalCol.Valid && isCanonicalCol.Int64 != 0
+				isCanonical, authority := semanticAuthority(persistedCanonical, confidence)
+				label := semanticSourceLabel(category, key)
+				if sourceLabelCol.Valid && sourceLabelCol.String != "" {
+					label = sourceLabelCol.String
+				}
 				evidence = appendEvidence(evidence, Evidence{
 					Content:        fmt.Sprintf("[%s] %s: %s", category, key, value),
 					SourceTier:     TierSemantic,
 					SourceID:       id,
 					SourceTable:    "semantic_memory",
-					SourceLabel:    semanticSourceLabel(category, key),
+					SourceLabel:    label,
 					SourceCategory: category,
 					Score:          hr.Similarity,
 					FTSScore:       hr.FTSScore,
@@ -148,19 +163,21 @@ func (mr *Retriever) retrieveSemanticEvidence(ctx context.Context, query string,
 	if query != "" {
 		rows, err = mr.store.QueryContext(ctx,
 			`SELECT id, category, key, value, confidence,
-			        julianday('now') - julianday(updated_at) AS age_days
+			        julianday('now') - julianday(updated_at) AS age_days,
+			        is_canonical, source_label
 			   FROM semantic_memory
 			  WHERE memory_state = 'active' AND (value LIKE ? OR key LIKE ?)
-			  ORDER BY confidence DESC, updated_at DESC LIMIT 20`,
+			  ORDER BY is_canonical DESC, confidence DESC, updated_at DESC LIMIT 20`,
 			"%"+query+"%", "%"+query+"%")
 	}
 	if err != nil || rows == nil {
 		rows, err = mr.store.QueryContext(ctx,
 			`SELECT id, category, key, value, confidence,
-			        julianday('now') - julianday(updated_at) AS age_days
+			        julianday('now') - julianday(updated_at) AS age_days,
+			        is_canonical, source_label
 			   FROM semantic_memory
 			  WHERE memory_state = 'active'
-			  ORDER BY confidence DESC, updated_at DESC LIMIT 20`)
+			  ORDER BY is_canonical DESC, confidence DESC, updated_at DESC LIMIT 20`)
 	}
 	if err != nil {
 		return nil
@@ -169,26 +186,33 @@ func (mr *Retriever) retrieveSemanticEvidence(ctx context.Context, query string,
 
 	for rows.Next() {
 		var (
-			id         string
-			category   string
-			key        string
-			value      string
-			confidence float64
-			ageDays    float64
+			id             string
+			category       string
+			key            string
+			value          string
+			confidence     float64
+			ageDays        float64
+			isCanonicalCol sql.NullInt64
+			sourceLabelCol sql.NullString
 		)
-		if rows.Scan(&id, &category, &key, &value, &confidence, &ageDays) != nil {
+		if rows.Scan(&id, &category, &key, &value, &confidence, &ageDays, &isCanonicalCol, &sourceLabelCol) != nil {
 			continue
 		}
 		if _, ok := seen[id]; ok {
 			continue
 		}
-		isCanonical, authority := semanticAuthority(category, confidence)
+		persistedCanonical := isCanonicalCol.Valid && isCanonicalCol.Int64 != 0
+		isCanonical, authority := semanticAuthority(persistedCanonical, confidence)
+		label := semanticSourceLabel(category, key)
+		if sourceLabelCol.Valid && sourceLabelCol.String != "" {
+			label = sourceLabelCol.String
+		}
 		evidence = appendEvidence(evidence, Evidence{
 			Content:        fmt.Sprintf("[%s] %s: %s", category, key, value),
 			SourceTier:     TierSemantic,
 			SourceID:       id,
 			SourceTable:    "semantic_memory",
-			SourceLabel:    semanticSourceLabel(category, key),
+			SourceLabel:    label,
 			SourceCategory: category,
 			Score:          confidence,
 			AgeDays:        ageDays,

@@ -42,7 +42,7 @@ closed, or the critical path changes.
 |-----------|-------|--------|-------|
 | 1 | Unify The Production Retrieval Path | Acceptance met | Pipeline-prepared memory/index preferred by runtime; inference stage emits a `retrieval.*` artifact hash (context + index + combined) onto every trace; a parity fitness proves standard and streaming sessions compute identical hashes and detects drift |
 | 2 | Make Intent And Retrieval Routing Real Decision Inputs | Acceptance met | Unified `PerceptionArtifact` (intent, risk, source-of-truth, required tiers, decomposition, freshness, confidence) is computed in pipeline, stashed on session, and emitted to traces; retrieval modes already honour intent-driven routing |
-| 3 | Upgrade Semantic Memory Into A Canonical Knowledge Layer | Acceptance met | Schema now carries `version`, `effective_date`, and `superseded_by`; manager upsert bumps version on value change and keeps it stable on idempotent rewrites; consolidation contradiction phase sets supersession pointers; `CurrentSemanticValue` walks the chain with cycle + length guards |
+| 3 | Upgrade Semantic Memory Into A Canonical Knowledge Layer | Acceptance met (follow-on closed) | Schema now carries `version`, `effective_date`, `superseded_by`, `is_canonical`, `source_label`, and `asserter_id`; canonical is a caller-asserted persisted flag (no more inference by category substring); `IngestPolicyDocument` + `ingest_policy` agent tool provide an end-to-end ingestion surface with null-default effective_date, explicit canonical provenance, and no-silent-overwrite guardrails |
 | 4 | Turn Procedural Memory Into Workflow Memory | Acceptance met (follow-on closed) | Workflow schema, Manager API, retrieval precedence over tool stats, post-turn promotion with auto-extracted error modes + preconditions + intent tags, consolidation confidence sync, and an agent-facing `find_workflow` tool with Laplace-smoothed ranking all land |
 | 5 | Replace Relationship Memory With Persisted Relational Memory | Acceptance met (follow-ons closed) | Persisted `knowledge_facts` store, graph-aware retrieval, reusable `KnowledgeGraph` API with multi-hop `ShortestPath` / `Impact` / `Dependencies`, a `query_knowledge_graph` agent tool, and a retired permissive path-search fallback with a single canonical-relation source of truth enforced at the write gate |
 | 6 | Add A Real Verifier / Critic Stage | Acceptance met (follow-ons closed) | Claim-level certainty classification, provenance coverage, contradiction reconciliation, per-intent proof obligations, a structured claim-to-evidence trace map, and an embedding-backed semantic certainty classifier (lexical-first, semantic-second) that catches paraphrased absolute / hedged claims the lexical markers miss |
@@ -145,9 +145,11 @@ closed, or the critical path changes.
 All eight core milestones (M1–M8) now have their acceptance criteria
 met. The only remaining items are quality follow-ons:
 
-1. **M3 follow-on** — richer ingestion surface for docs / policy files
-   with version + effective-date population, and migrate semantic
-   retrieval off the residual LIKE path onto hybrid FTS+vector.
+1. **M3 follow-on (read path)** — migrate semantic retrieval off the
+   residual `LIKE` path onto hybrid FTS+vector. The ingestion surface
+   is now closed; this remaining piece touches every consumer of
+   `retrieveSemanticEvidence` and needs careful FTS5 schema work, so
+   it is sequenced as its own slice.
 2. **Appendices A, B, C** — observability dashboards, evaluation
    matrix, and fallback strategy spec work. These are sequenced
    after the quality follow-ons above complete.
@@ -346,7 +348,7 @@ that controls memory selection, retrieval mode, and risk posture.
 
 ## Milestone 3: Upgrade Semantic Memory Into A Canonical Knowledge Layer
 
-**Status**: Acceptance met (follow-on open: richer ingestion surface for docs / policy files)
+**Status**: Acceptance met (follow-ons closed)
 
 ### Goal
 
@@ -408,11 +410,34 @@ knowledge instead of mostly long assistant responses.
   `CurrentSemanticValue` (walks the chain with cycle + length guards)
   and `MarkSemanticSuperseded` (manual supersession with replacement
   liveness validation).
-- Follow-on open: richer ingestion surface so docs / policy files and
-  normalized distilled summaries can land directly into semantic memory
-  with the new version and effective-date fields populated, and a full
-  migration of semantic retrieval off the residual LIKE path onto
-  hybrid FTS+vector.
+- Migration `047_policy_ingestion.sql` adds `is_canonical`,
+  `source_label`, and `asserter_id` columns plus a `(is_canonical,
+  memory_state, category)` index so the canonical-first read path is
+  cheap. Canonical status is now a persisted caller-asserted flag —
+  the old "infer canonical from substring matches on category/key"
+  path in `semanticAuthority` is gone.
+- `Manager.IngestPolicyDocument` provides the ingestion surface with
+  the design's full set of guardrails: required category / key /
+  content / source_label; `effective_date` defaults to NULL (never
+  silently substituted with `now()`); `Canonical=true` requires
+  `AsserterID` AND (`Version > 0` OR `EffectiveDate`); silent
+  overwrite of an existing `(category, key)` row is rejected unless
+  the caller passes `ReplacePriorVersion=true` or supplies a
+  strictly-higher version. Replacements flip the prior row to stale
+  with `superseded_by` set, integrating with the Milestone 3
+  supersession chain so audit trails stay intact.
+- New `ingest_policy` agent tool wraps the Manager method as
+  `RiskDangerous`. It blocks the calling agent's own identity from
+  being used as the canonical asserter, so the agent cannot
+  auto-mark its own output as canonical.
+- The retrieval reader now SELECTs `is_canonical` and `source_label`
+  directly and prefers the persisted source label when present;
+  ordering puts canonical rows ahead of non-canonical at equal
+  confidence.
+- Follow-on still open: migrating semantic retrieval off the residual
+  `LIKE` path onto hybrid FTS+vector. Tracked separately because it
+  touches every consumer of `retrieveSemanticEvidence` and needs
+  careful FTS5 schema work.
 
 ---
 

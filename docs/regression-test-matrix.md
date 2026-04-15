@@ -393,6 +393,13 @@ Blocking commands for feature-complete releases:
 | R-AGENT-126 | Semantic certainty classifier upgrades a paraphrased moderate-tagged claim and leaves already-tagged lexical claims untouched | `internal/pipeline/verifier_classifier_test.go` | L1 |
 | R-AGENT-127 | Verifier with classifier flags paraphrased absolute claims (no lexical marker) under per-intent proof obligation; without classifier the same response stays moderate and passes | `internal/pipeline/verifier_classifier_test.go` | L1 |
 | R-AGENT-128 | Curated certainty corpus covers absolute / high / hedged with at least 5 examples per category | `internal/pipeline/verifier_classifier_test.go` | L1 |
+| R-AGENT-129 | `IngestPolicyDocument` rejects missing core fields (category / key / content / source_label) | `internal/agent/memory/policy_ingestion_test.go` | L1 |
+| R-AGENT-130 | `IngestPolicyDocument` defaults `effective_date` to NULL and parses caller-supplied dates without substituting ingestion time | `internal/agent/memory/policy_ingestion_test.go` | L1 |
+| R-AGENT-131 | `IngestPolicyDocument` enforces canonical guardrails: requires `asserter_id` AND (version OR effective_date); rejects asserters in `DisallowedAsserterIDs` | `internal/agent/memory/policy_ingestion_test.go` | L1 |
+| R-AGENT-132 | `IngestPolicyDocument` rejects silent overwrites; allows replacement via explicit flag, strictly-higher version, or canonical-promotion | `internal/agent/memory/policy_ingestion_test.go` | L1 |
+| R-AGENT-133 | Replacement marks prior row stale with `superseded_by` and the Milestone 3 chain-walker resolves from the prior id to the new row | `internal/agent/memory/policy_ingestion_test.go` | L1 |
+| R-AGENT-134 | Semantic retrieval uses persisted `is_canonical` and `source_label` columns; rows without explicit canonical assertion no longer surface as canonical even when category contains "policy" | `internal/agent/memory/retrieval_test.go` | L1 |
+| R-AGENT-135 | `ingest_policy` agent tool round-trips with explicit provenance, blocks self-asserter for canonical, rejects silent overwrites, and exposes RiskDangerous | `internal/agent/tools/policy_ingest_test.go` | L1 |
 
 ## Governance Rules
 

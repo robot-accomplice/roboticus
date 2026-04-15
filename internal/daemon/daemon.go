@@ -209,6 +209,7 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 	tools.Register(agenttools.NewMemorySearchTool(store))
 	tools.Register(agenttools.NewGraphQueryTool(store))
 	tools.Register(agenttools.NewWorkflowSearchTool(store))
+	tools.Register(agenttools.NewPolicyIngestTool(store, cfg.Agent.Name))
 
 	// Channel and subagent introspection.
 	tools.Register(&agenttools.ChannelHealthTool{})
