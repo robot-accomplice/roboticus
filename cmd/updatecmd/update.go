@@ -316,14 +316,29 @@ func applyProvidersUpdate(ctx context.Context, registryURL, configPath string) (
 		return false, err
 	}
 	remoteURL := registryBaseURL(registryURL) + "/" + strings.TrimPrefix(manifest.Packs.Providers.Path, "/")
+	// Symmetric narration with the binary update path, which prints
+	// "Downloading roboticus-darwin-arm64..." before the fetch. Without
+	// this, a checksum-mismatch failure right after the binary's
+	// "Checksum verified." line reads as if the same verification flipped
+	// outcome — they are actually two separate verifications against two
+	// separate sources of truth.
+	fmt.Printf("Downloading provider pack from %s...\n", remoteURL)
 	content, err := fetchText(ctx, remoteURL)
 	if err != nil {
 		return false, err
 	}
 	hash := BytesSHA256([]byte(content))
 	if manifest.Packs.Providers.SHA256 != "" && !strings.EqualFold(hash, manifest.Packs.Providers.SHA256) {
-		return false, fmt.Errorf("provider pack checksum mismatch")
+		// Self-describing mismatch error: surface the URL fetched, the
+		// hash the registry manifest declared, and the hash actually
+		// computed from the downloaded bytes. An operator hitting this
+		// can decide in one read whether the registry is publishing a
+		// stale manifest or the download is being mutated in transit,
+		// without needing to re-run curl by hand.
+		return false, fmt.Errorf("provider pack checksum mismatch: url=%s expected=%s received=%s",
+			remoteURL, manifest.Packs.Providers.SHA256, hash)
 	}
+	fmt.Println("Provider pack checksum verified.")
 
 	path := providersLocalPath(configPath)
 	if data, err := os.ReadFile(path); err == nil && BytesSHA256(data) == hash {
@@ -372,6 +387,13 @@ func applySkillsUpdate(ctx context.Context, registryURL, configPath string) (boo
 		}
 	}
 
+	// Tally counts so we can emit one summary line at the end rather
+	// than narrating every single skill file. Per-file narration would
+	// flood the operator's terminal on first install (manifests can list
+	// dozens of skills); the summary keeps the signal without losing
+	// observability.
+	downloaded := 0
+	cached := 0
 	changed := false
 	for name, expectedHash := range manifest.Packs.Skills.Files {
 		if !safeSkillPath(dir, name) {
@@ -380,6 +402,7 @@ func applySkillsUpdate(ctx context.Context, registryURL, configPath string) (boo
 		path := filepath.Join(dir, name)
 		if data, err := os.ReadFile(path); err == nil && strings.EqualFold(BytesSHA256(data), expectedHash) {
 			fileHashes[name] = expectedHash
+			cached++
 			continue
 		}
 
@@ -390,7 +413,13 @@ func applySkillsUpdate(ctx context.Context, registryURL, configPath string) (boo
 		}
 		hash := BytesSHA256([]byte(content))
 		if expectedHash != "" && !strings.EqualFold(hash, expectedHash) {
-			return false, fmt.Errorf("skill %s checksum mismatch", name)
+			// Self-describing mismatch error matches the providers-pack
+			// shape: skill name, URL, expected hash, received hash.
+			// Anyone debugging the registry needs all four to confirm
+			// whether the manifest is stale or the file was mutated in
+			// transit.
+			return false, fmt.Errorf("skill %s checksum mismatch: url=%s expected=%s received=%s",
+				name, remoteURL, expectedHash, hash)
 		}
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			return false, err
@@ -399,7 +428,23 @@ func applySkillsUpdate(ctx context.Context, registryURL, configPath string) (boo
 			return false, err
 		}
 		fileHashes[name] = hash
+		downloaded++
 		changed = true
+	}
+
+	// Symmetric end-of-step narration with the providers-pack
+	// "Provider pack checksum verified." line. Quiet on no-op runs
+	// (nothing downloaded AND nothing newly cached) so subsequent
+	// re-runs don't spam the operator with redundant chatter.
+	if downloaded > 0 || cached > 0 {
+		switch {
+		case downloaded == 0:
+			fmt.Printf("Skill pack already current (%d files cached).\n", cached)
+		case cached == 0:
+			fmt.Printf("Skill pack updated: %d file(s) downloaded and verified.\n", downloaded)
+		default:
+			fmt.Printf("Skill pack updated: %d file(s) downloaded and verified, %d already cached.\n", downloaded, cached)
+		}
 	}
 
 	state.LastCheck = nowRFC3339()

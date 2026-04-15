@@ -138,6 +138,145 @@ func TestApplyProvidersUpdateAndSkillsUpdate(t *testing.T) {
 	}
 }
 
+// TestApplyProvidersUpdate_MismatchErrorIsSelfDescribing locks in the
+// post-incident debuggability contract: when the registry manifest's
+// declared SHA256 doesn't match the bytes actually served for the
+// provider pack, the resulting error string must carry enough
+// information to triage the publishing pipeline without re-running curl
+// by hand. Specifically: the URL fetched, the hash the manifest
+// declared (expected), and the hash computed from the downloaded bytes
+// (received) all appear in the error message.
+//
+// The same kind of mismatch surfaced as a bare "provider pack checksum
+// mismatch" before this regression existed — that wording made
+// operators conflate the binary update's "Checksum verified." message
+// with the providers step's verification, since the providers step
+// silently failed without saying which URL it had pulled from. The
+// assertions below intentionally check for the URL, the expected hash,
+// and the received hash literally so any future shortening of the
+// error message would surface here.
+func TestApplyProvidersUpdate_MismatchErrorIsSelfDescribing(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	configPath := filepath.Join(home, "roboticus.toml")
+	if err := os.WriteFile(configPath, []byte(""), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// The manifest declares a SHA for bytes that DO NOT match what the
+	// pack URL will actually serve. This is the exact shape of the bug
+	// reported against `roboticus upgrade all` when the publishing
+	// pipeline forgets to regenerate the manifest hash.
+	declaredHash := BytesSHA256([]byte("the manifest claims THIS is the pack body"))
+	servedBody := "but the URL serves THESE bytes instead"
+
+	manifest := RegistryManifest{
+		Version: "v2026.04.10",
+		Packs: RegistryPacks{
+			Providers: ProviderPack{
+				Path:   "packs/providers.toml",
+				SHA256: declaredHash,
+			},
+		},
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/registry/manifest.json":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(manifest)
+		case "/registry/packs/providers.toml":
+			_, _ = w.Write([]byte(servedBody))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	registryURL := server.URL + "/registry/manifest.json"
+	_, err := applyProvidersUpdate(context.Background(), registryURL, configPath)
+	if err == nil {
+		t.Fatalf("expected mismatch error; got nil")
+	}
+	msg := err.Error()
+	expectedURL := server.URL + "/registry/packs/providers.toml"
+	receivedHash := BytesSHA256([]byte(servedBody))
+	for _, want := range []string{
+		"checksum mismatch",
+		"url=" + expectedURL,
+		"expected=" + declaredHash,
+		"received=" + receivedHash,
+	} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("error message must contain %q for triage; got %q", want, msg)
+		}
+	}
+}
+
+// TestApplySkillsUpdate_MismatchErrorIsSelfDescribing extends the same
+// debuggability contract to skills. The skills path can mismatch on a
+// per-file basis (each skill has its own hash entry in the manifest),
+// so the error must also identify which specific skill file failed —
+// that's the only signal that tells operators whether the publishing
+// pipeline mishandled one file or the whole pack.
+func TestApplySkillsUpdate_MismatchErrorIsSelfDescribing(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	configPath := filepath.Join(home, "roboticus.toml")
+	skillsDir := filepath.Join(home, "skills")
+	if err := os.WriteFile(configPath, []byte("[skills]\ndirectory = \""+skillsDir+"\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	declaredHash := BytesSHA256([]byte("the manifest claims THIS is the skill body"))
+	servedBody := "but the skill URL serves THESE bytes instead"
+
+	manifest := RegistryManifest{
+		Version: "v2026.04.10",
+		Packs: RegistryPacks{
+			Skills: SkillPack{
+				Path: "packs/skills/",
+				Files: map[string]string{
+					"misaligned-skill.md": declaredHash,
+				},
+			},
+		},
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/registry/manifest.json":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(manifest)
+		case "/registry/packs/skills/misaligned-skill.md":
+			_, _ = w.Write([]byte(servedBody))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	registryURL := server.URL + "/registry/manifest.json"
+	_, err := applySkillsUpdate(context.Background(), registryURL, configPath)
+	if err == nil {
+		t.Fatalf("expected skill mismatch error; got nil")
+	}
+	msg := err.Error()
+	expectedURL := server.URL + "/registry/packs/skills/misaligned-skill.md"
+	receivedHash := BytesSHA256([]byte(servedBody))
+	for _, want := range []string{
+		"misaligned-skill.md",
+		"checksum mismatch",
+		"url=" + expectedURL,
+		"expected=" + declaredHash,
+		"received=" + receivedHash,
+	} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("skill error message must contain %q for triage; got %q", want, msg)
+		}
+	}
+}
+
 func TestRunUpdateAllOrchestratesBinaryProvidersAndSkills(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
