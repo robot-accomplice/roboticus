@@ -3,7 +3,36 @@ package db
 import (
 	"context"
 	"database/sql"
+	"fmt"
 )
+
+// CanonicalGraphRelations is the authoritative set of relations that may be
+// written to knowledge_facts. Retrieval's KnowledgeGraph treats these (and
+// only these) as traversable dependency edges, so the write gate enforces
+// the same set to prevent non-traversable relations from sneaking in and
+// silently excluding themselves from path / impact queries.
+//
+// To introduce a new relation:
+//  1. Add it here.
+//  2. Update the extractor in
+//     internal/agent/memory/manager.go::graphRelationPatterns so the
+//     ingestion pipeline produces the new relation on matching text.
+//  3. Update internal/agent/memory/graph.go::IsTraversableRelation (a test
+//     enforces parity between this list and IsTraversableRelation).
+var CanonicalGraphRelations = []string{
+	"depends_on", "uses", "blocked_by", "blocks",
+	"causes", "caused_by", "version_of", "owned_by",
+}
+
+// IsCanonicalGraphRelation reports whether relation is in the canonical set.
+func IsCanonicalGraphRelation(relation string) bool {
+	for _, r := range CanonicalGraphRelations {
+		if r == relation {
+			return true
+		}
+	}
+	return false
+}
 
 // MemoryRow is a unified row type for any memory tier.
 type MemoryRow struct {
@@ -75,8 +104,13 @@ func (r *MemoryRepository) StoreRelationship(ctx context.Context, id, entityID, 
 	return err
 }
 
-// StoreKnowledgeFact upserts a typed graph fact.
+// StoreKnowledgeFact upserts a typed graph fact. The relation is validated
+// against CanonicalGraphRelations so retrieval-layer path and impact
+// traversals can trust every row they read.
 func (r *MemoryRepository) StoreKnowledgeFact(ctx context.Context, id, subject, relation, object, sourceTable, sourceID string, confidence float64) error {
+	if !IsCanonicalGraphRelation(relation) {
+		return fmt.Errorf("knowledge_facts: relation %q is not canonical; allowed set: %v", relation, CanonicalGraphRelations)
+	}
 	_, err := r.q.ExecContext(ctx,
 		`INSERT INTO knowledge_facts (id, subject, relation, object, source_table, source_id, confidence)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)

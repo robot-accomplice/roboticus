@@ -379,6 +379,10 @@ Blocking commands for feature-complete releases:
 | R-AGENT-112 | Ranker drops candidates below the ranking floor so the tool does not surface untrusted workflows | `internal/agent/tools/workflow_search_test.go` | L1 |
 | R-AGENT-113 | `find_workflow` tool returns ranked matches for `find`, fetches by exact name for `get`, and rejects unknown operations | `internal/agent/tools/workflow_search_test.go` | L1 |
 | R-AGENT-114 | `find_workflow` multi-word queries match hyphenated workflow names via longest-token SQL prefilter + in-memory multi-token ranker | `internal/agent/tools/workflow_search_test.go` | L1 |
+| R-AGENT-115 | Path retrieval ignores non-canonical relations (no permissive fallback) and still traverses canonical edges | `internal/agent/memory/graph_canonical_test.go` | L1 |
+| R-AGENT-116 | Extractor patterns and `db.CanonicalGraphRelations` stay in sync — new relations added to one side must land on the other | `internal/agent/memory/graph_canonical_test.go` | L1 |
+| R-AGENT-117 | `IsTraversableRelation` delegates to `db.IsCanonicalGraphRelation` as the single source of truth | `internal/agent/memory/graph_canonical_test.go` | L1 |
+| R-AGENT-118 | `MemoryRepository.StoreKnowledgeFact` rejects non-canonical relations at write time | `internal/agent/memory/graph_canonical_test.go` | L1 |
 
 ## Governance Rules
 

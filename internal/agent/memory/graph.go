@@ -106,16 +106,12 @@ func NewKnowledgeGraph(facts []GraphFactRow) *KnowledgeGraph {
 }
 
 // IsTraversableRelation returns true for relations that represent a directed
-// dependency or causal edge in the knowledge graph. Non-traversable relations
-// (e.g. "mentions") do not contribute to path or impact traversals.
+// dependency or causal edge in the knowledge graph. It delegates to
+// db.CanonicalGraphRelations so the read-side traversability rule and the
+// write-side enforcement in StoreKnowledgeFact share one authoritative list.
+// Non-canonical relations do not contribute to path or impact traversals.
 func IsTraversableRelation(relation string) bool {
-	switch relation {
-	case "depends_on", "uses", "blocked_by", "blocks",
-		"causes", "caused_by", "version_of", "owned_by":
-		return true
-	default:
-		return false
-	}
+	return db.IsCanonicalGraphRelation(relation)
 }
 
 // NodeCount returns the number of distinct nodes in the graph (subjects or

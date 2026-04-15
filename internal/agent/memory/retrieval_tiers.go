@@ -715,15 +715,16 @@ const retrievalGraphMaxExpansionDepth = 2
 const retrievalGraphMaxEvidence = 3
 
 func buildGraphPathEvidence(facts []graphFactRow, start, goal string) []Evidence {
+	// Path evidence only travels canonical directed-dependency edges
+	// (depends_on / uses / blocks / blocked_by / causes / caused_by /
+	// version_of / owned_by). The production ingestion path
+	// (Manager.extractKnowledgeFacts) writes only those relations, so the
+	// canonical set is a superset of anything that can land in the table.
+	// Non-canonical rows, if they ever appear, are not treated as valid
+	// dependency edges and the path search correctly returns nil rather
+	// than fabricating a connection through an unrelated relation.
 	graph := NewKnowledgeGraph(facts)
 	edges := graph.ShortestPath(start, goal, retrievalGraphMaxPathDepth)
-	if len(edges) == 0 {
-		// The retrieval-tier walker used to treat any edge as traversable for
-		// path queries (not just depends_on / blocks / etc.). Preserve that
-		// behaviour by retrying against the raw adjacency when the bounded
-		// traversal finds nothing.
-		edges = shortestPathIgnoringRelationFilter(facts, start, goal)
-	}
 	if len(edges) == 0 {
 		return nil
 	}
@@ -754,58 +755,6 @@ func buildGraphExpansionEvidence(facts []graphFactRow, seeds []string, reverse b
 		}
 	}
 	return evidence
-}
-
-// shortestPathIgnoringRelationFilter replicates the historical retrieval
-// behaviour where even non-traversable relations (e.g., "mentions") could
-// contribute to a path search. The bounded KnowledgeGraph walker rejects
-// those by design, so when a filtered walk finds nothing we fall back to
-// this permissive helper.
-func shortestPathIgnoringRelationFilter(facts []graphFactRow, start, goal string) []graphEdge {
-	adjacency := make(map[string][]graphEdge)
-	for _, fact := range facts {
-		from := strings.ToLower(fact.Subject)
-		to := strings.ToLower(fact.Object)
-		if from == "" || to == "" {
-			continue
-		}
-		adjacency[from] = append(adjacency[from], graphEdge{From: fact.Subject, To: fact.Object, Fact: fact})
-		adjacency[to] = append(adjacency[to], graphEdge{From: fact.Object, To: fact.Subject, Fact: fact})
-	}
-
-	startKey := strings.ToLower(start)
-	goalKey := strings.ToLower(goal)
-	if startKey == "" || goalKey == "" || startKey == goalKey {
-		return nil
-	}
-
-	type pathState struct {
-		Node  string
-		Edges []graphEdge
-	}
-	queue := []pathState{{Node: startKey}}
-	visited := map[string]struct{}{startKey: {}}
-
-	for len(queue) > 0 {
-		current := queue[0]
-		queue = queue[1:]
-		for _, edge := range adjacency[current.Node] {
-			next := strings.ToLower(edge.To)
-			if _, seen := visited[next]; seen {
-				continue
-			}
-			visited[next] = struct{}{}
-			nextEdges := append(append([]graphEdge(nil), current.Edges...), edge)
-			if next == goalKey {
-				return nextEdges
-			}
-			if len(nextEdges) >= retrievalGraphMaxPathDepth {
-				continue
-			}
-			queue = append(queue, pathState{Node: next, Edges: nextEdges})
-		}
-	}
-	return nil
 }
 
 func graphPathEvidence(start, goal string, edges []graphEdge) Evidence {

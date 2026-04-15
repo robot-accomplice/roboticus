@@ -44,7 +44,7 @@ closed, or the critical path changes.
 | 2 | Make Intent And Retrieval Routing Real Decision Inputs | Acceptance met | Unified `PerceptionArtifact` (intent, risk, source-of-truth, required tiers, decomposition, freshness, confidence) is computed in pipeline, stashed on session, and emitted to traces; retrieval modes already honour intent-driven routing |
 | 3 | Upgrade Semantic Memory Into A Canonical Knowledge Layer | Acceptance met | Schema now carries `version`, `effective_date`, and `superseded_by`; manager upsert bumps version on value change and keeps it stable on idempotent rewrites; consolidation contradiction phase sets supersession pointers; `CurrentSemanticValue` walks the chain with cycle + length guards |
 | 4 | Turn Procedural Memory Into Workflow Memory | Acceptance met (follow-on closed) | Workflow schema, Manager API, retrieval precedence over tool stats, post-turn promotion with auto-extracted error modes + preconditions + intent tags, consolidation confidence sync, and an agent-facing `find_workflow` tool with Laplace-smoothed ranking all land |
-| 5 | Replace Relationship Memory With Persisted Relational Memory | Acceptance met | Persisted `knowledge_facts` store, graph-aware retrieval, reusable `KnowledgeGraph` API with multi-hop `ShortestPath` / `Impact` / `Dependencies`, and a `query_knowledge_graph` agent tool are all shipped |
+| 5 | Replace Relationship Memory With Persisted Relational Memory | Acceptance met (follow-ons closed) | Persisted `knowledge_facts` store, graph-aware retrieval, reusable `KnowledgeGraph` API with multi-hop `ShortestPath` / `Impact` / `Dependencies`, a `query_knowledge_graph` agent tool, and a retired permissive path-search fallback with a single canonical-relation source of truth enforced at the write gate |
 | 6 | Add A Real Verifier / Critic Stage | Acceptance met | Claim-level certainty classification, provenance coverage, contradiction reconciliation, per-intent proof obligations, and a structured claim-to-evidence trace map are all in place; semantic-classifier upgrade remains as quality work |
 | 7 | Deepen Working Memory Into Executive State | Acceptance met | Executive state is persisted, surfaced in context assembly, grows automatically in post-turn, survives restart with a cross-turn regression test, and emits operator-auditable trace/log writes; richer tool-output assumption extraction remains as follow-on work |
 | 8 | Improve Reflection And Consolidation Quality | Acceptance met | Enriched episode summaries (evidence refs, failed hypotheses, fix patterns, result quality) land in post-turn reflection; a dedicated consolidation distillation phase promotes repeated fix patterns and recurring evidence into semantic memory with stricter thresholds so anecdotes do not get promoted |
@@ -143,12 +143,10 @@ met. The only remaining items are quality follow-ons:
 2. **M7 follow-on** — extract assumptions from tool outputs (not only
    the agent's own response) and upgrade assumption confidence
    scoring based on evidence support.
-3. **M5 follow-on** — retire the permissive retrieval fallback now
-   that the canonical relation set covers real-world paths.
-4. **M3 follow-on** — richer ingestion surface for docs / policy files
+3. **M3 follow-on** — richer ingestion surface for docs / policy files
    with version + effective-date population, and migrate semantic
    retrieval off the residual LIKE path onto hybrid FTS+vector.
-5. **Appendices A, B, C** — observability dashboards, evaluation
+4. **Appendices A, B, C** — observability dashboards, evaluation
    matrix, and fallback strategy spec work. These are sequenced
    after the quality follow-ons above complete.
 
@@ -497,7 +495,7 @@ playbooks, and approved action sequences.
 
 ## Milestone 5: Replace Relationship Memory With Persisted Relational Memory
 
-**Status**: Acceptance met (follow-on open: retire the permissive retrieval fallback)
+**Status**: Acceptance met (follow-ons closed)
 
 ### Goal
 
@@ -561,18 +559,22 @@ capable of representing dependencies, ownership, chronology, and causality.
   each call.
 - The retrieval tier now consumes the `KnowledgeGraph` API via type aliases
   (`graphFactRow = GraphFactRow`, `graphEdge = GraphEdge`). Path queries
-  delegate to `ShortestPath`, with a fallback to a permissive walker for
-  non-traversable relations to preserve historical retrieval behaviour.
-  Impact / dependency queries delegate to `Impact` and `Dependencies` with
-  the same depth-2 cap the retrieval tier had before.
+  delegate to `ShortestPath` over the canonical relation set only — the
+  historical permissive fallback is retired because the ingestion path
+  writes only canonical relations by construction. Impact / dependency
+  queries delegate to `Impact` and `Dependencies` with the same depth-2
+  cap the retrieval tier had before.
 - Multi-hop graph queries are now exposed as an agent tool
   (`query_knowledge_graph`) registered from the daemon. The tool supports
   three operations — `path`, `impact`, `dependencies` — and caps both
   the working-set size (500 facts) and max traversal depth (8 hops) so
   large graphs stay responsive. Output is JSON with a `summary`, the
   discovered hops or nodes, and graph stats for auditability.
-- What still remains is removing the permissive retrieval fallback once
-  the canonical relation set covers every path a consumer needs.
+- Canonical relations are centralised in `db.CanonicalGraphRelations` with
+  `db.IsCanonicalGraphRelation` as the single source of truth:
+  `IsTraversableRelation` delegates to it, `StoreKnowledgeFact` enforces
+  it at write time, and a parity regression asserts the extractor's
+  production patterns and the canonical list stay aligned.
 
 ---
 
