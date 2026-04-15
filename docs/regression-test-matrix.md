@@ -400,6 +400,8 @@ Blocking commands for feature-complete releases:
 | R-AGENT-133 | Replacement marks prior row stale with `superseded_by` and the Milestone 3 chain-walker resolves from the prior id to the new row | `internal/agent/memory/policy_ingestion_test.go` | L1 |
 | R-AGENT-134 | Semantic retrieval uses persisted `is_canonical` and `source_label` columns; rows without explicit canonical assertion no longer surface as canonical even when category contains "policy" | `internal/agent/memory/retrieval_test.go` | L1 |
 | R-AGENT-135 | `ingest_policy` agent tool round-trips with explicit provenance, blocks self-asserter for canonical, rejects silent overwrites, and exposes RiskDangerous | `internal/agent/tools/policy_ingest_test.go` | L1 |
+| R-AGENT-136 | M3.1 — every FTS-covered tier (`episodic_memory`, `semantic_memory`, `procedural_memory`, `relationship_memory`) keeps `memory_fts` synchronized across INSERT, UPDATE, and DELETE; future migrations cannot silently regress this contract | `internal/db/fts_trigger_completeness_test.go` | L1 |
+| R-AGENT-137 | M3.1 — migration 048's `memory_fts` backfill is idempotent on already-current data (re-running the SQL produces zero new rows) | `internal/db/fts_trigger_completeness_test.go` | L1 |
 
 ## Governance Rules
 
