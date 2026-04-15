@@ -47,7 +47,7 @@ closed, or the critical path changes.
 | 5 | Replace Relationship Memory With Persisted Relational Memory | In progress | Persisted `knowledge_facts` store, graph-aware retrieval, and first traversal semantics now shipped |
 | 6 | Add A Real Verifier / Critic Stage | Acceptance met | Claim-level certainty classification, provenance coverage, contradiction reconciliation, per-intent proof obligations, and a structured claim-to-evidence trace map are all in place; semantic-classifier upgrade remains as quality work |
 | 7 | Deepen Working Memory Into Executive State | Acceptance met | Executive state is persisted, surfaced in context assembly, grows automatically in post-turn, survives restart with a cross-turn regression test, and emits operator-auditable trace/log writes; richer tool-output assumption extraction remains as follow-on work |
-| 8 | Improve Reflection And Consolidation Quality | In progress | Episode summaries now carry evidence refs, failed hypotheses, fix patterns, error messages, verifier outcome, and a blended result-quality score; cross-tier semantic promotion still pending |
+| 8 | Improve Reflection And Consolidation Quality | Acceptance met | Enriched episode summaries (evidence refs, failed hypotheses, fix patterns, result quality) land in post-turn reflection; a dedicated consolidation distillation phase promotes repeated fix patterns and recurring evidence into semantic memory with stricter thresholds so anecdotes do not get promoted |
 | A | Observability Dashboards (Appendix A) | Post-plan | Only pick up after milestones 1–8 complete; see Appendix A |
 | B | Evaluation Matrix and Test Harness (Appendix B) | Post-plan | Only pick up after milestones 1–8 complete; see Appendix B |
 | C | Fallback Strategy (Appendix C) | Post-plan | Verifier retry and routing modes cover some layers today; full fallback ladder only scheduled after milestones 1–8 complete; see Appendix C |
@@ -706,7 +706,7 @@ short-term executive state described in the reference architecture.
 
 ## Milestone 8: Improve Reflection And Consolidation Quality
 
-**Status**: In progress
+**Status**: Acceptance met (follow-on cleanup open)
 
 ### Goal
 
@@ -751,10 +751,18 @@ Turn post-turn learning from heuristic logging into reusable memory shaping.
   captured tool error messages into `AnalyzeEpisode`, so the stored
   episode summary records the information consolidation needs to
   promote reusable patterns later.
-- What still remains (next M8 slice): a consolidation phase that reads
-  recent episode summaries and promotes repeated successful patterns
-  into semantic memory (and repeat dependencies into `knowledge_facts`),
-  with stricter promotion thresholds to prevent anecdote hijacking.
+- A dedicated consolidation phase `phaseEpisodeDistillation` now parses
+  enriched episode summaries, counts recurring fix patterns and
+  evidence references across successful episodes, and promotes them
+  into `semantic_memory` under the `fix_pattern` and `learned_fact`
+  categories. Thresholds are deliberately strict (3+ episodes for
+  evidence, 2+ for fix patterns) to prevent anecdote hijacking. The
+  phase is idempotent via UPSERT on `(category, key)` and the
+  `Distilled` counter appears in the consolidation report.
+- Follow-on quality work (not blocking acceptance): promote repeated
+  entity-relation pairs observed in enriched summaries into
+  `knowledge_facts`, and add a dashboard surface for the distilled
+  patterns so operators can see what the agent has generalized.
 
 ---
 

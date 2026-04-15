@@ -354,6 +354,10 @@ Blocking commands for feature-complete releases:
 | R-AGENT-87 | Enriched reflection detects fail→success fix patterns and extracts failed hypotheses from self-corrections in the answer | `internal/agent/memory/reflection_episode_test.go` | L1 |
 | R-AGENT-88 | Enriched reflection captures tool error messages, deduplicated, and produces low result quality when tools and verifier fail | `internal/agent/memory/reflection_episode_test.go` | L1 |
 | R-AGENT-89 | `FormatForStorage` includes enriched fields (FixPatterns, EvidenceRefs, FailedHypotheses, Errors, Quality label) | `internal/agent/memory/reflection_episode_test.go` | L1 |
+| R-AGENT-90 | `parseEpisodeSummary` round-trips enriched fields (outcome, fix patterns, evidence refs, quality) back out of the storage format | `internal/agent/memory/consolidation_distillation_test.go` | L1 |
+| R-AGENT-91 | `phaseEpisodeDistillation` promotes fix patterns seen in 2+ successful episodes into `semantic_memory` under `fix_pattern` and is idempotent across re-runs | `internal/agent/memory/consolidation_distillation_test.go` | L1 |
+| R-AGENT-92 | `phaseEpisodeDistillation` promotes evidence references seen in 3+ successful episodes into `semantic_memory` under `learned_fact` | `internal/agent/memory/consolidation_distillation_test.go` | L1 |
+| R-AGENT-93 | `phaseEpisodeDistillation` ignores evidence below the support threshold and skips failure-outcome episodes | `internal/agent/memory/consolidation_distillation_test.go` | L1 |
 
 ## Governance Rules
 
