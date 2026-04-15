@@ -938,20 +938,30 @@ The roadmap should be considered complete when all of the following are true:
 
 ## Immediate Next Step
 
-All eight core milestones (M1–M8) are now acceptance-met. The roadmap's
-main arc is complete. Remaining work is quality follow-ons listed in
-the **Current Critical Path** section above, followed by Appendices A,
-B, and C once the follow-ons close.
+Six of the eight core milestones (M1, M2, M4, M5, M6, M7) are
+acceptance-met. **M3 and M8 are NOT yet fully closed:** M3's
+read-path migration off residual `LIKE` is open, and M8's relational
+promotion from enriched episode summaries into `knowledge_facts` is
+open. Both items are scoped explicitly in
+[agentic-memory-remaining-development-spec.md](agentic-memory-remaining-development-spec.md),
+which is the authoritative work plan for the remainder of this
+roadmap.
 
-The highest-leverage follow-on to tackle first is the **semantic
-classifier** upgrade for the verifier (M6 follow-on). Lexical marker
-matching lets paraphrased claims slip through the current checks, and
-embedding-backed classification would close that gap without expanding
-the acceptance surface.
+Implementation order (per the development spec):
 
-Appendices A, B, and C remain **post-plan** work. They are **not** part
-of the current critical path and should only be picked up once the
-follow-ons above are closed.
+1. **M3.1** — FTS trigger completeness and backfill correctness
+2. **M3.2** — HybridSearch-first retrieval with `retrieval.path` trace
+3. **M8 relational distillation** — promote recurring entity-relation
+   patterns from enriched summaries into `knowledge_facts`
+4. **M3.3** — optional `LIKE` retirement after telemetry confirms the
+   safety net is dormant
+5. **Appendices A, B, C** — observability dashboards, evaluation
+   matrix, and fallback strategy spec work, sequenced after the
+   M3 and M8 work above closes.
+
+M3 and M8 remain marked "In progress" in the status table above and
+in their own milestone sections, and must not be marked closed until
+the acceptance criteria in the development spec are met.
 
 ---
 
