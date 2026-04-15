@@ -61,6 +61,11 @@ type VerifiedClaim struct {
 	Certainty          ClaimCertainty
 	HasCanonicalAnchor bool
 	Keywords           []string
+	// CertaintyUpgraded is true when the semantic classifier raised the
+	// claim's certainty above the lexical-only default (CertaintyModerate).
+	// Surfaced on the trace claim map so operators can see when the
+	// embedding-backed pass added value beyond lexical markers.
+	CertaintyUpgraded bool
 }
 
 // absoluteMarkers trigger CertaintyAbsolute regardless of other signals.
@@ -368,12 +373,13 @@ func verifyClaimLevel(content string, ctx VerificationContext, claims []Verified
 	for _, claim := range claims {
 		hits := claimEvidenceSupport(claim, ctx.EvidenceItems)
 		audit := ClaimAudit{
-			Sentence:    truncate(claim.Sentence, 200),
-			Certainty:   claim.Certainty.String(),
-			Supported:   ClaimSupportedByEvidence(claim, ctx.EvidenceItems),
-			Anchored:    claim.HasCanonicalAnchor,
-			Reconciled:  ClaimAcknowledgesConflict(claim),
-			KeywordHits: hits,
+			Sentence:          truncate(claim.Sentence, 200),
+			Certainty:         claim.Certainty.String(),
+			CertaintyUpgraded: claim.CertaintyUpgraded,
+			Supported:         ClaimSupportedByEvidence(claim, ctx.EvidenceItems),
+			Anchored:          claim.HasCanonicalAnchor,
+			Reconciled:        ClaimAcknowledgesConflict(claim),
+			KeywordHits:       hits,
 		}
 		result.ClaimAudits = append(result.ClaimAudits, audit)
 		auditIndex[claim.Sentence] = len(result.ClaimAudits) - 1

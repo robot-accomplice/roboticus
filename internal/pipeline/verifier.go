@@ -1,8 +1,11 @@
 package pipeline
 
 import (
+	"context"
 	"fmt"
 	"strings"
+
+	"roboticus/internal/llm"
 )
 
 // VerificationIssue captures one reason a response should be revised.
@@ -23,13 +26,14 @@ type VerificationResult struct {
 
 // ClaimAudit is a structured record of a verifier decision on a single claim.
 type ClaimAudit struct {
-	Sentence    string `json:"sentence"`
-	Certainty   string `json:"certainty"`
-	Supported   bool   `json:"supported"`
-	Anchored    bool   `json:"anchored"`
-	Reconciled  bool   `json:"reconciled"`
-	IssueCode   string `json:"issue_code,omitempty"`
-	KeywordHits int    `json:"keyword_hits"`
+	Sentence          string `json:"sentence"`
+	Certainty         string `json:"certainty"`
+	CertaintyUpgraded bool   `json:"certainty_upgraded,omitempty"`
+	Supported         bool   `json:"supported"`
+	Anchored          bool   `json:"anchored"`
+	Reconciled        bool   `json:"reconciled"`
+	IssueCode         string `json:"issue_code,omitempty"`
+	KeywordHits       int    `json:"keyword_hits"`
 }
 
 // VerificationContext carries the minimum state needed to sanity-check
@@ -58,6 +62,12 @@ type VerificationContext struct {
 	UnresolvedQuestions []string
 	VerifiedConclusions []string
 	StoppingCriteria    []string
+
+	// CertaintyClassifier is the optional embedding-backed semantic
+	// classifier used by claim extraction to tag certainty when none of
+	// the lexical markers in verifier_claims.go match. Nil means
+	// lexical-only behaviour, which is what tests rely on by default.
+	CertaintyClassifier *llm.SemanticClassifier
 }
 
 func BuildVerificationContext(session *Session) VerificationContext {
@@ -237,10 +247,37 @@ func VerifyResponse(content string, ctx VerificationContext) VerificationResult 
 	// certainty metadata and check each absolute claim for evidence support,
 	// contradiction reconciliation, and canonical anchoring on high-risk queries.
 	claims := ExtractClaims(content)
+	upgradeClaimCertaintyWithClassifier(claims, ctx.CertaintyClassifier)
 	verifyClaimLevel(content, ctx, claims, &result)
 	verifyExecutiveState(lowerContent, ctx, &result)
 
 	return result
+}
+
+// upgradeClaimCertaintyWithClassifier runs the embedding-backed semantic
+// classifier over every claim still tagged CertaintyModerate (which means
+// no lexical marker matched) and upgrades the tag if the classifier
+// confidently identifies an absolute / high / hedged paraphrase.
+//
+// Lexical-tagged claims are intentionally untouched — they are 100%
+// precision for their phrases and the classifier's job is to fill the
+// paraphrase gap, not to second-guess known matches.
+//
+// Mutates claims in place to keep the call site one line.
+func upgradeClaimCertaintyWithClassifier(claims []VerifiedClaim, classifier *llm.SemanticClassifier) {
+	if classifier == nil || len(claims) == 0 {
+		return
+	}
+	ctx := context.Background()
+	for i := range claims {
+		if claims[i].Certainty != CertaintyModerate {
+			continue
+		}
+		if upgraded, ok := classifyCertaintySemantic(ctx, classifier, claims[i].Sentence); ok {
+			claims[i].Certainty = upgraded
+			claims[i].CertaintyUpgraded = true
+		}
+	}
 }
 
 // verifyExecutiveState checks that the response honors durable executive-state

@@ -45,7 +45,7 @@ closed, or the critical path changes.
 | 3 | Upgrade Semantic Memory Into A Canonical Knowledge Layer | Acceptance met | Schema now carries `version`, `effective_date`, and `superseded_by`; manager upsert bumps version on value change and keeps it stable on idempotent rewrites; consolidation contradiction phase sets supersession pointers; `CurrentSemanticValue` walks the chain with cycle + length guards |
 | 4 | Turn Procedural Memory Into Workflow Memory | Acceptance met (follow-on closed) | Workflow schema, Manager API, retrieval precedence over tool stats, post-turn promotion with auto-extracted error modes + preconditions + intent tags, consolidation confidence sync, and an agent-facing `find_workflow` tool with Laplace-smoothed ranking all land |
 | 5 | Replace Relationship Memory With Persisted Relational Memory | Acceptance met (follow-ons closed) | Persisted `knowledge_facts` store, graph-aware retrieval, reusable `KnowledgeGraph` API with multi-hop `ShortestPath` / `Impact` / `Dependencies`, a `query_knowledge_graph` agent tool, and a retired permissive path-search fallback with a single canonical-relation source of truth enforced at the write gate |
-| 6 | Add A Real Verifier / Critic Stage | Acceptance met | Claim-level certainty classification, provenance coverage, contradiction reconciliation, per-intent proof obligations, and a structured claim-to-evidence trace map are all in place; semantic-classifier upgrade remains as quality work |
+| 6 | Add A Real Verifier / Critic Stage | Acceptance met (follow-ons closed) | Claim-level certainty classification, provenance coverage, contradiction reconciliation, per-intent proof obligations, a structured claim-to-evidence trace map, and an embedding-backed semantic certainty classifier (lexical-first, semantic-second) that catches paraphrased absolute / hedged claims the lexical markers miss |
 | 7 | Deepen Working Memory Into Executive State | Acceptance met (follow-ons closed) | Executive state is persisted, surfaced in context assembly, grows automatically in post-turn, survives restart with a cross-turn regression test, emits operator-auditable trace/log writes, and harvests tool-output facts via a narrow allowlist (recall_memory / search_memories / read_file / query_knowledge_graph / find_workflow) gated on whether the final response actually references them |
 | 8 | Improve Reflection And Consolidation Quality | Acceptance met | Enriched episode summaries (evidence refs, failed hypotheses, fix patterns, result quality) land in post-turn reflection; a dedicated consolidation distillation phase promotes repeated fix patterns and recurring evidence into semantic memory with stricter thresholds so anecdotes do not get promoted |
 | A | Observability Dashboards (Appendix A) | Post-plan | Only pick up after milestones 1–8 complete; see Appendix A |
@@ -145,13 +145,10 @@ closed, or the critical path changes.
 All eight core milestones (M1–M8) now have their acceptance criteria
 met. The only remaining items are quality follow-ons:
 
-1. **M6 follow-on** — replace the lexical claim extractor with an
-   embedding-backed semantic classifier so certainty and provenance
-   judgments survive paraphrased claims.
-2. **M3 follow-on** — richer ingestion surface for docs / policy files
+1. **M3 follow-on** — richer ingestion surface for docs / policy files
    with version + effective-date population, and migrate semantic
    retrieval off the residual LIKE path onto hybrid FTS+vector.
-4. **Appendices A, B, C** — observability dashboards, evaluation
+2. **Appendices A, B, C** — observability dashboards, evaluation
    matrix, and fallback strategy spec work. These are sequenced
    after the quality follow-ons above complete.
 
@@ -585,7 +582,7 @@ capable of representing dependencies, ownership, chronology, and causality.
 
 ## Milestone 6: Add A Real Verifier / Critic Stage
 
-**Status**: Acceptance met (quality follow-on open)
+**Status**: Acceptance met (follow-ons closed)
 
 ### Goal
 
@@ -657,9 +654,22 @@ support, contradictions, and freshness before final answer or action.
   evidence that itself carries a canonical marker (`canonical`, `policy`,
   `documentation`, `runbook`, `standard`, `authoritative`, etc.). Violations
   fail with `proof_obligation_unmet` and are surfaced in the claim trace map.
-- The remaining gap is semantic depth: claim classification is still lexical,
-  so paraphrase-heavy responses can still slip through the certainty and
-  support checks.
+- The verifier now ships an embedding-backed semantic certainty
+  classifier (`internal/pipeline/verifier_classifier.go`). The lexical
+  marker pass runs first and is authoritative for known phrases; any
+  sentence still tagged `CertaintyModerate` after that pass flows
+  through the classifier, which is built from a small adversarial
+  exemplar corpus shaped around the verifier failure modes we care
+  about (absolute-without-evidence, pseudo-cautious resolution,
+  policy / currentness overclaim, remediation-as-fact, softened
+  hallucinations). The `SemanticClassifier` uses the configured
+  embedder when available and the n-gram fallback otherwise; a
+  conservative abstain policy (MinScore 0.30, MinGap 0.10) keeps
+  ambiguous embeddings from inventing certainty. Upgraded claims
+  carry a `certainty_upgraded` flag onto the trace claim map so
+  operators can audit when the embedding-backed pass added value
+  beyond lexical matching, and use those audits to evolve the corpus
+  from observed misses (regression-asset discipline).
 
 ---
 

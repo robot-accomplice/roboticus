@@ -113,6 +113,7 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 	// contradictions, or multi-part coverage, request one revision before we
 	// persist the assistant message.
 	verifyCtx := BuildVerificationContext(session)
+	verifyCtx.CertaintyClassifier = p.certaintyClass
 	verifyResult := VerifyResponse(result, verifyCtx)
 	AnnotateVerifierTrace(tr, verifyResult)
 	if !verifyResult.Passed {

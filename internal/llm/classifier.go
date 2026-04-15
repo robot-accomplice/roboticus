@@ -52,6 +52,12 @@ type SemanticClassifier struct {
 	corpus   []ClassifierExample
 	abstain  AbstainPolicy
 
+	// queryEmbedFn lets callers (typically tests) override the
+	// per-query embedding strategy without supplying a full
+	// EmbeddingClient. When nil, the standard path runs: embedder if
+	// present, n-gram fallback otherwise.
+	queryEmbedFn func(string) []float32
+
 	mu        sync.RWMutex
 	centroids map[string][]float32 // category → centroid vector
 }
@@ -117,8 +123,45 @@ func (sc *SemanticClassifier) ClassifyAll(ctx context.Context, text string) ([]C
 	return sc.classifyAgainstCentroids(vec, trust), nil
 }
 
+// ClassifyVector classifies a pre-embedded query vector against the corpus
+// centroids without re-embedding. The trust level is treated as TrustNeural
+// because the caller already chose the embedding source. Useful for tests
+// that need deterministic behaviour without a real embedder, and for
+// production paths that batch-embed many sentences and then classify each.
+func (sc *SemanticClassifier) ClassifyVector(vec []float32) (string, float64, error) {
+	if len(sc.corpus) == 0 || len(vec) == 0 {
+		return "unknown", 0.0, nil
+	}
+	results := sc.classifyAgainstCentroids(vec, TrustNeural)
+	if len(results) == 0 {
+		return "unknown", 0.0, nil
+	}
+	top := results[0]
+	if top.Score < sc.abstain.MinScore {
+		return "abstain", top.Score, nil
+	}
+	if len(results) > 1 && (top.Score-results[1].Score) < sc.abstain.MinGap {
+		return "abstain", top.Score, nil
+	}
+	return top.Intent, top.Score, nil
+}
+
+// SetCorpusVectors replaces the corpus with explicit pre-embedded examples.
+// Centroids are reset so the next Classify recomputes them from the new
+// corpus. Useful for tests that need deterministic, in-process classifier
+// behaviour without depending on a remote embedder.
+func (sc *SemanticClassifier) SetCorpusVectors(examples []ClassifierExample) {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	sc.corpus = append([]ClassifierExample(nil), examples...)
+	sc.centroids = make(map[string][]float32)
+}
+
 // embedText returns the embedding vector and trust level for the given text.
 func (sc *SemanticClassifier) embedText(ctx context.Context, text string) ([]float32, TrustLevel, error) {
+	if sc.queryEmbedFn != nil {
+		return sc.queryEmbedFn(text), TrustNeural, nil
+	}
 	if sc.embedder != nil {
 		vec, err := sc.embedder.EmbedSingle(ctx, text)
 		if err == nil {
@@ -127,6 +170,47 @@ func (sc *SemanticClassifier) embedText(ctx context.Context, text string) ([]flo
 		// Fall through to n-gram on error.
 	}
 	return ngramEmbed(text, 128), TrustNGram, nil
+}
+
+// SetQueryEmbedFn installs a deterministic per-query embedding function.
+// Primarily useful for tests that need predictable centroid distances; in
+// production the field stays nil and the standard embedder / n-gram path
+// is used.
+func (sc *SemanticClassifier) SetQueryEmbedFn(fn func(string) []float32) {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	sc.queryEmbedFn = fn
+}
+
+// PrepareCorpus pre-embeds every corpus example whose Vector is nil. It uses
+// the same embedText path as Classify, so corpus and query vectors share an
+// embedding space (neural when an embedder is configured, n-gram otherwise).
+// Callers should invoke this once at construction time so the first
+// Classify call doesn't pay the corpus-embedding cost on the hot path.
+//
+// Returns the count of examples whose vectors were populated. An error is
+// returned only when the embedder fails for every example AND the n-gram
+// fallback was not reached for some structural reason — in normal use this
+// always succeeds because n-gram embedding cannot fail.
+func (sc *SemanticClassifier) PrepareCorpus(ctx context.Context) (int, error) {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	populated := 0
+	for i := range sc.corpus {
+		if len(sc.corpus[i].Vector) > 0 {
+			continue
+		}
+		vec, _, err := sc.embedText(ctx, sc.corpus[i].Text)
+		if err != nil {
+			return populated, err
+		}
+		sc.corpus[i].Vector = vec
+		populated++
+	}
+	// Reset any cached centroids so they're recomputed from the freshly-
+	// embedded corpus the next time Classify runs.
+	sc.centroids = make(map[string][]float32)
+	return populated, nil
 }
 
 // classifyAgainstCentroids computes similarity against category centroids.

@@ -214,6 +214,7 @@ func (p *Pipeline) reflectOnTurn(ctx context.Context, userContent string, sessio
 	// summary captures evidence refs, fix patterns, failed hypotheses, and
 	// a blended result-quality score.
 	verifyCtx := BuildVerificationContext(session)
+	verifyCtx.CertaintyClassifier = p.certaintyClass
 	verifyResult := VerifyResponse(session.LastAssistantContent(), verifyCtx)
 	summary := agentmemory.AnalyzeEpisode(agentmemory.EpisodeInput{
 		UserContent:     userContent,

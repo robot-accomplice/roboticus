@@ -101,10 +101,14 @@ type Pipeline struct {
 	tasks        *TaskTracker
 	botCmds      *BotCommandHandler
 	embeddings   *llm.EmbeddingClient
-	errBus       *core.ErrorBus
-	dashboard    DashboardNotifier
-	workspace    string   // agent workspace root — propagated to sessions for tool sandbox
-	allowedPaths []string // extra paths outside workspace that tools may access
+	// certaintyClass is the embedding-backed semantic claim certainty
+	// classifier (M6 follow-on). Built once per pipeline so the corpus
+	// embedding cost is amortised across every turn.
+	certaintyClass *llm.SemanticClassifier
+	errBus         *core.ErrorBus
+	dashboard      DashboardNotifier
+	workspace      string   // agent workspace root — propagated to sessions for tool sandbox
+	allowedPaths   []string // extra paths outside workspace that tools may access
 }
 
 // PipelineDeps bundles dependencies for the Pipeline.
@@ -149,12 +153,13 @@ func New(deps PipelineDeps) *Pipeline {
 		bgWorker:   bgw,
 		dedup:      NewDedupTracker(60 * time.Second),
 		tasks:      NewTaskTracker(),
-		embeddings:   deps.Embeddings,
-		errBus:       deps.ErrBus,
-		dashboard:    deps.Dashboard,
-		botCmds:      NewBotCommandHandler(deps.LLM, deps.Store),
-		workspace:    deps.Workspace,
-		allowedPaths: deps.AllowedPaths,
+		embeddings:     deps.Embeddings,
+		certaintyClass: NewClaimCertaintyClassifier(deps.Embeddings),
+		errBus:         deps.ErrBus,
+		dashboard:      deps.Dashboard,
+		botCmds:        NewBotCommandHandler(deps.LLM, deps.Store),
+		workspace:      deps.Workspace,
+		allowedPaths:   deps.AllowedPaths,
 	}
 }
 

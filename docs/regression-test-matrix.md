@@ -389,6 +389,10 @@ Blocking commands for feature-complete releases:
 | R-AGENT-122 | `ExtractToolFacts` harvests `find_workflow` `find` results at 0.65 inventory and `get` results with inherited workflow confidence | `internal/pipeline/tool_facts_test.go` | L1 |
 | R-AGENT-123 | `FilterFactsReferencedByResponse` keeps only facts whose keywords appear in the final response, and requires 2-of-N matches for rich facts | `internal/pipeline/tool_facts_test.go` | L1 |
 | R-AGENT-124 | Post-turn growth records referenced tool facts as assumptions with their per-source confidence, and skips tool facts the response did not reference | `internal/pipeline/tool_facts_test.go` | L1 |
+| R-AGENT-125 | `NewClaimCertaintyClassifier` pre-embeds the curated adversarial corpus and returns a working classifier with no embedder configured | `internal/pipeline/verifier_classifier_test.go` | L1 |
+| R-AGENT-126 | Semantic certainty classifier upgrades a paraphrased moderate-tagged claim and leaves already-tagged lexical claims untouched | `internal/pipeline/verifier_classifier_test.go` | L1 |
+| R-AGENT-127 | Verifier with classifier flags paraphrased absolute claims (no lexical marker) under per-intent proof obligation; without classifier the same response stays moderate and passes | `internal/pipeline/verifier_classifier_test.go` | L1 |
+| R-AGENT-128 | Curated certainty corpus covers absolute / high / hedged with at least 5 examples per category | `internal/pipeline/verifier_classifier_test.go` | L1 |
 
 ## Governance Rules
 
