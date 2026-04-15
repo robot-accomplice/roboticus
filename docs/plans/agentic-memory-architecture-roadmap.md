@@ -45,8 +45,8 @@ closed, or the critical path changes.
 | 3 | Upgrade Semantic Memory Into A Canonical Knowledge Layer | In progress | Semantic provenance, canonical flags, authority scoring, and freshness cues now survive retrieval/assembly |
 | 4 | Turn Procedural Memory Into Workflow Memory | Not started | Still too stats-heavy; no true workflow records yet |
 | 5 | Replace Relationship Memory With Persisted Relational Memory | In progress | Persisted `knowledge_facts` store, graph-aware retrieval, and first traversal semantics now shipped |
-| 6 | Add A Real Verifier / Critic Stage | In progress | Verifier now does claim-level certainty classification, provenance coverage accounting, and contradicted-claim reconciliation |
-| 7 | Deepen Working Memory Into Executive State | In progress | Working memory now persists plans, assumptions, unresolved questions, verified conclusions, decision checkpoints, and stopping criteria; executive state survives restart and is surfaced in context assembly |
+| 6 | Add A Real Verifier / Critic Stage | Acceptance met | Claim-level certainty classification, provenance coverage, contradiction reconciliation, per-intent proof obligations, and a structured claim-to-evidence trace map are all in place; semantic-classifier upgrade remains as quality work |
+| 7 | Deepen Working Memory Into Executive State | Acceptance met | Executive state is persisted, surfaced in context assembly, grows automatically in post-turn, survives restart with a cross-turn regression test, and emits operator-auditable trace/log writes; richer tool-output assumption extraction remains as follow-on work |
 | 8 | Improve Reflection And Consolidation Quality | Not started | Reflection/consolidation still heuristic despite working scaffolding |
 
 ### Completed Slices
@@ -119,18 +119,18 @@ closed, or the critical path changes.
 
 ### Current Critical Path
 
-1. Finish Milestone 6 by moving from lexical claim extraction to semantic
-   claim classification (LLM or embedding backed) so the verifier's
-   certainty and provenance judgments survive paraphrases. Proof obligations
-   for financial/compliance intents are already enforceable per claim thanks
-   to the new `ClaimAudit` trace map — next step is to wire an explicit
-   per-intent requirement on canonical anchoring for those classes.
-2. Finish Milestone 5 by moving from first traversal semantics to richer
+1. Milestone 6 acceptance criteria are met. Remaining quality work is a
+   semantic claim classifier (LLM or embedding backed) so certainty and
+   provenance survive paraphrases rather than relying only on lexical
+   markers.
+2. Milestone 7 acceptance criteria are met. Remaining quality work is
+   extracting assumptions from tool outputs (not just the agent's own
+   response) and upgrading assumption confidence scoring based on evidence.
+3. Finish Milestone 5 by moving from first traversal semantics to richer
    persisted adjacency/path reasoning and multi-hop impact analysis.
-3. Finish Milestone 7 by wiring assumptions, verified conclusions, unresolved
-   questions, and decision checkpoints into the executing pipeline stages
-   (post-turn reflection, consolidation) so executive entries grow naturally
-   during work rather than only when task synthesis fires.
+4. Start Milestone 4 (turn procedural memory into workflow memory) so the
+   reusable-workflow gap is closed before Milestone 8 attempts to promote
+   episodic patterns into procedures.
 
 ---
 
@@ -470,7 +470,7 @@ capable of representing dependencies, ownership, chronology, and causality.
 
 ## Milestone 6: Add A Real Verifier / Critic Stage
 
-**Status**: In progress
+**Status**: Acceptance met (quality follow-on open)
 
 ### Goal
 
@@ -550,7 +550,7 @@ support, contradictions, and freshness before final answer or action.
 
 ## Milestone 7: Deepen Working Memory Into Executive State
 
-**Status**: In progress
+**Status**: Acceptance met (tool-output assumption extraction open)
 
 ### Goal
 
@@ -736,17 +736,20 @@ The roadmap should be considered complete when all of the following are true:
 
 ## Immediate Next Step
 
-Continue advancing Milestone 6 and Milestone 7:
+Milestones 6 and 7 acceptance criteria are now met. Shift the critical
+path to Milestones 5 and 4:
 
-- replace the lexical claim extractor with a semantic classifier so
-  paraphrased absolute claims are still flagged, and emit a machine-readable
-  claim-to-evidence map into the trace so operators can audit every
-  unsupported-claim decision.
-- extend post-turn reflection and consolidation to grow executive state on
-  its own: record new assumptions when tool outputs surface untested facts,
-  record verified conclusions when the verifier passes a subgoal with
-  evidence support, and resolve or age out unresolved questions once the
-  agent answers them.
-- add cross-turn tests that prove a multi-step task resumes after restart
-  with the same plan, same open questions, and the same stopping criteria
-  as the pre-restart run.
+- **Milestone 5 (relational memory)** — finish persisted adjacency/path
+  reasoning by promoting the current retrieval-time graph traversal into a
+  first-class persisted graph API so multi-hop impact analysis and
+  dependency-chain queries do not rebuild on every retrieval.
+- **Milestone 4 (workflow memory)** — introduce structured workflow records
+  (name, steps, preconditions, failure modes, context tags, version,
+  success/failure evidence) so procedural retrieval returns reusable
+  workflows instead of tool statistics.
+- **Milestone 6 quality follow-on** — replace the lexical claim extractor
+  with an embedding-backed semantic classifier so paraphrased absolute
+  claims are still flagged by the verifier.
+- **Milestone 7 quality follow-on** — extract assumptions from tool outputs
+  (not only the agent's own response) and upgrade assumption confidence
+  based on evidence support.
