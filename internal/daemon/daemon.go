@@ -2,7 +2,9 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -46,6 +48,15 @@ type Daemon struct {
 	errBusCancel context.CancelFunc
 	cancel       context.CancelFunc
 	wg           sync.WaitGroup
+
+	// pidFilePath is the resolved location for the v1.0.6 PID file.
+	// Set in New() from cfg.Daemon.PIDFile (or the default path
+	// returned by PIDFilePath). Daemon.Start writes os.Getpid() here
+	// after the HTTP server is ready; Daemon.Stop removes it as the
+	// last cleanup step. The PID file is what `roboticus daemon
+	// stop` reads to find a running daemon without re-booting the
+	// 12-step subsystem stack.
+	pidFilePath string
 }
 
 // ServiceConfig returns the kardianos service configuration.
@@ -558,6 +569,7 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 		memMgr:       memMgr,
 		startupStart: startupStart,
 		errBusCancel: errBusCancel,
+		pidFilePath:  PIDFilePath(cfg),
 	}, nil
 }
 
@@ -569,6 +581,22 @@ func (d *Daemon) Start(s service.Service) error {
 	bootDetail("bind", bindAddr)
 	bootDetail("dashboard", fmt.Sprintf("http://localhost:%d", d.cfg.Server.Port))
 	bootReady(time.Since(d.startupStart))
+
+	// v1.0.6: write the PID file so `roboticus daemon stop` can find
+	// us via SIGTERM without reaching for launchctl/systemctl. Failure
+	// to write is logged but does not block startup — the daemon can
+	// still serve requests, the operator just won't be able to use
+	// the PID-file path of `daemon stop` (they can still kill -9 or
+	// use the OS service manager). Surfacing the failure rather than
+	// burying it is what makes operator triage tractable.
+	if err := WritePIDFile(d.pidFilePath); err != nil {
+		log.Warn().
+			Err(err).
+			Str("path", d.pidFilePath).
+			Msg("could not write pid file; `roboticus daemon stop` will fall back to OS service manager (which may not work for foreground/serve invocations)")
+	} else {
+		log.Info().Str("path", d.pidFilePath).Int("pid", os.Getpid()).Msg("pid file written")
+	}
 
 	log.Info().Str("agent", d.cfg.Agent.Name).Str("platform", service.Platform()).Int("port", d.cfg.Server.Port).Msg("roboticus starting")
 	go d.run()
@@ -617,6 +645,18 @@ func (d *Daemon) Stop(s service.Service) error {
 	}
 
 	_ = d.store.Close()
+
+	// v1.0.6: remove PID file as the FINAL cleanup step so `roboticus
+	// daemon stop` (which polls liveness via the PID file) sees a
+	// clean state immediately after we exit. RemovePIDFile is
+	// idempotent — missing-file is not an error — so a kill -9 that
+	// bypassed Stop entirely won't cause the next graceful shutdown
+	// to fail at this step.
+	if d.pidFilePath != "" {
+		if err := RemovePIDFile(d.pidFilePath); err != nil {
+			log.Warn().Err(err).Str("path", d.pidFilePath).Msg("failed to remove pid file on shutdown; next start may report stale-pid warning")
+		}
+	}
 	return nil
 }
 
@@ -630,69 +670,149 @@ func (d *Daemon) RunInteractive() error {
 	return svc.Run()
 }
 
+// controlStub is a minimal implementation of service.Interface used by
+// the lifecycle verbs (Install, Uninstall, Control, Status) that need to
+// construct a *service.Service handle without actually running the
+// daemon. The kardianos library only invokes Start/Stop on the
+// Interface when the binary is itself running AS the service (i.e.,
+// inside `svc.Run()`), so a stub satisfying the type is sufficient for
+// all external control operations.
+//
+// The pre-v1.0.6 path called daemon.New() (full 12-step boot) just to
+// hand the resulting *Daemon to service.New(). That had two ugly
+// consequences:
+//   1. Every `roboticus daemon stop` printed a 12-step startup
+//      sequence to the user before issuing a stop, which is the
+//      opposite of operationally clear.
+//   2. Under sudo, the boot opened ~/.roboticus/state.db (and other
+//      files) as root, leaving them root-owned and locking subsequent
+//      unprivileged invocations out.
+// The stub eliminates both: zero subsystems initialized, zero files
+// touched, zero permission side effects.
+type controlStub struct{}
+
+// Start / Stop on the stub are unreachable in practice — they would
+// only fire if someone called svc.Run() on a stub-backed service,
+// which the lifecycle verbs never do. Implemented as no-ops to satisfy
+// the interface.
+func (controlStub) Start(s service.Service) error { return nil }
+func (controlStub) Stop(s service.Service) error  { return nil }
+
+// NewServiceOnly returns a *service.Service constructed from a
+// minimal stub Interface — no daemon boot, no DB open, no LLM init,
+// no goroutines spawned. Used by Install / Uninstall / Control /
+// Status to issue OS-service commands without paying the full
+// daemon-boot cost (and without creating root-owned files in
+// ~/.roboticus when run under sudo).
+//
+// Returns the service handle plus the *service.Config used to build
+// it so callers (specifically Control on macOS) can re-derive the
+// service name for direct launchctl invocations when the kardianos
+// stop path returns its uninformative legacy error.
+func NewServiceOnly(_ *core.Config) (service.Service, *service.Config, error) {
+	cfg := ServiceConfig()
+	svc, err := service.New(controlStub{}, cfg)
+	if err != nil {
+		return nil, nil, fmt.Errorf("service create: %w", err)
+	}
+	return svc, cfg, nil
+}
+
 // Install registers roboticus as an OS service.
 func Install(cfg *core.Config) error {
-	d, err := New(cfg, BootOptions{})
+	svc, _, err := NewServiceOnly(cfg)
 	if err != nil {
 		return err
-	}
-	_ = d.store.Close() // don't need DB for install
-
-	svc, err := service.New(d, ServiceConfig())
-	if err != nil {
-		return fmt.Errorf("service create: %w", err)
 	}
 	return svc.Install()
 }
 
 // Uninstall removes roboticus from the OS service manager.
 func Uninstall(cfg *core.Config) error {
-	d, err := New(cfg, BootOptions{})
+	svc, _, err := NewServiceOnly(cfg)
 	if err != nil {
 		return err
-	}
-	_ = d.store.Close()
-
-	svc, err := service.New(d, ServiceConfig())
-	if err != nil {
-		return fmt.Errorf("service create: %w", err)
 	}
 	return svc.Uninstall()
 }
 
-// Control sends a command (start/stop/restart) to the OS service.
+// Control dispatches start/stop/restart to the running daemon.
+//
+// Resolution order:
+//
+//   1. PID file path (DaemonConfig.PIDFile or default
+//      ~/.roboticus/roboticus.pid). If the file exists and points at
+//      a live process, the action is satisfied via Unix signals — no
+//      sudo needed, no launchctl involved. This is the path that
+//      handles `roboticus serve` foreground invocations and
+//      user-mode daemons.
+//
+//   2. Fall back to the OS service manager (launchctl on macOS,
+//      systemctl on Linux, SCM on Windows). This is the path for
+//      installed system services where the daemon was bootstrapped
+//      by the OS, not by `roboticus serve`.
+//
+// Idempotent semantics:
+//   - "stop" on an already-stopped daemon → returns nil with a
+//     friendly "not running" log. Operators running `roboticus
+//     daemon stop` to verify clean state get exit code 0, not an
+//     error.
+//   - "start" on an already-running daemon → returns nil with a
+//     friendly "already running" log.
 func Control(cfg *core.Config, action string) error {
-	d, err := New(cfg, BootOptions{})
-	if err != nil {
-		return err
+	switch action {
+	case "stop":
+		return controlStop(cfg)
+	case "start":
+		return controlStart(cfg)
+	case "restart":
+		if err := controlStop(cfg); err != nil {
+			return fmt.Errorf("restart: stop phase: %w", err)
+		}
+		return controlStart(cfg)
+	default:
+		// Unknown verbs go to the OS service manager unchanged so
+		// kardianos-supported actions (e.g. "pause" on Windows) keep
+		// working without a Roboticus-side switch entry.
+		svc, _, err := NewServiceOnly(cfg)
+		if err != nil {
+			return err
+		}
+		return service.Control(svc, action)
 	}
-	_ = d.store.Close()
-
-	svc, err := service.New(d, ServiceConfig())
-	if err != nil {
-		return fmt.Errorf("service create: %w", err)
-	}
-	return service.Control(svc, action)
 }
 
-// Status returns the current service status from the OS service manager.
+// Status returns the current service status. Resolves the same way as
+// Control: PID file first (covers foreground `roboticus serve` and
+// user-mode daemons), OS service manager as fallback (covers system-
+// installed services).
 func Status(cfg *core.Config) (string, error) {
-	d, err := New(cfg, BootOptions{})
+	pidPath := PIDFilePath(cfg)
+	if pid, found, err := ReadPIDFile(pidPath); err == nil && found {
+		if ProcessIsAlive(pid) {
+			return "running", nil
+		}
+		// PID file exists but process is dead — stale file. Report
+		// stopped so callers see clean state; the next `daemon stop`
+		// or `serve` will clean up the stale file.
+		return "stopped", nil
+	}
+
+	svc, _, err := NewServiceOnly(cfg)
 	if err != nil {
 		return "", err
 	}
-	_ = d.store.Close()
-
-	svc, err := service.New(d, ServiceConfig())
-	if err != nil {
-		return "", fmt.Errorf("service create: %w", err)
-	}
-
 	status, err := svc.Status()
 	if err != nil {
+		// kardianos returns errors for "service not installed" — treat
+		// that as "stopped" rather than propagating the error, since
+		// from the operator's perspective an uninstalled service is
+		// indistinguishable from a stopped one for `daemon status`.
+		if errors.Is(err, service.ErrNotInstalled) {
+			return "stopped", nil
+		}
 		return "", err
 	}
-
 	switch status {
 	case service.StatusRunning:
 		return "running", nil
