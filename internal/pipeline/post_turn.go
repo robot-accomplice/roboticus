@@ -446,6 +446,39 @@ func (p *Pipeline) growExecutiveState(ctx context.Context, session *Session, ass
 			Msg("executive assumption recorded")
 	}
 
+	// Record tool-output assumptions via the narrow allowlist harvester.
+	// Reference gate: only persist facts whose keywords actually appear in
+	// the final response, so observation alone does not flood working
+	// memory.
+	for _, fact := range FilterFactsReferencedByResponse(ExtractToolFacts(session), content) {
+		entryContent := "tool-fact: " + truncate(fact.Value, 160)
+		exists, err := mm.HasExecutiveEntry(ctx, session.ID, taskID, agentmemory.EntryAssumption, entryContent)
+		if err != nil {
+			log.Debug().Err(err).Msg("executive: duplicate check failed for tool fact")
+			continue
+		}
+		if exists {
+			continue
+		}
+		payload := agentmemory.AssumptionPayload{
+			Source:     string(fact.Source),
+			Confidence: fact.Confidence,
+		}
+		if err := mm.RecordAssumption(ctx, session.ID, taskID, entryContent, payload); err != nil {
+			log.Debug().Err(err).Msg("executive: record tool fact failed")
+			continue
+		}
+		result.AssumptionsRecorded++
+		log.Debug().
+			Str("session", session.ID).
+			Str("task", taskID).
+			Str("tool", fact.ToolName).
+			Str("source", string(fact.Source)).
+			Float64("confidence", fact.Confidence).
+			Str("category", "executive_write").
+			Msg("executive tool-fact recorded")
+	}
+
 	if result.VerifiedRecorded+result.QuestionsOpened+result.QuestionsResolved+result.AssumptionsRecorded > 0 {
 		log.Info().
 			Str("session", session.ID).

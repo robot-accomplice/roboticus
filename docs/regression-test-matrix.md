@@ -383,6 +383,12 @@ Blocking commands for feature-complete releases:
 | R-AGENT-116 | Extractor patterns and `db.CanonicalGraphRelations` stay in sync — new relations added to one side must land on the other | `internal/agent/memory/graph_canonical_test.go` | L1 |
 | R-AGENT-117 | `IsTraversableRelation` delegates to `db.IsCanonicalGraphRelation` as the single source of truth | `internal/agent/memory/graph_canonical_test.go` | L1 |
 | R-AGENT-118 | `MemoryRepository.StoreKnowledgeFact` rejects non-canonical relations at write time | `internal/agent/memory/graph_canonical_test.go` | L1 |
+| R-AGENT-119 | `ExtractToolFacts` harvests `recall_memory` semantic + knowledge-fact payloads with inherited confidence capped at 0.9 | `internal/pipeline/tool_facts_test.go` | L1 |
+| R-AGENT-120 | `ExtractToolFacts` harvests `search_memories` results at 0.65 inventory confidence and `read_file` narrow `key: value` pairs at 0.75 | `internal/pipeline/tool_facts_test.go` | L1 |
+| R-AGENT-121 | `ExtractToolFacts` harvests `query_knowledge_graph` hops at 0.75 and skips giant blobs / failure outputs / non-allowlisted tools | `internal/pipeline/tool_facts_test.go` | L1 |
+| R-AGENT-122 | `ExtractToolFacts` harvests `find_workflow` `find` results at 0.65 inventory and `get` results with inherited workflow confidence | `internal/pipeline/tool_facts_test.go` | L1 |
+| R-AGENT-123 | `FilterFactsReferencedByResponse` keeps only facts whose keywords appear in the final response, and requires 2-of-N matches for rich facts | `internal/pipeline/tool_facts_test.go` | L1 |
+| R-AGENT-124 | Post-turn growth records referenced tool facts as assumptions with their per-source confidence, and skips tool facts the response did not reference | `internal/pipeline/tool_facts_test.go` | L1 |
 
 ## Governance Rules
 

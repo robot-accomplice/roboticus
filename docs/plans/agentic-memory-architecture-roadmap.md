@@ -46,7 +46,7 @@ closed, or the critical path changes.
 | 4 | Turn Procedural Memory Into Workflow Memory | Acceptance met (follow-on closed) | Workflow schema, Manager API, retrieval precedence over tool stats, post-turn promotion with auto-extracted error modes + preconditions + intent tags, consolidation confidence sync, and an agent-facing `find_workflow` tool with Laplace-smoothed ranking all land |
 | 5 | Replace Relationship Memory With Persisted Relational Memory | Acceptance met (follow-ons closed) | Persisted `knowledge_facts` store, graph-aware retrieval, reusable `KnowledgeGraph` API with multi-hop `ShortestPath` / `Impact` / `Dependencies`, a `query_knowledge_graph` agent tool, and a retired permissive path-search fallback with a single canonical-relation source of truth enforced at the write gate |
 | 6 | Add A Real Verifier / Critic Stage | Acceptance met | Claim-level certainty classification, provenance coverage, contradiction reconciliation, per-intent proof obligations, and a structured claim-to-evidence trace map are all in place; semantic-classifier upgrade remains as quality work |
-| 7 | Deepen Working Memory Into Executive State | Acceptance met | Executive state is persisted, surfaced in context assembly, grows automatically in post-turn, survives restart with a cross-turn regression test, and emits operator-auditable trace/log writes; richer tool-output assumption extraction remains as follow-on work |
+| 7 | Deepen Working Memory Into Executive State | Acceptance met (follow-ons closed) | Executive state is persisted, surfaced in context assembly, grows automatically in post-turn, survives restart with a cross-turn regression test, emits operator-auditable trace/log writes, and harvests tool-output facts via a narrow allowlist (recall_memory / search_memories / read_file / query_knowledge_graph / find_workflow) gated on whether the final response actually references them |
 | 8 | Improve Reflection And Consolidation Quality | Acceptance met | Enriched episode summaries (evidence refs, failed hypotheses, fix patterns, result quality) land in post-turn reflection; a dedicated consolidation distillation phase promotes repeated fix patterns and recurring evidence into semantic memory with stricter thresholds so anecdotes do not get promoted |
 | A | Observability Dashboards (Appendix A) | Post-plan | Only pick up after milestones 1–8 complete; see Appendix A |
 | B | Evaluation Matrix and Test Harness (Appendix B) | Post-plan | Only pick up after milestones 1–8 complete; see Appendix B |
@@ -119,6 +119,14 @@ closed, or the critical path changes.
 - Post-turn growth now also records assumptions the agent names explicitly
   in the response, so the next turn's context carries forward the state the
   agent was taking for granted.
+- Milestone 7 now also harvests assumption-like facts from tool outputs via
+  a narrow allowlist (`recall_memory`, `search_memories`, `read_file`,
+  `query_knowledge_graph`, `find_workflow`). Confidence varies by source:
+  memory recalls inherit (capped at 0.9); file reads, graph lookups, and
+  named workflow gets land at 0.75; searches and find inventories at 0.65.
+  A reference gate keeps a fact only when the final response uses
+  enough of its keywords, so observation alone never floods working
+  memory with ambient facts.
 - Milestone 5 now ships a reusable `KnowledgeGraph` API
   (`internal/agent/memory/graph.go`) with multi-hop `ShortestPath`,
   `Impact`, and `Dependencies` traversals over persisted `knowledge_facts`.
@@ -140,10 +148,7 @@ met. The only remaining items are quality follow-ons:
 1. **M6 follow-on** — replace the lexical claim extractor with an
    embedding-backed semantic classifier so certainty and provenance
    judgments survive paraphrased claims.
-2. **M7 follow-on** — extract assumptions from tool outputs (not only
-   the agent's own response) and upgrade assumption confidence
-   scoring based on evidence support.
-3. **M3 follow-on** — richer ingestion surface for docs / policy files
+2. **M3 follow-on** — richer ingestion surface for docs / policy files
    with version + effective-date population, and migrate semantic
    retrieval off the residual LIKE path onto hybrid FTS+vector.
 4. **Appendices A, B, C** — observability dashboards, evaluation
@@ -660,7 +665,7 @@ support, contradictions, and freshness before final answer or action.
 
 ## Milestone 7: Deepen Working Memory Into Executive State
 
-**Status**: Acceptance met (tool-output assumption extraction open)
+**Status**: Acceptance met (follow-ons closed)
 
 ### Goal
 
@@ -748,8 +753,15 @@ short-term executive state described in the reference architecture.
   the next turn's context and into startup vetting. The extractor is
   word-boundary aware (so "reassuming" is not a match) and deduplicates
   equivalent clauses within a single turn.
-- What still remains is richer assumption extraction from tool outputs — the
-  current extractor only picks up assumptions the agent names explicitly.
+- Tool-output assumption extraction now lands as a narrow allowlist
+  harvester (`internal/pipeline/tool_facts.go`) covering `recall_memory`,
+  `search_memories`, `read_file`, `query_knowledge_graph`, and
+  `find_workflow`. Per-source confidence policy: memory recalls inherit
+  (capped at 0.9), file/graph/named-workflow gets land at 0.75, search
+  inventories and find-workflow inventories at 0.65. A reference gate
+  (`FilterFactsReferencedByResponse`) keeps a fact only when enough of
+  its keywords appear in the final assistant response, so observed-but-
+  unused facts never reach working memory.
 
 ---
 
