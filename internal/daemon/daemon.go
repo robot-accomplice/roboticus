@@ -580,6 +580,20 @@ func (d *Daemon) Start(s service.Service) error {
 	bindAddr := fmt.Sprintf("127.0.0.1:%d", d.cfg.Server.Port)
 	bootDetail("bind", bindAddr)
 	bootDetail("dashboard", fmt.Sprintf("http://localhost:%d", d.cfg.Server.Port))
+
+	// v1.0.6: surface any system warnings (config-defaults-used,
+	// ambient DB creation, etc.) right before "Ready" so the
+	// foreground operator sees them at the moment they're most
+	// likely to act on them. The warnings are also persisted in
+	// the system-warnings collector for the dashboard banner.
+	if rawWarnings := core.SystemWarningsSnapshot(); len(rawWarnings) > 0 {
+		views := make([]SystemWarningView, len(rawWarnings))
+		for i, w := range rawWarnings {
+			views[i] = SystemWarningView{Title: w.Title, Detail: w.Detail, Remedy: w.Remedy}
+		}
+		bootSystemWarningsBanner(views)
+	}
+
 	bootReady(time.Since(d.startupStart))
 
 	// v1.0.6: write the PID file so `roboticus daemon stop` can find

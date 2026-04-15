@@ -86,24 +86,72 @@ func registerSubpackageCommands() {
 }
 
 func initConfig() {
-	if cfgFile != "" {
+	// Track which config search path the operator actually got so we can
+	// log it explicitly. The pre-v1.0.6 behavior silently swallowed
+	// ConfigFileNotFoundError and fell through to DefaultConfig, which
+	// produced the rogue ambient `~/.roboticus/roboticus.db` whenever
+	// viper couldn't find roboticus.toml (sudo invocations that reset
+	// HOME, scripts that don't propagate env, etc.). Operators had no
+	// way to spot this from the CLI output — the daemon just silently
+	// opened the wrong DB.
+	var searchSource string
+	switch {
+	case cfgFile != "":
 		viper.SetConfigFile(cfgFile)
-	} else if envCfg := os.Getenv("ROBOTICUS_CONFIG"); envCfg != "" {
+		searchSource = "--config flag: " + cfgFile
+	case os.Getenv("ROBOTICUS_CONFIG") != "":
+		envCfg := os.Getenv("ROBOTICUS_CONFIG")
 		viper.SetConfigFile(envCfg)
-	} else {
+		searchSource = "ROBOTICUS_CONFIG env: " + envCfg
+	default:
 		configDir := core.ConfigDir()
 		viper.AddConfigPath(configDir)
 		viper.SetConfigName("roboticus")
 		viper.SetConfigType("toml")
+		searchSource = "search path: " + filepath.Join(configDir, "roboticus.toml")
 	}
 
 	viper.SetEnvPrefix("ROBOTICUS")
 	viper.AutomaticEnv()
 
 	if err := viper.ReadInConfig(); err != nil {
-		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
-			fmt.Fprintf(os.Stderr, "warning: config file error: %v\n", err)
+		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
+			// Loud warning: the operator ran a CLI verb that needs
+			// config, but no config file was found. Falling back to
+			// built-in defaults will cause the daemon to open
+			// ~/.roboticus/roboticus.db rather than the configured
+			// state.db, plant ambient empty stubs in workspace/, and
+			// generally look like the wrong roboticus is running.
+			// Surfacing this loudly is the only way the operator can
+			// catch the silent-default failure mode that produced the
+			// v1.0.5 rogue-DB report.
+			fmt.Fprintf(os.Stderr,
+				"warning: no roboticus config file found (%s); using built-in defaults — this is likely not what you want.\n"+
+					"  Run `roboticus config init` to create one, or pass --config / set ROBOTICUS_CONFIG to point at an existing file.\n",
+				searchSource)
+			// Also record on the system-warnings surface so the
+			// dashboard banner and bootStepWarn paths can pick it
+			// up — log lines are easy to miss; the dashboard banner
+			// keeps showing it until the operator addresses the
+			// underlying condition.
+			core.AddSystemWarning(core.SystemWarning{
+				Code:     core.WarningCodeConfigDefaultsUsed,
+				Title:    "No config file loaded — running on built-in defaults",
+				Detail:   "Searched: " + searchSource + ". Without a config file, the daemon will open the default database (~/.roboticus/roboticus.db) and run with the default agent identity, which is almost certainly not the runtime you intended.",
+				Remedy:   "Run `roboticus config init` to create a config, or pass --config / set ROBOTICUS_CONFIG to point at an existing file.",
+				Severity: core.SystemWarningSeverityHigh,
+			})
+		} else {
+			fmt.Fprintf(os.Stderr, "warning: config file error (%s): %v\n", searchSource, err)
 		}
+		return
+	}
+	// Successfully loaded — record the resolved file path so operators
+	// can see in startup output which config was actually used. This is
+	// the audit trail that prevents future "I'm running Duncan but the
+	// daemon is acting like default roboticus" mysteries.
+	if used := viper.ConfigFileUsed(); used != "" {
+		fmt.Fprintf(os.Stderr, "config: loaded %s\n", used)
 	}
 }
 

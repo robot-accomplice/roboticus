@@ -326,6 +326,14 @@ func NewServer(ctx context.Context, cfg ServerConfig, state *AppState) *http.Ser
 		r.Get("/api/workspace/tasks", routes.ListWorkspaceTasks(state.Store))
 		r.Get("/api/admin/task-events", routes.GetTaskEvents(state.Store))
 
+		// v1.0.6: system warnings (config-defaults-used, ambient DB
+		// creation, etc.). Polled by the dashboard for the
+		// top-of-page warning banner. See
+		// internal/core/system_warnings.go for the collector
+		// surface and internal/api/routes/system_warnings.go for
+		// the wire shape.
+		r.Get("/api/admin/system-warnings", routes.GetSystemWarnings())
+
 		// Runtime discovery.
 		r.Get("/api/runtime/surfaces", routes.GetRuntimeSurfaces())
 		r.Get("/api/runtime/discovery", routes.GetRuntimeDiscovery(state.Store))

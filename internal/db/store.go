@@ -45,6 +45,13 @@ func (s *Store) OnSessionArchived(fn func(ctx context.Context, sessionID string)
 // operator can fix ownership manually — but the warning makes the
 // security-relevant condition impossible to miss.
 func Open(dbPath string) (*Store, error) {
+	// Capture whether the file existed BEFORE sql.Open's lazy
+	// creation — used below for the audit-log distinction between
+	// "opened existing DB" and "created new DB at this path." The
+	// pre-existence flag is meaningful only for on-disk paths;
+	// in-memory and other special forms always read as "fresh."
+	preExisted := dbPathExisted(dbPath)
+
 	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode%%3Dwal&_pragma=foreign_keys%%3Don&_pragma=auto_vacuum%%3Dincremental&_pragma=busy_timeout%%3D5000", dbPath)
 
 	db, err := sql.Open("sqlite", dsn)
@@ -84,8 +91,44 @@ func Open(dbPath string) (*Store, error) {
 	// the first statement runs).
 	tightenDatabasePermissions(dbPath)
 
-	log.Info().Str("path", dbPath).Msg("database opened")
+	// Audit trail: distinguish "opened existing DB" from "created new
+	// DB on disk." The latter is the silent-default-creation pattern
+	// that produced the v1.0.5 rogue-roboticus.db report — when an
+	// invocation fell through to defaults and materialized a fresh
+	// SQLite file at ~/.roboticus/roboticus.db without anyone asking.
+	// We surface the warning in three places: zerolog Warn (post-hoc
+	// triage), the system-warnings collector (dashboard banner + boot
+	// prompt), and stderr (the operator running the command sees it).
+	if !preExisted && dbPath != "" && dbPath != ":memory:" && dbPath != "file::memory:" {
+		log.Warn().
+			Str("path", dbPath).
+			Msg("database created (no prior file existed at this path) — verify this is the intended database for this invocation; ambient creation at a default path may indicate a missing or unloaded config")
+		core.AddSystemWarning(core.SystemWarning{
+			Code:     core.WarningCodeDatabaseCreatedAtPath,
+			Title:    "New database created on disk",
+			Detail:   "A new SQLite database was just created at " + dbPath + ". If this isn't the database you expected this invocation to use, the most common cause is a missing or unloaded config file (the daemon falls back to defaults that point at ~/.roboticus/roboticus.db).",
+			Remedy:   "Verify ~/.roboticus/roboticus.toml exists and sets [database] path = correctly. If you were running under sudo or a wrapper script, check that HOME / ROBOTICUS_CONFIG propagated to the daemon process.",
+			Severity: core.SystemWarningSeverityHigh,
+		})
+	} else {
+		log.Info().Str("path", dbPath).Msg("database opened")
+	}
 	return s, nil
+}
+
+// dbPathExisted reports whether the file at dbPath was on disk before
+// sql.Open's lazy creation. Used by Open() to log "created new" vs
+// "opened existing" — the audit trail that lets operators spot
+// ambient creation of the wrong database.
+//
+// In-memory and other non-file DB paths return true (no creation
+// happens for them so the "created new" warning would be wrong).
+func dbPathExisted(dbPath string) bool {
+	if dbPath == "" || dbPath == ":memory:" || dbPath == "file::memory:" {
+		return true
+	}
+	_, err := os.Stat(dbPath)
+	return err == nil
 }
 
 // tightenDatabasePermissions sets restrictive POSIX mode on the SQLite

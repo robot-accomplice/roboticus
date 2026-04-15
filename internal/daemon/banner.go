@@ -136,3 +136,48 @@ func bootReady(elapsed time.Duration) {
 	fmt.Fprintln(os.Stderr)
 	fmt.Fprintln(os.Stderr)
 }
+
+// bootSystemWarningsBanner prints any system warnings collected during
+// boot (config defaults used, ambient DB creation, etc.) as a high-
+// visibility block immediately before "Ready". The warnings have
+// already been logged at zerolog Warn() level and recorded for the
+// dashboard banner — this step is the *interactive* surface so an
+// operator running `roboticus serve` in the foreground sees them
+// before getting to the prompt.
+//
+// The block is deliberately styled to stand out: it uses
+// bootStepWarn's icon, includes the title + remedy for each warning,
+// and is preceded by a blank line so it doesn't blend with the boot
+// step list above. Operators dismissing this as noise is a tradeoff
+// we accept; the cost of NOT surfacing it (silent rogue-DB creation,
+// wrong agent identity, etc.) was the v1.0.5 incident.
+func bootSystemWarningsBanner(warnings []SystemWarningView) {
+	if len(warnings) == 0 {
+		return
+	}
+	t := theme()
+	d, b, r := t.Dim(), t.Bold(), t.Reset()
+	warn := t.IconWarn()
+	fmt.Fprintln(os.Stderr)
+	fmt.Fprintf(os.Stderr, "  %s %sStartup Warnings%s (%d)\n", warn, b, r, len(warnings))
+	for _, w := range warnings {
+		fmt.Fprintf(os.Stderr, "  %s %s%s%s\n", warn, b, w.Title, r)
+		if w.Detail != "" {
+			fmt.Fprintf(os.Stderr, "       %s%s%s\n", d, w.Detail, r)
+		}
+		if w.Remedy != "" {
+			fmt.Fprintf(os.Stderr, "       %s→ %s%s\n", d, w.Remedy, r)
+		}
+	}
+	fmt.Fprintln(os.Stderr)
+}
+
+// SystemWarningView is the daemon-side projection of
+// core.SystemWarning. Defined here (not imported as core.SystemWarning
+// directly) so the banner package stays decoupled from core's
+// concrete type — easier to swap the surface later if needed.
+type SystemWarningView struct {
+	Title  string
+	Detail string
+	Remedy string
+}
