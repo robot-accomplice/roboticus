@@ -17,12 +17,12 @@ file targets, acceptance criteria, and non-goals.
 
 As of this spec:
 
-- Milestones 1, 2, 4, 5, 6, and 7 are materially delivered.
-- Milestone 3 is still open on the **semantic read path**.
-- Milestone 8 is still open on **relational promotion during distillation**.
+- Milestones 1, 2, 4, 5, 6, 7, and 8 are materially delivered.
+- Milestone 3 is delivered through M3.2, with M3.3 remaining as an
+  operator-driven cleanup gate rather than an implementation gap.
 
-The roadmap must not mark these items closed until the acceptance criteria
-below are met.
+The roadmap must not overstate cleanup closure: the residual `LIKE` deletion
+step stays open until production telemetry proves a tier is dormant.
 
 ---
 
@@ -30,18 +30,16 @@ below are met.
 
 ### Open core work
 
-1. M3 read-path migration: semantic / procedural / relationship retrieval
-   must stop relying on residual `LIKE` as a primary path.
-2. M8 relational distillation: enriched episode summaries must promote
-   recurring entity-relation pairs into `knowledge_facts`.
+1. M3.3 operator cleanup: use production telemetry to decide whether each
+   covered tier's residual `LIKE` safety net can be removed.
 
 ### Deferred work
 
 1. Appendix A: observability dashboards
 2. Appendix B: evaluation matrix / harness
 3. Appendix C: fallback strategy
-4. Optional cleanup: full removal of `LIKE` after telemetry proves the
-   safety net is quiet
+4. Optional final cleanup: full removal of `LIKE` after telemetry proves the
+   safety net is quiet tier by tier
 
 ---
 
@@ -49,16 +47,18 @@ below are met.
 
 ### Problem statement
 
-The ingestion-side semantic architecture is in place, but the read side is
-not fully migrated. `retrieveSemanticEvidence` still falls back to direct
-`LIKE` queries, and the scoping work found correctness gaps in FTS trigger
-coverage that make the fallback operationally important today.
+The ingestion-side semantic architecture is in place, and the read side is
+now migrated through M3.2. Residual `LIKE` queries remain only as safety
+nets pending the empirical retirement gate.
 
 The migration plan in
 [semantic-retrieval-fts-vector-migration.md](/Users/jmachen/code/roboticus/docs/plans/semantic-retrieval-fts-vector-migration.md)
 is the authoritative scope for this track.
 
-### Slice M3.1: FTS Trigger Completeness
+### Slice M3.1: FTS Trigger Completeness — **Shipped**
+
+> Status: closed 2026-04-15. Implementation in migration 048 and
+> regression coverage R-AGENT-136 / R-AGENT-137.
 
 #### Goal
 
@@ -72,7 +72,7 @@ can become the real primary read path without silently losing rows.
 - [testutil/](/Users/jmachen/code/roboticus/testutil)
 - new regression coverage under `internal/db/` or `internal/agent/memory/`
 
-#### Required work
+#### Delivered work
 
 - Add a migration `048_fts_trigger_completeness.sql` that:
   - adds the missing INSERT trigger for `semantic_memory`
@@ -241,10 +241,9 @@ meaningful work for FTS-covered tiers.
 
 ### Problem statement
 
-Reflection and distillation now promote recurring patterns into
-`semantic_memory`, but Milestone 8's original acceptance criteria require
-promotion into semantic, procedural, and relational stores. The relational
-promotion step is still missing.
+Reflection and distillation now promote recurring patterns into both
+`semantic_memory` and `knowledge_facts`, closing the relational-promotion
+gap that originally kept Milestone 8 open.
 
 ### Goal
 
@@ -260,7 +259,7 @@ layer learns from repeated successful experience without anecdote hijacking.
 - [internal/db/memory_repo.go](/Users/jmachen/code/roboticus/internal/db/memory_repo.go)
 - regression coverage in `internal/agent/memory/`
 
-### Required work
+### Delivered work
 
 - Extend the enriched episode representation so relation-bearing evidence
   can be recovered during distillation.
@@ -316,17 +315,14 @@ layer learns from repeated successful experience without anecdote hijacking.
 
 ---
 
-## Recommended Implementation Order
+## Recommended Next Actions
 
-1. M3.1 — FTS trigger completeness
-2. M3.2 — HybridSearch-first retrieval
-3. M8 relational distillation
-4. M3.3 — optional `LIKE` retirement after telemetry
-5. Appendices A/B/C
-
-This ordering reduces correctness risk first, then upgrades the read path,
-then closes the remaining consolidation gap, and only then removes the
-fallback safety net.
+1. Run `AggregateRetrievalPaths` against production traces over a meaningful
+   window and record per-tier dormancy.
+2. Retire residual `LIKE` safety nets only for tiers whose dormancy gate is
+   satisfied with adequate sample size.
+3. Update release-facing docs to reflect each retirement step.
+4. Complete appendices A/B/C.
 
 ---
 
@@ -334,8 +330,8 @@ fallback safety net.
 
 The remaining agentic-memory work is done when:
 
-- M3 is fully closed in both ingestion and read paths
-- M8 promotes into semantic, procedural, and relational stores
-- the roadmap no longer overstates milestone closure
-- the regression matrix covers the new behavior
+- per-tier telemetry-backed `LIKE` retirement decisions have been made and
+  implemented where warranted
+- the roadmap no longer overstates or understates milestone closure
+- the regression matrix covers the shipped behavior and the cleanup gates
 - the release docs describe the remaining state honestly

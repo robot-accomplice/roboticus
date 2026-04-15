@@ -234,7 +234,7 @@ func (p *ConsolidationPipeline) phaseEpisodeDistillation(ctx context.Context, st
 			Int("relations_distilled", relationsPromoted).
 			Int("episodes", len(episodes)).
 			Str("category", "consolidation_distillation").
-			Msg("consolidation: distilled patterns into semantic memory")
+			Msg("consolidation: distilled patterns into semantic memory and knowledge_facts")
 	}
 	return promoted
 }

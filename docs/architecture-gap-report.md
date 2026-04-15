@@ -1,6 +1,6 @@
 # Architecture Gap Report: Go Implementation vs Rust Reference
 
-**Date**: 2026-04-14 (updated for v1.0.6 work-in-progress)
+**Date**: 2026-04-15 (updated after M3.1 / M3.2 / M8 / M3.3)
 **Auditor**: Automated deep audit (3 parallel agents)
 **Scope**: Connector-factory compliance, security architecture, tool execution, context management, real-time transport, agentic retrieval architecture
 **Reference**: `/Users/jmachen/code/roboticus-rust/ARCHITECTURE.md`
@@ -11,7 +11,7 @@
 
 The Go implementation achieves **full structural compliance** with the connector-factory pattern. The pipeline is the single source of truth for business logic, all 8 entry points use `RunPipeline()`, and architecture tests enforce connector thinness. **All 7 original systemic gaps are now CLOSED** (v1.0.1 + v1.0.2 + v1.0.4).
 
-v1.0.5 introduced the **agentic retrieval architecture** scaffold — decomposer, router, reranker, context assembly, reflection, and working-memory persistence. v1.0.6 work is focused on making that scaffold behaviorally real: router-selected retrieval modes now influence actual tier retrieval, semantic and relationship evidence preserve stronger provenance/freshness signals, the verifier now consumes pipeline-computed task hints plus freshness/canonical-risk cues before final assistant output is persisted, the verifier also parses structured retrieved evidence to reject unsupported answered subgoals, a persisted graph-fact store now exists in production, and graph retrieval can now synthesize path / impact chains over that stored relation data.
+v1.0.5 introduced the **agentic retrieval architecture** scaffold — decomposer, router, reranker, context assembly, reflection, and working-memory persistence. v1.0.6 has now carried that scaffold much farther into runtime reality: router-selected retrieval modes influence actual tier retrieval, semantic / procedural / relationship / workflow reads are HybridSearch-first with per-tier `retrieval.path.*` trace attribution, semantic and relationship evidence preserve stronger provenance/freshness signals, the verifier consumes pipeline-computed task hints and claim-level proof obligations, a persisted graph-fact store now exists in production with reusable traversal APIs, and enriched episode distillation now promotes recurring canonical triples into `knowledge_facts`. The main remaining retrieval cleanup is operator-observed retirement of residual `LIKE` safety nets by tier, not missing architecture plumbing.
 
 | Category | Compliant | Gaps |
 |----------|-----------|------|
@@ -30,10 +30,10 @@ v1.0.5 introduced the **agentic retrieval architecture** scaffold — decomposer
 | Config Schema Derivation (v1.0.3) | Struct-driven | 0 |
 | Pipeline Cache Guards (v1.0.4) | Reject unparsed tool calls | 0 |
 | Session-Aware Routing (v1.0.4) | Escalation tracker | 0 |
-| **Agentic Retrieval Architecture (v1.0.5/v1.0.6)** | **10 layers partially wired** | **3 remain + 2 partial** |
+| **Agentic Retrieval Architecture (v1.0.5/v1.0.6)** | **Core runtime architecture materially wired** | **cleanup + follow-on gaps remain** |
 | **Working Memory Persistence (v1.0.5)** | **Shutdown/startup** | **0** |
 | **Post-Turn Reflection (v1.0.5)** | **Episode summaries** | **0** |
-| **Verifier/Critic (v1.0.6)** | **Structured retry gate** | **Partial** |
+| **Verifier/Critic (v1.0.6)** | **Claim-level verifier with proof obligations** | **Partial** |
 
 ### v1.0.6 Agentic Architecture Layers
 
@@ -44,20 +44,20 @@ v1.0.5 introduced the **agentic retrieval architecture** scaffold — decomposer
 | 8 | Retrieval Router | `router.go` + `daemon_adapters.go` | Wired into retrieval with production intent signals |
 | 11 | Reranker | `reranker.go` | Wired into RetrieveWithMetrics |
 | 12 | Context Assembly | `context_assembly.go` | Structured evidence with provenance/authority labels |
-| 14 | Verifier/Critic | `verifier.go` + `pipeline_stages.go` | Heuristic verifier with retry, task-hint inputs, action-plan and canonical-source checks, freshness gating, and subgoal evidence-support checks |
+| 14 | Verifier/Critic | `verifier.go` + `pipeline_stages.go` | Claim-level verifier with retry, task-hint inputs, action-plan and canonical-source checks, freshness gating, subgoal evidence-support checks, and per-intent proof obligations |
 | 16 | Reflection | `reflection.go` | Wired into PostTurnIngest |
 | — | Working Memory Persistence | `working_persistence.go` | Wired into Daemon Stop/Start |
-| 7 | Graph Facts Persistence | `043_knowledge_facts.sql`, `manager.go`, `retrieval_tiers.go` | Persisted typed relations with provenance/freshness, retrieved as first-class evidence with path/impact traversal |
+| 7 | Graph Facts Persistence | `043_knowledge_facts.sql`, `manager.go`, `retrieval_tiers.go`, `graph.go` | Persisted typed relations with provenance/freshness, reusable traversal API, and retrieved first-class evidence with path/impact traversal |
 
 ### Remaining Gaps To Full Vision
 
 | Layer | Component | Status |
 |-------|-----------|--------|
-| 4 | Parallel Retrieval | Tiers queried sequentially |
-| 7 | Knowledge Graph Traversal | First path/impact traversal exists over persisted graph facts, but there is still no richer reusable adjacency/path API |
+| 4 | Parallel Retrieval | Tiers are still queried sequentially |
 | 10 | Fusion Layer | Provenance and freshness survive farther now, but fusion signals are still thin |
 | 11 | LLM-based Reranking | Score-based only in v1.0.6 |
-| 14 | Verifier/Critic depth | Subgoal support checks now exist, but there is still no full contradiction resolution or proof-style evidence audit |
+| 14 | Verifier/Critic depth | Stronger claim-level checks exist, but there is still no full contradiction-resolution or proof-style evidence audit |
+| 3 | Semantic read-path cleanup | Residual `LIKE` safety nets remain until telemetry-backed dormancy justifies removal |
 
 ---
 

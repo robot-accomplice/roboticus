@@ -42,12 +42,12 @@ closed, or the critical path changes.
 |-----------|-------|--------|-------|
 | 1 | Unify The Production Retrieval Path | Acceptance met | Pipeline-prepared memory/index preferred by runtime; inference stage emits a `retrieval.*` artifact hash (context + index + combined) onto every trace; a parity fitness proves standard and streaming sessions compute identical hashes and detects drift |
 | 2 | Make Intent And Retrieval Routing Real Decision Inputs | Acceptance met | Unified `PerceptionArtifact` (intent, risk, source-of-truth, required tiers, decomposition, freshness, confidence) is computed in pipeline, stashed on session, and emitted to traces; retrieval modes already honour intent-driven routing |
-| 3 | Upgrade Semantic Memory Into A Canonical Knowledge Layer | In progress | Ingestion-side follow-on is closed: schema now carries `version`, `effective_date`, `superseded_by`, `is_canonical`, `source_label`, and `asserter_id`; canonical is a caller-asserted persisted flag; `IngestPolicyDocument` + `ingest_policy` provide an end-to-end ingestion surface with null-default effective_date, explicit canonical provenance, and no-silent-overwrite guardrails. Read-path migration off residual `LIKE` remains open and is scoped in `semantic-retrieval-fts-vector-migration.md` |
+| 3 | Upgrade Semantic Memory Into A Canonical Knowledge Layer | Acceptance met (cleanup gated by telemetry) | Ingestion-side follow-on is closed and the read path now ships M3.1 trigger completeness plus M3.2 HybridSearch-first retrieval. M3.3's telemetry gate is also shipped; only operator-observed dormancy can justify deleting each tier's residual `LIKE` safety net |
 | 4 | Turn Procedural Memory Into Workflow Memory | Acceptance met (follow-on closed) | Workflow schema, Manager API, retrieval precedence over tool stats, post-turn promotion with auto-extracted error modes + preconditions + intent tags, consolidation confidence sync, and an agent-facing `find_workflow` tool with Laplace-smoothed ranking all land |
 | 5 | Replace Relationship Memory With Persisted Relational Memory | Acceptance met (follow-ons closed) | Persisted `knowledge_facts` store, graph-aware retrieval, reusable `KnowledgeGraph` API with multi-hop `ShortestPath` / `Impact` / `Dependencies`, a `query_knowledge_graph` agent tool, and a retired permissive path-search fallback with a single canonical-relation source of truth enforced at the write gate |
 | 6 | Add A Real Verifier / Critic Stage | Acceptance met (follow-ons closed) | Claim-level certainty classification, provenance coverage, contradiction reconciliation, per-intent proof obligations, a structured claim-to-evidence trace map, and an embedding-backed semantic certainty classifier (lexical-first, semantic-second) that catches paraphrased absolute / hedged claims the lexical markers miss |
 | 7 | Deepen Working Memory Into Executive State | Acceptance met (follow-ons closed) | Executive state is persisted, surfaced in context assembly, grows automatically in post-turn, survives restart with a cross-turn regression test, emits operator-auditable trace/log writes, and harvests tool-output facts via a narrow allowlist (recall_memory / search_memories / read_file / query_knowledge_graph / find_workflow) gated on whether the final response actually references them |
-| 8 | Improve Reflection And Consolidation Quality | In progress | Enriched episode summaries and semantic distillation are in place, but relational promotion from enriched summaries into `knowledge_facts` remains open, so the milestone is not yet fully closed against its original acceptance criteria |
+| 8 | Improve Reflection And Consolidation Quality | Acceptance met | Enriched episode summaries now distill recurring fix patterns and evidence into semantic memory and recurring canonical triples into `knowledge_facts`, closing the relational promotion gap while keeping anecdote-hijack thresholds in place |
 | A | Observability Dashboards (Appendix A) | Post-plan | Only pick up after milestones 1–8 complete; see Appendix A |
 | B | Evaluation Matrix and Test Harness (Appendix B) | Post-plan | Only pick up after milestones 1–8 complete; see Appendix B |
 | C | Fallback Strategy (Appendix C) | Post-plan | Verifier retry and routing modes cover some layers today; full fallback ladder only scheduled after milestones 1–8 complete; see Appendix C |
@@ -139,28 +139,32 @@ closed, or the critical path changes.
   workflows over bare tool stats, post-turn detection promotes repeated
   tool chains into versioned workflow entries, and consolidation's
   confidence sync lands instead of silently skipping.
+- M3.1 shipped trigger completeness and backfill correctness for FTS-covered
+  tiers, eliminating the missing-trigger correctness gaps that previously made
+  `LIKE` operationally load-bearing.
+- M3.2 shipped HybridSearch-first retrieval across semantic, procedural,
+  relationship, and workflow paths, plus per-tier `retrieval.path.<tier>`
+  annotations threaded via per-call retrieval tracer context.
+- M8 now distills recurring canonical `(subject, relation, object)` triples
+  from enriched episode summaries into `knowledge_facts` through the same
+  canonical write gate used by direct graph ingestion.
+- M3.3 now ships a telemetry aggregator (`AggregateRetrievalPaths`) with a
+  minimum-sample dormancy gate so `LIKE` retirement is evidence-based rather
+  than guessed from fixture corpora.
 
 ### Current Critical Path
 
-The remaining core execution work is concentrated in two milestone
-follow-ons plus the post-plan appendices:
+The remaining core execution work is now operator-driven cleanup plus the
+post-plan appendices:
 
-1. **M3 follow-on (read path)** — migrate semantic retrieval off the
-   residual `LIKE` path onto hybrid FTS+vector. The ingestion surface
-   is closed, but the read path is still open. Scoping document:
-   [semantic-retrieval-fts-vector-migration.md](semantic-retrieval-fts-vector-migration.md).
-   That plan is currently sequenced as:
-   - Slice 1: FTS trigger completeness and backfill correctness
-   - Slice 2: HybridSearch-first migration for semantic / procedural /
-     relationship / workflow retrieval
-   - Slice 3: optional LIKE removal after telemetry
-2. **M8 follow-on (relational distillation)** — promote recurring
-   entity-relation pairs from enriched episode summaries into
-   `knowledge_facts` so consolidation genuinely promotes into semantic,
-   procedural, and relational stores.
-3. **Appendices A, B, C** — observability dashboards, evaluation
+1. **M3.3 operator cleanup** — run
+   [semantic-retrieval-fts-vector-migration.md](semantic-retrieval-fts-vector-migration.md)'s
+   dormancy procedure against production traces, verify `AggregateRetrievalPaths`
+   reports `IsDormant=true` for a tier over a meaningful window, and only then
+   delete that tier's residual `LIKE` safety net.
+2. **Appendices A, B, C** — observability dashboards, evaluation
    matrix, and fallback strategy spec work remain sequenced after the
-   M3/M8 follow-ons above complete.
+   operator-driven cleanup above.
 
 ---
 
@@ -176,21 +180,18 @@ follow-ons plus the post-plan appendices:
 
 ### Partial Today
 
-- Semantic retrieval still relies on a residual `LIKE` safety path, and
-  the FTS trigger surface is not yet complete for every covered tier
 - Planner/decomposer exists and is useful, but remains heuristic rather
   than an explicit dependency/stopping-criteria task graph
 - Context assembly is structured and provenance-aware, but still thinner
   than the full claim/source/chronology model in the reference design
-- Consolidation now promotes into semantic and procedural memory, but
-  relational promotion from enriched episode summaries is still open
+- `LIKE` safety nets still exist in covered retrieval tiers, but they are now
+  explicitly demoted to telemetry-gated cleanup paths rather than primary
+  retrieval behavior
 
 ### Remaining Gaps
 
-- Semantic read-path migration to hybrid FTS+vector with complete trigger
-  coverage and telemetry-backed LIKE retirement
-- Relational distillation from enriched episodic summaries into
-  `knowledge_facts`
+- Operator-observed dormancy and tier-by-tier retirement of residual `LIKE`
+  safety nets
 - Appendix work for dashboards, evaluation harnesses, and fallback policy
 
 ---
