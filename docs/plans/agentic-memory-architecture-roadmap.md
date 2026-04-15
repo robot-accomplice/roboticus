@@ -473,9 +473,16 @@ capable of representing dependencies, ownership, chronology, and causality.
   arbitrary depth (not the previous hard-coded 2 hops) and is exported so
   tools and tests can traverse the persisted graph without rebuilding BFS
   each call.
-- What still remains is migrating the retrieval tier to consume the new
-  API (currently it keeps a private walker), and surfacing multi-hop graph
-  queries via an agent tool so the model can call them directly.
+- The retrieval tier now consumes the `KnowledgeGraph` API via type aliases
+  (`graphFactRow = GraphFactRow`, `graphEdge = GraphEdge`). Path queries
+  delegate to `ShortestPath`, with a fallback to a permissive walker for
+  non-traversable relations to preserve historical retrieval behaviour.
+  Impact / dependency queries delegate to `Impact` and `Dependencies` with
+  the same depth-2 cap the retrieval tier had before.
+- What still remains is surfacing multi-hop graph queries via an agent tool
+  so the model can call them directly, and removing the permissive
+  retrieval fallback once the canonical relation set covers every path a
+  consumer needs.
 
 ---
 

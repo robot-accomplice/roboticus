@@ -54,14 +54,11 @@ func knowledgeFactSourceLabel(subject, relation, object string) string {
 	return subject + " " + relation + " " + object
 }
 
-type graphFactRow struct {
-	ID         string
-	Subject    string
-	Relation   string
-	Object     string
-	Confidence float64
-	AgeDays    float64
-}
+// Retrieval-tier graph types are aliases for the exported KnowledgeGraph API
+// types in graph.go. The alias keeps retrieval code readable while reusing
+// one authoritative graph representation for the whole memory package.
+type graphFactRow = GraphFactRow
+type graphEdge = GraphEdge
 
 type graphTraversalIntent int
 
@@ -71,12 +68,6 @@ const (
 	graphTraversalImpact
 	graphTraversalPath
 )
-
-type graphEdge struct {
-	From string
-	To   string
-	Fact graphFactRow
-}
 
 // retrieveSemanticEvidence fetches semantic memory with richer provenance preserved.
 func (mr *Retriever) retrieveSemanticEvidence(ctx context.Context, query string, queryEmbed []float32, mode RetrievalMode, budgetTokens int) []Evidence {
@@ -692,7 +683,68 @@ func graphMatchedEntities(query string, facts []graphFactRow) []string {
 	return entities
 }
 
+// retrievalGraphMaxPathDepth caps path search at six hops. Longer paths are
+// almost always noise for retrieval purposes and the bound keeps BFS cost
+// tight.
+const retrievalGraphMaxPathDepth = 6
+
+// retrievalGraphMaxExpansionDepth keeps the impact/dependency chains
+// readable. The KnowledgeGraph API supports deeper walks; callers that want
+// them should use the API directly.
+const retrievalGraphMaxExpansionDepth = 2
+
+// retrievalGraphMaxEvidence caps the number of graph evidence items returned
+// from a single retrieval pass.
+const retrievalGraphMaxEvidence = 3
+
 func buildGraphPathEvidence(facts []graphFactRow, start, goal string) []Evidence {
+	graph := NewKnowledgeGraph(facts)
+	edges := graph.ShortestPath(start, goal, retrievalGraphMaxPathDepth)
+	if len(edges) == 0 {
+		// The retrieval-tier walker used to treat any edge as traversable for
+		// path queries (not just depends_on / blocks / etc.). Preserve that
+		// behaviour by retrying against the raw adjacency when the bounded
+		// traversal finds nothing.
+		edges = shortestPathIgnoringRelationFilter(facts, start, goal)
+	}
+	if len(edges) == 0 {
+		return nil
+	}
+	return []Evidence{graphPathEvidence(start, goal, edges)}
+}
+
+func buildGraphExpansionEvidence(facts []graphFactRow, seeds []string, reverse bool) []Evidence {
+	if len(seeds) == 0 {
+		return nil
+	}
+	graph := NewKnowledgeGraph(facts)
+	var evidence []Evidence
+	for _, seed := range seeds {
+		var paths []GraphPath
+		if reverse {
+			paths = graph.Impact(seed, retrievalGraphMaxExpansionDepth)
+		} else {
+			paths = graph.Dependencies(seed, retrievalGraphMaxExpansionDepth)
+		}
+		for _, path := range paths {
+			if len(path.Edges) == 0 {
+				continue
+			}
+			evidence = append(evidence, graphChainEvidence(seeds[0], path.Edges, reverse))
+			if len(evidence) >= retrievalGraphMaxEvidence {
+				return evidence
+			}
+		}
+	}
+	return evidence
+}
+
+// shortestPathIgnoringRelationFilter replicates the historical retrieval
+// behaviour where even non-traversable relations (e.g., "mentions") could
+// contribute to a path search. The bounded KnowledgeGraph walker rejects
+// those by design, so when a filtered walk finds nothing we fall back to
+// this permissive helper.
+func shortestPathIgnoringRelationFilter(facts []graphFactRow, start, goal string) []graphEdge {
 	adjacency := make(map[string][]graphEdge)
 	for _, fact := range facts {
 		from := strings.ToLower(fact.Subject)
@@ -706,6 +758,10 @@ func buildGraphPathEvidence(facts []graphFactRow, start, goal string) []Evidence
 
 	startKey := strings.ToLower(start)
 	goalKey := strings.ToLower(goal)
+	if startKey == "" || goalKey == "" || startKey == goalKey {
+		return nil
+	}
+
 	type pathState struct {
 		Node  string
 		Edges []graphEdge
@@ -716,84 +772,23 @@ func buildGraphPathEvidence(facts []graphFactRow, start, goal string) []Evidence
 	for len(queue) > 0 {
 		current := queue[0]
 		queue = queue[1:]
-		if current.Node == goalKey {
-			return []Evidence{graphPathEvidence(start, goal, current.Edges)}
-		}
 		for _, edge := range adjacency[current.Node] {
 			next := strings.ToLower(edge.To)
-			if _, ok := visited[next]; ok {
+			if _, seen := visited[next]; seen {
 				continue
 			}
 			visited[next] = struct{}{}
 			nextEdges := append(append([]graphEdge(nil), current.Edges...), edge)
+			if next == goalKey {
+				return nextEdges
+			}
+			if len(nextEdges) >= retrievalGraphMaxPathDepth {
+				continue
+			}
 			queue = append(queue, pathState{Node: next, Edges: nextEdges})
 		}
 	}
 	return nil
-}
-
-func buildGraphExpansionEvidence(facts []graphFactRow, seeds []string, reverse bool) []Evidence {
-	adjacency := make(map[string][]graphEdge)
-	for _, fact := range facts {
-		if !isTraversableGraphRelation(fact.Relation) {
-			continue
-		}
-		forward := graphEdge{From: fact.Subject, To: fact.Object, Fact: fact}
-		backward := graphEdge{From: fact.Object, To: fact.Subject, Fact: fact}
-		if reverse {
-			adjacency[strings.ToLower(backward.From)] = append(adjacency[strings.ToLower(backward.From)], backward)
-		} else {
-			adjacency[strings.ToLower(forward.From)] = append(adjacency[strings.ToLower(forward.From)], forward)
-		}
-	}
-
-	type bfsState struct {
-		Node  string
-		Depth int
-		Edges []graphEdge
-	}
-	var queue []bfsState
-	visited := make(map[string]int)
-	for _, seed := range seeds {
-		key := strings.ToLower(seed)
-		queue = append(queue, bfsState{Node: key})
-		visited[key] = 0
-	}
-
-	var evidence []Evidence
-	for len(queue) > 0 && len(evidence) < 3 {
-		current := queue[0]
-		queue = queue[1:]
-		if current.Depth >= 2 {
-			continue
-		}
-		for _, edge := range adjacency[current.Node] {
-			next := strings.ToLower(edge.To)
-			nextDepth := current.Depth + 1
-			if prior, seen := visited[next]; seen && prior <= nextDepth {
-				continue
-			}
-			visited[next] = nextDepth
-			nextEdges := append(append([]graphEdge(nil), current.Edges...), edge)
-			if len(nextEdges) > 0 {
-				evidence = append(evidence, graphChainEvidence(seeds[0], nextEdges, reverse))
-			}
-			queue = append(queue, bfsState{Node: next, Depth: nextDepth, Edges: nextEdges})
-			if len(evidence) == 3 {
-				break
-			}
-		}
-	}
-	return evidence
-}
-
-func isTraversableGraphRelation(relation string) bool {
-	switch relation {
-	case "depends_on", "uses", "blocked_by", "blocks", "causes", "caused_by", "version_of", "owned_by":
-		return true
-	default:
-		return false
-	}
 }
 
 func graphPathEvidence(start, goal string, edges []graphEdge) Evidence {
