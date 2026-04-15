@@ -48,9 +48,9 @@ closed, or the critical path changes.
 | 6 | Add A Real Verifier / Critic Stage | Acceptance met | Claim-level certainty classification, provenance coverage, contradiction reconciliation, per-intent proof obligations, and a structured claim-to-evidence trace map are all in place; semantic-classifier upgrade remains as quality work |
 | 7 | Deepen Working Memory Into Executive State | Acceptance met | Executive state is persisted, surfaced in context assembly, grows automatically in post-turn, survives restart with a cross-turn regression test, and emits operator-auditable trace/log writes; richer tool-output assumption extraction remains as follow-on work |
 | 8 | Improve Reflection And Consolidation Quality | Not started | Reflection/consolidation still heuristic despite working scaffolding |
-| A | Observability Dashboards (Appendix A) | Not started | Extends cross-cutting trace work; unified event schema across variants; see Appendix A |
-| B | Evaluation Matrix and Test Harness (Appendix B) | Not started | Comparison matrix across V0–V4 RAG variants with six task buckets; see Appendix B |
-| C | Fallback Strategy (Appendix C) | Partial | Verifier retry and routing modes cover some layers; need independently testable router / planner / retrieval / reranker / action fallbacks; see Appendix C |
+| A | Observability Dashboards (Appendix A) | Post-plan | Only pick up after milestones 1–8 complete; see Appendix A |
+| B | Evaluation Matrix and Test Harness (Appendix B) | Post-plan | Only pick up after milestones 1–8 complete; see Appendix B |
+| C | Fallback Strategy (Appendix C) | Post-plan | Verifier retry and routing modes cover some layers today; full fallback ladder only scheduled after milestones 1–8 complete; see Appendix C |
 
 ### Completed Slices
 
@@ -774,17 +774,9 @@ path to Milestones 5 and 4:
 - **Milestone 7 quality follow-on** — extract assumptions from tool outputs
   (not only the agent's own response) and upgrade assumption confidence
   based on evidence support.
-- **Appendix B (Evaluation Matrix)** — stand up the one-command V0–V4
-  comparison harness with deterministic test cases across the six buckets
-  so every subsequent change can be measured, not argued about.
-- **Appendix A (Observability Dashboards)** — emit the unified run event
-  schema on every turn (run_id, variant, task_bucket, quality scores,
-  fallback breakdown, latency and cost) so the harness in Appendix B has
-  something to aggregate and the dashboards have a single source of truth.
-- **Appendix C (Fallback Strategy)** — formalize the router / planner /
-  retrieval / reranker / action fallbacks to match the verifier retry
-  that already exists, with each fallback independently testable and
-  logged with reason + outcome.
+Appendices A, B, and C are **post-plan** work. They are **not** part of the
+current critical path and should only be picked up once every core
+milestone (1–8) and the M5/M4/M6/M7 follow-ons above are closed.
 
 ---
 
