@@ -108,3 +108,33 @@ func mapKeys(m map[string]string) []string {
 // Silence unused-import lint on platforms where os isn't referenced in
 // individual tests.
 var _ = os.Environ
+
+// TestServiceInstallConfig_RejectsRelativePaths is the v1.0.6 P2-H
+// guardrail. ServiceInstallConfig is a leaf — it takes whatever
+// configPath it's handed and bakes it into service arguments. The
+// caller (cmd/admin/daemon.go and cmd/admin/service.go) is responsible
+// for calling cmdutil.EffectiveConfigPathAbs so only absolute paths
+// ever land here. This test documents the invariant by asserting that
+// a relative path, if it ever slips through to this leaf, is STILL
+// embedded verbatim — which surfaces as immediately-wrong service
+// behavior rather than silently-wrong behavior.
+//
+// The actual "reject" happens one layer up in the install command; but
+// by pinning the leaf's behavior as "verbatim pass-through", we
+// separate concerns cleanly: caller absolutizes, leaf trusts.
+func TestServiceInstallConfig_RelativeIsEmbeddedVerbatim(t *testing.T) {
+	cfg := core.DefaultConfig()
+	const relPath = "configs/prod.toml"
+	svc := ServiceInstallConfig(&cfg, relPath)
+
+	found := false
+	for i := 0; i < len(svc.Arguments)-1; i++ {
+		if svc.Arguments[i] == "--config" && svc.Arguments[i+1] == relPath {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("ServiceInstallConfig should pass configPath verbatim so the install layer's absolutize step is the single authority; Arguments=%v", svc.Arguments)
+	}
+}

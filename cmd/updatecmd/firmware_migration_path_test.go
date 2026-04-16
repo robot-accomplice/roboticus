@@ -3,6 +3,7 @@ package updatecmd
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -116,6 +117,55 @@ func TestCollectFirmwarePaths_ConfigLoadFailureFallsBack(t *testing.T) {
 		}
 		if !found {
 			t.Fatalf("legacy firmware path %q missing from fallback candidates %v", wantLegacy, paths)
+		}
+	}
+}
+
+// TestCollectFirmwarePaths_ExpandsTildeInWorkspace is the v1.0.6 P1-G
+// regression. The default config written by `roboticus config init` sets
+// `workspace = "~/.roboticus/workspace"`. Pre-fix,
+// core.LoadConfigFromFile returned those strings literally without
+// expanding ~ — so collectFirmwarePaths ended up returning
+// `"~/.roboticus/workspace/FIRMWARE.toml"` (a literal path with the
+// tilde character) and subsequent os.Stat failed, silently skipping
+// migration for anyone using the default workspace.
+//
+// The fix normalized paths inside LoadConfigFromFile. This test pins
+// that behavior: a config with a ~ workspace must resolve to an
+// absolute path under the user's home dir, never leave ~ literal.
+func TestCollectFirmwarePaths_ExpandsTildeInWorkspace(t *testing.T) {
+	// Set HOME to a known tmp dir so ~ expansion is predictable.
+	isolatedHome := t.TempDir()
+	t.Setenv("HOME", isolatedHome)
+
+	tmp := t.TempDir()
+	configPath := filepath.Join(tmp, "roboticus.toml")
+	cfgContent := `
+[agent]
+id = "test-agent"
+workspace = "~/.roboticus/workspace"
+`
+	if err := os.WriteFile(configPath, []byte(cfgContent), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	paths := collectFirmwarePaths(configPath)
+	if len(paths) == 0 {
+		t.Fatalf("collectFirmwarePaths returned no candidates")
+	}
+
+	// The primary candidate MUST be the expanded workspace path, NOT
+	// the literal "~/.roboticus/workspace/FIRMWARE.toml".
+	expectedWorkspace := filepath.Join(isolatedHome, ".roboticus", "workspace", "FIRMWARE.toml")
+	if paths[0] != expectedWorkspace {
+		t.Fatalf("primary firmware path = %q; want expanded workspace %q — did LoadConfigFromFile skip NormalizePaths again?", paths[0], expectedWorkspace)
+	}
+
+	// Defense in depth: nothing in the candidate list should contain
+	// a literal tilde. If any does, ~ expansion regressed somewhere.
+	for _, p := range paths {
+		if strings.Contains(p, "~") {
+			t.Fatalf("candidate path contains literal tilde %q — ~ expansion regressed", p)
 		}
 	}
 }

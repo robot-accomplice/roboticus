@@ -29,16 +29,19 @@ var serviceInstallCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		// Pin service registration to the resolved config path (see
-		// daemon.ServiceInstallConfig for rationale). Without this, the
-		// installed service falls back to default config lookup and can
-		// run against a different agent/DB/workspace than the operator
-		// intended.
-		configPath := cmdutil.EffectiveConfigPath()
+		// Pin service registration to the absolutized config path (see
+		// daemon.ServiceInstallConfig + cmdutil.EffectiveConfigPathAbs
+		// for the full rationale — tl;dr the service manager's CWD
+		// isn't the shell's CWD, so a relative --config would boot the
+		// wrong file).
+		configPath, err := cmdutil.EffectiveConfigPathAbs()
+		if err != nil {
+			return fmt.Errorf("install failed: %w", err)
+		}
 		if err := daemon.Install(&cfg, configPath); err != nil {
 			return fmt.Errorf("install failed: %w", err)
 		}
-		log.Info().Str("config", configPath).Msg("service installed (config path embedded)")
+		log.Info().Str("config", configPath).Msg("service installed (absolute config path embedded)")
 		return nil
 	},
 }

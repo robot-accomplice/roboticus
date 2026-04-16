@@ -24,15 +24,22 @@ var daemonInstallCmd = &cobra.Command{
 			return err
 		}
 		// Pin the service registration to the exact config the operator
-		// just loaded. Without this the service manager starts roboticus
-		// with no args, picks up the default config lookup, and silently
-		// runs against the wrong agent/database/workspace. See
-		// daemon.ServiceInstallConfig for the full rationale.
-		configPath := cmdutil.EffectiveConfigPath()
+		// just loaded. We must absolutize at install time because the
+		// service manager's working directory when it later invokes
+		// roboticus is /, /var, or some other system-controlled
+		// location — a relative `--config configs/prod.toml` would
+		// resolve against that, not the operator's install-time shell
+		// CWD. See daemon.ServiceInstallConfig for the full rationale
+		// and cmdutil.EffectiveConfigPathAbs for why we error out
+		// rather than silently install with a fragile path.
+		configPath, err := cmdutil.EffectiveConfigPathAbs()
+		if err != nil {
+			return fmt.Errorf("install failed: %w", err)
+		}
 		if err := daemon.Install(&cfg, configPath); err != nil {
 			return fmt.Errorf("install failed: %w", err)
 		}
-		log.Info().Str("config", configPath).Msg("service installed (config path embedded)")
+		log.Info().Str("config", configPath).Msg("service installed (absolute config path embedded)")
 		return nil
 	},
 }

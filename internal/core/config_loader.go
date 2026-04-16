@@ -20,11 +20,24 @@ var bundledProvidersTOML string
 
 // LoadConfigFromFile reads and parses a TOML config file into a Config struct.
 // It starts with DefaultConfig and overlays values from the file.
+//
+// v1.0.6: path fields are normalized (tilde-expanded) before return. Pre-fix,
+// callers that used LoadConfigFromFile directly (bypassing
+// cmdutil.LoadConfig's wrapper, which DID call NormalizePaths) got back
+// literal "~/.roboticus/workspace" strings. That broke downstream
+// os.Stat / os.Open calls silently — the firmware-migration path was
+// the P1-G audit finding where a default config with
+// `workspace = "~/.roboticus/workspace"` never matched any real file.
+// Normalizing here means no caller can skip the step even if they don't
+// realize it exists.
 func LoadConfigFromFile(path string) (Config, error) {
 	cfg := DefaultConfig()
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
+			// DefaultConfig carries literal "~/..." paths too — normalize so the
+			// file-not-found branch matches the file-present branch.
+			cfg.NormalizePaths()
 			return cfg, nil
 		}
 		return cfg, fmt.Errorf("read config: %w", err)
@@ -36,6 +49,7 @@ func LoadConfigFromFile(path string) (Config, error) {
 	if cfg.Memory.WorkingBudgetPct != 0 {
 		cfg.Memory.WorkingBudget = cfg.Memory.WorkingBudgetPct
 	}
+	cfg.NormalizePaths()
 	return cfg, nil
 }
 
