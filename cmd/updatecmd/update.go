@@ -618,6 +618,36 @@ func runUpdateAll(ctx context.Context, currentVersion string, yes, refreshConfig
 	return nil
 }
 
+// collectFirmwarePaths returns all candidate locations where FIRMWARE.toml
+// might live for a given configPath, in priority order. The primary path
+// is the configured agent workspace (where setup.go writes new firmware).
+// The secondary path is filepath.Dir(configPath) — legacy pre-workspace
+// installs left firmware there, and we still want to migrate those during
+// a maintenance pass so stale firmware on disk doesn't break the runtime.
+// Returns unique paths; deduplicates when workspace == parent-of-config.
+func collectFirmwarePaths(configPath string) []string {
+	seen := map[string]struct{}{}
+	var out []string
+	add := func(dir string) {
+		if dir == "" {
+			return
+		}
+		path := filepath.Join(dir, "FIRMWARE.toml")
+		if _, dup := seen[path]; dup {
+			return
+		}
+		seen[path] = struct{}{}
+		out = append(out, path)
+	}
+	// Primary: configured workspace (operator intent).
+	if cfg, err := core.LoadConfigFromFile(configPath); err == nil {
+		add(cfg.Agent.Workspace)
+	}
+	// Secondary: legacy parent-of-config location.
+	add(filepath.Dir(configPath))
+	return out
+}
+
 func runUpdateMaintenance(configPath string) error {
 	// Step 1: Create a backup before any modifications.
 	backupPath, err := core.BackupConfigFile(configPath, 10, 30)
@@ -636,13 +666,30 @@ func runUpdateMaintenance(configPath string) error {
 	}
 
 	// Step 3: Firmware rules migration (TOML [[rules]] → [rules] table format).
-	workspaceDir := filepath.Dir(configPath)
-	firmwarePath := filepath.Join(workspaceDir, "FIRMWARE.toml")
-	if _, err := os.Stat(firmwarePath); err == nil {
+	//
+	// The personality setup flow writes FIRMWARE.toml to cfg.Agent.Workspace
+	// (see cmd/configcmd/setup.go). Pre-v1.0.6 this maintenance path looked
+	// for FIRMWARE.toml in filepath.Dir(configPath), which is the CONFIG
+	// directory (~/.roboticus), not the WORKSPACE directory (typically
+	// ~/.roboticus/workspace or operator-configured). That meant migration
+	// silently skipped every operator who had a custom workspace — their
+	// firmware stayed on the old [[rules]] format while the runtime moved
+	// to [rules] table format.
+	//
+	// The fix is to resolve the workspace path from the loaded config. If
+	// the config can't be loaded (e.g., first-time init or corrupt toml),
+	// we fall back to the legacy parent-of-config path so pre-workspace
+	// installs still migrate. As a safety net we ALSO attempt migration on
+	// any stale FIRMWARE.toml that lingered in the config dir from older
+	// versions — old file, new codebase should still migrate cleanly.
+	for _, firmwarePath := range collectFirmwarePaths(configPath) {
+		if _, err := os.Stat(firmwarePath); err != nil {
+			continue
+		}
 		if migErr := migrateFirmwareRules(firmwarePath); migErr != nil {
-			fmt.Fprintf(os.Stderr, "warning: firmware migration: %v\n", migErr)
+			fmt.Fprintf(os.Stderr, "warning: firmware migration at %s: %v\n", firmwarePath, migErr)
 		} else {
-			fmt.Println("Firmware rules migration: OK")
+			fmt.Printf("Firmware rules migration: OK (%s)\n", firmwarePath)
 		}
 	}
 
@@ -976,7 +1023,21 @@ func performUpdate(ctx context.Context, rel LatestRelease, skipConfirm bool) err
 	}
 
 	// Move the downloaded binary into the same directory as the current binary,
-	// then rename over it. This ensures same-filesystem rename for atomicity.
+	// then replace it. Same-filesystem rename is required for atomicity.
+	//
+	// OS boundary: on Unix, a running binary can be os.Rename()'d over in place
+	// — the kernel keeps the old inode alive for the running process while the
+	// new file takes the name. Windows does NOT allow that: a running .exe
+	// holds an exclusive write lock and a direct rename over it fails with
+	// "The process cannot access the file because it is being used by another
+	// process." Windows *does* allow renaming the running exe itself (the lock
+	// is on the open handle, not the directory entry), so the canonical
+	// Windows dance is: move running exe aside (→ <path>.old), move staged exe
+	// into place, schedule .old for delete-on-reboot. That platform-specific
+	// dance lives in replaceRunningBinary (see update_unix.go /
+	// update_windows.go). Previously this code path used a bare os.Rename
+	// everywhere, which is why the v1.0.6 architecture audit flagged Windows
+	// self-update as pre-release broken.
 	destDir := filepath.Dir(execPath)
 	stagePath := filepath.Join(destDir, ".roboticus-update-staging")
 	if err := copyFile(binaryPath, stagePath); err != nil {
@@ -986,7 +1047,7 @@ func performUpdate(ctx context.Context, rel LatestRelease, skipConfirm bool) err
 		_ = os.Remove(stagePath)
 		return fmt.Errorf("failed to set permissions on staged binary: %w", err)
 	}
-	if err := os.Rename(stagePath, execPath); err != nil {
+	if err := replaceRunningBinary(stagePath, execPath); err != nil {
 		_ = os.Remove(stagePath)
 		return fmt.Errorf("failed to replace binary: %w", err)
 	}

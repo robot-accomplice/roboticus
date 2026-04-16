@@ -78,7 +78,9 @@ func TestInstall_InvalidConfig(t *testing.T) {
 	cfg := core.DefaultConfig()
 	cfg.Database.Path = "/nonexistent/deep/path/db.sqlite"
 	// Install may fail or succeed depending on service manager — just exercise.
-	_ = Install(&cfg)
+	// v1.0.6: Install now takes a configPath so the installed service is
+	// pinned to the operator's explicit config — pass a test-only placeholder.
+	_ = Install(&cfg, "/nonexistent/roboticus.toml")
 }
 
 func TestStatus_NotInstalled(t *testing.T) {

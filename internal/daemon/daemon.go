@@ -59,13 +59,69 @@ type Daemon struct {
 	pidFilePath string
 }
 
-// ServiceConfig returns the kardianos service configuration.
+// ServiceConfig returns the baseline kardianos service identity — Name,
+// DisplayName, Description. This is the lookup-only config used by
+// Uninstall / Control / Status, which don't need to re-specify how the
+// service starts (the service manager already has the registered args
+// from Install). For Install itself, see ServiceInstallConfig.
 func ServiceConfig() *service.Config {
 	return &service.Config{
 		Name:        "roboticus",
 		DisplayName: "Roboticus Agent Runtime",
 		Description: "Autonomous AI agent runtime with multi-channel support.",
 	}
+}
+
+// ServiceInstallConfig returns a service config that embeds the operator's
+// current invocation context — the exact config file path and any active
+// ROBOTICUS_* environment variables — so the installed service starts
+// against the same agent runtime the operator just validated at install
+// time.
+//
+// Why this exists: v1.0.6 audit flagged that NewServiceOnly discarded the
+// loaded cfg and registered the service with only Name/Display/Description
+// set. The service manager then started the binary with no arguments,
+// which on macOS/Linux/Windows resolves to the default config location —
+// NOT the --config the operator passed to `roboticus daemon install`. The
+// operator's install intent got silently dropped, so installed services
+// could pick up the wrong database, wrong agent identity, wrong workspace.
+//
+// Arguments: we embed `serve --config <path>` so the binary's serve path
+// loads explicitly against the configured file. An empty configPath is
+// accepted (falls back to default lookup) for callers that don't have one
+// — but the install command always passes cmdutil.EffectiveConfigPath().
+//
+// Env: we snapshot ROBOTICUS_* env vars present at install time. This
+// covers cases where the operator was running with ROBOTICUS_CONFIG,
+// ROBOTICUS_PROFILE, or any feature-flag overrides. Those need to persist
+// into the service's environment so the service honors them on boot.
+// We intentionally don't copy non-prefixed env (PATH, HOME, USER, etc.)
+// — those are inherited from the service manager's own environment.
+func ServiceInstallConfig(_ *core.Config, configPath string) *service.Config {
+	cfg := ServiceConfig()
+	args := []string{"serve"}
+	if strings.TrimSpace(configPath) != "" {
+		args = append(args, "--config", configPath)
+	}
+	cfg.Arguments = args
+
+	// Snapshot ROBOTICUS_* env so the installed service inherits the same
+	// overrides the operator ran install under.
+	envVars := map[string]string{}
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, "ROBOTICUS_") {
+			continue
+		}
+		i := strings.IndexByte(kv, '=')
+		if i <= 0 {
+			continue
+		}
+		envVars[kv[:i]] = kv[i+1:]
+	}
+	if len(envVars) > 0 {
+		cfg.EnvVars = envVars
+	}
+	return cfg
 }
 
 // New creates a daemon with all subsystems wired together.
@@ -735,11 +791,21 @@ func NewServiceOnly(_ *core.Config) (service.Service, *service.Config, error) {
 	return svc, cfg, nil
 }
 
-// Install registers roboticus as an OS service.
-func Install(cfg *core.Config) error {
-	svc, _, err := NewServiceOnly(cfg)
+// Install registers roboticus as an OS service with the invocation
+// context embedded (config path + ROBOTICUS_* env). The service manager
+// will start the binary as `roboticus serve --config <configPath>` with
+// the captured env so the installed runtime honors the operator's intent
+// instead of silently falling back to default config lookup.
+//
+// configPath should be the absolute path the operator used at install
+// time — the install command layer obtains it via
+// cmdutil.EffectiveConfigPath(). Passing an empty string is accepted (no
+// --config arg embedded) but not recommended.
+func Install(cfg *core.Config, configPath string) error {
+	installCfg := ServiceInstallConfig(cfg, configPath)
+	svc, err := service.New(controlStub{}, installCfg)
 	if err != nil {
-		return err
+		return fmt.Errorf("service create: %w", err)
 	}
 	return svc.Install()
 }

@@ -23,10 +23,16 @@ var daemonInstallCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if err := daemon.Install(&cfg); err != nil {
+		// Pin the service registration to the exact config the operator
+		// just loaded. Without this the service manager starts roboticus
+		// with no args, picks up the default config lookup, and silently
+		// runs against the wrong agent/database/workspace. See
+		// daemon.ServiceInstallConfig for the full rationale.
+		configPath := cmdutil.EffectiveConfigPath()
+		if err := daemon.Install(&cfg, configPath); err != nil {
 			return fmt.Errorf("install failed: %w", err)
 		}
-		log.Info().Msg("service installed")
+		log.Info().Str("config", configPath).Msg("service installed (config path embedded)")
 		return nil
 	},
 }
