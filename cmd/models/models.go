@@ -959,7 +959,27 @@ per-intent-class latency scorecard and 6-axis metascore dimension reporting.`,
 			fail          int
 			avgQuality    float64
 			intentQuality map[string]float64 // intent_class → avg quality 0-1
-			latencies     map[string][]int64  // intent_class → latencies in ms
+			latencies     map[string][]int64 // intent_class → latencies in ms
+
+			// Warm-up telemetry (baseline harness only). Recorded
+			// separately from scored prompts so cold-start latency
+			// can't pollute the steady-state latency average the
+			// router uses for metascore-driven dispatch. The two
+			// warm-up calls give us distinct signals:
+			//   * coldStartMs — first call after model wasn't resident
+			//     (model load + KV cache allocation + pipeline warm).
+			//     Includes timeout-pegged lower bound when the call
+			//     didn't complete within the extended warm-up timeout.
+			//   * warmTransitionMs — second call after warm-up #1
+			//     finished. Should be close to steady-state latency;
+			//     if it isn't, warm-up #1 didn't actually take and
+			//     the operator needs to know before the scored calls
+			//     produce misleading data.
+			coldStartMs        int64
+			coldStartTimedOut  bool
+			warmTransitionMs   int64
+			warmTransitionOK   bool // true when warmTransitionMs landed near expected steady-state
+			warmupSkipped      bool // true for cloud models — their "cold" is server-side
 		}
 		var results []modelResult
 
@@ -974,6 +994,66 @@ per-intent-class latency scorecard and 6-axis metascore dimension reporting.`,
 				model:         model,
 				intentQuality: make(map[string]float64),
 				latencies:     make(map[string][]int64),
+			}
+
+			// ── Warm-up stage (v1.0.6) ────────────────────────────
+			//
+			// Pre-warm-up baselining produced polluted latency
+			// averages whenever a local model paid cold-start cost
+			// on the first prompt — one EXECUTION call timing out
+			// at 5m would push the EXECUTION bucket's avg to 65s
+			// (real number: ~4.5s). Two warm-up calls isolate the
+			// cold-start cost from the scored-prompt data:
+			//
+			//   warm-up #1 (cold): extended timeout (2x), records
+			//                       coldStartMs. Hits weight-load +
+			//                       KV cache + pipeline init.
+			//   warm-up #2 (warm-transition): normal timeout,
+			//                       records warmTransitionMs.
+			//                       Confirms the warm-up "took";
+			//                       should be near steady-state.
+			//
+			// Cloud models skip warm-up — "cold start" on the cloud
+			// side is opaque from our client and measuring it from
+			// here is noise.
+			mr.warmupSkipped = isCloudModel(config, model)
+			if mr.warmupSkipped {
+				fmt.Printf("    Warm-up: skipped (cloud model)\n\n")
+			} else {
+				coldTimeout := 2 * modelTimeout
+				fmt.Printf("    Warm-up 1/2 (cold, timeout: %s): ", coldTimeout)
+				coldRes := runWarmupCall(model, coldTimeout)
+				mr.coldStartMs = coldRes.LatencyMs
+				mr.coldStartTimedOut = coldRes.TimedOut
+				if coldRes.TimedOut {
+					fmt.Printf("TIMEOUT  (cold-start exceeded %s — recorded as lower bound)\n", coldTimeout)
+				} else if coldRes.Err != nil {
+					fmt.Printf("ERROR  %v\n", coldRes.Err)
+				} else {
+					fmt.Printf("%.1fs\n", float64(coldRes.LatencyMs)/1000.0)
+				}
+
+				fmt.Printf("    Warm-up 2/2 (warm-transition, timeout: %s): ", modelTimeout)
+				warmRes := runWarmupCall(model, modelTimeout)
+				mr.warmTransitionMs = warmRes.LatencyMs
+				// Heuristic: warm-transition is "OK" when it's
+				// under 30s for local models. If #2 is still slow
+				// (>30s) the warm-up didn't take — operator should
+				// notice before 30 minutes of scored data accrues.
+				const warmOKCeiling = int64(30_000)
+				mr.warmTransitionOK = !warmRes.TimedOut && warmRes.Err == nil && warmRes.LatencyMs < warmOKCeiling
+				if warmRes.TimedOut {
+					fmt.Printf("TIMEOUT  (warm-up didn't take — scored prompts may be unreliable)\n")
+				} else if warmRes.Err != nil {
+					fmt.Printf("ERROR  %v\n", warmRes.Err)
+				} else {
+					marker := "OK"
+					if !mr.warmTransitionOK {
+						marker = "SLOW — warm-up may not have fully primed the model"
+					}
+					fmt.Printf("%.1fs  (%s)\n", float64(warmRes.LatencyMs)/1000.0, marker)
+				}
+				fmt.Println()
 			}
 
 			intentSums := make(map[string]float64)
@@ -1065,6 +1145,26 @@ per-intent-class latency scorecard and 6-axis metascore dimension reporting.`,
 				fmt.Printf("    Baseline profile: Eff=%.2f Cost=%.2f Avail=%.2f Loc=%.1f Conf=%.1f Spd=%.2f\n",
 					baseline.Efficacy, baseline.Cost, baseline.Availability,
 					baseline.Locality, baseline.Confidence, baseline.Speed)
+			}
+
+			// Warm-up telemetry summary. Shown separately from the
+			// steady-state quality/latency so operators can see at
+			// a glance how expensive cold-start is for this model
+			// and whether the warm-up actually took. If
+			// warmTransitionOK=false, the scored data below should
+			// be treated with extra skepticism — the warm-up didn't
+			// fully prime the model.
+			if !r.warmupSkipped {
+				if r.coldStartTimedOut {
+					fmt.Printf("    Cold-start: >%.0fs (timed out — genuine value exceeds timeout)\n", float64(r.coldStartMs)/1000.0)
+				} else {
+					fmt.Printf("    Cold-start: %.1fs\n", float64(r.coldStartMs)/1000.0)
+				}
+				warmMarker := ""
+				if !r.warmTransitionOK {
+					warmMarker = "  ⚠ warm-up may not have taken — scored data may be unreliable"
+				}
+				fmt.Printf("    Warm-transition: %.1fs%s\n", float64(r.warmTransitionMs)/1000.0, warmMarker)
 			}
 		}
 		// Cross-model comparison: rank all models by overall quality.
@@ -1255,6 +1355,65 @@ func resolveModelTimeout(config map[string]any, model string) time.Duration {
 	}
 
 	return 120 * time.Second // 2 min for cloud models
+}
+
+// isCloudModel reports whether the given model's provider is cloud-hosted.
+// Cloud models skip warm-up in the baseline harness because "cold start"
+// for them is opaque (provider-side model routing, autoscaler spin-up,
+// etc.) and measuring it from the client produces noise, not signal.
+// The inverse of the local-provider check in resolveModelTimeout.
+func isCloudModel(config map[string]any, model string) bool {
+	providerName, _ := splitModelForDisplay(model)
+	if providerName == "" {
+		return false
+	}
+	providers, ok := config["providers"].(map[string]any)
+	if !ok {
+		return false
+	}
+	prov, ok := providers[providerName].(map[string]any)
+	if !ok {
+		return false
+	}
+	isLocal, _ := prov["is_local"].(bool)
+	return !isLocal
+}
+
+// runWarmupCall issues a single warm-up request against the baseline
+// API endpoint. The request uses llm.WarmupPrompt (a trivial "reply
+// with ready" shape) so the pipeline exercises its full path but the
+// generation cost is near-minimal. Returns WarmupResult carrying
+// latency, timeout flag, and any transport error.
+//
+// Callers record the two warm-up calls' latencies separately from the
+// scored-prompt latencies so cold-start cost doesn't pollute
+// steady-state averages. The second call's latency is a tripwire: if
+// it's still abnormally slow, the warm-up didn't actually take and
+// the operator should stop the run rather than collect 30 minutes of
+// misleading scored data.
+func runWarmupCall(model string, timeout time.Duration) llm.WarmupResult {
+	body := map[string]any{
+		"content":  llm.WarmupPrompt,
+		"model":    model,
+		"no_cache": true, // warm-up must always hit the model, never a cache hit
+	}
+	start := time.Now()
+	_, err := cmdutil.APIPostSlow("/api/agent/message", body, timeout)
+	latencyMs := time.Since(start).Milliseconds()
+
+	res := llm.WarmupResult{LatencyMs: latencyMs}
+	if err != nil {
+		// Distinguish timeout from transport error. cmdutil.APIPostSlow
+		// wraps net.Error with "context deadline exceeded" text; we
+		// heuristically detect it so the caller can record a
+		// lower-bound observation rather than drop the sample.
+		if latencyMs >= timeout.Milliseconds()-500 {
+			res.TimedOut = true
+		} else {
+			res.Err = err
+		}
+	}
+	return res
 }
 
 // toFloat extracts a float64 from an any value (JSON numbers decode as float64).
