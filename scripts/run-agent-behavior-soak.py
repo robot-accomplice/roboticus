@@ -26,6 +26,14 @@ Environment:
   SOAK_REPO_ROOT                Repo root used to launch `go run . serve`
   SOAK_SERVER_START_TIMEOUT     Seconds to wait for managed server health (default: 90)
   SOAK_KEEP_ISOLATED_ROOT       1=keep isolated root after run (default: 0)
+  SOAK_AUTONOMY_MAX_LOOP_SECS   Override autonomy_max_turn_duration_seconds
+                                in the isolated config (clone/fresh only).
+                                Unset = honor whatever was cloned from the
+                                source config. Useful for re-soaking with a
+                                higher ceiling when local models' cold-cache
+                                latency causes the ReAct loop to miss its
+                                wall-clock deadline before tool chains
+                                complete. Prod configs are never touched.
 """
 import atexit
 import hashlib
@@ -89,6 +97,28 @@ SERVER_MODE = os.environ.get("SOAK_SERVER_MODE", "external").strip().lower()
 _default_clear = "1" if SERVER_MODE in ("clone", "fresh") else "0"
 CLEAR_CACHE = os.environ.get("SOAK_CLEAR_CACHE", _default_clear) == "1"
 BYPASS_CACHE = os.environ.get("SOAK_BYPASS_CACHE", "0") == "1"
+# v1.0.6: isolated-config override for the agent's ReAct wall-clock
+# ceiling. The soak clones the user's roboticus.toml verbatim, which
+# in realistic installs carries autonomy_max_turn_duration_seconds =
+# 90 (Rust-parity default). That ceiling is too tight for cold-cache
+# local models — each inference call on e.g. qwen2.5:32b can burn
+# 60-80s, so a 3-step tool chain blows through 90s long before the
+# final answer. Operators can re-run the soak with a looser ceiling
+# by exporting SOAK_AUTONOMY_MAX_LOOP_SECS=600 (or whatever value
+# they want to validate). Only the isolated clone is patched; the
+# source config is never modified.
+_raw_soak_max_loop = os.environ.get("SOAK_AUTONOMY_MAX_LOOP_SECS", "").strip()
+AUTONOMY_MAX_LOOP_SECS: Optional[int] = None
+if _raw_soak_max_loop:
+    try:
+        AUTONOMY_MAX_LOOP_SECS = int(_raw_soak_max_loop)
+        if AUTONOMY_MAX_LOOP_SECS <= 0:
+            raise ValueError("must be positive")
+    except ValueError as _exc:
+        sys.stderr.write(
+            f"[behavior-soak] ignoring SOAK_AUTONOMY_MAX_LOOP_SECS={_raw_soak_max_loop!r}: {_exc}\n"
+        )
+        AUTONOMY_MAX_LOOP_SECS = None
 SOURCE_ROOT = Path(os.environ.get("SOAK_SOURCE_ROOT", str(Path.home() / ".roboticus"))).expanduser()
 REPO_ROOT = Path(os.environ.get("SOAK_REPO_ROOT", str(Path(__file__).resolve().parents[1]))).resolve()
 SERVER_START_TIMEOUT = int(os.environ.get("SOAK_SERVER_START_TIMEOUT", "90"))
@@ -304,6 +334,8 @@ def build_isolated_config(mode: str, source_root: Path, isolated_root: Path, hos
     # denies the bash invocation and the agent has no way to
     # produce the expected count-style answer.
     text = extend_allowed_paths_for_soak(text, source_root)
+    if AUTONOMY_MAX_LOOP_SECS is not None:
+        text = patch_autonomy_duration(text, AUTONOMY_MAX_LOOP_SECS)
     config_path.write_text(text, encoding="utf-8")
     return config_path
 
@@ -355,6 +387,57 @@ def extend_allowed_paths_for_soak(text: str, source_root: Path) -> str:
     text = _append_paths(text, "tool_allowed_paths")
     text = _append_paths(text, "script_allowed_paths")
     return text
+
+
+def patch_autonomy_duration(text: str, seconds: int) -> str:
+    """Rewrite autonomy_max_turn_duration_seconds in the isolated
+    config to the given value. This is the soak-only knob for
+    relaxing the ReAct wall-clock ceiling without touching the
+    operator's live roboticus.toml (v1.0.6 safety invariant:
+    isolated clone only).
+
+    If the key exists anywhere in the config, we update it in place
+    (preserving surrounding structure). If it does not exist — which
+    can happen for hand-edited or stripped-down configs — we append
+    it under the [agent] section if one is present, or as a
+    top-level key otherwise.
+
+    Idempotent: running this twice with the same value is a no-op.
+
+    >>> patch_autonomy_duration('x = 1\\nautonomy_max_turn_duration_seconds = 90\\ny = 2\\n', 600)
+    'x = 1\\nautonomy_max_turn_duration_seconds = 600\\ny = 2\\n'
+    >>> patch_autonomy_duration('[agent]\\nfoo = 1\\n', 600)
+    '[agent]\\nautonomy_max_turn_duration_seconds = 600\\nfoo = 1\\n'
+    >>> patch_autonomy_duration('top = 1\\n', 600)
+    'top = 1\\nautonomy_max_turn_duration_seconds = 600\\n'
+    >>> patch_autonomy_duration('top = 1', 600)
+    'top = 1\\nautonomy_max_turn_duration_seconds = 600\\n'
+    >>> once = patch_autonomy_duration('top = 1\\n', 600)
+    >>> patch_autonomy_duration(once, 600) == once  # idempotent
+    True
+    """
+    assignment = f"autonomy_max_turn_duration_seconds = {seconds}"
+    # Use [^\S\n] (whitespace minus newline) at the line edges so
+    # pattern.sub does not eat the trailing '\n' of the matched line.
+    # With plain \s* here, a second call on already-patched text
+    # would strip the newline and make the function non-idempotent —
+    # the /tmp/patch_test.py fixture pins this.
+    pattern = re.compile(
+        r"^[^\S\n]*autonomy_max_turn_duration_seconds[^\S\n]*=[^\S\n]*\d+[^\S\n]*$",
+        re.MULTILINE,
+    )
+    if pattern.search(text):
+        return pattern.sub(assignment, text, count=1)
+    # Key wasn't present — splice it in. Prefer inserting after the
+    # existing [agent] section header if one exists; otherwise append
+    # to the file. This keeps the config readable rather than forming
+    # an orphan assignment in the wrong section.
+    agent_header = re.search(r"^\[agent\]\s*$", text, re.MULTILINE)
+    if agent_header:
+        insert_at = agent_header.end()
+        return text[:insert_at] + "\n" + assignment + text[insert_at:]
+    sep = "" if text.endswith("\n") else "\n"
+    return text + sep + assignment + "\n"
 
 
 def clear_response_cache(db_path: Path) -> None:
@@ -879,6 +962,8 @@ def run() -> int:
     # Operators reading old reports can immediately see whether the
     # soak was exercising cached or uncached behavior.
     print(f"[behavior-soak] clear_cache={CLEAR_CACHE} bypass_cache={BYPASS_CACHE}")
+    if AUTONOMY_MAX_LOOP_SECS is not None:
+        print(f"[behavior-soak] autonomy_max_loop_secs={AUTONOMY_MAX_LOOP_SECS} (isolated config override)")
     if managed is not None:
         print(f"[behavior-soak] isolated_root={managed.isolated_root}")
         print(f"[behavior-soak] isolated_config={managed.config_path}")
