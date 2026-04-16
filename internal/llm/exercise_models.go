@@ -26,8 +26,11 @@ package llm
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"time"
+
+	"roboticus/internal/core"
 )
 
 // ModelSender is the pluggable transport for dispatching a single
@@ -60,9 +63,11 @@ type PromptOutcome struct {
 	Err             error   // transport error, nil on success
 }
 
-// OnPromptFn is invoked once per scored prompt. Callers use this for
-// streaming progress output. Pass nil if no per-prompt callback is
-// needed — the orchestrator is silent by default.
+// OnPromptFn is invoked once per scored prompt AFTER the call
+// returns (success, timeout, or error). Callers use this for
+// streaming a result trailer onto the prefix line the orchestrator
+// already printed. Pass nil if no per-prompt callback is needed —
+// the orchestrator is silent by default (beyond the prefix print).
 type OnPromptFn func(o PromptOutcome)
 
 // ExerciseRequest bundles the parameters for one end-to-end exercise
@@ -86,9 +91,13 @@ type ExerciseRequest struct {
 	// signature (it receives a fixed prompt — WarmupPrompt). Required.
 	SendWarmup WarmupSender
 
-	// OnPrompt, if non-nil, is invoked for each scored prompt. Use
-	// this for streaming progress. Callers that only need the final
-	// report can leave it nil.
+	// OnPrompt, if non-nil, is invoked for each scored prompt AFTER
+	// the call returns. The orchestrator has already printed a
+	// "[N/M] INTENT:Cx ... " prefix with spinner to req.Progress
+	// before the call dispatched, so typical OnPrompt implementations
+	// just print the result trailer (pass/fail + quality + latency)
+	// ending with a newline. Callers that only need the final
+	// report can leave this nil.
 	OnPrompt OnPromptFn
 
 	// Progress receives warm-up progress lines from RunWarmupStage.
@@ -165,6 +174,13 @@ func ExerciseModels(ctx context.Context, req ExerciseRequest) (ExerciseReport, e
 	if req.Iterations < 1 {
 		req.Iterations = 1
 	}
+	// Normalize nil progress writer to io.Discard so downstream
+	// helpers (RunWarmupStage, RunWithSpinner) can always write
+	// unconditionally without nil guards. Tests that don't care
+	// about progress output rely on this normalization.
+	if req.Progress == nil {
+		req.Progress = io.Discard
+	}
 
 	report := ExerciseReport{}
 
@@ -212,8 +228,23 @@ func ExerciseModels(ctx context.Context, req ExerciseRequest) (ExerciseReport, e
 				}
 
 				promptNum := (iter-1)*len(ExerciseMatrix) + i + 1
+
+				// Per the v1.0.6 "no silent blocking calls" rule:
+				// print a prefix line and run the prompt dispatch
+				// under a spinner so the operator has visible
+				// feedback during the wait. core.RunWithSpinner is
+				// a no-op on non-TTY progress writers, so piped /
+				// logged output stays clean.
+				prefix := fmt.Sprintf("    [%d/%d] %s:C%d ... ", promptNum, totalPrompts, ep.Intent.String(), ep.Complexity)
+				var (
+					content   string
+					latencyMs int64
+					err       error
+				)
 				start := time.Now()
-				content, latencyMs, err := req.SendPrompt(ctx, model, ep.Prompt, modelTimeout)
+				core.RunWithSpinner(req.Progress, prefix, func() {
+					content, latencyMs, err = req.SendPrompt(ctx, model, ep.Prompt, modelTimeout)
+				})
 				// SendPrompt is allowed to return latencyMs==0 if it
 				// doesn't track its own timing; fall back to our
 				// start-based measurement so callers always see a

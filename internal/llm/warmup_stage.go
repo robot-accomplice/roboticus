@@ -18,6 +18,8 @@ import (
 	"fmt"
 	"io"
 	"time"
+
+	"roboticus/internal/core"
 )
 
 // WarmupSender is the injectable transport for a single warm-up call.
@@ -103,9 +105,16 @@ func RunWarmupStage(
 
 	// Warm-up #1: cold. Extended timeout — the first call may pay
 	// model-load cost that scales with model size and disk speed.
+	// Runs under core.RunWithSpinner per the v1.0.6 "no silent
+	// blocking calls" rule. Non-TTY progress writers get no spinner
+	// output (see core.RunWithSpinner for TTY detection).
 	coldTimeout := 2 * modelTimeout
-	fmt.Fprintf(progress, "    Warm-up 1/2 (cold, timeout: %s): ", coldTimeout)
-	coldRes := send(ctx, model, coldTimeout)
+	var coldRes WarmupResult
+	core.RunWithSpinner(progress,
+		fmt.Sprintf("    Warm-up 1/2 (cold, timeout: %s): ", coldTimeout),
+		func() {
+			coldRes = send(ctx, model, coldTimeout)
+		})
 	out.ColdStartMs = coldRes.LatencyMs
 	out.ColdStartTimedOut = coldRes.TimedOut
 	switch {
@@ -119,8 +128,12 @@ func RunWarmupStage(
 
 	// Warm-up #2: warm-transition. Normal timeout. Confirms the
 	// warm-up took.
-	fmt.Fprintf(progress, "    Warm-up 2/2 (warm-transition, timeout: %s): ", modelTimeout)
-	warmRes := send(ctx, model, modelTimeout)
+	var warmRes WarmupResult
+	core.RunWithSpinner(progress,
+		fmt.Sprintf("    Warm-up 2/2 (warm-transition, timeout: %s): ", modelTimeout),
+		func() {
+			warmRes = send(ctx, model, modelTimeout)
+		})
 	out.WarmTransitionMs = warmRes.LatencyMs
 	out.WarmTransitionOK = !warmRes.TimedOut && warmRes.Err == nil && warmRes.LatencyMs < warmTransitionOKCeilingMs
 	switch {

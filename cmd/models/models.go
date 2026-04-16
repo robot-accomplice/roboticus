@@ -593,23 +593,30 @@ func cliWarmupSender(config map[string]any) llm.WarmupSender {
 	}
 }
 
-// renderPromptProgress is the OnPromptFn callback that streams per-prompt
-// progress to stdout. Matches the visual format operators expect from
-// the old `models baseline` command.
+// renderPromptPrefix is the OnBeforePromptFn callback. Prints the
+// "[N/M] INTENT:Cx ... " prefix line (no newline) and starts a
+// renderPromptProgress is the OnPromptFn callback that streams a
+// result trailer (PASS/FAIL + quality + latency) onto the prefix
+// line the orchestrator already printed. The orchestrator emits
+// "[N/M] INTENT:Cx ... " with a spinner before the call; this
+// callback closes out that line with the result and a newline.
+//
+// Per the v1.0.6 "no silent blocking calls" rule: prefix + spinner
+// are emitted from inside the business logic (ExerciseModels uses
+// core.RunWithSpinner) so every code path gets the same feedback
+// uniformly — not just the CLI path.
 func renderPromptProgress(o llm.PromptOutcome) {
-	intent := o.Prompt.Intent.String()
-	label := fmt.Sprintf("[%d/%d] %s:C%d", o.PromptIndex, o.TotalPrompts, intent, o.Prompt.Complexity)
 	switch {
 	case o.Err != nil:
-		fmt.Printf("    %s FAIL  %v\n", label, o.Err)
+		fmt.Printf("FAIL  %v\n", o.Err)
 	case !o.Passed:
-		fmt.Printf("    %s FAIL  empty response  %.1fs\n", label, float64(o.LatencyMs)/1000.0)
+		fmt.Printf("FAIL  empty response  %.1fs\n", float64(o.LatencyMs)/1000.0)
 	default:
 		preview := o.Content
 		if len(preview) > 50 {
 			preview = preview[:50] + "..."
 		}
-		fmt.Printf("    %s PASS  Q=%.2f  %.1fs: %s\n", label, o.Quality, float64(o.LatencyMs)/1000.0, preview)
+		fmt.Printf("PASS  Q=%.2f  %.1fs: %s\n", o.Quality, float64(o.LatencyMs)/1000.0, preview)
 	}
 }
 
