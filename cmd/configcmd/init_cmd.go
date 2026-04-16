@@ -24,7 +24,17 @@ var initCmd = &cobra.Command{
 		fmt.Printf("  created %s\n", configDir)
 
 		// Create standard subdirectories.
-		subdirs := []string{"skills", "plugins", "data"}
+		//
+		// "workspace" is included here because defaultConfigTOML points
+		// agent.workspace at ~/.roboticus/workspace — pre-v1.0.6 init
+		// wrote the config reference but never created the target
+		// directory, so a first-run would end up with a config file
+		// claiming a workspace that didn't exist on disk. The personality
+		// setup flow (cmd/configcmd/setup.go) then had to mkdir it on
+		// demand, which worked but made the "fresh install" appear
+		// incomplete. Adding "workspace" to this list keeps the init
+		// filesystem consistent with the init config.
+		subdirs := []string{"skills", "plugins", "data", "workspace"}
 		for _, sub := range subdirs {
 			dir := filepath.Join(configDir, sub)
 			if err := os.MkdirAll(dir, 0o700); err != nil {
