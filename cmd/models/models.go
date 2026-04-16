@@ -1,7 +1,7 @@
 package models
 
 import (
-	"roboticus/cmd/internal/cmdutil"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,6 +13,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"roboticus/cmd/internal/cmdutil"
 	"roboticus/internal/llm"
 )
 
@@ -364,162 +365,455 @@ func probeOpenAI(client *http.Client, baseURL string) []string {
 	return result
 }
 
+// modelsExerciseCmd is the single consolidated exercise command,
+// replacing the formerly separate `exercise` (single-model) and
+// `baseline` (all-models) commands. They did the same thing — exercise
+// models through the prompt matrix, score, aggregate — just differing
+// in selector and output shape. The consolidation makes the CLI a thin
+// connector around internal/llm.ExerciseModels.
 var modelsExerciseCmd = &cobra.Command{
-	Use:   "exercise [model]",
-	Short: "Exercise a model with the 25-prompt matrix to establish quality baseline",
-	Long: `Exercise runs the model through the full prompt matrix across 6 intent classes
-(Execution, Delegation, Introspection, Conversation, Memory Recall).
+	Use:   "exercise [model...]",
+	Short: "Exercise models through the prompt matrix to establish quality baselines",
+	Long: `Exercise runs models through the 30-prompt matrix across 6 intent classes
+(Execution, Delegation, Introspection, Conversation, Memory Recall, Tool Use)
+and produces per-intent quality + latency scorecards. The cross-model
+comparison table is ALWAYS shown — absolute scores are meaningless without
+peer context. Exercised models are highlighted with a star (★) so operators
+can see their fresh run in the context of the full baselined landscape.
 
-Use -n to run multiple iterations for statistical confidence.
-Use --min-quality to set a pass/fail threshold — models below the threshold
-are flagged for removal from the routing chain.`,
-	Args: cobra.MaximumNArgs(1),
+SELECTOR:
+  No args     → exercise every configured model (primary + fallbacks)
+  One or more → exercise just those models (useful for re-baselining a
+                specific one without touching the others)
+
+FLAGS:
+  -n N             Run the matrix N times per model for statistical
+                   confidence. Default: 1.
+  --new-only       Skip models that already have baseline data. Only
+                   applies when no model args are given.
+  --flush          Flush all existing quality observations before
+                   exercising. Preserves the old ` + "`baseline`" + ` command's
+                   re-baseline-from-scratch semantics.
+  --min-quality N  Flag models scoring below this threshold (0.0–1.0)
+                   in the final output. Useful for CI gating.
+
+The process begins with a warm-up stage for local models (two trivial
+calls: cold + warm-transition) so cold-start cost doesn't pollute the
+scored latency averages. Cloud models skip warm-up.`,
+	Args: cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		model := ""
-		if len(args) > 0 {
-			model = args[0]
-		}
-
 		iterations, _ := cmd.Flags().GetInt("iterations")
 		if iterations < 1 {
 			iterations = 1
 		}
 		minQuality, _ := cmd.Flags().GetFloat64("min-quality")
+		newOnly, _ := cmd.Flags().GetBool("new-only")
+		flush, _ := cmd.Flags().GetBool("flush")
 
-		// Fetch config for per-model timeout resolution.
-		exerciseCfg, _ := cmdutil.APIGet("/api/config")
-		exerciseTimeout := resolveModelTimeout(exerciseCfg, model)
+		config, err := cmdutil.APIGet("/api/config")
+		if err != nil {
+			return fmt.Errorf("cannot reach API: %w", err)
+		}
 
+		// Resolve the model list: explicit args win; otherwise enumerate
+		// configured models.
+		models, err := resolveExerciseModelList(config, args, newOnly)
+		if err != nil {
+			return err
+		}
+		if len(models) == 0 {
+			fmt.Println("  No models to exercise.")
+			return nil
+		}
+
+		// Pre-flight summary: how many calls, estimated duration,
+		// what we'll do (flush or not).
 		totalPrompts := len(llm.ExerciseMatrix) * iterations
-		fmt.Println()
-		fmt.Printf("  Exercising %s with %d prompts x %d iteration(s) = %d calls across 6 intent classes (timeout: %s)...\n",
-			func() string {
-				if model != "" {
-					return model
-				}
-				return "default model"
-			}(),
-			len(llm.ExerciseMatrix),
-			iterations,
-			totalPrompts,
-			exerciseTimeout)
+		fmt.Printf("\n  Exercising %d model(s):\n", len(models))
+		for _, m := range models {
+			label := "local"
+			if isCloudModel(config, m) {
+				label = "cloud"
+			}
+			fmt.Printf("    %-40s  %s\n", m, label)
+		}
+		fmt.Printf("  %d prompts × %d iteration(s) = %d scored calls per model.\n", len(llm.ExerciseMatrix), iterations, totalPrompts)
+		if flush && len(args) == 0 {
+			fmt.Printf("  Quality scores will be FLUSHED before exercising (--flush).\n")
+		}
 		if minQuality > 0 {
 			fmt.Printf("  Minimum quality threshold: %.0f%% — models below this will be flagged.\n", minQuality*100)
 		}
 		fmt.Println()
 
-		// Warm-up stage (v1.0.6). Fires ONCE per `exercise` run —
-		// all N iterations of the scored matrix share the same warm
-		// model. Without this, iteration 1's first prompt would pay
-		// cold-start cost and pollute latency averages in exactly
-		// the same shape the baseline audit flagged. Cloud models
-		// skip warm-up; see runWarmupStage for the rationale.
-		//
-		// Warm-up latencies are NOT added to the per-intent latency
-		// averages below — they're recorded and printed separately
-		// so steady-state data stays clean.
-		if model != "" {
-			wu := runWarmupStage(exerciseCfg, model, exerciseTimeout)
-			if !wu.Skipped {
-				if wu.ColdStartTimedOut {
-					fmt.Printf("  Cold-start: >%.0fs (timed out — genuine value exceeds timeout)\n", float64(wu.ColdStartMs)/1000.0)
-				} else {
-					fmt.Printf("  Cold-start: %.1fs\n", float64(wu.ColdStartMs)/1000.0)
-				}
-				warmMarker := ""
-				if !wu.WarmTransitionOK {
-					warmMarker = "  ⚠ warm-up may not have taken — scored data may be unreliable"
-				}
-				fmt.Printf("  Warm-transition: %.1fs%s\n\n", float64(wu.WarmTransitionMs)/1000.0, warmMarker)
+		// Optional score flush before exercising (preserves the old
+		// `baseline` command's reset-first semantic).
+		if flush {
+			if _, err := cmdutil.APIPost("/api/models/reset", map[string]any{}); err != nil {
+				fmt.Printf("  ⚠ flush failed: %v (continuing anyway)\n", err)
+			} else {
+				fmt.Println("  All quality scores flushed.")
 			}
 		}
 
-		// Per-intent-class tracking.
-		type intentStats struct {
-			pass, fail int
-			totalMs    int64
+		// Dispatch to the business-logic orchestrator.
+		req := llm.ExerciseRequest{
+			Models:       models,
+			Iterations:   iterations,
+			SendPrompt:   cliPromptSender,
+			SendWarmup:   cliWarmupSender(config),
+			OnPrompt:     renderPromptProgress,
+			Progress:     os.Stdout,
+			IsLocal:      func(m string) bool { return !isCloudModel(config, m) },
+			ModelTimeout: func(m string) time.Duration { return resolveModelTimeout(config, m) },
 		}
-		byIntent := make(map[llm.IntentClass]*intentStats)
-		for _, ic := range llm.AllIntentClasses() {
-			byIntent[ic] = &intentStats{}
-		}
-
-		pass, fail := 0, 0
-		for iter := 0; iter < iterations; iter++ {
-			if iterations > 1 {
-				fmt.Printf("  ── Iteration %d/%d ──────────────────────────\n\n", iter+1, iterations)
-			}
-			for i, ep := range llm.ExerciseMatrix {
-				body := map[string]any{"content": ep.Prompt}
-				if model != "" {
-					body["model"] = model
-				}
-				start := time.Now()
-				resp, err := cmdutil.APIPostSlow("/api/agent/message", body, exerciseTimeout)
-				latencyMs := time.Since(start).Milliseconds()
-
-				promptNum := iter*len(llm.ExerciseMatrix) + i + 1
-				prefix := fmt.Sprintf("  [%2d/%d] %-15s C%d", promptNum, totalPrompts, ep.Intent, ep.Complexity)
-
-				stats := byIntent[ep.Intent]
-				if err != nil {
-					fail++
-					stats.fail++
-					fmt.Printf("%s FAIL: %v\n", prefix, err)
-					continue
-				}
-				content := fmt.Sprintf("%v", resp["content"])
-				if content != "" && content != "<nil>" {
-					pass++
-					stats.pass++
-					stats.totalMs += latencyMs
-					if len(content) > 50 {
-						content = content[:50] + "..."
-					}
-					fmt.Printf("%s PASS %4dms: %s\n", prefix, latencyMs, content)
-				} else {
-					fail++
-					stats.fail++
-					fmt.Printf("%s FAIL: empty response\n", prefix)
-				}
-			}
-			if iterations > 1 {
-				fmt.Println()
-			}
+		report, err := llm.ExerciseModels(cmd.Context(), req)
+		if err != nil {
+			return fmt.Errorf("exercise: %w", err)
 		}
 
-		fmt.Printf("\n  ── Results ──────────────────────────────────\n")
-		fmt.Printf("  Total: %d/%d passed\n\n", pass, pass+fail)
-		fmt.Printf("  %-15s  %s  %s  %s\n", "Intent Class", "Pass", "Fail", "Avg Latency")
-		fmt.Printf("  %-15s  %s  %s  %s\n", "───────────────", "────", "────", "───────────")
-		for _, ic := range llm.AllIntentClasses() {
-			s := byIntent[ic]
-			avgMs := int64(0)
-			if s.pass > 0 {
-				avgMs = s.totalMs / int64(s.pass)
-			}
-			fmt.Printf("  %-15s  %4d  %4d  %6dms\n", ic, s.pass, s.fail, avgMs)
-		}
-
-		total := pass + fail
-		qualityPct := 0.0
-		if total > 0 {
-			qualityPct = float64(pass) / float64(total)
-		}
-		fmt.Printf("\n  Quality score: %.0f%% (%d/%d)\n", qualityPct*100, pass, total)
-
-		if minQuality > 0 && qualityPct < minQuality {
-			modelLabel := model
-			if modelLabel == "" {
-				modelLabel = "default model"
-			}
-			fmt.Printf("\n  ⚠  %s scored %.0f%% — below the %.0f%% minimum quality threshold.\n", modelLabel, qualityPct*100, minQuality*100)
-			fmt.Printf("     Consider removing this model from the routing chain.\n")
-		}
-
-		fmt.Println()
+		// Always render the cross-model comparison — a single model's
+		// 0.71 is uninterpretable without peer context. Exercised
+		// models get the ★ highlight.
+		renderExerciseReport(report, config, minQuality)
 		return nil
 	},
+}
+
+// resolveExerciseModelList turns the CLI args + flags into the final
+// list of models to exercise. Rules:
+//   - Explicit args → use those verbatim.
+//   - No args → enumerate every configured model (primary + fallbacks).
+//   - --new-only only applies when no args are given (explicit args
+//     are the operator's expressed intent; --new-only filtering
+//     against them would be surprising).
+func resolveExerciseModelList(config map[string]any, args []string, newOnly bool) ([]string, error) {
+	if len(args) > 0 {
+		return args, nil
+	}
+
+	var configured []string
+	if models, ok := config["models"].(map[string]any); ok {
+		if p, ok := models["primary"].(string); ok && p != "" {
+			configured = append(configured, p)
+		}
+		if fbs, ok := models["fallbacks"].([]any); ok {
+			for _, fb := range fbs {
+				if s, ok := fb.(string); ok && s != "" {
+					configured = append(configured, s)
+				}
+			}
+		}
+	}
+
+	if !newOnly {
+		return configured, nil
+	}
+
+	// --new-only: filter out models that already have exercise data.
+	status, err := cmdutil.APIGet("/api/models/exercise/status")
+	if err != nil {
+		return configured, nil // fail open; we'd rather over-exercise than silently skip a model
+	}
+	existing, _ := status["models"].(map[string]any)
+	if len(existing) == 0 {
+		return configured, nil
+	}
+
+	filtered := configured[:0]
+	for _, m := range configured {
+		if hasExistingData(existing, m) {
+			fmt.Printf("  Skipping %s (already has baseline data)\n", m)
+			continue
+		}
+		filtered = append(filtered, m)
+	}
+	return filtered, nil
+}
+
+// hasExistingData checks whether a model name (full or bare) has
+// exercise data in the status map. The API may return names with or
+// without the provider prefix, so we check both forms.
+func hasExistingData(existing map[string]any, model string) bool {
+	if count, ok := existing[model]; ok && toFloat(count) > 0 {
+		return true
+	}
+	bare := model
+	if idx := strings.Index(model, "/"); idx >= 0 {
+		bare = model[idx+1:]
+	}
+	if count, ok := existing[bare]; ok && toFloat(count) > 0 {
+		return true
+	}
+	return false
+}
+
+// cliPromptSender is the CLI-side llm.ModelSender: dispatches one
+// scored prompt through the pipeline via /api/agent/message.
+func cliPromptSender(ctx context.Context, model, content string, timeout time.Duration) (string, int64, error) {
+	body := map[string]any{"content": content, "no_cache": true}
+	if model != "" {
+		body["model"] = model
+	}
+	start := time.Now()
+	resp, err := cmdutil.APIPostSlow("/api/agent/message", body, timeout)
+	latencyMs := time.Since(start).Milliseconds()
+	if err != nil {
+		return "", latencyMs, err
+	}
+	contentStr := fmt.Sprintf("%v", resp["content"])
+	if contentStr == "<nil>" {
+		contentStr = ""
+	}
+	return contentStr, latencyMs, nil
+}
+
+// cliWarmupSender returns a WarmupSender bound to the current config
+// for timeout resolution. Captures `config` so the returned closure
+// doesn't need to refetch it per call.
+func cliWarmupSender(config map[string]any) llm.WarmupSender {
+	return func(ctx context.Context, model string, timeout time.Duration) llm.WarmupResult {
+		body := map[string]any{
+			"content":  llm.WarmupPrompt,
+			"model":    model,
+			"no_cache": true,
+		}
+		start := time.Now()
+		_, err := cmdutil.APIPostSlow("/api/agent/message", body, timeout)
+		latencyMs := time.Since(start).Milliseconds()
+		res := llm.WarmupResult{LatencyMs: latencyMs}
+		if err != nil {
+			if latencyMs >= timeout.Milliseconds()-500 {
+				res.TimedOut = true
+			} else {
+				res.Err = err
+			}
+		}
+		return res
+	}
+}
+
+// renderPromptProgress is the OnPromptFn callback that streams per-prompt
+// progress to stdout. Matches the visual format operators expect from
+// the old `models baseline` command.
+func renderPromptProgress(o llm.PromptOutcome) {
+	intent := o.Prompt.Intent.String()
+	label := fmt.Sprintf("[%d/%d] %s:C%d", o.PromptIndex, o.TotalPrompts, intent, o.Prompt.Complexity)
+	switch {
+	case o.Err != nil:
+		fmt.Printf("    %s FAIL  %v\n", label, o.Err)
+	case !o.Passed:
+		fmt.Printf("    %s FAIL  empty response  %.1fs\n", label, float64(o.LatencyMs)/1000.0)
+	default:
+		preview := o.Content
+		if len(preview) > 50 {
+			preview = preview[:50] + "..."
+		}
+		fmt.Printf("    %s PASS  Q=%.2f  %.1fs: %s\n", label, o.Quality, float64(o.LatencyMs)/1000.0, preview)
+	}
+}
+
+// renderExerciseReport renders the final per-model scorecards AND the
+// cross-model comparison table that puts the exercised models' scores
+// in the context of ALL baselined models. The comparison table is
+// non-negotiable regardless of how many models the operator exercised
+// — a single model's 0.71 is uninterpretable without peer scores.
+//
+// Exercised models are marked with ★ in the comparison table so
+// operators can see their fresh-run results against the historical
+// baseline of other configured models.
+func renderExerciseReport(report llm.ExerciseReport, config map[string]any, minQuality float64) {
+	intents := []string{"EXECUTION", "DELEGATION", "INTROSPECTION", "CONVERSATION", "MEMORY_RECALL", "TOOL_USE"}
+
+	// Per-model detailed scorecards for the freshly-exercised models.
+	for _, r := range report.Models {
+		status := "PASS"
+		if r.Fail > 0 && r.Pass == 0 {
+			status = "FAIL"
+		} else if r.Fail > 0 {
+			status = "DEGRADED"
+		}
+		fmt.Printf("\n  ── %s ──\n", r.Model)
+		fmt.Printf("    Pass/Fail: %d / %d  (%s)\n", r.Pass, r.Fail, status)
+		fmt.Printf("    Avg quality: %s %.2f\n", qualityBar(r.AvgQuality), r.AvgQuality)
+
+		fmt.Printf("    Intent Quality:\n")
+		for _, intent := range intents {
+			q := r.IntentQuality[intent]
+			fmt.Printf("      %-16s %s %.2f\n", intent, qualityBar(q), q)
+		}
+		printLatencyScorecard(r.Latencies)
+
+		if baseline, ok := llm.LookupBaseline(r.Model); ok {
+			fmt.Printf("    Baseline profile: Eff=%.2f Cost=%.2f Avail=%.2f Loc=%.1f Conf=%.1f Spd=%.2f\n",
+				baseline.Efficacy, baseline.Cost, baseline.Availability,
+				baseline.Locality, baseline.Confidence, baseline.Speed)
+		}
+
+		if !r.Warmup.Skipped {
+			if r.Warmup.ColdStartTimedOut {
+				fmt.Printf("    Cold-start: >%.0fs (timed out — actual value exceeds timeout)\n", float64(r.Warmup.ColdStartMs)/1000.0)
+			} else {
+				fmt.Printf("    Cold-start: %.1fs\n", float64(r.Warmup.ColdStartMs)/1000.0)
+			}
+			marker := ""
+			if !r.Warmup.WarmTransitionOK {
+				marker = "  ⚠ warm-up may not have taken — scored data may be unreliable"
+			}
+			fmt.Printf("    Warm-transition: %.1fs%s\n", float64(r.Warmup.WarmTransitionMs)/1000.0, marker)
+		}
+	}
+
+	// Cross-model comparison — always rendered. Merge fresh results
+	// with historical scorecard so operators see the exercised models
+	// (★) in context of the full baselined landscape.
+	rows := buildComparisonRows(report, config)
+	if len(rows) > 0 {
+		fmt.Printf("\n  Model Comparison (ranked by quality; ★ = exercised this run):\n\n")
+		fmt.Printf("  %-5s  %-30s  %-15s  %5s  %5s  %5s  %5s  %5s  %5s  %s\n",
+			"RANK", "MODEL", "QUALITY", "EXEC", "DELEG", "INTRO", "CONV", "MEMRC", "TOOLS", "AVG MS")
+		fmt.Println("  " + strings.Repeat("─", 110))
+		for i, row := range rows {
+			label := row.Model
+			prefix := "  "
+			if row.Exercised {
+				prefix = "★ "
+			}
+			if len(label) > 30 {
+				label = label[:27] + "..."
+			}
+			fmt.Printf("%s#%-3d  %-30s  %s %3.0f%%  %4.0f%%  %4.0f%%  %4.0f%%  %4.0f%%  %4.0f%%  %4.0f%%  %5dms\n",
+				prefix, i+1, label, qualityBar(row.AvgQuality), row.AvgQuality*100,
+				row.Intent["EXECUTION"]*100, row.Intent["DELEGATION"]*100, row.Intent["INTROSPECTION"]*100,
+				row.Intent["CONVERSATION"]*100, row.Intent["MEMORY_RECALL"]*100, row.Intent["TOOL_USE"]*100,
+				row.AvgLatencyMs)
+		}
+		fmt.Println()
+
+		// Best-per-intent across the full landscape. Helpful for
+		// operators deciding which model to route a specific intent
+		// class to.
+		fmt.Printf("  Best per intent class:\n")
+		for _, intent := range intents {
+			best := ""
+			bestQ := 0.0
+			for _, row := range rows {
+				if q, ok := row.Intent[intent]; ok && q > bestQ {
+					bestQ = q
+					best = row.Model
+				}
+			}
+			if best != "" {
+				fmt.Printf("    %-18s  %s (%.0f%%)\n", intent, best, bestQ*100)
+			}
+		}
+		fmt.Println()
+	}
+
+	// Flag underperformers from THIS RUN (not historical) — the fresh
+	// data is what the operator is acting on right now.
+	if minQuality > 0 {
+		var flagged []string
+		for _, r := range report.Models {
+			if r.AvgQuality > 0 && r.AvgQuality < minQuality {
+				flagged = append(flagged, fmt.Sprintf("%s (%.0f%%)", r.Model, r.AvgQuality*100))
+			}
+		}
+		if len(flagged) > 0 {
+			fmt.Printf("  ⚠  Models below %.0f%% quality threshold:\n", minQuality*100)
+			for _, f := range flagged {
+				fmt.Printf("    - %s\n", f)
+			}
+			fmt.Printf("\n  Consider removing these from the routing chain with:\n")
+			fmt.Printf("    roboticus models remove <model>\n\n")
+		}
+	}
+}
+
+// comparisonRow is the merged view of one model in the comparison
+// table: fresh data wins over historical for the exercised set.
+type comparisonRow struct {
+	Model        string
+	Exercised    bool // true if in the current ExerciseReport
+	AvgQuality   float64
+	Intent       map[string]float64
+	AvgLatencyMs int64
+}
+
+// buildComparisonRows fetches the historical scorecard and overlays
+// the fresh ExerciseReport data so the final table shows every
+// configured model's scores with the exercised ones highlighted.
+// Falls open on scorecard fetch failure — we'd rather show the
+// fresh-only rows than no comparison at all.
+func buildComparisonRows(report llm.ExerciseReport, config map[string]any) []comparisonRow {
+	byModel := make(map[string]comparisonRow)
+
+	// Start with historical scorecard data for all known models.
+	if data, err := cmdutil.APIGet("/api/models/exercise/scorecard"); err == nil {
+		if rows, ok := data["rows"].([]any); ok {
+			for _, raw := range rows {
+				row, ok := raw.(map[string]any)
+				if !ok {
+					continue
+				}
+				model, _ := row["model"].(string)
+				if model == "" {
+					continue
+				}
+				cr := comparisonRow{
+					Model:        model,
+					AvgQuality:   toFloat(row["avg_quality"]),
+					Intent:       make(map[string]float64),
+					AvgLatencyMs: int64(toFloat(row["avg_latency_ms"])),
+				}
+				if intents, ok := row["intent_quality"].(map[string]any); ok {
+					for k, v := range intents {
+						cr.Intent[k] = toFloat(v)
+					}
+				}
+				byModel[model] = cr
+			}
+		}
+	}
+
+	// Overlay fresh exercise results — fresh data wins.
+	for _, r := range report.Models {
+		cr := comparisonRow{
+			Model:      r.Model,
+			Exercised:  true,
+			AvgQuality: r.AvgQuality,
+			Intent:     make(map[string]float64, len(r.IntentQuality)),
+		}
+		for k, v := range r.IntentQuality {
+			cr.Intent[k] = v
+		}
+		var totalLat int64
+		var latCount int64
+		for _, lats := range r.Latencies {
+			for _, l := range lats {
+				totalLat += l
+				latCount++
+			}
+		}
+		if latCount > 0 {
+			cr.AvgLatencyMs = totalLat / latCount
+		}
+		byModel[r.Model] = cr
+	}
+
+	rows := make([]comparisonRow, 0, len(byModel))
+	for _, cr := range byModel {
+		rows = append(rows, cr)
+	}
+	// Sort by AvgQuality descending (simple selection sort for small N).
+	for i := 0; i < len(rows)-1; i++ {
+		for j := i + 1; j < len(rows); j++ {
+			if rows[j].AvgQuality > rows[i].AvgQuality {
+				rows[i], rows[j] = rows[j], rows[i]
+			}
+		}
+	}
+	return rows
 }
 
 var modelsSuggestCmd = &cobra.Command{
@@ -820,423 +1114,15 @@ var modelsResetCmd = &cobra.Command{
 	},
 }
 
-var modelsBaselineCmd = &cobra.Command{
-	Use:   "baseline",
-	Short: "Flush quality scores and re-exercise all configured models",
-	Long: `Baseline discovers configured models, flushes all quality observations,
-exercises each model with the full 20-prompt matrix across multiple iterations,
-and reports per-model, per-intent-class latency scores (Avg/P50/P95).
-This re-establishes the metascore quality baseline from scratch.
-
-Matches the Rust reference: 20 prompts x N iterations per model, with a
-per-intent-class latency scorecard and 6-axis metascore dimension reporting.`,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		iterations := 1
-		if v, _ := cmd.Flags().GetInt("iterations"); v > 0 {
-			iterations = v
-		}
-		newOnly, _ := cmd.Flags().GetBool("new-only")
-
-		// Step 1: Discover configured models.
-		fmt.Println("\n  Step 1: Discovering configured models...")
-		config, err := cmdutil.APIGet("/api/config")
-		if err != nil {
-			return fmt.Errorf("cannot reach API: %w", err)
-		}
-
-		var configured []string
-		if models, ok := config["models"].(map[string]any); ok {
-			if p, ok := models["primary"].(string); ok && p != "" {
-				configured = append(configured, p)
-			}
-			if fbs, ok := models["fallbacks"].([]any); ok {
-				for _, fb := range fbs {
-					if s, ok := fb.(string); ok && s != "" {
-						configured = append(configured, s)
-					}
-				}
-			}
-		}
-
-		if len(configured) == 0 {
-			fmt.Println("  No models configured. Nothing to baseline.")
-			return nil
-		}
-
-		// In --new-only mode, filter out models that already have exercise data.
-		// Match by both full name (provider/model) and bare model name since
-		// the exercise status API may store names with or without the provider prefix.
-		if newOnly {
-			status, err := cmdutil.APIGet("/api/models/exercise/status")
-			if err == nil {
-				if existing, ok := status["models"].(map[string]any); ok && len(existing) > 0 {
-					var filtered []string
-					for _, model := range configured {
-						found := false
-						// Try exact match first.
-						if count, ok := existing[model]; ok {
-							if toFloat(count) > 0 {
-								fmt.Printf("  Skipping %s (already has %.0f exercise result(s))\n", model, toFloat(count))
-								found = true
-							}
-						}
-						// Try bare model name (strip provider/).
-						if !found {
-							bare := model
-							if idx := strings.Index(model, "/"); idx >= 0 {
-								bare = model[idx+1:]
-							}
-							for k, v := range existing {
-								kBare := k
-								if idx := strings.Index(k, "/"); idx >= 0 {
-									kBare = k[idx+1:]
-								}
-								if kBare == bare && toFloat(v) > 0 {
-									fmt.Printf("  Skipping %s (already has %.0f exercise result(s) as %s)\n", model, toFloat(v), k)
-									found = true
-									break
-								}
-							}
-						}
-						if !found {
-							filtered = append(filtered, model)
-						}
-					}
-					configured = filtered
-				}
-			}
-			if len(configured) == 0 {
-				fmt.Println("\n  All models already have exercise data. Nothing to do.")
-				fmt.Println("  Run without --new-only to re-baseline all models.")
-				return nil
-			}
-		}
-
-		totalPrompts := len(llm.ExerciseMatrix) * iterations
-		fmt.Printf("\n  Found %d model(s) to exercise:\n\n", len(configured))
-		var localCount, cloudCount int
-		for i, model := range configured {
-			role := "fallback"
-			if i == 0 {
-				role = "primary"
-			}
-			timeout := resolveModelTimeout(config, model)
-			locality := "cloud"
-			if timeout > 120*time.Second {
-				locality = "local"
-				localCount++
-			} else {
-				cloudCount++
-			}
-			fmt.Printf("    %-10s %-40s  %s\n", role, model, locality)
-		}
-
-		// Estimate total duration. Local models average ~30-60s per prompt,
-		// cloud models ~2-5s. Use conservative midpoints.
-		localEstSec := localCount * totalPrompts * 45  // 45s avg per local prompt
-		cloudEstSec := cloudCount * totalPrompts * 4   // 4s avg per cloud prompt
-		totalEstMin := (localEstSec + cloudEstSec) / 60
-		if totalEstMin < 1 {
-			totalEstMin = 1
-		}
-
-		// Step 2: Confirm with duration warning.
-		if newOnly {
-			fmt.Printf("\n  This will exercise %d new model(s) without flushing existing scores.\n", len(configured))
-		} else {
-			fmt.Printf("\n  This will flush all quality scores and re-exercise each model.\n")
-		}
-		fmt.Printf("  %d prompts x %d iteration(s) = %d calls per model.\n\n", len(llm.ExerciseMatrix), iterations, totalPrompts)
-		fmt.Printf("  ⏱  Estimated duration: ~%d minutes (%d local model(s) @ ~45s/prompt, %d cloud @ ~4s/prompt)\n", totalEstMin, localCount, cloudCount)
-		if localCount > 0 {
-			fmt.Printf("     Local models are significantly slower — especially on first run (cold start).\n")
-			fmt.Printf("     Do not interrupt the process or the baseline data will be incomplete.\n")
-		}
-		fmt.Printf("\n  Proceed? [Y/n] ")
-		var input string
-		if _, err := fmt.Scanln(&input); err != nil && err.Error() != "unexpected newline" {
-			fmt.Fprintf(os.Stderr, "  (stdin read error: %v)\n", err)
-		}
-		if input != "" && input != "y" && input != "Y" && input != "yes" {
-			fmt.Println("  Cancelled.")
-			return nil
-		}
-
-		// Step 3: Flush all scores (skip in --new-only mode — we're adding, not replacing).
-		if newOnly {
-			fmt.Println("\n  Step 2: Skipping score flush (--new-only mode)")
-		} else {
-			fmt.Println("\n  Step 2: Flushing all quality scores...")
-			resetData, err := cmdutil.APIPost("/api/models/reset", nil)
-			if err != nil {
-				return fmt.Errorf("failed to reset scores: %w", err)
-			}
-			cleared, _ := resetData["cleared"].(float64)
-			fmt.Printf("  Cleared %.0f observation entries.\n", cleared)
-		}
-
-		// Step 4: Exercise each model via /api/models/exercise (direct LLM quality scoring,
-		// no pipeline overhead). Returns per-prompt quality scores 0-1.
-		fmt.Printf("\n  Step 3: Exercising models...\n\n")
-
-		type modelResult struct {
-			model         string
-			pass          int
-			fail          int
-			avgQuality    float64
-			intentQuality map[string]float64 // intent_class → avg quality 0-1
-			latencies     map[string][]int64 // intent_class → latencies in ms
-
-			// Warm-up telemetry (baseline harness only). Recorded
-			// separately from scored prompts so cold-start latency
-			// can't pollute the steady-state latency average the
-			// router uses for metascore-driven dispatch. The two
-			// warm-up calls give us distinct signals:
-			//   * coldStartMs — first call after model wasn't resident
-			//     (model load + KV cache allocation + pipeline warm).
-			//     Includes timeout-pegged lower bound when the call
-			//     didn't complete within the extended warm-up timeout.
-			//   * warmTransitionMs — second call after warm-up #1
-			//     finished. Should be close to steady-state latency;
-			//     if it isn't, warm-up #1 didn't actually take and
-			//     the operator needs to know before the scored calls
-			//     produce misleading data.
-			coldStartMs        int64
-			coldStartTimedOut  bool
-			warmTransitionMs   int64
-			warmTransitionOK   bool // true when warmTransitionMs landed near expected steady-state
-			warmupSkipped      bool // true for cloud models — their "cold" is server-side
-		}
-		var results []modelResult
-
-		for _, model := range configured {
-			modelTimeout := resolveModelTimeout(config, model)
-			fmt.Printf("  --- %s (timeout: %s) ---\n", model, modelTimeout)
-
-			// Exercise per-prompt through the pipeline for immediate output.
-			// Previous approach used bulk /api/models/exercise which blocked for
-			// the entire model exercise with no progress output.
-			mr := modelResult{
-				model:         model,
-				intentQuality: make(map[string]float64),
-				latencies:     make(map[string][]int64),
-			}
-
-			// Warm-up stage (v1.0.6). Shared with `models exercise
-			// <model>` via runWarmupStage — see that helper for the
-			// full rationale (TL;DR: pre-warm-up baselines produced
-			// polluted latency averages when local models paid
-			// cold-start on the first scored prompt).
-			wu := runWarmupStage(config, model, modelTimeout)
-			mr.warmupSkipped = wu.Skipped
-			mr.coldStartMs = wu.ColdStartMs
-			mr.coldStartTimedOut = wu.ColdStartTimedOut
-			mr.warmTransitionMs = wu.WarmTransitionMs
-			mr.warmTransitionOK = wu.WarmTransitionOK
-
-			intentSums := make(map[string]float64)
-			intentCounts := make(map[string]int)
-			var qualitySum float64
-			var qualityCount int
-
-			for i, ep := range llm.ExerciseMatrix {
-				body := map[string]any{"content": ep.Prompt, "model": model, "no_cache": true}
-				start := time.Now()
-				resp, err := cmdutil.APIPostSlow("/api/agent/message", body, modelTimeout)
-				latencyMs := time.Since(start).Milliseconds()
-				intent := ep.Intent.String()
-				label := fmt.Sprintf("[%d/%d] %s:C%d", i+1, len(llm.ExerciseMatrix), intent, ep.Complexity)
-				mr.latencies[intent] = append(mr.latencies[intent], latencyMs)
-
-				if err != nil {
-					mr.fail++
-					fmt.Printf("    %s FAIL  %v\n", label, err)
-					continue
-				}
-				content := fmt.Sprintf("%v", resp["content"])
-				if content != "" && content != "<nil>" {
-					mr.pass++
-					// Score the response quality using the same scoring function
-					// as the server-side exercise endpoint.
-					quality := llm.ScoreExerciseResponse(ep, content)
-					qualitySum += quality
-					qualityCount++
-					intentSums[intent] += quality
-					intentCounts[intent]++
-					preview := content
-					if len(preview) > 50 {
-						preview = preview[:50] + "..."
-					}
-					fmt.Printf("    %s PASS  Q=%.2f  %.1fs: %s\n", label, quality, float64(latencyMs)/1000.0, preview)
-				} else {
-					mr.fail++
-					fmt.Printf("    %s FAIL  empty response  %.1fs\n", label, float64(latencyMs)/1000.0)
-				}
-			}
-
-			// Compute averages.
-			if qualityCount > 0 {
-				mr.avgQuality = qualitySum / float64(qualityCount)
-			}
-			for intent, sum := range intentSums {
-				if intentCounts[intent] > 0 {
-					mr.intentQuality[intent] = sum / float64(intentCounts[intent])
-				}
-			}
-
-			// Print per-intent quality + latency scorecard.
-			fmt.Printf("\n    Intent Quality:\n")
-			for _, intent := range []string{"EXECUTION", "DELEGATION", "INTROSPECTION", "CONVERSATION", "MEMORY_RECALL", "TOOL_USE"} {
-				q := mr.intentQuality[intent]
-				bar := qualityBar(q)
-				fmt.Printf("      %-16s %s %.2f\n", intent, bar, q)
-			}
-			printLatencyScorecard(mr.latencies)
-			results = append(results, mr)
-			fmt.Println()
-		}
-
-		// Step 5: Summary with per-model quality scores + baseline profile.
-		fmt.Printf("  Baseline Results:\n\n")
-		fmt.Printf("  %-35s  %-6s  %-6s  %-10s  %s\n", "MODEL", "PASS", "FAIL", "QUALITY", "STATUS")
-		fmt.Println("  " + strings.Repeat("─", 75))
-		for _, r := range results {
-			status := "PASS"
-			if r.fail > 0 && r.pass == 0 {
-				status = "FAIL"
-			} else if r.fail > 0 {
-				status = "DEGRADED"
-			}
-			qBar := qualityBar(r.avgQuality)
-			fmt.Printf("  %-35s  %-6d  %-6d  %s %.2f  %s\n", r.model, r.pass, r.fail, qBar, r.avgQuality, status)
-
-			// Per-intent quality breakdown.
-			if len(r.intentQuality) > 0 {
-				for _, intent := range []string{"EXECUTION", "DELEGATION", "INTROSPECTION", "CONVERSATION", "MEMORY_RECALL", "TOOL_USE"} {
-					q := r.intentQuality[intent]
-					fmt.Printf("    %-18s %s %.2f\n", intent, qualityBar(q), q)
-				}
-			}
-
-			// Print 6-axis baseline profile if we have a known baseline.
-			if baseline, ok := llm.LookupBaseline(r.model); ok {
-				fmt.Printf("    Baseline profile: Eff=%.2f Cost=%.2f Avail=%.2f Loc=%.1f Conf=%.1f Spd=%.2f\n",
-					baseline.Efficacy, baseline.Cost, baseline.Availability,
-					baseline.Locality, baseline.Confidence, baseline.Speed)
-			}
-
-			// Warm-up telemetry summary. Shown separately from the
-			// steady-state quality/latency so operators can see at
-			// a glance how expensive cold-start is for this model
-			// and whether the warm-up actually took. If
-			// warmTransitionOK=false, the scored data below should
-			// be treated with extra skepticism — the warm-up didn't
-			// fully prime the model.
-			if !r.warmupSkipped {
-				if r.coldStartTimedOut {
-					fmt.Printf("    Cold-start: >%.0fs (timed out — genuine value exceeds timeout)\n", float64(r.coldStartMs)/1000.0)
-				} else {
-					fmt.Printf("    Cold-start: %.1fs\n", float64(r.coldStartMs)/1000.0)
-				}
-				warmMarker := ""
-				if !r.warmTransitionOK {
-					warmMarker = "  ⚠ warm-up may not have taken — scored data may be unreliable"
-				}
-				fmt.Printf("    Warm-transition: %.1fs%s\n", float64(r.warmTransitionMs)/1000.0, warmMarker)
-			}
-		}
-		// Cross-model comparison: rank all models by overall quality.
-		if len(results) > 1 {
-			// Sort by avgQuality descending.
-			sorted := make([]modelResult, len(results))
-			copy(sorted, results)
-			for i := 0; i < len(sorted)-1; i++ {
-				for j := i + 1; j < len(sorted); j++ {
-					if sorted[j].avgQuality > sorted[i].avgQuality {
-						sorted[i], sorted[j] = sorted[j], sorted[i]
-					}
-				}
-			}
-
-			fmt.Printf("\n  Model Comparison (ranked by quality):\n\n")
-			fmt.Printf("  %-4s  %-30s  %-15s  %5s  %5s  %5s  %5s  %5s  %5s  %s\n",
-				"RANK", "MODEL", "QUALITY", "EXEC", "DELEG", "INTRO", "CONV", "MEMRC", "TOOLS", "AVG MS")
-			fmt.Println("  " + strings.Repeat("─", 105))
-			for rank, r := range sorted {
-				exec := r.intentQuality["EXECUTION"]
-				deleg := r.intentQuality["DELEGATION"]
-				intro := r.intentQuality["INTROSPECTION"]
-				conv := r.intentQuality["CONVERSATION"]
-				memrc := r.intentQuality["MEMORY_RECALL"]
-				tools := r.intentQuality["TOOL_USE"]
-				avgMs := int64(0)
-				var totalLat int64
-				var latCount int
-				for _, lats := range r.latencies {
-					for _, l := range lats {
-						totalLat += l
-						latCount++
-					}
-				}
-				if latCount > 0 {
-					avgMs = totalLat / int64(latCount)
-				}
-				modelLabel := r.model
-				if len(modelLabel) > 30 {
-					modelLabel = modelLabel[:27] + "..."
-				}
-				fmt.Printf("  #%-3d  %-30s  %s %3.0f%%  %4.0f%%  %4.0f%%  %4.0f%%  %4.0f%%  %4.0f%%  %4.0f%%  %5dms\n",
-					rank+1, modelLabel, qualityBar(r.avgQuality), r.avgQuality*100,
-					exec*100, deleg*100, intro*100, conv*100, memrc*100, tools*100, avgMs)
-			}
-			fmt.Println()
-
-			// Highlight best/worst per intent class.
-			intents := []string{"EXECUTION", "DELEGATION", "INTROSPECTION", "CONVERSATION", "MEMORY_RECALL", "TOOL_USE"}
-			fmt.Printf("  Best per intent class:\n")
-			for _, intent := range intents {
-				bestModel := ""
-				bestQ := 0.0
-				for _, r := range results {
-					if q, ok := r.intentQuality[intent]; ok && q > bestQ {
-						bestQ = q
-						bestModel = r.model
-					}
-				}
-				if bestModel != "" {
-					fmt.Printf("    %-18s  %s (%.0f%%)\n", intent, bestModel, bestQ*100)
-				}
-			}
-			fmt.Println()
-
-			// Flag underperformers — models below 50% overall quality.
-			var underperformers []string
-			for _, r := range sorted {
-				if r.avgQuality < 0.5 && r.avgQuality > 0 {
-					underperformers = append(underperformers, fmt.Sprintf("%s (%.0f%%)", r.model, r.avgQuality*100))
-				}
-			}
-			if len(underperformers) > 0 {
-				fmt.Printf("  Underperforming models (below 50%%):\n")
-				for _, u := range underperformers {
-					fmt.Printf("    - %s\n", u)
-				}
-				fmt.Printf("\n  Consider removing these from the routing chain with:\n")
-				fmt.Printf("    roboticus models remove <model>\n\n")
-			}
-		}
-
-		fmt.Println()
-		return nil
-	},
-}
 
 func init() {
-	modelsExerciseCmd.Flags().IntP("iterations", "n", 1, "Number of iterations over the prompt matrix (default: 1 quick mode)")
+	// Consolidated exercise command (v1.0.6). Formerly split into
+	// `exercise` and `baseline`; see the command Long description
+	// for the merge rationale.
+	modelsExerciseCmd.Flags().IntP("iterations", "n", 1, "Number of iterations over the prompt matrix")
 	modelsExerciseCmd.Flags().Float64("min-quality", 0, "Minimum quality threshold (0.0-1.0) — flag models below this for removal")
-
-	modelsBaselineCmd.Flags().IntP("iterations", "n", 1, "Number of iterations over the 20-prompt matrix per model")
-	modelsBaselineCmd.Flags().Bool("new-only", false, "Only exercise models with no existing baseline data")
+	modelsExerciseCmd.Flags().Bool("new-only", false, "Only exercise models with no existing baseline data (ignored when explicit args are given)")
+	modelsExerciseCmd.Flags().Bool("flush", false, "Flush ALL existing quality observations before exercising (preserves the old `baseline` command's reset-first semantics)")
 }
 
 // printLatencyScorecard prints a per-intent-class latency table (Avg/P50/P95).
@@ -1357,109 +1243,10 @@ func isCloudModel(config map[string]any, model string) bool {
 	return !isLocal
 }
 
-// warmupOutcome is the per-model outcome of runWarmupStage, captured so
-// both the `exercise` and `baseline` commands can record it on their
-// respective result structs without duplicating the flow. Fields mirror
-// the modelResult warm-up block in the baseline command.
-type warmupOutcome struct {
-	Skipped            bool
-	ColdStartMs        int64
-	ColdStartTimedOut  bool
-	WarmTransitionMs   int64
-	WarmTransitionOK   bool
-}
-
-// runWarmupStage is the shared warm-up sequence invoked by both
-// `models exercise <model>` and `models baseline`. It determines
-// whether the model is cloud (skip) or local (run two warm-up calls),
-// prints operator-visible progress, and returns the outcome for the
-// caller's summary. Warm-up latencies are NEVER added to the
-// caller's scored-prompt latency buckets — the whole point of warm-up
-// is separating cold-start cost from steady-state measurement.
-//
-// Having this as a single function means both command paths get the
-// same treatment. When the v1.0.6 self-audit caught that one command
-// had warm-up and the other didn't, the fix was literally extracting
-// this helper.
-func runWarmupStage(config map[string]any, model string, modelTimeout time.Duration) warmupOutcome {
-	var out warmupOutcome
-	out.Skipped = isCloudModel(config, model)
-	if out.Skipped {
-		fmt.Printf("    Warm-up: skipped (cloud model)\n\n")
-		return out
-	}
-
-	coldTimeout := 2 * modelTimeout
-	fmt.Printf("    Warm-up 1/2 (cold, timeout: %s): ", coldTimeout)
-	coldRes := runWarmupCall(model, coldTimeout)
-	out.ColdStartMs = coldRes.LatencyMs
-	out.ColdStartTimedOut = coldRes.TimedOut
-	switch {
-	case coldRes.TimedOut:
-		fmt.Printf("TIMEOUT  (cold-start exceeded %s — recorded as lower bound)\n", coldTimeout)
-	case coldRes.Err != nil:
-		fmt.Printf("ERROR  %v\n", coldRes.Err)
-	default:
-		fmt.Printf("%.1fs\n", float64(coldRes.LatencyMs)/1000.0)
-	}
-
-	fmt.Printf("    Warm-up 2/2 (warm-transition, timeout: %s): ", modelTimeout)
-	warmRes := runWarmupCall(model, modelTimeout)
-	out.WarmTransitionMs = warmRes.LatencyMs
-	const warmOKCeiling = int64(30_000)
-	out.WarmTransitionOK = !warmRes.TimedOut && warmRes.Err == nil && warmRes.LatencyMs < warmOKCeiling
-	switch {
-	case warmRes.TimedOut:
-		fmt.Printf("TIMEOUT  (warm-up didn't take — scored prompts may be unreliable)\n")
-	case warmRes.Err != nil:
-		fmt.Printf("ERROR  %v\n", warmRes.Err)
-	default:
-		marker := "OK"
-		if !out.WarmTransitionOK {
-			marker = "SLOW — warm-up may not have fully primed the model"
-		}
-		fmt.Printf("%.1fs  (%s)\n", float64(warmRes.LatencyMs)/1000.0, marker)
-	}
-	fmt.Println()
-	return out
-}
-
-// runWarmupCall issues a single warm-up request against the baseline
-// API endpoint. The request uses llm.WarmupPrompt (a trivial "reply
-// with ready" shape) so the pipeline exercises its full path but the
-// generation cost is near-minimal. Returns WarmupResult carrying
-// latency, timeout flag, and any transport error.
-//
-// Callers record the two warm-up calls' latencies separately from the
-// scored-prompt latencies so cold-start cost doesn't pollute
-// steady-state averages. The second call's latency is a tripwire: if
-// it's still abnormally slow, the warm-up didn't actually take and
-// the operator should stop the run rather than collect 30 minutes of
-// misleading scored data.
-func runWarmupCall(model string, timeout time.Duration) llm.WarmupResult {
-	body := map[string]any{
-		"content":  llm.WarmupPrompt,
-		"model":    model,
-		"no_cache": true, // warm-up must always hit the model, never a cache hit
-	}
-	start := time.Now()
-	_, err := cmdutil.APIPostSlow("/api/agent/message", body, timeout)
-	latencyMs := time.Since(start).Milliseconds()
-
-	res := llm.WarmupResult{LatencyMs: latencyMs}
-	if err != nil {
-		// Distinguish timeout from transport error. cmdutil.APIPostSlow
-		// wraps net.Error with "context deadline exceeded" text; we
-		// heuristically detect it so the caller can record a
-		// lower-bound observation rather than drop the sample.
-		if latencyMs >= timeout.Milliseconds()-500 {
-			res.TimedOut = true
-		} else {
-			res.Err = err
-		}
-	}
-	return res
-}
+// Warm-up orchestration (runWarmupStage, runWarmupCall) moved to
+// internal/llm.RunWarmupStage + internal/llm.WarmupSender in the v1.0.6
+// consolidation. CLI calls cliWarmupSender (defined near
+// modelsExerciseCmd above) which delegates to the HTTP API.
 
 // toFloat extracts a float64 from an any value (JSON numbers decode as float64).
 func toFloat(v any) float64 {
@@ -1494,4 +1281,5 @@ func splitModelForDisplay(spec string) (string, string) {
 
 func init() {
 	modelsCmd.AddCommand(modelsListCmd, modelsDiagnosticsCmd, modelsScanCmd,
-		modelsExerciseCmd, modelsSuggestCmd, modelsResetCmd, modelsBaselineCmd)}
+		modelsExerciseCmd, modelsSuggestCmd, modelsResetCmd)
+}
