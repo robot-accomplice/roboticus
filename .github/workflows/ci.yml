@@ -73,7 +73,13 @@ jobs:
           go-version-file: ${{ env.GO_VERSION_FILE }}
 
       - name: Run unit tests with race detector
-        run: go test -race -coverprofile=coverage.out -covermode=atomic -timeout 300s ./...
+        # -timeout bumped from 300s -> 20m in v1.0.6: race detector adds
+        # 2-10x overhead per package, and the test surface grew (agentic
+        # retrieval, memory consolidation, executive state, knowledge graph).
+        # Locally ~275s without race; under -race on CI the old 300s cap
+        # was exceeded by internal/db alone. 20m gives headroom to surface
+        # real test failures instead of spurious timeouts.
+        run: go test -race -coverprofile=coverage.out -covermode=atomic -timeout 20m ./...
 
       - name: Upload coverage report
         if: matrix.os == 'ubuntu-latest'
