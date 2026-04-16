@@ -237,6 +237,8 @@ def ensure_free_port(host: str, port: int) -> None:
 
 
 def toml_literal(value: Any) -> str:
+    if isinstance(value, list):
+        return "[" + ", ".join(toml_literal(v) for v in value) + "]"
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, (int, float)):
@@ -244,23 +246,98 @@ def toml_literal(value: Any) -> str:
     return json.dumps(str(value))
 
 
-def rewrite_toml_setting(content: str, key: str, value: Any) -> str:
-    pattern = re.compile(rf"(?m)^{re.escape(key)}\s*=.*$")
+def append_top_level_setting(content: str, key: str, value: Any) -> str:
     line = f"{key} = {toml_literal(value)}"
-    if pattern.search(content):
-        return pattern.sub(line, content)
-    return content + ("\n" if not content.endswith("\n") else "") + line + "\n"
+    if not content.endswith("\n"):
+        content += "\n"
+    return content + line + "\n"
 
 
-def set_toml_section(content: str, section: str, settings: Dict[str, Any]) -> str:
-    header = f"[{section}]"
-    pattern = re.compile(rf"(?ms)^\[{re.escape(section)}\]\n.*?(?=^\[|\Z)")
-    body_lines = [header] + [f"{k} = {toml_literal(v)}" for k, v in settings.items()]
-    body = "\n".join(body_lines) + "\n"
-    if pattern.search(content):
-        return pattern.sub(body, content)
-    prefix = "" if content.endswith("\n") else "\n"
-    return content + prefix + "\n" + body
+def section_pattern(section: str) -> re.Pattern[str]:
+    return re.compile(rf"(?ms)^(\[{re.escape(section)}\]\n)(.*?)(?=^\[|\Z)")
+
+
+def upsert_toml_setting(content: str, section: Optional[str], key: str, value: Any) -> str:
+    line = f"{key} = {toml_literal(value)}"
+    key_pattern = re.compile(rf"(?m)^(\s*){re.escape(key)}\s*=.*$")
+
+    if not section:
+        if key_pattern.search(content):
+            return key_pattern.sub(line, content, count=1)
+        return append_top_level_setting(content, key, value)
+
+    pattern = section_pattern(section)
+    match = pattern.search(content)
+    if not match:
+        prefix = "" if content.endswith("\n") else "\n"
+        return content + prefix + f"\n[{section}]\n" + line + "\n"
+
+    header, body = match.group(1), match.group(2)
+    if key_pattern.search(body):
+        new_body = key_pattern.sub(rf"\1{line}", body, count=1)
+    else:
+        new_body = line + "\n" + body
+    return content[: match.start()] + header + new_body + content[match.end():]
+
+
+def extract_toml_array(content: str, section: str, key: str) -> List[str]:
+    pattern = section_pattern(section)
+    match = pattern.search(content)
+    if not match:
+        return []
+    body = match.group(2)
+    array_pattern = re.compile(rf"(?ms)^\s*{re.escape(key)}\s*=\s*(\[[^\]]*\])", re.MULTILINE)
+    array_match = array_pattern.search(body)
+    if not array_match:
+        return []
+    literal = array_match.group(1)
+    values: List[str] = []
+    for quoted in re.finditer(r'"((?:[^"\\]|\\.)*)"|\'([^\']*)\'', literal):
+        if quoted.group(1) is not None:
+            values.append(bytes(quoted.group(1), "utf-8").decode("unicode_escape"))
+        elif quoted.group(2) is not None:
+            values.append(quoted.group(2))
+    return values
+
+
+def merge_toml_array(content: str, section: str, key: str, extras: List[str]) -> str:
+    merged = extract_toml_array(content, section, key)
+    for value in extras:
+        if value not in merged:
+            merged.append(value)
+    return upsert_toml_setting(content, section, key, merged)
+
+
+def rewrite_string_literal_paths(content: str, source_root: Path, isolated_root: Path) -> str:
+    source = str(source_root)
+    target = str(isolated_root)
+
+    def repl(match: re.Match[str]) -> str:
+        literal = match.group(0)
+        quote = literal[0]
+        body = literal[1:-1]
+        replaced = body.replace(source, target)
+        return quote + replaced + quote
+
+    return re.sub(r'"(?:[^"\\]|\\.)*"|\'[^\']*\'', repl, content)
+
+
+def create_fresh_default_config(root_parent: Path, isolated_root: Path) -> Path:
+    env = os.environ.copy()
+    env["HOME"] = str(root_parent)
+    subprocess.run(
+        ["go", "run", ".", "config", "init"],
+        cwd=str(REPO_ROOT),
+        env=env,
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    config_path = isolated_root / "roboticus.toml"
+    if not config_path.exists():
+        raise RuntimeError(f"fresh config init did not produce {config_path}")
+    return config_path
 
 
 def build_isolated_config(mode: str, source_root: Path, isolated_root: Path, host: str, port: int) -> Path:
@@ -270,9 +347,7 @@ def build_isolated_config(mode: str, source_root: Path, isolated_root: Path, hos
             raise RuntimeError(f"source config not found: {REAL_CONFIG}")
         shutil.copy2(REAL_CONFIG, config_path)
     else:
-        if not REAL_CONFIG.exists():
-            raise RuntimeError(f"source config not found: {REAL_CONFIG}")
-        shutil.copy2(REAL_CONFIG, config_path)
+        config_path = create_fresh_default_config(isolated_root.parent, isolated_root)
 
     db_path = isolated_root / "state.db"
     workspace_path = isolated_root / "workspace"
@@ -305,26 +380,20 @@ def build_isolated_config(mode: str, source_root: Path, isolated_root: Path, hos
         log_path.mkdir(parents=True, exist_ok=True)
 
     text = config_path.read_text(encoding="utf-8")
-    text = text.replace(str(source_root), str(isolated_root))
-    text = set_toml_section(text, "agent", {
-        "name": "Duncan Soak",
-        "id": "duncan-soak",
-        "workspace": str(workspace_path),
-    })
-    text = set_toml_section(text, "server", {
-        "bind": host,
-        "log_dir": str(log_path),
-    })
-    text = rewrite_toml_setting(text, "port", str(port))
-    text = set_toml_section(text, "database", {"path": str(db_path)})
-    text = set_toml_section(text, "daemon", {
-        "pid_file": str(pid_path),
-        "auto_restart": False,
-    })
+    text = rewrite_string_literal_paths(text, source_root, isolated_root)
+    text = upsert_toml_setting(text, "agent", "name", "Duncan Soak")
+    text = upsert_toml_setting(text, "agent", "id", "duncan-soak")
+    text = upsert_toml_setting(text, "agent", "workspace", str(workspace_path))
+    text = upsert_toml_setting(text, "server", "bind", host)
+    text = upsert_toml_setting(text, "server", "port", port)
+    text = upsert_toml_setting(text, "server", "log_dir", str(log_path))
+    text = upsert_toml_setting(text, "database", "path", str(db_path))
+    text = upsert_toml_setting(text, "daemon", "pid_file", str(pid_path))
+    text = upsert_toml_setting(text, "daemon", "auto_restart", False)
     if mode == "clone" and wallet_path.exists():
-        text = set_toml_section(text, "wallet", {"path": str(wallet_path)})
+        text = upsert_toml_setting(text, "wallet", "path", str(wallet_path))
     elif mode == "fresh":
-        text = set_toml_section(text, "wallet", {"path": str(wallet_path)})
+        text = upsert_toml_setting(text, "wallet", "path", str(wallet_path))
     # v1.0.6: extend allowed_paths in the ISOLATED config so the
     # behavioral scenarios that legitimately need to read user dirs
     # (filesystem_count_only counts markdown files in
@@ -333,14 +402,14 @@ def build_isolated_config(mode: str, source_root: Path, isolated_root: Path, hos
     # to the isolated copy. Without this, the soak's policy gate
     # denies the bash invocation and the agent has no way to
     # produce the expected count-style answer.
-    text = extend_allowed_paths_for_soak(text, source_root)
+    text = extend_allowed_paths_for_soak(text)
     if AUTONOMY_MAX_LOOP_SECS is not None:
         text = patch_autonomy_duration(text, AUTONOMY_MAX_LOOP_SECS)
     config_path.write_text(text, encoding="utf-8")
     return config_path
 
 
-def extend_allowed_paths_for_soak(text: str, source_root: Path) -> str:
+def extend_allowed_paths_for_soak(text: str) -> str:
     """Append the soak's required test paths to allowed_paths and
     tool_allowed_paths in the isolated config. Idempotent — paths
     already present are not duplicated.
@@ -358,34 +427,10 @@ def extend_allowed_paths_for_soak(text: str, source_root: Path) -> str:
         f"{home}/Downloads",
     ]
 
-    def _append_paths(text: str, key: str) -> str:
-        # Naive TOML editing: locate the line "key = [...]" and
-        # splice extras into the array. Idempotent if extras are
-        # already present.
-        pattern = re.compile(
-            rf"^(\s*){re.escape(key)}\s*=\s*\[([^\]]*)\]",
-            re.MULTILINE,
-        )
-        match = pattern.search(text)
-        if not match:
-            return text
-        indent = match.group(1)
-        existing_inner = match.group(2)
-        # Parse existing entries (single-quoted strings).
-        existing = re.findall(r"'([^']*)'", existing_inner)
-        added = list(existing)
-        for p in extras:
-            if p not in added:
-                added.append(p)
-        if added == existing:
-            return text  # no-op, already permissive enough
-        joined = ", ".join(f"'{p}'" for p in added)
-        replacement = f"{indent}{key} = [{joined}]"
-        return text[: match.start()] + replacement + text[match.end():]
-
-    text = _append_paths(text, "allowed_paths")
-    text = _append_paths(text, "tool_allowed_paths")
-    text = _append_paths(text, "script_allowed_paths")
+    text = merge_toml_array(text, "security", "allowed_paths", extras)
+    text = merge_toml_array(text, "security", "script_allowed_paths", extras)
+    text = merge_toml_array(text, "security.filesystem", "tool_allowed_paths", extras)
+    text = merge_toml_array(text, "security.filesystem", "script_allowed_paths", extras)
     return text
 
 

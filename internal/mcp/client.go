@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -102,6 +103,7 @@ type StdioTransport struct {
 // NewStdioTransport spawns a subprocess and connects via JSON-RPC over stdio.
 func NewStdioTransport(command string, args []string, env map[string]string) (*StdioTransport, error) {
 	cmd := exec.Command(command, args...)
+	cmd.Env = os.Environ()
 	for k, v := range env {
 		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
 	}
@@ -350,21 +352,41 @@ func (c *Connection) call(ctx context.Context, method string, params any) (json.
 	if err != nil {
 		return nil, err
 	}
-	if err := c.transport.Send(ctx, data); err != nil {
-		return nil, err
+
+	type callResult struct {
+		result json.RawMessage
+		err    error
 	}
-	respData, err := c.transport.Receive(ctx)
-	if err != nil {
-		return nil, err
+	done := make(chan callResult, 1)
+	go func() {
+		if err := c.transport.Send(ctx, data); err != nil {
+			done <- callResult{err: err}
+			return
+		}
+		respData, err := c.transport.Receive(ctx)
+		if err != nil {
+			done <- callResult{err: err}
+			return
+		}
+		var resp jsonRPCResponse
+		if err := json.Unmarshal(respData, &resp); err != nil {
+			done <- callResult{err: fmt.Errorf("mcp: invalid response: %w", err)}
+			return
+		}
+		if resp.Error != nil {
+			done <- callResult{err: fmt.Errorf("mcp rpc error %d: %s", resp.Error.Code, resp.Error.Message)}
+			return
+		}
+		done <- callResult{result: resp.Result}
+	}()
+
+	select {
+	case <-ctx.Done():
+		_ = c.Close()
+		return nil, ctx.Err()
+	case res := <-done:
+		return res.result, res.err
 	}
-	var resp jsonRPCResponse
-	if err := json.Unmarshal(respData, &resp); err != nil {
-		return nil, fmt.Errorf("mcp: invalid response: %w", err)
-	}
-	if resp.Error != nil {
-		return nil, fmt.Errorf("mcp rpc error %d: %s", resp.Error.Code, resp.Error.Message)
-	}
-	return resp.Result, nil
 }
 
 func (c *Connection) initialize(ctx context.Context) error {

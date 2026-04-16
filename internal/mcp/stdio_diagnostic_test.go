@@ -147,3 +147,53 @@ func TestStdioTransport_ChildDiagnosticHandlesLargeStderr(t *testing.T) {
 		t.Fatalf("expected diagnostic to indicate truncation when buffer was overflowed; got %q", diag)
 	}
 }
+
+// TestNewStdioTransport_InheritsParentEnvironment verifies that stdio MCP
+// children inherit the parent process environment even when cfg.Env provides
+// overrides. Pre-fix, setting any env override replaced the entire child
+// environment, which broke PATH/HOME-sensitive MCP servers.
+func TestNewStdioTransport_InheritsParentEnvironment(t *testing.T) {
+	if testing.Short() {
+		t.Skip("subprocess test skipped under -short")
+	}
+	t.Setenv("MCP_PARENT_FIXTURE", "parent-value")
+
+	transport, err := NewStdioTransport("sleep", []string{"30"}, map[string]string{
+		"MCP_CHILD_FIXTURE": "child-value",
+	})
+	if err != nil {
+		t.Fatalf("NewStdioTransport: %v", err)
+	}
+	defer func() { _ = transport.Close() }()
+
+	envJoined := strings.Join(transport.cmd.Env, "\n")
+	if !strings.Contains(envJoined, "MCP_PARENT_FIXTURE=parent-value") {
+		t.Fatalf("expected parent environment to be preserved, got %q", envJoined)
+	}
+	if !strings.Contains(envJoined, "MCP_CHILD_FIXTURE=child-value") {
+		t.Fatalf("expected override environment to be appended, got %q", envJoined)
+	}
+}
+
+// TestConnectStdio_ContextDeadlineCancelsHungInitialize verifies that a hung
+// stdio child no longer outlives the caller's timeout. Pre-fix, Receive()
+// blocked forever on ReadBytes('\n') and ConnectStdio ignored the context.
+func TestConnectStdio_ContextDeadlineCancelsHungInitialize(t *testing.T) {
+	if testing.Short() {
+		t.Skip("subprocess test skipped under -short")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	_, err := ConnectStdio(ctx, "test-hung-stdio", "sh", []string{"-c", "sleep 30"}, nil)
+	if err == nil {
+		t.Fatal("expected ConnectStdio to fail on context deadline")
+	}
+	if !strings.Contains(err.Error(), context.DeadlineExceeded.Error()) {
+		t.Fatalf("expected context deadline exceeded, got %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("ConnectStdio should return promptly after ctx timeout; took %v", elapsed)
+	}
+}
