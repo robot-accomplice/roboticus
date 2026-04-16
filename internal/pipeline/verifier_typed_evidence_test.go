@@ -89,6 +89,39 @@ func TestBuildVerificationContext_StringParseFallback(t *testing.T) {
 		t.Fatalf("fallback string-parse should set HasGaps from [Gaps] marker")
 	}
 	if !vctx.HasCanonicalEvidence {
-		t.Fatalf("fallback should detect 'canonical' substring")
+		t.Fatalf("fallback should detect 'canonical' qualifier inside bracketed evidence row")
+	}
+}
+
+// TestBuildVerificationContext_FallbackCanonicalNoFalsePositive is the
+// v1.0.6 self-audit P3-D regression. Pre-fix, the fallback path used a
+// naked strings.Contains(lowered, "canonical") so ANY memory block
+// that mentioned the word — whether in prose, user input quoted in
+// history, or a third-party doc excerpt — would false-positive
+// HasCanonicalEvidence. The typed path (via IsCanonical on evidence
+// rows) could never do that. Post-fix: the fallback regex requires
+// "canonical" to appear inside a bracketed meta block, matching the
+// assembler's only emission site.
+func TestBuildVerificationContext_FallbackCanonicalNoFalsePositive(t *testing.T) {
+	sess := session.New("s1", "a1", "Test")
+	sess.AddUserMessage("q")
+
+	// Memory context mentions "canonical" in narrative prose but has
+	// NO bracketed evidence row with the canonical qualifier. Pre-fix
+	// the naked strings.Contains would return true here; post-fix it
+	// must return false.
+	sess.SetMemoryContext(strings.Join([]string{
+		"[Active Memory]",
+		"",
+		"[Working State]",
+		"- user is researching whether the RFC is the canonical source",
+		"",
+		"[Retrieved Evidence]",
+		"1. [semantic, 0.77, via=fts] the rfc describes a protocol",
+	}, "\n"))
+
+	vctx := BuildVerificationContext(sess)
+	if vctx.HasCanonicalEvidence {
+		t.Fatalf("fallback should NOT false-positive on prose mentions of 'canonical' — typed path requires IsCanonical row qualifier; fallback must mirror that")
 	}
 }

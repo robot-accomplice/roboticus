@@ -23,17 +23,11 @@ var initCmd = &cobra.Command{
 		}
 		fmt.Printf("  created %s\n", configDir)
 
-		// Create standard subdirectories.
-		//
-		// "workspace" is included here because defaultConfigTOML points
-		// agent.workspace at ~/.roboticus/workspace — pre-v1.0.6 init
-		// wrote the config reference but never created the target
-		// directory, so a first-run would end up with a config file
-		// claiming a workspace that didn't exist on disk. The personality
-		// setup flow (cmd/configcmd/setup.go) then had to mkdir it on
-		// demand, which worked but made the "fresh install" appear
-		// incomplete. Adding "workspace" to this list keeps the init
-		// filesystem consistent with the init config.
+		// Create standard subdirectories in the config dir. "workspace"
+		// is included here as the default placement, but the ACTUAL
+		// workspace that init creates below (after writing or reading
+		// the config) may point elsewhere — see workspace handling
+		// below the config-write block.
 		subdirs := []string{"skills", "plugins", "data", "workspace"}
 		for _, sub := range subdirs {
 			dir := filepath.Join(configDir, sub)
@@ -45,13 +39,47 @@ var initCmd = &cobra.Command{
 
 		// Write default config file if it doesn't exist.
 		configPath := core.ConfigFilePath()
+		configNewlyWritten := false
 		if _, err := os.Stat(configPath); os.IsNotExist(err) {
 			if err := os.WriteFile(configPath, []byte(defaultConfigTOML), 0o600); err != nil {
 				return fmt.Errorf("failed to write config: %w", err)
 			}
 			fmt.Printf("  created %s\n", configPath)
+			configNewlyWritten = true
 		} else {
 			fmt.Printf("  config already exists: %s\n", configPath)
+		}
+
+		// v1.0.6 self-audit P2-K: ensure the workspace dir the config
+		// REFERENCES actually exists on disk, not just the default
+		// `<configDir>/workspace`. If the operator hand-edited
+		// workspace to `/opt/agents/workspace` before re-running init,
+		// pre-fix init would happily (re)create `<configDir>/workspace`
+		// and silently leave `/opt/agents/workspace` missing. Now: load
+		// the effective config (which NormalizePaths expands ~ in) and
+		// mkdir whatever workspace the config actually points at.
+		//
+		// Only runs when the config was already on disk — a fresh
+		// default-toml install is covered by the subdirs loop above.
+		if !configNewlyWritten {
+			effective, err := core.LoadConfigFromFile(configPath)
+			if err == nil && effective.Agent.Workspace != "" {
+				ws := effective.Agent.Workspace
+				// Skip if it's the same path the subdirs loop already
+				// created (avoids noise on the common default case).
+				defaultWs := filepath.Join(configDir, "workspace")
+				if ws != defaultWs {
+					if err := os.MkdirAll(ws, 0o700); err != nil {
+						// Non-fatal: init's job is primarily to set up
+						// the default dir. A missing custom workspace
+						// dir can be created later by setup.go's
+						// personality flow. Log rather than fail.
+						fmt.Printf("  warning: could not create configured workspace %s: %v\n", ws, err)
+					} else {
+						fmt.Printf("  created %s (from config)\n", ws)
+					}
+				}
+			}
 		}
 
 		fmt.Println("\nroboticus workspace initialized successfully.")

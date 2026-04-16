@@ -26,6 +26,7 @@ import (
 	"roboticus/internal/llm"
 	"roboticus/internal/mcp"
 	"roboticus/internal/pipeline"
+	"roboticus/internal/update"
 )
 
 // Daemon manages the lifecycle of all roboticus subsystems.
@@ -73,10 +74,10 @@ func ServiceConfig() *service.Config {
 }
 
 // ServiceInstallConfig returns a service config that embeds the operator's
-// current invocation context — the exact config file path and any active
-// ROBOTICUS_* environment variables — so the installed service starts
-// against the same agent runtime the operator just validated at install
-// time.
+// current invocation context — the exact config file path, any active
+// ROBOTICUS_* environment variables, and the operator's PATH at install
+// time — so the installed service starts against the same agent runtime
+// the operator just validated at install time.
 //
 // Why this exists: v1.0.6 audit flagged that NewServiceOnly discarded the
 // loaded cfg and registered the service with only Name/Display/Description
@@ -91,12 +92,29 @@ func ServiceConfig() *service.Config {
 // accepted (falls back to default lookup) for callers that don't have one
 // — but the install command always passes cmdutil.EffectiveConfigPath().
 //
-// Env: we snapshot ROBOTICUS_* env vars present at install time. This
-// covers cases where the operator was running with ROBOTICUS_CONFIG,
-// ROBOTICUS_PROFILE, or any feature-flag overrides. Those need to persist
-// into the service's environment so the service honors them on boot.
-// We intentionally don't copy non-prefixed env (PATH, HOME, USER, etc.)
-// — those are inherited from the service manager's own environment.
+// Env: we snapshot three categories of environment at install time:
+//  1. All ROBOTICUS_* vars (feature flags, profile, config override).
+//  2. PATH — specifically called out because the v1.0.6 self-audit
+//     caught that systemd/launchd services inherit a minimal PATH
+//     (typically /usr/bin:/bin), NOT the operator's shell PATH. If the
+//     operator had /opt/homebrew/bin (for `ollama`), $HOME/.local/bin
+//     (pip installs), or a virtualenv bin dir on PATH, subprocess
+//     launches from the service (Ollama, Playwright MCP via npx,
+//     Python-based MCP servers) would silently fail with "not found."
+//     Copying PATH at install freezes the operator's working PATH
+//     into the service environment.
+//  3. The installer's own HOME — so default-config resolution inside
+//     the service targets the operator's home, not the service user's
+//     home (on macOS launchd that's often a system account). This is
+//     belt-and-suspenders alongside the explicit --config path, for
+//     any code path that reads $HOME directly (tilde expansion in
+//     user-edited paths, etc.).
+//
+// We intentionally DON'T copy everything in os.Environ() — dragging the
+// operator's shell-local aliases, OAuth tokens, and unrelated env into a
+// long-running service would be a leak vector. The three whitelists above
+// cover observed footguns; if a new env becomes load-bearing for the
+// agent, add it here with a note explaining why.
 func ServiceInstallConfig(_ *core.Config, configPath string) *service.Config {
 	cfg := ServiceConfig()
 	args := []string{"serve"}
@@ -105,9 +123,9 @@ func ServiceInstallConfig(_ *core.Config, configPath string) *service.Config {
 	}
 	cfg.Arguments = args
 
-	// Snapshot ROBOTICUS_* env so the installed service inherits the same
-	// overrides the operator ran install under.
 	envVars := map[string]string{}
+
+	// Category 1: ROBOTICUS_* overrides.
 	for _, kv := range os.Environ() {
 		if !strings.HasPrefix(kv, "ROBOTICUS_") {
 			continue
@@ -118,6 +136,20 @@ func ServiceInstallConfig(_ *core.Config, configPath string) *service.Config {
 		}
 		envVars[kv[:i]] = kv[i+1:]
 	}
+
+	// Category 2: PATH. The service manager's default PATH is too
+	// minimal for the MCP/subprocess ecosystem to work. We capture
+	// the operator's install-time PATH verbatim.
+	if p := os.Getenv("PATH"); p != "" {
+		envVars["PATH"] = p
+	}
+
+	// Category 3: HOME. Belt-and-suspenders for any code path that
+	// expands ~ after the fact.
+	if h := os.Getenv("HOME"); h != "" {
+		envVars["HOME"] = h
+	}
+
 	if len(envVars) > 0 {
 		cfg.EnvVars = envVars
 	}
@@ -605,6 +637,14 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 		log.Info().Int("retained", vetResult.Retained).Int("discarded", vetResult.Discarded).
 			Msg("working memory vetted on startup")
 	}
+
+	// v1.0.6 self-audit P1-J: best-effort sweep of stale
+	// <roboticus>.old* sidecars left behind by Windows self-updates
+	// whose MoveFileExW delete-on-reboot failed (privilege revoked,
+	// reboot never happened). Runs once per boot. The 24h minimum
+	// age discipline protects in-flight rollback windows. Unix
+	// doesn't produce these sidecars so this is a no-op there.
+	update.SweepStaleUpdateSidecarsAuto()
 
 	// ── Phase 12: Complete ──────────────────────────────────────────────
 	log.Info().Int64("startup_ms", time.Since(startupStart).Milliseconds()).Msg("[startup 12/12] daemon initialization complete")

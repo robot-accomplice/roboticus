@@ -95,13 +95,30 @@
 
 ### Core Principles
 
-1. **Memory = Index, Not Storage.** Only working memory and recent activity are
-   injected directly. All other tiers appear as compact index entries. The model
-   calls `recall_memory(id)` or `search_memories(query)` on demand.
+**Terminology note**: "store" and "tier" are used with intentionally
+different meanings in this spec:
+- **Store** = a distinct storage surface with its own table + schema
+  (Working, Episodic, Semantic, Procedural, Relationship, Knowledge
+  Facts = 6 stores total). Stores are the unit of data persistence.
+- **Tier** = the retrieval router's classification of stores by role
+  (direct-inject vs index-only vs graph-distilled). Used when talking
+  about routing plans and budget allocation.
+
+The runtime has 6 stores; the retrieval router groups them into 3
+tier categories (direct-inject, indexed-tier, graph). Earlier drafts
+of this spec used "tier" and "store" interchangeably — v1.0.6
+consolidated the distinction.
+
+1. **Memory = Index, Not Storage.** Only working memory and recent activity
+   are injected directly. All other stores appear as compact index entries.
+   The model calls `recall_memory(id)` or `search_memories(query)` on demand.
+   Canonical knowledge facts are a special case: they're treated as
+   authoritative evidence rows and surfaced with the `canonical=true`
+   qualifier by the retrieval assembler.
 
 2. **Six-Store Memory System (v1.0.6).** Five persistent tiers (Working,
    Episodic, Semantic, Procedural, Relationship) plus a distilled knowledge
-   store:
+   store (Knowledge Facts, v1.0.6):
    - **Working** (session-scoped scratchpad; active goals, decisions, observations)
    - **Episodic** (event log / long-term experiences; verbatim episode rows)
    - **Semantic** (facts / knowledge chunks; FTS5 + vector indexed)
@@ -115,10 +132,6 @@
      evidence rows in the retrieval surface — the verifier's
      `HasCanonicalEvidence` flag is sourced from here, not from substring
      matching on the word "canonical" in rendered text.)
-
-   **Legacy doc note**: some older references in this file still say "five-tier"
-   — those sections are being migrated; the 6-store list above is the current
-   runtime reality.
 
 3. **Background Ingestion.** Turn processing happens asynchronously after the
    response is sent. Ingestion failures are degraded silently -- they never

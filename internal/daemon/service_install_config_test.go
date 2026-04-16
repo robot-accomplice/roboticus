@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"os"
 	"strings"
 	"testing"
 
@@ -73,9 +72,9 @@ func TestServiceInstallConfig_SnapshotsRoboticusEnv(t *testing.T) {
 	value := "from-install-time"
 	t.Setenv(key, value)
 
-	// Also confirm a non-prefixed env DOESN'T leak in (we only capture
-	// ROBOTICUS_*, never general environment).
-	t.Setenv("PATH_SHOULD_NOT_LEAK", "bad")
+	// A foreign env that is NOT in any whitelist category must not
+	// leak through.
+	t.Setenv("FOREIGN_SHOULD_NOT_LEAK", "bad")
 
 	cfg := core.DefaultConfig()
 	svc := ServiceInstallConfig(&cfg, "/tmp/cfg.toml")
@@ -90,10 +89,61 @@ func TestServiceInstallConfig_SnapshotsRoboticusEnv(t *testing.T) {
 	if got != value {
 		t.Fatalf("EnvVars[%q] = %q; want %q", key, got, value)
 	}
+	// Whitelist boundary: every key must be ROBOTICUS_*, PATH, or HOME.
+	// Foreign keys must NOT appear.
 	for k := range svc.EnvVars {
-		if !strings.HasPrefix(k, "ROBOTICUS_") {
-			t.Fatalf("EnvVars should only carry ROBOTICUS_*; found foreign key %q", k)
+		if strings.HasPrefix(k, "ROBOTICUS_") || k == "PATH" || k == "HOME" {
+			continue
 		}
+		t.Fatalf("EnvVars carries foreign key %q; whitelist is ROBOTICUS_* | PATH | HOME only", k)
+	}
+	if _, leaked := svc.EnvVars["FOREIGN_SHOULD_NOT_LEAK"]; leaked {
+		t.Fatalf("foreign env leaked into install snapshot")
+	}
+}
+
+// TestServiceInstallConfig_SnapshotsPATH is the v1.0.6 self-audit P1-H
+// regression. Systemd/launchd services inherit a minimal PATH (often
+// just /usr/bin:/bin), NOT the operator's shell PATH. If the operator
+// had /opt/homebrew/bin (for `ollama`), $HOME/.local/bin (pip), or a
+// virtualenv bin dir on PATH, subprocess launches from the service
+// (Ollama, Playwright MCP via npx, Python MCP servers) would silently
+// fail with "not found." Pre-audit the PATH snapshot was intentionally
+// NOT included with the rationale "services inherit PATH from the
+// service manager" — which is technically true but practically wrong,
+// because the service manager's PATH is the wrong PATH.
+func TestServiceInstallConfig_SnapshotsPATH(t *testing.T) {
+	const customPath = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+	t.Setenv("PATH", customPath)
+
+	cfg := core.DefaultConfig()
+	svc := ServiceInstallConfig(&cfg, "/tmp/cfg.toml")
+	got, ok := svc.EnvVars["PATH"]
+	if !ok {
+		t.Fatalf("EnvVars missing PATH — service will inherit service-manager minimal PATH and subprocess tool lookups will fail")
+	}
+	if got != customPath {
+		t.Fatalf("PATH in EnvVars = %q; want %q (verbatim snapshot, not rewritten)", got, customPath)
+	}
+}
+
+// TestServiceInstallConfig_SnapshotsHOME mirrors the PATH concern for
+// $HOME — some code paths expand `~` after the config loads (plugins,
+// user-edited paths, external MCP configs). If the service runs as a
+// system account and we don't seed HOME, those ~ references resolve
+// to the wrong user's home or to an empty string.
+func TestServiceInstallConfig_SnapshotsHOME(t *testing.T) {
+	const operatorHome = "/Users/operator"
+	t.Setenv("HOME", operatorHome)
+
+	cfg := core.DefaultConfig()
+	svc := ServiceInstallConfig(&cfg, "/tmp/cfg.toml")
+	got, ok := svc.EnvVars["HOME"]
+	if !ok {
+		t.Fatalf("EnvVars missing HOME — tilde-expansion in the installed service will resolve against the service user's home, not the operator's")
+	}
+	if got != operatorHome {
+		t.Fatalf("HOME in EnvVars = %q; want %q", got, operatorHome)
 	}
 }
 
@@ -104,10 +154,6 @@ func mapKeys(m map[string]string) []string {
 	}
 	return ks
 }
-
-// Silence unused-import lint on platforms where os isn't referenced in
-// individual tests.
-var _ = os.Environ
 
 // TestServiceInstallConfig_RejectsRelativePaths is the v1.0.6 P2-H
 // guardrail. ServiceInstallConfig is a leaf — it takes whatever

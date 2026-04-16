@@ -71,6 +71,55 @@ func TestInitCmd_CreatesWorkspaceDir(t *testing.T) {
 	}
 }
 
+// TestInitCmd_CreatesCustomWorkspaceOnReRun is the v1.0.6 self-audit
+// P2-K regression. If the operator hand-edits roboticus.toml to point
+// workspace at a custom path (e.g., `/opt/agents/workspace`) and then
+// re-runs init, pre-fix init would only create the default
+// `<configDir>/workspace` and silently leave the configured path
+// missing. Post-fix: init loads the effective config and mkdirs
+// whatever workspace it references.
+func TestInitCmd_CreatesCustomWorkspaceOnReRun(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("see TestInitCmd_CreatesWorkspaceDir for platform rationale")
+	}
+	isolated := t.TempDir()
+	t.Setenv("HOME", isolated)
+	t.Setenv("XDG_CONFIG_HOME", "")
+
+	// First init: creates the default config referencing ~/.roboticus/workspace.
+	if err := initCmd.RunE(initCmd, []string{}); err != nil {
+		t.Fatalf("first init: %v", err)
+	}
+
+	// Operator edits config to point workspace at a custom path
+	// OUTSIDE the config dir entirely.
+	customWorkspace := filepath.Join(isolated, "custom-workspace-location")
+	configPath := filepath.Join(isolated, ".roboticus", "roboticus.toml")
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	edited := strings.ReplaceAll(string(data),
+		`workspace = "~/.roboticus/workspace"`,
+		`workspace = "`+customWorkspace+`"`)
+	if err := os.WriteFile(configPath, []byte(edited), 0o600); err != nil {
+		t.Fatalf("edit config: %v", err)
+	}
+
+	// Operator re-runs init. Expected: the custom workspace path is created.
+	if err := initCmd.RunE(initCmd, []string{}); err != nil {
+		t.Fatalf("re-run init: %v", err)
+	}
+
+	info, err := os.Stat(customWorkspace)
+	if err != nil {
+		t.Fatalf("custom workspace %s should have been created by init; got err=%v", customWorkspace, err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("custom workspace %s should be a directory", customWorkspace)
+	}
+}
+
 // TestInitCmd_IsIdempotent confirms running init twice doesn't error
 // and doesn't overwrite an existing config file. This is a secondary
 // safety property — operators sometimes re-run init after edits and

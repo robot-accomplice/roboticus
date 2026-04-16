@@ -3,10 +3,19 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"roboticus/internal/llm"
 )
+
+// canonicalQualifierRegex matches the assembler's
+// "canonical" qualifier only when it appears inside a bracketed
+// evidence-row meta block (e.g. `[semantic, 0.91, canonical, ...]`).
+// Used by BuildVerificationContext's string-parse fallback to align
+// with the typed path's row-qualifier check. See P3-D rationale in
+// v1.0.6 self-audit.
+var canonicalQualifierRegex = regexp.MustCompile(`\[[^\]]*\bcanonical\b[^\]]*\]`)
 
 // VerificationIssue captures one reason a response should be revised.
 type VerificationIssue struct {
@@ -116,12 +125,25 @@ func BuildVerificationContext(session *Session) VerificationContext {
 		ctx.VerifiedConclusions = append([]string(nil), ve.VerifiedConclusions...)
 		ctx.StoppingCriteria = append([]string(nil), ve.StoppingCriteria...)
 	} else {
-		// String-parse fallback for non-pipeline callers.
+		// String-parse fallback for non-pipeline callers (tests, smoke
+		// scripts, ad-hoc CLI). The goal is to keep this path's
+		// semantics as close to the typed path as possible so callers
+		// can't silently get different behavior depending on which
+		// route populated the session.
 		ctx.HasEvidence = strings.Contains(ctx.MemoryContext, "[Retrieved Evidence]")
 		ctx.HasGaps = strings.Contains(ctx.MemoryContext, "[Gaps]")
 		ctx.HasFreshnessRisk = strings.Contains(ctx.MemoryContext, "[Freshness Risks]")
 		ctx.HasContradictions = strings.Contains(ctx.MemoryContext, "[Contradictions]")
-		ctx.HasCanonicalEvidence = strings.Contains(strings.ToLower(ctx.MemoryContext), "canonical")
+		// Canonical detection: the assembler emits "canonical" ONLY
+		// as an evidence-row qualifier inside the bracketed meta
+		// block, e.g. `1. [semantic, 0.91, canonical, source=...]`.
+		// Pre-v1.0.6-self-audit the fallback used a naked
+		// strings.Contains which false-positived whenever memory
+		// prose happened to mention the word. The regex below
+		// matches only when "canonical" appears inside a bracket
+		// block — aligning fallback semantics with the typed path's
+		// row-qualifier check.
+		ctx.HasCanonicalEvidence = canonicalQualifierRegex.MatchString(ctx.MemoryContext)
 		ctx.EvidenceItems = verificationSectionItems(ctx.MemoryContext, "[Retrieved Evidence]")
 		ctx.UnresolvedQuestions = verificationExecutiveSection(ctx.MemoryContext, "Unresolved questions")
 		ctx.VerifiedConclusions = verificationExecutiveSection(ctx.MemoryContext, "Verified conclusions")

@@ -83,13 +83,37 @@ fetch_latest_version() {
             return 1
         }
     elif command -v wget >/dev/null 2>&1; then
-        raw=$(wget -qO- "$url" 2>/dev/null) || {
+        # --server-response prints "HTTP/1.1 NNN ..." lines to stderr.
+        # Capture both streams so we can parse the status code instead
+        # of guessing. Pre-v1.0.6-self-audit this branch unconditionally
+        # appended "HTTP_STATUS=200" which was a lie whenever wget
+        # fetched a non-2xx body (some wget builds silently succeed
+        # with 4xx bodies depending on server config).
+        wget_combined=$(wget --server-response -qO- "$url" 2>&1) || {
             echo "ERROR: failed to reach GitHub API at $url" >&2
+            printf '%s\n' "$wget_combined" | head -5 >&2
             return 1
         }
-        # wget gives no trailing HTTP_STATUS marker; assume 200 if body parses.
-        raw="$raw
-HTTP_STATUS=200"
+        # Extract the LAST HTTP status line (wget may print multiple if
+        # following redirects) and pull the 3-digit code.
+        wget_status=$(printf '%s\n' "$wget_combined" | grep -oE 'HTTP/[0-9.]+ [0-9]{3}' | tail -1 | awk '{print $2}')
+        if [ -z "$wget_status" ]; then
+            # No HTTP status line found — wget hit the URL without
+            # a valid HTTP response (unusual: typically means a raw
+            # TCP error or wget built without --server-response
+            # support). Treat as unreachable.
+            echo "ERROR: wget did not return a parseable HTTP status for $url" >&2
+            printf '%s\n' "$wget_combined" | head -5 >&2
+            return 1
+        fi
+        # Separate status from body: wget prints status lines to stderr
+        # (we merged streams with 2>&1) and body to stdout. A simple
+        # heuristic: lines matching HTTP/... NNN ... are status metadata;
+        # lines starting with two spaces are wget's own response headers;
+        # everything else is body. Filter those out for body extraction.
+        wget_body=$(printf '%s\n' "$wget_combined" | grep -Ev '^(HTTP/|  |[[:space:]]*$)')
+        raw="$wget_body
+HTTP_STATUS=$wget_status"
     else
         echo "ERROR: neither curl nor wget found. Install one to continue." >&2
         return 1

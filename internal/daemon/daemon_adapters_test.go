@@ -655,24 +655,38 @@ func TestBuildAgentContext_NoUserMessages(t *testing.T) {
 }
 
 func TestBuildAgentContext_PrefersPipelineMemoryContext(t *testing.T) {
-	// v1.0.6: the daemon no longer has a fallback retriever. This test's
-	// original purpose was to confirm pipeline-set memory wins over the
-	// fallback; post-fix there's no fallback at all, so we keep the test
-	// as a positive assertion that pipeline-prepared memory makes it
-	// into the request. The "fallback retrieval memory" seed in the DB
-	// stays as a negative tripwire: it MUST NOT appear in the request
-	// because the adapter can't reach the retriever anymore.
+	// REGRESSION TRIPWIRE against fallback-path reintroduction.
+	//
+	// Test setup: populate the session's MemoryContext (pipeline-path
+	// state) AND seed the working_memory DB table (the data a
+	// fallback-path retriever would pick up). The assertions below
+	// confirm that:
+	//   (1) the pipeline-path data makes it into the request
+	//   (2) the fallback-path data does NOT
+	//
+	// As of v1.0.6 P1-B, buildAgentContext has NO CODE PATH that can
+	// reach the working_memory DB — the fallback was deleted. So the
+	// "fallback retrieval memory" DB row in this test is UNREACHABLE
+	// by the code under test; assertion (2) is trivially true. Do not
+	// delete the DB seed: if a future engineer re-introduces the
+	// fallback pattern (e.g., "just a quick RetrieveDirectOnly call
+	// to patch empty memory"), the seed becomes reachable again and
+	// THIS TEST FAILS, catching the regression before it ships.
+	//
+	// The seed stays. The assertion stays. The DB I/O is intentional.
 	store := testutil.TempStore(t)
 
 	sess := session.New("s1", "a1", "TestBot")
 	sess.AddUserMessage("query about something")
 	sess.SetMemoryContext("[Working State]\n- pipeline prepared memory")
 
+	// Tripwire seed: this row MUST remain unreachable by
+	// buildAgentContext. See the block comment above.
 	_, err := store.ExecContext(context.Background(),
 		`INSERT INTO working_memory (id, session_id, entry_type, content, importance)
 		 VALUES ('wm1', 's1', 'note', 'fallback retrieval memory', 5)`)
 	if err != nil {
-		t.Fatalf("seed working memory: %v", err)
+		t.Fatalf("seed working memory tripwire: %v", err)
 	}
 
 	ctx := buildAgentContext(context.Background(), sess, nil, agent.PromptConfig{
@@ -698,7 +712,7 @@ func TestBuildAgentContext_PrefersPipelineMemoryContext(t *testing.T) {
 		t.Fatal("expected pipeline-prepared memory context in request")
 	}
 	if sawFallback {
-		t.Fatal("expected session memory context to win over retriever fallback")
+		t.Fatal("FALLBACK REGRESSION: buildAgentContext reached the working_memory DB — the v1.0.6 P1-B removal of the fallback path has been undone")
 	}
 }
 

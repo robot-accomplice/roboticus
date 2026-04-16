@@ -1,7 +1,6 @@
 package cmdutil
 
 import (
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -78,7 +77,3 @@ func TestEffectiveConfigPathAbs_UsesHomeDefaultWhenUnset(t *testing.T) {
 		t.Fatalf("default config path should be absolute; got %q", got)
 	}
 }
-
-// Silence unused-import lint on Windows CI where filepath is the only
-// test-scope reference.
-var _ = os.Environ

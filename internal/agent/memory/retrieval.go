@@ -151,39 +151,19 @@ func (mr *Retriever) Retrieve(ctx context.Context, sessionID, query string, tota
 	return text
 }
 
-// RetrieveDirectOnly returns only working memory + recent ambient activity.
-// This matches Rust's two-stage pattern: direct injection is limited to cheap,
-// session-scoped, always-relevant content. All other tiers (episodic, semantic,
-// procedural, relationship) are accessed via the memory index + recall_memory tool.
+// RetrieveDirectOnly was removed in v1.0.6 (self-audit P2-L). It was
+// the sole consumer of the daemon's fallback memory-assembly path
+// (internal/daemon/daemon_adapters.go buildAgentContext), which was
+// itself removed in v1.0.6 P1-B because the pipeline's Stage 8.5 is
+// now the single authority for memory preparation. Leaving
+// RetrieveDirectOnly as unused API surface would invite a future
+// engineer to reintroduce the fallback pattern without realizing it's
+// explicitly architecturally discouraged.
 //
-// This prevents the model from treating the injected block as "all of my memories"
-// and confabulating when a topic isn't present.
-func (mr *Retriever) RetrieveDirectOnly(ctx context.Context, sessionID, query string, totalTokens int) string {
-	if mr.store == nil {
-		return ""
-	}
-
-	var sections []string
-
-	// Working memory (session-scoped).
-	if budget := int(float64(totalTokens) * mr.budgets.Working); budget > 0 {
-		working := mr.retrieveWorkingMemory(ctx, sessionID, budget)
-		if working != "" {
-			sections = append(sections, "[Working Memory]\n"+working)
-		}
-	}
-
-	// Ambient recency: recent episodic memories (last 2 hours).
-	ambient := mr.retrieveAmbientRecent(ctx, 2)
-	if ambient != "" {
-		sections = append(sections, "[Recent Activity]\n"+ambient)
-	}
-
-	if len(sections) == 0 {
-		return ""
-	}
-	return strings.Join(sections, "\n\n")
-}
+// If a future feature genuinely needs working+ambient-only memory
+// without the full retrieval pipeline, the replacement is a new
+// dedicated method with that specific purpose — NOT resurrecting this
+// one under the same name.
 
 // RetrieveWithMetrics fetches memories and returns both the injected text
 // and observability metrics (Rust parity: retrieve_with_metrics).

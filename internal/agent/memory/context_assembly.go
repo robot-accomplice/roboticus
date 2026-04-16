@@ -89,9 +89,16 @@ func AssembleContext(
 ) *AssembledContext {
 	ac := &AssembledContext{}
 
+	// Load executive state ONCE and reuse it for both the rendered
+	// working-state block AND the typed verification artifact.
+	// Pre-v1.0.6-self-audit, these two surfaces each called
+	// LoadExecutiveState independently — same DB query, run twice
+	// per retrieval. The single load here is the P2-I dedup fix.
+	execState := loadExecutiveState(ctx, store, sessionID)
+
 	// Working state: direct injection (plan, assumptions, recent activity).
 	var workingParts []string
-	if executive := loadExecutiveStateBlock(ctx, store, sessionID); executive != "" {
+	if executive := renderExecutiveStateBlock(execState); executive != "" {
 		workingParts = append(workingParts, executive)
 	}
 	if workingMemory != "" {
@@ -155,23 +162,25 @@ func AssembleContext(
 	// Typed evidence artifact: derived from the same assembly state as
 	// the rendered text, so the verifier can read structured fields
 	// instead of parsing the rendered output (see v1.0.6 P2-C).
-	ac.EvidenceArtifact = buildVerificationEvidenceFromContext(ctx, store, sessionID, ac, evidence)
+	// execState was already loaded above — pass it through instead of
+	// re-querying (v1.0.6 self-audit P2-I).
+	ac.EvidenceArtifact = buildVerificationEvidenceFromAssembly(ac, evidence, execState)
 
 	return ac
 }
 
-// buildVerificationEvidenceFromContext extracts the typed verification
-// artifact from the assembled context. Executive-state fields
-// (UnresolvedQuestions, VerifiedConclusions, StoppingCriteria) are
-// fetched directly from the working_memory store rather than
-// re-parsing the WorkingState text block — same source of truth, just
-// without the string round-trip.
-func buildVerificationEvidenceFromContext(
-	ctx context.Context,
-	store *db.Store,
-	sessionID string,
+// buildVerificationEvidenceFromAssembly extracts the typed verification
+// artifact from an already-assembled context plus a pre-loaded executive
+// state. Callers are expected to have loaded executive state once via
+// loadExecutiveState and shared it — this function does zero DB I/O.
+//
+// Pre-P2-I dedup: this function used to re-query LoadExecutiveState
+// itself, duplicating the call that loadExecutiveStateBlock already
+// made. Every retrieval turn paid for the same query twice.
+func buildVerificationEvidenceFromAssembly(
 	ac *AssembledContext,
 	evidence []Evidence,
+	execState *ExecutiveState,
 ) *session.VerificationEvidence {
 	ve := &session.VerificationEvidence{
 		HasEvidence:       strings.TrimSpace(ac.Evidence) != "",
@@ -200,22 +209,16 @@ func buildVerificationEvidenceFromContext(
 			fmt.Sprintf("[%s, %.2f] %s", tier, e.Score, truncateForArtifact(e.Content, 200)))
 	}
 
-	// Executive state: read once from the same shim that populates the
-	// working-state text block. Keeps both surfaces in sync without
-	// re-querying. ExecutiveState.X is []ExecutiveEntry; for the
-	// verifier we only need the short Content string of each entry.
-	if store != nil && sessionID != "" {
-		shim := &Manager{store: store}
-		if state, err := shim.LoadExecutiveState(ctx, sessionID, ""); err == nil && state != nil {
-			for _, e := range state.UnresolvedQuestions {
-				ve.UnresolvedQuestions = append(ve.UnresolvedQuestions, e.Content)
-			}
-			for _, e := range state.VerifiedConclusions {
-				ve.VerifiedConclusions = append(ve.VerifiedConclusions, e.Content)
-			}
-			for _, e := range state.StoppingCriteria {
-				ve.StoppingCriteria = append(ve.StoppingCriteria, e.Content)
-			}
+	// Executive state: passed in from AssembleContext's single load.
+	if execState != nil {
+		for _, e := range execState.UnresolvedQuestions {
+			ve.UnresolvedQuestions = append(ve.UnresolvedQuestions, e.Content)
+		}
+		for _, e := range execState.VerifiedConclusions {
+			ve.VerifiedConclusions = append(ve.VerifiedConclusions, e.Content)
+		}
+		for _, e := range execState.StoppingCriteria {
+			ve.StoppingCriteria = append(ve.StoppingCriteria, e.Content)
 		}
 	}
 
@@ -232,12 +235,14 @@ func truncateForArtifact(s string, max int) string {
 	return s[:max] + "…"
 }
 
-// loadExecutiveStateBlock reads the latest executive state for a session and
-// renders it for the working-state section. Returns an empty string if the
-// session has no executive state yet or the store is nil.
-func loadExecutiveStateBlock(ctx context.Context, store *db.Store, sessionID string) string {
+// loadExecutiveState reads the latest executive state for a session. Split
+// from rendering (renderExecutiveStateBlock) so AssembleContext can share
+// a single load between the rendered working-state block AND the typed
+// verification artifact (v1.0.6 P2-I dedup). Returns nil when there's
+// nothing to render — callers must nil-check before accessing fields.
+func loadExecutiveState(ctx context.Context, store *db.Store, sessionID string) *ExecutiveState {
 	if store == nil || sessionID == "" {
-		return ""
+		return nil
 	}
 	// Use a minimal manager shim so executive loading does not require a fully
 	// configured Manager instance. This keeps AssembleContext usable from the
@@ -246,9 +251,20 @@ func loadExecutiveStateBlock(ctx context.Context, store *db.Store, sessionID str
 	state, err := shim.LoadExecutiveState(ctx, sessionID, "")
 	if err != nil {
 		log.Debug().Err(err).Msg("context assembly: executive state load failed")
-		return ""
+		return nil
 	}
 	if state == nil || state.IsEmpty() {
+		return nil
+	}
+	return state
+}
+
+// renderExecutiveStateBlock formats an already-loaded executive state as
+// the "Executive State:\n..." prefix block for the working-state
+// section. Pure rendering — zero I/O — so it can be called after
+// loadExecutiveState without paying for another DB query.
+func renderExecutiveStateBlock(state *ExecutiveState) string {
+	if state == nil {
 		return ""
 	}
 	block := state.FormatForContext()
