@@ -597,7 +597,7 @@ func TestBuildAgentContext_Basic(t *testing.T) {
 	sess.AddUserMessage("Hello there")
 
 	// No tools, no retriever — should not panic.
-	ctx := buildAgentContext(context.Background(), sess, nil, nil, nil, agent.PromptConfig{
+	ctx := buildAgentContext(context.Background(), sess, nil, agent.PromptConfig{
 		AgentName: "TestBot",
 	}, nil)
 	if ctx == nil {
@@ -612,7 +612,7 @@ func TestBuildAgentContext_WithTools(t *testing.T) {
 	reg := agent.NewToolRegistry()
 	reg.Register(&tools.EchoTool{})
 
-	ctx := buildAgentContext(context.Background(), sess, reg, nil, nil, agent.PromptConfig{
+	ctx := buildAgentContext(context.Background(), sess, reg, agent.PromptConfig{
 		AgentName: "TestBot",
 	}, nil)
 	if ctx == nil {
@@ -621,15 +621,16 @@ func TestBuildAgentContext_WithTools(t *testing.T) {
 }
 
 func TestBuildAgentContext_WithRetriever(t *testing.T) {
-	store := testutil.TempStore(t)
-	retriever := memory.NewRetriever(memory.DefaultRetrievalConfig(), memory.TierBudget{
-		Working: 0.5,
-	}, store)
+	// v1.0.6: buildAgentContext no longer holds a retriever reference.
+	// Memory preparation is the pipeline's responsibility; this test now
+	// just confirms the context builder is constructed regardless of
+	// session memory state.
+	_ = testutil.TempStore(t) // keep schema init for consistency with peer tests
 
 	sess := session.New("s1", "a1", "TestBot")
 	sess.AddUserMessage("query about something")
 
-	ctx := buildAgentContext(context.Background(), sess, nil, retriever, store, agent.PromptConfig{
+	ctx := buildAgentContext(context.Background(), sess, nil, agent.PromptConfig{
 		AgentName: "TestBot",
 	}, nil)
 	if ctx == nil {
@@ -638,14 +639,14 @@ func TestBuildAgentContext_WithRetriever(t *testing.T) {
 }
 
 func TestBuildAgentContext_NoUserMessages(t *testing.T) {
-	store := testutil.TempStore(t)
-	retriever := memory.NewRetriever(memory.DefaultRetrievalConfig(), memory.TierBudget{
-		Working: 0.5,
-	}, store)
+	// v1.0.6: no retriever threaded through buildAgentContext; the
+	// pipeline is authoritative for memory preparation. Test just
+	// confirms empty-session construction doesn't panic.
+	_ = testutil.TempStore(t)
 
 	sess := session.New("s1", "a1", "TestBot")
 	// No messages.
-	ctx := buildAgentContext(context.Background(), sess, nil, retriever, store, agent.PromptConfig{
+	ctx := buildAgentContext(context.Background(), sess, nil, agent.PromptConfig{
 		AgentName: "TestBot",
 	}, nil)
 	if ctx == nil {
@@ -654,10 +655,14 @@ func TestBuildAgentContext_NoUserMessages(t *testing.T) {
 }
 
 func TestBuildAgentContext_PrefersPipelineMemoryContext(t *testing.T) {
+	// v1.0.6: the daemon no longer has a fallback retriever. This test's
+	// original purpose was to confirm pipeline-set memory wins over the
+	// fallback; post-fix there's no fallback at all, so we keep the test
+	// as a positive assertion that pipeline-prepared memory makes it
+	// into the request. The "fallback retrieval memory" seed in the DB
+	// stays as a negative tripwire: it MUST NOT appear in the request
+	// because the adapter can't reach the retriever anymore.
 	store := testutil.TempStore(t)
-	retriever := memory.NewRetriever(memory.DefaultRetrievalConfig(), memory.TierBudget{
-		Working: 0.5,
-	}, store)
 
 	sess := session.New("s1", "a1", "TestBot")
 	sess.AddUserMessage("query about something")
@@ -670,7 +675,7 @@ func TestBuildAgentContext_PrefersPipelineMemoryContext(t *testing.T) {
 		t.Fatalf("seed working memory: %v", err)
 	}
 
-	ctx := buildAgentContext(context.Background(), sess, nil, retriever, store, agent.PromptConfig{
+	ctx := buildAgentContext(context.Background(), sess, nil, agent.PromptConfig{
 		AgentName: "TestBot",
 	}, nil)
 	req := ctx.BuildRequest(sess)
@@ -711,7 +716,7 @@ func TestBuildAgentContext_PrefersPipelineMemoryIndex(t *testing.T) {
 		t.Fatalf("seed memory index: %v", err)
 	}
 
-	ctx := buildAgentContext(context.Background(), sess, nil, nil, store, agent.PromptConfig{
+	ctx := buildAgentContext(context.Background(), sess, nil, agent.PromptConfig{
 		AgentName: "TestBot",
 	}, nil)
 	req := ctx.BuildRequest(sess)
@@ -742,7 +747,7 @@ func TestBuildAgentContext_SetsAgentName(t *testing.T) {
 	sess := session.New("s1", "a1", "OverrideName")
 	sess.AddUserMessage("test")
 
-	ctx := buildAgentContext(context.Background(), sess, nil, nil, nil, agent.PromptConfig{
+	ctx := buildAgentContext(context.Background(), sess, nil, agent.PromptConfig{
 		AgentName: "DefaultName",
 	}, nil)
 	if ctx == nil {
@@ -776,7 +781,6 @@ func TestStreamAdapter_PrepareStream(t *testing.T) {
 	a := &streamAdapter{
 		llmSvc:       llmSvc,
 		tools:        nil,
-		retriever:    nil,
 		promptConfig: agent.PromptConfig{AgentName: "Bot"},
 	}
 

@@ -30,14 +30,23 @@ func DefaultRetrievalConfig() RetrievalConfig {
 	}
 }
 
-// Retriever coordinates retrieval across all 5 memory tiers.
+// Retriever coordinates retrieval across all memory stores.
+//
+// Concurrency contract: *Retriever is constructed once at daemon startup
+// and shared across every concurrent request. No per-turn mutable state
+// may live on this struct — per-call inputs (query, sessionID, budget,
+// intent classification) must travel via function parameters or
+// context.Context. Pre-v1.0.6 this struct carried an `intents` field
+// that was set by a call-site helper before every Retrieve; under
+// concurrent traffic turn A's SetIntents raced turn B's read in the
+// routing logic. See intents_context.go for the ctx-value replacement
+// (mirrors the RetrievalTracer pattern in retrieval_path.go).
 type Retriever struct {
 	config        RetrievalConfig
 	store         *db.Store
 	budgets       TierBudget
 	embedClient   *llm.EmbeddingClient
 	vectorIndex   db.VectorIndex
-	intents       []IntentSignal // set before retrieval if intent classifier available
 	charsPerToken int
 }
 
@@ -61,11 +70,11 @@ func (mr *Retriever) SetVectorIndex(idx db.VectorIndex) {
 	mr.vectorIndex = idx
 }
 
-// SetIntents provides intent classification results for the current query.
-// Called by the pipeline after Stage 7 (intent classification) before retrieval.
-func (mr *Retriever) SetIntents(intents []IntentSignal) {
-	mr.intents = intents
-}
+// (v1.0.6) SetIntents was removed — intents now travel via
+// memory.WithIntents(ctx, ...) and are read by intentsFromContext(ctx)
+// inside Retrieve. See intents_context.go for the rationale. Old callers
+// that still used SetIntents will fail at compile time, which is the
+// intended behavior: the shared-state pattern is gone, not renamed.
 
 // MemoryEntry represents a memory result from ANN retrieval.
 type MemoryEntry struct {
@@ -247,8 +256,11 @@ func (mr *Retriever) RetrieveWithMetrics(ctx context.Context, sessionID, query s
 	router := NewRouter(corpusSize)
 	var allEvidence []Evidence
 
+	// Intents are per-call ambient state from the request's intent classifier.
+	// See memory.WithIntents for the context-value contract.
+	intents := intentsFromContext(ctx)
 	for _, sg := range subgoals {
-		plan := router.Plan(sg.Question, mr.intents)
+		plan := router.Plan(sg.Question, intents)
 
 		// 3. Retrieve from each targeted tier.
 		for _, target := range plan.Targets {

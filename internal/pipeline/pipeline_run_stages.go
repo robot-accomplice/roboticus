@@ -438,6 +438,28 @@ func (p *Pipeline) stageAuthority(_ context.Context, pc *pipelineContext) {
 
 func (p *Pipeline) stageMemoryRetrieval(ctx context.Context, pc *pipelineContext) {
 	retrievalStrat := DecideRetrievalStrategy(pc.synthesis, pc.session.TurnCount(), 2048)
+
+	// Memory INDEX is the lightweight recall handle — it's injected on every
+	// turn regardless of retrieval strategy so the model can call
+	// recall_memory(id) on demand. Pre-v1.0.6 this was gated behind
+	// retrievalStrat.Strategy != "none", which meant early-turn/simple
+	// conversations got no index AND the daemon's buildAgentContext
+	// fallback then reconstructed one — creating a second production
+	// memory-assembly path outside the pipeline. The v1.0.6 architecture
+	// audit flagged that fallback as a "pipeline is single authority"
+	// violation. Fix: always populate the index here, then drop the
+	// daemon fallback (see daemon_adapters.go buildAgentContext).
+	if p.store != nil {
+		index := agenttools.BuildMemoryIndex(ctx, p.store, 20, pc.content)
+		if index == "" {
+			index = "[Memory Index: No memories stored yet. " +
+				"Memories will accumulate as conversations continue. " +
+				"When a user asks about a past topic, use search_memories(query) to check, " +
+				"or be honest that you don't have stored memories about it yet.]"
+		}
+		pc.session.SetMemoryIndex(index)
+	}
+
 	if p.retriever != nil && retrievalStrat.Strategy != "none" {
 		pc.tr.BeginSpan("memory_retrieval")
 		// M3.2: attach the active trace recorder to ctx so memory tier
@@ -447,17 +469,6 @@ func (p *Pipeline) stageMemoryRetrieval(ctx context.Context, pc *pipelineContext
 		pc.memoryBlock = p.retriever.Retrieve(ctx, pc.session.ID, pc.content, retrievalStrat.Budget)
 		if pc.memoryBlock != "" {
 			pc.session.SetMemoryContext(pc.memoryBlock)
-		}
-		if p.store != nil {
-			index := agenttools.BuildMemoryIndex(ctx, p.store, 20, pc.content)
-			if index != "" {
-				pc.session.SetMemoryIndex(index)
-			} else {
-				pc.session.SetMemoryIndex("[Memory Index: No memories stored yet. " +
-					"Memories will accumulate as conversations continue. " +
-					"When a user asks about a past topic, use search_memories(query) to check, " +
-					"or be honest that you don't have stored memories about it yet.]")
-			}
 		}
 		fragmentCount := 0
 		if pc.memoryBlock != "" {

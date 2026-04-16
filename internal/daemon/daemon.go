@@ -527,8 +527,6 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 			policy:          policyEngine,
 			injection:       injection,
 			memMgr:          memMgr,
-			retriever:       retriever,
-			store:           store,
 			promptConfig:    basePromptCfg,
 			budgetCfg:       &cfg.ContextBudget,
 			maxTurnDuration: time.Duration(cfg.Agent.AutonomyMaxTurnDurationSecs) * time.Second,
@@ -538,8 +536,6 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 		Streamer: &streamAdapter{
 			llmSvc:       llmSvc,
 			tools:        tools,
-			retriever:    retriever,
-			store:        store,
 			promptConfig: basePromptCfg,
 			budgetCfg:    &cfg.ContextBudget,
 		},
