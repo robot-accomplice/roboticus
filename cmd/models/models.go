@@ -408,6 +408,32 @@ are flagged for removal from the routing chain.`,
 		}
 		fmt.Println()
 
+		// Warm-up stage (v1.0.6). Fires ONCE per `exercise` run —
+		// all N iterations of the scored matrix share the same warm
+		// model. Without this, iteration 1's first prompt would pay
+		// cold-start cost and pollute latency averages in exactly
+		// the same shape the baseline audit flagged. Cloud models
+		// skip warm-up; see runWarmupStage for the rationale.
+		//
+		// Warm-up latencies are NOT added to the per-intent latency
+		// averages below — they're recorded and printed separately
+		// so steady-state data stays clean.
+		if model != "" {
+			wu := runWarmupStage(exerciseCfg, model, exerciseTimeout)
+			if !wu.Skipped {
+				if wu.ColdStartTimedOut {
+					fmt.Printf("  Cold-start: >%.0fs (timed out — genuine value exceeds timeout)\n", float64(wu.ColdStartMs)/1000.0)
+				} else {
+					fmt.Printf("  Cold-start: %.1fs\n", float64(wu.ColdStartMs)/1000.0)
+				}
+				warmMarker := ""
+				if !wu.WarmTransitionOK {
+					warmMarker = "  ⚠ warm-up may not have taken — scored data may be unreliable"
+				}
+				fmt.Printf("  Warm-transition: %.1fs%s\n\n", float64(wu.WarmTransitionMs)/1000.0, warmMarker)
+			}
+		}
+
 		// Per-intent-class tracking.
 		type intentStats struct {
 			pass, fail int
@@ -996,65 +1022,17 @@ per-intent-class latency scorecard and 6-axis metascore dimension reporting.`,
 				latencies:     make(map[string][]int64),
 			}
 
-			// ── Warm-up stage (v1.0.6) ────────────────────────────
-			//
-			// Pre-warm-up baselining produced polluted latency
-			// averages whenever a local model paid cold-start cost
-			// on the first prompt — one EXECUTION call timing out
-			// at 5m would push the EXECUTION bucket's avg to 65s
-			// (real number: ~4.5s). Two warm-up calls isolate the
-			// cold-start cost from the scored-prompt data:
-			//
-			//   warm-up #1 (cold): extended timeout (2x), records
-			//                       coldStartMs. Hits weight-load +
-			//                       KV cache + pipeline init.
-			//   warm-up #2 (warm-transition): normal timeout,
-			//                       records warmTransitionMs.
-			//                       Confirms the warm-up "took";
-			//                       should be near steady-state.
-			//
-			// Cloud models skip warm-up — "cold start" on the cloud
-			// side is opaque from our client and measuring it from
-			// here is noise.
-			mr.warmupSkipped = isCloudModel(config, model)
-			if mr.warmupSkipped {
-				fmt.Printf("    Warm-up: skipped (cloud model)\n\n")
-			} else {
-				coldTimeout := 2 * modelTimeout
-				fmt.Printf("    Warm-up 1/2 (cold, timeout: %s): ", coldTimeout)
-				coldRes := runWarmupCall(model, coldTimeout)
-				mr.coldStartMs = coldRes.LatencyMs
-				mr.coldStartTimedOut = coldRes.TimedOut
-				if coldRes.TimedOut {
-					fmt.Printf("TIMEOUT  (cold-start exceeded %s — recorded as lower bound)\n", coldTimeout)
-				} else if coldRes.Err != nil {
-					fmt.Printf("ERROR  %v\n", coldRes.Err)
-				} else {
-					fmt.Printf("%.1fs\n", float64(coldRes.LatencyMs)/1000.0)
-				}
-
-				fmt.Printf("    Warm-up 2/2 (warm-transition, timeout: %s): ", modelTimeout)
-				warmRes := runWarmupCall(model, modelTimeout)
-				mr.warmTransitionMs = warmRes.LatencyMs
-				// Heuristic: warm-transition is "OK" when it's
-				// under 30s for local models. If #2 is still slow
-				// (>30s) the warm-up didn't take — operator should
-				// notice before 30 minutes of scored data accrues.
-				const warmOKCeiling = int64(30_000)
-				mr.warmTransitionOK = !warmRes.TimedOut && warmRes.Err == nil && warmRes.LatencyMs < warmOKCeiling
-				if warmRes.TimedOut {
-					fmt.Printf("TIMEOUT  (warm-up didn't take — scored prompts may be unreliable)\n")
-				} else if warmRes.Err != nil {
-					fmt.Printf("ERROR  %v\n", warmRes.Err)
-				} else {
-					marker := "OK"
-					if !mr.warmTransitionOK {
-						marker = "SLOW — warm-up may not have fully primed the model"
-					}
-					fmt.Printf("%.1fs  (%s)\n", float64(warmRes.LatencyMs)/1000.0, marker)
-				}
-				fmt.Println()
-			}
+			// Warm-up stage (v1.0.6). Shared with `models exercise
+			// <model>` via runWarmupStage — see that helper for the
+			// full rationale (TL;DR: pre-warm-up baselines produced
+			// polluted latency averages when local models paid
+			// cold-start on the first scored prompt).
+			wu := runWarmupStage(config, model, modelTimeout)
+			mr.warmupSkipped = wu.Skipped
+			mr.coldStartMs = wu.ColdStartMs
+			mr.coldStartTimedOut = wu.ColdStartTimedOut
+			mr.warmTransitionMs = wu.WarmTransitionMs
+			mr.warmTransitionOK = wu.WarmTransitionOK
 
 			intentSums := make(map[string]float64)
 			intentCounts := make(map[string]int)
@@ -1377,6 +1355,73 @@ func isCloudModel(config map[string]any, model string) bool {
 	}
 	isLocal, _ := prov["is_local"].(bool)
 	return !isLocal
+}
+
+// warmupOutcome is the per-model outcome of runWarmupStage, captured so
+// both the `exercise` and `baseline` commands can record it on their
+// respective result structs without duplicating the flow. Fields mirror
+// the modelResult warm-up block in the baseline command.
+type warmupOutcome struct {
+	Skipped            bool
+	ColdStartMs        int64
+	ColdStartTimedOut  bool
+	WarmTransitionMs   int64
+	WarmTransitionOK   bool
+}
+
+// runWarmupStage is the shared warm-up sequence invoked by both
+// `models exercise <model>` and `models baseline`. It determines
+// whether the model is cloud (skip) or local (run two warm-up calls),
+// prints operator-visible progress, and returns the outcome for the
+// caller's summary. Warm-up latencies are NEVER added to the
+// caller's scored-prompt latency buckets — the whole point of warm-up
+// is separating cold-start cost from steady-state measurement.
+//
+// Having this as a single function means both command paths get the
+// same treatment. When the v1.0.6 self-audit caught that one command
+// had warm-up and the other didn't, the fix was literally extracting
+// this helper.
+func runWarmupStage(config map[string]any, model string, modelTimeout time.Duration) warmupOutcome {
+	var out warmupOutcome
+	out.Skipped = isCloudModel(config, model)
+	if out.Skipped {
+		fmt.Printf("    Warm-up: skipped (cloud model)\n\n")
+		return out
+	}
+
+	coldTimeout := 2 * modelTimeout
+	fmt.Printf("    Warm-up 1/2 (cold, timeout: %s): ", coldTimeout)
+	coldRes := runWarmupCall(model, coldTimeout)
+	out.ColdStartMs = coldRes.LatencyMs
+	out.ColdStartTimedOut = coldRes.TimedOut
+	switch {
+	case coldRes.TimedOut:
+		fmt.Printf("TIMEOUT  (cold-start exceeded %s — recorded as lower bound)\n", coldTimeout)
+	case coldRes.Err != nil:
+		fmt.Printf("ERROR  %v\n", coldRes.Err)
+	default:
+		fmt.Printf("%.1fs\n", float64(coldRes.LatencyMs)/1000.0)
+	}
+
+	fmt.Printf("    Warm-up 2/2 (warm-transition, timeout: %s): ", modelTimeout)
+	warmRes := runWarmupCall(model, modelTimeout)
+	out.WarmTransitionMs = warmRes.LatencyMs
+	const warmOKCeiling = int64(30_000)
+	out.WarmTransitionOK = !warmRes.TimedOut && warmRes.Err == nil && warmRes.LatencyMs < warmOKCeiling
+	switch {
+	case warmRes.TimedOut:
+		fmt.Printf("TIMEOUT  (warm-up didn't take — scored prompts may be unreliable)\n")
+	case warmRes.Err != nil:
+		fmt.Printf("ERROR  %v\n", warmRes.Err)
+	default:
+		marker := "OK"
+		if !out.WarmTransitionOK {
+			marker = "SLOW — warm-up may not have fully primed the model"
+		}
+		fmt.Printf("%.1fs  (%s)\n", float64(warmRes.LatencyMs)/1000.0, marker)
+	}
+	fmt.Println()
+	return out
 }
 
 // runWarmupCall issues a single warm-up request against the baseline
