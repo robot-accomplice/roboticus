@@ -54,6 +54,17 @@ func (d *Daemon) run() {
 		}
 	}
 
+	// Tool embeddings for semantic tool search (Rust parity:
+	// roboticus-agent/src/tool_search.rs). Runs AFTER all tools are
+	// registered (builtins + MCP bridges) so the embedding pass
+	// covers the full set. One batch call; failures are non-fatal
+	// (ranker falls back to always_include-only selection).
+	if d.appState.Tools != nil && d.embedClient != nil {
+		if err := d.appState.Tools.EmbedDescriptors(ctx, d.embedClient); err != nil {
+			log.Warn().Err(err).Msg("tool descriptor embedding failed; tool pruning will degrade to always_include-only")
+		}
+	}
+
 	// ── Startup Phase: Sub-agent registry (Rust parity) ──────────────────
 	// Load enabled sub-agents from DB and register them.
 	d.loadSubAgents(ctx)

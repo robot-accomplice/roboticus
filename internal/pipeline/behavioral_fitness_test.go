@@ -333,7 +333,8 @@ func TestFitness_TaskSynthesisAnnotations(t *testing.T) {
 	spans := extractSpans(t, trace.StagesJSON)
 
 	// Task synthesis must annotate intent, complexity, planned_action, confidence.
-	// These are namespaced under TraceNSTaskState ("taskstate").
+	// These are namespaced under TraceNSTaskState ("task_state"). Matches
+	// Rust's ns::TASK_STATE constant.
 	synthSpan := findSpan(spans, "task_synthesis")
 	if synthSpan == nil {
 		t.Fatal("missing task_synthesis span")
@@ -892,10 +893,10 @@ func TestFitness_TraceNamespaceConstants(t *testing.T) {
 		"TraceNSGuard":      "guard",
 		"TraceNSInference":  "inference",
 		"TraceNSRetrieval":  "retrieval",
-		"TraceNSToolSearch": "toolsearch",
+		"TraceNSToolSearch": "tool_search",
 		"TraceNSMCP":        "mcp",
 		"TraceNSDelegation": "delegation",
-		"TraceNSTaskState":  "taskstate",
+		"TraceNSTaskState":  "task_state",
 	}
 
 	actual := map[string]string{

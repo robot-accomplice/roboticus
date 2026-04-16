@@ -647,6 +647,46 @@ func (p *Pipeline) stageCacheCheck(ctx context.Context, pc *pipelineContext) (*O
 	return nil, nil
 }
 
+// ── Stage 11.6: Tool pruning ───────────────────────────────────────────
+//
+// Runs after cache-miss and before prepare-inference so early-exit paths
+// (delegation, skill-first, shortcut, cache-hit) skip the embedding call
+// entirely, while every turn that actually reaches inference has a
+// bounded, query-relevant tool set before routing and budget accounting
+// observe the request.
+//
+// Ownership:
+//   - Pipeline stage owns the trace contract (`tool_search.*` annotations)
+//     and the side effect of writing the selected set onto the session.
+//   - The `ToolPruner` adapter owns the actual ranking + budget math
+//     (internal/agent/tools::SelectToolDefs).
+//
+// No-op when the pipeline has no pruner wired (e.g. tests that drive the
+// pipeline without the daemon's executor adapter). In that case
+// downstream buildAgentContext retains its defensive fallback — see
+// internal/daemon/daemon_adapters.go.
+//
+// Matches the Rust seam: crates/roboticus-pipeline/src/core/tool_prune.rs
+// is the equivalent owner on the Rust side.
+
+func (p *Pipeline) stageToolPruning(ctx context.Context, pc *pipelineContext) {
+	if p.pruner == nil {
+		return
+	}
+	pc.tr.BeginSpan("tool_pruning")
+	defs, stats, err := p.pruner.PruneTools(ctx, pc.session)
+	if err != nil {
+		log.Warn().Err(err).Str("session", pc.session.ID).
+			Msg("tool pruning failed; buildAgentContext will fall back to defensive pruning")
+		pc.tr.Annotate(TraceNSToolSearch+".error", err.Error())
+		pc.tr.EndSpan("error")
+		return
+	}
+	pc.session.SetSelectedToolDefs(defs)
+	AnnotateToolSearchTrace(pc.tr, stats)
+	pc.tr.EndSpan("ok")
+}
+
 // ── Stage 11.75: Prepare for inference ─────────────────────────────────
 
 func (p *Pipeline) stagePrepareInference(ctx context.Context, pc *pipelineContext) {

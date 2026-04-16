@@ -95,6 +95,7 @@ type Pipeline struct {
 	ingestor     Ingestor
 	refiner      NicknameRefiner
 	streamer     StreamPreparer
+	pruner       ToolPruner
 	guards       *GuardChain
 	bgWorker     *core.BackgroundWorker
 	dedup        *DedupTracker
@@ -122,6 +123,7 @@ type PipelineDeps struct {
 	Ingestor   Ingestor
 	Refiner    NicknameRefiner
 	Streamer   StreamPreparer
+	Pruner     ToolPruner
 	Guards     *GuardChain
 	BGWorker   *core.BackgroundWorker
 	Embeddings *llm.EmbeddingClient
@@ -149,6 +151,7 @@ func New(deps PipelineDeps) *Pipeline {
 		ingestor:   deps.Ingestor,
 		refiner:    deps.Refiner,
 		streamer:   deps.Streamer,
+		pruner:     deps.Pruner,
 		guards:     deps.Guards,
 		bgWorker:   bgw,
 		dedup:      NewDedupTracker(60 * time.Second),
@@ -348,6 +351,9 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 	if out, err := p.stageCacheCheck(ctx, pc); out != nil || err != nil {
 		return out, err
 	}
+
+	// Stage 11.6: tool pruning (query-time semantic ranking + budget).
+	p.stageToolPruning(ctx, pc)
 
 	// Stage 11.75: prepare inference context.
 	p.stagePrepareInference(ctx, pc)

@@ -251,5 +251,23 @@ func DefaultConfig() Config {
 			ChannelMinimum:    "L1",
 			SoulMaxContextPct: 0.4,
 		},
+		// Tool search defaults mirror Rust's hard-coded SearchConfig::default
+		// (top_k=15, token_budget=4000, mcp_penalty=0.05). AlwaysInclude is
+		// Go-native: it names tools that exist in Go's registry and are the
+		// functional analogue of Rust's always_include_operational_tools
+		// (crates/roboticus-pipeline/src/core/tool_prune.rs). See System 02
+		// Intentional Deviations for the mapping rationale.
+		ToolSearch: ToolSearchConfig{
+			TopK:              15,
+			TokenBudget:       4000,
+			MCPLatencyPenalty: 0.05,
+			AlwaysInclude: []string{
+				"recall_memory",
+				"search_memories",
+				"get_memory_stats",
+				"get_runtime_context",
+				"get_subagent_status",
+			},
+		},
 	}
 }

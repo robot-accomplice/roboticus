@@ -546,6 +546,12 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 	}
 
 	// ── Phase 10: Pipeline assembly ─────────────────────────────────────
+	// Resolve the operator-configured tool-search knobs into the agent-
+	// local struct once, so the executor, streamer, and pruner adapters
+	// all see the same bindings. Zero-valued fields in core.ToolSearch
+	// fall back to the Rust-parity defaults.
+	toolSearchCfg := resolveToolSearchConfig(cfg.ToolSearch)
+
 	eventBus := api.NewEventBus(256)
 	pipe := pipeline.New(pipeline.PipelineDeps{
 		Store:     store,
@@ -559,6 +565,8 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 			policy:          policyEngine,
 			injection:       injection,
 			memMgr:          memMgr,
+			embedClient:     embedClient,
+			toolSearchCfg:   toolSearchCfg,
 			promptConfig:    basePromptCfg,
 			budgetCfg:       &cfg.ContextBudget,
 			maxTurnDuration: time.Duration(cfg.Agent.AutonomyMaxTurnDurationSecs) * time.Second,
@@ -566,10 +574,17 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 		Ingestor: &ingestorAdapter{m: memMgr},
 		Refiner:  &nicknameAdapter{llm: llmSvc, store: store},
 		Streamer: &streamAdapter{
-			llmSvc:       llmSvc,
-			tools:        tools,
-			promptConfig: basePromptCfg,
-			budgetCfg:    &cfg.ContextBudget,
+			llmSvc:        llmSvc,
+			tools:         tools,
+			embedClient:   embedClient,
+			toolSearchCfg: toolSearchCfg,
+			promptConfig:  basePromptCfg,
+			budgetCfg:     &cfg.ContextBudget,
+		},
+		Pruner: &prunerAdapter{
+			tools:         tools,
+			embedClient:   embedClient,
+			toolSearchCfg: toolSearchCfg,
 		},
 		Guards:       guards,
 		BGWorker:     bgWorker,

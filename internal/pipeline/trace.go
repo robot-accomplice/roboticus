@@ -15,10 +15,10 @@ const (
 	TraceNSGuard      = "guard"      // Guard chain evaluation spans
 	TraceNSInference  = "inference"  // LLM inference spans (standard and streaming)
 	TraceNSRetrieval  = "retrieval"  // Memory retrieval and context assembly spans
-	TraceNSToolSearch = "toolsearch" // Tool discovery and pruning spans
-	TraceNSMCP        = "mcp"        // MCP server interaction spans
-	TraceNSDelegation = "delegation" // Subagent delegation spans
-	TraceNSTaskState  = "taskstate"  // Task state machine transition spans
+	TraceNSToolSearch = "tool_search" // Tool discovery and pruning spans (Rust parity: ns::TOOL_SEARCH)
+	TraceNSMCP        = "mcp"         // MCP server interaction spans
+	TraceNSDelegation = "delegation"  // Subagent delegation spans
+	TraceNSTaskState  = "task_state"  // Task state machine transition spans (Rust parity: ns::TASK_STATE)
 	TraceNSVerifier   = "verifier"   // Verification / critic stage annotations
 	TraceNSExecutive  = "executive"  // Executive working-memory write annotations
 	TraceNSPerception = "perception" // Unified perception artifact annotations

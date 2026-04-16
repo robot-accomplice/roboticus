@@ -41,6 +41,22 @@ type Session struct {
 	// Populated by the pipeline after retrieval; consumed by the
 	// verifier instead of re-parsing the rendered memoryContext text.
 	verificationEvidence *VerificationEvidence
+
+	// v1.0.6 selected tool set for the current turn.
+	// Populated by the pipeline's tool-pruning stage (query-time
+	// semantic ranking + budget enforcement; see
+	// internal/pipeline/pipeline_run_stages.go::stageToolPruning and
+	// internal/agent/tools/tool_search.go). Consumed by the
+	// agent-context builder so the ContextBuilder attaches exactly the
+	// tools the pipeline selected instead of bulk-injecting everything
+	// at loop time.
+	//
+	// nil means "no pipeline stage ran" (typical for non-pipeline
+	// callers such as isolated executor-adapter tests). An empty
+	// non-nil slice means "pipeline ran but produced no tools," which
+	// the consumer MAY treat as authoritative or MAY fall back — the
+	// authoritative behavior is owned by the consumer.
+	selectedToolDefs []llm.ToolDef
 }
 
 // New creates a session with the given identity.
@@ -125,6 +141,19 @@ func (s *Session) TaskRequiredTiers() []string {
 
 // TaskFreshness returns whether the answer depends on current state.
 func (s *Session) TaskFreshness() bool { return s.taskFreshness }
+
+// SetSelectedToolDefs records the tool set the pipeline selected for this
+// turn (after query-time semantic ranking + token-budget enforcement).
+// Callers should always pass a newly-allocated slice so later mutations
+// don't leak through shared backing arrays; this setter stores the
+// reference as-is and does not copy.
+func (s *Session) SetSelectedToolDefs(defs []llm.ToolDef) { s.selectedToolDefs = defs }
+
+// SelectedToolDefs returns the pipeline-selected tool set for this turn,
+// or nil if no pruning stage ran. Returns the underlying slice by
+// reference — callers must not mutate. Consumers that need to append
+// should copy first.
+func (s *Session) SelectedToolDefs() []llm.ToolDef { return s.selectedToolDefs }
 
 // AddAssistantMessage appends an assistant message with optional tool calls.
 func (s *Session) AddAssistantMessage(content string, toolCalls []llm.ToolCall) {

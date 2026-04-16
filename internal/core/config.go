@@ -58,7 +58,50 @@ type Config struct {
 	Obsidian                 ObsidianConfig       `json:"obsidian" toml:"obsidian" mapstructure:"obsidian"`
 	Backups                  BackupsConfig        `json:"backups" toml:"backups" mapstructure:"backups"`
 	ContextBudget            ContextBudgetConfig  `json:"context_budget" toml:"context_budget" mapstructure:"context_budget"`
+	ToolSearch               ToolSearchConfig     `json:"tool_search" toml:"tool_search" mapstructure:"tool_search"`
 	DisabledBundledProviders []string             `json:"disabled_bundled_providers" toml:"disabled_bundled_providers" mapstructure:"disabled_bundled_providers"`
+}
+
+// ToolSearchConfig controls the query-time semantic tool-pruning pass.
+//
+// Rust parity anchor: crates/roboticus-agent/src/tool_search.rs::SearchConfig
+// and crates/roboticus-pipeline/src/core/tool_prune.rs (runtime owner).
+// Rust hard-codes these at runtime — no TOML section exists there. Go
+// exposes them as an operator-overridable config as a deliberate Go
+// improvement (recorded in docs/parity-forensics/systems/02-...md under
+// Intentional Deviations), because on-machine context ceilings vary
+// widely by model and operators need to tune top_k/token_budget without
+// a rebuild.
+type ToolSearchConfig struct {
+	// TopK is the maximum number of tools kept after ranking, regardless
+	// of token budget. Rust default: 15. Zero falls back to the default.
+	TopK int `json:"top_k" toml:"top_k" mapstructure:"top_k"`
+
+	// TokenBudget is the cumulative token cap for the selected tool set.
+	// Rust default: 4000. Zero falls back to the default.
+	TokenBudget int `json:"token_budget" toml:"token_budget" mapstructure:"token_budget"`
+
+	// MCPLatencyPenalty is subtracted from the raw cosine-similarity
+	// score for MCP tools before ranking, breaking ties in favor of
+	// local tools. Rust default: 0.05. Zero is a valid explicit value;
+	// negative values are clamped to zero at consumption time.
+	MCPLatencyPenalty float64 `json:"mcp_latency_penalty" toml:"mcp_latency_penalty" mapstructure:"mcp_latency_penalty"`
+
+	// AlwaysInclude names tools pinned into the selected set regardless
+	// of score. Rust pins a 12-item operational-tools list at runtime
+	// (see crates/roboticus-pipeline/src/core/tool_prune.rs::always_include_operational_tools).
+	// Go pins only names that exist in Go's registry — pinning a name
+	// that isn't registered is a silent no-op and hides the intent.
+	// Go's default list is the functional analogue: memory recall
+	// primitives plus operational introspection tools. Names beyond
+	// Rust's list that exist in Go (e.g. search_memories, get_subagent_status)
+	// are included because they serve the same purpose Rust's pinned
+	// tools serve — keeping memory + subagent/skill reach reachable at
+	// every turn regardless of the query.
+	//
+	// Empty list disables pinning entirely; the default list is applied
+	// when this field is unset.
+	AlwaysInclude []string `json:"always_include" toml:"always_include" mapstructure:"always_include"`
 }
 
 // MCPConfig holds MCP (Model Context Protocol) server configuration.
