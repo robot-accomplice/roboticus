@@ -239,3 +239,38 @@ is re-audited.
     (compression ownership split), and SYS-01-008 (empty compacted
     messages) remain open and are the target of the next remediation
     passes after audit re-validation of SYS-01-001/002.
+- 2026-04-16: v1.0.6 P1 memory-compaction + hippocampus-summary
+  remediation landed (touches SYS-01-003 and SYS-01-004). Changes:
+  - `internal/agent/memory/compaction.go` ports Rust's
+    `crates/roboticus-agent/src/compaction.rs`: `Compact` for structured
+    entries, `CompactText` for rendered text, preserving the Rust
+    priority formula (0.4*relevance + 0.3*importance + 0.3*recency;
+    recency has 1-hour half-life), the 0.8 dedup threshold over word
+    trigrams, and the Rust section headers. Token estimation uses Go's
+    script-aware `llm.EstimateTokens` (documented as Idiomatic Shift).
+  - `internal/agent/context.go:141-158` naïve
+    `cb.memory[:maxChars] + "[truncated]"` replaced with
+    `memory.CompactText(cb.memory, memCap)`. Also guards against
+    emitting an empty memory system message when the compacted block
+    collapses to "" under a tight budget (analogue of SYS-01-008 for
+    the memory injection site; the message-history analogue remains
+    open).
+  - `stageHippocampusSummary` (new pipeline stage) runs between
+    `stageToolPruning` and `stagePrepareInference`. Calls
+    `db.NewHippocampusRegistry(store).CompactSummary(ctx)`, writes the
+    non-empty summary onto `session.Session.hippocampusSummary`,
+    annotates the trace with `hippocampus.bytes`. Empty summaries are
+    recorded with bytes=0 and the outcome stays `ok` so operators can
+    see the stage ran and why the model didn't receive an ambient
+    database note.
+  - `ContextBuilder.AppendSystemNote` (new) queues pipeline-owned
+    ambient system messages and emits them after memory index in
+    `BuildRequest`, matching Rust's
+    `context_builder.rs:356-369` injection position. Trim-space guard
+    rejects empty notes at append time.
+  - runtime-facing tests:
+    `internal/pipeline/hippocampus_stage_test.go` asserts the non-empty
+    + empty-registry paths; `internal/agent/memory/compaction_test.go`
+    covers the Rust port's unit contract.
+  - SYS-01-003 and SYS-01-004 now carry artifact-level closure
+    evidence; re-audit is the next step.

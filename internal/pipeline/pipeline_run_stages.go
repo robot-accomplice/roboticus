@@ -687,6 +687,48 @@ func (p *Pipeline) stageToolPruning(ctx context.Context, pc *pipelineContext) {
 	pc.tr.EndSpan("ok")
 }
 
+// ── Stage 11.65: Hippocampus summary ───────────────────────────────────
+//
+// Produces a compact summary of the database surface (agent-owned
+// tables, knowledge sources, system-table count) and writes it onto the
+// session so buildAgentContext can append it as a system message after
+// the memory block. Matches Rust's
+// crates/roboticus-pipeline/src/core/context_builder.rs:356-369 which
+// calls roboticus_db::hippocampus::compact_summary at the same position
+// in request assembly.
+//
+// No-op when the store is missing (test contexts that skip registry
+// wiring) or when CompactSummary errors. Errors are logged at warn
+// level and annotated on the stage span so operators can see the
+// degradation; they do not fail the turn.
+
+func (p *Pipeline) stageHippocampusSummary(ctx context.Context, pc *pipelineContext) {
+	if p.store == nil {
+		return
+	}
+	pc.tr.BeginSpan("hippocampus_summary")
+	registry := db.NewHippocampusRegistry(p.store)
+	summary, err := registry.CompactSummary(ctx)
+	if err != nil {
+		log.Warn().Err(err).Str("session", pc.session.ID).
+			Msg("hippocampus summary failed; skipping injection")
+		pc.tr.Annotate("hippocampus.error", err.Error())
+		pc.tr.EndSpan("error")
+		return
+	}
+	// Empty summary is the normal "no registered tables" signal. The
+	// stage still closes with outcome=ok; the bytes annotation is the
+	// honest signal for operators (bytes>0 means the model got an
+	// ambient note; bytes==0 means it did not). This keeps the trace
+	// outcome vocabulary aligned with the behavioral fitness test's
+	// allowlist (ok|skipped|error|rejected|fallthrough|miss).
+	pc.tr.Annotate("hippocampus.bytes", len(summary))
+	if summary != "" {
+		pc.session.SetHippocampusSummary(summary)
+	}
+	pc.tr.EndSpan("ok")
+}
+
 // ── Stage 11.75: Prepare for inference ─────────────────────────────────
 
 func (p *Pipeline) stagePrepareInference(ctx context.Context, pc *pipelineContext) {

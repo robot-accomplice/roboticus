@@ -192,3 +192,15 @@ Acceptance bar for closure:
 - 2026-04-16: Classified Go's richer `recall_memory` lookup semantics as an
   idiomatic shift leaning improvement, while keeping the typed-evidence
   fallback seam as the main remaining degradation in this system.
+- 2026-04-16: v1.0.6 P1 closed the SYS-03-001 compaction seam on the
+  live request path. `internal/agent/memory/compaction.go` ports Rust's
+  `compaction.rs` with both the structured `Compact` entry point and
+  the text-level `CompactText`; `internal/agent/context.go` now calls
+  `memory.CompactText(cb.memory, memCap)` at the memory-injection site
+  instead of the old `cb.memory[:maxChars] + "[truncated]"` char cut.
+  Token estimation continues to use Go's script-aware
+  `llm.EstimateTokens` — recorded as Idiomatic Shift in the port's
+  header comment, so the audit re-pass should verify no downstream
+  consumer depended on Rust's naïve `len/4` estimator.
+  SYS-03-002 / SYS-03-007 (typed-evidence fallback) remain open; the
+  P1 commit does not touch the verifier code path.

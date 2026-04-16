@@ -355,6 +355,9 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 	// Stage 11.6: tool pruning (query-time semantic ranking + budget).
 	p.stageToolPruning(ctx, pc)
 
+	// Stage 11.65: hippocampus summary (database surface ambient note).
+	p.stageHippocampusSummary(ctx, pc)
+
 	// Stage 11.75: prepare inference context.
 	p.stagePrepareInference(ctx, pc)
 

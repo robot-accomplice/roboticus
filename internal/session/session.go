@@ -57,6 +57,22 @@ type Session struct {
 	// the consumer MAY treat as authoritative or MAY fall back — the
 	// authoritative behavior is owned by the consumer.
 	selectedToolDefs []llm.ToolDef
+
+	// v1.0.6 hippocampus table summary for the current turn.
+	// Populated by the pipeline's hippocampus stage (see
+	// internal/pipeline/pipeline_run_stages.go::stageHippocampusSummary).
+	// Consumed by buildAgentContext, which appends the summary as a
+	// system message after the memory block so the model has ambient
+	// awareness of the database surface (agent-owned tables, knowledge
+	// sources, and system table count). Matches Rust's
+	// crates/roboticus-pipeline/src/core/context_builder.rs:356-369
+	// which calls roboticus_db::hippocampus::compact_summary at the
+	// same position.
+	//
+	// Empty string means either (a) the pipeline stage didn't run, or
+	// (b) the registry is empty. Consumers MUST NOT inject an empty
+	// hippocampus message.
+	hippocampusSummary string
 }
 
 // New creates a session with the given identity.
@@ -154,6 +170,16 @@ func (s *Session) SetSelectedToolDefs(defs []llm.ToolDef) { s.selectedToolDefs =
 // reference — callers must not mutate. Consumers that need to append
 // should copy first.
 func (s *Session) SelectedToolDefs() []llm.ToolDef { return s.selectedToolDefs }
+
+// SetHippocampusSummary records the ambient database/table summary
+// produced by the pipeline's hippocampus stage. Empty string is valid
+// and is the signal "skip injection" — consumers must not append an
+// empty summary message.
+func (s *Session) SetHippocampusSummary(summary string) { s.hippocampusSummary = summary }
+
+// HippocampusSummary returns the ambient database/table summary, or ""
+// if the pipeline stage didn't run or produced an empty summary.
+func (s *Session) HippocampusSummary() string { return s.hippocampusSummary }
 
 // AddAssistantMessage appends an assistant message with optional tool calls.
 func (s *Session) AddAssistantMessage(content string, toolCalls []llm.ToolCall) {

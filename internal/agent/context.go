@@ -6,6 +6,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"roboticus/internal/agent/memory"
 	"roboticus/internal/core"
 	"roboticus/internal/llm"
 )
@@ -78,6 +79,14 @@ type ContextBuilder struct {
 	toolDefs     []llm.ToolDef
 	memory       string // current memory block
 	memoryIndex  string // lightweight memory index for recall_memory
+
+	// systemNotes are additional ambient system messages produced by
+	// pipeline stages (e.g. hippocampus summary, checkpoint digest)
+	// and injected after the memory index. Order matches insertion
+	// order; each note becomes its own system message so the model
+	// sees them as distinct ambient context rather than one
+	// concatenated blob. See AppendSystemNote for the contract.
+	systemNotes []string
 }
 
 // NewContextBuilder creates a builder with the given config.
@@ -103,6 +112,23 @@ func (cb *ContextBuilder) SetMemory(mem string) {
 // SetMemoryIndex sets the lightweight memory index for recall_memory tool usage.
 func (cb *ContextBuilder) SetMemoryIndex(index string) {
 	cb.memoryIndex = index
+}
+
+// AppendSystemNote queues an additional ambient system message to be
+// injected after the memory index and before conversation history.
+// Intended for pipeline-owned ambient context (hippocampus summary,
+// checkpoint digest, runtime diagnostics) that does not belong inside
+// the main system prompt but should reach the model on every turn.
+//
+// Empty notes are silently ignored — upstream stages emit "" when the
+// source is empty, and threading those through to the request would
+// produce dead system messages the model reads as "intentionally
+// blank."
+func (cb *ContextBuilder) AppendSystemNote(note string) {
+	if strings.TrimSpace(note) == "" {
+		return
+	}
+	cb.systemNotes = append(cb.systemNotes, note)
 }
 
 // BuildRequest constructs an LLM request from session state, applying
@@ -141,20 +167,32 @@ func (cb *ContextBuilder) BuildRequest(session *Session) *llm.Request {
 	// Inject memory (capped at 25% of budget, matching Rust: l0 / 4).
 	// Memory is always present — buildAgentContext guarantees at least an
 	// orientation block even when retrieval returns empty.
+	//
+	// v1.0.6 SYS-01-003 remediation: over-budget memory is now compacted
+	// through memory.CompactText (Rust-parity port of compact_text in
+	// roboticus-agent/src/compaction.rs), which drops lowest-priority
+	// bullets first and preserves section headers. Pre-v1.0.6 this path
+	// did `cb.memory[:maxChars] + "...[truncated]"` — a char-count cut
+	// that silently discarded whatever happened to sit at the tail and
+	// could split multi-byte characters mid-rune.
+	//
+	// If CompactText returns an empty string for a non-empty input (the
+	// budget was too small for even one bullet + header), we skip
+	// injection entirely rather than emit an empty memory message. An
+	// empty system message is worse than no message — it tells the
+	// model "memory is intentionally blank."
 	memTokCount := 0
 	memCap := budget / 4
 	if cb.memory != "" {
 		memTokens := cb.estimateTokens(cb.memory)
 		if memTokens > memCap {
-			// Truncate memory to fit within cap (rough char-based truncation).
-			maxChars := memCap * cb.config.CharsPerToken
-			if maxChars < len(cb.memory) {
-				cb.memory = cb.memory[:maxChars] + "\n[...memory truncated to fit budget]"
-			}
+			cb.memory = memory.CompactText(cb.memory, memCap)
 			memTokens = cb.estimateTokens(cb.memory)
 		}
-		memTokCount = memTokens
-		result = append(result, llm.Message{Role: "system", Content: cb.memory})
+		if cb.memory != "" {
+			memTokCount = memTokens
+			result = append(result, llm.Message{Role: "system", Content: cb.memory})
+		}
 	}
 
 	// Inject memory index (lightweight recall list for recall_memory tool).
@@ -162,6 +200,18 @@ func (cb *ContextBuilder) BuildRequest(session *Session) *llm.Request {
 		indexTokens := cb.estimateTokens(cb.memoryIndex)
 		memTokCount += indexTokens
 		result = append(result, llm.Message{Role: "system", Content: cb.memoryIndex})
+	}
+
+	// Inject ambient system notes queued by pipeline stages
+	// (hippocampus summary, checkpoint digest, diagnostics). Each note
+	// goes in as its own system message — matches Rust's
+	// context_builder.rs:356-369 which emits the hippocampus summary
+	// as a separate UnifiedMessage rather than concatenating it to the
+	// main system prompt. Empty notes were rejected at AppendSystemNote
+	// time, so every surviving entry reaches the model.
+	for _, note := range cb.systemNotes {
+		memTokCount += cb.estimateTokens(note)
+		result = append(result, llm.Message{Role: "system", Content: note})
 	}
 
 	// Account for tool definitions in the token budget. Each tool adds ~100-200

@@ -297,6 +297,21 @@ func buildAgentContext(ctx context.Context, sess *session.Session, tools *agent.
 		ctxBuilder.SetMemoryIndex(memIdx)
 	}
 
+	// Hippocampus summary: pipeline-owned (stageHippocampusSummary).
+	// When present, it joins the assembled system-prompt stream as an
+	// additional ambient note so the model knows which agent-owned
+	// tables, knowledge sources, and system tables are available
+	// without having to call get_memory_stats or a registry tool every
+	// turn. Matches Rust parity (context_builder.rs:356-369).
+	//
+	// Consumers that bypass the pipeline (non-pipeline test paths)
+	// will see an empty summary here; injection is gated on non-empty
+	// so there's no risk of an empty system message reaching the
+	// model.
+	if hippo := sess.HippocampusSummary(); hippo != "" {
+		ctxBuilder.AppendSystemNote(hippo)
+	}
+
 	return ctxBuilder
 }
 
