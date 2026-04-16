@@ -374,9 +374,9 @@ func probeOpenAI(client *http.Client, baseURL string) []string {
 var modelsExerciseCmd = &cobra.Command{
 	Use:   "exercise [model...]",
 	Short: "Exercise models through the prompt matrix to establish quality baselines",
-	Long: `Exercise runs models through the 30-prompt matrix across 6 intent classes
-(Execution, Delegation, Introspection, Conversation, Memory Recall, Tool Use)
-and produces per-intent quality + latency scorecards. The cross-model
+	Long: `Exercise runs models through the 35-prompt matrix across 7 intent classes
+(Execution, Delegation, Introspection, Conversation, Memory Recall, Tool Use,
+Coding) and produces per-intent quality + latency scorecards. The cross-model
 comparison table is ALWAYS shown — absolute scores are meaningless without
 peer context. Exercised models are highlighted with a star (★) so operators
 can see their fresh run in the context of the full baselined landscape.
@@ -623,7 +623,7 @@ func renderPromptProgress(o llm.PromptOutcome) {
 // operators can see their fresh-run results against the historical
 // baseline of other configured models.
 func renderExerciseReport(report llm.ExerciseReport, config map[string]any, minQuality float64) {
-	intents := []string{"EXECUTION", "DELEGATION", "INTROSPECTION", "CONVERSATION", "MEMORY_RECALL", "TOOL_USE"}
+	intents := []string{"EXECUTION", "DELEGATION", "INTROSPECTION", "CONVERSATION", "MEMORY_RECALL", "TOOL_USE", "CODING"}
 
 	// Per-model detailed scorecards for the freshly-exercised models.
 	for _, r := range report.Models {
@@ -670,9 +670,9 @@ func renderExerciseReport(report llm.ExerciseReport, config map[string]any, minQ
 	rows := buildComparisonRows(report, config)
 	if len(rows) > 0 {
 		fmt.Printf("\n  Model Comparison (ranked by quality; ★ = exercised this run):\n\n")
-		fmt.Printf("  %-5s  %-30s  %-15s  %5s  %5s  %5s  %5s  %5s  %5s  %s\n",
-			"RANK", "MODEL", "QUALITY", "EXEC", "DELEG", "INTRO", "CONV", "MEMRC", "TOOLS", "AVG MS")
-		fmt.Println("  " + strings.Repeat("─", 110))
+		fmt.Printf("  %-5s  %-30s  %-15s  %5s  %5s  %5s  %5s  %5s  %5s  %5s  %s\n",
+			"RANK", "MODEL", "QUALITY", "EXEC", "DELEG", "INTRO", "CONV", "MEMRC", "TOOLS", "CODE", "AVG MS")
+		fmt.Println("  " + strings.Repeat("─", 118))
 		for i, row := range rows {
 			label := row.Model
 			prefix := "  "
@@ -682,10 +682,11 @@ func renderExerciseReport(report llm.ExerciseReport, config map[string]any, minQ
 			if len(label) > 30 {
 				label = label[:27] + "..."
 			}
-			fmt.Printf("%s#%-3d  %-30s  %s %3.0f%%  %4.0f%%  %4.0f%%  %4.0f%%  %4.0f%%  %4.0f%%  %4.0f%%  %5dms\n",
+			fmt.Printf("%s#%-3d  %-30s  %s %3.0f%%  %4.0f%%  %4.0f%%  %4.0f%%  %4.0f%%  %4.0f%%  %4.0f%%  %4.0f%%  %5dms\n",
 				prefix, i+1, label, qualityBar(row.AvgQuality), row.AvgQuality*100,
 				row.Intent["EXECUTION"]*100, row.Intent["DELEGATION"]*100, row.Intent["INTROSPECTION"]*100,
 				row.Intent["CONVERSATION"]*100, row.Intent["MEMORY_RECALL"]*100, row.Intent["TOOL_USE"]*100,
+				row.Intent["CODING"]*100,
 				row.AvgLatencyMs)
 		}
 		fmt.Println()
@@ -1138,7 +1139,15 @@ func printLatencyScorecard(latencies map[string][]int64) {
 	fmt.Println("    ├──────────────────┼────────┼────────┼────────┤")
 
 	var allLatencies []int64
-	intents := []string{llm.IntentExecution.String(), llm.IntentDelegation.String(), llm.IntentIntrospection.String(), llm.IntentConversation.String()}
+	// Render every intent class the matrix exercises, sourced from
+	// llm.AllIntentClasses so a future new class (CODING landed in
+	// v1.0.6; more may follow) automatically appears in the latency
+	// scorecard without further edits here.
+	intentsOrdered := llm.AllIntentClasses()
+	intents := make([]string, 0, len(intentsOrdered))
+	for _, ic := range intentsOrdered {
+		intents = append(intents, ic.String())
+	}
 	for _, intent := range intents {
 		times, ok := latencies[intent]
 		if !ok || len(times) == 0 {
