@@ -1,11 +1,29 @@
 # Memory Architecture Specification
 
 > Authoritative reference for the Roboticus memory system.
-> Updated for v1.0.5 agentic retrieval architecture.
+> Updated for **v1.0.6** (semantic FTS+vector closure, relational distillation, typed verification evidence).
 > Derived from exhaustive analysis of the Rust reference implementation (v0.11.4)
 > and extended with the 13-layer agentic AI reference architecture.
 >
 > **Guiding principle**: Retrieve broadly, reason narrowly, act cautiously, learn continuously.
+>
+> **What changed since v1.0.5**:
+> - The memory surface is now a **6-store system** (five persistent tiers + the
+>   `knowledge_facts` graph store). Graph facts carry canonical subject/relation/object
+>   triples distilled from ≥3 high-quality episodes via the write gate. See §2 and §7.
+> - **HybridSearch (FTS5 BM25 + vector cosine)** is the primary read path across
+>   semantic / procedural / relationship / workflow tiers. LIKE remains as a
+>   documented safety net pending operator-driven retirement per M3.3 telemetry.
+> - **Retrieval is per-call isolated**: intent classification travels via
+>   `memory.WithIntents(ctx, ...)` as a context value (no shared mutable state on
+>   `*Retriever`). See §7 "Concurrency contract".
+> - **Verifier consumes a typed artifact** (`session.VerificationEvidence`)
+>   attached by Stage 8.5, not rendered prompt markers. See §5 "Structured
+>   evidence hand-off" and v1.0.6 audit finding P2-C.
+> - **Pipeline is the single memory-assembly authority.** The daemon's
+>   fallback `RetrieveDirectOnly` + `BuildMemoryIndex` path was removed; Stage
+>   8.5 always populates the memory INDEX (recall handle) and conditionally
+>   populates the memory CONTEXT (tiered evidence) per retrieval strategy.
 
 ---
 
@@ -81,9 +99,26 @@
    injected directly. All other tiers appear as compact index entries. The model
    calls `recall_memory(id)` or `search_memories(query)` on demand.
 
-2. **Five-Tier Memory System.** Working (session-scoped), Episodic (event log),
-   Semantic (facts/knowledge), Procedural (tool statistics), Relationship
-   (entity trust tracking).
+2. **Six-Store Memory System (v1.0.6).** Five persistent tiers (Working,
+   Episodic, Semantic, Procedural, Relationship) plus a distilled knowledge
+   store:
+   - **Working** (session-scoped scratchpad; active goals, decisions, observations)
+   - **Episodic** (event log / long-term experiences; verbatim episode rows)
+   - **Semantic** (facts / knowledge chunks; FTS5 + vector indexed)
+   - **Procedural** (tool usage statistics; latency, success rate, last-seen)
+   - **Relationship** (entity trust tracking; interaction counts + trust scores)
+   - **Knowledge Facts (graph store, v1.0.6)** (`knowledge_facts` table; canonical
+     subject/relation/object triples distilled from ≥3 independent high-quality
+     episodes via the write gate. Anecdote-hijacking guarded: low-quality or
+     failed episodes are ignored entirely. Writes flow through `UpsertFact` with
+     the canonical support counter; reads expose these as `canonical=true`
+     evidence rows in the retrieval surface — the verifier's
+     `HasCanonicalEvidence` flag is sourced from here, not from substring
+     matching on the word "canonical" in rendered text.)
+
+   **Legacy doc note**: some older references in this file still say "five-tier"
+   — those sections are being migrated; the 6-store list above is the current
+   runtime reality.
 
 3. **Background Ingestion.** Turn processing happens asynchronously after the
    response is sent. Ingestion failures are degraded silently -- they never

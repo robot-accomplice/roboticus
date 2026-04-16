@@ -21,15 +21,32 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"roboticus/internal/db"
+	"roboticus/internal/session"
 )
 
 // AssembledContext is the structured output of the context assembler.
+//
+// The text fields are the rendered markdown-ish sections that get
+// formatted into the prompt (see Format()). The EvidenceArtifact
+// field carries a typed, format-independent view of the same data
+// for downstream pipeline stages (verifier, policy guards) that want
+// to reason over structured data instead of `strings.Contains`'ing
+// their way through the rendered output. See v1.0.6 audit finding
+// P2-C and internal/session/verification_evidence.go for the
+// rationale.
 type AssembledContext struct {
 	WorkingState   string // direct-injected active state
 	Evidence       string // ranked retrieval results with provenance
 	FreshnessRisks string // stale evidence or recency caveats
 	Gaps           string // detected information gaps
 	Contradictions string // conflicting evidence
+
+	// EvidenceArtifact is the typed sibling of the rendered text
+	// sections above. Populated alongside them by AssembleContext.
+	// Nil means "no assembly happened yet" — callers can still
+	// format the text fields but there's nothing for the verifier
+	// to consume.
+	EvidenceArtifact *session.VerificationEvidence
 }
 
 // Format produces the final text block for prompt injection.
@@ -135,7 +152,84 @@ func AssembleContext(
 		Int("contradictions", contradictionCount).
 		Msg("context assembly: structured context built")
 
+	// Typed evidence artifact: derived from the same assembly state as
+	// the rendered text, so the verifier can read structured fields
+	// instead of parsing the rendered output (see v1.0.6 P2-C).
+	ac.EvidenceArtifact = buildVerificationEvidenceFromContext(ctx, store, sessionID, ac, evidence)
+
 	return ac
+}
+
+// buildVerificationEvidenceFromContext extracts the typed verification
+// artifact from the assembled context. Executive-state fields
+// (UnresolvedQuestions, VerifiedConclusions, StoppingCriteria) are
+// fetched directly from the working_memory store rather than
+// re-parsing the WorkingState text block — same source of truth, just
+// without the string round-trip.
+func buildVerificationEvidenceFromContext(
+	ctx context.Context,
+	store *db.Store,
+	sessionID string,
+	ac *AssembledContext,
+	evidence []Evidence,
+) *session.VerificationEvidence {
+	ve := &session.VerificationEvidence{
+		HasEvidence:       strings.TrimSpace(ac.Evidence) != "",
+		HasGaps:           strings.TrimSpace(ac.Gaps) != "",
+		HasFreshnessRisks: strings.TrimSpace(ac.FreshnessRisks) != "",
+		HasContradictions: strings.TrimSpace(ac.Contradictions) != "",
+	}
+
+	// Canonical evidence: any single evidence row with the canonical
+	// qualifier is enough. This replaces pre-v1.0.6
+	// `strings.Contains(mem, "canonical")` in the verifier which
+	// would false-positive on anyone saying the word "canonical".
+	for _, e := range evidence {
+		if e.IsCanonical {
+			ve.HasCanonicalEvidence = true
+			break
+		}
+	}
+
+	// Evidence items: flatten each evidence row into a short bullet
+	// string with its provenance tag intact. The verifier uses this to
+	// count distinct sources and detect thin-evidence answers.
+	for _, e := range evidence {
+		tier := e.SourceTier.String()
+		ve.EvidenceItems = append(ve.EvidenceItems,
+			fmt.Sprintf("[%s, %.2f] %s", tier, e.Score, truncateForArtifact(e.Content, 200)))
+	}
+
+	// Executive state: read once from the same shim that populates the
+	// working-state text block. Keeps both surfaces in sync without
+	// re-querying. ExecutiveState.X is []ExecutiveEntry; for the
+	// verifier we only need the short Content string of each entry.
+	if store != nil && sessionID != "" {
+		shim := &Manager{store: store}
+		if state, err := shim.LoadExecutiveState(ctx, sessionID, ""); err == nil && state != nil {
+			for _, e := range state.UnresolvedQuestions {
+				ve.UnresolvedQuestions = append(ve.UnresolvedQuestions, e.Content)
+			}
+			for _, e := range state.VerifiedConclusions {
+				ve.VerifiedConclusions = append(ve.VerifiedConclusions, e.Content)
+			}
+			for _, e := range state.StoppingCriteria {
+				ve.StoppingCriteria = append(ve.StoppingCriteria, e.Content)
+			}
+		}
+	}
+
+	return ve
+}
+
+// truncateForArtifact trims a content string for inclusion in the
+// typed evidence artifact. Full content lives in the evidence-source
+// rows already; we just need enough for downstream pattern matching.
+func truncateForArtifact(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "…"
 }
 
 // loadExecutiveStateBlock reads the latest executive state for a session and

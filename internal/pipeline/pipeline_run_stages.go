@@ -466,9 +466,20 @@ func (p *Pipeline) stageMemoryRetrieval(ctx context.Context, pc *pipelineContext
 		// methods can emit per-tier "retrieval.path.<tier>" annotations.
 		// TraceRecorder satisfies memory.RetrievalTracer structurally.
 		ctx = agentmemory.WithRetrievalTracer(ctx, pc.tr)
+		// v1.0.6 P2-C: attach a typed-evidence sink so the retriever
+		// hands back a structured view of the assembly. The verifier
+		// stage reads this instead of parsing the rendered memory text
+		// for "[Retrieved Evidence]", "[Gaps]", etc. markers. Nil-safe
+		// in every direction: retriever drops on empty assembly, verifier
+		// falls back to string parsing if no typed artifact landed.
+		evidenceSink := &agentmemory.EvidenceSink{}
+		ctx = agentmemory.WithEvidenceSink(ctx, evidenceSink)
 		pc.memoryBlock = p.retriever.Retrieve(ctx, pc.session.ID, pc.content, retrievalStrat.Budget)
 		if pc.memoryBlock != "" {
 			pc.session.SetMemoryContext(pc.memoryBlock)
+		}
+		if evidenceSink.Evidence != nil {
+			pc.session.SetVerificationEvidence(evidenceSink.Evidence)
 		}
 		fragmentCount := 0
 		if pc.memoryBlock != "" {

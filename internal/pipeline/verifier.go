@@ -95,12 +95,39 @@ func BuildVerificationContext(session *Session) VerificationContext {
 		ctx.Intents = []string{ctx.Intent}
 	}
 	ctx.MemoryContext = session.MemoryContext()
-	ctx.HasEvidence = strings.Contains(ctx.MemoryContext, "[Retrieved Evidence]")
-	ctx.HasGaps = strings.Contains(ctx.MemoryContext, "[Gaps]")
-	ctx.HasFreshnessRisk = strings.Contains(ctx.MemoryContext, "[Freshness Risks]")
-	ctx.HasContradictions = strings.Contains(ctx.MemoryContext, "[Contradictions]")
-	ctx.HasCanonicalEvidence = strings.Contains(strings.ToLower(ctx.MemoryContext), "canonical")
-	ctx.EvidenceItems = verificationSectionItems(ctx.MemoryContext, "[Retrieved Evidence]")
+
+	// v1.0.6 P2-C: prefer the typed evidence artifact the pipeline's
+	// Stage 8.5 attaches via SetVerificationEvidence. This replaces the
+	// pre-v1.0.6 pattern where the verifier `strings.Contains`'d its
+	// way through the rendered "[Retrieved Evidence]", "[Gaps]",
+	// "[Freshness Risks]", "[Contradictions]" markers — a coupling
+	// that would silently break the verifier if the assembler ever
+	// renamed a section header. The string parse is kept as a
+	// fallback for callers that don't flow through the full pipeline
+	// (tests, smoke harnesses, ad-hoc CLI paths).
+	if ve := session.VerificationEvidence(); ve != nil {
+		ctx.HasEvidence = ve.HasEvidence
+		ctx.HasGaps = ve.HasGaps
+		ctx.HasFreshnessRisk = ve.HasFreshnessRisks
+		ctx.HasContradictions = ve.HasContradictions
+		ctx.HasCanonicalEvidence = ve.HasCanonicalEvidence
+		ctx.EvidenceItems = append([]string(nil), ve.EvidenceItems...)
+		ctx.UnresolvedQuestions = append([]string(nil), ve.UnresolvedQuestions...)
+		ctx.VerifiedConclusions = append([]string(nil), ve.VerifiedConclusions...)
+		ctx.StoppingCriteria = append([]string(nil), ve.StoppingCriteria...)
+	} else {
+		// String-parse fallback for non-pipeline callers.
+		ctx.HasEvidence = strings.Contains(ctx.MemoryContext, "[Retrieved Evidence]")
+		ctx.HasGaps = strings.Contains(ctx.MemoryContext, "[Gaps]")
+		ctx.HasFreshnessRisk = strings.Contains(ctx.MemoryContext, "[Freshness Risks]")
+		ctx.HasContradictions = strings.Contains(ctx.MemoryContext, "[Contradictions]")
+		ctx.HasCanonicalEvidence = strings.Contains(strings.ToLower(ctx.MemoryContext), "canonical")
+		ctx.EvidenceItems = verificationSectionItems(ctx.MemoryContext, "[Retrieved Evidence]")
+		ctx.UnresolvedQuestions = verificationExecutiveSection(ctx.MemoryContext, "Unresolved questions")
+		ctx.VerifiedConclusions = verificationExecutiveSection(ctx.MemoryContext, "Verified conclusions")
+		ctx.StoppingCriteria = verificationExecutiveSection(ctx.MemoryContext, "Stopping criteria")
+	}
+
 	ctx.Subgoals = session.TaskSubgoals()
 	if len(ctx.Subgoals) == 0 {
 		ctx.Subgoals = verificationSubgoals(ctx.UserPrompt)
@@ -109,11 +136,6 @@ func BuildVerificationContext(session *Session) VerificationContext {
 	ctx.RequiresFreshness = verificationRequiresFreshness(ctx.UserPrompt, ctx.Intent)
 	ctx.RequiresActionPlan = verificationRequiresActionPlan(ctx.UserPrompt, ctx.Subgoals)
 
-	// Executive state is rendered into the memory context by the assembler.
-	// Parse the named subsections so the verifier can honor them.
-	ctx.UnresolvedQuestions = verificationExecutiveSection(ctx.MemoryContext, "Unresolved questions")
-	ctx.VerifiedConclusions = verificationExecutiveSection(ctx.MemoryContext, "Verified conclusions")
-	ctx.StoppingCriteria = verificationExecutiveSection(ctx.MemoryContext, "Stopping criteria")
 	return ctx
 }
 

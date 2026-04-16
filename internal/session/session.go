@@ -36,6 +36,11 @@ type Session struct {
 	taskSourceOfTruth string
 	taskRequiredTiers []string
 	taskFreshness     bool
+
+	// v1.0.6 typed evidence artifact (see verification_evidence.go).
+	// Populated by the pipeline after retrieval; consumed by the
+	// verifier instead of re-parsing the rendered memoryContext text.
+	verificationEvidence *VerificationEvidence
 }
 
 // New creates a session with the given identity.

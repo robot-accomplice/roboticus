@@ -299,6 +299,15 @@ func (mr *Retriever) RetrieveWithMetrics(ctx context.Context, sessionID, query s
 	// 5. Structured context assembly: evidence + gaps + contradictions.
 	assembled := AssembleContext(ctx, mr.store, sessionID, filtered, workingText, ambientText)
 
+	// Publish the typed evidence artifact to any caller that attached
+	// an evidence sink to ctx. This lets the pipeline hand a
+	// format-independent view of the same assembly state to the
+	// verifier stage — no string parsing of rendered output. See
+	// evidence_sink.go and v1.0.6 P2-C.
+	if sink := evidenceSinkFromContext(ctx); sink != nil && assembled != nil {
+		sink.Evidence = assembled.EvidenceArtifact
+	}
+
 	// ── Metrics ─────────────────────────────────────────────────────
 	metrics.EpisodicCount = countByTier(filtered, TierEpisodic)
 	metrics.SemanticCount = countByTier(filtered, TierSemantic)
