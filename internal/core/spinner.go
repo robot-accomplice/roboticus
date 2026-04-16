@@ -74,14 +74,33 @@ func SpinWhileBlocking(w io.Writer) SpinStop {
 	done := make(chan struct{})
 	var once sync.Once
 
-	// Emit the first frame immediately so there's no silent gap
-	// between the caller's prefix print and the spinner appearing.
+	// Hide the cursor while the spinner is active. Without this the
+	// terminal's blinking cursor sits immediately after the spinner
+	// character and visually competes with it — exactly the
+	// "confusing and unattractive" effect v1.0.6 flagged.
+	// \033[?25l hides, \033[?25h restores. Universally supported
+	// on modern terminal emulators (iTerm2, Terminal.app, Windows
+	// Terminal, gnome-terminal, xterm, tmux/screen).
+	//
+	// Emit the first frame AFTER the cursor-hide so there's no
+	// visible cursor-beside-spinner flicker between the two writes.
 	mu.Lock()
+	_, _ = fmt.Fprint(w, "\x1b[?25l")
 	_, _ = fmt.Fprintf(w, "%c", frames[0])
 	mu.Unlock()
 
 	go func() {
 		defer close(done)
+		// Defense-in-depth cursor restore: if the goroutine panics
+		// before hitting the normal stop path, still restore the
+		// cursor so the operator's terminal doesn't end up with
+		// cursor permanently hidden after a crash.
+		defer func() {
+			mu.Lock()
+			_, _ = fmt.Fprint(w, "\x1b[?25h")
+			mu.Unlock()
+		}()
+
 		ticker := time.NewTicker(spinnerTickInterval)
 		defer ticker.Stop()
 		i := 1
@@ -92,7 +111,8 @@ func SpinWhileBlocking(w io.Writer) SpinStop {
 				// backspace. Works for ASCII frames. For Unicode
 				// braille frames on some terminals this may leave
 				// artifacts, but the follow-up print from the
-				// caller overwrites the position anyway.
+				// caller overwrites the position anyway. Cursor
+				// restore happens in the deferred func above.
 				mu.Lock()
 				_, _ = fmt.Fprint(w, "\b \b")
 				mu.Unlock()
