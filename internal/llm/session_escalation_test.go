@@ -9,14 +9,14 @@ func TestSessionEscalation_ConsecutiveFailures(t *testing.T) {
 
 	// First failure — not enough to escalate.
 	tracker.RecordOutcome(sid, "local/qwen", false, 0.5)
-	esc, model := tracker.ShouldEscalate(sid)
+	esc, _ := tracker.ShouldEscalate(sid)
 	if esc {
 		t.Error("should not escalate after 1 failure")
 	}
 
 	// Second consecutive failure — should escalate.
 	tracker.RecordOutcome(sid, "local/qwen", false, 0.4)
-	esc, model = tracker.ShouldEscalate(sid)
+	esc, model := tracker.ShouldEscalate(sid)
 	if !esc {
 		t.Error("should escalate after 2 consecutive failures")
 	}

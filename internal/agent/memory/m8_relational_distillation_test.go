@@ -287,7 +287,7 @@ func TestM8_NonCanonicalRelationsBlockedAtWriteGate(t *testing.T) {
 	// "foo_bars" is intentionally not in db.CanonicalGraphRelations.
 	for i := 0; i < MinRelationDistillSupport+2; i++ {
 		seedRawEpisodeSummary(t, store,
-			fmt.Sprintf("Goal: bogus | Outcome: success | Quality: high | Relations: A||foo_bars||B"))
+			"Goal: bogus | Outcome: success | Quality: high | Relations: A||foo_bars||B")
 	}
 
 	pipeline := newTestConsolidationPipeline()

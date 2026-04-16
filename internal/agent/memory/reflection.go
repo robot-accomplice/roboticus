@@ -249,11 +249,7 @@ func extractEpisodeRelations(input EpisodeInput) []EpisodeRelation {
 				continue
 			}
 			seen[signature] = struct{}{}
-			out = append(out, EpisodeRelation{
-				Subject:  fact.Subject,
-				Relation: fact.Relation,
-				Object:   fact.Object,
-			})
+			out = append(out, EpisodeRelation(fact))
 		}
 	}
 	return out

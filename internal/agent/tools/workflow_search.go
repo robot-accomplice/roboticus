@@ -453,7 +453,7 @@ func tokenizeForRanking(lowerQuery string) []string {
 		return nil
 	}
 	fields := strings.FieldsFunc(lowerQuery, func(r rune) bool {
-		return !(r >= 'a' && r <= 'z') && !(r >= '0' && r <= '9')
+		return (r < 'a' || r > 'z') && (r < '0' || r > '9')
 	})
 	stop := map[string]struct{}{
 		"the": {}, "and": {}, "for": {}, "with": {}, "a": {}, "an": {}, "to": {}, "of": {}, "is": {}, "in": {},

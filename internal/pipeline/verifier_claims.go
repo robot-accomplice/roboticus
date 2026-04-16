@@ -266,13 +266,10 @@ func requiresPerClaimAnchoring(ctx VerificationContext) bool {
 		}
 	}
 	lower := strings.ToLower(ctx.UserPrompt)
-	if containsAny(lower,
+	return containsAny(lower,
 		"financial", "compliance", "audit", "security",
 		"refund", "chargeback", "kyc", "aml", "gdpr", "hipaa", "sox",
-	) {
-		return true
-	}
-	return false
+	)
 }
 
 // canonicalEvidenceMarkers identify evidence items that represent a canonical

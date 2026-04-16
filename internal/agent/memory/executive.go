@@ -263,7 +263,7 @@ func (mm *Manager) LoadExecutiveState(ctx context.Context, sessionID, taskID str
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	for rows.Next() {
 		entry, err := scanExecutiveEntry(rows)
@@ -297,7 +297,7 @@ func (mm *Manager) LoadAllExecutiveState(ctx context.Context, sessionID string) 
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	byTask := make(map[string]*ExecutiveState)
 	var order []string

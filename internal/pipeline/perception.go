@@ -188,10 +188,7 @@ func classifySourceOfTruth(lower string, synthesis TaskSynthesis) SourceOfTruth 
 }
 
 func classifyFreshness(lower string, synthesis TaskSynthesis) bool {
-	if verificationRequiresFreshness(lower, synthesis.Intent) {
-		return true
-	}
-	return false
+	return verificationRequiresFreshness(lower, synthesis.Intent)
 }
 
 // classifyRequiredTiers decides which memory tiers retrieval MUST consult

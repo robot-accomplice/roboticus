@@ -15,7 +15,7 @@ func TestAssembleContext_FullStructure(t *testing.T) {
 		{Content: "deploy-to-prod: 4 runs", SourceTier: TierProcedural, Score: 0.71, AgeDays: 45},
 	}
 
-	ac := AssembleContext(nil, nil, "", evidence, "- goal: finish deployment", "- [14:32] checked logs")
+	ac := AssembleContext(context.TODO(), nil, "", evidence, "- goal: finish deployment", "- [14:32] checked logs")
 
 	if ac.WorkingState == "" {
 		t.Error("working state should be populated")
@@ -54,7 +54,7 @@ func TestAssembleContext_DetectsGaps(t *testing.T) {
 		{Content: "some fact", SourceTier: TierSemantic, Score: 0.8},
 	}
 
-	ac := AssembleContext(nil, nil, "", evidence, "", "")
+	ac := AssembleContext(context.TODO(), nil, "", evidence, "", "")
 
 	if ac.Gaps == "" {
 		t.Error("gaps should be detected when tiers are missing")
@@ -75,7 +75,7 @@ func TestAssembleContext_NoGapsWhenAllTiersPresent(t *testing.T) {
 		{Content: "entity", SourceTier: TierRelationship, Score: 0.5},
 	}
 
-	ac := AssembleContext(nil, nil, "", evidence, "", "")
+	ac := AssembleContext(context.TODO(), nil, "", evidence, "", "")
 
 	if ac.Gaps != "" {
 		t.Errorf("no gaps expected when all tiers present, got: %s", ac.Gaps)
@@ -83,7 +83,7 @@ func TestAssembleContext_NoGapsWhenAllTiersPresent(t *testing.T) {
 }
 
 func TestAssembleContext_EmptyEvidence(t *testing.T) {
-	ac := AssembleContext(nil, nil, "", nil, "", "")
+	ac := AssembleContext(context.TODO(), nil, "", nil, "", "")
 
 	if ac.Evidence != "" {
 		t.Error("evidence should be empty")
@@ -142,7 +142,7 @@ func TestAssembleContext_ContradictionDetection(t *testing.T) {
 		{Content: "weak match", SourceTier: TierSemantic, Score: 0.3},
 	}
 
-	ac := AssembleContext(nil, nil, "", evidence, "", "")
+	ac := AssembleContext(context.TODO(), nil, "", evidence, "", "")
 
 	if ac.Contradictions == "" {
 		t.Error("should detect contradiction signal from high score spread")
@@ -156,7 +156,7 @@ func TestAssembleContext_NoContradictionHealthySpread(t *testing.T) {
 		{Content: "c", SourceTier: TierSemantic, Score: 0.6},
 	}
 
-	ac := AssembleContext(nil, nil, "", evidence, "", "")
+	ac := AssembleContext(context.TODO(), nil, "", evidence, "", "")
 
 	if ac.Contradictions != "" {
 		t.Errorf("healthy spread should not trigger contradiction, got: %s", ac.Contradictions)
@@ -164,7 +164,7 @@ func TestAssembleContext_NoContradictionHealthySpread(t *testing.T) {
 }
 
 func TestAssembleContext_WorkingStateOnly(t *testing.T) {
-	ac := AssembleContext(nil, nil, "", nil, "- goal: test", "")
+	ac := AssembleContext(context.TODO(), nil, "", nil, "- goal: test", "")
 
 	formatted := ac.Format()
 	if !strings.Contains(formatted, "[Working State]") {
@@ -180,7 +180,7 @@ func TestAssembleContext_DetectsFreshnessRisk(t *testing.T) {
 		{Content: "old policy", SourceTier: TierSemantic, Score: 0.8, AgeDays: 91},
 	}
 
-	ac := AssembleContext(nil, nil, "", evidence, "", "")
+	ac := AssembleContext(context.TODO(), nil, "", evidence, "", "")
 
 	if ac.FreshnessRisks == "" {
 		t.Fatal("expected freshness risks for stale evidence")

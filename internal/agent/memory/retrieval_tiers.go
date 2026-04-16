@@ -264,16 +264,9 @@ func (mr *Retriever) retrieveSemanticEvidence(ctx context.Context, query string,
 	return evidence
 }
 
-// retrieveSemanticMemory fetches from the semantic_memory table.
-func (mr *Retriever) retrieveSemanticMemory(ctx context.Context, query string, queryEmbed []float32, mode RetrievalMode, budgetTokens int) string {
-	var b strings.Builder
-	for _, ev := range mr.retrieveSemanticEvidence(ctx, query, queryEmbed, mode, budgetTokens) {
-		b.WriteString("- ")
-		b.WriteString(ev.Content)
-		b.WriteString("\n")
-	}
-	return b.String()
-}
+// retrieveSemanticMemory was removed in v1.0.6 — callers use
+// retrieveSemanticEvidence() directly to preserve provenance metadata
+// (source, age, authority) instead of flattening to "- content\n" lines.
 
 // retrieveProceduralMemory formats procedural memory for a query. Rich
 // workflows (category='workflow') are surfaced first — they carry steps,
