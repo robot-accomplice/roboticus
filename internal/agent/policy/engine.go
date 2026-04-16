@@ -3,6 +3,7 @@ package policy
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -256,6 +257,8 @@ var protectedPatterns = []string{
 	"roboticus.toml", "credentials", "secret", "private_key",
 }
 
+var tildePathPattern = regexp.MustCompile(`(^|[^A-Za-z0-9_])~(?:/|$)`)
+
 func (r *pathProtectionRule) Evaluate(req *ToolCallRequest, _ *tools.Registry) DecisionResult {
 	lower := strings.ToLower(req.Arguments)
 	for _, pattern := range protectedPatterns {
@@ -272,6 +275,10 @@ func (r *pathProtectionRule) Evaluate(req *ToolCallRequest, _ *tools.Registry) D
 
 	// Workspace-only enforcement: deny absolute paths not in allowed list and not under /tmp.
 	if r.workspaceOnly {
+		if tildePathPattern.MatchString(req.Arguments) {
+			return Deny("path_protection", "home-directory shortcuts (~) are not allowed in workspace_only mode")
+		}
+
 		// Extract potential file paths from arguments.
 		var args map[string]json.RawMessage
 		if err := json.Unmarshal([]byte(req.Arguments), &args); err == nil {

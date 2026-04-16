@@ -3,9 +3,11 @@ package llm
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
+var blankLinePattern = regexp.MustCompile(`\n[ \t]*\n+`)
 
 // ParseToolCallsFromText extracts tool calls embedded in LLM text output.
 // This is the fallback parser for models that don't use structured tool calls.
@@ -107,6 +109,98 @@ func ParseToolCallsFromText(content string) []ToolCall {
 	}
 
 	return calls
+}
+
+// StripToolCallsFromText removes embedded tool-call JSON blocks from text
+// content after they've been parsed into structured ToolCalls. This prevents
+// raw invocation payloads from leaking back into assistant-visible content.
+func StripToolCallsFromText(content string) string {
+	if !strings.Contains(content, `"tool_call"`) {
+		return strings.TrimSpace(content)
+	}
+
+	type span struct {
+		start int
+		end   int
+	}
+	var spans []span
+
+	searchFrom := 0
+	for searchFrom < len(content) {
+		idx := strings.Index(content[searchFrom:], `"tool_call"`)
+		if idx < 0 {
+			break
+		}
+		idx += searchFrom
+
+		braceStart := -1
+		for i := idx - 1; i >= searchFrom; i-- {
+			if content[i] == '{' {
+				braceStart = i
+				break
+			}
+		}
+		if braceStart < 0 {
+			searchFrom = idx + 1
+			continue
+		}
+
+		hasClosingBetween := false
+		for i := braceStart + 1; i < idx; i++ {
+			if content[i] == '}' {
+				hasClosingBetween = true
+				break
+			}
+		}
+		if hasClosingBetween {
+			searchFrom = idx + 1
+			continue
+		}
+
+		depth := 0
+		braceEnd := -1
+	scanLoop:
+		for i := braceStart; i < len(content); i++ {
+			switch content[i] {
+			case '{':
+				depth++
+			case '}':
+				depth--
+				if depth == 0 {
+					braceEnd = i + 1
+					break scanLoop
+				}
+			}
+		}
+		if braceEnd < 0 {
+			searchFrom = idx + 1
+			continue
+		}
+
+		if _, ok := extractToolInvocation(content[braceStart:braceEnd]); ok {
+			spans = append(spans, span{start: braceStart, end: braceEnd})
+		}
+		searchFrom = braceEnd
+	}
+
+	if len(spans) == 0 {
+		return strings.TrimSpace(content)
+	}
+
+	var out strings.Builder
+	last := 0
+	for _, s := range spans {
+		if s.start > last {
+			out.WriteString(content[last:s.start])
+		}
+		last = s.end
+	}
+	if last < len(content) {
+		out.WriteString(content[last:])
+	}
+	cleaned := strings.ReplaceAll(out.String(), "\r\n", "\n")
+	cleaned = blankLinePattern.ReplaceAllString(cleaned, "\n")
+	return strings.TrimSpace(cleaned)
 }
 
 // extractToolInvocation parses a JSON block into a ToolCall.

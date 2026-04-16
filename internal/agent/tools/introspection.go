@@ -17,6 +17,14 @@ type IntrospectionTool struct {
 	toolNames func() []string
 }
 
+// IntrospectionAliasTool exposes the same implementation under alternate names
+// (for example "introspection") so the model can still succeed when it picks a
+// natural-language synonym instead of the canonical "introspect" name.
+type IntrospectionAliasTool struct {
+	name string
+	base *IntrospectionTool
+}
+
 // NewIntrospectionTool creates an introspection tool.
 func NewIntrospectionTool(agentName, version string, toolNames func() []string) *IntrospectionTool {
 	return &IntrospectionTool{
@@ -25,6 +33,11 @@ func NewIntrospectionTool(agentName, version string, toolNames func() []string) 
 		version:   version,
 		toolNames: toolNames,
 	}
+}
+
+// NewIntrospectionAliasTool creates an alias for the introspection surface.
+func NewIntrospectionAliasTool(name string, base *IntrospectionTool) *IntrospectionAliasTool {
+	return &IntrospectionAliasTool{name: strings.TrimSpace(name), base: base}
 }
 
 func (t *IntrospectionTool) Name() string { return "introspect" }
@@ -70,6 +83,18 @@ func (t *IntrospectionTool) Execute(ctx context.Context, params string, _ *Conte
 	}
 
 	return &Result{Output: strings.Join(sections, "\n\n")}, nil
+}
+
+func (t *IntrospectionAliasTool) Name() string { return t.name }
+func (t *IntrospectionAliasTool) Description() string {
+	return t.base.Description()
+}
+func (t *IntrospectionAliasTool) Risk() RiskLevel { return t.base.Risk() }
+func (t *IntrospectionAliasTool) ParameterSchema() json.RawMessage {
+	return t.base.ParameterSchema()
+}
+func (t *IntrospectionAliasTool) Execute(ctx context.Context, params string, tctx *Context) (*Result, error) {
+	return t.base.Execute(ctx, params, tctx)
 }
 
 func (t *IntrospectionTool) capabilities() string {

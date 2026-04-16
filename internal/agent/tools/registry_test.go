@@ -60,3 +60,26 @@ func TestRegistry_ToolDefs(t *testing.T) {
 		}
 	}
 }
+
+func TestRegistry_Get_IntrospectionAlias(t *testing.T) {
+	reg := NewRegistry()
+	base := NewIntrospectionTool("roboticus", "0.1.0", reg.Names)
+	reg.Register(base)
+	reg.Register(NewIntrospectionAliasTool("introspection", base))
+
+	tool := reg.Get("introspection")
+	if tool == nil {
+		t.Fatal("should find introspection alias")
+	}
+	if tool.Name() != "introspection" {
+		t.Fatalf("alias name = %q", tool.Name())
+	}
+
+	canonical := reg.Get("introspect")
+	if canonical == nil {
+		t.Fatal("should find canonical introspection tool")
+	}
+	if canonical == tool {
+		t.Fatal("alias lookup should not replace canonical tool instance")
+	}
+}

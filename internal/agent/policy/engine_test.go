@@ -51,6 +51,24 @@ func TestPolicy_BlocksProtectedPaths(t *testing.T) {
 	}
 }
 
+func TestPolicy_BlocksHomeShortcutInWorkspaceOnlyMode(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.WorkspaceOnly = true
+	pe := NewEngine(cfg)
+	req := &ToolCallRequest{
+		ToolName:  "bash",
+		Arguments: `{"command":"find ~/Downloads -maxdepth 1 -type f"}`,
+		Authority: core.AuthorityCreator,
+	}
+	result := pe.Evaluate(req)
+	if !result.Denied() {
+		t.Fatal("expected home-directory shortcut to be denied")
+	}
+	if result.Rule != "path_protection" {
+		t.Fatalf("rule = %s, want path_protection", result.Rule)
+	}
+}
+
 func TestPolicy_BlocksShellInjection(t *testing.T) {
 	pe := NewEngine(DefaultConfig())
 	req := &ToolCallRequest{
@@ -128,10 +146,10 @@ func TestPolicy_AuthorityGating(t *testing.T) {
 func TestConfigProtectionRule_Direct(t *testing.T) {
 	rule := &configProtectionRule{}
 	tests := []struct {
-		name    string
-		tool    string
-		args    string
-		denied  bool
+		name   string
+		tool   string
+		args   string
+		denied bool
 	}{
 		{"write_file with api_key in config", "write_file", `{"path":"roboticus.toml","content":"api_key = \"secret\""}`, true},
 		{"write_file with admin_token in overrides", "write_file", `{"path":"config-overrides.toml","content":"admin_token = \"abc\""}`, true},

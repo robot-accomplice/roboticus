@@ -213,7 +213,9 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 	// Introspection tools.
 	tools.Register(&agenttools.RuntimeContextTool{})
 	tools.Register(&agenttools.MemoryStatsTool{})
-	tools.Register(agenttools.NewIntrospectionTool(cfg.Agent.Name, "0.1.0", tools.Names))
+	introspection := agenttools.NewIntrospectionTool(cfg.Agent.Name, "0.1.0", tools.Names)
+	tools.Register(introspection)
+	tools.Register(agenttools.NewIntrospectionAliasTool("introspection", introspection))
 
 	// Memory tools.
 	tools.Register(agenttools.NewMemoryRecallTool(store))
@@ -695,12 +697,13 @@ func (d *Daemon) RunInteractive() error {
 // The pre-v1.0.6 path called daemon.New() (full 12-step boot) just to
 // hand the resulting *Daemon to service.New(). That had two ugly
 // consequences:
-//   1. Every `roboticus daemon stop` printed a 12-step startup
-//      sequence to the user before issuing a stop, which is the
-//      opposite of operationally clear.
-//   2. Under sudo, the boot opened ~/.roboticus/state.db (and other
-//      files) as root, leaving them root-owned and locking subsequent
-//      unprivileged invocations out.
+//  1. Every `roboticus daemon stop` printed a 12-step startup
+//     sequence to the user before issuing a stop, which is the
+//     opposite of operationally clear.
+//  2. Under sudo, the boot opened ~/.roboticus/state.db (and other
+//     files) as root, leaving them root-owned and locking subsequent
+//     unprivileged invocations out.
+//
 // The stub eliminates both: zero subsystems initialized, zero files
 // touched, zero permission side effects.
 type controlStub struct{}
@@ -754,17 +757,17 @@ func Uninstall(cfg *core.Config) error {
 //
 // Resolution order:
 //
-//   1. PID file path (DaemonConfig.PIDFile or default
-//      ~/.roboticus/roboticus.pid). If the file exists and points at
-//      a live process, the action is satisfied via Unix signals — no
-//      sudo needed, no launchctl involved. This is the path that
-//      handles `roboticus serve` foreground invocations and
-//      user-mode daemons.
+//  1. PID file path (DaemonConfig.PIDFile or default
+//     ~/.roboticus/roboticus.pid). If the file exists and points at
+//     a live process, the action is satisfied via Unix signals — no
+//     sudo needed, no launchctl involved. This is the path that
+//     handles `roboticus serve` foreground invocations and
+//     user-mode daemons.
 //
-//   2. Fall back to the OS service manager (launchctl on macOS,
-//      systemctl on Linux, SCM on Windows). This is the path for
-//      installed system services where the daemon was bootstrapped
-//      by the OS, not by `roboticus serve`.
+//  2. Fall back to the OS service manager (launchctl on macOS,
+//     systemctl on Linux, SCM on Windows). This is the path for
+//     installed system services where the daemon was bootstrapped
+//     by the OS, not by `roboticus serve`.
 //
 // Idempotent semantics:
 //   - "stop" on an already-stopped daemon → returns nil with a

@@ -463,6 +463,9 @@ Allowed Paths: %s`,
 
 // resolvePath safely resolves a path within the workspace.
 func resolvePath(workspace, path string, allowedPaths []string) (string, error) {
+	if strings.HasPrefix(path, "~") {
+		return "", fmt.Errorf("home-directory shortcuts are not allowed; use a workspace-relative path or an explicitly allowed absolute path")
+	}
 	if filepath.IsAbs(path) {
 		cleanPath := filepath.Clean(path)
 		// Check if absolute path is within an allowed path (exact match or proper subtree).
