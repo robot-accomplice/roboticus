@@ -111,6 +111,7 @@ type Pipeline struct {
 	dashboard      DashboardNotifier
 	workspace      string   // agent workspace root — propagated to sessions for tool sandbox
 	allowedPaths   []string // extra paths outside workspace that tools may access
+	checkpointPolicy CheckpointPolicy
 }
 
 // PipelineDeps bundles dependencies for the Pipeline.
@@ -134,6 +135,16 @@ type PipelineDeps struct {
 	// Sandbox: workspace root and extra allowed paths propagated to every session.
 	Workspace    string
 	AllowedPaths []string
+
+	// Optional lifecycle policy. Nil means use package defaults so tests and
+	// ad-hoc callers keep the historical behavior unless they opt in.
+	CheckpointPolicy *CheckpointPolicy
+}
+
+// CheckpointPolicy controls periodic context checkpoint behavior.
+type CheckpointPolicy struct {
+	Enabled       bool
+	IntervalTurns int
 }
 
 // New creates the unified pipeline.
@@ -141,6 +152,16 @@ func New(deps PipelineDeps) *Pipeline {
 	bgw := deps.BGWorker
 	if bgw == nil {
 		bgw = core.NewBackgroundWorker(16)
+	}
+	cp := CheckpointPolicy{
+		Enabled:       true,
+		IntervalTurns: checkpointIntervalTurns,
+	}
+	if deps.CheckpointPolicy != nil {
+		cp.Enabled = deps.CheckpointPolicy.Enabled
+		if deps.CheckpointPolicy.IntervalTurns > 0 {
+			cp.IntervalTurns = deps.CheckpointPolicy.IntervalTurns
+		}
 	}
 	return &Pipeline{
 		store:      deps.Store,
@@ -164,6 +185,7 @@ func New(deps PipelineDeps) *Pipeline {
 		botCmds:        NewBotCommandHandler(deps.LLM, deps.Store),
 		workspace:      deps.Workspace,
 		allowedPaths:   deps.AllowedPaths,
+		checkpointPolicy: cp,
 	}
 }
 

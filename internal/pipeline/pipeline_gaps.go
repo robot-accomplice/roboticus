@@ -364,9 +364,16 @@ func (p *Pipeline) maybeCheckpoint(ctx context.Context, session *Session, turnID
 	if p.store == nil {
 		return
 	}
+	if !p.checkpointPolicy.Enabled {
+		return
+	}
+	interval := p.checkpointPolicy.IntervalTurns
+	if interval <= 0 {
+		interval = checkpointIntervalTurns
+	}
 
 	turnCount := session.TurnCount()
-	if turnCount == 0 || turnCount%checkpointIntervalTurns != 0 {
+	if turnCount == 0 || turnCount%interval != 0 {
 		return
 	}
 
@@ -415,6 +422,7 @@ func (p *Pipeline) maybeCheckpoint(ctx context.Context, session *Session, turnID
 	log.Debug().
 		Str("session", session.ID).
 		Int("turn", turnCount).
+		Int("interval", interval).
 		Int("retained", checkpointRetentionCount).
 		Msg("context checkpoint saved")
 }

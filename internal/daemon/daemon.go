@@ -597,6 +597,10 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 		Dashboard:    eventBus,
 		Workspace:    cfg.Agent.Workspace,
 		AllowedPaths: cfg.Security.AllowedPaths,
+		CheckpointPolicy: &pipeline.CheckpointPolicy{
+			Enabled:       cfg.Context.CheckpointEnabled,
+			IntervalTurns: cfg.Context.CheckpointIntervalTurns,
+		},
 	})
 
 	bootStep(10, steps, "Pipeline assembled")

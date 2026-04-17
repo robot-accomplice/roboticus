@@ -108,3 +108,79 @@ func TestMaybeCheckpoint_PrunesViaRepositoryLifecycle(t *testing.T) {
 		t.Fatalf("checkpoint count = %d, want %d", count, checkpointRetentionCount)
 	}
 }
+
+func TestMaybeCheckpoint_HonorsDisabledPolicy(t *testing.T) {
+	store := testutil.TempStore(t)
+	pipe := New(PipelineDeps{
+		Store:            store,
+		BGWorker:         testutil.BGWorker(t, 2),
+		CheckpointPolicy: &CheckpointPolicy{Enabled: false, IntervalTurns: 10},
+	})
+
+	sess := session.New("sess-ckpt-disabled", "agent-3", "TestBot")
+	if _, err := store.FindOrCreateSession(context.Background(), sess.AgentID, "scope:checkpoint-disabled"); err != nil {
+		t.Fatalf("FindOrCreateSession: %v", err)
+	}
+	if err := store.QueryRowContext(context.Background(),
+		`SELECT id FROM sessions WHERE agent_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+		sess.AgentID,
+	).Scan(&sess.ID); err != nil {
+		t.Fatalf("load session id: %v", err)
+	}
+	for i := 0; i < 10; i++ {
+		sess.AddUserMessage("user turn")
+	}
+	sess.AddSystemMessage("memory block")
+	sess.AddAssistantMessage("assistant digest", nil)
+
+	pipe.maybeCheckpoint(context.Background(), sess, "turn-disabled")
+
+	var count int
+	if err := store.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM context_checkpoints WHERE session_id = ?`,
+		sess.ID,
+	).Scan(&count); err != nil {
+		t.Fatalf("count checkpoints: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("checkpoint count = %d, want 0 when disabled", count)
+	}
+}
+
+func TestMaybeCheckpoint_HonorsConfiguredInterval(t *testing.T) {
+	store := testutil.TempStore(t)
+	pipe := New(PipelineDeps{
+		Store:            store,
+		BGWorker:         testutil.BGWorker(t, 2),
+		CheckpointPolicy: &CheckpointPolicy{Enabled: true, IntervalTurns: 3},
+	})
+
+	sess := session.New("sess-ckpt-interval", "agent-4", "TestBot")
+	if _, err := store.FindOrCreateSession(context.Background(), sess.AgentID, "scope:checkpoint-interval"); err != nil {
+		t.Fatalf("FindOrCreateSession: %v", err)
+	}
+	if err := store.QueryRowContext(context.Background(),
+		`SELECT id FROM sessions WHERE agent_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+		sess.AgentID,
+	).Scan(&sess.ID); err != nil {
+		t.Fatalf("load session id: %v", err)
+	}
+
+	for i := 0; i < 3; i++ {
+		sess.AddUserMessage("user turn")
+	}
+	sess.AddSystemMessage("memory block")
+	sess.AddAssistantMessage("assistant digest", nil)
+	pipe.maybeCheckpoint(context.Background(), sess, "turn-interval")
+
+	var count int
+	if err := store.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM context_checkpoints WHERE session_id = ?`,
+		sess.ID,
+	).Scan(&count); err != nil {
+		t.Fatalf("count checkpoints: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("checkpoint count = %d, want 1 at configured interval", count)
+	}
+}
