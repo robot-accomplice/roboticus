@@ -218,21 +218,11 @@ func (w *CronWorker) loadEnabledJob(ctx context.Context, jobID string) (*CronJob
 }
 
 func (w *CronWorker) recordRun(ctx context.Context, run *CronRun) {
-	// Use column names compatible with both old schema (error, created_at)
-	// and new schema (error_msg, timestamp). Try new first, fall back to old.
 	_, err := w.store.ExecContext(ctx,
 		`INSERT INTO cron_runs (job_id, status, duration_ms, error_msg, timestamp)
 		 VALUES (?, ?, ?, ?, ?)`,
 		run.JobID, run.Status, run.DurationMs, run.ErrorMsg,
 		run.Timestamp.UTC().Format(time.RFC3339))
-	if err != nil {
-		// Old schema: columns are 'error' and 'created_at'.
-		_, err = w.store.ExecContext(ctx,
-			`INSERT INTO cron_runs (job_id, status, duration_ms, error, created_at)
-			 VALUES (?, ?, ?, ?, ?)`,
-			run.JobID, run.Status, run.DurationMs, run.ErrorMsg,
-			run.Timestamp.UTC().Format(time.RFC3339))
-	}
 	if err != nil {
 		w.errBus.ReportIfErr(err, "scheduler", "record_run", core.SevWarning)
 	}

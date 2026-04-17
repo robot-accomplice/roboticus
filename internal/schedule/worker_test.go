@@ -244,6 +244,21 @@ func TestRunRecording_SuccessAndFailure(t *testing.T) {
 	if successCount != 1 || failCount != 1 {
 		t.Errorf("success=%d fail=%d, want 1 each", successCount, failCount)
 	}
+
+	var errorMsg, timestamp string
+	row = store.QueryRowContext(ctx,
+		`SELECT error_msg, timestamp FROM cron_runs
+		 WHERE job_id = 'run-1' AND status = 'failed'
+		 ORDER BY rowid DESC LIMIT 1`)
+	if err := row.Scan(&errorMsg, &timestamp); err != nil {
+		t.Fatalf("scan cron_runs error/timestamp: %v", err)
+	}
+	if errorMsg != "boom" {
+		t.Fatalf("cron_runs.error_msg = %q, want boom", errorMsg)
+	}
+	if timestamp == "" {
+		t.Fatal("cron_runs.timestamp should not be empty")
+	}
 }
 
 func TestRunJobNow_UsesRunLifecycle(t *testing.T) {

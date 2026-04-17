@@ -80,7 +80,7 @@ Today that lifecycle is already split into two families:
 | SYS-11-001 | P1 | Scheduled runtime is split across durable cron and heartbeat families | Rust scheduler/heartbeat relationship still needs explicit source-anchored comparison | Go has a real split: `CronWorker` owns persisted cron jobs with lease/retry/run-history semantics, while `HeartbeatDaemon` runs maintenance-style recurring tasks outside the durable cron lifecycle | Open | Open | `internal/schedule/worker.go`, `internal/schedule/heartbeat.go`, `internal/schedule/tasks.go`, `internal/daemon/daemon_subsystems.go` |
 | SYS-11-002 | P1 | Manual cron execution must share the durable worker lifecycle | Rust immediate-run semantics need explicit comparison | `RunCronJobNow` now delegates through `CronWorker.RunJobNow(...)`, so lease acquisition, run-history recording, retry bookkeeping, and next-run updates all reuse the same lifecycle as scheduled execution | Degradation remediated / lifecycle ownership restored | Accepted | `internal/api/routes/cron_run_now.go`, `internal/schedule/worker.go`, `internal/api/routes/cron_test.go`, `internal/schedule/worker_test.go` |
 | SYS-11-003 | P2 | Durable cron execution is correctly pipeline-owned once a job reaches execution | Rust intent is pipeline-owned business behavior | `CronWorker` delegates actual job behavior through `pipeline.RunPipeline(...PresetCron())` and daemon cron execution enqueues delivery after pipeline outcome | Idiomatic shift / likely improvement | Accepted | `internal/daemon/daemon_subsystems.go`, `internal/schedule/worker.go` |
-| SYS-11-004 | P2 | Scheduler compatibility logic still carries schema-fallback debt | Rust schema contract needs comparison | `recordRun(...)` still tries new cron-run columns first and falls back to old names, indicating runtime compatibility debt is still in the hot path | Open | Open | `internal/schedule/worker.go` |
+| SYS-11-004 | P2 | Scheduler compatibility logic carried schema-fallback debt in the hot path | Rust schema contract needs comparison | `recordRun(...)` now writes only the authoritative `cron_runs(error_msg, timestamp)` shape; runtime no longer branches across legacy column names during live execution. Remaining work is broader heartbeat/runtime classification, not cron-run schema ambiguity | Degradation remediated | Accepted | `internal/schedule/worker.go`, `internal/schedule/worker_test.go` |
 
 ## Intentional Deviations
 
@@ -116,3 +116,6 @@ scheduled execution paths share the same lifecycle guarantees.
 - 2026-04-17: Remediated the manual-run bypass by routing `RunCronJobNow`
   through `CronWorker.RunJobNow(...)`, restoring lease/run-history/retry
   ownership on the live route path.
+- 2026-04-17: Removed legacy cron-run schema fallback from `recordRun(...)`;
+  live scheduler execution now writes only the authoritative
+  `cron_runs(error_msg, timestamp)` contract and pins that shape in tests.

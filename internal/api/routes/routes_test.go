@@ -285,12 +285,22 @@ func TestGetSetActiveTheme(t *testing.T) {
 
 func TestSearchTraces(t *testing.T) {
 	store := testutil.TempStore(t)
+	_, _ = store.ExecContext(bgCtx, `INSERT INTO sessions (id, agent_id, scope_key) VALUES ('s1', 'a1', 'test')`)
+	_, _ = store.ExecContext(bgCtx, `INSERT INTO sessions (id, agent_id, scope_key) VALUES ('s2', 'a2', 'test')`)
+	_, _ = store.ExecContext(bgCtx, `INSERT INTO turns (id, session_id) VALUES ('t1', 's1')`)
+	_, _ = store.ExecContext(bgCtx, `INSERT INTO turns (id, session_id) VALUES ('t2', 's2')`)
 	_, _ = store.ExecContext(bgCtx,
 		`INSERT INTO pipeline_traces (id, turn_id, session_id, channel, total_ms, stages_json, react_trace_json, created_at)
 		 VALUES ('pt1', 't1', 's1', 'api', 250, '[{"tool":"search_files"}]', '{"guard":"approval"}', datetime('now'))`)
 	_, _ = store.ExecContext(bgCtx,
 		`INSERT INTO pipeline_traces (id, turn_id, session_id, channel, total_ms, stages_json, react_trace_json, created_at)
 		 VALUES ('pt2', 't2', 's2', 'chat', 50, '[{"tool":"web_search"}]', '{"guard":"none"}', datetime('now'))`)
+	_, _ = store.ExecContext(bgCtx,
+		`INSERT INTO tool_calls (id, turn_id, tool_name, input, status, created_at)
+		 VALUES ('tc1', 't1', 'search_files', '{}', 'success', datetime('now'))`)
+	_, _ = store.ExecContext(bgCtx,
+		`INSERT INTO tool_calls (id, turn_id, tool_name, input, status, created_at)
+		 VALUES ('tc2', 't2', 'web_search', '{}', 'success', datetime('now'))`)
 
 	req := httptest.NewRequest("GET", "/api/traces/search?tool_name=search_files&guard_name=approval&min_duration_ms=100", nil)
 	rec := httptest.NewRecorder()
@@ -306,6 +316,42 @@ func TestSearchTraces(t *testing.T) {
 	first := results[0].(map[string]any)
 	if first["turn_id"] != "t1" {
 		t.Errorf("turn_id = %v, want t1", first["turn_id"])
+	}
+}
+
+func TestSearchTraces_ToolFilterUsesExactToolCalls(t *testing.T) {
+	store := testutil.TempStore(t)
+	_, _ = store.ExecContext(bgCtx, `INSERT INTO sessions (id, agent_id, scope_key) VALUES ('s1', 'a1', 'test')`)
+	_, _ = store.ExecContext(bgCtx, `INSERT INTO sessions (id, agent_id, scope_key) VALUES ('s2', 'a2', 'test')`)
+	_, _ = store.ExecContext(bgCtx, `INSERT INTO turns (id, session_id) VALUES ('t1', 's1')`)
+	_, _ = store.ExecContext(bgCtx, `INSERT INTO turns (id, session_id) VALUES ('t2', 's2')`)
+	_, _ = store.ExecContext(bgCtx,
+		`INSERT INTO pipeline_traces (id, turn_id, session_id, channel, total_ms, stages_json, react_trace_json, created_at)
+		 VALUES ('pt1', 't1', 's1', 'api', 250, '[{"tool":"search_files_backup"}]', '{"guard":"approval"}', datetime('now'))`)
+	_, _ = store.ExecContext(bgCtx,
+		`INSERT INTO pipeline_traces (id, turn_id, session_id, channel, total_ms, stages_json, react_trace_json, created_at)
+		 VALUES ('pt2', 't2', 's2', 'api', 250, '[{"tool":"search_files"}]', '{"guard":"approval"}', datetime('now'))`)
+	_, _ = store.ExecContext(bgCtx,
+		`INSERT INTO tool_calls (id, turn_id, tool_name, input, status, created_at)
+		 VALUES ('tc1', 't1', 'search_files_backup', '{}', 'success', datetime('now'))`)
+	_, _ = store.ExecContext(bgCtx,
+		`INSERT INTO tool_calls (id, turn_id, tool_name, input, status, created_at)
+		 VALUES ('tc2', 't2', 'search_files', '{}', 'success', datetime('now'))`)
+
+	req := httptest.NewRequest("GET", "/api/traces/search?tool_name=search_files", nil)
+	rec := httptest.NewRecorder()
+	SearchTraces(store).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	body := jsonBody(t, rec)
+	if body["count"] != float64(1) {
+		t.Fatalf("count = %v, want 1", body["count"])
+	}
+	results := body["results"].([]any)
+	first := results[0].(map[string]any)
+	if first["turn_id"] != "t2" {
+		t.Fatalf("turn_id = %v, want t2", first["turn_id"])
 	}
 }
 

@@ -100,6 +100,7 @@ Blocking commands for feature-complete releases:
 | R-RT-09 | IntentMemoryRecall scoring rewards tool use and penalizes confabulation | `internal/llm/exercise_memory_recall_test.go` | L1 |
 | R-RT-10 | Every model in CommonIntentBaselines has a MEMORY_RECALL entry | `internal/llm/exercise_memory_recall_test.go` | L1 |
 | R-RT-11 | Routing trace annotations are emitted from the actual `llm.Request` selection site, including real message/tool counts, not a synthetic user-only approximation | `internal/llm/routing_trace_test.go` | L1 |
+| R-RT-12 | `/api/traces/search` uses exact `tool_calls.tool_name` matching and parsed guard JSON instead of SQL `LIKE` over serialized trace blobs | `internal/api/routes/routes_test.go` | L1/L2 |
 | R-RT-12 | Model-selection events persist the actual routed request's winner and user excerpt when turn/session/channel context is present | `internal/llm/model_selection_event_test.go` | L1 |
 | R-RT-13 | `/api/models/exercise` now exercises the same pipeline-owned request path as the CLI, with `NoCache` + `NoEscalate`, instead of bypassing into direct LLM scoring | `internal/api/routes/routing_admin_exercise_test.go`, `internal/llm/service_complete_test.go` | L1/L2 |
 
@@ -140,6 +141,7 @@ Blocking commands for feature-complete releases:
 | R-SCHED-03 | UI-created schedule kinds are executable by the worker | integration tests | L2/L3 |
 | R-SCHED-04 | Background maintenance tasks do real work or are explicitly disabled | smoke + subsystem tests | L2/L3 |
 | R-SCHED-05 | Manual "run now" execution reuses the durable cron worker lifecycle instead of bypassing lease/run-history/retry ownership | route + scheduler tests | L1/L2 |
+| R-SCHED-06 | Cron run recording writes the authoritative `error_msg` / `timestamp` schema without legacy fallback branching in the live worker path | scheduler tests | L1/L2 |
 
 ### R-WAL: Wallet, Treasury, Payments
 
