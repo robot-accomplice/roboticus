@@ -91,6 +91,7 @@ The key artifacts are:
 | SYS-10-002 | P1 | Sandbox semantics are enforced in more than one layer | Rust intent is one coherent operator contract | Go now has a tighter shared runtime helper: filesystem tools resolve through `tools.ResolvePath(...)`, `ValidatePath(...)` shares the same allowed-path semantics, and pipeline session bootstrap snapshots `AllowedPaths` instead of sharing the pipeline slice header. Policy-layer path denial and tool-layer resolution are still distinct seams, but the helper split is materially narrower | Improved, not closed | Open | `internal/agent/tools/sandbox.go`, `internal/agent/tools/builtins.go`, `internal/pipeline/pipeline_stages.go`, `internal/pipeline/sandbox_propagation_test.go`, `internal/agent/tools/sandbox_test.go` |
 | SYS-10-003 | P1 | Model self-censorship must not replace real policy decisions | Tool/runtime policy should be the source of truth | Go has already fixed several prompt/runtime mismatches here, but this concern deserves explicit ownership in the parity program | Improvement candidate | Open | soak fixes, `prompt.go`, policy/tool tests |
 | SYS-10-004 | P1 | Sensitive config mutation vocabulary drifted between the policy engine and the post-inference guard | Rust intent is one coherent operator contract for protected settings | Go now centralizes protected config filenames and field patterns under `internal/security/config_protection.go`, and both `configProtectionRule` and `ConfigProtectionGuard` consume that shared matcher. This materially reduces policy/guard divergence, though the broader cross-layer audit is still open | Improved, not closed | Open | `internal/security/config_protection.go`, `internal/agent/policy/engine.go`, `internal/pipeline/guards_config_protection.go`, related tests |
+| SYS-10-005 | P1 | `FilesystemDenialGuard` treated all filesystem-access disclaimers as false, even when the tool layer had returned a real sandbox denial | Rust intent is to suppress fake capability disclaimers, not overwrite legitimate policy outcomes | Go now lets `FilesystemDenialGuard` pass when tool results contain a real sandbox/path denial marker, while still rewriting false "can't access your files" boilerplate when the turn context contradicts it | Improved, not closed | Open | `internal/pipeline/guards_truthfulness.go`, `internal/pipeline/guards_truthfulness_test.go` |
 
 ## Intentional Deviations
 
@@ -121,6 +122,9 @@ Current known good state:
 - sensitive config filenames and field patterns are now owned by one shared
   matcher, so pre-execution policy denial and post-inference config-protection
   guards evaluate the same protected surface
+- filesystem-denial truthfulness now respects real sandbox outcomes from the
+  tool layer instead of treating every filesystem-access disclaimer as false on
+  sight
 
 ## Downstream Systems Affected
 
@@ -156,3 +160,7 @@ Current known good state:
   `internal/security/config_protection.go`. The policy engine and the
   `ConfigProtectionGuard` now consume the same matcher instead of carrying
   diverging sensitive-key vocabularies.
+- 2026-04-17: `FilesystemDenialGuard` now consults tool results and passes when
+  the turn contains a real sandbox/path denial, while still stripping or
+  retrying the old fake capability-disclaimer boilerplate when the turn context
+  contradicts it.

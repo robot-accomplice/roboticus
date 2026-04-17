@@ -77,6 +77,35 @@ func TestExecutionTruthGuard_DeniedCapability(t *testing.T) {
 	}
 }
 
+func TestFilesystemDenialGuard_AllowsActualSandboxDenial(t *testing.T) {
+	g := &FilesystemDenialGuard{}
+	ctx := &GuardContext{
+		ToolResults: []ToolResultEntry{
+			{ToolName: "list_directory", Output: "error: absolute paths must be in allowed_paths list"},
+		},
+	}
+	result := g.CheckWithContext("I can't access your files directly because that path is outside the allowed workspace.", ctx)
+	if !result.Passed {
+		t.Fatalf("expected pass for real sandbox denial, got reason: %s", result.Reason)
+	}
+}
+
+func TestFilesystemDenialGuard_RewritesFalseDenialWhenToolsRan(t *testing.T) {
+	g := &FilesystemDenialGuard{}
+	ctx := &GuardContext{
+		ToolResults: []ToolResultEntry{
+			{ToolName: "list_directory", Output: "file-a\nfile-b"},
+		},
+	}
+	result := g.CheckWithContext("I can't access your files directly, but I can still help conceptually.", ctx)
+	if result.Passed {
+		t.Fatal("expected false filesystem denial to be blocked")
+	}
+	if result.Retry && result.Content != "" {
+		t.Fatalf("expected retry-only or rewrite-only result, got both retry=%v content=%q", result.Retry, result.Content)
+	}
+}
+
 func TestExecutionTruthGuard_HonestExecution(t *testing.T) {
 	g := &ExecutionTruthGuard{}
 	ctx := &GuardContext{
