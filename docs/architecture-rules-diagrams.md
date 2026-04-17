@@ -258,20 +258,21 @@ flowchart LR
 
 Plugin administration and plugin runtime are not the same thing. Install/search
 surfaces may write plugin files or inspect catalogs, but the live runtime must
-own registry construction, directory discovery, manifest parsing, and init.
-Routes consume that runtime-owned registry; they do not create their own view
-of plugin state.
+own registry construction, directory discovery, manifest parsing, init, and
+install-time hot loading. Routes consume that runtime-owned registry; they do
+not create their own view of plugin state.
 
 ```mermaid
 flowchart LR
     install["Install / Catalog UX"]
     fs["Plugin Directory"]
     daemon["Daemon Composition Root"]
-    registry["plugin.Registry\n(scan + init + active statuses)"]
+    registry["plugin.Registry\n(scan + init + hot load + active statuses)"]
     routes["Plugin Routes / Dashboard"]
     runtime["Runtime Tool Surface"]
 
     install --> fs
+    install --> registry
     daemon --> registry
     fs --> daemon
     registry --> routes

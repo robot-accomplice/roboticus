@@ -250,7 +250,7 @@ func NewServer(ctx context.Context, cfg ServerConfig, state *AppState) *http.Ser
 		r.Get("/api/plugins/tools", routes.ListPluginTools(state.Plugins))
 		r.Post("/api/plugins/{name}/enable", routes.EnablePlugin(state.Plugins))
 		r.Post("/api/plugins/{name}/disable", routes.DisablePlugin(state.Plugins))
-		r.Post("/api/plugins/catalog/install", routes.InstallPlugin(state.Config))
+		r.Post("/api/plugins/catalog/install", routes.InstallPlugin(state.Config, state.Plugins))
 		r.Post("/api/plugins/{name}/execute/{tool}", routes.ExecutePluginTool(state.Plugins))
 
 		// Stats.

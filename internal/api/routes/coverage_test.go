@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -889,7 +891,7 @@ func TestIntToNegStr(t *testing.T) {
 
 func TestInstallPlugin_InvalidJSON(t *testing.T) {
 	cfg := coverageTestConfig()
-	handler := InstallPlugin(cfg)
+	handler := InstallPlugin(cfg, nil)
 	req := httptest.NewRequest("POST", "/api/plugins/install",
 		strings.NewReader(`{bad`))
 	rec := httptest.NewRecorder()
@@ -902,7 +904,7 @@ func TestInstallPlugin_InvalidJSON(t *testing.T) {
 
 func TestInstallPlugin_MissingFields(t *testing.T) {
 	cfg := coverageTestConfig()
-	handler := InstallPlugin(cfg)
+	handler := InstallPlugin(cfg, nil)
 	req := httptest.NewRequest("POST", "/api/plugins/install",
 		strings.NewReader(`{"name":"test"}`))
 	rec := httptest.NewRecorder()
@@ -916,7 +918,7 @@ func TestInstallPlugin_MissingFields(t *testing.T) {
 func TestInstallPlugin_Success(t *testing.T) {
 	cfg := coverageTestConfig()
 	cfg.Plugins.Dir = t.TempDir()
-	handler := InstallPlugin(cfg)
+	handler := InstallPlugin(cfg, nil)
 	req := httptest.NewRequest("POST", "/api/plugins/install",
 		strings.NewReader(`{"name":"my-plugin","content":"print('hello')"}`))
 	rec := httptest.NewRecorder()
@@ -928,6 +930,37 @@ func TestInstallPlugin_Success(t *testing.T) {
 	body := jsonBody(t, rec)
 	if body["name"] != "my-plugin" {
 		t.Errorf("name = %v", body["name"])
+	}
+}
+
+func TestInstallPlugin_SourcePathHotRegisters(t *testing.T) {
+	cfg := coverageTestConfig()
+	cfg.Plugins.Dir = t.TempDir()
+	reg := plugin.NewRegistry(nil, nil, plugin.PermissionPolicy{})
+
+	sourceDir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(sourceDir, "manifest.toml"), []byte(strings.TrimSpace(`
+name = "hot-plugin"
+version = "1.0.0"
+
+[[tools]]
+name = "echo"
+description = "Echo"
+`)), 0o644)
+	_ = os.WriteFile(filepath.Join(sourceDir, "echo"), []byte("#!/bin/sh\necho ok\n"), 0o755)
+
+	handler := InstallPlugin(cfg, reg)
+	req := httptest.NewRequest("POST", "/api/plugins/install",
+		strings.NewReader(fmt.Sprintf(`{"name":"hot-plugin","source_path":%q}`, sourceDir)))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201", rec.Code)
+	}
+	tools := reg.AllTools()
+	if len(tools) != 1 || tools[0].Name != "echo" {
+		t.Fatalf("tools = %+v, want echo", tools)
 	}
 }
 

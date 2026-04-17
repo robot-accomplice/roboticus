@@ -36,8 +36,9 @@ older architecture docs had left too generic:
   messages into the pipeline.
 - **Plugin runtime ownership is sharper.** Daemon startup now owns plugin
   registry construction, directory scan, manifest parsing, init, and
-  `AppState.Plugins` wiring. Plugin install/catalog UX still exists, but it no
-  longer stands in for a missing runtime lifecycle.
+  `AppState.Plugins` wiring. Install-time plugin writes now hot-load into that
+  same registry, so plugin install/catalog UX no longer stands in for a missing
+  runtime lifecycle.
 - **Manual cron execution now shares the durable scheduler lifecycle.** The
   live `/api/cron/{id}/run` path no longer bypasses lease/run-history/retry
   ownership; it delegates through `CronWorker.RunJobNow(...)` and preserves the

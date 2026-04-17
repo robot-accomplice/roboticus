@@ -275,7 +275,7 @@ func GetSkillsCatalog(store *db.Store, reg *plugin.Registry, cfg *core.Config) h
 			entry := map[string]any{
 				"id": t.ID, "name": t.Name, "description": t.Description,
 				"author": t.Author, "swatch": t.Swatch, "source": t.Source,
-				"version": t.Version,
+				"version":   t.Version,
 				"installed": installedThemes[t.ID] || installed[t.ID],
 			}
 			if len(t.Variables) > 0 {
@@ -374,42 +374,6 @@ func ActivateSkillFromCatalog(store *db.Store) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "activated", "name": req.Name})
-	}
-}
-
-// InstallPlugin installs a plugin by writing its content to the plugins directory.
-// Accepts {"name": "plugin_name", "content": "plugin script content"}.
-func InstallPlugin(cfg *core.Config) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			Name    string `json:"name"`
-			Content string `json:"content"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid JSON body")
-			return
-		}
-		if req.Name == "" || req.Content == "" {
-			writeError(w, http.StatusBadRequest, "name and content are required")
-			return
-		}
-
-		pluginsDir := cfg.Plugins.Dir
-		if pluginsDir == "" {
-			pluginsDir = filepath.Join(core.ConfigDir(), "plugins")
-		}
-		pluginDir := filepath.Join(pluginsDir, req.Name)
-		path, err := core.WritePluginFile(pluginDir, "main", req.Content)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-
-		writeJSON(w, http.StatusCreated, map[string]string{
-			"status": "installed",
-			"name":   req.Name,
-			"path":   path,
-		})
 	}
 }
 

@@ -982,3 +982,74 @@ func TestRegistry_ScanDirectory_YMLManifest(t *testing.T) {
 		t.Errorf("found %d, want 1", n)
 	}
 }
+
+func TestRegistry_ScanDirectory_ParsesToolDefinitions(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "toolplugin")
+	_ = os.MkdirAll(dir, 0o755)
+	manifest := `
+name = "toolplugin"
+version = "1.0.0"
+description = "plugin with tools"
+
+[[tools]]
+name = "echo"
+description = "Echo text"
+dangerous = false
+parameters_schema = '{"type":"object","properties":{"text":{"type":"string"}}}'
+`
+	_ = os.WriteFile(filepath.Join(dir, "manifest.toml"), []byte(strings.TrimSpace(manifest)), 0o644)
+
+	reg := NewRegistry(nil, nil, PermissionPolicy{})
+	n, err := reg.ScanDirectory(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("found %d plugins, want 1", n)
+	}
+	errs := reg.InitAll()
+	if len(errs) != 0 {
+		t.Fatalf("init errs = %v", errs)
+	}
+
+	tools := reg.AllTools()
+	if len(tools) != 1 {
+		t.Fatalf("AllTools length = %d, want 1", len(tools))
+	}
+	if tools[0].Name != "echo" {
+		t.Fatalf("tool name = %q, want echo", tools[0].Name)
+	}
+	if tools[0].Description != "Echo text" {
+		t.Fatalf("tool description = %q", tools[0].Description)
+	}
+}
+
+func TestRegistry_LoadDirectory_ActivatesPlugin(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "loadme")
+	_ = os.MkdirAll(dir, 0o755)
+	manifest := `
+name = "loadme"
+version = "1.0.0"
+
+[[tools]]
+name = "ping"
+description = "ping tool"
+`
+	_ = os.WriteFile(filepath.Join(dir, "manifest.toml"), []byte(strings.TrimSpace(manifest)), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "ping"), []byte("#!/bin/sh\necho ok\n"), 0o755)
+
+	reg := NewRegistry(nil, nil, PermissionPolicy{})
+	info, err := reg.LoadDirectory(dir)
+	if err != nil {
+		t.Fatalf("LoadDirectory: %v", err)
+	}
+	if info.Name != "loadme" || info.Status != StatusActive {
+		t.Fatalf("info = %+v, want active loadme", info)
+	}
+	tools := reg.AllTools()
+	if len(tools) != 1 || tools[0].Name != "ping" {
+		t.Fatalf("tools = %+v, want ping", tools)
+	}
+}
