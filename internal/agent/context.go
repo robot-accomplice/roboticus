@@ -370,6 +370,9 @@ func (cb *ContextBuilder) BuildRequest(session *Session) *llm.Request {
 
 		// Non-latest-user message: subject to budget. Older history
 		// gets dropped first when the budget is tight.
+		if strings.TrimSpace(content) == "" && len(m.ToolCalls) == 0 && m.ToolCallID == "" {
+			continue
+		}
 		if usedTokens+tokens > remaining {
 			continue
 		}

@@ -49,7 +49,6 @@ Out of scope:
 | Runtime selection in complete path | `internal/llm/service.go:214-218` |
 | Runtime selection in stream path | `internal/llm/service.go:422-425` |
 | Pipeline trace routing annotation | `internal/pipeline/pipeline_run_stages.go:683-716` |
-| Model-selection audit helper | `internal/pipeline/inference_runner.go:67-81` |
 | Retrieval intents carried per-call | `internal/agent/memory/intents_context.go:1-52`, `internal/agent/memory/retrieval.go:236-244` |
 
 ## Live Go Path
@@ -60,12 +59,7 @@ Current observed state on 2026-04-16:
    and stream paths.
 2. The pipeline trace annotation path does not use that same full request; it
    reconstructs a synthetic request containing only the last user message.
-3. The model-selection audit helper in `inference_runner.go` also routes on a
-   synthetic user-only request.
-4. `SelectAndAuditModel` persists a routing event derived from a synthetic
-   user-only request rather than the same effective request runtime inference
-   uses.
-5. Memory retrieval intents were previously a shared mutable field on the
+3. Memory retrieval intents were previously a shared mutable field on the
    retriever, but that specific concurrency drift has now been corrected by
    moving intents onto `context.Context` per retrieval call.
 
@@ -110,7 +104,7 @@ Parity is not satisfied unless those three agree on the effective input.
 | ID | Priority | Concern | Rust behavior | Go behavior | Classification | Status | Evidence |
 |----|----------|---------|---------------|-------------|----------------|--------|----------|
 | SYS-05-001 | P1 | Routing trace request shape drift | Downstream observability should describe the same prepared request that inference uses | Routing trace annotation is now emitted at the actual selection site inside `llm.Service` using the final `llm.Request`; the old synthetic pipeline winner path has been removed | Improvement / synthesis | Closed (retain) | `internal/llm/routing_trace.go`, `internal/llm/service.go:225-226`, `internal/llm/service.go:438-439`, `internal/pipeline/pipeline_run_stages.go:766-789` |
-| SYS-05-002 | P1 | Model-selection audit event request shape drift | Audit path should reflect the same routing decision surface as runtime inference | Routed model-selection events are now persisted from `llm.Service` using the actual request plus turn/session/channel context; the older `SelectAndAuditModel` helper remains legacy scaffolding but is no longer the authoritative path | Improvement / synthesis | Closed (retain) | `internal/llm/service.go:225-227`, `internal/llm/service.go:438-440`, `internal/llm/model_selection_event_test.go`, `internal/core/context_keys.go`, `internal/pipeline/pipeline_stages.go:31-35` |
+| SYS-05-002 | P1 | Model-selection audit event request shape drift | Audit path should reflect the same routing decision surface as runtime inference | Routed model-selection events are now persisted from `llm.Service` using the actual request plus turn/session/channel context. The older synthetic `SelectAndAuditModel` path has been deleted, leaving one live audit owner | Improvement / synthesis | Closed (retain) | `internal/llm/service.go:225-227`, `internal/llm/service.go:438-440`, `internal/llm/model_selection_event_test.go`, `internal/core/context_keys.go`, `internal/pipeline/pipeline_stages.go:31-35` |
 | SYS-05-003 | P2 | Complexity estimation depends on final request shape | Router complexity heuristics include message count, tool count, and content signals | Any path that omits tools/history from the routed request will understate complexity versus real inference | Degradation | Open | `internal/llm/router.go:199-260` plus synthetic-call sites above |
 | SYS-05-004 | P1 | Per-call retrieval intents previously leaked across turns | Routing-adjacent retrieval planning should not use shared mutable intent state | This was a real bug, now fixed by context-carried intents | Improvement | Closed / retain as evidence | `internal/agent/memory/intents_context.go:1-52`, `internal/agent/memory/retrieval.go:236-244` |
 | SYS-05-005 | P2 | Metascore / weight tracing can become decorrelated from the actual routed request when the winner is chosen from a synthetic request | Routing observability should expose the same effective inputs that produced the selected model and weight application | Go traces routing mode and weights, but the winner is still computed from a user-only reconstruction in the trace path | Degradation | Open | `internal/pipeline/pipeline_run_stages.go:683-716`, `internal/pipeline/trace.go:384-401`, `internal/llm/router.go:150-174` |
@@ -141,8 +135,6 @@ Expected closure conditions:
 
 - Should routing trace annotation move to the point where the final
   `llm.Request` is available rather than reconstructing an approximation?
-- Is `SelectAndAuditModel` still necessary as a separate selection path, or can
-  it observe the already-selected runtime model?
 - Is there any legitimate operator use case for a user-only routing estimate, or
   should that be demoted to a clearly non-authoritative diagnostic if retained?
 
@@ -167,3 +159,6 @@ Expected closure conditions:
   pipeline threads turn/session/channel context into inference. This aligns
   persisted audit events with runtime truth instead of relying on a
   user-only reconstruction helper.
+- 2026-04-17: Deleted the dead `internal/pipeline/inference_runner.go`
+  scaffolding after the actual-request model-selection event path was proven
+  live. This removes a fake second routing/audit owner from the codebase.

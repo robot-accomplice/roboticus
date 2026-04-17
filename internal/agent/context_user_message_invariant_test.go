@@ -168,3 +168,36 @@ func TestBuildRequest_UserMessagePresentInGenerousBudget(t *testing.T) {
 		}
 	}
 }
+
+// TestBuildRequest_DropsEmptyCompactedHistoryMessages pins the ownership
+// boundary for empty-message removal. Social filler that compacts to ""
+// must be dropped by ContextBuilder itself, not carried forward and cleaned
+// up later by llm.Service.
+func TestBuildRequest_DropsEmptyCompactedHistoryMessages(t *testing.T) {
+	cfg := DefaultContextConfig()
+	cfg.MaxTokens = 10 // force selective compaction
+	cb := NewContextBuilder(cfg)
+	cb.SetSystemPrompt(strings.Repeat("x", 20))
+
+	sess := NewSession("s1", "agent-id", "Test")
+	sess.AddUserMessage("hello")
+	sess.AddAssistantMessage("okay", nil)
+	sess.AddUserMessage("FINAL_PROMPT")
+
+	req := cb.BuildRequest(sess)
+
+	for _, m := range req.Messages {
+		if m.Role == "user" && m.Content == "" {
+			t.Fatal("context builder emitted empty user message")
+		}
+		if m.Role == "assistant" && m.Content == "" {
+			t.Fatal("context builder emitted empty assistant message")
+		}
+	}
+	for _, m := range req.Messages {
+		if m.Role == "user" && strings.Contains(m.Content, "FINAL_PROMPT") {
+			return
+		}
+	}
+	t.Fatal("latest user prompt missing after dropping empty compacted history")
+}

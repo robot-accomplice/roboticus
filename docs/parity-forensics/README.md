@@ -116,6 +116,14 @@ The intended audit order is:
 8. MCP and external integrations
 9. Admin, dashboard, and observability surfaces
 
+Cross-cutting systems promoted after the initial 9:
+
+10. Security, policy, and sandbox semantics
+11. Scheduler, automation, and cron runtime
+12. Plugin and script runtime
+13. Channel adapter behavior
+14. Cache and replay semantics
+
 The order may change if one audit materially reshapes the seam for the next.
 When that happens, update `parity-ledger.md`.
 

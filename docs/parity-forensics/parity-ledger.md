@@ -15,6 +15,11 @@ This file is the program-level index for the parity-forensics effort.
 | 7 | Install, update, service lifecycle, and config loading | [07-install-update-service-lifecycle-and-config-loading.md](./systems/07-install-update-service-lifecycle-and-config-loading.md) | In progress | Deepened with retained operator-contract improvements: absolute config embedding, sidecar updater, repo parity tests, checksum hard-fail, and stub/PID-file lifecycle control |
 | 8 | MCP and external integrations | [08-mcp-and-external-integrations.md](./systems/08-mcp-and-external-integrations.md) | In progress | Deepened with transport-vs-governance distinction, stronger validation-guidance tracking, and a concrete timeout/cancellation seam where per-call timeout currently closes the full connection |
 | 9 | Admin, dashboard, and observability surfaces | [09-admin-dashboard-and-observability-surfaces.md](./systems/09-admin-dashboard-and-observability-surfaces.md) | In progress | Deepened with stronger observability assets (shape tests, log ring buffer, explicit caveats), direct HTTP-handler reuse for WebSocket snapshots, and sharper trace-route overlap classification |
+| 10 | Security, policy, and sandbox semantics | [10-security-policy-and-sandbox-semantics.md](./systems/10-security-policy-and-sandbox-semantics.md) | In progress | Promoted from implicit cross-cutting concern because policy/runtime enforcement is too important to leave split across Systems 04, 07, and 08 |
+| 11 | Scheduler, automation, and cron runtime | [11-scheduler-automation-and-cron-runtime.md](./systems/11-scheduler-automation-and-cron-runtime.md) | Not started | Promoted from implicit concern under System 07 |
+| 12 | Plugin and script runtime | [12-plugin-and-script-runtime.md](./systems/12-plugin-and-script-runtime.md) | Not started | Promoted from implicit concern under System 08 |
+| 13 | Channel adapter behavior | [13-channel-adapter-behavior.md](./systems/13-channel-adapter-behavior.md) | Not started | Promoted from implicit concern because structural thinness does not by itself prove transport-semantic parity |
+| 14 | Cache and replay semantics | [14-cache-and-replay-semantics.md](./systems/14-cache-and-replay-semantics.md) | In progress | Promoted from Systems 01/04/05 because cache-path behavior has repeatedly created real drift |
 
 ## Program Rules
 
@@ -65,3 +70,6 @@ request/tool remediation lands:
    whether JSON-`LIKE` trace search is acceptable or now its own audit target.
 9. Use System 09 to keep operational truth and release truth aligned
    with the backend as the lower systems stabilize.
+10. Seed and then deepen the new cross-cutting systems only where they expose
+    real live-path divergence; do not let them become duplicate audits of the
+    original 9.
