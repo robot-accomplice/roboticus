@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 	"time"
 )
@@ -166,6 +167,53 @@ func TestCheckpointRepository_DeleteOld(t *testing.T) {
 	}
 	if deleted < 1 {
 		t.Logf("DeleteOld returned %d (may depend on timing)", deleted)
+	}
+}
+
+func TestCheckpointRepository_SaveRecordPersistsFullShape(t *testing.T) {
+	store := openTestStore(t)
+	repo := NewCheckpointRepository(store)
+	ctx := context.Background()
+
+	sess, err := store.FindOrCreateSession(ctx, "agent-ckpt4", "scope1")
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	err = repo.SaveRecord(ctx, CheckpointRecord{
+		SessionID:          sess.ID,
+		SystemPromptHash:   "abcd1234",
+		MemorySummary:      "memory summary",
+		ActiveTasks:        `["t1"]`,
+		ConversationDigest: "last digest",
+		TurnCount:          12,
+	})
+	if err != nil {
+		t.Fatalf("SaveRecord: %v", err)
+	}
+
+	var hash, summary string
+	var activeTasks, digest sql.NullString
+	var turnCount int
+	err = store.QueryRowContext(ctx,
+		`SELECT system_prompt_hash, memory_summary, active_tasks, conversation_digest, turn_count
+		   FROM context_checkpoints
+		  WHERE session_id = ?
+		  ORDER BY created_at DESC, rowid DESC
+		  LIMIT 1`,
+		sess.ID,
+	).Scan(&hash, &summary, &activeTasks, &digest, &turnCount)
+	if err != nil {
+		t.Fatalf("query checkpoint: %v", err)
+	}
+	if hash != "abcd1234" || summary != "memory summary" || turnCount != 12 {
+		t.Fatalf("checkpoint core fields = (%q, %q, %d)", hash, summary, turnCount)
+	}
+	if !activeTasks.Valid || activeTasks.String != `["t1"]` {
+		t.Fatalf("active_tasks = %+v, want [\"t1\"]", activeTasks)
+	}
+	if !digest.Valid || digest.String != "last digest" {
+		t.Fatalf("conversation_digest = %+v, want last digest", digest)
 	}
 }
 

@@ -4,7 +4,7 @@
 
 - Owner: parity-forensics program
 - Audit status: `in progress`
-- Last updated: 2026-04-16
+- Last updated: 2026-04-17
 - Related release: v1.0.6
 
 ## Why This System Matters
@@ -128,10 +128,10 @@ ownership and promotion rules.
 | SYS-06-001 | P1 | Working-memory persistence/vetting must remain treated as a core success, not an open gap | Rust baseline preserves active task-relevant state across continuity boundaries | Go has a real persisted/vetted working-memory path and should preserve it as an invariant | Improvement | Closed / retain as evidence | `internal/agent/memory/working_persistence.go:1-184` |
 | SYS-06-002 | P1 | Reflection remains heuristic and may under-capture turn quality/timing | Rust continuity/learning path includes richer session/governor/checkpoint context | Go reflection stores structured `episode_summary`, but turn duration is still a TODO proxy and tool-event extraction is heuristic | Degradation | Open | `internal/pipeline/post_turn.go:205-227` |
 | SYS-06-003 | P1 | Consolidation behavior must be classified, not assumed parity | Rust has an explicit consolidation pipeline | Go distillation now promotes recurring patterns into semantic memory and `knowledge_facts`, which may be improvement or drift depending on exact parity target | Improvement candidate | Open | `internal/agent/memory/consolidation_distillation.go:1-320`, Rust `consolidation.rs` |
-| SYS-06-004 | P1 | Checkpoint ownership is split between a lightweight live save path and a separate repository abstraction | Rust has explicit checkpoint persistence and pruning APIs with clearer lifecycle ownership | Go saves periodic checkpoints through `maybeCheckpoint(...)` in `pipeline_gaps.go`, while a `CheckpointRepository` also exists with save/load/delete APIs; the live save path currently stores a truncated system-message summary and digest rather than a richer typed snapshot | Degradation seam | Open | `internal/pipeline/pipeline_gaps.go:357-406`, `internal/db/checkpoint_repo.go:10-54` |
+| SYS-06-004 | P1 | Checkpoint ownership is split between a lightweight live save path and a separate repository abstraction | Rust has explicit checkpoint persistence and pruning APIs with clearer lifecycle ownership | Go now routes the live periodic checkpoint write through `CheckpointRepository.SaveRecord(...)` instead of keeping a second raw-SQL writer in `maybeCheckpoint(...)`. Remaining gap: load/prune lifecycle is still not fully owned by the same live boundary | Improved, not closed | Open | `internal/pipeline/pipeline_gaps.go`, `internal/db/checkpoint_repo.go`, `internal/pipeline/checkpoint_lifecycle_test.go` |
 | SYS-06-005 | P2 | Executive-state growth is stronger than earlier versions, but needs classification against Rust task-state ownership | Rust threads task state through planning/inference/guards | Go grows executive state post-turn from verification results; this looks like a real improvement, but needs explicit parity classification so it is protected rather than flattened away | Improvement candidate | Open | `internal/pipeline/post_turn.go:246+` |
 | SYS-06-006 | P1 | Reflection remains heuristic and under-specified relative to the richer memory architecture now in place | Rust continuity/learning path ties more directly into checkpoint/session lifecycle | Go reflection stores structured `episode_summary`, but turn duration is still a TODO proxy and tool-event extraction is inferred from message adjacency patterns | Degradation | Open | `internal/pipeline/post_turn.go:171-227` |
-| SYS-06-007 | P1 | Checkpoint repository abstraction is currently test-only and not the authoritative live lifecycle | Checkpoint persistence APIs should either own the live save/load/delete lifecycle or be explicitly demoted as helper/test scaffolding | Go's `CheckpointRepository` is exercised in tests, but the current tree has no live call sites for `SaveCheckpoint`, `LoadCheckpoint`, or `DeleteOld`; production checkpoint writes still go through `maybeCheckpoint(...)` directly | Degradation seam | Open | `internal/db/checkpoint_repo.go`, `internal/db/coverage_boost_test.go`, `internal/pipeline/pipeline_gaps.go:362-406` |
+| SYS-06-007 | P1 | Checkpoint repository abstraction is currently only partially authoritative | Checkpoint persistence APIs should either own the live save/load/delete lifecycle or be explicitly demoted as helper/test scaffolding | `CheckpointRepository` now owns the live save path via `SaveRecord(...)`, but the load/prune lifecycle is still not exercised by production code, so repository ownership is incomplete rather than absent | Degradation seam | Open | `internal/db/checkpoint_repo.go`, `internal/db/coverage_boost_test.go`, `internal/pipeline/pipeline_gaps.go`, `internal/pipeline/checkpoint_lifecycle_test.go` |
 | SYS-06-008 | P2 | Tool-fact harvesting into executive-state assumptions is a novel extension that needs explicit protection | Baseline continuity systems preserve task-relevant state; memory growth should be deliberate rather than accidental | Go now extracts a narrow allowlist of referenced tool-derived facts and records them as executive assumptions post-turn; this is beyond simple Rust parity and should be classified as a deliberate synthesis of recall discipline plus working-memory continuity | Improvement candidate | Open | `internal/pipeline/post_turn.go:378-407` |
 
 ## Intentional Deviations
@@ -211,3 +211,8 @@ Protected invariants for this system:
 - 2026-04-16: Added the newer tool-fact harvesting path to the audit so this
   recall-plus-working-memory synthesis is classified deliberately instead of
   being flattened away by future parity cleanup.
+- 2026-04-17: Moved the live periodic checkpoint writer onto
+  `CheckpointRepository.SaveRecord(...)` so there is now one authoritative save
+  boundary for checkpoint persistence. The remaining checkpoint seam is no
+  longer "two writers," but "save path unified while load/prune ownership is
+  still partial."

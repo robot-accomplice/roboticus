@@ -395,11 +395,14 @@ func (p *Pipeline) maybeCheckpoint(ctx context.Context, session *Session, turnID
 	h := sha256.Sum256([]byte(memorySummary))
 	promptHash := hex.EncodeToString(h[:8])
 
-	_, err := p.store.ExecContext(ctx,
-		`INSERT INTO context_checkpoints (id, session_id, system_prompt_hash, memory_summary, conversation_digest, turn_count)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		db.NewID(), session.ID, promptHash, memorySummary, digest, turnCount,
-	)
+	repo := db.NewCheckpointRepository(p.store)
+	err := repo.SaveRecord(ctx, db.CheckpointRecord{
+		SessionID:          session.ID,
+		SystemPromptHash:   promptHash,
+		MemorySummary:      memorySummary,
+		ConversationDigest: digest,
+		TurnCount:          turnCount,
+	})
 	if err != nil {
 		log.Warn().Err(err).Str("session", session.ID).Int("turn", turnCount).Msg("checkpoint save failed")
 	} else {
