@@ -72,14 +72,11 @@ func TestLiveSmokeTest(t *testing.T) {
 	}
 
 	injection := agent.NewInjectionDetector()
-	guards := pipeline.DefaultGuardChain()
-
 	pipe := pipeline.New(pipeline.PipelineDeps{
 		Store:     store,
 		LLM:       llmSvc,
 		Injection: injection,
 		Executor:  &smokeExecutor{},
-		Guards:    guards,
 	})
 
 	cfgVal := core.DefaultConfig()

@@ -117,7 +117,7 @@ inputs on the live path rather than depending on formatting conventions.
 | SYS-04-004 | P1 | Guard retry ownership was duplicated instead of flowing through one authoritative helper | Rust retry behavior is centralized in the guard pipeline | Go now routes live guard-triggered retry through `retryWithGuardsDetailed(...)`, which owns contextual guard application, retry prompt injection, fresh-context re-evaluation, and final applied guard-result capture. The older `retryWithGuards(...)` wrapper is now only a thin compatibility shim over the same implementation | Improved | Closed 2026-04-17 | `internal/pipeline/guard_retry.go`, `internal/pipeline/pipeline_stages.go`, `internal/pipeline/guard_retry_test.go` |
 | SYS-04-005 | P1 | Some guard application paths still bypass contextual guard evaluation entirely | Guard behavior should not silently get weaker on specific early-return paths | Early-return `guardOutcome(...)` now rebuilds `GuardContext` from the live session and applies `ApplyFullWithContext(...)`, so skill/shortcut exits no longer silently degrade contextual guards to text-only checks | Fixed | Closed 2026-04-17 | `internal/pipeline/pipeline.go`, `internal/pipeline/pipeline_run_stages.go`, `internal/pipeline/guard_retry_artifacts_test.go::TestGuardOutcome_UsesContextualGuardsWhenSessionAvailable` |
 | SYS-04-006 | P2 | Go verifier appears more featureful than earlier parity baseline, but needs explicit classification | Rust guard pipeline has typed context, retries, and deterministic fallbacks | Go now has claim audits, typed evidence, richer freshness checks, and structured verifier trace output, which may be true improvements rather than parity regressions | Improvement candidate | Open | Rust `guard_registry.rs`, `guard_retry.rs`; Go `verifier.go`, `trace.go:164-184` |
-| SYS-04-007 | P2 | Guard registry parity still needs its own line-by-line sweep | Rust guard ownership is centralized and explicit | Go now has a centralized `GuardRegistry` with Rust-aligned ordering plus additive Go-only guards, but this system audit has not yet traced every live call site and preset against Rust expectations | Improvement candidate | Open | `internal/pipeline/guard_registry.go`, `internal/pipeline/guards*.go` |
+| SYS-04-007 | P1 | Guard preset ownership was split between registry intent and injected fixed chains | Rust guard ownership is centralized and explicit | Go now resolves `GuardSetFull` / `GuardSetCached` / `GuardSetStream` through one authoritative `GuardRegistry` on the live path. `FullGuardChain`, `CachedGuardChain`, and `StreamGuardChain` delegate to the same registry; daemon/smoke/parity boot no longer inject a fixed full chain that masks preset selection; `GuardSetNone` is a real disable again | Improved | Closed 2026-04-17 | `internal/pipeline/guard_registry.go`, `internal/pipeline/guards.go`, `internal/pipeline/pipeline.go`, `internal/pipeline/pipeline_stages.go`, `internal/pipeline/pipeline_run_stages.go`, `internal/daemon/daemon.go`, `smoke_test.go`, `internal/api/parity_integration_test.go` |
 | SYS-04-008 | P1 | Guard retry reuses stale `GuardContext` when evaluating the retry result | Guard retries should evaluate against context derived from the actual retry attempt, not the pre-retry session snapshot | Go now rebuilds `GuardContext` after the retry `RunLoop(...)` before reapplying contextual guards, so retry evaluation sees newly-attached tool results/messages from the actual retry attempt | Fixed | Closed 2026-04-17 | `internal/pipeline/pipeline_stages.go`, `internal/pipeline/guard_retry_artifacts_test.go::TestStandardInference_GuardRetryUsesFreshContext` |
 | SYS-04-009 | P2 | Trace/inference metadata capture re-runs guards after the fact instead of preserving the exact applied result | Observability for guards should be derived from the actual guard outcome used on the live path | Go now carries the final applied guard result forward and serializes `InferenceParams.GuardViolations` / `GuardRetried` from that live outcome instead of recomputing on already-sanitized content | Fixed | Closed 2026-04-17 | `internal/pipeline/pipeline_stages.go`, `internal/pipeline/guard_retry_artifacts_test.go::TestStandardInference_InferenceParamsCaptureAppliedGuardViolations` |
 | SYS-04-010 | P1 | Cached responses still bypassed contextual guards on the live path | Cached responses should be filtered through the same session-derived contextual guard surface as other early-return paths | Go now applies cache-hit guards with `ApplyFullWithContext(...)`, using the live session-derived `GuardContext` and cached model metadata instead of the weaker text-only `ApplyFull(...)` path | Fixed | Closed 2026-04-17 | `internal/pipeline/pipeline_run_stages.go`, `internal/pipeline/guard_retry_artifacts_test.go::TestCacheHit_UsesContextualGuardsWhenSessionAvailable` |
@@ -132,6 +132,8 @@ Potential likely improvements that still need explicit classification:
 - centralized `GuardRegistry` ordering that now explicitly mirrors the Rust
   chain before appending Go-only guards
 - structured verifier trace annotations carrying claim audit JSON
+- runtime preset resolution that lets Go keep additive guards like
+  `placeholder_content` without sacrificing one authoritative preset owner
 
 None are accepted yet until the full guard/verification path is compared
 line-by-line with Rust.
@@ -145,6 +147,9 @@ The main architectural target here is clear:
   normalization and eventually be retired if possible
 - guard/retry ownership should remain collapsed onto one authoritative helper
   rather than drifting back to multiple live implementations
+- guard preset ownership should remain collapsed onto one registry-driven
+  runtime selector rather than reintroducing injected fixed full chains at
+  composition time
 - retry-time guard evaluation should rebuild `GuardContext` from the actual
   post-retry session state instead of reusing the pre-retry snapshot
 - trace / `InferenceParams` capture must serialize the actual final guard
@@ -214,3 +219,7 @@ The main architectural target here is clear:
   Cache hits now apply `ApplyFullWithContext(...)` using the live session
   state instead of bypassing contextual guards through the older text-only
   cache path.
+- 2026-04-17: Closed the split preset-ownership seam. Runtime guard selection
+  now resolves through `Pipeline.guardsForPreset(...)` and the centralized
+  `GuardRegistry`; daemon/smoke/parity callers no longer inject a fixed full
+  chain that masks `GuardSetCached` / `GuardSetStream` / `GuardSetNone`.

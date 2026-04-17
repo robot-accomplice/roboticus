@@ -53,10 +53,7 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 
 	var finalGuardResult *ApplyResult
 	guardRetried := false
-	activeGuards := p.guards
-	if cfg.GuardSet == GuardSetNone {
-		activeGuards = nil
-	}
+	activeGuards := p.guardsForPreset(cfg.GuardSet)
 
 	// Guard chain with full context and retry support. The helper owns the live
 	// guard-triggered retry path even when no guards are configured, so there is
@@ -79,7 +76,7 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 		turns = guardRun.Turns
 		guardRetried = guardRun.GuardRetried
 		guardDur := time.Since(guardStart).Milliseconds()
-		if p.guards != nil && cfg.GuardSet != GuardSetNone {
+		if activeGuards != nil {
 			log.Debug().
 				Str("session", session.ID).
 				Bool("retry", guardResult.RetryRequested).
@@ -89,7 +86,7 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 		}
 
 		// Build per-guard trace entries for the dashboard.
-		if tr != nil && p.guards != nil && cfg.GuardSet != GuardSetNone {
+		if tr != nil && activeGuards != nil {
 			guardResults := make(map[string]GuardTraceEntry)
 			for _, v := range guardResult.Violations {
 				// Violations are in "name: reason" format from ApplyFull,
@@ -135,9 +132,9 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 			log.Debug().Err(retryErr).Msg("verifier retry inference failed, using pre-verifier result")
 		} else {
 			turns += retryTurns
-			if p.guards != nil && cfg.GuardSet != GuardSetNone {
+			if activeGuards != nil {
 				guardCtx := p.buildGuardContext(session)
-				retryGuardResult := p.guards.ApplyFullWithContext(retryContent, guardCtx)
+				retryGuardResult := activeGuards.ApplyFullWithContext(retryContent, guardCtx)
 				finalGuard := retryGuardResult
 				finalGuardResult = &finalGuard
 				retryContent = retryGuardResult.Content

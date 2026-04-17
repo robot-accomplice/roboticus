@@ -353,7 +353,6 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 		Procedural:   cfg.Memory.ProceduralBudget / 100.0,
 		Relationship: cfg.Memory.RelationshipBudget / 100.0,
 	}, store)
-	guards := pipeline.DefaultGuardChain()
 	bootStep(6, steps, "Policy engine + memory management ready")
 	log.Info().Msg("[startup 6/12] policy engine + memory management ready")
 
@@ -590,7 +589,6 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 			embedClient:   embedClient,
 			toolSearchCfg: toolSearchCfg,
 		},
-		Guards:       guards,
 		BGWorker:     bgWorker,
 		Embeddings:   embedClient,
 		ErrBus:       errBus,

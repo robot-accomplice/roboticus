@@ -16,25 +16,26 @@ func NewDefaultGuardRegistry() *GuardRegistry {
 
 	// Rust-aligned guards (order matches Rust reference chain).
 	r.Register(&EmptyResponseGuard{})           // 1
-	r.Register(&SubagentClaimGuard{})            // 2
-	r.Register(&ExecutionTruthGuard{})           // 3
-	r.Register(&ActionVerificationGuard{})       // 4
-	r.Register(&TaskDeferralGuard{})             // 5
-	r.Register(&ClarificationDeflectionGuard{})  // 6
-	r.Register(&OutputContractGuard{})           // 7
-	r.Register(&ModelIdentityTruthGuard{})       // 8
-	r.Register(&CurrentEventsTruthGuard{})       // 9
-	r.Register(&LiteraryQuoteRetryGuard{})       // 10
-	r.Register(&PersonalityIntegrityGuard{})     // 11
-	r.Register(&InternalJargonGuard{})           // 12
-	r.Register(&NonRepetitionGuardV2{})          // 13
-	r.Register(&LowValueParrotingGuard{})        // 14
-	r.Register(&PerspectiveGuard{})              // 15
-	r.Register(&DeclaredActionGuard{})           // 16
-	r.Register(&UserEchoGuard{})                 // 17
-	r.Register(&InternalProtocolGuard{})         // 18
+	r.Register(&SubagentClaimGuard{})           // 2
+	r.Register(&ExecutionTruthGuard{})          // 3
+	r.Register(&ActionVerificationGuard{})      // 4
+	r.Register(&TaskDeferralGuard{})            // 5
+	r.Register(&ClarificationDeflectionGuard{}) // 6
+	r.Register(&OutputContractGuard{})          // 7
+	r.Register(&ModelIdentityTruthGuard{})      // 8
+	r.Register(&CurrentEventsTruthGuard{})      // 9
+	r.Register(&LiteraryQuoteRetryGuard{})      // 10
+	r.Register(&PersonalityIntegrityGuard{})    // 11
+	r.Register(&InternalJargonGuard{})          // 12
+	r.Register(&NonRepetitionGuardV2{})         // 13
+	r.Register(&LowValueParrotingGuard{})       // 14
+	r.Register(&PerspectiveGuard{})             // 15
+	r.Register(&DeclaredActionGuard{})          // 16
+	r.Register(&UserEchoGuard{})                // 17
+	r.Register(&InternalProtocolGuard{})        // 18
 
 	// Go-only guards (additive, appended after Rust-aligned set).
+	r.Register(&PlaceholderContentGuard{})
 	r.Register(NewContentClassificationGuard())
 	r.Register(NewRepetitionGuard())
 	r.Register(NewSystemPromptLeakGuard())
@@ -83,7 +84,7 @@ func (r *GuardRegistry) Chain(preset GuardSetPreset) *GuardChain {
 			"low_value_parroting", "perspective", "declared_action",
 			"user_echo", "internal_protocol",
 			// Go-only guards (additive).
-			"content_classification", "repetition", "system_prompt_leak",
+			"placeholder_content", "content_classification", "repetition", "system_prompt_leak",
 			"internal_marker", "execution_block", "delegation_metadata",
 			"filesystem_denial", "config_protection", "financial_action_truth",
 		)
@@ -97,7 +98,7 @@ func (r *GuardRegistry) Chain(preset GuardSetPreset) *GuardChain {
 			"personality_integrity", "internal_jargon", "non_repetition_v2",
 			"low_value_parroting", "internal_protocol",
 			// Go-only guards (additive).
-			"content_classification", "repetition", "system_prompt_leak",
+			"placeholder_content", "content_classification", "repetition", "system_prompt_leak",
 			"internal_marker", "execution_block", "delegation_metadata",
 			"filesystem_denial", "config_protection", "financial_action_truth",
 		)

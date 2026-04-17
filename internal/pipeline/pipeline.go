@@ -87,30 +87,32 @@ var _ Runner = (*Pipeline)(nil)
 // Pipeline is the unified factory. Connectors call Run() with a Config preset
 // and an Input — the pipeline handles everything else.
 type Pipeline struct {
-	store        *db.Store
-	llmSvc       *llm.Service
-	injection    InjectionChecker
-	retriever    MemoryRetriever
-	skills       SkillMatcher
-	executor     ToolExecutor
-	ingestor     Ingestor
-	refiner      NicknameRefiner
-	streamer     StreamPreparer
-	pruner       ToolPruner
-	guards       *GuardChain
-	bgWorker     *core.BackgroundWorker
-	dedup        *DedupTracker
-	tasks        *TaskTracker
-	botCmds      *BotCommandHandler
-	embeddings   *llm.EmbeddingClient
+	store           *db.Store
+	llmSvc          *llm.Service
+	injection       InjectionChecker
+	retriever       MemoryRetriever
+	skills          SkillMatcher
+	executor        ToolExecutor
+	ingestor        Ingestor
+	refiner         NicknameRefiner
+	streamer        StreamPreparer
+	pruner          ToolPruner
+	guards          *GuardChain
+	guardRegistry   *GuardRegistry
+	usePresetGuards bool
+	bgWorker        *core.BackgroundWorker
+	dedup           *DedupTracker
+	tasks           *TaskTracker
+	botCmds         *BotCommandHandler
+	embeddings      *llm.EmbeddingClient
 	// certaintyClass is the embedding-backed semantic claim certainty
 	// classifier (M6 follow-on). Built once per pipeline so the corpus
 	// embedding cost is amortised across every turn.
-	certaintyClass *llm.SemanticClassifier
-	errBus         *core.ErrorBus
-	dashboard      DashboardNotifier
-	workspace      string   // agent workspace root — propagated to sessions for tool sandbox
-	allowedPaths   []string // extra paths outside workspace that tools may access
+	certaintyClass   *llm.SemanticClassifier
+	errBus           *core.ErrorBus
+	dashboard        DashboardNotifier
+	workspace        string   // agent workspace root — propagated to sessions for tool sandbox
+	allowedPaths     []string // extra paths outside workspace that tools may access
 	checkpointPolicy CheckpointPolicy
 }
 
@@ -164,29 +166,55 @@ func New(deps PipelineDeps) *Pipeline {
 		}
 	}
 	return &Pipeline{
-		store:      deps.Store,
-		llmSvc:     deps.LLM,
-		injection:  deps.Injection,
-		retriever:  deps.Retriever,
-		skills:     deps.Skills,
-		executor:   deps.Executor,
-		ingestor:   deps.Ingestor,
-		refiner:    deps.Refiner,
-		streamer:   deps.Streamer,
-		pruner:     deps.Pruner,
-		guards:     deps.Guards,
-		bgWorker:   bgw,
-		dedup:      NewDedupTracker(60 * time.Second),
-		tasks:      NewTaskTracker(),
-		embeddings:     deps.Embeddings,
-		certaintyClass: NewClaimCertaintyClassifier(deps.Embeddings),
-		errBus:         deps.ErrBus,
-		dashboard:      deps.Dashboard,
-		botCmds:        NewBotCommandHandler(deps.LLM, deps.Store),
-		workspace:      deps.Workspace,
-		allowedPaths:   deps.AllowedPaths,
+		store:            deps.Store,
+		llmSvc:           deps.LLM,
+		injection:        deps.Injection,
+		retriever:        deps.Retriever,
+		skills:           deps.Skills,
+		executor:         deps.Executor,
+		ingestor:         deps.Ingestor,
+		refiner:          deps.Refiner,
+		streamer:         deps.Streamer,
+		pruner:           deps.Pruner,
+		guards:           deps.Guards,
+		guardRegistry:    NewDefaultGuardRegistry(),
+		usePresetGuards:  deps.Guards == nil,
+		bgWorker:         bgw,
+		dedup:            NewDedupTracker(60 * time.Second),
+		tasks:            NewTaskTracker(),
+		embeddings:       deps.Embeddings,
+		certaintyClass:   NewClaimCertaintyClassifier(deps.Embeddings),
+		errBus:           deps.ErrBus,
+		dashboard:        deps.Dashboard,
+		botCmds:          NewBotCommandHandler(deps.LLM, deps.Store),
+		workspace:        deps.Workspace,
+		allowedPaths:     deps.AllowedPaths,
 		checkpointPolicy: cp,
 	}
+}
+
+func (p *Pipeline) guardsForPreset(preset GuardSetPreset) *GuardChain {
+	if preset == GuardSetNone {
+		return nil
+	}
+	if p.usePresetGuards && p.guardRegistry != nil {
+		chain := p.guardRegistry.Chain(preset)
+		if chain == nil || chain.Len() == 0 {
+			return nil
+		}
+		return chain
+	}
+	if p.guards != nil {
+		return p.guards
+	}
+	if p.guardRegistry != nil {
+		chain := p.guardRegistry.Chain(preset)
+		if chain == nil || chain.Len() == 0 {
+			return nil
+		}
+		return chain
+	}
+	return nil
 }
 
 // RunPipeline is the canonical package-level entry point for all connectors.
@@ -407,9 +435,9 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 // This ensures skill, shortcut, and all other early-return paths are filtered.
 // Uses full context when a session is available for contextual guard evaluation.
 func (p *Pipeline) guardOutcome(cfg Config, session *Session, outcome *Outcome) *Outcome {
-	if p.guards != nil && cfg.GuardSet != GuardSetNone && outcome != nil {
+	if guards := p.guardsForPreset(cfg.GuardSet); guards != nil && outcome != nil {
 		guardCtx := p.buildGuardContext(session)
-		outcome.Content = p.guards.ApplyFullWithContext(outcome.Content, guardCtx).Content
+		outcome.Content = guards.ApplyFullWithContext(outcome.Content, guardCtx).Content
 	}
 	return outcome
 }
