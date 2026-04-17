@@ -621,6 +621,43 @@ func TestBuildAgentContext_WithTools(t *testing.T) {
 	}
 }
 
+func TestBuildAgentContext_PromptToolRosterUsesSelectedDefs(t *testing.T) {
+	sess := session.New("s1", "a1", "TestBot")
+	sess.AddUserMessage("test")
+	sess.SetSelectedToolDefs([]llm.ToolDef{
+		{
+			Type: "function",
+			Function: llm.ToolFuncDef{
+				Name:        "echo",
+				Description: "Echo a string back",
+			},
+		},
+	})
+
+	ctx := buildAgentContext(context.Background(), sess, nil, nil, nil, tools.DefaultToolSearchConfig(), agent.PromptConfig{
+		AgentName: "TestBot",
+		ToolNames: []string{"echo", "search_memories"},
+		ToolDescs: [][2]string{
+			{"echo", "Echo a string back"},
+			{"search_memories", "Search long-term memory"},
+		},
+	}, nil, nil)
+	req := ctx.BuildRequest(sess)
+	if len(req.Messages) == 0 || req.Messages[0].Role != "system" {
+		t.Fatalf("expected system prompt in first message")
+	}
+	prompt := req.Messages[0].Content
+	if !strings.Contains(prompt, "**echo**") {
+		t.Fatal("expected selected tool in prompt roster")
+	}
+	if strings.Contains(prompt, "**search_memories**") {
+		t.Fatal("prompt roster should not advertise tools outside selected defs")
+	}
+	if len(req.Tools) != 1 || req.Tools[0].Function.Name != "echo" {
+		t.Fatalf("structured tool surface drifted from selected defs: %+v", req.Tools)
+	}
+}
+
 func TestBuildAgentContext_WithRetriever(t *testing.T) {
 	// v1.0.6: buildAgentContext no longer holds a retriever reference.
 	// Memory preparation is the pipeline's responsibility; this test now

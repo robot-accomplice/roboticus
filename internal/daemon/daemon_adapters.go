@@ -156,6 +156,23 @@ func latestUserMessageContent(sess *session.Session) string {
 	return ""
 }
 
+func promptToolSurface(defs []llm.ToolDef) ([]string, [][2]string) {
+	if len(defs) == 0 {
+		return nil, nil
+	}
+	names := make([]string, 0, len(defs))
+	descs := make([][2]string, 0, len(defs))
+	for _, def := range defs {
+		name := strings.TrimSpace(def.Function.Name)
+		if name == "" {
+			continue
+		}
+		names = append(names, name)
+		descs = append(descs, [2]string{name, strings.TrimSpace(def.Function.Description)})
+	}
+	return names, descs
+}
+
 // buildAgentContext assembles a ContextBuilder with system prompt, PRUNED
 // tool defs, and pipeline-prepared memory. Shared by executorAdapter and
 // streamAdapter.
@@ -195,26 +212,6 @@ func buildAgentContext(ctx context.Context, sess *session.Session, store *db.Sto
 	}
 	ctxBuilder := agent.NewContextBuilder(ccfg)
 
-	cfg := promptCfg
-	// Use session's agent name only if explicitly set (not "default").
-	// Otherwise keep the configured agent name (e.g., "Duncan").
-	if sess.AgentName != "" && sess.AgentName != "default" {
-		cfg.AgentName = sess.AgentName
-	}
-	systemPrompt := agent.BuildSystemPrompt(cfg)
-
-	// HMAC trust boundary: wrap system prompt so model output verification
-	// can detect forged prompt injections (Rust parity).
-	if len(cfg.BoundaryKey) > 0 {
-		systemPrompt = agent.TagContent(systemPrompt, cfg.BoundaryKey)
-		// Sanity check: verify immediately after injection (matches Rust).
-		if _, ok := agent.VerifyHMACBoundary(systemPrompt, cfg.BoundaryKey); !ok {
-			log.Error().Msg("HMAC boundary verification failed immediately after injection")
-		}
-	}
-
-	ctxBuilder.SetSystemPrompt(systemPrompt)
-
 	// Tool pruning: primary owner is the pipeline's stageToolPruning
 	// (internal/pipeline/pipeline_run_stages.go). When the pipeline ran,
 	// `sess.SelectedToolDefs()` is non-nil and carries exactly the set
@@ -249,6 +246,33 @@ func buildAgentContext(ctx context.Context, sess *session.Session, store *db.Sto
 		searchSource = "fallback"
 		ctxBuilder.SetTools(selectedDefs)
 	}
+
+	cfg := promptCfg
+	// Use session's agent name only if explicitly set (not "default").
+	// Otherwise keep the configured agent name (e.g., "Duncan").
+	if sess.AgentName != "" && sess.AgentName != "default" {
+		cfg.AgentName = sess.AgentName
+	}
+	// Keep the prompt-layer roster aligned with the structured tool surface
+	// sent in llm.Request.Tools. Pre-v1.0.6 this block kept the daemon boot's
+	// full registry roster in PromptConfig while the request carried a pruned
+	// set, which told the model about tools it could not actually call.
+	if len(selectedDefs) > 0 {
+		cfg.ToolNames, cfg.ToolDescs = promptToolSurface(selectedDefs)
+	}
+	systemPrompt := agent.BuildSystemPrompt(cfg)
+
+	// HMAC trust boundary: wrap system prompt so model output verification
+	// can detect forged prompt injections (Rust parity).
+	if len(cfg.BoundaryKey) > 0 {
+		systemPrompt = agent.TagContent(systemPrompt, cfg.BoundaryKey)
+		// Sanity check: verify immediately after injection (matches Rust).
+		if _, ok := agent.VerifyHMACBoundary(systemPrompt, cfg.BoundaryKey); !ok {
+			log.Error().Msg("HMAC boundary verification failed immediately after injection")
+		}
+	}
+
+	ctxBuilder.SetSystemPrompt(systemPrompt)
 
 	log.Info().
 		Str("agent_name", cfg.AgentName).

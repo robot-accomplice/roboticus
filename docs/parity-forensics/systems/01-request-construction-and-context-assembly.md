@@ -145,7 +145,7 @@ Parity for this system is not satisfied unless tests can assert:
 | SYS-01-007 | P2 | Compression ownership split across subsystems | One authoritative context-compression path | ContextBuilder compaction, `PromptCompressor`, and topic compression coexist as separate plausible owners | Degradation | Open | `internal/agent/context.go:179-217`, `internal/agent/context.go:345-377`, `internal/llm/compression.go:18-67`, `internal/llm/topic_compression.go:10-195` |
 | SYS-01-008 | P2 | Empty compacted messages may still be emitted | Dropped content should disappear from the final request | `compact(...)` can return `\"\"`, but the history loop still appends the message | Degradation | Open | `internal/agent/context.go:252-310`, `internal/agent/context.go:351-356` |
 | SYS-01-009 | P2 | Rust request assembly restores context checkpoints directly into the live request; Go currently uses a compact checkpoint digest restore instead of the full checkpoint blob | Rust loads the latest checkpoint and injects it as a system message during request construction | Go now loads the latest checkpoint through `CheckpointRepository.LoadLatestRecord(...)` and injects a compact `[Checkpoint Digest]` ambient note during `buildAgentContext(...)`; this closes the missing live restore seam but remains a deliberate synthesis rather than verbatim Rust replay | Synthesis / improvement candidate | Improved, not closed | Rust: `context_builder.rs:387-410`; Go: `internal/daemon/daemon_adapters.go`, `internal/db/checkpoint_repo.go`, `internal/daemon/daemon_adapters_test.go` |
-| SYS-01-010 | P2 | Tool discoverability differs at the prompt layer, not just in the structured tool list | Rust injects textual tool-use instructions derived from the pruned tool set into the system prompt, helping models without perfect native tool-calling priors | Go passes structured `ToolDef`s, but the committed request builder does not add an equivalent tool-summary block into the live prompt assembly path | Open | Open | Rust: `context_builder.rs:214-269`; Go: `internal/agent/context.go`, `internal/daemon/daemon_adapters.go` |
+| SYS-01-010 | P1 | Prompt-layer tool discoverability could drift from the structured tool list | Rust injects textual tool-use instructions derived from the pruned tool set into the system prompt, helping models without perfect native tool-calling priors | Go already had a textual tool roster block, but it was populated from the daemon boot's full registry instead of the selected per-request tool set. The live path now rewrites `PromptConfig.ToolNames` / `ToolDescs` from `selectedDefs` before building the prompt, so the model sees one coherent tool surface across prompt and `llm.Request.Tools` | Improved | Closed 2026-04-17 | Rust: `context_builder.rs:214-269`; Go: `internal/daemon/daemon_adapters.go`, `internal/daemon/daemon_adapters_test.go::TestBuildAgentContext_PromptToolRosterUsesSelectedDefs` |
 | SYS-01-011 | P2 | Prompt assembly tiering differs | Rust varies prompt blocks by complexity level (compact L0/L1 vs verbose L2/L3) within the same request builder | Go currently has one primary prompt-assembly path plus independent compaction rules, but no equivalent committed complexity-tiered prompt block assembly in `ContextBuilder` | Open | Open | Rust: `context_builder.rs:270-310`; Go: `internal/agent/context.go:98-343` |
 
 ## Intentional Deviations
@@ -213,8 +213,8 @@ is re-audited.
   instead of the pipeline stage helper?
 - Is checkpoint restore intentionally absent from the committed Go request path,
   or is it simply not yet reintegrated into the novel memory design?
-- Is the lack of a prompt-layer tool summary an intentional dependence on native
-  tool-calling, or a missing complement to structured tool defs?
+- Does every prompt-layer tool hint now derive from the selected per-request
+  tool surface, or do any callers still advertise full-registry capability?
 
 ## Progress Log
 
@@ -314,3 +314,8 @@ is re-audited.
   checkpoint blob. This closes the missing live restore seam for SYS-01-009,
   but its final classification remains synthesis/improvement-candidate rather
   than pure Rust parity because the restore shape is intentionally narrower.
+- 2026-04-17: Closed the prompt-layer tool discoverability seam for the live
+  request path. `buildAgentContext(...)` now rewrites the prompt-layer
+  `ToolNames` / `ToolDescs` from the same selected tool defs that populate
+  `llm.Request.Tools`, instead of advertising the daemon boot's full registry
+  while the structured request carried a pruned set.
