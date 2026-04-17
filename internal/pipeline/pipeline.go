@@ -383,9 +383,10 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 // guardOutcome applies the guard chain to an outcome if guards are configured.
 // This ensures skill, shortcut, and all other early-return paths are filtered.
 // Uses full context when a session is available for contextual guard evaluation.
-func (p *Pipeline) guardOutcome(cfg Config, outcome *Outcome) *Outcome {
+func (p *Pipeline) guardOutcome(cfg Config, session *Session, outcome *Outcome) *Outcome {
 	if p.guards != nil && cfg.GuardSet != GuardSetNone && outcome != nil {
-		outcome.Content = p.guards.Apply(outcome.Content)
+		guardCtx := p.buildGuardContext(session)
+		outcome.Content = p.guards.ApplyFullWithContext(outcome.Content, guardCtx).Content
 	}
 	return outcome
 }

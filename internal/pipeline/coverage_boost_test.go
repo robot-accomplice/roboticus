@@ -558,7 +558,7 @@ func TestTryShortcut_NoMatch(t *testing.T) {
 func TestGuardOutcome_NoGuards(t *testing.T) {
 	pipe := &Pipeline{}
 	outcome := &Outcome{Content: "hello"}
-	result := pipe.guardOutcome(Config{GuardSet: GuardSetFull}, outcome)
+	result := pipe.guardOutcome(Config{GuardSet: GuardSetFull}, nil, outcome)
 	if result.Content != "hello" {
 		t.Error("no guards should pass through")
 	}
@@ -567,7 +567,7 @@ func TestGuardOutcome_NoGuards(t *testing.T) {
 func TestGuardOutcome_WithGuards(t *testing.T) {
 	pipe := &Pipeline{guards: DefaultGuardChain()}
 	outcome := &Outcome{Content: "valid response"}
-	result := pipe.guardOutcome(Config{GuardSet: GuardSetFull}, outcome)
+	result := pipe.guardOutcome(Config{GuardSet: GuardSetFull}, nil, outcome)
 	if result == nil {
 		t.Fatal("should return outcome")
 	}
@@ -576,7 +576,7 @@ func TestGuardOutcome_WithGuards(t *testing.T) {
 func TestGuardOutcome_GuardSetNone(t *testing.T) {
 	pipe := &Pipeline{guards: DefaultGuardChain()}
 	outcome := &Outcome{Content: "anything"}
-	result := pipe.guardOutcome(Config{GuardSet: GuardSetNone}, outcome)
+	result := pipe.guardOutcome(Config{GuardSet: GuardSetNone}, nil, outcome)
 	if result.Content != "anything" {
 		t.Error("GuardSetNone should pass through")
 	}
@@ -584,7 +584,7 @@ func TestGuardOutcome_GuardSetNone(t *testing.T) {
 
 func TestGuardOutcome_NilOutcome(t *testing.T) {
 	pipe := &Pipeline{guards: DefaultGuardChain()}
-	result := pipe.guardOutcome(Config{GuardSet: GuardSetFull}, nil)
+	result := pipe.guardOutcome(Config{GuardSet: GuardSetFull}, nil, nil)
 	if result != nil {
 		t.Error("nil outcome should return nil")
 	}

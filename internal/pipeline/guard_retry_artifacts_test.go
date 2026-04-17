@@ -75,6 +75,26 @@ func (e *staticExecutor) RunLoop(_ context.Context, _ *session.Session) (string,
 	return e.content, 1, nil
 }
 
+type promptEchoContextGuard struct{}
+
+func (g *promptEchoContextGuard) Name() string { return "prompt_echo_context" }
+
+func (g *promptEchoContextGuard) Check(content string) GuardResult {
+	return GuardResult{Passed: true, Content: content}
+}
+
+func (g *promptEchoContextGuard) CheckWithContext(content string, ctx *GuardContext) GuardResult {
+	if ctx != nil && ctx.UserPrompt == "context please" {
+		return GuardResult{
+			Passed:  false,
+			Content: "context-aware rewrite",
+			Reason:  "used session-derived user prompt",
+			Verdict: GuardRewritten,
+		}
+	}
+	return GuardResult{Passed: true, Content: content}
+}
+
 func TestStandardInference_GuardRetryUsesFreshContext(t *testing.T) {
 	store := testutil.TempStore(t)
 	executor := &retryAwareExecutor{}
@@ -162,5 +182,20 @@ func TestStandardInference_InferenceParamsCaptureAppliedGuardViolations(t *testi
 	}
 	if len(params.GuardViolations) != 1 || params.GuardViolations[0] != "rewrite_tracking" {
 		t.Fatalf("GuardViolations = %v, want [rewrite_tracking]", params.GuardViolations)
+	}
+}
+
+func TestGuardOutcome_UsesContextualGuardsWhenSessionAvailable(t *testing.T) {
+	sess := session.New("s1", "agent-1", "TestBot")
+	sess.AddUserMessage("context please")
+
+	pipe := &Pipeline{guards: NewGuardChain(&promptEchoContextGuard{})}
+	outcome := &Outcome{Content: "original"}
+	result := pipe.guardOutcome(Config{GuardSet: GuardSetFull}, sess, outcome)
+	if result == nil {
+		t.Fatal("result = nil")
+	}
+	if result.Content != "context-aware rewrite" {
+		t.Fatalf("result.Content = %q, want context-aware rewrite", result.Content)
 	}
 }

@@ -560,7 +560,7 @@ func (p *Pipeline) stageSkillFirst(ctx context.Context, pc *pipelineContext) (*O
 		pc.tr.EndSpan("ok")
 		p.storeTrace(ctx, pc.tr, pc.session.ID, pc.msgID, pc.cfg.ChannelLabel)
 		p.tasks.Complete(pc.taskID)
-		return p.guardOutcome(pc.cfg, skillResult), nil
+		return p.guardOutcome(pc.cfg, pc.session, skillResult), nil
 	}
 	pc.tr.EndSpan("skipped")
 	return nil, nil
@@ -577,7 +577,7 @@ func (p *Pipeline) stageShortcut(ctx context.Context, pc *pipelineContext) (*Out
 			p.recordShortcutCost(ctx, pc.turnID, pc.session.ID, pc.cfg.ChannelLabel)
 			p.storeTrace(ctx, pc.tr, pc.session.ID, pc.msgID, pc.cfg.ChannelLabel)
 			p.tasks.Complete(pc.taskID)
-			return p.guardOutcome(pc.cfg, result), nil
+			return p.guardOutcome(pc.cfg, pc.session, result), nil
 		}
 	}
 	pc.tr.EndSpan("skipped")
