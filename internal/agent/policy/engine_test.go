@@ -82,6 +82,36 @@ func TestPolicy_BlocksHomeShortcutInWorkspaceOnlyMode(t *testing.T) {
 	}
 }
 
+func TestPolicy_WorkspaceOnlyAllowedPaths_UsesPathBoundaries(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.WorkspaceOnly = true
+	cfg.AllowedPaths = []string{"/data/vault"}
+	pe := NewEngine(cfg)
+
+	req := &ToolCallRequest{
+		ToolName:  "read_file",
+		Arguments: `{"path":"/data/vaultBackup/secrets.txt"}`,
+		Authority: core.AuthorityCreator,
+	}
+	result := pe.Evaluate(req)
+	if !result.Denied() {
+		t.Fatal("expected /data/vaultBackup to be denied when only /data/vault is allowed")
+	}
+	if result.Rule != "path_protection" {
+		t.Fatalf("rule = %s, want path_protection", result.Rule)
+	}
+
+	req = &ToolCallRequest{
+		ToolName:  "read_file",
+		Arguments: `{"path":"/data/vault/notes.txt"}`,
+		Authority: core.AuthorityCreator,
+	}
+	result = pe.Evaluate(req)
+	if result.Denied() {
+		t.Fatalf("expected /data/vault/notes.txt to be allowed, denied by %s: %s", result.Rule, result.Reason)
+	}
+}
+
 func TestPolicy_BlocksShellInjection(t *testing.T) {
 	pe := NewEngine(DefaultConfig())
 	req := &ToolCallRequest{

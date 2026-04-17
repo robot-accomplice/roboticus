@@ -93,6 +93,7 @@ The key artifacts are:
 | SYS-10-004 | P1 | Sensitive config mutation vocabulary drifted between the policy engine and the post-inference guard | Rust intent is one coherent operator contract for protected settings | Go now centralizes protected config filenames and field patterns under `internal/security/config_protection.go`, and both `configProtectionRule` and `ConfigProtectionGuard` consume that shared matcher. This materially reduces policy/guard divergence, though the broader cross-layer audit is still open | Improved, not closed | Open | `internal/security/config_protection.go`, `internal/agent/policy/engine.go`, `internal/pipeline/guards_config_protection.go`, related tests |
 | SYS-10-005 | P1 | `FilesystemDenialGuard` treated all filesystem-access disclaimers as false, even when the tool layer had returned a real sandbox denial | Rust intent is to suppress fake capability disclaimers, not overwrite legitimate policy outcomes | Go now lets `FilesystemDenialGuard` pass when tool results contain a real sandbox/path denial marker, while still rewriting false "can't access your files" boilerplate when the turn context contradicts it | Improved, not closed | Open | `internal/pipeline/guards_truthfulness.go`, `internal/pipeline/guards_truthfulness_test.go` |
 | SYS-10-006 | P1 | `pathProtectionRule` matched generic content nouns like `secret`, so a content string could trip a path rule even when no protected path was referenced | Rust intent is for path protection to guard protected paths, not arbitrary text payloads | Go now limits `protectedPatterns` to actual protected path/file markers (`.env`, `.ssh`, `/etc/`, `roboticus.toml`, etc.). Sensitive config fields remain protected by the shared config-protection matcher instead of leaking into the path rule | Improved, not closed | Open | `internal/agent/policy/engine.go`, `internal/agent/policy/engine_test.go`, `internal/security/config_protection.go` |
+| SYS-10-007 | P1 | Workspace-only allowlist matching used naive prefix checks, so `/data/vault` could incorrectly admit `/data/vaultBackup` | Rust intent is boundary-safe path admission | Go now cleans both paths and enforces exact-match-or-subtree semantics in `pathProtectionRule`, aligning the policy layer with the already-fixed runtime path resolution behavior | Improved, not closed | Open | `internal/agent/policy/engine.go`, `internal/agent/policy/engine_test.go` |
 
 ## Intentional Deviations
 
@@ -129,6 +130,9 @@ Current known good state:
 - path protection is again path-oriented rather than content-oriented; generic
   content words like `secret` no longer trip the path rule just because they
   appear in a write payload
+- workspace-only allowlist enforcement now uses path-boundary matching rather
+  than naive string prefixes, so sibling paths like `/data/vaultBackup` are not
+  accidentally admitted by an allowlist entry for `/data/vault`
 
 ## Downstream Systems Affected
 
@@ -172,3 +176,7 @@ Current known good state:
   markers. Sensitive content terms now belong solely to shared
   config-protection matching instead of accidentally causing path-rule denials
   on ordinary write payloads.
+- 2026-04-17: Fixed `pathProtectionRule` allowlist boundary matching in
+  workspace-only mode. Allowed absolute paths now require exact match or
+  subtree semantics, mirroring the runtime helper contract instead of using
+  naive prefix checks.

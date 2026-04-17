@@ -3,6 +3,7 @@ package policy
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -299,9 +300,11 @@ func (r *pathProtectionRule) Evaluate(req *ToolCallRequest, _ *tools.Registry) D
 				if strings.HasPrefix(pathVal, "/tmp") || strings.HasPrefix(pathVal, "/tmp/") {
 					continue // /tmp is always allowed
 				}
+				cleanPath := filepath.Clean(pathVal)
 				allowed := false
 				for _, ap := range r.allowedPaths {
-					if strings.HasPrefix(pathVal, ap) {
+					cleanAllowed := filepath.Clean(ap)
+					if cleanPath == cleanAllowed || strings.HasPrefix(cleanPath, cleanAllowed+string(filepath.Separator)) {
 						allowed = true
 						break
 					}
