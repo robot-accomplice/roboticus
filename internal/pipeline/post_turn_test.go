@@ -143,6 +143,27 @@ func TestReflectOnTurn_UsesPersistedTurnArtifacts(t *testing.T) {
 	); err != nil {
 		t.Fatalf("insert pipeline trace: %v", err)
 	}
+	if _, err := store.ExecContext(ctx,
+		`UPDATE pipeline_traces
+		    SET inference_params_json = ?
+		  WHERE id = 'pt-1'`,
+		(&InferenceParams{
+			ModelActual:     "ollama/llama3",
+			ReactTurns:      2,
+			GuardViolations: []string{"rewrite_tracking"},
+			GuardRetried:    true,
+		}).JSON(),
+	); err != nil {
+		t.Fatalf("seed inference params: %v", err)
+	}
+	if _, err := store.ExecContext(ctx,
+		`INSERT INTO model_selection_events
+		     (id, turn_id, session_id, agent_id, channel, selected_model, strategy, primary_model, user_excerpt, candidates_json)
+		 VALUES ('mse-1', 'turn-reflect', ?, 'agent-reflect', 'api', 'ollama/llama3', 'router', 'ollama/llama3', 'find something relevant', '[]')`,
+		sess.ID,
+	); err != nil {
+		t.Fatalf("insert model selection event: %v", err)
+	}
 
 	live := session.New(sess.ID, sess.AgentID, "TestBot")
 	live.AddUserMessage("find something relevant")
@@ -168,6 +189,10 @@ func TestReflectOnTurn_UsesPersistedTurnArtifacts(t *testing.T) {
 		"bash",
 		"Errors: error: denied",
 		"Duration: 2s",
+		"Model: ollama/llama3",
+		"ReactTurns: 2",
+		"GuardViolations: rewrite_tracking",
+		"GuardRetried: yes",
 	) {
 		t.Fatalf("episode summary did not reflect persisted turn artifacts: %q", content)
 	}

@@ -182,6 +182,7 @@ func (p *Pipeline) reflectOnTurn(ctx context.Context, turnID, userContent string
 	}
 
 	turnDuration := p.loadReflectionTurnDuration(ctx, turnID, toolEvents)
+	selectedModel, params := p.loadReflectionInferenceArtifacts(ctx, turnID)
 
 	// Enriched reflection: pass evidence items and verifier outcome so the
 	// summary captures evidence refs, fix patterns, failed hypotheses, and
@@ -197,6 +198,10 @@ func (p *Pipeline) reflectOnTurn(ctx context.Context, turnID, userContent string
 		VerifierPassed:  verifyResult.Passed,
 		ErrorMessages:   errorMessages,
 		Duration:        turnDuration,
+		ModelUsed:       selectedModel,
+		ReactTurns:      reflectionReactTurns(params),
+		GuardViolations: reflectionGuardViolations(params),
+		GuardRetried:    params != nil && params.GuardRetried,
 	})
 	if summary == nil {
 		return
@@ -301,6 +306,60 @@ func (p *Pipeline) loadReflectionTurnDuration(ctx context.Context, turnID string
 		sum += te.Duration
 	}
 	return sum
+}
+
+func (p *Pipeline) loadReflectionInferenceArtifacts(ctx context.Context, turnID string) (string, *InferenceParams) {
+	if p.store == nil || strings.TrimSpace(turnID) == "" {
+		return "", nil
+	}
+	var selectedModel string
+	_ = p.store.QueryRowContext(ctx,
+		`SELECT selected_model
+		   FROM model_selection_events
+		  WHERE turn_id = ?
+		  ORDER BY created_at DESC, rowid DESC
+		  LIMIT 1`,
+		turnID,
+	).Scan(&selectedModel)
+
+	var raw string
+	err := p.store.QueryRowContext(ctx,
+		`SELECT COALESCE(inference_params_json, '')
+		   FROM pipeline_traces
+		  WHERE turn_id = ?
+		  ORDER BY created_at DESC, rowid DESC
+		  LIMIT 1`,
+		turnID,
+	).Scan(&raw)
+	if err != nil || strings.TrimSpace(raw) == "" {
+		return strings.TrimSpace(selectedModel), nil
+	}
+	params, err := ParseInferenceParams(raw)
+	if err != nil {
+		return strings.TrimSpace(selectedModel), nil
+	}
+	if strings.TrimSpace(selectedModel) == "" {
+		if params.ModelActual != "" {
+			selectedModel = params.ModelActual
+		} else if params.ModelRequested != "" {
+			selectedModel = params.ModelRequested
+		}
+	}
+	return strings.TrimSpace(selectedModel), params
+}
+
+func reflectionReactTurns(params *InferenceParams) int {
+	if params == nil || params.ReactTurns < 0 {
+		return 0
+	}
+	return params.ReactTurns
+}
+
+func reflectionGuardViolations(params *InferenceParams) []string {
+	if params == nil || len(params.GuardViolations) == 0 {
+		return nil
+	}
+	return append([]string(nil), params.GuardViolations...)
 }
 
 // ExecutiveGrowthResult reports what the auto-grow pass wrote for a turn.

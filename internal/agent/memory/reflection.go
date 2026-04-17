@@ -9,6 +9,7 @@
 package memory
 
 import (
+	"strconv"
 	"strings"
 	"time"
 
@@ -33,10 +34,14 @@ type EpisodeSummary struct {
 	Outcome          string        // "success" / "partial" / "failure"
 	Learnings        []string      // insights extracted
 	Duration         time.Duration // total turn duration
+	ModelUsed        string        // selected model for the turn, when known
+	ReactTurns       int           // number of react turns for the final answer
 	EvidenceRefs     []string      // content previews of evidence items that shaped the answer
 	FailedHypotheses []string      // hypotheses the agent walked back
 	FixPatterns      []string      // tool sequences that succeeded after prior failures
 	ErrorsSeen       []string      // error messages from failed tool calls
+	GuardViolations  []string      // final guard violations applied to the answer
+	GuardRetried     bool          // whether the turn required a guard-triggered retry
 	ResultQuality    float64       // 0-1 blended signal: verifier pass + tool success rate
 	VerifierPassed   bool          // whether the verifier passed the final answer
 
@@ -148,6 +153,21 @@ func (es *EpisodeSummary) FormatForStorage() string {
 		b.WriteString(" | Errors: ")
 		b.WriteString(strings.Join(es.ErrorsSeen, "; "))
 	}
+	if es.ModelUsed != "" {
+		b.WriteString(" | Model: ")
+		b.WriteString(es.ModelUsed)
+	}
+	if es.ReactTurns > 0 {
+		b.WriteString(" | ReactTurns: ")
+		b.WriteString(strconv.Itoa(es.ReactTurns))
+	}
+	if len(es.GuardViolations) > 0 {
+		b.WriteString(" | GuardViolations: ")
+		b.WriteString(strings.Join(es.GuardViolations, "; "))
+	}
+	if es.GuardRetried {
+		b.WriteString(" | GuardRetried: yes")
+	}
 	if len(es.Relations) > 0 {
 		// Wire format is `subject||relation||object` per triple, joined by
 		// "; " between triples. The "||" separator avoids collisions with
@@ -181,6 +201,10 @@ type EpisodeInput struct {
 	VerifierPassed bool
 	ErrorMessages  []string // stderr / failure outputs captured from tool calls
 	Duration       time.Duration
+	ModelUsed      string
+	ReactTurns     int
+	GuardViolations []string
+	GuardRetried   bool
 }
 
 // AnalyzeEpisode is the enriched reflection entry point. It extends Reflect
@@ -202,12 +226,17 @@ func AnalyzeEpisode(input EpisodeInput) *EpisodeSummary {
 	}
 
 	summary.VerifierPassed = input.VerifierPassed
+	summary.ModelUsed = strings.TrimSpace(input.ModelUsed)
+	summary.ReactTurns = input.ReactTurns
 	summary.EvidenceRefs = evidencePreviews(input.EvidenceItems, 3)
 	summary.FixPatterns = extractFixPatterns(input.ToolEvents)
 	summary.FailedHypotheses = extractFailedHypotheses(input.AssistantAnswer)
 	summary.ErrorsSeen = dedupeAndTrim(input.ErrorMessages, 3, 200)
+	summary.GuardViolations = dedupeAndTrim(input.GuardViolations, 3, 120)
+	summary.GuardRetried = input.GuardRetried
 	summary.ResultQuality = computeResultQuality(input)
 	summary.Relations = extractEpisodeRelations(input)
+	summary.Learnings = mergeLearnings(summary.Learnings, structuredLearnings(input))
 
 	return summary
 }
@@ -280,6 +309,9 @@ func computeResultQuality(input EpisodeInput) float64 {
 		evidenceComponent = 0.75
 	}
 	blended := (toolComponent*0.5 + verifierComponent*0.3 + evidenceComponent*0.2)
+	if len(input.GuardViolations) > 0 {
+		blended -= 0.1
+	}
 	if blended < 0 {
 		return 0
 	}
@@ -287,6 +319,24 @@ func computeResultQuality(input EpisodeInput) float64 {
 		return 1
 	}
 	return blended
+}
+
+func structuredLearnings(input EpisodeInput) []string {
+	var out []string
+	if input.GuardRetried {
+		out = append(out, "guard-triggered revision required before final answer")
+	}
+	if input.ReactTurns >= 2 {
+		out = append(out, "multi-step react loop used")
+	}
+	return out
+}
+
+func mergeLearnings(base []string, extras []string) []string {
+	if len(extras) == 0 {
+		return base
+	}
+	return dedupeStrings(append(base, extras...))
 }
 
 // extractFixPatterns detects tool sequences where a failure was followed by
