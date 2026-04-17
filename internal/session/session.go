@@ -41,6 +41,10 @@ type Session struct {
 	// Populated by the pipeline after retrieval; consumed by the
 	// verifier instead of re-parsing the rendered memoryContext text.
 	verificationEvidence *VerificationEvidence
+	// verificationEvidenceDerived tracks whether the current artifact
+	// was synthesized from rendered memory text for compatibility
+	// callers rather than supplied explicitly by the pipeline.
+	verificationEvidenceDerived bool
 
 	// v1.0.6 selected tool set for the current turn.
 	// Populated by the pipeline's tool-pruning stage (query-time
@@ -101,7 +105,16 @@ func (s *Session) AddSystemMessage(content string) {
 // SetMemoryContext stores pre-retrieved memory for cognitive scaffold injection.
 // Called by the pipeline before delegation/skill-first so early-exit paths
 // still have full cognitive context (ARCHITECTURE.md §4).
-func (s *Session) SetMemoryContext(block string) { s.memoryContext = block }
+func (s *Session) SetMemoryContext(block string) {
+	s.memoryContext = block
+	// Compatibility bridge: callers that only set the rendered memory
+	// block still get a typed verification artifact at the session
+	// boundary. Downstream stages consume typed data only.
+	if s.verificationEvidence == nil || s.verificationEvidenceDerived {
+		s.verificationEvidence = deriveVerificationEvidenceFromMemoryContext(block)
+		s.verificationEvidenceDerived = true
+	}
+}
 
 // MemoryContext returns the pre-retrieved memory block, if any.
 func (s *Session) MemoryContext() string { return s.memoryContext }

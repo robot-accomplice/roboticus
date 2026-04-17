@@ -123,12 +123,12 @@ path and consumed without rebuilding weaker alternatives elsewhere.
 | ID | Priority | Concern | Rust behavior | Go behavior | Classification | Status | Evidence |
 |----|----------|---------|---------------|-------------|----------------|--------|----------|
 | SYS-03-001 | P1 | Memory compaction parity still incomplete on live request path | Rust compacts memory text before context assembly with dedup, formatting compression, and budgeted retention | Go retriever assembles structured evidence, but final `ContextBuilder` committed path still truncates injected memory text naively | Degradation | Active remediation | Rust: `compaction.rs:78-154`, `293-348`; Go: `internal/agent/context.go:141-158`, `internal/agent/memory/retrieval.go:279-303` |
-| SYS-03-002 | P1 | Structured evidence still has a rendered-text fallback downstream | Rust pipeline carries structured prepared context forward | Go now emits typed evidence, but verifier/session code still contains a fallback to parsing `MemoryContext()` text markers | Degradation | Open | `internal/agent/memory/context_assembly.go:162-225`, `internal/session/verification_evidence.go`, `internal/pipeline/verifier.go:133-150` |
+| SYS-03-002 | P1 | Structured evidence still had a rendered-text fallback downstream | Rust pipeline carries structured prepared context forward | Go now emits typed evidence, and the verifier consumes typed artifacts only. Compatibility callers that set only `MemoryContext` are normalized at the session boundary into `VerificationEvidence`, so downstream stages no longer parse rendered memory text directly | Improved | Closed, retain as invariant | `internal/agent/memory/context_assembly.go:162-225`, `internal/session/verification_evidence.go`, `internal/pipeline/verifier.go` |
 | SYS-03-003 | P1 | Pipeline single-authority claim must be continuously re-proven | Rust request builder consumes prepared retrieval output in one path | Go comments and tests say Stage 8.5 is sole authority; must keep proving no fallback rebuild path reappears | Improvement | Closed for current tree, retain as invariant | `internal/pipeline/pipeline_run_stages.go:442-460`, `internal/daemon/daemon_adapters.go:174-212`, `internal/pipeline/retrieval_parity_test.go` |
 | SYS-03-004 | P2 | Hippocampus summary is split between retrieval-adjacent repo API and prompt assembly ownership | Rust injects compact summary in context builder | Go has repository support and related introspection use, but live prompt-injection ownership still belongs to System 01 remediation | Missing Functionality | Tracked in System 01 | `internal/db/hippocampus_repo.go:207-260` plus absence from current committed request path |
 | SYS-03-005 | P2 | `search_memories` exists in Go but not in the Rust baseline | Rust exposes memory index plus `recall_memory(id)`; no search-by-topic companion tool is present in the audited baseline | Go adds `search_memories(query)` with FTS + fallback search to recover topic-based memories not surfaced in the injected index | Improvement | Classified, retain | Go: `internal/agent/tools/memory_recall.go:158-260`; Rust: `crates/roboticus-agent/src/tools/introspection.rs:403-465` |
 | SYS-03-006 | P2 | `recall_memory` lookup semantics diverged from Rust | Rust `recall_memory` resolves through the memory index and recalls indexed content by source tier | Go accepts optional `source_table`, falls back to scanning source tables directly if the index misses, and reinforces index confidence on successful recall | Idiomatic shift leaning improvement | Classified, retain | Go: `internal/agent/tools/memory_recall.go:44-156`; Rust: `crates/roboticus-agent/src/tools/introspection.rs:403-465` |
-| SYS-03-007 | P1 | Typed evidence replaced most rendered-text reparsing, but the fallback is still live for non-pipeline callers | Rust carries prepared context forward in one path | Go's verifier prefers typed evidence from the session, but still reparses rendered memory text when `VerificationEvidence` is nil | Degradation seam | Open | `internal/session/verification_evidence.go`, `internal/pipeline/verifier.go:72-149` |
+| SYS-03-007 | P1 | Typed evidence replaced most rendered-text reparsing, but compatibility callers still need a bridge | Rust carries prepared context forward in one path | Go moved the format-sensitive parse to the session boundary: `SetMemoryContext` derives a compatibility `VerificationEvidence` artifact when no explicit typed artifact exists, and `BuildVerificationContext` consumes typed evidence only. The remaining seam is compatibility normalization ownership, not verifier/parser coupling | Idiomatic shift | Closed, retain | `internal/session/verification_evidence.go`, `internal/session/session.go`, `internal/pipeline/verifier.go` |
 
 ## Intentional Deviations
 
@@ -145,8 +145,9 @@ Classified improvements / shifts already visible:
 
 Still not fully accepted as a clean improvement:
 
-- typed verification evidence alongside rendered memory context, because some
-  downstream callers still rely on the rendered-text fallback path.
+- session-boundary derivation of typed verification evidence from rendered
+  memory context for compatibility callers. This is acceptable only because the
+  verifier and other downstream consumers now stay on typed artifacts.
 
 ## Remediation Notes
 
@@ -173,10 +174,11 @@ Acceptance bar for closure:
 
 - Once System 01 lands, does the final request still contain any naive memory
   truncation path at all?
-- Can the verifier fallback to string parsing be retired entirely, or is there
-  still a legitimate caller that needs it?
+- Is the session-boundary compatibility derivation still needed once all test,
+  smoke, and ad-hoc callers populate `VerificationEvidence` directly?
 - Does any live downstream consumer still depend on `MemoryContext` section
-  formatting even when typed evidence is present?
+  formatting, or is the remaining format-sensitive logic now fully isolated to
+  compatibility normalization?
 - Do the richer Go recall/search behaviors create any ranking or prompt-budget
   side effects that need their own system-level audit?
 
@@ -204,3 +206,9 @@ Acceptance bar for closure:
   consumer depended on Rust's naïve `len/4` estimator.
   SYS-03-002 / SYS-03-007 (typed-evidence fallback) remain open; the
   P1 commit does not touch the verifier code path.
+- 2026-04-17: Closed the live downstream typed-evidence seam. The verifier no
+  longer reparses rendered `MemoryContext` sections at all; compatibility
+  callers that only set text now derive a `VerificationEvidence` artifact at
+  `Session.SetMemoryContext(...)`. This keeps format-sensitive parsing out of
+  downstream consumers while preserving backward compatibility for tests and
+  ad-hoc harnesses.

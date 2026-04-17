@@ -59,11 +59,11 @@ func TestBuildVerificationContext_PrefersTypedEvidence(t *testing.T) {
 	}
 }
 
-// TestBuildVerificationContext_StringParseFallback confirms the
-// fallback path still works for callers that don't flow through the
-// pipeline (tests, smoke scripts, ad-hoc CLIs). If VerificationEvidence
-// is nil the verifier must reach for the rendered markers instead.
-func TestBuildVerificationContext_StringParseFallback(t *testing.T) {
+// TestBuildVerificationContext_CompatibilityDerivesTypedEvidence confirms
+// compatibility callers still work: SetMemoryContext derives a typed
+// VerificationEvidence artifact at the session boundary, so the verifier
+// itself stays on typed data only.
+func TestBuildVerificationContext_CompatibilityDerivesTypedEvidence(t *testing.T) {
 	sess := session.New("s1", "a1", "Test")
 	sess.AddUserMessage("q")
 
@@ -83,26 +83,20 @@ func TestBuildVerificationContext_StringParseFallback(t *testing.T) {
 
 	vctx := BuildVerificationContext(sess)
 	if !vctx.HasEvidence {
-		t.Fatalf("fallback string-parse should set HasEvidence from [Retrieved Evidence] marker")
+		t.Fatalf("expected session-boundary compatibility derivation to set HasEvidence")
 	}
 	if !vctx.HasGaps {
-		t.Fatalf("fallback string-parse should set HasGaps from [Gaps] marker")
+		t.Fatalf("expected session-boundary compatibility derivation to set HasGaps")
 	}
 	if !vctx.HasCanonicalEvidence {
-		t.Fatalf("fallback should detect 'canonical' qualifier inside bracketed evidence row")
+		t.Fatalf("expected compatibility derivation to detect canonical qualifier inside bracketed evidence row")
 	}
 }
 
-// TestBuildVerificationContext_FallbackCanonicalNoFalsePositive is the
-// v1.0.6 self-audit P3-D regression. Pre-fix, the fallback path used a
-// naked strings.Contains(lowered, "canonical") so ANY memory block
-// that mentioned the word — whether in prose, user input quoted in
-// history, or a third-party doc excerpt — would false-positive
-// HasCanonicalEvidence. The typed path (via IsCanonical on evidence
-// rows) could never do that. Post-fix: the fallback regex requires
-// "canonical" to appear inside a bracketed meta block, matching the
-// assembler's only emission site.
-func TestBuildVerificationContext_FallbackCanonicalNoFalsePositive(t *testing.T) {
+// TestBuildVerificationContext_CompatibilityCanonicalNoFalsePositive covers
+// the same canonical-detection hazard on the session-boundary
+// compatibility path.
+func TestBuildVerificationContext_CompatibilityCanonicalNoFalsePositive(t *testing.T) {
 	sess := session.New("s1", "a1", "Test")
 	sess.AddUserMessage("q")
 
@@ -122,6 +116,6 @@ func TestBuildVerificationContext_FallbackCanonicalNoFalsePositive(t *testing.T)
 
 	vctx := BuildVerificationContext(sess)
 	if vctx.HasCanonicalEvidence {
-		t.Fatalf("fallback should NOT false-positive on prose mentions of 'canonical' — typed path requires IsCanonical row qualifier; fallback must mirror that")
+		t.Fatalf("compatibility derivation should NOT false-positive on prose mentions of 'canonical'")
 	}
 }

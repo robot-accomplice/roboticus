@@ -3,19 +3,10 @@ package pipeline
 import (
 	"context"
 	"fmt"
-	"regexp"
 	"strings"
 
 	"roboticus/internal/llm"
 )
-
-// canonicalQualifierRegex matches the assembler's
-// "canonical" qualifier only when it appears inside a bracketed
-// evidence-row meta block (e.g. `[semantic, 0.91, canonical, ...]`).
-// Used by BuildVerificationContext's string-parse fallback to align
-// with the typed path's row-qualifier check. See P3-D rationale in
-// v1.0.6 self-audit.
-var canonicalQualifierRegex = regexp.MustCompile(`\[[^\]]*\bcanonical\b[^\]]*\]`)
 
 // VerificationIssue captures one reason a response should be revised.
 type VerificationIssue struct {
@@ -105,15 +96,9 @@ func BuildVerificationContext(session *Session) VerificationContext {
 	}
 	ctx.MemoryContext = session.MemoryContext()
 
-	// v1.0.6 P2-C: prefer the typed evidence artifact the pipeline's
-	// Stage 8.5 attaches via SetVerificationEvidence. This replaces the
-	// pre-v1.0.6 pattern where the verifier `strings.Contains`'d its
-	// way through the rendered "[Retrieved Evidence]", "[Gaps]",
-	// "[Freshness Risks]", "[Contradictions]" markers — a coupling
-	// that would silently break the verifier if the assembler ever
-	// renamed a section header. The string parse is kept as a
-	// fallback for callers that don't flow through the full pipeline
-	// (tests, smoke harnesses, ad-hoc CLI paths).
+	// Typed evidence only. Compatibility callers that still set only
+	// MemoryContext are normalized at the session boundary when
+	// SetMemoryContext derives a VerificationEvidence artifact.
 	if ve := session.VerificationEvidence(); ve != nil {
 		ctx.HasEvidence = ve.HasEvidence
 		ctx.HasGaps = ve.HasGaps
@@ -124,30 +109,6 @@ func BuildVerificationContext(session *Session) VerificationContext {
 		ctx.UnresolvedQuestions = append([]string(nil), ve.UnresolvedQuestions...)
 		ctx.VerifiedConclusions = append([]string(nil), ve.VerifiedConclusions...)
 		ctx.StoppingCriteria = append([]string(nil), ve.StoppingCriteria...)
-	} else {
-		// String-parse fallback for non-pipeline callers (tests, smoke
-		// scripts, ad-hoc CLI). The goal is to keep this path's
-		// semantics as close to the typed path as possible so callers
-		// can't silently get different behavior depending on which
-		// route populated the session.
-		ctx.HasEvidence = strings.Contains(ctx.MemoryContext, "[Retrieved Evidence]")
-		ctx.HasGaps = strings.Contains(ctx.MemoryContext, "[Gaps]")
-		ctx.HasFreshnessRisk = strings.Contains(ctx.MemoryContext, "[Freshness Risks]")
-		ctx.HasContradictions = strings.Contains(ctx.MemoryContext, "[Contradictions]")
-		// Canonical detection: the assembler emits "canonical" ONLY
-		// as an evidence-row qualifier inside the bracketed meta
-		// block, e.g. `1. [semantic, 0.91, canonical, source=...]`.
-		// Pre-v1.0.6-self-audit the fallback used a naked
-		// strings.Contains which false-positived whenever memory
-		// prose happened to mention the word. The regex below
-		// matches only when "canonical" appears inside a bracket
-		// block — aligning fallback semantics with the typed path's
-		// row-qualifier check.
-		ctx.HasCanonicalEvidence = canonicalQualifierRegex.MatchString(ctx.MemoryContext)
-		ctx.EvidenceItems = verificationSectionItems(ctx.MemoryContext, "[Retrieved Evidence]")
-		ctx.UnresolvedQuestions = verificationExecutiveSection(ctx.MemoryContext, "Unresolved questions")
-		ctx.VerifiedConclusions = verificationExecutiveSection(ctx.MemoryContext, "Verified conclusions")
-		ctx.StoppingCriteria = verificationExecutiveSection(ctx.MemoryContext, "Stopping criteria")
 	}
 
 	ctx.Subgoals = session.TaskSubgoals()
@@ -422,54 +383,6 @@ func verificationKeywordsOverlap(keywords []string, text string) int {
 	return overlap
 }
 
-// verificationExecutiveSection parses a labeled subsection out of the working
-// state block rendered by the memory assembler (see executive.go::FormatForContext).
-// The block has the shape:
-//
-//	Executive State:
-//	Plan:
-//	- ...
-//	Unresolved questions:
-//	- ...
-//
-// Each bullet becomes a returned string.
-func verificationExecutiveSection(memoryContext, label string) []string {
-	if memoryContext == "" || label == "" {
-		return nil
-	}
-	needle := label + ":"
-	idx := strings.Index(memoryContext, needle)
-	if idx < 0 {
-		return nil
-	}
-	rest := memoryContext[idx+len(needle):]
-	// Terminate at the next labeled subsection or blank line.
-	lines := strings.Split(rest, "\n")
-	var items []string
-	for i, line := range lines {
-		if i == 0 {
-			continue // skip the label line tail
-		}
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
-			break
-		}
-		if !strings.HasPrefix(trimmed, "-") {
-			// Next labeled section such as "Verified conclusions:".
-			break
-		}
-		item := strings.TrimSpace(strings.TrimPrefix(trimmed, "-"))
-		// Strip trailing parenthetical metadata "(steps=..., ...)".
-		if paren := strings.LastIndex(item, " ("); paren > 0 {
-			item = item[:paren]
-		}
-		if item != "" {
-			items = append(items, item)
-		}
-	}
-	return items
-}
-
 func verificationGoalCovered(goal, response string) bool {
 	keywords := verificationKeywords(goal)
 	if len(keywords) == 0 {
@@ -651,36 +564,6 @@ func verificationMentionsCanonical(response string) bool {
 		"according to", "current policy", "current rule", "policy says",
 		"canonical", "documented", "source", "official", "current documentation",
 	)
-}
-
-func verificationSectionItems(memoryContext, header string) []string {
-	if memoryContext == "" {
-		return nil
-	}
-	idx := strings.Index(memoryContext, header)
-	if idx < 0 {
-		return nil
-	}
-	rest := memoryContext[idx+len(header):]
-	if next := strings.Index(rest, "\n["); next >= 0 {
-		rest = rest[:next]
-	}
-
-	var items []string
-	for _, line := range strings.Split(rest, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		line = strings.TrimLeft(line, "- ")
-		if dot := strings.Index(line, "] "); strings.HasPrefix(line, "1.") || strings.HasPrefix(line, "2.") || strings.HasPrefix(line, "3.") || strings.HasPrefix(line, "4.") || strings.HasPrefix(line, "5.") {
-			if dot >= 0 && dot+2 < len(line) {
-				line = line[dot+2:]
-			}
-		}
-		items = append(items, line)
-	}
-	return items
 }
 
 func (vr VerificationResult) RetryMessage() string {
