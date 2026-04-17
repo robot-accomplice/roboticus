@@ -95,6 +95,25 @@ func TestValidatePath(t *testing.T) {
 	}
 }
 
+func TestResolvePathAndValidatePath_ShareAllowedAbsoluteSemantics(t *testing.T) {
+	tmpDir := t.TempDir()
+	allowedDir := filepath.Join(tmpDir, "..", "external-allowed")
+	target := filepath.Join(allowedDir, "notes.txt")
+	snapshot := &ToolSandboxSnapshot{AllowedPaths: []string{allowedDir}}
+
+	resolved, err := ResolvePath(target, tmpDir, snapshot)
+	if err != nil {
+		t.Fatalf("ResolvePath: %v", err)
+	}
+	if resolved != filepath.Clean(target) {
+		t.Fatalf("resolved = %q, want %q", resolved, filepath.Clean(target))
+	}
+
+	if err := ValidatePath(target, tmpDir, snapshot); err != nil {
+		t.Fatalf("ValidatePath: %v", err)
+	}
+}
+
 func TestNormalizeWorkspaceRelPath(t *testing.T) {
 	tmpDir := t.TempDir()
 

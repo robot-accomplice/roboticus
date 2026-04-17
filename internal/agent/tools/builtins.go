@@ -463,38 +463,5 @@ Allowed Paths: %s`,
 
 // resolvePath safely resolves a path within the workspace.
 func resolvePath(workspace, path string, allowedPaths []string) (string, error) {
-	if strings.HasPrefix(path, "~") {
-		return "", fmt.Errorf("home-directory shortcuts are not allowed; use a workspace-relative path or an explicitly allowed absolute path")
-	}
-	if filepath.IsAbs(path) {
-		cleanPath := filepath.Clean(path)
-		// Check if absolute path is within an allowed path (exact match or proper subtree).
-		// Uses path-separator boundary check to prevent /vault matching /vaultBackup.
-		for _, allowed := range allowedPaths {
-			cleanAllowed := filepath.Clean(allowed)
-			if cleanPath == cleanAllowed || strings.HasPrefix(cleanPath, cleanAllowed+string(filepath.Separator)) {
-				return cleanPath, nil
-			}
-		}
-		return "", fmt.Errorf("absolute paths must be in allowed_paths list")
-	}
-
-	resolved := filepath.Join(workspace, path)
-	resolved = filepath.Clean(resolved)
-
-	// Ensure the resolved path is within workspace.
-	absWorkspace, err := filepath.Abs(workspace)
-	if err != nil {
-		return "", fmt.Errorf("invalid workspace: %w", err)
-	}
-	absResolved, err := filepath.Abs(resolved)
-	if err != nil {
-		return "", fmt.Errorf("invalid path: %w", err)
-	}
-
-	if absResolved != absWorkspace && !strings.HasPrefix(absResolved, absWorkspace+string(filepath.Separator)) {
-		return "", fmt.Errorf("path escapes workspace boundary")
-	}
-
-	return resolved, nil
+	return ResolvePath(path, workspace, &ToolSandboxSnapshot{AllowedPaths: allowedPaths})
 }

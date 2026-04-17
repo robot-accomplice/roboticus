@@ -175,7 +175,32 @@ C4Component
     Rel(appstate, runtime, "Owns")
 ```
 
-## 6. Supplementary Rule View — Streaming Is Not A Separate Product
+## 6. Supplementary Rule View — Security Claim And Sandbox Ownership
+
+This view captures a runtime seam that was easy to misunderstand during parity
+work: claim resolution is pipeline-owned, while sandbox enforcement is shared
+across policy evaluation and tool/runtime path resolution. The important rule
+is that those seams must agree on the operator-visible contract.
+
+```mermaid
+flowchart LR
+    connector["Connector / Route / Channel"]
+    stage8["Stage 8: authority_resolution"]
+    session["Session Runtime Context\n(channel, workspace, allowed paths snapshot,\nsecurity claim)"]
+    policy["Policy Engine\n(tool allow/deny, path_protection,\nconfig_protection)"]
+    toolrt["Tool Runtime Path Resolution\nResolvePath / ValidatePath"]
+    guards["Post-Inference Guards"]
+    operator["Operator-visible Outcome"]
+
+    connector --> stage8 --> session
+    session --> policy
+    session --> toolrt
+    policy --> operator
+    toolrt --> operator
+    guards --> operator
+```
+
+## 7. Supplementary Rule View — Streaming Is Not A Separate Product
 
 This is a supporting diagram rather than a C4 view because it expresses a
 behavioral equivalence rule.
@@ -198,7 +223,7 @@ flowchart LR
     t1 --> shared --> t2
 ```
 
-## 7. Supplementary View — WebSocket Topic Subscription (v1.0.3+)
+## 8. Supplementary View — WebSocket Topic Subscription (v1.0.3+)
 
 The WebSocket layer is a push-only delivery connector. It does not call
 `RunPipeline()` — it subscribes to the EventBus that the pipeline publishes to.

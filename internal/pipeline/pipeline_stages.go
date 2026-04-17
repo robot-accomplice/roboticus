@@ -467,9 +467,7 @@ func (p *Pipeline) resolveSession(ctx context.Context, cfg Config, input Input) 
 
 func (p *Pipeline) loadSession(ctx context.Context, input Input) (*Session, error) {
 	sess := NewSession(input.SessionID, input.AgentID, input.AgentName)
-	sess.Channel = input.Platform
-	sess.Workspace = p.workspace
-	sess.AllowedPaths = p.allowedPaths
+	p.applyRuntimeSessionContext(sess, input)
 
 	rows, err := p.store.QueryContext(ctx,
 		`SELECT role, content FROM session_messages WHERE session_id = ? ORDER BY created_at ASC LIMIT 50`,
@@ -524,10 +522,14 @@ func (p *Pipeline) createSessionWithID(ctx context.Context, input Input, id, sco
 		return nil, err
 	}
 	sess := NewSession(id, input.AgentID, input.AgentName)
+	p.applyRuntimeSessionContext(sess, input)
+	return sess, nil
+}
+
+func (p *Pipeline) applyRuntimeSessionContext(sess *Session, input Input) {
 	sess.Channel = input.Platform
 	sess.Workspace = p.workspace
-	sess.AllowedPaths = p.allowedPaths
-	return sess, nil
+	sess.AllowedPaths = append([]string(nil), p.allowedPaths...)
 }
 
 // expandShortFollowup detects short reactions and prepends prior context.

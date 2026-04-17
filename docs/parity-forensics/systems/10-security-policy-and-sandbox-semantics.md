@@ -88,7 +88,7 @@ The key artifacts are:
 | ID | Priority | Concern | Rust behavior | Go behavior | Classification | Status | Evidence |
 | ---- | ---------- | --------- | --------------- | ------------- | ---------------- | -------- | ---------- |
 | SYS-10-001 | P1 | Security claim composition needed live-path proof, not just helper existence | Rust treats claim composition as a first-class pipeline concern | Go now has live evidence that Stage 8 resolves `SecurityClaim`, attaches it to `session.SecurityClaim`, annotates `authority` / `claim_sources` on the trace, and applies threat-caution downgrade on the actual pipeline path. Full transport-by-transport classification is still open, but the old "helper exists but is bypassed" concern is closed | Improved, not closed | Open | `internal/pipeline/config.go`, `internal/pipeline/pipeline_run_stages.go`, `internal/pipeline/security_claim_stage_test.go` |
-| SYS-10-002 | P1 | Sandbox semantics are enforced in more than one layer | Rust intent is one coherent operator contract | Go currently enforces path constraints through policy, tool/runtime helpers, and protection guards; the system is stronger than before but still needs explicit cross-layer audit | Open | Open | `internal/agent/policy/engine.go`, `internal/agent/tools/builtins.go`, `internal/pipeline/guards*.go` |
+| SYS-10-002 | P1 | Sandbox semantics are enforced in more than one layer | Rust intent is one coherent operator contract | Go now has a tighter shared runtime helper: filesystem tools resolve through `tools.ResolvePath(...)`, `ValidatePath(...)` shares the same allowed-path semantics, and pipeline session bootstrap snapshots `AllowedPaths` instead of sharing the pipeline slice header. Policy-layer path denial and tool-layer resolution are still distinct seams, but the helper split is materially narrower | Improved, not closed | Open | `internal/agent/tools/sandbox.go`, `internal/agent/tools/builtins.go`, `internal/pipeline/pipeline_stages.go`, `internal/pipeline/sandbox_propagation_test.go`, `internal/agent/tools/sandbox_test.go` |
 | SYS-10-003 | P1 | Model self-censorship must not replace real policy decisions | Tool/runtime policy should be the source of truth | Go has already fixed several prompt/runtime mismatches here, but this concern deserves explicit ownership in the parity program | Improvement candidate | Open | soak fixes, `prompt.go`, policy/tool tests |
 
 ## Intentional Deviations
@@ -109,6 +109,14 @@ Current known good state:
 - threat-caution downgrade is applied on the live path
 - API-key routes do not need to synthesize `ChannelClaimContext`; under
   `AuthorityAPIKey`, Stage 8 resolves directly through `ResolveAPIClaim(...)`
+- filesystem tools and generic sandbox validation now share one path-resolution
+  contract (`ResolvePath` / `ValidatePath`) for:
+  - `~` rejection
+  - workspace-relative anchoring
+  - boundary-safe allowed-path extension for explicit absolute paths
+- live sessions snapshot `AllowedPaths` at creation/load time instead of sharing
+  the pipeline slice header, so config reloads or in-place mutations cannot
+  silently retcon active sessions' sandbox surface
 
 ## Downstream Systems Affected
 
@@ -135,3 +143,8 @@ Current known good state:
   `AuthorityAPIKey` presets. The live API authority path is `ResolveAPIClaim`
   at Stage 8, so carrying a channel-claim object in the route only obscured the
   real owner.
+- 2026-04-17: Consolidated tool/runtime sandbox resolution under
+  `tools.ResolvePath(...)` and updated `ValidatePath(...)` to share the same
+  absolute-path semantics. Also moved live session sandbox snapshot ownership
+  into `Pipeline.applyRuntimeSessionContext(...)` so `AllowedPaths` are copied
+  instead of header-shared across the pipeline/session boundary.

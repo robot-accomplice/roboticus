@@ -205,12 +205,9 @@ func TestSandboxPropagation_BidirectionalReconfiguration(t *testing.T) {
 // (or any other deep-copy mechanism) — and this test fails if that
 // gets removed.
 //
-// Note the production code in pipeline_stages.go currently shares
-// the slice header (`sess.AllowedPaths = p.allowedPaths`). That's
-// safe TODAY because nothing mutates the slice in-place after
-// creation, but it's a foot-gun. This test is intentionally
-// stricter than the production behavior so a future refactor that
-// adds in-place mutation is caught.
+// This asserts the actual production helper that applies runtime metadata to a
+// session. If the helper regresses to sharing the slice header again, the
+// mutation below will leak through and fail the test.
 func TestSandboxPropagation_SnapshotIsolation(t *testing.T) {
 	tmp := t.TempDir()
 	p := &Pipeline{
@@ -218,13 +215,8 @@ func TestSandboxPropagation_SnapshotIsolation(t *testing.T) {
 		allowedPaths: []string{filepath.Join(tmp, "a")},
 	}
 
-	// Production code path: session takes the slice as-is. We
-	// simulate the safer pattern (deep copy) the test ASSERTS
-	// should be in place, and the test will fail if production
-	// regresses to in-place mutation.
 	sess := NewSession("s", "agent", "Test")
-	sess.Workspace = p.workspace
-	sess.AllowedPaths = append([]string(nil), p.allowedPaths...)
+	p.applyRuntimeSessionContext(sess, Input{Platform: "api"})
 
 	// Mutate the pipeline's slice in-place. If session shared the
 	// header, sess.AllowedPaths would observe the mutation.

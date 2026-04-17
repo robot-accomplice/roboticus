@@ -63,30 +63,27 @@ v1.0.5 introduced the **agentic retrieval architecture** scaffold — decomposer
 
 ## Gap 1: SecurityClaim Resolvers Defined But Never Called
 
-**Severity**: HIGH
+**Severity**: CLOSED
 **Rust principle violated**: Section 5 (Clear Boundaries) — "Authority resolution" belongs in Pipeline
 
-**Current state**: `internal/core/security_claim.go` defines `ResolveChannelClaim()`, `ResolveAPIClaim()`, and `ResolveA2AClaim()` with proper grant/ceiling composition (`min(max(grants), min(ceilings))`). These are **never called in production**. Instead, authority flows through the simpler `pipeline.ResolveAuthority()` function in `internal/pipeline/config.go` which lacks:
-- Threat-based ceiling downgrades
-- Multi-source grant composition
-- SecurityClaim audit trail on ToolCallRequest
+**Current state**: Closed in v1.0.6. Stage 8 (`authority_resolution`) is the live owner for `SecurityClaim` composition. The pipeline resolves channel/API/A2A claims through the proper resolver path, attaches the resolved claim to the session, annotates `authority` and `claim_sources` on the trace, and applies threat-caution downgrade on the live path.
 
 **Rust behavior**: Every entry point constructs a proper SecurityClaim via the corresponding resolver. The claim carries through the entire pipeline and is attached to every tool call for audit.
 
-**Fix**: Wire the three resolvers into the pipeline's authority resolution stage. Replace or augment `ResolveAuthority()` to call the appropriate resolver and produce a `SecurityClaim` that flows through to the policy engine.
+**Fix**: Completed. Remaining work is transport-by-transport classification and broader cross-layer sandbox audit, not basic claim-owner wiring.
 
 ---
 
 ## Gap 2: API Routes Never Set Input.Claim
 
-**Severity**: MEDIUM
+**Severity**: CLOSED
 **Rust principle violated**: Section 6 (Feature Parity Across Channels) — all channels access same capabilities
 
-**Current state**: `internal/api/routes/agent.go` and `sessions.go` construct `pipeline.Input{}` with `Claim: nil`. The pipeline's `ResolveAuthority(AuthorityAPIKey, nil)` hardcodes `AuthorityCreator`, bypassing claim composition entirely. This works but creates an inconsistency: API requests skip the security claim pipeline while channel requests go through it.
+**Current state**: Closed in v1.0.6. API-key routes do not need to synthesize `ChannelClaimContext`; under `AuthorityAPIKey`, Stage 8 resolves the claim through `ResolveAPIClaim(...)`. The old route-level `Input.Claim` scaffolding was removed because it obscured the true live owner.
 
 **Rust behavior**: API requests also go through claim resolution (`resolve_api_claim`), producing a SecurityClaim with source tracking.
 
-**Fix**: Construct a proper `ChannelClaimContext` for API requests (with `SenderInAllowlist: true` since API keys are fully trusted). This ensures all paths produce claims for audit consistency.
+**Fix**: Completed by making Stage 8 the canonical API claim owner and removing dead route-layer claim placeholders.
 
 ---
 
