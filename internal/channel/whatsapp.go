@@ -148,6 +148,22 @@ func (w *WhatsAppAdapter) ValidateWebhookSignature(body []byte, signature string
 
 // ProcessWebhook parses an incoming WhatsApp webhook payload.
 func (w *WhatsAppAdapter) ProcessWebhook(data []byte) (*InboundMessage, error) {
+	msgs, err := w.ProcessWebhookBatch(data)
+	if err != nil {
+		return nil, err
+	}
+	if len(msgs) == 0 {
+		return nil, nil
+	}
+	w.mu.Lock()
+	w.messageBuffer = append(w.messageBuffer, msgs...)
+	w.mu.Unlock()
+	return &msgs[0], nil
+}
+
+// ProcessWebhookBatch normalizes an incoming WhatsApp webhook payload into
+// canonical inbound messages without invoking pipeline behavior.
+func (w *WhatsAppAdapter) ProcessWebhookBatch(data []byte) ([]InboundMessage, error) {
 	var webhook struct {
 		Entry []struct {
 			Changes []struct {
@@ -184,6 +200,7 @@ func (w *WhatsAppAdapter) ProcessWebhook(data []byte) (*InboundMessage, error) {
 		return nil, fmt.Errorf("whatsapp webhook decode: %w", err)
 	}
 
+	var results []InboundMessage
 	for _, entry := range webhook.Entry {
 		for _, change := range entry.Changes {
 			for _, msg := range change.Value.Messages {
@@ -192,7 +209,7 @@ func (w *WhatsAppAdapter) ProcessWebhook(data []byte) (*InboundMessage, error) {
 					continue
 				}
 
-				inbound := &InboundMessage{
+				inbound := InboundMessage{
 					ID:        msg.ID,
 					Platform:  "whatsapp",
 					SenderID:  msg.From,
@@ -239,15 +256,12 @@ func (w *WhatsAppAdapter) ProcessWebhook(data []byte) (*InboundMessage, error) {
 				if inbound.Content == "" && len(inbound.Media) == 0 {
 					continue
 				}
-
-				w.mu.Lock()
-				w.messageBuffer = append(w.messageBuffer, *inbound)
-				w.mu.Unlock()
-				return inbound, nil
+				SanitizeInbound(&inbound)
+				results = append(results, inbound)
 			}
 		}
 	}
-	return nil, nil
+	return results, nil
 }
 
 func (w *WhatsAppAdapter) isSenderAllowed(sender string) bool {

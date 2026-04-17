@@ -306,6 +306,19 @@ func (t *TelegramAdapter) sendChatAction(ctx context.Context, chatID, action str
 
 // ProcessWebhook handles an incoming Telegram webhook payload.
 func (t *TelegramAdapter) ProcessWebhook(data []byte) (*InboundMessage, error) {
+	msgs, err := t.ProcessWebhookBatch(data)
+	if err != nil {
+		return nil, err
+	}
+	if len(msgs) == 0 {
+		return nil, nil
+	}
+	return &msgs[0], nil
+}
+
+// ProcessWebhookBatch normalizes a Telegram webhook payload into zero or one
+// canonical inbound messages without invoking pipeline behavior.
+func (t *TelegramAdapter) ProcessWebhookBatch(data []byte) ([]InboundMessage, error) {
 	var update struct {
 		UpdateID int64 `json:"update_id"`
 		Message  *struct {
@@ -339,14 +352,16 @@ func (t *TelegramAdapter) ProcessWebhook(data []byte) (*InboundMessage, error) {
 		senderID = strconv.FormatInt(msg.From.ID, 10)
 	}
 
-	return &InboundMessage{
+	inbound := InboundMessage{
 		ID:        strconv.FormatInt(msg.MessageID, 10),
 		Platform:  "telegram",
 		SenderID:  senderID,
 		ChatID:    strconv.FormatInt(chatID, 10),
 		Content:   msg.Text,
 		Timestamp: time.Unix(msg.Date, 0),
-	}, nil
+	}
+	SanitizeInbound(&inbound)
+	return []InboundMessage{inbound}, nil
 }
 
 // chunkText splits text into chunks of at most maxLen bytes.

@@ -22,6 +22,8 @@ This file follows the same C4 conventions used elsewhere in the repo:
 - one architectural level per diagram
 - explicit relationship labels
 - transport adapters shown as adapters, not as owners of behavior
+- transport payload normalization owned once per transport, not duplicated
+  across route and adapter layers
 - pipeline shown as the central factory
 - supporting non-C4 diagrams clearly labeled as such
 
@@ -91,7 +93,7 @@ C4Component
         Component(api, "HTTP / REST Routes", "Go", "Parse HTTP input, call unified pipeline, format HTTP output")
         Component(streaming, "Streaming / SSE Routes", "Go", "Parse stream request, call unified pipeline, format chunked output")
         Component(ws, "WebSocket Transport", "Go", "Ticket auth, topic subscription, EventBus broadcast. No business logic.")
-        Component(channels, "Channel Adapters", "Go", "Translate Telegram, Discord, Signal, WhatsApp, Email, Voice, A2A to pipeline input")
+        Component(channels, "Channel Adapters", "Go", "Translate Telegram, Discord, Signal, WhatsApp, Email, Voice, A2A to pipeline input. Own canonical transport normalization for those protocols.")
         Component(cron, "Cron Connectors", "Go", "Translate scheduled execution into pipeline input")
         Component(cli, "CLI / Admin Adapters", "Go", "Call API or runtime surfaces without owning shared business rules")
     }
@@ -231,7 +233,26 @@ flowchart LR
     t1 --> shared --> t2
 ```
 
-## 8. Supplementary Rule View — Request Construction Ownership
+## 8. Supplementary Rule View — Channel Ingress Ownership
+
+Webhook-capable channels follow the same thin-connector rule more strictly than
+before: the route owns HTTP framing and pipeline dispatch, while the adapter
+owns transport verification and payload normalization. Routes must not carry a
+second copy of Telegram / WhatsApp webhook JSON parsing once the adapter
+defines the canonical ingress contract.
+
+```mermaid
+flowchart LR
+    http["Webhook Route"]
+    verify["Adapter Verification\n(challenge / signature)"]
+    normalize["Adapter Normalization\ntransport JSON -> InboundMessage batch"]
+    bridge["Route Bridge\nInboundMessage -> pipeline.Input"]
+    pipeline["RunPipeline(...)"]
+
+    http --> verify --> normalize --> bridge --> pipeline
+```
+
+## 9. Supplementary Rule View — Request Construction Ownership
 
 This view captures the validated v1.0.6 ownership rule for the inference
 artifact. Tool selection, memory preparation, checkpoint restore, and prompt
@@ -261,7 +282,7 @@ flowchart LR
     builder -.-> note3
 ```
 
-## 9. Supplementary Rule View — Continuity And Learning Ownership
+## 10. Supplementary Rule View — Continuity And Learning Ownership
 
 This view captures the validated v1.0.6 continuity rule. Post-turn artifacts
 must be written from turn-owned evidence first, then promoted through explicit
@@ -292,7 +313,7 @@ flowchart LR
     episodic -.-> note
 ```
 
-## 10. Supplementary View — WebSocket Topic Subscription (v1.0.3+)
+## 11. Supplementary View — WebSocket Topic Subscription (v1.0.3+)
 
 The WebSocket layer is a push-only delivery connector. It does not call
 `RunPipeline()` — it subscribes to the EventBus that the pipeline publishes to.
@@ -320,7 +341,7 @@ sequenceDiagram
     WS->>D: Push trace update
 ```
 
-## 11. Supplementary Rule View — No Symptom Fixes
+## 12. Supplementary Rule View — No Symptom Fixes
 
 This is a supporting debugging diagram rather than a structural one.
 
@@ -348,7 +369,7 @@ flowchart TD
     diff -. "MUST NOT" .-> wrong3
 ```
 
-## 12. Supplementary Rule View — Enforcement Model
+## 13. Supplementary Rule View — Enforcement Model
 
 This diagram shows how the architecture is kept real.
 
@@ -365,7 +386,7 @@ flowchart LR
     review --> code
 ```
 
-## 13. Reading Guide
+## 14. Reading Guide
 
 - Use the C4 context and container views to understand architectural ownership.
 - Use the connector-layer component diagram when reviewing route, streaming,

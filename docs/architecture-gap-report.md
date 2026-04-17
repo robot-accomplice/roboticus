@@ -30,6 +30,10 @@ older architecture docs had left too generic:
   composition, policy/tool runtime own what actually happened, and
   post-inference guards are no longer allowed to overwrite legitimate
   policy/sandbox denials with fabricated canned outcomes.
+- **Webhook ingress ownership is sharper.** Telegram and WhatsApp routes no
+  longer own transport JSON parsing; adapters own normalization and WhatsApp
+  verification/signature checks, while routes only bridge normalized inbound
+  messages into the pipeline.
 
 | Category | Compliant | Gaps |
 |----------|-----------|------|

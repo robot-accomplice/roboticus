@@ -76,10 +76,11 @@ route preserves when constructing the normalized inbound message.
 
 | ID | Priority | Concern | Rust behavior | Go behavior | Classification | Status | Evidence |
 |----|----------|---------|---------------|-------------|----------------|--------|----------|
-| SYS-13-001 | P1 | Webhook normalization is split between route handlers and adapters | Rust channel ingress ownership needs explicit comparison | Telegram and WhatsApp webhook routes construct `pipeline.Input` directly, while the adapters themselves also implement webhook parse/normalize paths (`ProcessWebhook(...)`) | Degradation / split ownership | Open | `internal/api/routes/admin_webhooks.go`, `internal/channel/telegram.go`, `internal/channel/whatsapp.go` |
+| SYS-13-001 | P1 | Webhook normalization is split between route handlers and adapters | Rust channel ingress ownership needs explicit comparison | Closed in v1.0.6 remediation: Telegram and WhatsApp routes now consume adapter-owned webhook normalization (`ProcessWebhookBatch(...)`) and bridge normalized `InboundMessage` values into the pipeline instead of parsing transport JSON directly in the route layer | Degradation / split ownership | Closed | `internal/api/routes/admin_webhooks.go`, `internal/api/routes/admin_webhooks_test.go`, `internal/channel/telegram.go`, `internal/channel/whatsapp.go` |
 | SYS-13-002 | P2 | Router remains structurally thin and formatting-owned, not behavior-owned | Rust connector thinness intent | `channel.Router` only polls adapters, formats outbound content per platform, and manages delivery/health state; it does not own business decisions | Idiomatic shift / accepted | Accepted | `internal/channel/router.go`, `internal/channel/formatter.go` |
 | SYS-13-003 | P2 | Transport metadata preservation differs by adapter and needs explicit classification | Rust per-channel metadata mapping needs comparison | Adapters preserve different normalized fields: e.g. Signal group messages become `group:<id>` chat IDs, WhatsApp surfaces media attachments, Matrix preserves sender IDs and room IDs, Telegram may omit sender ID in some cases | Open | Open | `internal/channel/signal.go`, `internal/channel/whatsapp.go`, `internal/channel/matrix.go`, `internal/channel/telegram.go`, coverage tests |
 | SYS-13-004 | P2 | Outbound formatting is richer and centralized | Rust formatter behavior needs comparison | `FormatFor(platform)` strips internal orchestration metadata and converts markdown to platform-native syntax before send | Likely improvement | Accepted | `internal/channel/formatter.go`, `internal/channel/formatter_parity_test.go` |
+| SYS-13-005 | P1 | WhatsApp challenge/signature checks were not owned by the adapter contract on the live route path | Rust transport verification ownership needs explicit comparison | Closed in v1.0.6 remediation: the WhatsApp GET verification route now uses the adapter verifier instead of an empty hardcoded token, and the POST webhook path validates `X-Hub-Signature-256` through the adapter before normalization | Missing functionality / split ownership | Closed | `internal/api/routes/admin_webhooks.go`, `internal/api/routes/admin_webhooks_test.go`, `internal/channel/whatsapp.go` |
 
 ## Intentional Deviations
 
@@ -90,8 +91,10 @@ route preserves when constructing the normalized inbound message.
 
 ## Remediation Notes
 
-Promoted from an implicit concern. Actual behavior drift has now been found at
-the ingress normalization seam, so this system is no longer only precautionary.
+Promoted from an implicit concern. The main ingress split has now been removed:
+Telegram and WhatsApp webhook routes consume adapter-owned normalization and
+verification. The remaining work in this system is transport-by-transport
+metadata classification, not duplicate ingress parsing.
 
 ## Downstream Systems Affected
 
@@ -103,8 +106,8 @@ the ingress normalization seam, so this system is no longer only precautionary.
 
 - Which channel surfaces are truly behaviorally distinct enough to require their
   own sub-audits?
-- Should webhook routes delegate to adapters for normalization, or should the
-  route-owned normalization path become the single explicit ingress contract?
+- Telegram/WhatsApp now delegate webhook normalization to adapters. Should the
+  same single-owner rule be applied anywhere else ingress parsing is duplicated?
 
 ## Progress Log
 
@@ -112,3 +115,6 @@ the ingress normalization seam, so this system is no longer only precautionary.
 - 2026-04-17: Deepened with a concrete split-ingress finding: some channels
   normalize webhooks in routes while adapters also implement their own parse
   path.
+- 2026-04-17: Closed the Telegram/WhatsApp split-ingress seam by making the
+  adapters own webhook normalization and WhatsApp verification/signature
+  checks on the live route path.

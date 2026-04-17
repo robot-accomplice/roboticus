@@ -15,6 +15,7 @@ import (
 	"roboticus/internal/agent/tools"
 	"roboticus/internal/api/routes"
 	"roboticus/internal/browser"
+	"roboticus/internal/channel"
 	"roboticus/internal/core"
 	"roboticus/internal/db"
 	"roboticus/internal/llm"
@@ -38,6 +39,18 @@ type AppState struct {
 	MCPGateway      *mcp.Gateway // serves the agent's tools to external MCP clients
 	Plugins         *plugin.Registry
 	Browser         *browser.Browser
+	TelegramWebhook routesWebhookBatchParser
+	WhatsAppWebhook routesWhatsAppWebhook
+}
+
+type routesWebhookBatchParser interface {
+	ProcessWebhookBatch(data []byte) ([]channel.InboundMessage, error)
+}
+
+type routesWhatsAppWebhook interface {
+	routesWebhookBatchParser
+	VerifyWebhook(mode, token, challenge string) (string, bool)
+	ValidateWebhookSignature(body []byte, signature string) bool
 }
 
 // ServerConfig controls the HTTP server.
@@ -105,9 +118,9 @@ func NewServer(ctx context.Context, cfg ServerConfig, state *AppState) *http.Ser
 		r.Get("/.well-known/agent.json", routes.AgentCard())
 		r.Get("/openapi.yaml", OpenAPIHandler())
 		r.Get("/api/docs", DocsHandler())
-		r.Post("/api/webhooks/telegram", routes.WebhookTelegram(state.Pipeline))
-		r.Get("/api/webhooks/whatsapp", routes.WebhookWhatsAppVerify(""))
-		r.Post("/api/webhooks/whatsapp", routes.WebhookWhatsApp(state.Pipeline))
+		r.Post("/api/webhooks/telegram", routes.WebhookTelegram(state.Pipeline, state.TelegramWebhook))
+		r.Get("/api/webhooks/whatsapp", routes.WebhookWhatsAppVerify(state.WhatsAppWebhook))
+		r.Post("/api/webhooks/whatsapp", routes.WebhookWhatsApp(state.Pipeline, state.WhatsAppWebhook, state.WhatsAppWebhook))
 
 		// MCP gateway — external MCP clients authenticate via their own mechanism.
 		if state.MCPGateway != nil {

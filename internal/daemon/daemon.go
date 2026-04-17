@@ -442,6 +442,14 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 	}
 
 	router := channel.NewRouter(dq)
+	var telegramWebhook interface {
+		ProcessWebhookBatch(data []byte) ([]channel.InboundMessage, error)
+	}
+	var whatsAppWebhook interface {
+		ProcessWebhookBatch(data []byte) ([]channel.InboundMessage, error)
+		VerifyWebhook(mode, token, challenge string) (string, bool)
+		ValidateWebhookSignature(body []byte, signature string) bool
+	}
 
 	// Register channel adapters from config + keystore.
 	// All tokens come from keystore — no env var fallback.
@@ -464,12 +472,24 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 			DenyOnEmpty:    cfg.Security.Filesystem.DenyOnEmptyAllowlist,
 		}
 		tgAdapter := channel.NewTelegramAdapter(tgCfg)
+		telegramWebhook = tgAdapter
 		// Clear any stale webhook so getUpdates polling works.
 		if err := tgAdapter.DeleteWebhook(context.Background()); err != nil {
 			log.Warn().Err(err).Msg("telegram: failed to delete webhook")
 		}
 		router.Register(tgAdapter)
 		log.Info().Msg("telegram adapter registered (polling mode)")
+	}
+	if cfg.Channels.WhatsApp != nil && cfg.Channels.WhatsApp.Enabled {
+		waCfg := channel.WhatsAppConfig{
+			Token:          resolveChannelToken("", "whatsapp_api_token", ks),
+			PhoneNumberID:  cfg.Channels.WhatsApp.PhoneNumberID,
+			VerifyToken:    cfg.Channels.WhatsApp.VerifyToken,
+			AppSecret:      cfg.Channels.WhatsApp.AppSecret,
+			AllowedNumbers: cfg.Channels.WhatsApp.AllowedNumbers,
+			DenyOnEmpty:    cfg.Security.Filesystem.DenyOnEmptyAllowlist,
+		}
+		whatsAppWebhook = channel.NewWhatsAppAdapter(waCfg)
 	}
 
 	// Build channel list for display (Rust parity: serve.rs channels vec).
@@ -643,6 +663,8 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 		Approvals:       approvalMgr,
 		Tools:           tools,
 		MCP:             mcpMgr,
+		TelegramWebhook: telegramWebhook,
+		WhatsAppWebhook: whatsAppWebhook,
 	}
 
 	bootStep(11, steps, "Hippocampus, approvals, events ready")
