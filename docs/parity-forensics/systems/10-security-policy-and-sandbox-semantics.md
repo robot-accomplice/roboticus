@@ -31,14 +31,14 @@ Out of scope:
 ## Rust Source Anchors
 
 | Concern | Rust file(s) / function(s) |
-|---------|-----------------------------|
+| --------- | ----------------------------- |
 | Security claim composition | `ARCHITECTURE.md`, `src/.../security_claim*` |
 | Policy / sandbox semantics | `src/.../policy*`, `src/.../tool_runtime*` |
 
 ## Go Source Anchors
 
 | Concern | Go file(s) / function(s) |
-|---------|---------------------------|
+| --------- | --------------------------- |
 | Security claims | `internal/core/security_claim.go` |
 | Policy engine | `internal/agent/policy/engine.go` |
 | Tool/runtime sandboxing | `internal/agent/tools/builtins.go`, `internal/pipeline/sandbox_*`, `internal/pipeline/guards*.go` |
@@ -86,8 +86,8 @@ The key artifacts are:
 ## Divergence Register
 
 | ID | Priority | Concern | Rust behavior | Go behavior | Classification | Status | Evidence |
-|----|----------|---------|---------------|-------------|----------------|--------|----------|
-| SYS-10-001 | P1 | Security claim composition still needs full parity classification | Rust treats claim composition as a first-class pipeline concern | Go has `SecurityClaim` machinery plus simpler authority paths; the exact live ownership and transport consistency still need a line-by-line sweep | Open | Open | `internal/core/security_claim.go`, `internal/pipeline/config.go` |
+| ---- | ---------- | --------- | --------------- | ------------- | ---------------- | -------- | ---------- |
+| SYS-10-001 | P1 | Security claim composition needed live-path proof, not just helper existence | Rust treats claim composition as a first-class pipeline concern | Go now has live evidence that Stage 8 resolves `SecurityClaim`, attaches it to `session.SecurityClaim`, annotates `authority` / `claim_sources` on the trace, and applies threat-caution downgrade on the actual pipeline path. Full transport-by-transport classification is still open, but the old "helper exists but is bypassed" concern is closed | Improved, not closed | Open | `internal/pipeline/config.go`, `internal/pipeline/pipeline_run_stages.go`, `internal/pipeline/security_claim_stage_test.go` |
 | SYS-10-002 | P1 | Sandbox semantics are enforced in more than one layer | Rust intent is one coherent operator contract | Go currently enforces path constraints through policy, tool/runtime helpers, and protection guards; the system is stronger than before but still needs explicit cross-layer audit | Open | Open | `internal/agent/policy/engine.go`, `internal/agent/tools/builtins.go`, `internal/pipeline/guards*.go` |
 | SYS-10-003 | P1 | Model self-censorship must not replace real policy decisions | Tool/runtime policy should be the source of truth | Go has already fixed several prompt/runtime mismatches here, but this concern deserves explicit ownership in the parity program | Improvement candidate | Open | soak fixes, `prompt.go`, policy/tool tests |
 
@@ -101,6 +101,15 @@ The key artifacts are:
 This system was previously distributed across Systems 04, 07, and 08. It is
 now explicit because policy/sandbox drift is too important to leave implicit.
 
+Current known good state:
+
+- Stage 8 (`authority_resolution`) is a real live owner for `SecurityClaim`
+- the resolved claim is attached to the session
+- the trace records `authority` and `claim_sources`
+- threat-caution downgrade is applied on the live path
+- API-key routes do not need to synthesize `ChannelClaimContext`; under
+  `AuthorityAPIKey`, Stage 8 resolves directly through `ResolveAPIClaim(...)`
+
 ## Downstream Systems Affected
 
 - System 04: verification and guards
@@ -109,11 +118,20 @@ now explicit because policy/sandbox drift is too important to leave implicit.
 
 ## Open Questions
 
-- Is `SecurityClaim` now the true cross-transport authority artifact, or still a
-  partially bypassed capability?
+- Which transport paths still need direct evidence that they feed the right
+  claim inputs into the Stage 8 owner?
 - Which sandbox rules are authoritative when prompt guidance and runtime checks
   differ?
 
 ## Progress Log
 
 - 2026-04-17: Initialized cross-cutting system document.
+- 2026-04-17: Corrected the stale "claim helper may be bypassed" assumption.
+  Stage 8 has live-path tests proving `SecurityClaim` resolution, session
+  attachment, trace annotation, and threat-caution downgrade. The remaining
+  work is transport coverage and broader sandbox classification, not basic
+  claim-owner wiring.
+- 2026-04-17: Removed dead API-route `Input.Claim` scaffolding for
+  `AuthorityAPIKey` presets. The live API authority path is `ResolveAPIClaim`
+  at Stage 8, so carrying a channel-claim object in the route only obscured the
+  real owner.
