@@ -1356,6 +1356,12 @@ func TestMatrixAdapter_RecvAndSync(t *testing.T) {
 	if msg.SenderID != "@alice:test" {
 		t.Errorf("sender = %q", msg.SenderID)
 	}
+	if got := msg.Metadata["room_id"]; got != "!room1:test" {
+		t.Errorf("room_id = %v", got)
+	}
+	if got := msg.Metadata["sender_mxid"]; got != "@alice:test" {
+		t.Errorf("sender_mxid = %v", got)
+	}
 }
 
 func TestMatrixAdapter_SendPlaintext(t *testing.T) {
