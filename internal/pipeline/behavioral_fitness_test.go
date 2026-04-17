@@ -489,6 +489,26 @@ func TestFitness_CacheRejectsAcknowledgements(t *testing.T) {
 	}
 }
 
+func TestFitness_CacheRejectsExpiredEntries(t *testing.T) {
+	store := testutil.TempStore(t)
+	pipe := New(PipelineDeps{
+		Store:    store,
+		BGWorker: testutil.BGWorker(t, 4),
+		CacheTTL: 50 * time.Millisecond,
+	})
+
+	prompt := "expired cache prompt"
+	response := "This is a sufficiently long cached response that should expire quickly."
+	pipe.StoreInCache(context.Background(), prompt, response, "mock")
+
+	time.Sleep(80 * time.Millisecond)
+
+	hit := pipe.CheckCache(context.Background(), prompt)
+	if hit != nil {
+		t.Fatal("expired cache entry should not be returned")
+	}
+}
+
 // ── InferenceParams Fitness Tests ─────────────────────────────────────────
 //
 // Rust records model selection, tokens, and guard outcomes per inference.

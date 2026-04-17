@@ -114,6 +114,7 @@ type Pipeline struct {
 	dashboard        DashboardNotifier
 	workspace        string   // agent workspace root — propagated to sessions for tool sandbox
 	allowedPaths     []string // extra paths outside workspace that tools may access
+	cacheTTL         time.Duration
 	checkpointPolicy CheckpointPolicy
 }
 
@@ -138,6 +139,7 @@ type PipelineDeps struct {
 	// Sandbox: workspace root and extra allowed paths propagated to every session.
 	Workspace    string
 	AllowedPaths []string
+	CacheTTL     time.Duration
 
 	// Optional lifecycle policy. Nil means use package defaults so tests and
 	// ad-hoc callers keep the historical behavior unless they opt in.
@@ -159,6 +161,10 @@ func New(deps PipelineDeps) *Pipeline {
 	cp := CheckpointPolicy{
 		Enabled:       true,
 		IntervalTurns: checkpointIntervalTurns,
+	}
+	cacheTTL := llm.DefaultCacheConfig().TTL
+	if deps.CacheTTL > 0 {
+		cacheTTL = deps.CacheTTL
 	}
 	if deps.CheckpointPolicy != nil {
 		cp.Enabled = deps.CheckpointPolicy.Enabled
@@ -190,6 +196,7 @@ func New(deps PipelineDeps) *Pipeline {
 		botCmds:          NewBotCommandHandler(deps.LLM, deps.Store),
 		workspace:        deps.Workspace,
 		allowedPaths:     deps.AllowedPaths,
+		cacheTTL:         cacheTTL,
 		checkpointPolicy: cp,
 	}
 }

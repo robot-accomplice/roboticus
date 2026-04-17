@@ -131,7 +131,7 @@ func (c *Cache) Get(ctx context.Context, req *Request) *Response {
 	}
 
 	// Promote to L1.
-	created, _ := time.Parse(time.RFC3339, createdAt)
+	created, _ := db.ParseTime(createdAt)
 	c.put(hash, &resp, created)
 
 	// Update hit count.
@@ -171,14 +171,15 @@ func (c *Cache) Put(ctx context.Context, req *Request, resp *Response) {
 	}
 
 	id := hash[:32]
-	expires := now.Add(c.ttl).Format(time.RFC3339)
+	expires := db.FormatTime(now.Add(c.ttl))
+	createdAtText := db.FormatTime(now)
 	tokensSaved := resp.Usage.InputTokens + resp.Usage.OutputTokens
 
 	if _, err := c.store.ExecContext(ctx,
 		`INSERT OR REPLACE INTO semantic_cache
 		 (id, prompt_hash, response, model, tokens_saved, hit_count, created_at, expires_at)
-		 VALUES (?, ?, ?, ?, ?, 0, datetime('now'), ?)`,
-		id, hash, string(respJSON), resp.Model, tokensSaved, expires,
+		 VALUES (?, ?, ?, ?, ?, 0, ?, ?)`,
+		id, hash, string(respJSON), resp.Model, tokensSaved, createdAtText, expires,
 	); err != nil {
 		c.errBus.ReportIfErr(err, "llm", "cache_persist", core.SevWarning)
 	}
@@ -265,13 +266,14 @@ func (c *Cache) PutWithEmbedding(ctx context.Context, req *Request, resp *Respon
 		return
 	}
 	id := hash[:32]
-	expires := now.Add(c.ttl).Format(time.RFC3339)
+	expires := db.FormatTime(now.Add(c.ttl))
+	createdAtText := db.FormatTime(now)
 	tokensSaved := resp.Usage.InputTokens + resp.Usage.OutputTokens
 	if _, err := c.store.ExecContext(ctx,
 		`INSERT OR REPLACE INTO semantic_cache
 		 (id, prompt_hash, response, model, tokens_saved, hit_count, created_at, expires_at)
-		 VALUES (?, ?, ?, ?, ?, 0, datetime('now'), ?)`,
-		id, hash, string(respJSON), resp.Model, tokensSaved, expires,
+		 VALUES (?, ?, ?, ?, ?, 0, ?, ?)`,
+		id, hash, string(respJSON), resp.Model, tokensSaved, createdAtText, expires,
 	); err != nil {
 		c.errBus.ReportIfErr(err, "llm", "cache_persist", core.SevWarning)
 	}

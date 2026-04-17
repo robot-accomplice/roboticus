@@ -13,8 +13,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog/log"
+
+	"roboticus/internal/db"
 )
 
 // CacheHit represents a cached response that passed pipeline quality checks.
@@ -42,6 +45,7 @@ func (p *Pipeline) CheckCache(ctx context.Context, content string) *CacheHit {
 	row := p.store.QueryRowContext(ctx,
 		`SELECT response, model FROM semantic_cache
 		 WHERE prompt_hash = ?
+		   AND (expires_at IS NULL OR expires_at > datetime('now'))
 		 ORDER BY created_at DESC LIMIT 1`,
 		fp,
 	)
@@ -121,10 +125,14 @@ func (p *Pipeline) StoreInCache(ctx context.Context, content, response, model st
 	}
 
 	fp := cacheFingerprint(content)
+	now := time.Now()
+	expiresAt := db.FormatTime(now.Add(p.cacheTTL))
+	createdAt := db.FormatTime(now)
 	_, err := p.store.ExecContext(ctx,
-		`INSERT OR REPLACE INTO semantic_cache (id, prompt_hash, response, model)
-		 VALUES (hex(randomblob(16)), ?, ?, ?)`,
-		fp, response, model,
+		`INSERT OR REPLACE INTO semantic_cache
+		 (id, prompt_hash, response, model, tokens_saved, hit_count, created_at, expires_at)
+		 VALUES (hex(randomblob(16)), ?, ?, ?, 0, 0, ?, ?)`,
+		fp, response, model, createdAt, expiresAt,
 	)
 	if err != nil {
 		log.Warn().Err(err).Str("prompt_hash", fp).Msg("cache store failed")

@@ -212,6 +212,7 @@ Blocking commands for feature-complete releases:
 | R-PIPE-04 | Cache rejects responses containing `"tool_call"` or `"function_call"` | `internal/pipeline/pipeline_cache_test.go` | L1 |
 | R-PIPE-05 | Cache rejects parroting responses (>60% text overlap) | `internal/pipeline/pipeline_cache_test.go` | L1 |
 | R-PIPE-06 | `FinancialActionTruthGuard` verifies financial claims against tool output | `internal/pipeline/guards_financial_truth_test.go` | L1/L2 |
+| R-PIPE-07 | Pipeline cache honors TTL on reads and stamps explicit `created_at` / `expires_at` metadata on writes instead of creating timeless rows | `internal/pipeline/behavioral_fitness_test.go::TestFitness_CacheRejectsExpiredEntries` | L1/L2 |
 
 ### R-SEC: Security Hardening (v1.0.4)
 
