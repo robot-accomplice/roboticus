@@ -13,6 +13,24 @@ The Go implementation achieves **full structural compliance** with the connector
 
 v1.0.5 introduced the **agentic retrieval architecture** scaffold — decomposer, router, reranker, context assembly, reflection, and working-memory persistence. v1.0.6 has now carried that scaffold much farther into runtime reality: router-selected retrieval modes influence actual tier retrieval, semantic / procedural / relationship / workflow reads are HybridSearch-first with per-tier `retrieval.path.*` trace attribution, semantic and relationship evidence preserve stronger provenance/freshness signals, the verifier consumes pipeline-computed task hints and claim-level proof obligations, a persisted graph-fact store now exists in production with reusable traversal APIs, and enriched episode distillation now promotes recurring canonical triples into `knowledge_facts`. The main remaining retrieval cleanup is operator-observed retirement of residual `LIKE` safety nets by tier, not missing architecture plumbing.
 
+The parity-driven remediation effort also clarified several ownership seams that
+older architecture docs had left too generic:
+
+- **Request construction is now a first-class architecture seam.** Tool pruning,
+  memory preparation, checkpoint restore, and prompt assembly converge into one
+  `llm.Request`, and the request builder is now expected to preserve the latest
+  user message, align prompt-layer tool guidance with the structured tool list,
+  and drop empty compacted history before inference.
+- **Continuity and learning are now explicitly artifact-driven.** Reflection,
+  executive growth, checkpoints, and consolidation are expected to consume
+  structured turn artifacts (`tool_calls`, `pipeline_traces`,
+  `model_selection_events`, structured `episodic_memory.content_json`) instead
+  of re-deriving durable state from lossy text summaries.
+- **Security/policy truth ownership is sharper.** Stage 8 owns claim
+  composition, policy/tool runtime own what actually happened, and
+  post-inference guards are no longer allowed to overwrite legitimate
+  policy/sandbox denials with fabricated canned outcomes.
+
 | Category | Compliant | Gaps |
 |----------|-----------|------|
 | Connector-Factory Pattern | 8/8 entry points | 0 |
@@ -216,6 +234,38 @@ implicit in earlier releases:
 This is not just "more guards." It is an ownership correction: policy and tool
 runtime define what actually happened; post-inference guards are only allowed to
 police fabricated narration around that outcome.
+
+### Request Artifact Ownership
+v1.0.6 clarified that the final `llm.Request` is itself an architectural
+artifact, not just a local implementation detail. The validated ownership is:
+
+- Stage 8 / 8.5 prepare authority and memory artifacts.
+- Tool pruning writes the selected structured tool surface before request
+  assembly.
+- `ContextBuilder.BuildRequest` owns final message assembly, including
+  checkpoint digest restore, history compaction/compression, and prompt-layer
+  tool roster alignment.
+- Routing trace and model-selection audit must reflect that actual request,
+  rather than a synthetic user-only approximation.
+
+This closes an important class of migration errors where parity-looking helper
+code existed, but the actual inference artifact was still assembled by weaker
+or duplicate paths.
+
+### Continuity / Learning Artifact Ownership
+v1.0.6 also moved continuity work closer to long-term architecture instead of
+release-specific patching:
+
+- checkpoint save/load/prune now share repository-owned lifecycle seams
+- reflection reads real turn artifacts instead of zero-duration and adjacency
+  proxies
+- `episodic_memory` now stores both a compact human-readable summary and a
+  structured `content_json` payload
+- consolidation prefers the structured payload over reparsing compact text
+
+That is an architectural shift toward durable, machine-consumable turn state.
+It materially lowers the risk of future drift caused by helper-specific string
+formats becoming accidental downstream contracts.
 
 ---
 

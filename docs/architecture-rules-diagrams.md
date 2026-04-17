@@ -231,7 +231,68 @@ flowchart LR
     t1 --> shared --> t2
 ```
 
-## 8. Supplementary View — WebSocket Topic Subscription (v1.0.3+)
+## 8. Supplementary Rule View — Request Construction Ownership
+
+This view captures the validated v1.0.6 ownership rule for the inference
+artifact. Tool selection, memory preparation, checkpoint restore, and prompt
+assembly all converge into one `llm.Request`. The builder may compact or
+compress older conversational history, but it must preserve the latest user
+message and the higher-value system/memory surfaces.
+
+```mermaid
+flowchart LR
+    stage8["Stage 8 / 8.5\nAuthority + Memory Preparation"]
+    prune["Tool Pruning Stage"]
+    session["Session Runtime Artifacts\nSelectedToolDefs\nMemoryContext\nMemoryIndex\nVerificationEvidence"]
+    builder["ContextBuilder.BuildRequest"]
+    request["Final llm.Request"]
+    router["Model Selection / Inference"]
+
+    stage8 --> session
+    prune --> session
+    session --> builder --> request --> router
+
+    note1["Latest user message survives verbatim"]
+    note2["Prompt-layer tool roster matches structured tool defs"]
+    note3["Empty compacted history messages are dropped before inference"]
+
+    builder -.-> note1
+    builder -.-> note2
+    builder -.-> note3
+```
+
+## 9. Supplementary Rule View — Continuity And Learning Ownership
+
+This view captures the validated v1.0.6 continuity rule. Post-turn artifacts
+must be written from turn-owned evidence first, then promoted through explicit
+consolidation seams. Reflection is not allowed to invent durable state from
+weak proxies when structured turn artifacts already exist.
+
+```mermaid
+flowchart LR
+    inference["Inference Turn"]
+    traces["Turn Artifacts\ntool_calls\npipeline_traces\nmodel_selection_events"]
+    post["Post-Turn Pipeline\nreflection + executive growth + checkpoint policy"]
+    episodic["episodic_memory\ncontent + content_json"]
+    executive["Executive / Working State"]
+    checkpoint["CheckpointRepository\nsave / load / prune"]
+    consolidate["Consolidation / Distillation"]
+    semantic["semantic_memory"]
+    facts["knowledge_facts"]
+
+    inference --> traces --> post
+    post --> episodic
+    post --> executive
+    post --> checkpoint
+    episodic --> consolidate
+    consolidate --> semantic
+    consolidate --> facts
+
+    note["Structured artifacts are authoritative;\ncompact text summaries are for human readability, not downstream reparsing"]
+    episodic -.-> note
+```
+
+## 10. Supplementary View — WebSocket Topic Subscription (v1.0.3+)
 
 The WebSocket layer is a push-only delivery connector. It does not call
 `RunPipeline()` — it subscribes to the EventBus that the pipeline publishes to.
@@ -259,7 +320,7 @@ sequenceDiagram
     WS->>D: Push trace update
 ```
 
-## 8. Supplementary Rule View — No Symptom Fixes
+## 11. Supplementary Rule View — No Symptom Fixes
 
 This is a supporting debugging diagram rather than a structural one.
 
@@ -287,7 +348,7 @@ flowchart TD
     diff -. "MUST NOT" .-> wrong3
 ```
 
-## 9. Supplementary Rule View — Enforcement Model
+## 12. Supplementary Rule View — Enforcement Model
 
 This diagram shows how the architecture is kept real.
 
@@ -304,7 +365,7 @@ flowchart LR
     review --> code
 ```
 
-## 10. Reading Guide
+## 13. Reading Guide
 
 - Use the C4 context and container views to understand architectural ownership.
 - Use the connector-layer component diagram when reviewing route, streaming,
@@ -314,12 +375,13 @@ flowchart LR
 - Use the capability diagram when evaluating stage dependencies and service-bag
   creep.
 - Use the supporting diagrams when validating streaming parity, debugging
-  divergence, or explaining why a local connector patch is incorrect.
+  divergence, checking request-artifact ownership, continuity/learning
+  ownership, or explaining why a local connector patch is incorrect.
 
 If a proposed code change does not fit cleanly onto these diagrams, the change
 SHOULD be treated as architecturally suspect until its ownership becomes clear.
 
-## 11. Memory Retrieval Architecture (v1.0.1+)
+## 14. Memory Retrieval Architecture (v1.0.1+)
 
 Two-stage pattern: direct injection for cheap/session-scoped data, index for
 everything else. The model uses tools (`recall_memory`, `search_memories`) to
@@ -374,7 +436,7 @@ sequenceDiagram
 
 ---
 
-## 8. Agentic Retrieval Architecture (v1.0.5)
+## 15. Agentic Retrieval Architecture (v1.0.5)
 
 ```
 User Query

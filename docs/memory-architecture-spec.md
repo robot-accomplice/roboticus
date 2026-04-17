@@ -24,6 +24,13 @@
 >   fallback `RetrieveDirectOnly` + `BuildMemoryIndex` path was removed; Stage
 >   8.5 always populates the memory INDEX (recall handle) and conditionally
 >   populates the memory CONTEXT (tiered evidence) per retrieval strategy.
+> - **Episodic reflection is dual-surface by design.** `episodic_memory.content`
+>   remains the compact human-readable summary, while `episodic_memory.content_json`
+>   preserves structured turn-state for consolidation and future learning flows.
+> - **Continuity lifecycle is artifact-owned.** Checkpoint save/load/prune flows
+>   through `CheckpointRepository`, and post-turn reflection reads turn-owned
+>   artifacts (`tool_calls`, `pipeline_traces`, `model_selection_events`) rather
+>   than reconstructing durable state from summary text alone.
 
 ---
 
@@ -169,6 +176,7 @@ CREATE TABLE episodic_memory (
     id            TEXT PRIMARY KEY,
     classification TEXT NOT NULL,
     content       TEXT NOT NULL,
+    content_json  TEXT,
     importance    INTEGER NOT NULL DEFAULT 5,
     owner_id      TEXT,
     memory_state  TEXT NOT NULL DEFAULT 'active',
@@ -179,6 +187,10 @@ CREATE INDEX idx_episodic_importance ON episodic_memory(importance DESC, created
 ```
 - Has `memory_state` + `state_reason` for lifecycle management.
 - FTS5 trigger-backed (INSERT + DELETE triggers).
+- `content` is the compact human-readable episode summary.
+- `content_json` is the structured `EpisodeSummary` payload used by
+  consolidation and other machine consumers; downstream stages should prefer it
+  over reparsing `content`.
 
 #### semantic_memory (facts / key-value knowledge)
 ```sql
