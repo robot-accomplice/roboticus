@@ -180,7 +180,10 @@ C4Component
 This view captures a runtime seam that was easy to misunderstand during parity
 work: claim resolution is pipeline-owned, while sandbox enforcement is shared
 across policy evaluation and tool/runtime path resolution. The important rule
-is that those seams must agree on the operator-visible contract.
+is that those seams must agree on the operator-visible contract. Post-inference
+guards are not allowed to invent a softer or harsher denial surface than the
+actual tool/policy result; they may suppress fabricated capability claims, but
+they must preserve real policy/sandbox denials as truth.
 
 ```mermaid
 flowchart LR
@@ -198,6 +201,11 @@ flowchart LR
     policy --> operator
     toolrt --> operator
     guards --> operator
+
+    %% Rule note:
+    %% guards may remove fabricated "I can't..." language,
+    %% but they must not overwrite real policy/sandbox denials or
+    %% fabricate canned execution summaries in their place.
 ```
 
 ## 7. Supplementary Rule View — Streaming Is Not A Separate Product

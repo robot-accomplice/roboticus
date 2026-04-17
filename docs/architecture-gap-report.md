@@ -202,6 +202,21 @@ This is a transport-layer change. The pipeline remains the single behavioral aut
 ### Financial Action Verification
 `FinancialActionTruthGuard` added to the guard chain (26th guard). Before a pipeline response claiming financial success is delivered, the guard verifies the claimed action against tool execution output. Prevents fabricated trading/transfer results.
 
+### Cross-Layer Security / Sandbox Truth Ownership
+v1.0.6 also tightened a cross-cutting architectural seam that had been too
+implicit in earlier releases:
+
+- Stage 8 is the live owner for `SecurityClaim` composition.
+- Policy evaluation and tool/runtime path resolution now share substantially
+  tighter sandbox and config-protection semantics.
+- Post-inference truth guards have been narrowed so they preserve real
+  policy/sandbox denials and failed execution outcomes instead of flattening
+  every denial-shaped answer into a fake-capability case.
+
+This is not just "more guards." It is an ownership correction: policy and tool
+runtime define what actually happened; post-inference guards are only allowed to
+police fabricated narration around that outcome.
+
 ---
 
 ## Compliant Areas (No Gaps)
