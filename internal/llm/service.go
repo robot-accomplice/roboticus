@@ -430,20 +430,26 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 // error channels. The chunk channel closes when streaming completes.
 func (s *Service) Stream(ctx context.Context, req *Request) (<-chan StreamChunk, <-chan error) {
 	req.Stream = true
+	if core.NoEscalateFromCtx(ctx) {
+		req.NoEscalate = true
+	}
 
 	// Empty-message drop (SYS-01-008 message-history analogue) — same
 	// rationale as Service.Complete. Apply here so the streaming
 	// dispatch path gets the guard too.
 	req.Messages = dropEmptyMessages(req.Messages, "Service.Stream")
 
-	// Cache check: if we have a cached response, emit it as a single chunk.
-	if cached := s.cache.Get(ctx, req); cached != nil {
+	// Cache check. Skip during benchmark/no-escalate paths for the same reason as
+	// Complete(): cache replay would contaminate raw model measurement.
+	if !req.NoEscalate {
+		if cached := s.cache.Get(ctx, req); cached != nil {
 		chunks := make(chan StreamChunk, 1)
 		errs := make(chan error)
 		chunks <- StreamChunk{Delta: cached.Content, FinishReason: "stop"}
 		close(chunks)
 		close(errs)
 		return chunks, errs
+	}
 	}
 
 	// Route if needed.

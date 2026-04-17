@@ -725,6 +725,51 @@ func TestService_Stream_CacheHit(t *testing.T) {
 	}
 }
 
+func TestService_Stream_NoEscalateSkipsCache(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+		_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"fresh-stream\"}}]}\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer ts.Close()
+
+	client, _ := NewClientWithHTTP(&Provider{
+		Name: "stream-nocache", URL: ts.URL, Format: FormatOpenAI,
+	}, ts.Client())
+
+	svc, _ := NewService(ServiceConfig{
+		Providers: []Provider{{Name: "stream-nocache", URL: ts.URL, Format: FormatOpenAI}},
+		Primary:   "stream-nocache",
+		Cache:     CacheConfig{Enabled: true, MaxEntries: 100, TTL: time.Hour},
+	}, nil)
+	svc.providers["stream-nocache"] = client
+
+	req := &Request{Model: "gpt-4", Messages: []Message{{Role: "user", Content: "stream-no-cache"}}}
+	svc.cache.Put(context.Background(), req, &Response{Content: "cached-stream"})
+
+	chunks, errs := svc.Stream(context.Background(), &Request{
+		Model:      "gpt-4",
+		Messages:   []Message{{Role: "user", Content: "stream-no-cache"}},
+		NoEscalate: true,
+	})
+
+	var content strings.Builder
+	for chunk := range chunks {
+		content.WriteString(chunk.Delta)
+	}
+	select {
+	case err := <-errs:
+		if err != nil {
+			t.Fatalf("stream error: %v", err)
+		}
+	default:
+	}
+	if content.String() != "fresh-stream" {
+		t.Fatalf("content = %q, want fresh-stream", content.String())
+	}
+}
+
 func TestService_Stream_NoProviders(t *testing.T) {
 	svc, _ := NewService(ServiceConfig{}, nil)
 

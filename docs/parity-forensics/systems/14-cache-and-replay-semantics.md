@@ -76,6 +76,7 @@ replay-specific logic.
 |----|----------|---------|---------------|-------------|----------------|--------|----------|
 | SYS-14-001 | P1 | Pipeline cache stage previously drifted from live TTL semantics | Cached responses should remain behaviorally equivalent enough to fresh inference | Closed in v1.0.6: pipeline cache reads now honor `expires_at`, pipeline cache writes stamp the same SQLite-friendly TTL window as the main LLM cache, and the pipeline owns its configured TTL explicitly instead of relying on timeless rows | Remediated | Closed | `internal/pipeline/pipeline_cache.go`, `internal/pipeline/pipeline.go`, `internal/daemon/daemon.go`, `internal/pipeline/behavioral_fitness_test.go` |
 | SYS-14-002 | P1 | Prompt compression quality risk needs its own cache-aware audit surface | Rust had a compression gate, but quality acceptance must be proved, not assumed | Go now has a paired soak harness specifically because the feature is considered suspect until live evidence clears it | Open | Open | `scripts/run-prompt-compression-soak.py`, release notes |
+| SYS-14-003 | P1 | Streaming no-escalate requests previously still allowed cache replay | Benchmark/no-escalate paths should measure fresh model behavior consistently across complete and stream modes | Closed in v1.0.6: `Service.Stream(...)` now mirrors `Complete(...)` and skips cache replay when `NoEscalate` is set directly or via context | Remediated | Closed | `internal/llm/service.go`, `internal/llm/coverage_boost_test.go` |
 
 ## Intentional Deviations
 
@@ -104,3 +105,6 @@ surprise behavior and deserve a first-class artifact boundary.
   `expires_at`, writes stamp explicit TTL metadata, and cache timestamps use a
   SQLite-friendly format consistently enough that lexical expiry checks are no
   longer relying on mixed timestamp encodings.
+- 2026-04-17: Closed the stream replay contamination seam. `NoEscalate`
+  now suppresses cache replay for streaming requests too, so benchmark/raw
+  capability paths do not diverge between complete and stream modes.
