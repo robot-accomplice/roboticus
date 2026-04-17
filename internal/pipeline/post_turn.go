@@ -54,19 +54,22 @@ func (p *Pipeline) PostTurnIngest(ctx context.Context, session *Session, turnID 
 		// 3. Observer subagent dispatch (Rust: role="observer" receives turn summary).
 		p.dispatchToObservers(bgCtx, sessionID, turnID, userContent, assistantContent)
 
-		// 4. Reflection: generate structured episode summary (agentic architecture Layer 16).
-		p.reflectOnTurn(bgCtx, turnID, userContent, session)
-
-		// 5. Procedure detection: extract tool sequences and persist learned skills.
+		// 4. Procedure detection: extract tool sequences and persist learned skills.
 		p.detectAndPersistProcedures(bgCtx, session)
 
-		// 5b. Executive state growth: record verified conclusions for answered
+		// 5. Executive state growth: record verified conclusions for answered
 		// subgoals that have evidence support, open unresolved questions for
 		// subgoals the turn could not close, and resolve any prior unresolved
 		// questions the agent has now answered.
-		p.growExecutiveState(bgCtx, session, assistantContent)
+		growth := p.growExecutiveState(bgCtx, session, assistantContent)
 
-		// 6. Log the turn pair for analytics/debugging.
+		// 6. Reflection: generate structured episode summary (agentic
+		// architecture Layer 16). Reflection runs after executive growth so the
+		// stored episodic artifact can record what continuity state this turn
+		// actually changed instead of inferring it later from separate stores.
+		p.reflectOnTurn(bgCtx, turnID, userContent, session, growth)
+
+		// 7. Log the turn pair for analytics/debugging.
 		if userContent != "" {
 			log.Trace().
 				Str("session", sessionID).
@@ -171,7 +174,7 @@ func (p *Pipeline) storeChunkEmbedding(ctx context.Context, sessionID, turnID, c
 
 // reflectOnTurn generates a structured episode summary and stores it as
 // episodic memory. Wires reflection.go into the post-turn pipeline.
-func (p *Pipeline) reflectOnTurn(ctx context.Context, turnID, userContent string, session *Session) {
+func (p *Pipeline) reflectOnTurn(ctx context.Context, turnID, userContent string, session *Session, growth ExecutiveGrowthResult) {
 	if p.store == nil || userContent == "" {
 		return
 	}
@@ -202,6 +205,10 @@ func (p *Pipeline) reflectOnTurn(ctx context.Context, turnID, userContent string
 		ReactTurns:      reflectionReactTurns(params),
 		GuardViolations: reflectionGuardViolations(params),
 		GuardRetried:    params != nil && params.GuardRetried,
+		VerifiedRecorded: growth.VerifiedRecorded,
+		QuestionsOpened:  growth.QuestionsOpened,
+		QuestionsResolved: growth.QuestionsResolved,
+		AssumptionsRecorded: growth.AssumptionsRecorded,
 	})
 	if summary == nil {
 		return
@@ -396,6 +403,8 @@ func (p *Pipeline) growExecutiveState(ctx context.Context, session *Session, ass
 	if len(vctx.Subgoals) == 0 {
 		return result
 	}
+	verifyResult := VerifyResponse(content, vctx)
+	executiveClosureBlocked := verificationBlocksExecutiveClosure(verifyResult)
 
 	mm := agentmemory.NewManager(agentmemory.DefaultConfig(), p.store)
 	state, err := mm.LoadExecutiveState(ctx, session.ID, "")
@@ -415,6 +424,9 @@ func (p *Pipeline) growExecutiveState(ctx context.Context, session *Session, ass
 	for _, goal := range vctx.Subgoals {
 		trimmed := strings.TrimSpace(goal)
 		if trimmed == "" {
+			continue
+		}
+		if executiveClosureBlocked {
 			continue
 		}
 		if !verificationGoalCovered(trimmed, lowerResponse) {
@@ -500,6 +512,9 @@ func (p *Pipeline) growExecutiveState(ctx context.Context, session *Session, ass
 	// Resolve any prior unresolved question whose keywords now appear in the
 	// response with enough confidence to consider it answered.
 	for _, q := range state.UnresolvedQuestions {
+		if executiveClosureBlocked {
+			continue
+		}
 		keywords := verificationKeywords(q.Content)
 		if len(keywords) == 0 {
 			continue
@@ -611,6 +626,27 @@ func (p *Pipeline) growExecutiveState(ctx context.Context, session *Session, ass
 			Msg("executive state grown after turn")
 	}
 	return result
+}
+
+func verificationBlocksExecutiveClosure(result VerificationResult) bool {
+	if result.Passed {
+		return false
+	}
+	for _, issue := range result.Issues {
+		switch issue.Code {
+		case "unsupported_certainty",
+			"ignored_contradictions",
+			"freshness_overclaim",
+			"unsupported_subgoal",
+			"canonical_source_omitted",
+			"unresolved_contradicted_claim",
+			"weak_provenance_coverage",
+			"unsupported_absolute_claim",
+			"proof_obligation_unmet":
+			return true
+		}
+	}
+	return false
 }
 
 // assumptionMarkers are phrases that frequently precede an explicit

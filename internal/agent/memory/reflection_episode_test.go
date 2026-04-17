@@ -110,6 +110,10 @@ func TestFormatForStorage_IncludesEnrichedFields(t *testing.T) {
 		ReactTurns:       2,
 		GuardViolations:  []string{"rewrite_tracking"},
 		GuardRetried:     true,
+		VerifiedRecorded: 1,
+		QuestionsOpened:  2,
+		QuestionsResolved: 1,
+		AssumptionsRecorded: 3,
 		ResultQuality:    0.87,
 		Duration:         2 * time.Second,
 	}
@@ -117,6 +121,7 @@ func TestFormatForStorage_IncludesEnrichedFields(t *testing.T) {
 	for _, needle := range []string{
 		"FixPatterns", "EvidenceRefs", "FailedHypotheses", "Errors", "Quality: high",
 		"Model: ollama/llama3", "ReactTurns: 2", "GuardViolations: rewrite_tracking", "GuardRetried: yes",
+		"ExecutiveVerified: 1", "ExecutiveQuestionsOpened: 2", "ExecutiveQuestionsResolved: 1", "ExecutiveAssumptions: 3",
 	} {
 		if !strings.Contains(out, needle) {
 			t.Fatalf("expected %q in format output, got %q", needle, out)
@@ -133,6 +138,10 @@ func TestAnalyzeEpisode_UsesStructuredInferenceArtifacts(t *testing.T) {
 		ReactTurns:       3,
 		GuardViolations:  []string{"policy_risk", "policy_risk"},
 		GuardRetried:     true,
+		VerifiedRecorded: 1,
+		QuestionsOpened:  1,
+		QuestionsResolved: 1,
+		AssumptionsRecorded: 2,
 	}
 	summary := AnalyzeEpisode(input)
 	if summary.ModelUsed != "openai/gpt-5.4" {
@@ -146,6 +155,9 @@ func TestAnalyzeEpisode_UsesStructuredInferenceArtifacts(t *testing.T) {
 	}
 	if !summary.GuardRetried {
 		t.Fatal("expected GuardRetried=true")
+	}
+	if summary.VerifiedRecorded != 1 || summary.QuestionsOpened != 1 || summary.QuestionsResolved != 1 || summary.AssumptionsRecorded != 2 {
+		t.Fatalf("unexpected executive growth counts: %+v", summary)
 	}
 	if !strings.Contains(strings.Join(summary.Learnings, " | "), "guard-triggered revision") {
 		t.Fatalf("expected structured guard learning, got %+v", summary.Learnings)

@@ -44,6 +44,10 @@ type EpisodeSummary struct {
 	GuardRetried     bool          // whether the turn required a guard-triggered retry
 	ResultQuality    float64       // 0-1 blended signal: verifier pass + tool success rate
 	VerifierPassed   bool          // whether the verifier passed the final answer
+	VerifiedRecorded int           // verified conclusions written into executive state
+	QuestionsOpened  int           // unresolved questions opened for uncovered subgoals
+	QuestionsResolved int          // prior unresolved questions closed by this turn
+	AssumptionsRecorded int        // assumptions written into executive state
 
 	// Relations captures canonical (subject, relation, object) triples
 	// extracted from the episode's text — assistant answer, learnings, and
@@ -168,6 +172,22 @@ func (es *EpisodeSummary) FormatForStorage() string {
 	if es.GuardRetried {
 		b.WriteString(" | GuardRetried: yes")
 	}
+	if es.VerifiedRecorded > 0 {
+		b.WriteString(" | ExecutiveVerified: ")
+		b.WriteString(strconv.Itoa(es.VerifiedRecorded))
+	}
+	if es.QuestionsOpened > 0 {
+		b.WriteString(" | ExecutiveQuestionsOpened: ")
+		b.WriteString(strconv.Itoa(es.QuestionsOpened))
+	}
+	if es.QuestionsResolved > 0 {
+		b.WriteString(" | ExecutiveQuestionsResolved: ")
+		b.WriteString(strconv.Itoa(es.QuestionsResolved))
+	}
+	if es.AssumptionsRecorded > 0 {
+		b.WriteString(" | ExecutiveAssumptions: ")
+		b.WriteString(strconv.Itoa(es.AssumptionsRecorded))
+	}
 	if len(es.Relations) > 0 {
 		// Wire format is `subject||relation||object` per triple, joined by
 		// "; " between triples. The "||" separator avoids collisions with
@@ -205,6 +225,10 @@ type EpisodeInput struct {
 	ReactTurns     int
 	GuardViolations []string
 	GuardRetried   bool
+	VerifiedRecorded int
+	QuestionsOpened  int
+	QuestionsResolved int
+	AssumptionsRecorded int
 }
 
 // AnalyzeEpisode is the enriched reflection entry point. It extends Reflect
@@ -234,6 +258,10 @@ func AnalyzeEpisode(input EpisodeInput) *EpisodeSummary {
 	summary.ErrorsSeen = dedupeAndTrim(input.ErrorMessages, 3, 200)
 	summary.GuardViolations = dedupeAndTrim(input.GuardViolations, 3, 120)
 	summary.GuardRetried = input.GuardRetried
+	summary.VerifiedRecorded = input.VerifiedRecorded
+	summary.QuestionsOpened = input.QuestionsOpened
+	summary.QuestionsResolved = input.QuestionsResolved
+	summary.AssumptionsRecorded = input.AssumptionsRecorded
 	summary.ResultQuality = computeResultQuality(input)
 	summary.Relations = extractEpisodeRelations(input)
 	summary.Learnings = mergeLearnings(summary.Learnings, structuredLearnings(input))

@@ -5,7 +5,8 @@
 // Why a dedicated phase? The existing phaseEpisodicPromotion uses Jaccard
 // similarity over raw episodic content, which is good at clustering near-
 // duplicate episodes but loses the structured signal AnalyzeEpisode now
-// writes (FixPatterns, EvidenceRefs, FailedHypotheses, ResultQuality).
+// writes (Learnings, FixPatterns, EvidenceRefs, FailedHypotheses,
+// ResultQuality).
 // This phase reads those structured fields back out of storage and uses them
 // directly so repeat successes turn into reusable semantic knowledge without
 // waiting for the episode count to hit the Jaccard threshold.
@@ -78,6 +79,7 @@ func (p *ConsolidationPipeline) phaseEpisodeDistillation(ctx context.Context, st
 
 	fixPatternCount := make(map[string]int)
 	evidenceCount := make(map[string]int)
+	learningCount := make(map[string]int)
 	// relationCount keys on the lowercased canonical signature
 	// "subject|relation|object" so two episodes that mention the same
 	// triple in different cases or whitespace count as one observation.
@@ -97,6 +99,13 @@ func (p *ConsolidationPipeline) phaseEpisodeDistillation(ctx context.Context, st
 			continue
 		}
 		episodes = append(episodes, fields)
+		for _, learning := range fields.Learnings {
+			key := strings.ToLower(strings.TrimSpace(learning))
+			if key == "" {
+				continue
+			}
+			learningCount[key]++
+		}
 		for _, pattern := range fields.FixPatterns {
 			key := strings.ToLower(strings.TrimSpace(pattern))
 			if key == "" {
@@ -146,6 +155,26 @@ func (p *ConsolidationPipeline) phaseEpisodeDistillation(ctx context.Context, st
 	}
 
 	promoted := 0
+	// Promote repeated learnings distilled by the reflection layer. These are
+	// stronger than ad hoc free-text snippets because AnalyzeEpisode curates
+	// them from tool outcomes and structured turn artifacts (for example,
+	// guard-triggered revision or multi-step react usage). Keeping them in
+	// semantic_memory preserves the learned behavior pattern without flattening
+	// the richer procedural/workflow tier into generic text.
+	for rawKey, count := range learningCount {
+		if count < MinDistillSupport {
+			continue
+		}
+		key := "episode_learning:" + shortHash(rawKey)
+		value := firstMatchingPattern(episodes, rawKey, func(f episodeFields) []string { return f.Learnings })
+		if value == "" {
+			continue
+		}
+		if p.upsertDistilledFact(ctx, store, "episode_learning", key, value, count) {
+			promoted++
+		}
+	}
+
 	// Promote fix patterns that have cleared the retry-success bar at least
 	// MinFixPatternSupport times. These become semantic facts of the form
 	// "tool X recovers from failure on retry — applied in N episodes".
@@ -229,6 +258,7 @@ func (p *ConsolidationPipeline) phaseEpisodeDistillation(ctx context.Context, st
 	if promoted > 0 {
 		log.Info().
 			Int("promoted", promoted).
+			Int("learnings", len(learningCount)).
 			Int("fix_patterns", len(fixPatternCount)).
 			Int("evidence_refs", len(evidenceCount)).
 			Int("relations_distilled", relationsPromoted).
@@ -282,6 +312,7 @@ func (p *ConsolidationPipeline) upsertDistilledFact(ctx context.Context, store *
 // uses — so the parser can remain a plain string splitter.
 type episodeFields struct {
 	Outcome      string
+	Learnings    []string
 	FixPatterns  []string
 	EvidenceRefs []string
 	QualityLabel string
@@ -311,6 +342,8 @@ func parseEpisodeSummary(content string) episodeFields {
 		switch {
 		case strings.HasPrefix(segment, "Outcome: "):
 			fields.Outcome = strings.TrimSpace(strings.TrimPrefix(segment, "Outcome: "))
+		case strings.HasPrefix(segment, "Learnings: "):
+			fields.Learnings = splitSemicolonList(strings.TrimPrefix(segment, "Learnings: "))
 		case strings.HasPrefix(segment, "FixPatterns: "):
 			fields.FixPatterns = splitSemicolonList(strings.TrimPrefix(segment, "FixPatterns: "))
 		case strings.HasPrefix(segment, "EvidenceRefs: "):

@@ -169,7 +169,12 @@ func TestReflectOnTurn_UsesPersistedTurnArtifacts(t *testing.T) {
 	live.AddUserMessage("find something relevant")
 	live.AddAssistantMessage("final answer after tools", nil)
 
-	p.reflectOnTurn(ctx, "turn-reflect", "find something relevant", live)
+	p.reflectOnTurn(ctx, "turn-reflect", "find something relevant", live, ExecutiveGrowthResult{
+		VerifiedRecorded:    1,
+		QuestionsOpened:     2,
+		QuestionsResolved:   1,
+		AssumptionsRecorded: 3,
+	})
 
 	var content string
 	if err := store.QueryRowContext(ctx,
@@ -193,6 +198,10 @@ func TestReflectOnTurn_UsesPersistedTurnArtifacts(t *testing.T) {
 		"ReactTurns: 2",
 		"GuardViolations: rewrite_tracking",
 		"GuardRetried: yes",
+		"ExecutiveVerified: 1",
+		"ExecutiveQuestionsOpened: 2",
+		"ExecutiveQuestionsResolved: 1",
+		"ExecutiveAssumptions: 3",
 	) {
 		t.Fatalf("episode summary did not reflect persisted turn artifacts: %q", content)
 	}

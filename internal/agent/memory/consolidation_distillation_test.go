@@ -26,6 +26,7 @@ func TestParseEpisodeSummary_PullsEnrichedFields(t *testing.T) {
 	summary := &EpisodeSummary{
 		Goal:         "deploy",
 		Outcome:      "success",
+		Learnings:    []string{"guard-triggered revision required before final answer"},
 		FixPatterns:  []string{"shell: fail→success on retry"},
 		EvidenceRefs: []string{"cache TTL 24h"},
 		ResultQuality: 0.9,
@@ -34,6 +35,9 @@ func TestParseEpisodeSummary_PullsEnrichedFields(t *testing.T) {
 	fields := parseEpisodeSummary(summary.FormatForStorage())
 	if fields.Outcome != "success" {
 		t.Fatalf("expected outcome=success, got %q", fields.Outcome)
+	}
+	if len(fields.Learnings) != 1 || fields.Learnings[0] != "guard-triggered revision required before final answer" {
+		t.Fatalf("expected learning parsed, got %+v", fields.Learnings)
 	}
 	if len(fields.FixPatterns) != 1 || fields.FixPatterns[0] != "shell: fail→success on retry" {
 		t.Fatalf("expected fix pattern parsed, got %+v", fields.FixPatterns)
@@ -109,6 +113,37 @@ func TestPhaseEpisodeDistillation_PromotesRepeatedEvidence(t *testing.T) {
 	).Scan(&count)
 	if count != 1 {
 		t.Fatalf("expected one learned_fact row, got %d", count)
+	}
+}
+
+func TestPhaseEpisodeDistillation_PromotesRepeatedLearnings(t *testing.T) {
+	store := testutil.TempStore(t)
+	ctx := context.Background()
+
+	for i := 0; i < 3; i++ {
+		writeEpisodeSummary(t, store, &EpisodeSummary{
+			Goal:      "ship release",
+			Outcome:   "success",
+			Learnings: []string{"guard-triggered revision required before final answer"},
+		})
+	}
+
+	pipeline := &ConsolidationPipeline{}
+	promoted := pipeline.phaseEpisodeDistillation(ctx, store)
+	if promoted == 0 {
+		t.Fatalf("expected at least one distilled fact, got 0")
+	}
+
+	var count int
+	var value string
+	_ = store.QueryRowContext(ctx,
+		`SELECT COUNT(*), COALESCE(MAX(value), '') FROM semantic_memory WHERE category = 'episode_learning'`,
+	).Scan(&count, &value)
+	if count != 1 {
+		t.Fatalf("expected one episode_learning row, got %d", count)
+	}
+	if value != "guard-triggered revision required before final answer" {
+		t.Fatalf("unexpected episode_learning value %q", value)
 	}
 }
 

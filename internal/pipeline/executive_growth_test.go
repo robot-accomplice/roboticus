@@ -143,6 +143,45 @@ func TestGrowExecutiveState_DoesNotResolveWhenResponseIsUncertain(t *testing.T) 
 	}
 }
 
+func TestGrowExecutiveState_DoesNotVerifyOrResolveWhenVerifierFails(t *testing.T) {
+	p := newGrowthTestPipeline(t)
+	ctx := context.Background()
+	seedPlan(t, p.store, "s1", "t1", []string{"identify affected systems"})
+
+	mm := agentmemory.NewManager(agentmemory.DefaultConfig(), p.store)
+	if err := mm.RecordUnresolvedQuestion(ctx, "s1", "t1",
+		"unresolved: identify affected systems",
+		agentmemory.UnresolvedQuestionPayload{BlockingSubgoal: "identify affected systems"}); err != nil {
+		t.Fatal(err)
+	}
+
+	sess := session.New("s1", "a1", "Bot")
+	sess.AddUserMessage("Which systems were affected?")
+	sess.SetTaskVerificationHints("analysis", "moderate", "execute_directly", []string{"identify affected systems"})
+	sess.SetMemoryContext("[Active Memory]\n\n[Retrieved Evidence]\n1. [semantic, 0.9] Billing and ledger are affected\n[Gaps]\n- Missing authoritative confirmation\n")
+
+	result := p.growExecutiveState(ctx, sess,
+		"The affected systems are billing and ledger.")
+
+	if result.VerifiedRecorded != 0 {
+		t.Fatalf("expected no verified conclusions on verifier failure, got %+v", result)
+	}
+	if result.QuestionsResolved != 0 {
+		t.Fatalf("expected no question resolution on verifier failure, got %+v", result)
+	}
+
+	state, err := mm.LoadExecutiveState(ctx, "s1", "t1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.VerifiedConclusions) != 0 {
+		t.Fatalf("expected no verified conclusions persisted, got %+v", state.VerifiedConclusions)
+	}
+	if len(state.UnresolvedQuestions) == 0 {
+		t.Fatalf("expected unresolved question to remain, got %+v", state.UnresolvedQuestions)
+	}
+}
+
 func TestGrowExecutiveState_ReturnsCountsForTelemetry(t *testing.T) {
 	p := newGrowthTestPipeline(t)
 	ctx := context.Background()
