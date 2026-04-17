@@ -561,6 +561,7 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 		Skills:    &skillAdapter{matcher: skillMatcher, tools: tools},
 		Executor: &executorAdapter{
 			llmSvc:          llmSvc,
+			store:           store,
 			tools:           tools,
 			policy:          policyEngine,
 			injection:       injection,
@@ -576,6 +577,7 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 		Refiner:  &nicknameAdapter{llm: llmSvc, store: store},
 		Streamer: &streamAdapter{
 			llmSvc:        llmSvc,
+			store:         store,
 			tools:         tools,
 			embedClient:   embedClient,
 			toolSearchCfg: toolSearchCfg,

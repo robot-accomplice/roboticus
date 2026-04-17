@@ -55,19 +55,52 @@ func (r *CheckpointRepository) SaveRecord(ctx context.Context, rec CheckpointRec
 	return err
 }
 
-// LoadCheckpoint returns the latest checkpoint data (memory_summary) for a session.
-func (r *CheckpointRepository) LoadCheckpoint(ctx context.Context, sessionID string) (string, error) {
+// LoadLatestRecord returns the latest full checkpoint row for a session.
+func (r *CheckpointRepository) LoadLatestRecord(ctx context.Context, sessionID string) (*CheckpointRecord, error) {
 	row := r.q.QueryRowContext(ctx,
-		`SELECT memory_summary FROM context_checkpoints
-		 WHERE session_id = ? ORDER BY created_at DESC LIMIT 1`,
+		`SELECT session_id,
+		        system_prompt_hash,
+		        memory_summary,
+		        active_tasks,
+		        conversation_digest,
+		        turn_count
+		   FROM context_checkpoints
+		  WHERE session_id = ?
+		  ORDER BY created_at DESC, rowid DESC
+		  LIMIT 1`,
 		sessionID,
 	)
-	var data string
-	err := row.Scan(&data)
+	var rec CheckpointRecord
+	var activeTasks, digest sql.NullString
+	err := row.Scan(
+		&rec.SessionID,
+		&rec.SystemPromptHash,
+		&rec.MemorySummary,
+		&activeTasks,
+		&digest,
+		&rec.TurnCount,
+	)
 	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	rec.ActiveTasks = activeTasks.String
+	rec.ConversationDigest = digest.String
+	return &rec, nil
+}
+
+// LoadCheckpoint returns the latest checkpoint data (memory_summary) for a session.
+func (r *CheckpointRepository) LoadCheckpoint(ctx context.Context, sessionID string) (string, error) {
+	rec, err := r.LoadLatestRecord(ctx, sessionID)
+	if rec == nil || err == sql.ErrNoRows {
 		return "", nil
 	}
-	return data, err
+	if err != nil {
+		return "", err
+	}
+	return rec.MemorySummary, nil
 }
 
 // DeleteOld deletes old checkpoints, keeping only the most recent keepCount per session.
@@ -76,7 +109,9 @@ func (r *CheckpointRepository) DeleteOld(ctx context.Context, keepCount int) (in
 		`DELETE FROM context_checkpoints WHERE id IN (
 		   SELECT c1.id FROM context_checkpoints c1
 		   WHERE (SELECT COUNT(*) FROM context_checkpoints c2
-		          WHERE c2.session_id = c1.session_id AND c2.created_at >= c1.created_at) > ?
+		          WHERE c2.session_id = c1.session_id
+		            AND (c2.created_at > c1.created_at
+		                 OR (c2.created_at = c1.created_at AND c2.rowid >= c1.rowid))) > ?
 		 )`,
 		keepCount,
 	)

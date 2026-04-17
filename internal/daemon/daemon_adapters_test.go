@@ -15,6 +15,7 @@ import (
 	"roboticus/internal/agent/skills"
 	"roboticus/internal/agent/tools"
 	"roboticus/internal/core"
+	"roboticus/internal/db"
 	"roboticus/internal/llm"
 	"roboticus/internal/pipeline"
 	"roboticus/internal/session"
@@ -597,7 +598,7 @@ func TestBuildAgentContext_Basic(t *testing.T) {
 	sess.AddUserMessage("Hello there")
 
 	// No tools, no retriever — should not panic.
-	ctx := buildAgentContext(context.Background(), sess, nil, nil, tools.DefaultToolSearchConfig(), agent.PromptConfig{
+	ctx := buildAgentContext(context.Background(), sess, nil, nil, nil, tools.DefaultToolSearchConfig(), agent.PromptConfig{
 		AgentName: "TestBot",
 	}, nil, nil)
 	if ctx == nil {
@@ -612,7 +613,7 @@ func TestBuildAgentContext_WithTools(t *testing.T) {
 	reg := agent.NewToolRegistry()
 	reg.Register(&tools.EchoTool{})
 
-	ctx := buildAgentContext(context.Background(), sess, reg, nil, tools.DefaultToolSearchConfig(), agent.PromptConfig{
+	ctx := buildAgentContext(context.Background(), sess, nil, reg, nil, tools.DefaultToolSearchConfig(), agent.PromptConfig{
 		AgentName: "TestBot",
 	}, nil, nil)
 	if ctx == nil {
@@ -630,7 +631,7 @@ func TestBuildAgentContext_WithRetriever(t *testing.T) {
 	sess := session.New("s1", "a1", "TestBot")
 	sess.AddUserMessage("query about something")
 
-	ctx := buildAgentContext(context.Background(), sess, nil, nil, tools.DefaultToolSearchConfig(), agent.PromptConfig{
+	ctx := buildAgentContext(context.Background(), sess, nil, nil, nil, tools.DefaultToolSearchConfig(), agent.PromptConfig{
 		AgentName: "TestBot",
 	}, nil, nil)
 	if ctx == nil {
@@ -646,7 +647,7 @@ func TestBuildAgentContext_NoUserMessages(t *testing.T) {
 
 	sess := session.New("s1", "a1", "TestBot")
 	// No messages.
-	ctx := buildAgentContext(context.Background(), sess, nil, nil, tools.DefaultToolSearchConfig(), agent.PromptConfig{
+	ctx := buildAgentContext(context.Background(), sess, nil, nil, nil, tools.DefaultToolSearchConfig(), agent.PromptConfig{
 		AgentName: "TestBot",
 	}, nil, nil)
 	if ctx == nil {
@@ -689,7 +690,7 @@ func TestBuildAgentContext_PrefersPipelineMemoryContext(t *testing.T) {
 		t.Fatalf("seed working memory tripwire: %v", err)
 	}
 
-	ctx := buildAgentContext(context.Background(), sess, nil, nil, tools.DefaultToolSearchConfig(), agent.PromptConfig{
+	ctx := buildAgentContext(context.Background(), sess, store, nil, nil, tools.DefaultToolSearchConfig(), agent.PromptConfig{
 		AgentName: "TestBot",
 	}, nil, nil)
 	req := ctx.BuildRequest(sess)
@@ -730,7 +731,7 @@ func TestBuildAgentContext_PrefersPipelineMemoryIndex(t *testing.T) {
 		t.Fatalf("seed memory index: %v", err)
 	}
 
-	ctx := buildAgentContext(context.Background(), sess, nil, nil, tools.DefaultToolSearchConfig(), agent.PromptConfig{
+	ctx := buildAgentContext(context.Background(), sess, store, nil, nil, tools.DefaultToolSearchConfig(), agent.PromptConfig{
 		AgentName: "TestBot",
 	}, nil, nil)
 	req := ctx.BuildRequest(sess)
@@ -757,11 +758,61 @@ func TestBuildAgentContext_PrefersPipelineMemoryIndex(t *testing.T) {
 	}
 }
 
+func TestBuildAgentContext_AppendsCheckpointDigestFromRepository(t *testing.T) {
+	store := testutil.TempStore(t)
+	sess := session.New("s1", "a1", "TestBot")
+	if _, err := store.FindOrCreateSession(context.Background(), sess.AgentID, "scope:checkpoint-note"); err != nil {
+		t.Fatalf("FindOrCreateSession: %v", err)
+	}
+	if err := store.QueryRowContext(context.Background(),
+		`SELECT id FROM sessions WHERE agent_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+		sess.AgentID,
+	).Scan(&sess.ID); err != nil {
+		t.Fatalf("load session id: %v", err)
+	}
+	sess.AddUserMessage("current question")
+
+	repo := db.NewCheckpointRepository(store)
+	if err := repo.SaveRecord(context.Background(), db.CheckpointRecord{
+		SessionID:          sess.ID,
+		ConversationDigest: "assistant checkpoint digest that should be restored",
+		ActiveTasks:        `["task-a"]`,
+		TurnCount:          10,
+	}); err != nil {
+		t.Fatalf("SaveRecord: %v", err)
+	}
+
+	ctx := buildAgentContext(context.Background(), sess, store, nil, nil, tools.DefaultToolSearchConfig(), agent.PromptConfig{
+		AgentName: "TestBot",
+	}, nil, nil)
+	req := ctx.BuildRequest(sess)
+
+	var sawDigest, sawTasks bool
+	for _, msg := range req.Messages {
+		if msg.Role != "system" {
+			continue
+		}
+		if strings.Contains(msg.Content, "[Checkpoint Digest]") &&
+			strings.Contains(msg.Content, "assistant checkpoint digest that should be restored") {
+			sawDigest = true
+		}
+		if strings.Contains(msg.Content, `Active tasks: ["task-a"]`) {
+			sawTasks = true
+		}
+	}
+	if !sawDigest {
+		t.Fatal("expected checkpoint digest system note in request")
+	}
+	if !sawTasks {
+		t.Fatal("expected active tasks in checkpoint system note")
+	}
+}
+
 func TestBuildAgentContext_SetsAgentName(t *testing.T) {
 	sess := session.New("s1", "a1", "OverrideName")
 	sess.AddUserMessage("test")
 
-	ctx := buildAgentContext(context.Background(), sess, nil, nil, tools.DefaultToolSearchConfig(), agent.PromptConfig{
+	ctx := buildAgentContext(context.Background(), sess, nil, nil, nil, tools.DefaultToolSearchConfig(), agent.PromptConfig{
 		AgentName: "DefaultName",
 	}, nil, nil)
 	if ctx == nil {

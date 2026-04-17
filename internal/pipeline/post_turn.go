@@ -12,6 +12,7 @@ import (
 	agentmemory "roboticus/internal/agent/memory"
 	"roboticus/internal/core"
 	"roboticus/internal/db"
+	"roboticus/internal/llm"
 )
 
 // PostTurnIngest runs background work after a turn completes.
@@ -54,7 +55,7 @@ func (p *Pipeline) PostTurnIngest(ctx context.Context, session *Session, turnID 
 		p.dispatchToObservers(bgCtx, sessionID, turnID, userContent, assistantContent)
 
 		// 4. Reflection: generate structured episode summary (agentic architecture Layer 16).
-		p.reflectOnTurn(bgCtx, userContent, session)
+		p.reflectOnTurn(bgCtx, turnID, userContent, session)
 
 		// 5. Procedure detection: extract tool sequences and persist learned skills.
 		p.detectAndPersistProcedures(bgCtx, session)
@@ -170,45 +171,17 @@ func (p *Pipeline) storeChunkEmbedding(ctx context.Context, sessionID, turnID, c
 
 // reflectOnTurn generates a structured episode summary and stores it as
 // episodic memory. Wires reflection.go into the post-turn pipeline.
-func (p *Pipeline) reflectOnTurn(ctx context.Context, userContent string, session *Session) {
+func (p *Pipeline) reflectOnTurn(ctx context.Context, turnID, userContent string, session *Session) {
 	if p.store == nil || userContent == "" {
 		return
 	}
 
-	// Extract tool events from session messages.
-	// Track success/failure: a tool call is followed by a tool result message.
-	// If the result starts with error patterns, mark as failure.
-	var toolEvents []agentmemory.ToolEvent
-	var errorMessages []string
-	msgs := session.Messages()
-	for i, msg := range msgs {
-		if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
-			for _, tc := range msg.ToolCalls {
-				success := true
-				// Look ahead for the tool result message.
-				if i+1 < len(msgs) && msgs[i+1].Role == "tool" {
-					result := strings.ToLower(msgs[i+1].Content)
-					if strings.HasPrefix(result, "error") || strings.HasPrefix(result, "failed") ||
-						strings.HasPrefix(result, `{"error`) {
-						success = false
-						errorMessages = append(errorMessages, strings.TrimSpace(msgs[i+1].Content))
-					}
-				}
-				toolEvents = append(toolEvents, agentmemory.ToolEvent{
-					ToolName: tc.Function.Name,
-					Success:  success,
-				})
-			}
-		}
+	toolEvents, errorMessages := p.loadReflectionToolEvents(ctx, turnID)
+	if len(toolEvents) == 0 {
+		toolEvents, errorMessages = inferReflectionToolEvents(session.Messages())
 	}
 
-	// Estimate turn duration from session timestamps.
-	var turnDuration time.Duration
-	if len(msgs) >= 2 {
-		// Use session's created_at as proxy (actual turn timing would require
-		// the turn record, which isn't available in the session struct).
-		turnDuration = 0 // TODO: wire actual turn start time from pipeline context
-	}
+	turnDuration := p.loadReflectionTurnDuration(ctx, turnID, toolEvents)
 
 	// Enriched reflection: pass evidence items and verifier outcome so the
 	// summary captures evidence refs, fix patterns, failed hypotheses, and
@@ -241,6 +214,93 @@ func (p *Pipeline) reflectOnTurn(ctx context.Context, userContent string, sessio
 		log.Debug().Str("outcome", summary.Outcome).Int("actions", len(summary.Actions)).
 			Msg("reflection: episode summary stored")
 	}
+}
+
+func (p *Pipeline) loadReflectionToolEvents(ctx context.Context, turnID string) ([]agentmemory.ToolEvent, []string) {
+	if p.store == nil || strings.TrimSpace(turnID) == "" {
+		return nil, nil
+	}
+	rows, err := p.store.QueryContext(ctx,
+		`SELECT tool_name, status, COALESCE(output, ''), COALESCE(duration_ms, 0)
+		   FROM tool_calls
+		  WHERE turn_id = ?
+		  ORDER BY created_at ASC, rowid ASC`,
+		turnID,
+	)
+	if err != nil {
+		return nil, nil
+	}
+	defer func() { _ = rows.Close() }()
+
+	var toolEvents []agentmemory.ToolEvent
+	var errorMessages []string
+	for rows.Next() {
+		var name, status, output string
+		var durationMs int64
+		if err := rows.Scan(&name, &status, &output, &durationMs); err != nil {
+			continue
+		}
+		success := strings.EqualFold(strings.TrimSpace(status), "success")
+		if !success {
+			if msg := strings.TrimSpace(output); msg != "" {
+				errorMessages = append(errorMessages, msg)
+			}
+		}
+		toolEvents = append(toolEvents, agentmemory.ToolEvent{
+			ToolName: strings.TrimSpace(name),
+			Success:  success,
+			Duration: time.Duration(durationMs) * time.Millisecond,
+		})
+	}
+	return toolEvents, errorMessages
+}
+
+func inferReflectionToolEvents(msgs []llm.Message) ([]agentmemory.ToolEvent, []string) {
+	var toolEvents []agentmemory.ToolEvent
+	var errorMessages []string
+	for i, msg := range msgs {
+		if msg.Role != "assistant" || len(msg.ToolCalls) == 0 {
+			continue
+		}
+		for _, tc := range msg.ToolCalls {
+			success := true
+			if i+1 < len(msgs) && msgs[i+1].Role == "tool" {
+				result := strings.ToLower(msgs[i+1].Content)
+				if strings.HasPrefix(result, "error") || strings.HasPrefix(result, "failed") ||
+					strings.HasPrefix(result, `{"error`) {
+					success = false
+					errorMessages = append(errorMessages, strings.TrimSpace(msgs[i+1].Content))
+				}
+			}
+			toolEvents = append(toolEvents, agentmemory.ToolEvent{
+				ToolName: tc.Function.Name,
+				Success:  success,
+			})
+		}
+	}
+	return toolEvents, errorMessages
+}
+
+func (p *Pipeline) loadReflectionTurnDuration(ctx context.Context, turnID string, toolEvents []agentmemory.ToolEvent) time.Duration {
+	if p.store != nil && strings.TrimSpace(turnID) != "" {
+		var totalMs int64
+		err := p.store.QueryRowContext(ctx,
+			`SELECT total_ms
+			   FROM pipeline_traces
+			  WHERE turn_id = ?
+			  ORDER BY created_at DESC, rowid DESC
+			  LIMIT 1`,
+			turnID,
+		).Scan(&totalMs)
+		if err == nil && totalMs > 0 {
+			return time.Duration(totalMs) * time.Millisecond
+		}
+	}
+	var sum time.Duration
+	for _, te := range toolEvents {
+		sum += te.Duration
+	}
+	return sum
 }
 
 // ExecutiveGrowthResult reports what the auto-grow pass wrote for a turn.

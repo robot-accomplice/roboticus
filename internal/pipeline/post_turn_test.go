@@ -2,7 +2,11 @@ package pipeline
 
 import (
 	"context"
+	"strings"
 	"testing"
+
+	"roboticus/internal/session"
+	"roboticus/testutil"
 )
 
 func TestChunkText_SmallInput(t *testing.T) {
@@ -107,4 +111,73 @@ func TestPostTurnIngest_EmptyContent(t *testing.T) {
 	p := &Pipeline{}
 	// Should not panic with empty content.
 	p.PostTurnIngest(context.Background(), NewSession("s", "a", "n"), "t1", "")
+}
+
+func TestReflectOnTurn_UsesPersistedTurnArtifacts(t *testing.T) {
+	store := testutil.TempStore(t)
+	p := &Pipeline{store: store}
+	ctx := context.Background()
+
+	sess, err := store.FindOrCreateSession(ctx, "agent-reflect", "scope:reflect")
+	if err != nil {
+		t.Fatalf("FindOrCreateSession: %v", err)
+	}
+	if _, err := store.ExecContext(ctx,
+		`INSERT INTO turns (id, session_id) VALUES (?, ?)`,
+		"turn-reflect", sess.ID,
+	); err != nil {
+		t.Fatalf("insert turn: %v", err)
+	}
+	if _, err := store.ExecContext(ctx,
+		`INSERT INTO tool_calls (id, turn_id, tool_name, input, output, status, duration_ms)
+		 VALUES
+		   ('tc-1', 'turn-reflect', 'search_memories', '{}', 'ok', 'success', 1200),
+		   ('tc-2', 'turn-reflect', 'bash', '{}', 'error: denied', 'error', 350)`,
+	); err != nil {
+		t.Fatalf("insert tool calls: %v", err)
+	}
+	if _, err := store.ExecContext(ctx,
+		`INSERT INTO pipeline_traces (id, turn_id, session_id, total_ms, stages_json)
+		 VALUES ('pt-1', 'turn-reflect', ?, 2200, '[]')`,
+		sess.ID,
+	); err != nil {
+		t.Fatalf("insert pipeline trace: %v", err)
+	}
+
+	live := session.New(sess.ID, sess.AgentID, "TestBot")
+	live.AddUserMessage("find something relevant")
+	live.AddAssistantMessage("final answer after tools", nil)
+
+	p.reflectOnTurn(ctx, "turn-reflect", "find something relevant", live)
+
+	var content string
+	if err := store.QueryRowContext(ctx,
+		`SELECT content
+		   FROM episodic_memory
+		  WHERE classification = 'episode_summary'
+		  ORDER BY created_at DESC, rowid DESC
+		  LIMIT 1`,
+	).Scan(&content); err != nil {
+		t.Fatalf("load episode summary: %v", err)
+	}
+	if content == "" {
+		t.Fatal("episode summary content should not be empty")
+	}
+	if !containsAll(content,
+		"Actions: search_memories",
+		"bash",
+		"Errors: error: denied",
+		"Duration: 2s",
+	) {
+		t.Fatalf("episode summary did not reflect persisted turn artifacts: %q", content)
+	}
+}
+
+func containsAll(haystack string, needles ...string) bool {
+	for _, needle := range needles {
+		if !strings.Contains(haystack, needle) {
+			return false
+		}
+	}
+	return true
 }

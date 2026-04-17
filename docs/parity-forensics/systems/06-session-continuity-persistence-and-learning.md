@@ -126,12 +126,12 @@ ownership and promotion rules.
 | ID | Priority | Concern | Rust behavior | Go behavior | Classification | Status | Evidence |
 |----|----------|---------|---------------|-------------|----------------|--------|----------|
 | SYS-06-001 | P1 | Working-memory persistence/vetting must remain treated as a core success, not an open gap | Rust baseline preserves active task-relevant state across continuity boundaries | Go has a real persisted/vetted working-memory path and should preserve it as an invariant | Improvement | Closed / retain as evidence | `internal/agent/memory/working_persistence.go:1-184` |
-| SYS-06-002 | P1 | Reflection remains heuristic and may under-capture turn quality/timing | Rust continuity/learning path includes richer session/governor/checkpoint context | Go reflection stores structured `episode_summary`, but turn duration is still a TODO proxy and tool-event extraction is heuristic | Degradation | Open | `internal/pipeline/post_turn.go:205-227` |
+| SYS-06-002 | P1 | Reflection had been heuristic and under-captured turn quality/timing | Rust continuity/learning path includes richer session/governor/checkpoint context | Go reflection now reads persisted `tool_calls` and `pipeline_traces.total_ms` for the current turn before falling back to message adjacency, so the main TODO-proxy degradation is closed. Remaining seam is broader reflection richness/classification, not basic artifact ownership | Improved, narrower seam | Open | `internal/pipeline/post_turn.go:171-244`, `internal/pipeline/post_turn_test.go` |
 | SYS-06-003 | P1 | Consolidation behavior must be classified, not assumed parity | Rust has an explicit consolidation pipeline | Go distillation now promotes recurring patterns into semantic memory and `knowledge_facts`, which may be improvement or drift depending on exact parity target | Improvement candidate | Open | `internal/agent/memory/consolidation_distillation.go:1-320`, Rust `consolidation.rs` |
-| SYS-06-004 | P1 | Checkpoint ownership is split between a lightweight live save path and a separate repository abstraction | Rust has explicit checkpoint persistence and pruning APIs with clearer lifecycle ownership | Go now routes the live periodic checkpoint write through `CheckpointRepository.SaveRecord(...)` instead of keeping a second raw-SQL writer in `maybeCheckpoint(...)`. Remaining gap: load/prune lifecycle is still not fully owned by the same live boundary | Improved, not closed | Open | `internal/pipeline/pipeline_gaps.go`, `internal/db/checkpoint_repo.go`, `internal/pipeline/checkpoint_lifecycle_test.go` |
+| SYS-06-004 | P1 | Checkpoint ownership is split between a lightweight live save path and a separate repository abstraction | Rust has explicit checkpoint persistence and pruning APIs with clearer lifecycle ownership | Go now routes live save and prune through `CheckpointRepository` and restores the latest checkpoint via the same repository into request assembly as a compact checkpoint digest. The remaining seam is not "no lifecycle," but whether this compact restore is the final intended synthesis versus a closer Rust-style restore | Improved, narrower seam | Open | `internal/pipeline/pipeline_gaps.go`, `internal/db/checkpoint_repo.go`, `internal/pipeline/checkpoint_lifecycle_test.go`, `internal/daemon/daemon_adapters.go` |
 | SYS-06-005 | P2 | Executive-state growth is stronger than earlier versions, but needs classification against Rust task-state ownership | Rust threads task state through planning/inference/guards | Go grows executive state post-turn from verification results; this looks like a real improvement, but needs explicit parity classification so it is protected rather than flattened away | Improvement candidate | Open | `internal/pipeline/post_turn.go:246+` |
-| SYS-06-006 | P1 | Reflection remains heuristic and under-specified relative to the richer memory architecture now in place | Rust continuity/learning path ties more directly into checkpoint/session lifecycle | Go reflection stores structured `episode_summary`, but turn duration is still a TODO proxy and tool-event extraction is inferred from message adjacency patterns | Degradation | Open | `internal/pipeline/post_turn.go:171-227` |
-| SYS-06-007 | P1 | Checkpoint repository abstraction is currently only partially authoritative | Checkpoint persistence APIs should either own the live save/load/delete lifecycle or be explicitly demoted as helper/test scaffolding | `CheckpointRepository` now owns the live save path via `SaveRecord(...)`, but the load/prune lifecycle is still not exercised by production code, so repository ownership is incomplete rather than absent | Degradation seam | Open | `internal/db/checkpoint_repo.go`, `internal/db/coverage_boost_test.go`, `internal/pipeline/pipeline_gaps.go`, `internal/pipeline/checkpoint_lifecycle_test.go` |
+| SYS-06-006 | P1 | Reflection remains under-specified relative to the richer memory architecture now in place | Rust continuity/learning path ties more directly into checkpoint/session lifecycle | Go reflection now uses turn-owned artifacts for tool outcomes and duration, but still relies on heuristic summarization rules rather than a fuller structured turn-state model | Degradation | Open | `internal/pipeline/post_turn.go:171-244`, `internal/pipeline/post_turn_test.go` |
+| SYS-06-007 | P1 | Checkpoint repository abstraction is currently only partially authoritative | Checkpoint persistence APIs should either own the live save/load/delete lifecycle or be explicitly demoted as helper/test scaffolding | `CheckpointRepository` now owns the live save path (`SaveRecord(...)`), stable latest-record load (`LoadLatestRecord(...)`), and prune path (`DeleteOld(...)`), all exercised by production code. Remaining work is classification of the compact restore shape, not repository ownership itself | Improved, nearly closed | Open | `internal/db/checkpoint_repo.go`, `internal/db/coverage_boost_test.go`, `internal/pipeline/pipeline_gaps.go`, `internal/pipeline/checkpoint_lifecycle_test.go`, `internal/daemon/daemon_adapters.go`, `internal/daemon/daemon_adapters_test.go` |
 | SYS-06-008 | P2 | Tool-fact harvesting into executive-state assumptions is a novel extension that needs explicit protection | Baseline continuity systems preserve task-relevant state; memory growth should be deliberate rather than accidental | Go now extracts a narrow allowlist of referenced tool-derived facts and records them as executive assumptions post-turn; this is beyond simple Rust parity and should be classified as a deliberate synthesis of recall discipline plus working-memory continuity | Improvement candidate | Open | `internal/pipeline/post_turn.go:378-407` |
 
 ## Intentional Deviations
@@ -179,11 +179,12 @@ Protected invariants for this system:
 ## Open Questions
 
 - Where exactly is the full Go checkpoint save/load/prune lifecycle, and how
-  close is it to Rust?
+  close is the compact restore shape to Rust's fuller checkpoint injection?
 - Is `CheckpointRepository` intended to become the authoritative live path, or
   is it now effectively test/support scaffolding around a direct SQL path?
-- Should post-turn reflection remain heuristic, or is there a more structured
-  source of turn timing and tool outcomes available?
+- Should post-turn reflection remain heuristic above the now-correct
+  turn-owned artifact layer, or is there a richer structured turn-state model
+  we should feed it next?
 - Which consolidation behaviors are intentionally beyond parity and which are
   silent semantic changes?
 - Should the lightweight `maybeCheckpoint(...)` path be considered a temporary
@@ -216,3 +217,15 @@ Protected invariants for this system:
   boundary for checkpoint persistence. The remaining checkpoint seam is no
   longer "two writers," but "save path unified while load/prune ownership is
   still partial."
+- 2026-04-17: Extended repository ownership to the rest of the live checkpoint
+  lifecycle: `maybeCheckpoint(...)` now prunes via `DeleteOld(...)`, and
+  request construction restores the latest checkpoint through
+  `LoadLatestRecord(...)` as a compact `[Checkpoint Digest]` ambient note. The
+  open question is now the final restore shape, not whether the repository owns
+  the live lifecycle.
+- 2026-04-17: Replaced reflection's main fidelity proxies with turn-owned
+  artifacts. `reflectOnTurn(...)` now reads persisted `tool_calls` for actual
+  tool names / success / error output and `pipeline_traces.total_ms` for turn
+  duration before falling back to message adjacency. This closes the zero-
+  duration TODO seam and substantially narrows the reflection audit to richer
+  semantic classification rather than missing basic turn facts.

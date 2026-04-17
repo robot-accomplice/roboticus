@@ -178,7 +178,7 @@ func latestUserMessageContent(sess *session.Session) string {
 // back to always_include + the tool set sorted by registration order
 // within budget — callers still get a bounded tool surface, just
 // without query-relevance ranking.
-func buildAgentContext(ctx context.Context, sess *session.Session, tools *agent.ToolRegistry, embedClient *llm.EmbeddingClient, toolSearchCfg agenttools.ToolSearchConfig, promptCfg agent.PromptConfig, budgetCfg *core.ContextBudgetConfig, cacheCfg *core.CacheConfig) *agent.ContextBuilder {
+func buildAgentContext(ctx context.Context, sess *session.Session, store *db.Store, tools *agent.ToolRegistry, embedClient *llm.EmbeddingClient, toolSearchCfg agenttools.ToolSearchConfig, promptCfg agent.PromptConfig, budgetCfg *core.ContextBudgetConfig, cacheCfg *core.CacheConfig) *agent.ContextBuilder {
 	ccfg := agent.DefaultContextConfig()
 	if budgetCfg != nil {
 		ccfg.BudgetConfig = budgetCfg
@@ -321,8 +321,56 @@ func buildAgentContext(ctx context.Context, sess *session.Session, tools *agent.
 	if hippo := sess.HippocampusSummary(); hippo != "" {
 		ctxBuilder.AppendSystemNote(hippo)
 	}
+	appendCheckpointDigest(ctx, ctxBuilder, store, sess)
 
 	return ctxBuilder
+}
+
+func appendCheckpointDigest(ctx context.Context, ctxBuilder *agent.ContextBuilder, store *db.Store, sess *session.Session) {
+	if store == nil || sess == nil || strings.TrimSpace(sess.ID) == "" {
+		return
+	}
+	rec, err := db.NewCheckpointRepository(store).LoadLatestRecord(ctx, sess.ID)
+	if err != nil || rec == nil {
+		return
+	}
+	note := formatCheckpointDigest(*rec)
+	if note == "" {
+		return
+	}
+	ctxBuilder.AppendSystemNote(note)
+}
+
+func formatCheckpointDigest(rec db.CheckpointRecord) string {
+	const digestCap = 240
+	const tasksCap = 160
+
+	var parts []string
+	if digest := strings.TrimSpace(rec.ConversationDigest); digest != "" {
+		parts = append(parts, "Recent checkpoint digest: "+truncateForNote(digest, digestCap))
+	}
+	if tasks := strings.TrimSpace(rec.ActiveTasks); tasks != "" {
+		parts = append(parts, "Active tasks: "+truncateForNote(tasks, tasksCap))
+	}
+	if len(parts) == 0 {
+		summary := strings.TrimSpace(rec.MemorySummary)
+		if summary == "" {
+			return ""
+		}
+		parts = append(parts, "Recent checkpoint summary: "+truncateForNote(summary, digestCap))
+	}
+	return "[Checkpoint Digest]\n" + strings.Join(parts, "\n")
+}
+
+func truncateForNote(s string, max int) string {
+	s = strings.Join(strings.Fields(strings.TrimSpace(s)), " ")
+	if max <= 0 || len(s) <= max {
+		return s
+	}
+	if max <= 3 {
+		return s[:max]
+	}
+	return s[:max-3] + "..."
 }
 
 // executorAdapter wraps the full agent loop deps → pipeline.ToolExecutor.
@@ -337,6 +385,7 @@ func buildAgentContext(ctx context.Context, sess *session.Session, tools *agent.
 // registry.
 type executorAdapter struct {
 	llmSvc          *llm.Service
+	store           *db.Store
 	tools           *agent.ToolRegistry
 	policy          *policy.Engine
 	injection       *agent.InjectionDetector
@@ -350,7 +399,7 @@ type executorAdapter struct {
 }
 
 func (a *executorAdapter) RunLoop(ctx context.Context, sess *session.Session) (string, int, error) {
-	ctxBuilder := buildAgentContext(ctx, sess, a.tools, a.embedClient, a.toolSearchCfg, a.promptConfig, a.budgetCfg, a.cacheCfg)
+	ctxBuilder := buildAgentContext(ctx, sess, a.store, a.tools, a.embedClient, a.toolSearchCfg, a.promptConfig, a.budgetCfg, a.cacheCfg)
 
 	loopCfg := agent.DefaultLoopConfig()
 	if a.maxTurnDuration > 0 {
@@ -537,6 +586,7 @@ func (a *skillAdapter) buildParams(defaults map[string]string, userInput, previo
 // pruning (Rust parity: tool_search.rs).
 type streamAdapter struct {
 	llmSvc        *llm.Service
+	store         *db.Store
 	tools         *agent.ToolRegistry
 	embedClient   *llm.EmbeddingClient
 	toolSearchCfg agenttools.ToolSearchConfig
@@ -546,7 +596,7 @@ type streamAdapter struct {
 }
 
 func (a *streamAdapter) PrepareStream(ctx context.Context, sess *session.Session) (*llm.Request, error) {
-	ctxBuilder := buildAgentContext(ctx, sess, a.tools, a.embedClient, a.toolSearchCfg, a.promptConfig, a.budgetCfg, a.cacheCfg)
+	ctxBuilder := buildAgentContext(ctx, sess, a.store, a.tools, a.embedClient, a.toolSearchCfg, a.promptConfig, a.budgetCfg, a.cacheCfg)
 	req := ctxBuilder.BuildRequest(sess)
 	req.Stream = true
 	return req, nil

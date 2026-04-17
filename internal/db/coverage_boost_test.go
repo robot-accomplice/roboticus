@@ -217,6 +217,53 @@ func TestCheckpointRepository_SaveRecordPersistsFullShape(t *testing.T) {
 	}
 }
 
+func TestCheckpointRepository_LoadLatestRecordReturnsFullShape(t *testing.T) {
+	store := openTestStore(t)
+	repo := NewCheckpointRepository(store)
+	ctx := context.Background()
+
+	sess, err := store.FindOrCreateSession(ctx, "agent-ckpt5", "scope1")
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if err := repo.SaveRecord(ctx, CheckpointRecord{
+		SessionID:          sess.ID,
+		SystemPromptHash:   "hash-1",
+		MemorySummary:      "older summary",
+		ConversationDigest: "older digest",
+		TurnCount:          10,
+	}); err != nil {
+		t.Fatalf("SaveRecord older: %v", err)
+	}
+	if err := repo.SaveRecord(ctx, CheckpointRecord{
+		SessionID:          sess.ID,
+		SystemPromptHash:   "hash-2",
+		MemorySummary:      "latest summary",
+		ActiveTasks:        `["task-b"]`,
+		ConversationDigest: "latest digest",
+		TurnCount:          20,
+	}); err != nil {
+		t.Fatalf("SaveRecord latest: %v", err)
+	}
+
+	rec, err := repo.LoadLatestRecord(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("LoadLatestRecord: %v", err)
+	}
+	if rec == nil {
+		t.Fatal("LoadLatestRecord returned nil")
+	}
+	if rec.SystemPromptHash != "hash-2" || rec.MemorySummary != "latest summary" || rec.TurnCount != 20 {
+		t.Fatalf("latest checkpoint core = %+v", rec)
+	}
+	if rec.ActiveTasks != `["task-b"]` {
+		t.Fatalf("ActiveTasks = %q, want [\"task-b\"]", rec.ActiveTasks)
+	}
+	if rec.ConversationDigest != "latest digest" {
+		t.Fatalf("ConversationDigest = %q, want latest digest", rec.ConversationDigest)
+	}
+}
+
 // --- Hygiene Repository ---
 
 func TestHygieneRepository_RecordAndList(t *testing.T) {

@@ -357,6 +357,7 @@ func (p *Pipeline) recordShortcutCost(ctx context.Context, turnID, sessionID, ch
 // Matches Rust's periodic context checkpoint in post_turn_ingest.
 
 const checkpointIntervalTurns = 10
+const checkpointRetentionCount = 3
 
 // maybeCheckpoint saves a context checkpoint if the turn count hits the interval.
 func (p *Pipeline) maybeCheckpoint(ctx context.Context, session *Session, turnID string) {
@@ -405,7 +406,15 @@ func (p *Pipeline) maybeCheckpoint(ctx context.Context, session *Session, turnID
 	})
 	if err != nil {
 		log.Warn().Err(err).Str("session", session.ID).Int("turn", turnCount).Msg("checkpoint save failed")
-	} else {
-		log.Debug().Str("session", session.ID).Int("turn", turnCount).Msg("context checkpoint saved")
+		return
 	}
+	if _, err := repo.DeleteOld(ctx, checkpointRetentionCount); err != nil {
+		log.Warn().Err(err).Str("session", session.ID).Int("turn", turnCount).Msg("checkpoint prune failed")
+		return
+	}
+	log.Debug().
+		Str("session", session.ID).
+		Int("turn", turnCount).
+		Int("retained", checkpointRetentionCount).
+		Msg("context checkpoint saved")
 }
