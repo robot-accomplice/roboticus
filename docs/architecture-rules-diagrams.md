@@ -260,7 +260,9 @@ Plugin administration and plugin runtime are not the same thing. Install/search
 surfaces may write plugin files or inspect catalogs, but the live runtime must
 own registry construction, directory discovery, manifest parsing, init, and
 install-time hot loading. Routes consume that runtime-owned registry; they do
-not create their own view of plugin state.
+not create their own view of plugin state. Manifest-backed plugin scripts and
+skill scripts also share one core execution contract for containment,
+interpreter allowlists, output limits, and sandbox env shaping.
 
 ```mermaid
 flowchart LR

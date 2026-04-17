@@ -39,7 +39,9 @@ older architecture docs had left too generic:
   registry construction, directory scan, manifest parsing, init, and
   `AppState.Plugins` wiring. Install-time plugin writes now hot-load into that
   same registry, so plugin install/catalog UX no longer stands in for a missing
-  runtime lifecycle.
+  runtime lifecycle. Manifest-backed plugin scripts now also share the same
+  core execution contract as skill scripts, closing a policy drift seam at the
+  extension boundary.
 - **Manual cron execution now shares the durable scheduler lifecycle.** The
   live `/api/cron/{id}/run` path no longer bypasses lease/run-history/retry
   ownership; it delegates through `CronWorker.RunJobNow(...)` and preserves the

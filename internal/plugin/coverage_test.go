@@ -1053,3 +1053,37 @@ description = "ping tool"
 		t.Fatalf("tools = %+v, want ping", tools)
 	}
 }
+
+func TestRegistry_LoadDirectory_AppliesScriptExecutionPolicy(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "policy")
+	_ = os.MkdirAll(dir, 0o755)
+	manifest := `
+name = "policy"
+version = "1.0.0"
+
+[[tools]]
+name = "pycheck"
+description = "python tool"
+`
+	_ = os.WriteFile(filepath.Join(dir, "manifest.toml"), []byte(strings.TrimSpace(manifest)), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "pycheck.py"), []byte("#!/usr/bin/env python3\nprint('ok')\n"), 0o755)
+
+	reg := NewRegistry(nil, nil, PermissionPolicy{
+		AllowedInterpreters: []string{"bash"},
+	})
+	if _, err := reg.LoadDirectory(dir); err != nil {
+		t.Fatalf("LoadDirectory: %v", err)
+	}
+
+	result, err := reg.ExecuteTool(context.Background(), "pycheck", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("ExecuteTool: %v", err)
+	}
+	if result.Success {
+		t.Fatal("expected interpreter policy failure")
+	}
+	if !strings.Contains(result.Output, "interpreter validation failed") {
+		t.Fatalf("output = %q, want interpreter validation failure", result.Output)
+	}
+}

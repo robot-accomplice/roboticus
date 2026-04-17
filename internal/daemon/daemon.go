@@ -722,7 +722,10 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 
 func buildPluginRegistry(cfg *core.Config) (*plugin.Registry, error) {
 	reg := plugin.NewRegistry(cfg.Plugins.Allow, cfg.Plugins.Deny, plugin.PermissionPolicy{
-		StrictMode: cfg.Plugins.StrictPermissions,
+		StrictMode:          cfg.Plugins.StrictPermissions,
+		AllowedInterpreters: append([]string(nil), cfg.Skills.AllowedInterpreters...),
+		MaxOutputBytes:      cfg.Skills.ScriptMaxOutputBytes,
+		SandboxEnv:          cfg.Skills.SandboxEnv,
 	})
 
 	dir := strings.TrimSpace(cfg.Plugins.Dir)

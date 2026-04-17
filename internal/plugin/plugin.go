@@ -103,8 +103,11 @@ type ManifestTool struct {
 
 // PermissionPolicy controls what plugins are allowed to do.
 type PermissionPolicy struct {
-	StrictMode bool     `json:"strict_mode"`
-	Allowed    []string `json:"allowed"`
+	StrictMode          bool     `json:"strict_mode"`
+	Allowed             []string `json:"allowed"`
+	AllowedInterpreters []string `json:"allowed_interpreters,omitempty"`
+	MaxOutputBytes      int      `json:"max_output_bytes,omitempty"`
+	SandboxEnv          bool     `json:"sandbox_env"`
 }
 
 type pluginEntry struct {
@@ -192,7 +195,7 @@ func (r *Registry) LoadDirectory(dir string) (PluginInfo, error) {
 		return PluginInfo{}, err
 	}
 
-	sp := NewScriptPlugin(*manifest, dir)
+	sp := NewScriptPlugin(*manifest, dir).WithPolicy(r.policy)
 	if err := r.replace(sp); err != nil {
 		return PluginInfo{}, err
 	}
@@ -429,7 +432,7 @@ func (r *Registry) ScanDirectory(dir string) (int, error) {
 		}
 
 		pluginDir := filepath.Dir(path)
-		sp := NewScriptPlugin(*manifest, pluginDir)
+		sp := NewScriptPlugin(*manifest, pluginDir).WithPolicy(r.policy)
 		if err := r.Register(sp); err != nil {
 			log.Warn().Err(err).Str("plugin", manifest.Name).Msg("plugin registration failed")
 			return nil
