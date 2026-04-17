@@ -9,7 +9,7 @@
 
 ## Executive Summary
 
-The Go implementation achieves **full structural compliance** with the connector-factory pattern. The pipeline is the single source of truth for business logic, all 8 entry points use `RunPipeline()`, and architecture tests enforce connector thinness. **All 7 original systemic gaps are now CLOSED** (v1.0.1 + v1.0.2 + v1.0.4).
+The Go implementation achieves **full structural compliance** with the connector-factory pattern. The pipeline is the single source of truth for business logic, all 8 entry points use `RunPipeline()`, and architecture tests enforce connector thinness. **All 7 original systemic gaps are now CLOSED** (v1.0.1 + v1.0.2 + v1.0.4), but the broader parity-forensics program is still in progress and continues to surface deeper runtime-classification seams outside that original seven-gap set.
 
 v1.0.5 introduced the **agentic retrieval architecture** scaffold — decomposer, router, reranker, context assembly, reflection, and working-memory persistence. v1.0.6 has now carried that scaffold much farther into runtime reality: router-selected retrieval modes influence actual tier retrieval, semantic / procedural / relationship / workflow reads are HybridSearch-first with per-tier `retrieval.path.*` trace attribution, semantic and relationship evidence preserve stronger provenance/freshness signals, the verifier consumes pipeline-computed task hints and claim-level proof obligations, a persisted graph-fact store now exists in production with reusable traversal APIs, and enriched episode distillation now promotes recurring canonical triples into `knowledge_facts`. The main remaining retrieval cleanup is operator-observed retirement of residual `LIKE` safety nets by tier, not missing architecture plumbing.
 
@@ -310,4 +310,8 @@ Policy denials soft-fail with structured reason. Error dedup suppresses repeated
 | ~~P3~~ | ~~Gap 2: API routes never set Claim~~ | **CLOSED v1.0.2** | Both API routes now construct ChannelClaimContext |
 | ~~P3~~ | ~~Gap 7: Preset doc comments missing~~ | **CLOSED v1.0.4** | All 4 presets carry stage rationale doc comments |
 
-**All 7 original gaps are CLOSED.** No open architectural gaps remain.
+**All 7 original gaps are CLOSED.** That does **not** mean the parity or
+architecture program is complete. Open architectural/parity work still remains
+in request shaping, MCP transport semantics, cache/replay semantics, and the
+cross-cutting scheduler/plugin/channel families tracked in
+`docs/parity-forensics/`.
