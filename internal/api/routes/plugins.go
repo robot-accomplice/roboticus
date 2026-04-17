@@ -1,17 +1,30 @@
 package routes
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
 
+	"roboticus/internal/llm"
 	"roboticus/internal/plugin"
 )
 
 type pluginToolSyncer interface {
 	SyncPluginTools(*plugin.Registry) int
+	EmbedDescriptors(context.Context, *llm.EmbeddingClient) error
+}
+
+func syncPluginToolSurface(ctx context.Context, tools pluginToolSyncer, reg *plugin.Registry, ec *llm.EmbeddingClient) {
+	if tools == nil {
+		return
+	}
+	tools.SyncPluginTools(reg)
+	if ec != nil {
+		_ = tools.EmbedDescriptors(ctx, ec)
+	}
 }
 
 // ListPlugins returns all registered plugins.
@@ -37,7 +50,7 @@ func ListPluginTools(reg *plugin.Registry) http.HandlerFunc {
 }
 
 // EnablePlugin enables a plugin by name.
-func EnablePlugin(reg *plugin.Registry, tools pluginToolSyncer) http.HandlerFunc {
+func EnablePlugin(reg *plugin.Registry, tools pluginToolSyncer, ec *llm.EmbeddingClient) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if reg == nil {
 			writeError(w, http.StatusServiceUnavailable, "plugin registry not configured")
@@ -48,15 +61,13 @@ func EnablePlugin(reg *plugin.Registry, tools pluginToolSyncer) http.HandlerFunc
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
-		if tools != nil {
-			tools.SyncPluginTools(reg)
-		}
+		syncPluginToolSurface(r.Context(), tools, reg, ec)
 		writeJSON(w, http.StatusOK, map[string]string{"status": "enabled"})
 	}
 }
 
 // DisablePlugin disables a plugin by name.
-func DisablePlugin(reg *plugin.Registry, tools pluginToolSyncer) http.HandlerFunc {
+func DisablePlugin(reg *plugin.Registry, tools pluginToolSyncer, ec *llm.EmbeddingClient) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if reg == nil {
 			writeError(w, http.StatusServiceUnavailable, "plugin registry not configured")
@@ -67,9 +78,7 @@ func DisablePlugin(reg *plugin.Registry, tools pluginToolSyncer) http.HandlerFun
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
-		if tools != nil {
-			tools.SyncPluginTools(reg)
-		}
+		syncPluginToolSurface(r.Context(), tools, reg, ec)
 		writeJSON(w, http.StatusOK, map[string]string{"status": "disabled"})
 	}
 }

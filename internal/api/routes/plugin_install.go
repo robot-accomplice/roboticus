@@ -7,12 +7,13 @@ import (
 	"path/filepath"
 
 	"roboticus/internal/core"
+	"roboticus/internal/llm"
 	"roboticus/internal/plugin"
 )
 
 // InstallPlugin installs a plugin into the configured plugin directory and, when
 // a live registry is available, loads it into the running daemon immediately.
-func InstallPlugin(cfg *core.Config, reg *plugin.Registry, tools pluginToolSyncer) http.HandlerFunc {
+func InstallPlugin(cfg *core.Config, reg *plugin.Registry, tools pluginToolSyncer, ec *llm.EmbeddingClient) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Name       string `json:"name"`
@@ -59,9 +60,7 @@ func InstallPlugin(cfg *core.Config, reg *plugin.Registry, tools pluginToolSynce
 				writeError(w, http.StatusBadRequest, err.Error())
 				return
 			}
-			if tools != nil {
-				tools.SyncPluginTools(reg)
-			}
+			syncPluginToolSurface(r.Context(), tools, reg, ec)
 		}
 
 		writeJSON(w, http.StatusCreated, map[string]string{

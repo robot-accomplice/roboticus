@@ -665,6 +665,7 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 		Pipeline:        pipe,
 		StreamFinalizer: pipe, // *Pipeline satisfies both Runner and StreamFinalizer
 		LLM:             llmSvc,
+		Embeddings:      embedClient,
 		Config:          cfg,
 		Keystore:        ks,
 		EventBus:        eventBus,

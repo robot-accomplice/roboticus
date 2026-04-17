@@ -83,7 +83,7 @@ That split may be valid, but it must be classified explicitly.
 | SYS-12-006 | P1 | Startup plugin discovery previously loaded names without real tool surfaces | Rust runtime ownership needs explicit comparison | Closed in v1.0.6: `ScanDirectory(...)` now parses TOML/YAML manifests with real `tools`, `requirements`, and metadata instead of line-scanning only `name/version/description`, so startup-loaded plugins expose actual runtime tool definitions | Remediated | Closed | `internal/plugin/plugin.go`, `internal/plugin/coverage_test.go`, `internal/daemon/daemon_coverage_test.go` |
 | SYS-12-003 | P2 | Plugin execution and agent script execution are separate runtimes | Rust separation needs explicit comparison | `ScriptPlugin.ExecuteTool(...)` inherits OS env plus plugin env and runs scripts from plugin dirs, while `agent.ScriptRunner` enforces interpreter allowlists, root containment, and optional sandboxed env for skills/scripts | Open | Open | `internal/plugin/script.go`, `internal/agent/script_runner.go` |
 | SYS-12-004 | P2 | Registry-level permission/risk validation is stronger than a naive extension surface | Rust policy level needs comparison | Plugin registration validates names, risk levels, and strict-mode permissions before activation | Likely improvement | Accepted | `internal/plugin/plugin.go` |
-| SYS-12-005 | P2 | Extension-backed tools are not yet clearly integrated into the main agent tool-selection surface | Rust tool-surface integration needs comparison | Plugin tools are exposed through plugin routes and registry methods, but this audit has not yet proven they are embedded into the same live request/tool-pruning path as built-ins and MCP tools | Open | Open | `internal/plugin/plugin.go`, `internal/agent/tools/registry.go`, `internal/api/routes/plugins.go` |
+| SYS-12-005 | P1 | Extension-backed tools previously drifted from the main agent tool-selection surface on hot install/enable | Rust tool-surface integration needs comparison | Closed in v1.0.6: plugin-backed tools now hot-sync into the main registry and refresh descriptor embeddings during install/enable, so the live semantic pruning surface stays aligned with startup-owned plugin discovery instead of leaving newly loaded tools rankless until daemon restart | Remediated | Closed | `internal/api/routes/plugins.go`, `internal/api/routes/plugin_install.go`, `internal/agent/tools/registry.go`, `internal/api/server.go`, `internal/daemon/daemon.go`, `internal/api/routes/coverage_test.go` |
 
 ## Intentional Deviations
 
@@ -110,8 +110,9 @@ ownership surface.
 ## Open Questions
 
 - Are plugins and scripts one runtime concern, or should they split later?
-- Should plugin-backed tools join the same selected/pruned `llm.Request.Tools`
-  surface as built-ins and MCP tools, or remain explicitly out-of-band?
+- Are there still any plugin-backed tool lifecycles that bypass the main
+  selected/pruned `llm.Request.Tools` surface, or is the remaining work now
+  entirely about script-runtime classification?
 
 ## Progress Log
 
@@ -125,3 +126,7 @@ ownership surface.
 - 2026-04-17: Closed the hot-registration gap. `/api/plugins/install` now
   writes a manifest-backed plugin directory and loads it into the live
   registry immediately through `plugin.Registry.LoadDirectory(...)`.
+- 2026-04-17: Closed the hot tool-surface gap. Plugin install/enable now
+  refreshes descriptor embeddings after syncing plugin tools into the main
+  registry, so newly loaded tools participate in semantic pruning/ranking
+  without waiting for daemon restart.

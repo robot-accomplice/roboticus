@@ -30,6 +30,7 @@ type AppState struct {
 	Pipeline        pipeline.Runner          // connectors must depend on the interface, not *pipeline.Pipeline
 	StreamFinalizer pipeline.StreamFinalizer // post-stream work (Rule 7.2 parity)
 	LLM             *llm.Service
+	Embeddings      *llm.EmbeddingClient
 	Config          *core.Config
 	Keystore        *core.Keystore
 	EventBus        *EventBus
@@ -248,9 +249,9 @@ func NewServer(ctx context.Context, cfg ServerConfig, state *AppState) *http.Ser
 		// Plugins.
 		r.Get("/api/plugins", routes.ListPlugins(state.Plugins))
 		r.Get("/api/plugins/tools", routes.ListPluginTools(state.Plugins))
-		r.Post("/api/plugins/{name}/enable", routes.EnablePlugin(state.Plugins, state.Tools))
-		r.Post("/api/plugins/{name}/disable", routes.DisablePlugin(state.Plugins, state.Tools))
-		r.Post("/api/plugins/catalog/install", routes.InstallPlugin(state.Config, state.Plugins, state.Tools))
+		r.Post("/api/plugins/{name}/enable", routes.EnablePlugin(state.Plugins, state.Tools, state.Embeddings))
+		r.Post("/api/plugins/{name}/disable", routes.DisablePlugin(state.Plugins, state.Tools, state.Embeddings))
+		r.Post("/api/plugins/catalog/install", routes.InstallPlugin(state.Config, state.Plugins, state.Tools, state.Embeddings))
 		r.Post("/api/plugins/{name}/execute/{tool}", routes.ExecutePluginTool(state.Plugins))
 
 		// Stats.
