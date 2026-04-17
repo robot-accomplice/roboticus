@@ -81,6 +81,7 @@ Today that lifecycle is already split into two families:
 | SYS-11-002 | P1 | Manual cron execution must share the durable worker lifecycle | Rust immediate-run semantics need explicit comparison | `RunCronJobNow` now delegates through `CronWorker.RunJobNow(...)`, so lease acquisition, run-history recording, retry bookkeeping, and next-run updates all reuse the same lifecycle as scheduled execution | Degradation remediated / lifecycle ownership restored | Accepted | `internal/api/routes/cron_run_now.go`, `internal/schedule/worker.go`, `internal/api/routes/cron_test.go`, `internal/schedule/worker_test.go` |
 | SYS-11-003 | P2 | Durable cron execution is correctly pipeline-owned once a job reaches execution | Rust intent is pipeline-owned business behavior | `CronWorker` delegates actual job behavior through `pipeline.RunPipeline(...PresetCron())` and daemon cron execution enqueues delivery after pipeline outcome | Idiomatic shift / likely improvement | Accepted | `internal/daemon/daemon_subsystems.go`, `internal/schedule/worker.go` |
 | SYS-11-004 | P2 | Scheduler compatibility logic carried schema-fallback debt in the hot path | Rust schema contract needs comparison | `recordRun(...)` now writes only the authoritative `cron_runs(error_msg, timestamp)` shape; runtime no longer branches across legacy column names during live execution. Remaining work is broader heartbeat/runtime classification, not cron-run schema ambiguity | Degradation remediated | Accepted | `internal/schedule/worker.go`, `internal/schedule/worker_test.go` |
+| SYS-11-005 | P2 | Dormant heartbeat tasks must at least match the live schema they target | Rust heartbeat task/storage contract needs explicit comparison | `MetricSnapshotTask` now writes the current `metric_snapshots(id, metrics_json, alerts_json)` schema instead of targeting nonexistent `timestamp/tier/usdc_balance` columns | Degradation remediated | Accepted | `internal/schedule/tasks.go`, `internal/schedule/tasks_test.go`, `internal/db/schema.go` |
 
 ## Intentional Deviations
 
@@ -125,3 +126,6 @@ collection of partially used helpers.
   consolidation now runs through `HeartbeatDaemon` + `MemoryLoopTask`, with
   interval ownership sourced from heartbeat config/fallback policy and covered
   by direct daemon/schedule tests.
+- 2026-04-17: Corrected `MetricSnapshotTask` to write the current
+  `metric_snapshots(id, metrics_json, alerts_json)` schema instead of a stale
+  column set that no longer exists.

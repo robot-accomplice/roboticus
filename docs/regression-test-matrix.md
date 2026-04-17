@@ -146,6 +146,7 @@ Blocking commands for feature-complete releases:
 | R-SCHED-05 | Manual "run now" execution reuses the durable cron worker lifecycle instead of bypassing lease/run-history/retry ownership | route + scheduler tests | L1/L2 |
 | R-SCHED-06 | Cron run recording writes the authoritative `error_msg` / `timestamp` schema without legacy fallback branching in the live worker path | scheduler tests | L1/L2 |
 | R-SCHED-07 | Daemon-owned memory consolidation uses the shared heartbeat runtime instead of a bespoke ticker, and heartbeat interval ownership follows config/fallback policy | daemon + scheduler tests | L1/L2 |
+| R-SCHED-08 | Dormant heartbeat tasks still target the live schema they claim to maintain; `MetricSnapshotTask` writes `metric_snapshots(id, metrics_json, alerts_json)` instead of stale columns | scheduler tests | L1/L2 |
 
 ### R-WAL: Wallet, Treasury, Payments
 

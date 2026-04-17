@@ -3,6 +3,7 @@ package schedule
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -194,11 +195,21 @@ func (t *MetricSnapshotTask) Run(ctx context.Context, tctx *TickContext) TaskRes
 		return TaskResult{Success: false, Message: "no store configured"}
 	}
 
+	payload, err := json.Marshal(map[string]any{
+		"timestamp":      tctx.Timestamp.Format(time.RFC3339),
+		"survival_tier":  tctx.SurvivalTier.String(),
+		"credit_balance": tctx.CreditBalance,
+		"usdc_balance":   tctx.USDCBalance,
+	})
+	if err != nil {
+		return TaskResult{Success: false, Message: fmt.Sprintf("marshal snapshot: %v", err)}
+	}
+
 	// Record a metric snapshot row for historical tracking.
-	_, err := t.Store.ExecContext(ctx,
-		`INSERT OR IGNORE INTO metric_snapshots (timestamp, tier, usdc_balance)
-		 VALUES (?, ?, ?)`,
-		tctx.Timestamp.Format(time.RFC3339), tctx.SurvivalTier.String(), tctx.USDCBalance)
+	_, err = t.Store.ExecContext(ctx,
+		`INSERT INTO metric_snapshots (id, metrics_json, alerts_json)
+		 VALUES (hex(randomblob(16)), ?, NULL)`,
+		string(payload))
 	if err != nil {
 		// Table may not exist yet; this is non-fatal.
 		log.Debug().Err(err).Msg("metric snapshot: insert skipped (table may not exist)")
