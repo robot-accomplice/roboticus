@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -401,6 +402,13 @@ func (p *Pipeline) buildGuardContext(session *Session) *GuardContext {
 		AgentName: session.AgentName,
 	}
 
+	if intent := strings.TrimSpace(session.TaskIntent()); intent != "" {
+		ctx.Intents = append(ctx.Intents, intent)
+	}
+	if action := strings.TrimSpace(session.TaskPlannedAction()); action == "delegate_to_specialist" || action == "compose_subagent" {
+		ctx.Intents = append(ctx.Intents, "delegation")
+	}
+
 	// Extract user prompt (last user message).
 	msgs := session.Messages()
 	for i := len(msgs) - 1; i >= 0; i-- {
@@ -435,8 +443,38 @@ func (p *Pipeline) buildGuardContext(session *Session) *GuardContext {
 					ToolName: msgs[i].Name,
 					Output:   msgs[i].Content,
 				})
+				if strings.Contains(msgs[i].Name, "delegat") || strings.Contains(msgs[i].Name, "subagent") {
+					ctx.DelegationProvenance.SubagentTaskStarted = true
+					ctx.DelegationProvenance.SubagentTaskCompleted = true
+					if strings.TrimSpace(msgs[i].Content) != "" {
+						ctx.DelegationProvenance.SubagentResultAttached = true
+					}
+				}
 			}
 		}
+	}
+
+	if p.store != nil {
+		rows, err := p.store.QueryContext(context.Background(),
+			`SELECT name FROM sub_agents WHERE enabled = 1 ORDER BY name`)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var name string
+				if scanErr := rows.Scan(&name); scanErr == nil && strings.TrimSpace(name) != "" {
+					ctx.SubagentNames = append(ctx.SubagentNames, strings.ToLower(name))
+				}
+			}
+		}
+
+		_ = p.store.QueryRowContext(context.Background(),
+			`SELECT selected_model
+			   FROM model_selection_events
+			  WHERE session_id = ?
+			  ORDER BY created_at DESC, rowid DESC
+			  LIMIT 1`,
+			session.ID,
+		).Scan(&ctx.ResolvedModel)
 	}
 
 	return ctx

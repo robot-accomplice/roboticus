@@ -82,6 +82,7 @@ type ContextualGuard interface {
 // ApplyFullWithContext runs all guards with the given context.
 // Contextual guards receive the context; basic guards receive only content.
 func (gc *GuardChain) ApplyFullWithContext(content string, ctx *GuardContext) ApplyResult {
+	precomputeGuardScores(ctx, content)
 	result := ApplyResult{Content: content}
 	for _, g := range gc.guards {
 		var gr GuardResult
