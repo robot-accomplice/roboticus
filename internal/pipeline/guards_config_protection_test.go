@@ -33,6 +33,20 @@ func TestConfigProtectionGuard_BlocksKeystoreMutation(t *testing.T) {
 	}
 }
 
+func TestConfigProtectionGuard_BlocksTrustedProxyMutation(t *testing.T) {
+	g := &ConfigProtectionGuard{}
+	ctx := &GuardContext{
+		ToolResults: []ToolResultEntry{
+			{ToolName: "config_set", Output: "trusted_proxy=*"},
+		},
+	}
+
+	result := g.CheckWithContext("Trusted proxy updated.", ctx)
+	if result.Passed {
+		t.Fatal("expected guard to block trusted_proxy mutation")
+	}
+}
+
 func TestConfigProtectionGuard_AllowsNonSensitiveConfig(t *testing.T) {
 	g := &ConfigProtectionGuard{}
 	ctx := &GuardContext{

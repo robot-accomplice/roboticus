@@ -157,6 +157,8 @@ func TestConfigProtectionRule_Direct(t *testing.T) {
 		{"write_file with keystore", "write_file", `{"path":"roboticus.toml","content":"keystore = \"/tmp\""}`, true},
 		{"write_file with trusted_proxy", "write_file", `{"path":"config-overrides.toml","content":"trusted_proxy = \"*\""}`, true},
 		{"write_file with private_key", "write_file", `{"path":"roboticus.toml","content":"private_key = \"0x...\""}`, true},
+		{"write_file with server auth token", "write_file", `{"path":"roboticus.toml","content":"server.auth_token = \"abc\""}`, true},
+		{"write_file with wallet keyfile", "write_file", `{"path":"config-overrides.toml","content":"wallet.keyfile = \"/tmp/key.json\""}`, true},
 		{"write_file with _secret suffix", "write_file", `{"path":"roboticus.toml","content":"db_secret = \"pass\""}`, true},
 		{"write_file with _token suffix", "write_file", `{"path":"roboticus.toml","content":"refresh_token = \"tok\""}`, true},
 		{"bash with config and key", "bash", `{"command":"echo api_key > roboticus.toml"}`, true},

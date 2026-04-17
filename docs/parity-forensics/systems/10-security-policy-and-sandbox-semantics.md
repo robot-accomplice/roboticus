@@ -90,6 +90,7 @@ The key artifacts are:
 | SYS-10-001 | P1 | Security claim composition needed live-path proof, not just helper existence | Rust treats claim composition as a first-class pipeline concern | Go now has live evidence that Stage 8 resolves `SecurityClaim`, attaches it to `session.SecurityClaim`, annotates `authority` / `claim_sources` on the trace, and applies threat-caution downgrade on the actual pipeline path. Full transport-by-transport classification is still open, but the old "helper exists but is bypassed" concern is closed | Improved, not closed | Open | `internal/pipeline/config.go`, `internal/pipeline/pipeline_run_stages.go`, `internal/pipeline/security_claim_stage_test.go` |
 | SYS-10-002 | P1 | Sandbox semantics are enforced in more than one layer | Rust intent is one coherent operator contract | Go now has a tighter shared runtime helper: filesystem tools resolve through `tools.ResolvePath(...)`, `ValidatePath(...)` shares the same allowed-path semantics, and pipeline session bootstrap snapshots `AllowedPaths` instead of sharing the pipeline slice header. Policy-layer path denial and tool-layer resolution are still distinct seams, but the helper split is materially narrower | Improved, not closed | Open | `internal/agent/tools/sandbox.go`, `internal/agent/tools/builtins.go`, `internal/pipeline/pipeline_stages.go`, `internal/pipeline/sandbox_propagation_test.go`, `internal/agent/tools/sandbox_test.go` |
 | SYS-10-003 | P1 | Model self-censorship must not replace real policy decisions | Tool/runtime policy should be the source of truth | Go has already fixed several prompt/runtime mismatches here, but this concern deserves explicit ownership in the parity program | Improvement candidate | Open | soak fixes, `prompt.go`, policy/tool tests |
+| SYS-10-004 | P1 | Sensitive config mutation vocabulary drifted between the policy engine and the post-inference guard | Rust intent is one coherent operator contract for protected settings | Go now centralizes protected config filenames and field patterns under `internal/security/config_protection.go`, and both `configProtectionRule` and `ConfigProtectionGuard` consume that shared matcher. This materially reduces policy/guard divergence, though the broader cross-layer audit is still open | Improved, not closed | Open | `internal/security/config_protection.go`, `internal/agent/policy/engine.go`, `internal/pipeline/guards_config_protection.go`, related tests |
 
 ## Intentional Deviations
 
@@ -117,6 +118,9 @@ Current known good state:
 - live sessions snapshot `AllowedPaths` at creation/load time instead of sharing
   the pipeline slice header, so config reloads or in-place mutations cannot
   silently retcon active sessions' sandbox surface
+- sensitive config filenames and field patterns are now owned by one shared
+  matcher, so pre-execution policy denial and post-inference config-protection
+  guards evaluate the same protected surface
 
 ## Downstream Systems Affected
 
@@ -148,3 +152,7 @@ Current known good state:
   absolute-path semantics. Also moved live session sandbox snapshot ownership
   into `Pipeline.applyRuntimeSessionContext(...)` so `AllowedPaths` are copied
   instead of header-shared across the pipeline/session boundary.
+- 2026-04-17: Centralized protected config filenames and field patterns under
+  `internal/security/config_protection.go`. The policy engine and the
+  `ConfigProtectionGuard` now consume the same matcher instead of carrying
+  diverging sensitive-key vocabularies.
