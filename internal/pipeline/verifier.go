@@ -461,6 +461,9 @@ func verificationGoalNeedsEntitySupport(goal string) bool {
 	lower := strings.ToLower(goal)
 	return containsAny(lower,
 		"affected system", "affected systems", "impacted system", "impacted systems",
+		"system affected", "systems affected", "systems were affected",
+		"service affected", "services affected", "services were affected",
+		"component affected", "components affected", "components were affected",
 		"affected component", "affected components", "impacted component", "impacted components",
 		"affected service", "affected services", "dependency", "dependencies", "blast radius",
 		"what breaks", "impact",

@@ -48,32 +48,48 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 		ctx = core.WithModelOverride(ctx, cfg.ModelOverride)
 	}
 
-	result, turns, err := p.executor.RunLoop(ctx, session)
-	if err != nil {
-		return nil, core.WrapError(core.ErrLLM, "inference failed", err)
-	}
+	var result string
+	var turns int
 
 	var finalGuardResult *ApplyResult
 	guardRetried := false
+	activeGuards := p.guards
+	if cfg.GuardSet == GuardSetNone {
+		activeGuards = nil
+	}
 
-	// Guard chain with full context and retry support.
-	if p.guards != nil && cfg.GuardSet != GuardSetNone {
+	// Guard chain with full context and retry support. The helper owns the live
+	// guard-triggered retry path even when no guards are configured, so there is
+	// one authoritative inference+guard implementation.
+	{
 		guardStart := time.Now()
-		guardCtx := p.buildGuardContext(session)
-		guardResult := p.guards.ApplyFullWithContext(result, guardCtx)
-		finalGuard := guardResult
+		liveRetryPolicy := DefaultRetryPolicy()
+		liveRetryPolicy.MaxRetries = 1
+		liveRetryPolicy.ErrorOnExhaust = false
+		guardRun, guardErr := retryWithGuardsDetailed(ctx, p.executor, session, activeGuards, liveRetryPolicy, func() *GuardContext {
+			return p.buildGuardContext(session)
+		})
+		if guardErr != nil {
+			return nil, core.WrapError(core.ErrLLM, "inference failed", guardErr)
+		}
+		guardResult := guardRun.InitialGuardResult
+		finalGuard := guardRun.FinalGuardResult
 		finalGuardResult = &finalGuard
-		result = guardResult.Content
+		result = guardRun.Content
+		turns = guardRun.Turns
+		guardRetried = guardRun.GuardRetried
 		guardDur := time.Since(guardStart).Milliseconds()
-		log.Debug().
-			Str("session", session.ID).
-			Bool("retry", guardResult.RetryRequested).
-			Strs("violations", guardResult.Violations).
-			Str("reason", guardResult.RetryReason).
-			Msg("guard chain evaluated")
+		if p.guards != nil && cfg.GuardSet != GuardSetNone {
+			log.Debug().
+				Str("session", session.ID).
+				Bool("retry", guardResult.RetryRequested).
+				Strs("violations", guardResult.Violations).
+				Str("reason", guardResult.RetryReason).
+				Msg("guard chain evaluated")
+		}
 
 		// Build per-guard trace entries for the dashboard.
-		if tr != nil {
+		if tr != nil && p.guards != nil && cfg.GuardSet != GuardSetNone {
 			guardResults := make(map[string]GuardTraceEntry)
 			for _, v := range guardResult.Violations {
 				// Violations are in "name: reason" format from ApplyFull,
@@ -98,27 +114,6 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 				chainType = "stream"
 			}
 			AnnotateGuardTrace(tr, guardResults, chainType, guardDur)
-		}
-
-		// If guard requests retry, re-run inference once with the rejection reason.
-		if guardResult.RetryRequested {
-			session.AddSystemMessage(fmt.Sprintf(
-				"Your previous response was rejected by the %s guard: %s. Please revise.",
-				strings.Join(guardResult.Violations, ", "), guardResult.RetryReason,
-			))
-			retryContent, retryTurns, retryErr := p.executor.RunLoop(ctx, session)
-			if retryErr != nil {
-				log.Debug().Err(retryErr).Msg("guard retry inference failed, using original result")
-			} else {
-				guardRetried = true
-				turns += retryTurns
-				// Apply guards again on the retry result (no further retries).
-				retryGuardCtx := p.buildGuardContext(session)
-				retryGuardResult := p.guards.ApplyFullWithContext(retryContent, retryGuardCtx)
-				finalGuard := retryGuardResult
-				finalGuardResult = &finalGuard
-				result = retryGuardResult.Content
-			}
 		}
 	}
 

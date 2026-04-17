@@ -184,6 +184,9 @@ func TestPipeline_Run_VerifierRequestsRevisionOnEvidenceGaps(t *testing.T) {
 	})
 
 	cfg := PresetAPI()
+	cfg.DecompositionGate = false
+	cfg.DelegatedExecution = false
+	cfg.TaskOperatingState = "test"
 	input := Input{
 		Content: "Why did the deployment fail?",
 		AgentID: "test-agent",
@@ -216,6 +219,9 @@ func TestPipeline_Run_VerifierRequestsRevisionForMissingActionPlan(t *testing.T)
 
 	cfg := PresetAPI()
 	cfg.GuardSet = GuardSetNone
+	cfg.DecompositionGate = false
+	cfg.DelegatedExecution = false
+	cfg.TaskOperatingState = "test"
 	input := Input{
 		Content: "Explain the root cause and propose a remediation plan",
 		AgentID: "test-agent",
@@ -249,6 +255,9 @@ func TestPipeline_Run_VerifierRequestsRevisionForUnsupportedSubgoalEvidence(t *t
 
 	cfg := PresetAPI()
 	cfg.GuardSet = GuardSetNone
+	cfg.DecompositionGate = false
+	cfg.DelegatedExecution = false
+	cfg.TaskOperatingState = "test"
 	input := Input{
 		Content: "What was the root cause, and which systems were affected?",
 		AgentID: "test-agent",

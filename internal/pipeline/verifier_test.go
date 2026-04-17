@@ -192,6 +192,27 @@ func TestVerifyResponse_FailsWhenAnsweredSubgoalLacksEvidenceSupport(t *testing.
 	}
 }
 
+func TestVerifyResponse_FailsWhenReversedAffectedSystemsGoalLacksEvidenceSupport(t *testing.T) {
+	ctx := VerificationContext{
+		UserPrompt: "What was the root cause, and which systems were affected?",
+		Subgoals: []string{
+			"what was the root cause",
+			"which systems were affected",
+		},
+		EvidenceItems: []string{
+			"Billing service cache invalidation failed after deploy",
+		},
+	}
+
+	result := VerifyResponse("The root cause was a stale billing cache, and the affected systems were billing and ledger.", ctx)
+	if result.Passed {
+		t.Fatal("expected unsupported evidence failure for reversed affected-systems phrasing")
+	}
+	if len(result.Issues) == 0 || result.Issues[len(result.Issues)-1].Code != "unsupported_subgoal" {
+		t.Fatalf("expected unsupported_subgoal issue, got %+v", result.Issues)
+	}
+}
+
 func TestBuildVerificationContext_ExtractsExecutiveSections(t *testing.T) {
 	sess := session.New("s1", "a1", "Bot")
 	sess.AddUserMessage("Is the rollout blocked by legal review?")

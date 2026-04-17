@@ -39,7 +39,7 @@ Out of scope:
 ## Rust Source Anchors
 
 | Concern | Rust file(s) / function(s) |
-|---------|-----------------------------|
+| --------- | ----------------------------- |
 | Guard registry and typed guard context | `crates/roboticus-pipeline/src/guard_registry.rs` |
 | Full guard retry pipeline | `crates/roboticus-pipeline/src/core/guard_retry.rs` |
 | Inference pipeline guard application | `crates/roboticus-pipeline/src/core/inference_pipeline.rs` |
@@ -48,7 +48,7 @@ Out of scope:
 ## Go Source Anchors
 
 | Concern | Go file(s) / function(s) |
-|---------|---------------------------|
+| --------- | --------------------------- |
 | Verification context + verifier | `internal/pipeline/verifier.go:20-280` |
 | Typed evidence artifact | `internal/session/verification_evidence.go:1-78` |
 | Typed evidence produced by memory assembly | `internal/agent/memory/context_assembly.go:162-225` |
@@ -60,16 +60,17 @@ Current observed state on 2026-04-16:
 
 1. Stage 8.5 retrieval can attach a typed `VerificationEvidence` artifact to
    the session.
-2. `BuildVerificationContext` prefers that typed artifact when present.
-3. If the artifact is absent, the verifier still falls back to reparsing
-   `MemoryContext()` using rendered section headers such as
-   `[Retrieved Evidence]`, `[Gaps]`, and `[Freshness Risks]`.
+2. `BuildVerificationContext` now consumes typed evidence only.
+3. Compatibility callers that still set only `MemoryContext` are normalized at
+   the session boundary into `VerificationEvidence`, so the verifier itself no
+   longer owns rendered-text parsing.
 4. Verification logic now performs richer checks than earlier versions:
    subgoal coverage, unsupported subgoals, contradictions, freshness overclaim,
    and action-plan presence.
 
-So the system is materially better than a pure string-parsing verifier, but it
-still permits architecture drift through the fallback path.
+So the system is materially better than a pure string-parsing verifier. The
+remaining architecture work is no longer verifier fallback ownership; it is the
+deeper guard-context and retry-path classification work.
 
 ## Artifact Boundary
 
@@ -109,11 +110,11 @@ inputs on the live path rather than depending on formatting conventions.
 ## Divergence Register
 
 | ID | Priority | Concern | Rust behavior | Go behavior | Classification | Status | Evidence |
-|----|----------|---------|---------------|-------------|----------------|--------|----------|
-| SYS-04-001 | P1 | Structured evidence is still optional instead of fully authoritative | Rust guard pipeline is built around typed guard context and structured inputs | Go verifier prefers typed evidence, but still falls back to reparsing rendered memory text | Degradation | Open | `internal/pipeline/verifier.go:108-150`, `internal/session/verification_evidence.go:60-78` |
-| SYS-04-002 | P1 | Verifier behavior can still drift with prompt formatting on non-pipeline paths | Guard semantics should not depend on section-header strings | Fallback path uses `strings.Contains` and section extraction on `MemoryContext()` | Degradation | Open | `internal/pipeline/verifier.go:127-150` |
+| ---- | ---------- | --------- | --------------- | ------------- | ---------------- | -------- | ---------- |
+| SYS-04-001 | P1 | Structured evidence had not been fully authoritative | Rust guard pipeline is built around typed guard context and structured inputs | Go now consumes typed evidence only in the verifier. Non-pipeline callers that set only `MemoryContext` are normalized into `VerificationEvidence` at the session boundary before verification begins | Improved | Closed 2026-04-17 | `internal/pipeline/verifier.go`, `internal/session/verification_evidence.go`, `internal/session/session.go` |
+| SYS-04-002 | P1 | Verifier behavior could drift with prompt formatting on non-pipeline paths | Guard semantics should not depend on section-header strings | Format-sensitive parsing now lives only in the session-boundary compatibility normalization. The verifier itself no longer depends on rendered section-header strings | Improved, compatibility seam retained | Closed 2026-04-17 | `internal/session/verification_evidence.go`, `internal/pipeline/verifier.go` |
 | SYS-04-003 | P1 | `GuardContext` is richer on paper than on the live path | Rust guard/verification context is populated from the actual pipeline state that later guards consume | Go now populates live `GuardContext` with task-intent hints, delegation intent from planned action, enabled subagent names, delegation provenance inferred from delegation/subagent tool results, and the latest selected model when one has already been recorded. Guard-score precompute also now runs on the live path. Remaining gap: not every declared field is sourced from an explicit pipeline artifact yet | Improved, not closed | Open | `internal/pipeline/pipeline.go`, `internal/pipeline/guard_context.go`, `internal/pipeline/guard_context_population_test.go` |
-| SYS-04-004 | P1 | Guard retry ownership is duplicated instead of flowing through one authoritative helper | Rust retry behavior is centralized in the guard pipeline | Go has a reusable `retryWithGuards(...)` helper, but the main inference path in `pipeline_stages.go` re-implements guard retry and then verifier retry manually | Degradation seam | Open | `internal/pipeline/guard_retry.go`, `internal/pipeline/pipeline_stages.go:48-136` |
+| SYS-04-004 | P1 | Guard retry ownership was duplicated instead of flowing through one authoritative helper | Rust retry behavior is centralized in the guard pipeline | Go now routes live guard-triggered retry through `retryWithGuardsDetailed(...)`, which owns contextual guard application, retry prompt injection, fresh-context re-evaluation, and final applied guard-result capture. The older `retryWithGuards(...)` wrapper is now only a thin compatibility shim over the same implementation | Improved | Closed 2026-04-17 | `internal/pipeline/guard_retry.go`, `internal/pipeline/pipeline_stages.go`, `internal/pipeline/guard_retry_test.go` |
 | SYS-04-005 | P1 | Some guard application paths still bypass contextual guard evaluation entirely | Guard behavior should not silently get weaker on specific early-return paths | Early-return `guardOutcome(...)` now rebuilds `GuardContext` from the live session and applies `ApplyFullWithContext(...)`, so skill/shortcut exits no longer silently degrade contextual guards to text-only checks | Fixed | Closed 2026-04-17 | `internal/pipeline/pipeline.go`, `internal/pipeline/pipeline_run_stages.go`, `internal/pipeline/guard_retry_artifacts_test.go::TestGuardOutcome_UsesContextualGuardsWhenSessionAvailable` |
 | SYS-04-006 | P2 | Go verifier appears more featureful than earlier parity baseline, but needs explicit classification | Rust guard pipeline has typed context, retries, and deterministic fallbacks | Go now has claim audits, typed evidence, richer freshness checks, and structured verifier trace output, which may be true improvements rather than parity regressions | Improvement candidate | Open | Rust `guard_registry.rs`, `guard_retry.rs`; Go `verifier.go`, `trace.go:164-184` |
 | SYS-04-007 | P2 | Guard registry parity still needs its own line-by-line sweep | Rust guard ownership is centralized and explicit | Go now has a centralized `GuardRegistry` with Rust-aligned ordering plus additive Go-only guards, but this system audit has not yet traced every live call site and preset against Rust expectations | Improvement candidate | Open | `internal/pipeline/guard_registry.go`, `internal/pipeline/guards*.go` |
@@ -138,11 +139,11 @@ line-by-line with Rust.
 
 The main architectural target here is clear:
 
-- typed evidence should become fully authoritative on the live path
-- rendered-text fallback should be reduced to explicit compatibility cases and
-  eventually retired if possible
-- guard/retry ownership should collapse onto one authoritative path rather than
-  leaving a reusable retry helper and a separate hand-rolled live orchestration
+- typed evidence should remain authoritative on the live path
+- rendered-text parsing should stay isolated to explicit compatibility
+  normalization and eventually be retired if possible
+- guard/retry ownership should remain collapsed onto one authoritative helper
+  rather than drifting back to multiple live implementations
 - retry-time guard evaluation should rebuild `GuardContext` from the actual
   post-retry session state instead of reusing the pre-retry snapshot
 - trace / `InferenceParams` capture must serialize the actual final guard
@@ -161,8 +162,8 @@ The main architectural target here is clear:
 
 ## Open Questions
 
-- Which remaining callers still rely on the string-parsing verifier fallback?
-- Is there a legitimate non-pipeline path that must keep the fallback alive?
+- Is the session-boundary compatibility normalization still needed once all
+  callers populate `VerificationEvidence` directly?
 - How much of Rust’s guard-retry semantics is already matched by Go versus
   still diverging?
 - Should guard-trace / `InferenceParams` capture preserve the exact applied
@@ -198,3 +199,13 @@ The main architectural target here is clear:
   names, delegation provenance inferred from tool results, and latest selected
   model when available. Guard-score precompute is now part of the actual guard
   chain path instead of being test-only scaffolding.
+- 2026-04-17: Closed the verifier-owned fallback seam. `BuildVerificationContext`
+  now consumes typed evidence only; compatibility callers that set only
+  rendered `MemoryContext` are normalized at the session boundary via
+  `Session.SetMemoryContext(...)`.
+- 2026-04-17: Collapsed live guard-triggered retry onto one implementation.
+  `runStandardInferenceWithTrace(...)` now delegates guard retry to
+  `retryWithGuardsDetailed(...)`, which owns contextual guard application,
+  fresh-context rebuild across retries, retry prompt injection, and final
+  applied guard-result capture. The older `retryWithGuards(...)` entry point is
+  now just a thin wrapper for unit-compatibility callers.
