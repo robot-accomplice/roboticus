@@ -51,6 +51,19 @@ func TestPolicy_BlocksProtectedPaths(t *testing.T) {
 	}
 }
 
+func TestPolicy_PathProtection_DoesNotTreatGenericContentWordsAsPaths(t *testing.T) {
+	pe := NewEngine(DefaultConfig())
+	req := &ToolCallRequest{
+		ToolName:  "write_file",
+		Arguments: `{"path":"data/notes.txt","content":"this note contains the word secret but no protected path"}`,
+		Authority: core.AuthorityCreator,
+	}
+	result := pe.Evaluate(req)
+	if result.Denied() {
+		t.Fatalf("expected generic content words not to trigger path protection, denied by %s: %s", result.Rule, result.Reason)
+	}
+}
+
 func TestPolicy_BlocksHomeShortcutInWorkspaceOnlyMode(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.WorkspaceOnly = true

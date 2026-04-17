@@ -255,7 +255,7 @@ func (r *pathProtectionRule) Priority() int { return 4 }
 
 var protectedPatterns = []string{
 	".env", ".ssh", "/etc/", "wallet.json", "roboticus.toml",
-	"roboticus.toml", "credentials", "secret", "private_key",
+	"config-overrides.toml",
 }
 
 var tildePathPattern = regexp.MustCompile(`(^|[^A-Za-z0-9_])~(?:/|$)`)
