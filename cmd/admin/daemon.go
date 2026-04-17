@@ -1,8 +1,8 @@
 package admin
 
 import (
-	"roboticus/cmd/internal/cmdutil"
 	"fmt"
+	"roboticus/cmd/internal/cmdutil"
 
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -127,4 +127,5 @@ var daemonUninstallCmd = &cobra.Command{
 
 func init() {
 	daemonCmd.AddCommand(daemonInstallCmd, daemonStartCmd, daemonStopCmd,
-		daemonRestartCmd, daemonStatusCmd, daemonUninstallCmd)}
+		daemonRestartCmd, daemonStatusCmd, daemonUninstallCmd)
+}

@@ -23,7 +23,7 @@ import (
 type PairingState int
 
 const (
-	PairingPending  PairingState = iota
+	PairingPending PairingState = iota
 	PairingVerified
 	PairingRejected
 	PairingExpired

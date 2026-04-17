@@ -81,13 +81,13 @@ type ExecutiveEntry struct {
 
 // ExecutiveState groups the currently active executive entries for a task.
 type ExecutiveState struct {
-	TaskID               string
-	Plans                []ExecutiveEntry
-	Assumptions          []ExecutiveEntry
-	UnresolvedQuestions  []ExecutiveEntry
-	VerifiedConclusions  []ExecutiveEntry
-	DecisionCheckpoints  []ExecutiveEntry
-	StoppingCriteria     []ExecutiveEntry
+	TaskID              string
+	Plans               []ExecutiveEntry
+	Assumptions         []ExecutiveEntry
+	UnresolvedQuestions []ExecutiveEntry
+	VerifiedConclusions []ExecutiveEntry
+	DecisionCheckpoints []ExecutiveEntry
+	StoppingCriteria    []ExecutiveEntry
 }
 
 // IsEmpty reports whether the state carries no executive entries at all.

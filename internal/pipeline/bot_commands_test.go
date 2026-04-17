@@ -21,8 +21,8 @@ func TestBotCommandHandler_Match(t *testing.T) {
 		{"status command", "/status", true, "online"},
 		{"tools command", "/tools", true, "tools"},
 		{"skills command", "/skills", true, "skills"},
-		{"model command", "/model", true, ""},  // llmSvc nil — just check it matches
-		{"models command", "/models", true, ""}, // llmSvc nil — just check it matches
+		{"model command", "/model", true, ""},     // llmSvc nil — just check it matches
+		{"models command", "/models", true, ""},   // llmSvc nil — just check it matches
 		{"breaker command", "/breaker", true, ""}, // llmSvc nil — just check it matches
 		{"retry command", "/retry", true, "no previous"},
 		{"whoami command", "/whoami", true, "session"},

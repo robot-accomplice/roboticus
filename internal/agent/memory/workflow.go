@@ -34,22 +34,22 @@ const (
 
 // Workflow represents a reusable procedural record in working memory.
 type Workflow struct {
-	ID             string
-	Name           string
-	Steps          []string
-	Preconditions  []string
-	ErrorModes     []string
-	ContextTags    []string
-	Category       string
-	Version        int
-	Confidence     float64
-	MemoryState    string
-	SuccessCount   int
-	FailureCount   int
-	AvgDurationMs  int
-	LastUsedAt     time.Time
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	ID              string
+	Name            string
+	Steps           []string
+	Preconditions   []string
+	ErrorModes      []string
+	ContextTags     []string
+	Category        string
+	Version         int
+	Confidence      float64
+	MemoryState     string
+	SuccessCount    int
+	FailureCount    int
+	AvgDurationMs   int
+	LastUsedAt      time.Time
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 	SuccessEvidence []string
 	FailureEvidence []string
 }

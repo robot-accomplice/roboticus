@@ -22,17 +22,17 @@ import (
 // moves, the open handle keeps pointing at the same inode, and a new entry
 // at the original name becomes legal. So the standard dance is:
 //
-//   1. Pick a sidecar path for the outgoing exe — prefer `<exe>.old`,
-//      but if a previous update left that entry lingering and we can't
-//      remove it (another updater running, Defender holding a handle,
-//      user has it open in Explorer Properties), fall back to a
-//      timestamped name so this update never wedges.
-//   2. Rename exe → sidecar  (allowed — we only touch the dir entry)
-//   3. Rename stage → exe    (the original name is now free)
-//   4. Best-effort: schedule the sidecar for delete-on-reboot via
-//      MoveFileExW with MOVEFILE_DELAY_UNTIL_REBOOT. If this fails
-//      it's not fatal; the sidecar is harmless stale bytes the
-//      operator can delete by hand.
+//  1. Pick a sidecar path for the outgoing exe — prefer `<exe>.old`,
+//     but if a previous update left that entry lingering and we can't
+//     remove it (another updater running, Defender holding a handle,
+//     user has it open in Explorer Properties), fall back to a
+//     timestamped name so this update never wedges.
+//  2. Rename exe → sidecar  (allowed — we only touch the dir entry)
+//  3. Rename stage → exe    (the original name is now free)
+//  4. Best-effort: schedule the sidecar for delete-on-reboot via
+//     MoveFileExW with MOVEFILE_DELAY_UNTIL_REBOOT. If this fails
+//     it's not fatal; the sidecar is harmless stale bytes the
+//     operator can delete by hand.
 //
 // Rollback discipline: if step 3 fails, we try to rename sidecar back
 // into exe so the installed version continues to work. If the rollback

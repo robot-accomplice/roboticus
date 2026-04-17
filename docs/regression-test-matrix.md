@@ -101,6 +101,7 @@ Blocking commands for feature-complete releases:
 | R-RT-10 | Every model in CommonIntentBaselines has a MEMORY_RECALL entry | `internal/llm/exercise_memory_recall_test.go` | L1 |
 | R-RT-11 | Routing trace annotations are emitted from the actual `llm.Request` selection site, including real message/tool counts, not a synthetic user-only approximation | `internal/llm/routing_trace_test.go` | L1 |
 | R-RT-12 | Model-selection events persist the actual routed request's winner and user excerpt when turn/session/channel context is present | `internal/llm/model_selection_event_test.go` | L1 |
+| R-RT-13 | `/api/models/exercise` now exercises the same pipeline-owned request path as the CLI, with `NoCache` + `NoEscalate`, instead of bypassing into direct LLM scoring | `internal/api/routes/routing_admin_exercise_test.go`, `internal/llm/service_complete_test.go` | L1/L2 |
 
 ### R-BOT: Bot Commands
 

@@ -24,13 +24,13 @@ func writeEpisodeSummary(t *testing.T, store *db.Store, summary *EpisodeSummary)
 
 func TestParseEpisodeSummary_PullsEnrichedFields(t *testing.T) {
 	summary := &EpisodeSummary{
-		Goal:         "deploy",
-		Outcome:      "success",
-		Learnings:    []string{"guard-triggered revision required before final answer"},
-		FixPatterns:  []string{"shell: fail→success on retry"},
-		EvidenceRefs: []string{"cache TTL 24h"},
+		Goal:          "deploy",
+		Outcome:       "success",
+		Learnings:     []string{"guard-triggered revision required before final answer"},
+		FixPatterns:   []string{"shell: fail→success on retry"},
+		EvidenceRefs:  []string{"cache TTL 24h"},
 		ResultQuality: 0.9,
-		Duration:     time.Second,
+		Duration:      time.Second,
 	}
 	fields := parseEpisodeSummary(summary.FormatForStorage())
 	if fields.Outcome != "success" {
@@ -52,11 +52,11 @@ func TestParseEpisodeSummary_PullsEnrichedFields(t *testing.T) {
 
 func TestParseEpisodeSummaryStructured_PrefersJSONPayload(t *testing.T) {
 	summary := &EpisodeSummary{
-		Goal:         "deploy",
-		Outcome:      "success",
-		Learnings:    []string{"guard-triggered revision required before final answer"},
-		FixPatterns:  []string{"shell: fail→success on retry"},
-		EvidenceRefs: []string{"cache TTL 24h"},
+		Goal:          "deploy",
+		Outcome:       "success",
+		Learnings:     []string{"guard-triggered revision required before final answer"},
+		FixPatterns:   []string{"shell: fail→success on retry"},
+		EvidenceRefs:  []string{"cache TTL 24h"},
 		ResultQuality: 0.9,
 	}
 

@@ -75,8 +75,8 @@ func DefaultLoopConfig() LoopConfig {
 	return LoopConfig{
 		MaxTurns:        25,
 		MaxLoopDuration: 300 * time.Second, // 5 min — local models need 60-80s per call
-		IdleThreshold: 3,
-		LoopWindow:    3,
+		IdleThreshold:   3,
+		LoopWindow:      3,
 	}
 }
 

@@ -247,9 +247,9 @@ func TestPipeline_Run_VerifierRequestsRevisionForUnsupportedSubgoalEvidence(t *t
 	}}
 
 	pipe := New(PipelineDeps{
-		Store:    store,
-		Executor: exec,
-		Guards:   DefaultGuardChain(),
+		Store:     store,
+		Executor:  exec,
+		Guards:    DefaultGuardChain(),
 		Retriever: &stubRetriever{result: "[Active Memory]\n\n[Retrieved Evidence]\n1. [semantic, 0.90] Billing service cache invalidation failed after deploy\n\n[Gaps]\n- No relationship/entity data found"},
 	})
 

@@ -59,8 +59,8 @@ type RetrievalPathTierStats struct {
 // RetrievalPathDistribution is the aggregated view across all covered
 // tiers within an observation window.
 type RetrievalPathDistribution struct {
-	TracesScanned int                                 `json:"traces_scanned"`
-	Tiers         map[string]*RetrievalPathTierStats  `json:"tiers"`
+	TracesScanned int                                `json:"traces_scanned"`
+	Tiers         map[string]*RetrievalPathTierStats `json:"tiers"`
 }
 
 // minSampleForDormancy is the minimum TotalMeasured before IsDormant can

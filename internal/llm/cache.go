@@ -26,8 +26,8 @@ type Cache struct {
 	order   []string               // LRU eviction order
 	maxSize int
 	ttl     time.Duration
-	store  *db.Store // L2: persistent
-	errBus *core.ErrorBus
+	store   *db.Store // L2: persistent
+	errBus  *core.ErrorBus
 }
 
 type cacheEntry struct {

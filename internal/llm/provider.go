@@ -7,9 +7,9 @@ import (
 
 // Provider represents an LLM API endpoint (OpenAI, Anthropic, Ollama, Google, etc).
 type Provider struct {
-	Name             string            `json:"name"`
-	URL              string            `json:"url"`
-	Format           APIFormat         `json:"format"`
+	Name   string    `json:"name"`
+	URL    string    `json:"url"`
+	Format APIFormat `json:"format"`
 	// APIKeyEnv removed — keys come from keystore via KeyResolver only.
 	ChatPath         string            `json:"chat_path,omitempty"`
 	EmbeddingPath    string            `json:"embedding_path,omitempty"`

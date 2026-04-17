@@ -159,6 +159,7 @@ func TestArchitecture_ConnectorFilesInvokeRunPipeline(t *testing.T) {
 		filepath.Join("routes", "agent.go"),
 		filepath.Join("routes", "sessions.go"),
 		filepath.Join("routes", "admin_webhooks.go"),
+		filepath.Join("routes", "routing_admin.go"),
 	}
 	for _, path := range files {
 		src := readRepoFile(t, path)

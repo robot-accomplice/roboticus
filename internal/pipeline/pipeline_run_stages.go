@@ -32,6 +32,9 @@ func (p *Pipeline) stageValidation(_ context.Context, pc *pipelineContext) error
 	if pc.input.ModelOverride != "" {
 		pc.cfg.ModelOverride = pc.input.ModelOverride
 	}
+	if pc.input.NoEscalate {
+		pc.cfg.NoEscalate = true
+	}
 
 	// Prefer local model: scan fallbacks for a local provider and set override.
 	if pc.cfg.PreferLocalModel && pc.cfg.ModelOverride == "" {
@@ -54,6 +57,9 @@ func (p *Pipeline) stageValidation(_ context.Context, pc *pipelineContext) error
 	}
 	if pc.cfg.ModelOverride != "" {
 		pc.tr.Annotate("model_override", pc.cfg.ModelOverride)
+	}
+	if pc.cfg.NoEscalate {
+		pc.tr.Annotate("no_escalate", true)
 	}
 	if pc.cfg.PreferLocalModel {
 		pc.tr.Annotate("prefer_local", true)

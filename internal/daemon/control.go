@@ -35,7 +35,6 @@ import (
 	"roboticus/internal/core"
 )
 
-
 // stopGracefulTimeout is the budget for SIGTERM-based graceful
 // shutdown before we escalate to SIGKILL. Mirrors the daemon's own
 // internal shutdown timeout (15s for goroutines, 5s for working
@@ -56,20 +55,20 @@ const stopForceKillTimeout = 5 * time.Second
 //
 // Resolution order:
 //
-//   1. PID file. If it exists and points at a live process, signal
-//      SIGTERM and wait up to stopGracefulTimeout. If the process is
-//      still alive after the timeout, escalate to SIGKILL. Remove
-//      the PID file once the process exits.
+//  1. PID file. If it exists and points at a live process, signal
+//     SIGTERM and wait up to stopGracefulTimeout. If the process is
+//     still alive after the timeout, escalate to SIGKILL. Remove
+//     the PID file once the process exits.
 //
-//   2. OS service manager fallback (launchctl / systemctl / SCM).
-//      Only reached when no PID file exists, which corresponds to
-//      "the daemon was installed as a system service and the OS
-//      manages its lifecycle." On macOS we use `launchctl bootout`
-//      directly rather than kardianos's legacy `unload` so the
-//      stale-state error path is informative.
+//  2. OS service manager fallback (launchctl / systemctl / SCM).
+//     Only reached when no PID file exists, which corresponds to
+//     "the daemon was installed as a system service and the OS
+//     manages its lifecycle." On macOS we use `launchctl bootout`
+//     directly rather than kardianos's legacy `unload` so the
+//     stale-state error path is informative.
 //
-//   3. Idempotent fallback: if neither (1) nor (2) found a running
-//      daemon, return nil and log "not running."
+//  3. Idempotent fallback: if neither (1) nor (2) found a running
+//     daemon, return nil and log "not running."
 func controlStop(cfg *core.Config) error {
 	pidPath := PIDFilePath(cfg)
 	pid, found, err := ReadPIDFile(pidPath)

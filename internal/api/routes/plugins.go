@@ -10,6 +10,10 @@ import (
 	"roboticus/internal/plugin"
 )
 
+type pluginToolSyncer interface {
+	SyncPluginTools(*plugin.Registry) int
+}
+
 // ListPlugins returns all registered plugins.
 func ListPlugins(reg *plugin.Registry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -33,7 +37,7 @@ func ListPluginTools(reg *plugin.Registry) http.HandlerFunc {
 }
 
 // EnablePlugin enables a plugin by name.
-func EnablePlugin(reg *plugin.Registry) http.HandlerFunc {
+func EnablePlugin(reg *plugin.Registry, tools pluginToolSyncer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if reg == nil {
 			writeError(w, http.StatusServiceUnavailable, "plugin registry not configured")
@@ -44,12 +48,15 @@ func EnablePlugin(reg *plugin.Registry) http.HandlerFunc {
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
+		if tools != nil {
+			tools.SyncPluginTools(reg)
+		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "enabled"})
 	}
 }
 
 // DisablePlugin disables a plugin by name.
-func DisablePlugin(reg *plugin.Registry) http.HandlerFunc {
+func DisablePlugin(reg *plugin.Registry, tools pluginToolSyncer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if reg == nil {
 			writeError(w, http.StatusServiceUnavailable, "plugin registry not configured")
@@ -59,6 +66,9 @@ func DisablePlugin(reg *plugin.Registry) http.HandlerFunc {
 		if err := reg.Disable(name); err != nil {
 			writeError(w, http.StatusNotFound, err.Error())
 			return
+		}
+		if tools != nil {
+			tools.SyncPluginTools(reg)
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "disabled"})
 	}

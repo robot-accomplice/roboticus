@@ -193,8 +193,8 @@ func (mm *Manager) IngestPolicyDocument(ctx context.Context, in PolicyIngestionI
 		// flip the prior row to stale with a superseded_by pointer so the
 		// Milestone 3 supersession chain stays intact.
 		if err := mm.insertSemanticRow(ctx, semanticInsert{
-			id:            newID,
-			category:      in.Category,
+			id:       newID,
+			category: in.Category,
 			// Prior row occupies the (category, key) UNIQUE slot. Park the
 			// new row under a versioned key suffix so both survive; the
 			// supersession pointer still resolves from prior to new.
@@ -312,9 +312,9 @@ func (mm *Manager) insertSemanticRow(ctx context.Context, r semanticInsert) erro
 
 func (mm *Manager) lookupSemanticRow(ctx context.Context, category, key string) (id string, version int, isCanonical bool, err error) {
 	var (
-		idVal          sql.NullString
-		versionVal     sql.NullInt64
-		canonicalVal   sql.NullInt64
+		idVal        sql.NullString
+		versionVal   sql.NullInt64
+		canonicalVal sql.NullInt64
 	)
 	row := mm.store.QueryRowContext(ctx,
 		`SELECT id, version, is_canonical

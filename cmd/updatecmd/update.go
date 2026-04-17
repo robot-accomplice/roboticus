@@ -1,7 +1,6 @@
 package updatecmd
 
 import (
-	"roboticus/cmd/internal/cmdutil"
 	"bufio"
 	"context"
 	"crypto/sha256"
@@ -12,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"roboticus/cmd/internal/cmdutil"
 	"runtime"
 	"strconv"
 	"strings"
@@ -22,7 +22,6 @@ import (
 
 	"roboticus/internal/core"
 )
-
 
 var (
 	updateCheckURL    = "https://api.github.com/repos/robot-accomplice/roboticus/releases/latest"
@@ -210,7 +209,6 @@ func saveUpdateState(state updateState) error {
 	return os.WriteFile(path, data, 0o600)
 }
 
-
 func loadRawUpdateConfig(path string) (rawUpdateConfig, error) {
 	var cfg rawUpdateConfig
 	data, err := os.ReadFile(path)
@@ -325,20 +323,20 @@ func safeSkillPath(baseDir, name string) bool {
 //
 // Behavior matrix:
 //
-//   refreshConfig=false, local file exists  → SKIP download entirely.
-//                                              No fetch, no SHA check, no
-//                                              error. Print preservation
-//                                              notice. Returns changed=false.
-//   refreshConfig=false, local file missing → FRESH INSTALL: download +
-//                                              verify + write. SHA check
-//                                              is meaningful here because
-//                                              there is no user content to
-//                                              clobber.
-//   refreshConfig=true                       → ALWAYS download + verify +
-//                                              write, overwriting any local
-//                                              edits. The caller passing
-//                                              refreshConfig=true is the
-//                                              user opting in.
+//	refreshConfig=false, local file exists  → SKIP download entirely.
+//	                                           No fetch, no SHA check, no
+//	                                           error. Print preservation
+//	                                           notice. Returns changed=false.
+//	refreshConfig=false, local file missing → FRESH INSTALL: download +
+//	                                           verify + write. SHA check
+//	                                           is meaningful here because
+//	                                           there is no user content to
+//	                                           clobber.
+//	refreshConfig=true                       → ALWAYS download + verify +
+//	                                           write, overwriting any local
+//	                                           edits. The caller passing
+//	                                           refreshConfig=true is the
+//	                                           user opting in.
 //
 // SHA verification only fires on the download paths (cases 2 and 3); the
 // preservation path skips it entirely so a stale registry SHA can't break

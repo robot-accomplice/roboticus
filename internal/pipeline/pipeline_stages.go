@@ -47,6 +47,9 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 	if cfg.ModelOverride != "" {
 		ctx = core.WithModelOverride(ctx, cfg.ModelOverride)
 	}
+	if cfg.NoEscalate {
+		ctx = core.WithNoEscalate(ctx)
+	}
 
 	var result string
 	var turns int

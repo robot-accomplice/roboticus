@@ -82,11 +82,11 @@ func (mm *Manager) CurrentSemanticValue(ctx context.Context, startID string) (*S
 		visited[currentID] = struct{}{}
 
 		var (
-			row           SemanticRevision
-			effective     sql.NullString
-			updated       sql.NullString
-			superseded    sql.NullString
-			memoryState   sql.NullString
+			row         SemanticRevision
+			effective   sql.NullString
+			updated     sql.NullString
+			superseded  sql.NullString
+			memoryState sql.NullString
 		)
 		err := mm.store.QueryRowContext(ctx,
 			`SELECT id, category, key, value, version, confidence,

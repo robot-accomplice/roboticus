@@ -213,4 +213,5 @@ var setupPersonalityCmd = &cobra.Command{
 }
 
 func init() {
-	setupCmd.AddCommand(setupPersonalityCmd)}
+	setupCmd.AddCommand(setupPersonalityCmd)
+}

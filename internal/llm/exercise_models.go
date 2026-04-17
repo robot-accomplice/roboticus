@@ -1,8 +1,7 @@
 // exercise_models.go is the pipeline-mode exercise orchestrator — the
-// business logic behind `roboticus models exercise`. CLI commands in
-// cmd/models are thin connectors to this function; the HTTP route
-// /api/models/exercise uses a different orchestrator (RunExercise, in
-// exercise.go) that bypasses the pipeline for direct-LLM measurement.
+// business logic behind `roboticus models exercise`. CLI commands and the
+// `/api/models/exercise` route are thin connectors to this function so
+// baselines reflect the same runtime request path.
 //
 // What lives here: warm-up sequencing, per-model iteration loop,
 // per-prompt dispatch, quality scoring, per-intent aggregation,

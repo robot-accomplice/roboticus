@@ -1,8 +1,8 @@
 package channels
 
 import (
-	"roboticus/cmd/internal/cmdutil"
 	"fmt"
+	"roboticus/cmd/internal/cmdutil"
 
 	"github.com/spf13/cobra"
 )
@@ -119,4 +119,5 @@ var mcpTestCmd = &cobra.Command{
 }
 
 func init() {
-	mcpCmd.AddCommand(mcpListCmd, mcpConnectCmd, mcpDisconnectCmd, mcpShowCmd, mcpTestCmd)}
+	mcpCmd.AddCommand(mcpListCmd, mcpConnectCmd, mcpDisconnectCmd, mcpShowCmd, mcpTestCmd)
+}

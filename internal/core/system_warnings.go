@@ -41,12 +41,12 @@ import (
 // log level (Warn), but the dashboard renders "high" with a stronger
 // styling than "normal".
 type SystemWarning struct {
-	Code      string    `json:"code"`     // stable identifier — dashboards key on this
-	Title     string    `json:"title"`    // short headline (one line)
-	Detail    string    `json:"detail"`   // longer explanation, may include paths
-	Remedy    string    `json:"remedy"`   // suggested operator action
-	Severity  string    `json:"severity"` // "high" or "normal"
-	RaisedAt  time.Time `json:"raised_at"`
+	Code     string    `json:"code"`     // stable identifier — dashboards key on this
+	Title    string    `json:"title"`    // short headline (one line)
+	Detail   string    `json:"detail"`   // longer explanation, may include paths
+	Remedy   string    `json:"remedy"`   // suggested operator action
+	Severity string    `json:"severity"` // "high" or "normal"
+	RaisedAt time.Time `json:"raised_at"`
 }
 
 // Severity constants used by the dashboard styling.

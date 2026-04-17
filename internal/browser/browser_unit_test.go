@@ -24,13 +24,13 @@ func TestIsRecoverable(t *testing.T) {
 		{"timeout", false},
 		{"", false},
 		{"some random error", false},
-		{"WEBSOCKET CLOSED", true},        // Rust parity: case-insensitive matching
-		{"CDP read error", true},          // Rust parity: CDP disconnect signature
-		{"cdp send failed", true},         // Rust parity: CDP send failure
-		{"connection reset", true},        // Rust parity: TCP reset
-		{"browser not started", false},    // precondition, not recoverable
-		{"browser not running", false},    // precondition, not recoverable
-		{"URL scheme is blocked", false},  // security denial, not recoverable
+		{"WEBSOCKET CLOSED", true},       // Rust parity: case-insensitive matching
+		{"CDP read error", true},         // Rust parity: CDP disconnect signature
+		{"cdp send failed", true},        // Rust parity: CDP send failure
+		{"connection reset", true},       // Rust parity: TCP reset
+		{"browser not started", false},   // precondition, not recoverable
+		{"browser not running", false},   // precondition, not recoverable
+		{"URL scheme is blocked", false}, // security denial, not recoverable
 	}
 	for _, tt := range tests {
 		if got := isRecoverable(tt.errMsg); got != tt.want {

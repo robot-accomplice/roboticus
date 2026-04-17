@@ -490,8 +490,6 @@ func TestRunUpdateAllOrchestratesBinaryProvidersAndSkills(t *testing.T) {
 	}
 	t.Setenv("ROBOTICUS_CONFIG", configPath)
 
-
-
 	binaryBytes := []byte("fake binary")
 	binaryHash := sha256.Sum256(binaryBytes)
 	checksumBody := hex.EncodeToString(binaryHash[:]) + "  " + binaryName() + "\n"

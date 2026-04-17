@@ -12,7 +12,7 @@ import (
 
 // InstallPlugin installs a plugin into the configured plugin directory and, when
 // a live registry is available, loads it into the running daemon immediately.
-func InstallPlugin(cfg *core.Config, reg *plugin.Registry) http.HandlerFunc {
+func InstallPlugin(cfg *core.Config, reg *plugin.Registry, tools pluginToolSyncer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Name       string `json:"name"`
@@ -58,6 +58,9 @@ func InstallPlugin(cfg *core.Config, reg *plugin.Registry) http.HandlerFunc {
 				_ = plugin.RemoveInstall(pluginDir)
 				writeError(w, http.StatusBadRequest, err.Error())
 				return
+			}
+			if tools != nil {
+				tools.SyncPluginTools(reg)
 			}
 		}
 

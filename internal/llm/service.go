@@ -24,25 +24,25 @@ import (
 //	Circuit breaker → Client (format translation + HTTP) →
 //	Cache store → Response
 type Service struct {
-	providers     map[string]*Client
-	router        *Router
-	breakers      *BreakerRegistry
-	cache         *Cache
-	dedup         *Dedup
-	transforms    *TransformPipeline
-	primary       string   // primary model name
-	fallbacks     []string // fallback model names
-	store         *db.Store
-	bgWorker      *core.BackgroundWorker
-	Confidence    *ConfidenceEvaluator
+	providers         map[string]*Client
+	router            *Router
+	breakers          *BreakerRegistry
+	cache             *Cache
+	dedup             *Dedup
+	transforms        *TransformPipeline
+	primary           string   // primary model name
+	fallbacks         []string // fallback model names
+	store             *db.Store
+	bgWorker          *core.BackgroundWorker
+	Confidence        *ConfidenceEvaluator
 	Escalation        *EscalationTracker
 	SessionEscalation *SessionEscalationTracker
 	quality           *QualityTracker
-	intentQuality *IntentQualityTracker
-	latency       *LatencyTracker
-	errBus        *core.ErrorBus
-	toolBlocklist []string // models that don't support tools (config override)
-	toolAllowlist []string // force tool support (config override)
+	intentQuality     *IntentQualityTracker
+	latency           *LatencyTracker
+	errBus            *core.ErrorBus
+	toolBlocklist     []string // models that don't support tools (config override)
+	toolAllowlist     []string // force tool support (config override)
 }
 
 // ServiceConfig holds configuration for the LLM service.
@@ -122,25 +122,25 @@ func NewService(cfg ServiceConfig, store *db.Store) (*Service, error) {
 	}
 
 	svc := &Service{
-		providers:     clients,
-		router:        NewRouter(targets, cfg.Router),
-		breakers:      NewBreakerRegistry(cfg.Breaker),
-		cache:         NewCache(cfg.Cache, store, cfg.ErrBus),
-		dedup:         NewDedup(120 * time.Second), // Rust parity: 120s dedup window
-		transforms:    DefaultTransformPipeline(),
-		primary:       cfg.Primary,
-		fallbacks:     cfg.Fallbacks,
-		store:         store,
-		bgWorker:      bgw,
-		Confidence:    NewConfidenceEvaluator(floor),
+		providers:         clients,
+		router:            NewRouter(targets, cfg.Router),
+		breakers:          NewBreakerRegistry(cfg.Breaker),
+		cache:             NewCache(cfg.Cache, store, cfg.ErrBus),
+		dedup:             NewDedup(120 * time.Second), // Rust parity: 120s dedup window
+		transforms:        DefaultTransformPipeline(),
+		primary:           cfg.Primary,
+		fallbacks:         cfg.Fallbacks,
+		store:             store,
+		bgWorker:          bgw,
+		Confidence:        NewConfidenceEvaluator(floor),
 		Escalation:        NewEscalationTracker(),
 		SessionEscalation: NewSessionEscalationTracker(cfg.Fallbacks),
-		quality:       NewQualityTracker(100),
-		intentQuality: NewIntentQualityTracker(100),
-		latency:       NewLatencyTracker(100),
-		errBus:        cfg.ErrBus,
-		toolBlocklist: cfg.ToolBlocklist,
-		toolAllowlist: cfg.ToolAllowlist,
+		quality:           NewQualityTracker(100),
+		intentQuality:     NewIntentQualityTracker(100),
+		latency:           NewLatencyTracker(100),
+		errBus:            cfg.ErrBus,
+		toolBlocklist:     cfg.ToolBlocklist,
+		toolAllowlist:     cfg.ToolAllowlist,
 	}
 
 	// Metascore routing is always enabled when the service has quality/latency
@@ -196,6 +196,10 @@ func (s *Service) Complete(ctx context.Context, req *Request) (*Response, error)
 }
 
 func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Response, error) {
+	if core.NoEscalateFromCtx(ctx) {
+		req.NoEscalate = true
+	}
+
 	// Cache check. Skip during exercise/baseline (NoEscalate) — we need
 	// fresh inference to measure actual model performance.
 	if !req.Stream && !req.NoEscalate {
@@ -260,8 +264,12 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 			// Known provider — use it with its own name as model (unusual case).
 			primaryModel = primaryProvider
 			chain = append(chain, providerModel{primaryProvider, primaryModel})
+		} else if s.primary != "" {
+			// Bare model name — route it through the configured primary provider.
+			primaryModel = req.Model
+			chain = append(chain, providerModel{s.primary, primaryModel})
 		} else {
-			// Not a known provider — treat as bare model name, try all providers.
+			// No configured primary — last-resort fanout across providers.
 			primaryModel = req.Model
 			for name := range s.providers {
 				chain = append(chain, providerModel{name, primaryModel})
@@ -269,30 +277,34 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 		}
 	}
 
-	// Fallbacks: each has its own provider/model pair.
-	for _, fb := range s.fallbacks {
-		fbProvider, fbModel := splitModelSpec(fb)
-		if fbModel != "" {
-			// Explicit "provider/model" — use as-is.
-		} else {
-			// Bare name — if it's a known provider, use it with the primary model.
-			if _, ok := s.providers[fbProvider]; ok {
-				fbModel = primaryModel
+	// Exercise/baseline requests must measure the requested model, not the
+	// configured fallback chain.
+	if !req.NoEscalate {
+		// Fallbacks: each has its own provider/model pair.
+		for _, fb := range s.fallbacks {
+			fbProvider, fbModel := splitModelSpec(fb)
+			if fbModel != "" {
+				// Explicit "provider/model" — use as-is.
 			} else {
-				// Unknown provider, no model — skip.
-				continue
+				// Bare name — if it's a known provider, use it with the primary model.
+				if _, ok := s.providers[fbProvider]; ok {
+					fbModel = primaryModel
+				} else {
+					// Unknown provider, no model — skip.
+					continue
+				}
 			}
-		}
-		// Deduplicate: skip if already in chain.
-		dup := false
-		for _, existing := range chain {
-			if existing.provider == fbProvider && existing.model == fbModel {
-				dup = true
-				break
+			// Deduplicate: skip if already in chain.
+			dup := false
+			for _, existing := range chain {
+				if existing.provider == fbProvider && existing.model == fbModel {
+					dup = true
+					break
+				}
 			}
-		}
-		if !dup {
-			chain = append(chain, providerModel{fbProvider, fbModel})
+			if !dup {
+				chain = append(chain, providerModel{fbProvider, fbModel})
+			}
 		}
 	}
 
@@ -660,7 +672,7 @@ type CostMetadata struct {
 	Quality   float64 // 0–1
 	Escalated bool
 	Cached    bool
-	Tier      string  // routing tier (e.g., "local", "cloud", "premium")
+	Tier      string // routing tier (e.g., "local", "cloud", "premium")
 }
 
 // recordCost logs inference cost to the database for analytics.

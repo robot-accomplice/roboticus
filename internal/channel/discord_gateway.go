@@ -22,14 +22,14 @@ const (
 	gatewayVersion  = "10"
 	gatewayEncoding = "json"
 	// Discord gateway opcodes.
-	opDispatch        = 0
-	opHeartbeat       = 1
-	opIdentify        = 2
-	opResume          = 6
-	opReconnect       = 7
-	opInvalidSession  = 9
-	opHello           = 10
-	opHeartbeatAck    = 11
+	opDispatch       = 0
+	opHeartbeat      = 1
+	opIdentify       = 2
+	opResume         = 6
+	opReconnect      = 7
+	opInvalidSession = 9
+	opHello          = 10
+	opHeartbeatAck   = 11
 	// Discord intents: GUILDS | GUILD_MESSAGES | MESSAGE_CONTENT.
 	defaultIntents = 1<<0 | 1<<9 | 1<<15
 )
@@ -47,7 +47,7 @@ const (
 type gatewayState struct {
 	mu                sync.Mutex
 	heartbeatInterval time.Duration
-	sequence          *int64  // nullable sequence number
+	sequence          *int64 // nullable sequence number
 	sessionID         string
 	resumeGatewayURL  string
 	heartbeatAcked    atomic.Bool
@@ -343,10 +343,10 @@ func (a *DiscordAdapter) handleMessageCreate(data json.RawMessage) {
 // --- Gateway message types and helpers ---
 
 type gatewayMessage struct {
-	Op int              `json:"op"`
-	D  json.RawMessage  `json:"d"`
-	S  *int64           `json:"s,omitempty"`
-	T  string           `json:"t,omitempty"`
+	Op int             `json:"op"`
+	D  json.RawMessage `json:"d"`
+	S  *int64          `json:"s,omitempty"`
+	T  string          `json:"t,omitempty"`
 }
 
 func readGatewayMessage(ctx context.Context, conn *websocket.Conn) (*gatewayMessage, error) {

@@ -1,12 +1,12 @@
 package admin
 
 import (
-	"roboticus/cmd/internal/cmdutil"
 	"encoding/json"
 	"fmt"
 	"net"
 	"os"
 	"path/filepath"
+	"roboticus/cmd/internal/cmdutil"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -208,4 +208,5 @@ var securityAuditCmd = &cobra.Command{
 }
 
 func init() {
-	securityCmd.AddCommand(securityShowCmd, securityAuditCmd)}
+	securityCmd.AddCommand(securityShowCmd, securityAuditCmd)
+}

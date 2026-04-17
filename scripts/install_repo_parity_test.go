@@ -30,9 +30,10 @@ import (
 var canonicalRepoSlug = "robot-accomplice/roboticus"
 
 // repoRefRegex matches GitHub repo references that appear either:
-//   (a) inside a github.com or api.github.com URL, or
-//   (b) as a bare quoted/assigned REPO variable value (install.sh /
-//       install.ps1 both set REPO="<org>/<repo>" near the top).
+//
+//	(a) inside a github.com or api.github.com URL, or
+//	(b) as a bare quoted/assigned REPO variable value (install.sh /
+//	    install.ps1 both set REPO="<org>/<repo>" near the top).
 //
 // Filesystem paths like /usr/local/bin/roboticus look superficially
 // similar to "bin/roboticus" but aren't in either category above and

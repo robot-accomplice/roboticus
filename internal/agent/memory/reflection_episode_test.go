@@ -99,23 +99,23 @@ func TestAnalyzeEpisode_LowQualityWhenVerifierFailsWithNoEvidence(t *testing.T) 
 
 func TestFormatForStorage_IncludesEnrichedFields(t *testing.T) {
 	summary := &EpisodeSummary{
-		Goal:             "deploy",
-		Actions:          []string{"shell"},
-		Outcome:          "success",
-		FixPatterns:      []string{"shell: fail→success on retry"},
-		EvidenceRefs:     []string{"cache TTL 24h"},
-		FailedHypotheses: []string{"I was mistaken about the owner"},
-		ErrorsSeen:       []string{"Error: target not found"},
-		ModelUsed:        "ollama/llama3",
-		ReactTurns:       2,
-		GuardViolations:  []string{"rewrite_tracking"},
-		GuardRetried:     true,
-		VerifiedRecorded: 1,
-		QuestionsOpened:  2,
-		QuestionsResolved: 1,
+		Goal:                "deploy",
+		Actions:             []string{"shell"},
+		Outcome:             "success",
+		FixPatterns:         []string{"shell: fail→success on retry"},
+		EvidenceRefs:        []string{"cache TTL 24h"},
+		FailedHypotheses:    []string{"I was mistaken about the owner"},
+		ErrorsSeen:          []string{"Error: target not found"},
+		ModelUsed:           "ollama/llama3",
+		ReactTurns:          2,
+		GuardViolations:     []string{"rewrite_tracking"},
+		GuardRetried:        true,
+		VerifiedRecorded:    1,
+		QuestionsOpened:     2,
+		QuestionsResolved:   1,
 		AssumptionsRecorded: 3,
-		ResultQuality:    0.87,
-		Duration:         2 * time.Second,
+		ResultQuality:       0.87,
+		Duration:            2 * time.Second,
 	}
 	out := summary.FormatForStorage()
 	for _, needle := range []string{
@@ -131,16 +131,16 @@ func TestFormatForStorage_IncludesEnrichedFields(t *testing.T) {
 
 func TestAnalyzeEpisode_UsesStructuredInferenceArtifacts(t *testing.T) {
 	input := EpisodeInput{
-		UserContent:      "Deploy safely",
-		ToolEvents:       []ToolEvent{{ToolName: "shell", Success: true}},
-		VerifierPassed:   true,
-		ModelUsed:        "openai/gpt-5.4",
-		ReactTurns:       3,
-		GuardViolations:  []string{"policy_risk", "policy_risk"},
-		GuardRetried:     true,
-		VerifiedRecorded: 1,
-		QuestionsOpened:  1,
-		QuestionsResolved: 1,
+		UserContent:         "Deploy safely",
+		ToolEvents:          []ToolEvent{{ToolName: "shell", Success: true}},
+		VerifierPassed:      true,
+		ModelUsed:           "openai/gpt-5.4",
+		ReactTurns:          3,
+		GuardViolations:     []string{"policy_risk", "policy_risk"},
+		GuardRetried:        true,
+		VerifiedRecorded:    1,
+		QuestionsOpened:     1,
+		QuestionsResolved:   1,
 		AssumptionsRecorded: 2,
 	}
 	summary := AnalyzeEpisode(input)
@@ -166,16 +166,16 @@ func TestAnalyzeEpisode_UsesStructuredInferenceArtifacts(t *testing.T) {
 
 func TestEpisodeSummary_JSONRoundTrip(t *testing.T) {
 	original := &EpisodeSummary{
-		Goal:               "deploy",
-		Outcome:            "success",
-		Learnings:          []string{"guard-triggered revision required before final answer"},
-		ModelUsed:          "openai/gpt-5.4",
-		ReactTurns:         3,
-		VerifiedRecorded:   1,
-		QuestionsOpened:    2,
-		QuestionsResolved:  1,
+		Goal:                "deploy",
+		Outcome:             "success",
+		Learnings:           []string{"guard-triggered revision required before final answer"},
+		ModelUsed:           "openai/gpt-5.4",
+		ReactTurns:          3,
+		VerifiedRecorded:    1,
+		QuestionsOpened:     2,
+		QuestionsResolved:   1,
 		AssumptionsRecorded: 4,
-		ResultQuality:      0.9,
+		ResultQuality:       0.9,
 	}
 	decoded, err := ParseEpisodeSummaryJSON(original.JSON())
 	if err != nil {

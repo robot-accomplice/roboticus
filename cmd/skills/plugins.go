@@ -495,4 +495,5 @@ func init() {
 		pluginsDisableCmd,
 		pluginsSearchCmd,
 		pluginsPackCmd,
-	)}
+	)
+}

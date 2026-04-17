@@ -112,32 +112,32 @@ type PersonalityConfig struct {
 
 // TierAdaptConfig holds adaptive tier settings for model tiering.
 type TierAdaptConfig struct {
-	Enabled          bool   `json:"enabled" toml:"enabled" mapstructure:"enabled"`
-	T1StripSystem    bool   `json:"t1_strip_system" toml:"t1_strip_system" mapstructure:"t1_strip_system"`
-	T1CondenseTurns  bool   `json:"t1_condense_turns" toml:"t1_condense_turns" mapstructure:"t1_condense_turns"`
+	Enabled           bool   `json:"enabled" toml:"enabled" mapstructure:"enabled"`
+	T1StripSystem     bool   `json:"t1_strip_system" toml:"t1_strip_system" mapstructure:"t1_strip_system"`
+	T1CondenseTurns   bool   `json:"t1_condense_turns" toml:"t1_condense_turns" mapstructure:"t1_condense_turns"`
 	T2DefaultPreamble string `json:"t2_default_preamble" toml:"t2_default_preamble" mapstructure:"t2_default_preamble"`
-	T3T4Passthrough  bool   `json:"t3_t4_passthrough" toml:"t3_t4_passthrough" mapstructure:"t3_t4_passthrough"`
+	T3T4Passthrough   bool   `json:"t3_t4_passthrough" toml:"t3_t4_passthrough" mapstructure:"t3_t4_passthrough"`
 }
 
 // TieredInferenceConfig holds confidence-based model escalation settings.
 type TieredInferenceConfig struct {
-	Enabled                    bool    `json:"enabled" toml:"enabled" mapstructure:"enabled"`
-	ConfidenceFloor            float64 `json:"confidence_floor" toml:"confidence_floor" mapstructure:"confidence_floor"`
-	EscalationLatencyBudgetMs  int64   `json:"escalation_latency_budget_ms" toml:"escalation_latency_budget_ms" mapstructure:"escalation_latency_budget_ms"`
+	Enabled                   bool    `json:"enabled" toml:"enabled" mapstructure:"enabled"`
+	ConfidenceFloor           float64 `json:"confidence_floor" toml:"confidence_floor" mapstructure:"confidence_floor"`
+	EscalationLatencyBudgetMs int64   `json:"escalation_latency_budget_ms" toml:"escalation_latency_budget_ms" mapstructure:"escalation_latency_budget_ms"`
 }
 
 // RevenueSwapConfig holds revenue swap execution settings.
 type RevenueSwapConfig struct {
-	TargetSymbol string                  `json:"target_symbol" toml:"target_symbol" mapstructure:"target_symbol"`
-	DefaultChain string                  `json:"default_chain" toml:"default_chain" mapstructure:"default_chain"`
+	TargetSymbol string                   `json:"target_symbol" toml:"target_symbol" mapstructure:"target_symbol"`
+	DefaultChain string                   `json:"default_chain" toml:"default_chain" mapstructure:"default_chain"`
 	Chains       []RevenueSwapChainConfig `json:"chains" toml:"chains" mapstructure:"chains"`
 }
 
 // RevenueSwapChainConfig holds per-chain swap settings.
 type RevenueSwapChainConfig struct {
-	Chain                  string `json:"chain" toml:"chain" mapstructure:"chain"`
-	TargetContractAddress  string `json:"target_contract_address" toml:"target_contract_address" mapstructure:"target_contract_address"`
-	SwapContractAddress    string `json:"swap_contract_address,omitempty" toml:"swap_contract_address" mapstructure:"swap_contract_address"`
+	Chain                 string `json:"chain" toml:"chain" mapstructure:"chain"`
+	TargetContractAddress string `json:"target_contract_address" toml:"target_contract_address" mapstructure:"target_contract_address"`
+	SwapContractAddress   string `json:"swap_contract_address,omitempty" toml:"swap_contract_address" mapstructure:"swap_contract_address"`
 }
 
 // UpdateConfig holds auto-update settings.

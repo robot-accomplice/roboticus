@@ -160,9 +160,9 @@ func DefaultToolSearchConfig() ToolSearchConfig {
 // plus its computed scores. Exported so telemetry consumers (trace
 // annotations, /api/admin/tool-search) can inspect selections.
 type RankedTool struct {
-	Descriptor     *ToolDescriptor
-	RawScore       float64 // raw cosine similarity, pre-penalty
-	AdjustedScore  float64 // raw - penalty (floored at 0)
+	Descriptor    *ToolDescriptor
+	RawScore      float64 // raw cosine similarity, pre-penalty
+	AdjustedScore float64 // raw - penalty (floored at 0)
 }
 
 // ToolSearchStats is the telemetry surface for a single ranking pass.

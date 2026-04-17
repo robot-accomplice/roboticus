@@ -26,6 +26,7 @@ import (
 	"roboticus/internal/llm"
 	"roboticus/internal/mcp"
 	"roboticus/internal/pipeline"
+	"roboticus/internal/plugin"
 	"roboticus/internal/update"
 )
 
@@ -651,6 +652,13 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 
 	// MCP connection manager.
 	mcpMgr := mcp.NewConnectionManager()
+	pluginRegistry, err := buildPluginRegistry(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if pluginRegistry != nil {
+		agenttools.RegisterPluginTools(tools, pluginRegistry)
+	}
 
 	appState := &api.AppState{
 		Store:           store,
@@ -663,6 +671,7 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 		Approvals:       approvalMgr,
 		Tools:           tools,
 		MCP:             mcpMgr,
+		Plugins:         pluginRegistry,
 		TelegramWebhook: telegramWebhook,
 		WhatsAppWebhook: whatsAppWebhook,
 	}
@@ -708,6 +717,40 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 		errBusCancel: errBusCancel,
 		pidFilePath:  PIDFilePath(cfg),
 	}, nil
+}
+
+func buildPluginRegistry(cfg *core.Config) (*plugin.Registry, error) {
+	reg := plugin.NewRegistry(cfg.Plugins.Allow, cfg.Plugins.Deny, plugin.PermissionPolicy{
+		StrictMode: cfg.Plugins.StrictPermissions,
+	})
+
+	dir := strings.TrimSpace(cfg.Plugins.Dir)
+	if dir == "" {
+		return reg, nil
+	}
+
+	info, err := os.Stat(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return reg, nil
+		}
+		return nil, fmt.Errorf("plugin registry: stat %q: %w", dir, err)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("plugin registry: %q is not a directory", dir)
+	}
+
+	loaded, err := reg.ScanDirectory(dir)
+	if err != nil {
+		return nil, fmt.Errorf("plugin registry: scan %q: %w", dir, err)
+	}
+	for _, initErr := range reg.InitAll() {
+		log.Warn().Err(initErr).Str("dir", dir).Msg("plugin init failed")
+	}
+	if loaded > 0 {
+		log.Info().Int("count", loaded).Str("dir", dir).Msg("plugin registry loaded")
+	}
+	return reg, nil
 }
 
 // Start implements service.Interface. Called by the OS service manager.

@@ -323,3 +323,9 @@ is re-audited.
   builder. `ContextBuilder.BuildRequest` now drops compacted history messages
   that collapse to empty content instead of emitting blank conversational
   messages and relying on `llm.Service` to scrub them later.
+- 2026-04-17: Unified baseline/exercise onto the runtime request path.
+  `/api/models/exercise` no longer bypasses into direct `llm.RunExercise(...)`;
+  it now uses `llm.ExerciseModels(...)` with a pipeline-backed sender, the same
+  truth surface as `roboticus models exercise`. Exercise calls now set both
+  `NoCache` and `NoEscalate`, and `llm.Service` now actually honors
+  `NoEscalate` by suppressing the configured fallback chain during those runs.

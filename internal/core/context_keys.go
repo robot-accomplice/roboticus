@@ -9,6 +9,7 @@ const (
 	ctxKeySessionID
 	ctxKeyTurnID
 	ctxKeyChannelLabel
+	ctxKeyNoEscalate
 )
 
 // WithModelOverride attaches a model override to the context.
@@ -62,4 +63,17 @@ func ChannelLabelFromCtx(ctx context.Context) string {
 		return v
 	}
 	return ""
+}
+
+// WithNoEscalate marks the request context as a no-escalate/no-fallback path.
+func WithNoEscalate(ctx context.Context) context.Context {
+	return context.WithValue(ctx, ctxKeyNoEscalate, true)
+}
+
+// NoEscalateFromCtx reports whether the context carries no-escalate semantics.
+func NoEscalateFromCtx(ctx context.Context) bool {
+	if v, ok := ctx.Value(ctxKeyNoEscalate).(bool); ok {
+		return v
+	}
+	return false
 }

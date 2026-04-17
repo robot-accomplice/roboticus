@@ -279,8 +279,8 @@ func (mr *Retriever) retrieveSemanticEvidence(ctx context.Context, query string,
 // a safety net that only fires when the hybrid leg returns zero candidates
 // for a real search query. Two trace annotations are emitted:
 //
-//   retrieval.path.workflow    — workflow-tier path classification
-//   retrieval.path.procedural  — procedural-tier path classification
+//	retrieval.path.workflow    — workflow-tier path classification
+//	retrieval.path.procedural  — procedural-tier path classification
 //
 // The workflow annotation comes from findWorkflowsHybrid; the procedural
 // annotation is emitted by this function based on which leg produced the

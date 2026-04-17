@@ -14,18 +14,18 @@ import (
 //
 // Preference order:
 //
-//   1. `<execPath>.old` — the canonical name. If nothing currently
-//      occupies it, or if we can successfully remove an existing stale
-//      file there, this is what we return.
+//  1. `<execPath>.old` — the canonical name. If nothing currently
+//     occupies it, or if we can successfully remove an existing stale
+//     file there, this is what we return.
 //
-//   2. `<execPath>.old-<compact timestamp>` — the fallback for when
-//      `.old` is occupied and can't be removed (another updater holding
-//      it, Defender scanning it, user opened Explorer Properties). This
-//      is what the v1.0.6 P1-F audit finding required: the comment in
-//      update_windows.go had always promised this fallback but the
-//      original implementation never actually had one — a lingering
-//      `.old` would permanently wedge all future updates for that
-//      operator.
+//  2. `<execPath>.old-<compact timestamp>` — the fallback for when
+//     `.old` is occupied and can't be removed (another updater holding
+//     it, Defender scanning it, user opened Explorer Properties). This
+//     is what the v1.0.6 P1-F audit finding required: the comment in
+//     update_windows.go had always promised this fallback but the
+//     original implementation never actually had one — a lingering
+//     `.old` would permanently wedge all future updates for that
+//     operator.
 //
 // Returns an error only if BOTH the canonical and a freshly-timestamped
 // fallback are somehow unusable — a state that would mean the exe's

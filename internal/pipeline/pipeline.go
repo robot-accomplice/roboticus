@@ -58,6 +58,7 @@ type Input struct {
 	ChatID        string // channel chat identifier
 	ModelOverride string // force a specific model, bypassing router
 	NoCache       bool   // skip semantic cache (used by exercise/baseline)
+	NoEscalate    bool   // disable routing escalation/fallback contamination for benchmark paths
 	Claim         *ChannelClaimContext
 }
 

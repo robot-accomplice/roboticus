@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"roboticus/cmd/internal/cmdutil"
+	"roboticus/internal/core"
 	"roboticus/internal/llm"
 )
 
@@ -184,8 +185,8 @@ var modelsScanCmd = &cobra.Command{
 			} else {
 				fmt.Print("  Print TOML snippet instead? [Y/n] ")
 				if _, err := fmt.Scanln(&input); err != nil && err.Error() != "unexpected newline" {
-				fmt.Fprintf(os.Stderr, "  (stdin read error: %v)\n", err)
-			}
+					fmt.Fprintf(os.Stderr, "  (stdin read error: %v)\n", err)
+				}
 				if input == "" || strings.ToLower(input) == "y" || strings.ToLower(input) == "yes" {
 					fmt.Println("  [models]")
 					if len(allDiscovered) > 0 {
@@ -414,6 +415,7 @@ scored latency averages. Cloud models skip warm-up.`,
 		if err != nil {
 			return fmt.Errorf("cannot reach API: %w", err)
 		}
+		exerciseCfg := decodeExerciseConfig(config)
 
 		// Resolve the model list: explicit args win; otherwise enumerate
 		// configured models.
@@ -432,7 +434,7 @@ scored latency averages. Cloud models skip warm-up.`,
 		fmt.Printf("\n  Exercising %d model(s):\n", len(models))
 		for _, m := range models {
 			label := "local"
-			if isCloudModel(config, m) {
+			if !llm.ExerciseModelIsLocal(exerciseCfg, m) {
 				label = "cloud"
 			}
 			fmt.Printf("    %-40s  %s\n", m, label)
@@ -464,8 +466,8 @@ scored latency averages. Cloud models skip warm-up.`,
 			SendWarmup:   cliWarmupSender(config),
 			OnPrompt:     renderPromptProgress,
 			Progress:     os.Stdout,
-			IsLocal:      func(m string) bool { return !isCloudModel(config, m) },
-			ModelTimeout: func(m string) time.Duration { return resolveModelTimeout(config, m) },
+			IsLocal:      func(m string) bool { return llm.ExerciseModelIsLocal(exerciseCfg, m) },
+			ModelTimeout: func(m string) time.Duration { return llm.ExerciseModelTimeout(exerciseCfg, m) },
 		}
 		report, err := llm.ExerciseModels(cmd.Context(), req)
 		if err != nil {
@@ -1122,7 +1124,6 @@ var modelsResetCmd = &cobra.Command{
 	},
 }
 
-
 func init() {
 	// Consolidated exercise command (v1.0.6). Formerly split into
 	// `exercise` and `baseline`; see the command Long description
@@ -1208,33 +1209,25 @@ func sumInt64s(s []int64) int64 {
 	return total
 }
 
+func decodeExerciseConfig(config map[string]any) *core.Config {
+	if len(config) == 0 {
+		return nil
+	}
+	raw, err := json.Marshal(config)
+	if err != nil {
+		return nil
+	}
+	var cfg core.Config
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return nil
+	}
+	return &cfg
+}
+
 // resolveModelTimeout determines the HTTP client timeout for a model based on config.
 // Priority: model_overrides[model].timeout_seconds > is_local (300s) > cloud default (120s).
 func resolveModelTimeout(config map[string]any, model string) time.Duration {
-	// Check explicit per-model timeout override.
-	if models, ok := config["models"].(map[string]any); ok {
-		if overrides, ok := models["model_overrides"].(map[string]any); ok {
-			if mo, ok := overrides[model].(map[string]any); ok {
-				if ts, ok := mo["timeout_seconds"].(float64); ok && ts > 0 {
-					return time.Duration(ts) * time.Second
-				}
-			}
-		}
-	}
-
-	// Determine if the model's provider is local.
-	providerName, _ := splitModelForDisplay(model)
-	if providerName != "" {
-		if providers, ok := config["providers"].(map[string]any); ok {
-			if prov, ok := providers[providerName].(map[string]any); ok {
-				if isLocal, ok := prov["is_local"].(bool); ok && isLocal {
-					return 300 * time.Second // 5 min for local models (cold start, limited hardware)
-				}
-			}
-		}
-	}
-
-	return 120 * time.Second // 2 min for cloud models
+	return llm.ExerciseModelTimeout(decodeExerciseConfig(config), model)
 }
 
 // isCloudModel reports whether the given model's provider is cloud-hosted.
@@ -1243,20 +1236,7 @@ func resolveModelTimeout(config map[string]any, model string) time.Duration {
 // etc.) and measuring it from the client produces noise, not signal.
 // The inverse of the local-provider check in resolveModelTimeout.
 func isCloudModel(config map[string]any, model string) bool {
-	providerName, _ := splitModelForDisplay(model)
-	if providerName == "" {
-		return false
-	}
-	providers, ok := config["providers"].(map[string]any)
-	if !ok {
-		return false
-	}
-	prov, ok := providers[providerName].(map[string]any)
-	if !ok {
-		return false
-	}
-	isLocal, _ := prov["is_local"].(bool)
-	return !isLocal
+	return !llm.ExerciseModelIsLocal(decodeExerciseConfig(config), model)
 }
 
 // Warm-up orchestration (runWarmupStage, runWarmupCall) moved to
@@ -1288,13 +1268,6 @@ func qualityBar(q float64) string {
 
 // splitModelForDisplay splits "provider/model" into (provider, model).
 // Returns ("", input) if no slash present.
-func splitModelForDisplay(spec string) (string, string) {
-	if i := strings.Index(spec, "/"); i >= 0 {
-		return spec[:i], spec[i+1:]
-	}
-	return "", spec
-}
-
 func init() {
 	modelsCmd.AddCommand(modelsListCmd, modelsDiagnosticsCmd, modelsScanCmd,
 		modelsExerciseCmd, modelsSuggestCmd, modelsResetCmd)

@@ -24,13 +24,13 @@ package llm
 // WarmupPrompt is the trivial prompt issued during warm-up calls.
 //
 // Design notes:
-//   * "Reply with just: ready" constrains output to ~1 token so the
+//   - "Reply with just: ready" constrains output to ~1 token so the
 //     warm-up doesn't spend time generating long responses — we only
 //     need the generation loop to start.
-//   * Phrasing is unambiguous so every model (including strict local
+//   - Phrasing is unambiguous so every model (including strict local
 //     ones) produces a terminating response rather than a rambling
 //     introduction.
-//   * No tool-calling hint, no reasoning hint — warm-up exercises the
+//   - No tool-calling hint, no reasoning hint — warm-up exercises the
 //     "generate a short response" baseline path that's common to
 //     every downstream call type.
 const WarmupPrompt = "Reply with just: ready"

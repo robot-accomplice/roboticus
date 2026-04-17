@@ -1,12 +1,12 @@
 package updatecmd
 
 import (
-	"roboticus/cmd/internal/cmdutil"
 	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"roboticus/cmd/internal/cmdutil"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -258,4 +258,5 @@ func init() {
 		keystoreRemoveCmd,
 		keystoreImportCmd,
 		keystoreRekeyCmd,
-	)}
+	)
+}

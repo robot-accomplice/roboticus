@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	agent "roboticus/internal/agent"
+	agenttools "roboticus/internal/agent/tools"
 	"roboticus/internal/browser"
 	"roboticus/internal/core"
 	"roboticus/internal/mcp"
@@ -214,7 +216,7 @@ func TestListPluginTools_WithTools(t *testing.T) {
 }
 
 func TestEnablePlugin_NilRegistry(t *testing.T) {
-	r := chiRouter("POST", "/api/plugins/{name}/enable", EnablePlugin(nil))
+	r := chiRouter("POST", "/api/plugins/{name}/enable", EnablePlugin(nil, nil))
 	req := httptest.NewRequest("POST", "/api/plugins/test-plugin/enable", nil)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
@@ -226,7 +228,7 @@ func TestEnablePlugin_NilRegistry(t *testing.T) {
 
 func TestEnablePlugin_NotFound(t *testing.T) {
 	reg := newTestRegistry(t)
-	r := chiRouter("POST", "/api/plugins/{name}/enable", EnablePlugin(reg))
+	r := chiRouter("POST", "/api/plugins/{name}/enable", EnablePlugin(reg, nil))
 	req := httptest.NewRequest("POST", "/api/plugins/nonexistent/enable", nil)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
@@ -238,9 +240,10 @@ func TestEnablePlugin_NotFound(t *testing.T) {
 
 func TestEnablePlugin_Success(t *testing.T) {
 	reg := newTestRegistry(t)
+	tools := agent.NewToolRegistry()
 	// First disable it.
 	_ = reg.Disable("test-plugin")
-	r := chiRouter("POST", "/api/plugins/{name}/enable", EnablePlugin(reg))
+	r := chiRouter("POST", "/api/plugins/{name}/enable", EnablePlugin(reg, tools))
 	req := httptest.NewRequest("POST", "/api/plugins/test-plugin/enable", nil)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
@@ -248,11 +251,16 @@ func TestEnablePlugin_Success(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
+	if tools.Get("test-tool") == nil {
+		t.Fatal("plugin tool should be synced into main tool registry")
+	}
 }
 
 func TestDisablePlugin_Success(t *testing.T) {
 	reg := newTestRegistry(t)
-	r := chiRouter("POST", "/api/plugins/{name}/disable", DisablePlugin(reg))
+	tools := agent.NewToolRegistry()
+	agenttools.RegisterPluginTools(tools, reg)
+	r := chiRouter("POST", "/api/plugins/{name}/disable", DisablePlugin(reg, tools))
 	req := httptest.NewRequest("POST", "/api/plugins/test-plugin/disable", nil)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
@@ -260,10 +268,13 @@ func TestDisablePlugin_Success(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
+	if tools.Get("test-tool") != nil {
+		t.Fatal("disabled plugin tool should be removed from main tool registry")
+	}
 }
 
 func TestDisablePlugin_NilRegistry(t *testing.T) {
-	r := chiRouter("POST", "/api/plugins/{name}/disable", DisablePlugin(nil))
+	r := chiRouter("POST", "/api/plugins/{name}/disable", DisablePlugin(nil, nil))
 	req := httptest.NewRequest("POST", "/api/plugins/test-plugin/disable", nil)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
@@ -275,7 +286,7 @@ func TestDisablePlugin_NilRegistry(t *testing.T) {
 
 func TestDisablePlugin_NotFound(t *testing.T) {
 	reg := newTestRegistry(t)
-	r := chiRouter("POST", "/api/plugins/{name}/disable", DisablePlugin(reg))
+	r := chiRouter("POST", "/api/plugins/{name}/disable", DisablePlugin(reg, nil))
 	req := httptest.NewRequest("POST", "/api/plugins/nonexistent/disable", nil)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
@@ -891,7 +902,7 @@ func TestIntToNegStr(t *testing.T) {
 
 func TestInstallPlugin_InvalidJSON(t *testing.T) {
 	cfg := coverageTestConfig()
-	handler := InstallPlugin(cfg, nil)
+	handler := InstallPlugin(cfg, nil, nil)
 	req := httptest.NewRequest("POST", "/api/plugins/install",
 		strings.NewReader(`{bad`))
 	rec := httptest.NewRecorder()
@@ -904,7 +915,7 @@ func TestInstallPlugin_InvalidJSON(t *testing.T) {
 
 func TestInstallPlugin_MissingFields(t *testing.T) {
 	cfg := coverageTestConfig()
-	handler := InstallPlugin(cfg, nil)
+	handler := InstallPlugin(cfg, nil, nil)
 	req := httptest.NewRequest("POST", "/api/plugins/install",
 		strings.NewReader(`{"name":"test"}`))
 	rec := httptest.NewRecorder()
@@ -918,7 +929,7 @@ func TestInstallPlugin_MissingFields(t *testing.T) {
 func TestInstallPlugin_Success(t *testing.T) {
 	cfg := coverageTestConfig()
 	cfg.Plugins.Dir = t.TempDir()
-	handler := InstallPlugin(cfg, nil)
+	handler := InstallPlugin(cfg, nil, nil)
 	req := httptest.NewRequest("POST", "/api/plugins/install",
 		strings.NewReader(`{"name":"my-plugin","content":"print('hello')"}`))
 	rec := httptest.NewRecorder()
@@ -937,6 +948,7 @@ func TestInstallPlugin_SourcePathHotRegisters(t *testing.T) {
 	cfg := coverageTestConfig()
 	cfg.Plugins.Dir = t.TempDir()
 	reg := plugin.NewRegistry(nil, nil, plugin.PermissionPolicy{})
+	tools := agent.NewToolRegistry()
 
 	sourceDir := t.TempDir()
 	_ = os.WriteFile(filepath.Join(sourceDir, "manifest.toml"), []byte(strings.TrimSpace(`
@@ -949,7 +961,7 @@ description = "Echo"
 `)), 0o644)
 	_ = os.WriteFile(filepath.Join(sourceDir, "echo"), []byte("#!/bin/sh\necho ok\n"), 0o755)
 
-	handler := InstallPlugin(cfg, reg)
+	handler := InstallPlugin(cfg, reg, tools)
 	req := httptest.NewRequest("POST", "/api/plugins/install",
 		strings.NewReader(fmt.Sprintf(`{"name":"hot-plugin","source_path":%q}`, sourceDir)))
 	rec := httptest.NewRecorder()
@@ -958,9 +970,12 @@ description = "Echo"
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201", rec.Code)
 	}
-	tools := reg.AllTools()
-	if len(tools) != 1 || tools[0].Name != "echo" {
-		t.Fatalf("tools = %+v, want echo", tools)
+	pluginTools := reg.AllTools()
+	if len(pluginTools) != 1 || pluginTools[0].Name != "echo" {
+		t.Fatalf("plugin registry tools = %+v, want echo", pluginTools)
+	}
+	if tools.Get("echo") == nil {
+		t.Fatal("plugin tool should be synced into main tool registry")
 	}
 }
 

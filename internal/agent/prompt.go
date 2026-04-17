@@ -13,22 +13,22 @@ import (
 
 // PromptConfig holds parameters for system prompt construction.
 type PromptConfig struct {
-	AgentName   string
-	Firmware    string               // optional platform instructions
-	Personality string               // optional OS personality/identity
-	Operator    string               // optional operator context (OPERATOR.toml)
-	Directives  string               // optional goals/missions (DIRECTIVES.toml)
-	Version     string               // runtime version
-	Model       string               // primary model name
-	Workspace   string               // workspace root path
-	Skills            []string            // active skill names
-	SkillDescriptions map[string]string   // optional: skill name -> description
-	IsSubagent        bool                // include orchestration workflow block
-	BoundaryKey []byte               // HMAC-SHA256 key for trust boundary signing (nil = no signing)
-	ToolNames   []string             // registered tool names for introspection block
-	ToolDescs   [][2]string          // (name, description) pairs for tool roster in prompt
-	BudgetTier  int                  // 0=L0, 1=L1, 2=L2, 3=L3 — controls prompt compaction
-	Obsidian    *core.ObsidianConfig // optional Obsidian config for vault directive
+	AgentName         string
+	Firmware          string               // optional platform instructions
+	Personality       string               // optional OS personality/identity
+	Operator          string               // optional operator context (OPERATOR.toml)
+	Directives        string               // optional goals/missions (DIRECTIVES.toml)
+	Version           string               // runtime version
+	Model             string               // primary model name
+	Workspace         string               // workspace root path
+	Skills            []string             // active skill names
+	SkillDescriptions map[string]string    // optional: skill name -> description
+	IsSubagent        bool                 // include orchestration workflow block
+	BoundaryKey       []byte               // HMAC-SHA256 key for trust boundary signing (nil = no signing)
+	ToolNames         []string             // registered tool names for introspection block
+	ToolDescs         [][2]string          // (name, description) pairs for tool roster in prompt
+	BudgetTier        int                  // 0=L0, 1=L1, 2=L2, 3=L3 — controls prompt compaction
+	Obsidian          *core.ObsidianConfig // optional Obsidian config for vault directive
 }
 
 // BuildSystemPrompt constructs the full system prompt from config sections.

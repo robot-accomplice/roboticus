@@ -248,9 +248,9 @@ func NewServer(ctx context.Context, cfg ServerConfig, state *AppState) *http.Ser
 		// Plugins.
 		r.Get("/api/plugins", routes.ListPlugins(state.Plugins))
 		r.Get("/api/plugins/tools", routes.ListPluginTools(state.Plugins))
-		r.Post("/api/plugins/{name}/enable", routes.EnablePlugin(state.Plugins))
-		r.Post("/api/plugins/{name}/disable", routes.DisablePlugin(state.Plugins))
-		r.Post("/api/plugins/catalog/install", routes.InstallPlugin(state.Config, state.Plugins))
+		r.Post("/api/plugins/{name}/enable", routes.EnablePlugin(state.Plugins, state.Tools))
+		r.Post("/api/plugins/{name}/disable", routes.DisablePlugin(state.Plugins, state.Tools))
+		r.Post("/api/plugins/catalog/install", routes.InstallPlugin(state.Config, state.Plugins, state.Tools))
 		r.Post("/api/plugins/{name}/execute/{tool}", routes.ExecutePluginTool(state.Plugins))
 
 		// Stats.
@@ -270,7 +270,7 @@ func NewServer(ctx context.Context, cfg ServerConfig, state *AppState) *http.Ser
 		r.Get("/api/models/routing-diagnostics", routes.GetRoutingDiagnostics(state.Config))
 		r.Get("/api/models/routing-dataset", routes.GetRoutingDataset(state.Store))
 		r.Post("/api/models/reset", routes.ResetModelScores(state.LLM))
-		r.Post("/api/models/exercise", routes.ExerciseModel(state.LLM, state.Store))
+		r.Post("/api/models/exercise", routes.ExerciseModel(state.Pipeline, state.Store, state.Config, agentName))
 		r.Get("/api/models/exercise/status", routes.GetExerciseStatus(state.Store))
 		r.Get("/api/models/exercise/scorecard", routes.GetExerciseScorecard(state.Store))
 		r.Post("/api/models/routing-eval", routes.RunRoutingEval(state.LLM))

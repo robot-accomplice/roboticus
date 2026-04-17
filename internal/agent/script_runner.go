@@ -32,11 +32,11 @@ type ScriptResult struct {
 
 // ScriptRunner executes scripts with security controls.
 type ScriptRunner struct {
-	skillsRoot           string
-	allowedInterpreters  []string
-	maxOutputBytes       int
-	sandboxEnv           bool
-	runner               core.ProcessRunner
+	skillsRoot          string
+	allowedInterpreters []string
+	maxOutputBytes      int
+	sandboxEnv          bool
+	runner              core.ProcessRunner
 }
 
 // NewScriptRunner creates a ScriptRunner with the given configuration.

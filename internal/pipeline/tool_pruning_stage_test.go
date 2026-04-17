@@ -32,11 +32,11 @@ func (p *stubPruner) PruneTools(_ context.Context, _ *session.Session) ([]llm.To
 // TestStageToolPruning_PopulatesSessionAndTrace asserts that when the
 // pipeline runs a real turn, the tool-pruning stage:
 //
-//   1. calls the pruner exactly once
-//   2. stores the pruner's selection on the session so downstream
-//      context-builders can read it
-//   3. annotates the trace under the `tool_search.*` namespace with
-//      the fields the Rust pipeline emits
+//  1. calls the pruner exactly once
+//  2. stores the pruner's selection on the session so downstream
+//     context-builders can read it
+//  3. annotates the trace under the `tool_search.*` namespace with
+//     the fields the Rust pipeline emits
 //
 // This is the runtime-facing assertion the System 02 audit requires
 // ("the selected tool set, not just helper output, reaches the

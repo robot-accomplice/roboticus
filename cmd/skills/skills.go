@@ -1,7 +1,6 @@
 package skills
 
 import (
-	"roboticus/cmd/internal/cmdutil"
 	"archive/tar"
 	"compress/gzip"
 	"encoding/json"
@@ -9,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"roboticus/cmd/internal/cmdutil"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -329,4 +329,5 @@ func init() {
 		skillsCatalogActivateCmd,
 		skillsImportCmd,
 		skillsExportCmd,
-	)}
+	)
+}

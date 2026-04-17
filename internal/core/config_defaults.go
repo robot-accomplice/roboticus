@@ -12,20 +12,20 @@ func DefaultConfig() Config {
 			Name:                        "roboticus",
 			ID:                          "roboticus-default",
 			Workspace:                   filepath.Join(dataDir, "workspace"),
-			AutonomyMaxReactTurns:       10,  // Rust parity: 10 turns (was 25)
-			AutonomyMaxTurnDurationSecs: 90,  // Rust parity: 90s (was 300)
+			AutonomyMaxReactTurns:       10, // Rust parity: 10 turns (was 25)
+			AutonomyMaxTurnDurationSecs: 90, // Rust parity: 90s (was 300)
 			LogLevel:                    "info",
 			DelegationEnabled:           true,
 			DelegationMinComplexity:     0.35,
-			DelegationMinUtilityMargin:  0.15,   // Rust parity
-			SpecialistRequiresApproval:  true,    // Rust parity
+			DelegationMinUtilityMargin:  0.15, // Rust parity
+			SpecialistRequiresApproval:  true, // Rust parity
 			CompositionPolicy:           "propose",
-			SkillCreationRigor:          "validate",  // Rust parity: generate|validate|full
-			OutputValidationPolicy:      "sample",    // Rust parity: strict|sample|off
-			OutputValidationSampleRate:  0.1,         // Rust parity
-			MaxOutputRetries:            2,            // Rust parity
-			RetirementSuccessThreshold:  0.7,          // Rust parity
-			RetirementMinDelegations:    10,            // Rust parity
+			SkillCreationRigor:          "validate", // Rust parity: generate|validate|full
+			OutputValidationPolicy:      "sample",   // Rust parity: strict|sample|off
+			OutputValidationSampleRate:  0.1,        // Rust parity
+			MaxOutputRetries:            2,          // Rust parity
+			RetirementSuccessThreshold:  0.7,        // Rust parity
+			RetirementMinDelegations:    10,         // Rust parity
 		},
 		Server: ServerConfig{
 			Port:                      DefaultServerPort,
@@ -67,13 +67,13 @@ func DefaultConfig() Config {
 			SemanticBudget:         20,
 			ProceduralBudget:       15,
 			RelationshipBudget:     10,
-			HybridWeightOverride:     0, // 0 = adaptive (corpus-size based)
-			DecayHalfLifeDays:        7.0,
-			VectorIndexThreshold:     1000,
-			RerankerMinScore:         0.1,
-			RerankerAuthorityBoost:   1.5,
-			RerankerRecencyPenalty:   0.8,
-			RerankerCollapseSpread:   0.05,
+			HybridWeightOverride:   0, // 0 = adaptive (corpus-size based)
+			DecayHalfLifeDays:      7.0,
+			VectorIndexThreshold:   1000,
+			RerankerMinScore:       0.1,
+			RerankerAuthorityBoost: 1.5,
+			RerankerRecencyPenalty: 0.8,
+			RerankerCollapseSpread: 0.05,
 		},
 		Cache: CacheConfig{
 			Enabled:                true,
@@ -111,9 +111,9 @@ func DefaultConfig() Config {
 			CatalogURL:        "https://roboticus.ai/registry/plugins.json",
 		},
 		Security: SecurityConfig{
-			AllowlistAuthority:   "Peer",
-			TrustedAuthority:     "Creator",
-			APIAuthority:         "Creator",
+			AllowlistAuthority: "Peer",
+			TrustedAuthority:   "Creator",
+			APIAuthority:       "Creator",
 			Filesystem: FilesystemSecurityConfig{
 				WorkspaceOnly:        true,
 				DenyOnEmptyAllowlist: true,

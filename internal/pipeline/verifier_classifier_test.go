@@ -16,9 +16,10 @@ import (
 // embedding provider.
 //
 // vectors:
-//   absolute → [1, 0, 0]
-//   high     → [0, 1, 0]
-//   hedged   → [0, 0, 1]
+//
+//	absolute → [1, 0, 0]
+//	high     → [0, 1, 0]
+//	hedged   → [0, 0, 1]
 func deterministicCertaintyClassifier(queryMap map[string]string) *llm.SemanticClassifier {
 	c := llm.NewSemanticClassifier(nil, nil)
 	c.WithAbstainPolicy(llm.AbstainPolicy{MinScore: 0.30, MinGap: 0.10})

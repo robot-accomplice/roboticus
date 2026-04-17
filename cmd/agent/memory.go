@@ -1,8 +1,8 @@
 package agent
 
 import (
-	"roboticus/cmd/internal/cmdutil"
 	"fmt"
+	"roboticus/cmd/internal/cmdutil"
 
 	"github.com/spf13/cobra"
 )
@@ -163,4 +163,5 @@ func init() {
 	memorySemanticCmd.Flags().String("category", "", "Filter by category")
 
 	memoryCmd.AddCommand(memoryWorkingCmd, memoryEpisodicCmd, memorySemanticCmd,
-		memorySearchCmd, memoryStatsCmd, memoryConsolidateCmd, memoryReindexCmd)}
+		memorySearchCmd, memoryStatsCmd, memoryConsolidateCmd, memoryReindexCmd)
+}

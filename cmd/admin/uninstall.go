@@ -1,10 +1,10 @@
 package admin
 
 import (
-	"roboticus/cmd/internal/cmdutil"
 	"bufio"
 	"fmt"
 	"os"
+	"roboticus/cmd/internal/cmdutil"
 	"strings"
 
 	"github.com/rs/zerolog/log"
@@ -63,4 +63,5 @@ var uninstallCmd = &cobra.Command{
 
 func init() {
 	uninstallCmd.Flags().Bool("purge", false, "also remove ~/.roboticus/ directory")
-	uninstallCmd.Flags().Bool("yes", false, "skip confirmation prompt")}
+	uninstallCmd.Flags().Bool("yes", false, "skip confirmation prompt")
+}

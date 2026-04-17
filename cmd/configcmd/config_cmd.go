@@ -1,10 +1,10 @@
 package configcmd
 
 import (
-	"roboticus/cmd/internal/cmdutil"
 	"fmt"
 	"os"
 	"path/filepath"
+	"roboticus/cmd/internal/cmdutil"
 	"strconv"
 	"strings"
 	"time"
@@ -335,4 +335,5 @@ func autoType(s string) any {
 
 func init() {
 	configCmd.AddCommand(configShowCmd, configGetCmd, configValidateCmd, configLintCmd, configCapabilitiesCmd,
-		configSetCmd, configUnsetCmd, configBackupCmd)}
+		configSetCmd, configUnsetCmd, configBackupCmd)
+}

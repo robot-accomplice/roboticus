@@ -7,6 +7,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"roboticus/internal/llm"
+	"roboticus/internal/plugin"
 )
 
 // Registry manages available tools for an agent.
@@ -18,14 +19,14 @@ import (
 // the v1.0.6 Rust-parity closure (roboticus-agent/src/tool_search.rs).
 //
 // Lifecycle of descriptors:
-//   1. Register(tool) — creates a descriptor with nil embedding.
-//   2. EmbedDescriptors(ctx, ec) — batch-embeds all descriptors' names
-//      + descriptions via the embedding client. Called once at daemon
-//      startup after all tools are registered and the embedding client
-//      is ready. Idempotent: re-calling refreshes stale embeddings.
-//   3. Descriptors() — returns the cached slice (may have nil embeddings
-//      if step 2 was skipped or failed; the ranker handles that
-//      gracefully — see RankTools).
+//  1. Register(tool) — creates a descriptor with nil embedding.
+//  2. EmbedDescriptors(ctx, ec) — batch-embeds all descriptors' names
+//     + descriptions via the embedding client. Called once at daemon
+//     startup after all tools are registered and the embedding client
+//     is ready. Idempotent: re-calling refreshes stale embeddings.
+//  3. Descriptors() — returns the cached slice (may have nil embeddings
+//     if step 2 was skipped or failed; the ranker handles that
+//     gracefully — see RankTools).
 type Registry struct {
 	mu          sync.RWMutex
 	tools       map[string]Tool
@@ -75,8 +76,9 @@ func classifyToolSource(t Tool) (ToolSource, string) {
 	if bridge, ok := t.(*McpBridgeTool); ok {
 		return ToolSourceMCP, bridge.serverName
 	}
-	// Plugin-source classification would go here if we had a
-	// distinct plugin tool type. For now, non-MCP = BuiltIn.
+	if _, ok := t.(*PluginBridgeTool); ok {
+		return ToolSourcePlugin, ""
+	}
 	return ToolSourceBuiltIn, ""
 }
 
@@ -162,6 +164,19 @@ func (r *Registry) Get(name string) Tool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.tools[name]
+}
+
+// Unregister removes a tool and its descriptor from the registry.
+func (r *Registry) Unregister(name string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.tools, name)
+	delete(r.descriptors, name)
+}
+
+// SyncPluginTools refreshes plugin-backed bridge tools from the live plugin registry.
+func (r *Registry) SyncPluginTools(pluginReg *plugin.Registry) int {
+	return RegisterPluginTools(r, pluginReg)
 }
 
 // List returns all registered tools.

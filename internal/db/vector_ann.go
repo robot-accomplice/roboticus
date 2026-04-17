@@ -25,21 +25,21 @@ import (
 
 // hnswNode represents a single element in the HNSW graph.
 type hnswNode struct {
-	entry      VectorEntry
-	neighbors  [][]int // neighbors[layer] = list of node indices
-	maxLayer   int
+	entry     VectorEntry
+	neighbors [][]int // neighbors[layer] = list of node indices
+	maxLayer  int
 }
 
 // HNSWGraph is a multi-layer approximate nearest neighbor index.
 type HNSWGraph struct {
 	mu             sync.RWMutex
 	nodes          []hnswNode
-	entryPoint     int // index of the entry point node (-1 if empty)
-	maxLevel       int // current maximum layer in the graph
-	m              int // max connections per node per layer
-	mMax0          int // max connections at layer 0 (typically 2*M)
-	efConstruction int // beam width during construction
-	efSearch       int // beam width during search
+	entryPoint     int     // index of the entry point node (-1 if empty)
+	maxLevel       int     // current maximum layer in the graph
+	m              int     // max connections per node per layer
+	mMax0          int     // max connections at layer 0 (typically 2*M)
+	efConstruction int     // beam width during construction
+	efSearch       int     // beam width during search
 	mL             float64 // level generation factor: 1/ln(M)
 	rng            *rand.Rand
 	built          bool

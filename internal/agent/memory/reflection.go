@@ -30,25 +30,25 @@ type ToolEvent struct {
 // consolidation can promote reusable learnings into longer-term memory
 // instead of only archiving episodes.
 type EpisodeSummary struct {
-	Goal             string        // what was being attempted
-	Actions          []string      // tool names in order
-	Outcome          string        // "success" / "partial" / "failure"
-	Learnings        []string      // insights extracted
-	Duration         time.Duration // total turn duration
-	ModelUsed        string        // selected model for the turn, when known
-	ReactTurns       int           // number of react turns for the final answer
-	EvidenceRefs     []string      // content previews of evidence items that shaped the answer
-	FailedHypotheses []string      // hypotheses the agent walked back
-	FixPatterns      []string      // tool sequences that succeeded after prior failures
-	ErrorsSeen       []string      // error messages from failed tool calls
-	GuardViolations  []string      // final guard violations applied to the answer
-	GuardRetried     bool          // whether the turn required a guard-triggered retry
-	ResultQuality    float64       // 0-1 blended signal: verifier pass + tool success rate
-	VerifierPassed   bool          // whether the verifier passed the final answer
-	VerifiedRecorded int           // verified conclusions written into executive state
-	QuestionsOpened  int           // unresolved questions opened for uncovered subgoals
-	QuestionsResolved int          // prior unresolved questions closed by this turn
-	AssumptionsRecorded int        // assumptions written into executive state
+	Goal                string        // what was being attempted
+	Actions             []string      // tool names in order
+	Outcome             string        // "success" / "partial" / "failure"
+	Learnings           []string      // insights extracted
+	Duration            time.Duration // total turn duration
+	ModelUsed           string        // selected model for the turn, when known
+	ReactTurns          int           // number of react turns for the final answer
+	EvidenceRefs        []string      // content previews of evidence items that shaped the answer
+	FailedHypotheses    []string      // hypotheses the agent walked back
+	FixPatterns         []string      // tool sequences that succeeded after prior failures
+	ErrorsSeen          []string      // error messages from failed tool calls
+	GuardViolations     []string      // final guard violations applied to the answer
+	GuardRetried        bool          // whether the turn required a guard-triggered retry
+	ResultQuality       float64       // 0-1 blended signal: verifier pass + tool success rate
+	VerifierPassed      bool          // whether the verifier passed the final answer
+	VerifiedRecorded    int           // verified conclusions written into executive state
+	QuestionsOpened     int           // unresolved questions opened for uncovered subgoals
+	QuestionsResolved   int           // prior unresolved questions closed by this turn
+	AssumptionsRecorded int           // assumptions written into executive state
 
 	// Relations captures canonical (subject, relation, object) triples
 	// extracted from the episode's text — assistant answer, learnings, and
@@ -239,20 +239,20 @@ func ParseEpisodeSummaryJSON(raw string) (*EpisodeSummary, error) {
 // EpisodeInput carries the extra context the enriched reflection needs
 // beyond the original user content and tool events.
 type EpisodeInput struct {
-	UserContent    string
-	AssistantAnswer string
-	ToolEvents     []ToolEvent
-	EvidenceItems  []string // retrieved-evidence items that reached the model
-	VerifierPassed bool
-	ErrorMessages  []string // stderr / failure outputs captured from tool calls
-	Duration       time.Duration
-	ModelUsed      string
-	ReactTurns     int
-	GuardViolations []string
-	GuardRetried   bool
-	VerifiedRecorded int
-	QuestionsOpened  int
-	QuestionsResolved int
+	UserContent         string
+	AssistantAnswer     string
+	ToolEvents          []ToolEvent
+	EvidenceItems       []string // retrieved-evidence items that reached the model
+	VerifierPassed      bool
+	ErrorMessages       []string // stderr / failure outputs captured from tool calls
+	Duration            time.Duration
+	ModelUsed           string
+	ReactTurns          int
+	GuardViolations     []string
+	GuardRetried        bool
+	VerifiedRecorded    int
+	QuestionsOpened     int
+	QuestionsResolved   int
 	AssumptionsRecorded int
 }
 

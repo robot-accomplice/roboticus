@@ -549,15 +549,15 @@ func verifyProofObligations(ctx VerificationContext, claims []VerifiedClaim, aud
 // VerifierSummary distills a VerificationResult into compact counters suitable
 // for trace annotations. It is the backbone of AnnotateVerifierTrace.
 type VerifierSummary struct {
-	Passed           bool     `json:"passed"`
-	IssueCodes       []string `json:"issue_codes,omitempty"`
-	ClaimCount       int      `json:"claim_count"`
-	AbsoluteCount    int      `json:"absolute_count"`
-	SupportedCount   int      `json:"supported_count"`
-	AnchoredCount    int      `json:"anchored_count"`
-	UnsupportedAbs   int      `json:"unsupported_absolute_count"`
-	CoverageRatio    float64  `json:"coverage_ratio"`
-	FlaggedClaims    int      `json:"flagged_claims"`
+	Passed         bool     `json:"passed"`
+	IssueCodes     []string `json:"issue_codes,omitempty"`
+	ClaimCount     int      `json:"claim_count"`
+	AbsoluteCount  int      `json:"absolute_count"`
+	SupportedCount int      `json:"supported_count"`
+	AnchoredCount  int      `json:"anchored_count"`
+	UnsupportedAbs int      `json:"unsupported_absolute_count"`
+	CoverageRatio  float64  `json:"coverage_ratio"`
+	FlaggedClaims  int      `json:"flagged_claims"`
 }
 
 // SummarizeVerification computes a compact summary from a VerificationResult.

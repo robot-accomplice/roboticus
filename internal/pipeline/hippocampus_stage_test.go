@@ -33,11 +33,11 @@ func TestStageHippocampusSummary_InjectsNonEmpty(t *testing.T) {
 	if err := registry.RegisterTableFull(ctx,
 		"memos_test",
 		"agent-owned scratch table",
-		nil,   // columns: not needed for CompactSummary output
+		nil, // columns: not needed for CompactSummary output
 		"test",
-		true,  // agent_owned
+		true, // agent_owned
 		"private",
-		3,     // row_count: drives "(N rows)" annotation
+		3, // row_count: drives "(N rows)" annotation
 	); err != nil {
 		t.Fatalf("seed hippocampus registry: %v", err)
 	}

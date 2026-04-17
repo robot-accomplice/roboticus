@@ -8,7 +8,7 @@ func TestReranker_DiscardsWeakEvidence(t *testing.T) {
 	candidates := []Evidence{
 		{Content: "strong", Score: 0.8, SourceTier: TierSemantic},
 		{Content: "medium", Score: 0.4, SourceTier: TierEpisodic},
-		{Content: "weak", Score: 0.05, SourceTier: TierEpisodic},   // below threshold
+		{Content: "weak", Score: 0.05, SourceTier: TierEpisodic},    // below threshold
 		{Content: "garbage", Score: 0.01, SourceTier: TierSemantic}, // below threshold
 	}
 

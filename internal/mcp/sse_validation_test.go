@@ -48,11 +48,11 @@ import (
 //
 // Asserts (in order):
 //
-//   1. SSE endpoint is reachable
-//   2. initialize succeeds; serverInfo carries name + version
-//   3. tools/list returns a non-zero tool count
-//   4. tools/call completes with an interpretable result
-//   5. Server name/version match the fixture's declared values
+//  1. SSE endpoint is reachable
+//  2. initialize succeeds; serverInfo carries name + version
+//  3. tools/list returns a non-zero tool count
+//  4. tools/call completes with an interpretable result
+//  5. Server name/version match the fixture's declared values
 //
 // On pass: prints an evidence summary in the same format the
 // checklist's "Evidence" section requests, so an operator can

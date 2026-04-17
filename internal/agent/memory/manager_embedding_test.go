@@ -10,7 +10,6 @@ import (
 	"roboticus/testutil"
 )
 
-
 // ngramEmbedClient returns an embedding client using the local n-gram fallback
 // (no network calls, deterministic, suitable for testing).
 func ngramEmbedClient() *llm.EmbeddingClient {

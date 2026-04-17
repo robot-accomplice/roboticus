@@ -29,7 +29,7 @@ type BootOptions struct {
 	ColorMode string // "auto", "always", "never"
 	Theme     string // "ai-purple", "crt-green", "crt-orange", "terminal"
 	NerdMode  bool   // ASCII-only icons, no typewrite animation
-	NoDraw   bool   // Explicitly disable typewrite animation
+	NoDraw    bool   // Explicitly disable typewrite animation
 }
 
 // bootTheme is the active terminal theme for startup display.

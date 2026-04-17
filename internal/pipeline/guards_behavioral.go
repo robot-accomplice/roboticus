@@ -89,13 +89,13 @@ func (g *TaskDeferralGuard) CheckWithContext(content string, ctx *GuardContext) 
 	// Rust parity: behavioral.rs INTROSPECTION_TOOLS — 7 tools (no get_channel_health).
 	introspectionOnly := true
 	introspectionTools := map[string]bool{
-		"get_memory_stats":    true,
-		"get_runtime_context": true,
-		"get_subagent_status": true,
-		"list-subagent-roster": true,
+		"get_memory_stats":      true,
+		"get_runtime_context":   true,
+		"get_subagent_status":   true,
+		"list-subagent-roster":  true,
 		"list-available-skills": true,
-		"task-status":         true,
-		"list-open-tasks":     true,
+		"task-status":           true,
+		"list-open-tasks":       true,
 	}
 	for _, tr := range ctx.ToolResults {
 		if !introspectionTools[tr.ToolName] {

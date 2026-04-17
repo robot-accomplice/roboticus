@@ -1,8 +1,8 @@
 package admin
 
 import (
-	"roboticus/cmd/internal/cmdutil"
 	"fmt"
+	"roboticus/cmd/internal/cmdutil"
 
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -133,4 +133,5 @@ func init() {
 	serviceCmd.AddCommand(serviceStartCmd)
 	serviceCmd.AddCommand(serviceStopCmd)
 	serviceCmd.AddCommand(serviceRestartCmd)
-	serviceCmd.AddCommand(serviceStatusCmd)}
+	serviceCmd.AddCommand(serviceStatusCmd)
+}

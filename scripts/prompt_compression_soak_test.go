@@ -9,10 +9,10 @@ import (
 
 // TestPromptCompressionSoakScript_PinsQualityGate guards the release contract
 // for prompt compression:
-//   1. comparison is lane-based (compression OFF vs ON),
-//   2. it exercises the live model path rather than cache replay,
-//   3. it only runs where the script can safely force isolated config state,
-//   4. it treats pass->fail drift as a regression.
+//  1. comparison is lane-based (compression OFF vs ON),
+//  2. it exercises the live model path rather than cache replay,
+//  3. it only runs where the script can safely force isolated config state,
+//  4. it treats pass->fail drift as a regression.
 //
 // This is intentionally a source-level invariant test rather than a full
 // end-to-end execution test; the paired soak itself is long-running and belongs

@@ -1,10 +1,10 @@
 package agent
 
 import (
-	"roboticus/cmd/internal/cmdutil"
 	"fmt"
 	"os"
 	"path/filepath"
+	"roboticus/cmd/internal/cmdutil"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -20,7 +20,8 @@ var ingestCmd = &cobra.Command{
 	RunE:  runIngest,
 }
 
-func init() {	ingestCmd.Flags().Bool("recursive", true, "Recursively process subdirectories")
+func init() {
+	ingestCmd.Flags().Bool("recursive", true, "Recursively process subdirectories")
 	ingestCmd.Flags().StringSlice("extensions", []string{".md", ".txt", ".text"}, "File extensions to process")
 	ingestCmd.Flags().Int("chunk-size", 512, "Maximum chunk size in characters")
 	ingestCmd.Flags().Bool("dry-run", false, "Show what would be ingested without writing")

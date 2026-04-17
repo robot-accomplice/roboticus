@@ -67,21 +67,21 @@ func retrievalTracerFromContext(ctx context.Context) RetrievalTracer {
 // Retrieval path values. These are the legal values for the
 // "retrieval.path.<tier>" annotation written by tier methods.
 //
-//   RetrievalPathFTS          — FTS5 leg returned the result; vector leg
-//                               either skipped (no embedding) or returned
-//                               nothing for this tier
-//   RetrievalPathVector       — vector leg returned the result; FTS leg
-//                               returned nothing for this tier
-//   RetrievalPathHybrid       — both legs contributed candidates that were
-//                               blended into the final result
-//   RetrievalPathLikeFallback — both FTS and vector legs returned zero rows
-//                               for this tier and the residual LIKE safety
-//                               net produced the surfaced rows
-//   RetrievalPathEmpty        — no leg produced any row; tier returned an
-//                               empty result (this is still annotated so
-//                               operators can distinguish "tier was queried
-//                               and found nothing" from "tier was not
-//                               queried at all")
+//	RetrievalPathFTS          — FTS5 leg returned the result; vector leg
+//	                            either skipped (no embedding) or returned
+//	                            nothing for this tier
+//	RetrievalPathVector       — vector leg returned the result; FTS leg
+//	                            returned nothing for this tier
+//	RetrievalPathHybrid       — both legs contributed candidates that were
+//	                            blended into the final result
+//	RetrievalPathLikeFallback — both FTS and vector legs returned zero rows
+//	                            for this tier and the residual LIKE safety
+//	                            net produced the surfaced rows
+//	RetrievalPathEmpty        — no leg produced any row; tier returned an
+//	                            empty result (this is still annotated so
+//	                            operators can distinguish "tier was queried
+//	                            and found nothing" from "tier was not
+//	                            queried at all")
 const (
 	RetrievalPathFTS          = "fts"
 	RetrievalPathVector       = "vector"
@@ -120,12 +120,12 @@ func annotateRetrievalPath(ctx context.Context, tier, path string) {
 // label. The blended HybridSearch result is one merged ranked list, so the
 // tier methods inspect per-leg counts before merge to decide the label:
 //
-//   * both legs contributed     → RetrievalPathHybrid
-//   * FTS only                  → RetrievalPathFTS
-//   * vector only               → RetrievalPathVector
-//   * neither                   → "" (caller should attempt LIKE fallback,
-//                                  then annotate RetrievalPathLikeFallback or
-//                                  RetrievalPathEmpty as appropriate)
+//   - both legs contributed     → RetrievalPathHybrid
+//   - FTS only                  → RetrievalPathFTS
+//   - vector only               → RetrievalPathVector
+//   - neither                   → "" (caller should attempt LIKE fallback,
+//     then annotate RetrievalPathLikeFallback or
+//     RetrievalPathEmpty as appropriate)
 //
 // The empty-string return for the all-zero case is intentional: the caller
 // runs the safety-net query first and then annotates a more specific label

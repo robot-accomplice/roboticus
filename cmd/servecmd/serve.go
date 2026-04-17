@@ -1,8 +1,8 @@
 package servecmd
 
 import (
-	"roboticus/cmd/internal/cmdutil"
 	"fmt"
+	"roboticus/cmd/internal/cmdutil"
 
 	"github.com/spf13/cobra"
 
@@ -20,7 +20,6 @@ and on Windows with the Service Control Manager.
 Use "roboticus service install" to register as a system service.`,
 	RunE: runServe,
 }
-
 
 func runServe(cmd *cobra.Command, args []string) error {
 	cfg, err := cmdutil.LoadConfig()

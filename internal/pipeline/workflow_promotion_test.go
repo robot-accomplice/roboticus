@@ -25,8 +25,8 @@ func newFailingToolSession(t *testing.T, steps []string, errorBodies []string) *
 	})
 	for i, step := range steps {
 		calls := []llm.ToolCall{{
-			ID:   step + "-call",
-			Type: "function",
+			ID:       step + "-call",
+			Type:     "function",
 			Function: llm.ToolCallFunc{Name: step, Arguments: `{}`},
 		}}
 		sess.AddAssistantMessage("using "+step, calls)

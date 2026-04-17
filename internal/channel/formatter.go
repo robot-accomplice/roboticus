@@ -617,6 +617,7 @@ func (f *VoiceFormatter) Format(content string) string {
 type MatrixFormatter struct{}
 
 func (f *MatrixFormatter) Platform() string { return "matrix" }
+
 // matrixBoldRe matches **text** for bold conversion.
 var matrixBoldRe = regexp.MustCompile(`\*\*([^*]+)\*\*`)
 

@@ -1,8 +1,8 @@
 package admin
 
 import (
-	"roboticus/cmd/internal/cmdutil"
 	"github.com/spf13/cobra"
+	"roboticus/cmd/internal/cmdutil"
 )
 
 var metricsCmd = &cobra.Command{
@@ -68,4 +68,5 @@ var metricsTransactionsCmd = &cobra.Command{
 
 func init() {
 	metricsTransactionsCmd.Flags().String("hours", "24", "number of hours to look back")
-	metricsCmd.AddCommand(metricsCostsCmd, metricsCacheCmd, metricsCapacityCmd, metricsTransactionsCmd)}
+	metricsCmd.AddCommand(metricsCostsCmd, metricsCacheCmd, metricsCapacityCmd, metricsTransactionsCmd)
+}

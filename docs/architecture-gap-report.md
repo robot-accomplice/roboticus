@@ -20,7 +20,8 @@ older architecture docs had left too generic:
   memory preparation, checkpoint restore, and prompt assembly converge into one
   `llm.Request`, and the request builder is now expected to preserve the latest
   user message, align prompt-layer tool guidance with the structured tool list,
-  and drop empty compacted history before inference.
+  and drop empty compacted history before inference. Baseline/exercise now uses
+  that same runtime request path rather than a direct-LLM bypass.
 - **Continuity and learning are now explicitly artifact-driven.** Reflection,
   executive growth, checkpoints, and consolidation are expected to consume
   structured turn artifacts (`tool_calls`, `pipeline_traces`,

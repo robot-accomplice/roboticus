@@ -522,11 +522,13 @@ func TestEmbeddingClient_SetAuth(t *testing.T) {
 	origResolver := KeyResolver
 	defer func() { KeyResolver = origResolver }()
 	KeyResolver = func(key string) string {
-		if key == "test-embed_api_key" { return "testkey123" }
+		if key == "test-embed_api_key" {
+			return "testkey123"
+		}
 		return ""
 	}
 	ec = &EmbeddingClient{provider: &Provider{
-		Name: "test-embed",
+		Name:         "test-embed",
 		ExtraHeaders: map[string]string{"X-Custom": "val"},
 	}}
 

@@ -126,17 +126,17 @@ type graphPathHopJSON struct {
 
 // graphTraversalResult is the JSON payload returned for impact/dependencies.
 type graphTraversalResult struct {
-	Summary string             `json:"summary"`
-	Seed    string             `json:"seed"`
-	Mode    string             `json:"mode"`
-	Nodes   []graphNodeJSON    `json:"nodes"`
+	Summary string               `json:"summary"`
+	Seed    string               `json:"seed"`
+	Mode    string               `json:"mode"`
+	Nodes   []graphNodeJSON      `json:"nodes"`
 	Paths   []graphTraversalJSON `json:"paths"`
-	Graph   graphStatsJSON     `json:"graph"`
+	Graph   graphStatsJSON       `json:"graph"`
 }
 
 type graphNodeJSON struct {
-	Name      string `json:"name"`
-	MinDepth  int    `json:"min_depth"`
+	Name     string `json:"name"`
+	MinDepth int    `json:"min_depth"`
 }
 
 type graphTraversalJSON struct {

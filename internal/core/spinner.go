@@ -142,11 +142,11 @@ func SpinWhileBlocking(w io.Writer) SpinStop {
 //
 // Pattern:
 //
-//   var result SomeResult
-//   core.RunWithSpinner(os.Stdout, "    Loading config: ", func() {
-//       result = slowLoad()
-//   })
-//   fmt.Printf("%v\n", result)
+//	var result SomeResult
+//	core.RunWithSpinner(os.Stdout, "    Loading config: ", func() {
+//	    result = slowLoad()
+//	})
+//	fmt.Printf("%v\n", result)
 //
 // Prefer SpinWhileBlocking directly when the spinner's start and
 // stop happen in different callbacks (e.g., before/after pairs in

@@ -11,17 +11,17 @@ import (
 // Trace namespace constants for structured trace span naming (Wave 8, #88).
 // Use these as prefixes for TraceSpan.Name to enable filtering and aggregation.
 const (
-	TraceNSPipeline   = "pipeline"   // Top-level pipeline orchestration spans
-	TraceNSGuard      = "guard"      // Guard chain evaluation spans
-	TraceNSInference  = "inference"  // LLM inference spans (standard and streaming)
-	TraceNSRetrieval  = "retrieval"  // Memory retrieval and context assembly spans
+	TraceNSPipeline   = "pipeline"    // Top-level pipeline orchestration spans
+	TraceNSGuard      = "guard"       // Guard chain evaluation spans
+	TraceNSInference  = "inference"   // LLM inference spans (standard and streaming)
+	TraceNSRetrieval  = "retrieval"   // Memory retrieval and context assembly spans
 	TraceNSToolSearch = "tool_search" // Tool discovery and pruning spans (Rust parity: ns::TOOL_SEARCH)
 	TraceNSMCP        = "mcp"         // MCP server interaction spans
 	TraceNSDelegation = "delegation"  // Subagent delegation spans
 	TraceNSTaskState  = "task_state"  // Task state machine transition spans (Rust parity: ns::TASK_STATE)
-	TraceNSVerifier   = "verifier"   // Verification / critic stage annotations
-	TraceNSExecutive  = "executive"  // Executive working-memory write annotations
-	TraceNSPerception = "perception" // Unified perception artifact annotations
+	TraceNSVerifier   = "verifier"    // Verification / critic stage annotations
+	TraceNSExecutive  = "executive"   // Executive working-memory write annotations
+	TraceNSPerception = "perception"  // Unified perception artifact annotations
 )
 
 // PipelineTrace records per-stage timing for a single pipeline run.

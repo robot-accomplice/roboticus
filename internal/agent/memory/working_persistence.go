@@ -24,11 +24,11 @@ import (
 
 // VetConfig controls which working memory entries survive startup vetting.
 type VetConfig struct {
-	MaxAge           time.Duration // discard entries older than this
-	ExecutiveMaxAge  time.Duration // same, but applied to executive-state entries
-	MinImportance    int           // discard entries with importance <= this
-	RetainTypes      []string      // always retain these entry types
-	DiscardTypes     []string      // always discard these entry types
+	MaxAge          time.Duration // discard entries older than this
+	ExecutiveMaxAge time.Duration // same, but applied to executive-state entries
+	MinImportance   int           // discard entries with importance <= this
+	RetainTypes     []string      // always retain these entry types
+	DiscardTypes    []string      // always discard these entry types
 }
 
 // DefaultVetConfig returns sensible defaults for working memory vetting.

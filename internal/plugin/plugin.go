@@ -283,6 +283,21 @@ func (r *Registry) AllTools() []ToolDef {
 	return tools
 }
 
+// PluginTools returns the tool set for a named plugin, regardless of status.
+func (r *Registry) PluginTools(name string) []ToolDef {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	entry, ok := r.plugins[name]
+	if !ok {
+		return nil
+	}
+	tools := entry.plugin.Tools()
+	out := make([]ToolDef, len(tools))
+	copy(out, tools)
+	return out
+}
+
 func (r *Registry) replace(p Plugin) error {
 	name := p.Name()
 

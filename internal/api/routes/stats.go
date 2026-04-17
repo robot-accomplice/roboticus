@@ -224,9 +224,9 @@ func GetEfficiency(store *db.Store) http.HandlerFunc {
 				if qualityRows.Scan(&qModel, &avgGrade, &gradeCount, &escalationCount, &avgLatency) == nil {
 					qualityByModel[qModel] = map[string]any{
 						"avg_quality_score": avgGrade,
-						"graded_turns":     gradeCount,
-						"escalation_count": escalationCount,
-						"avg_latency_ms":   avgLatency,
+						"graded_turns":      gradeCount,
+						"escalation_count":  escalationCount,
+						"avg_latency_ms":    avgLatency,
 					}
 				}
 			}
