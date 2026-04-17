@@ -183,6 +183,44 @@ func (d *Daemon) run() {
 	log.Info().Msg("all subsystems started")
 }
 
+func (d *Daemon) consolidationHeartbeatInterval() time.Duration {
+	if secs := d.cfg.Heartbeat.MemoryIntervalSeconds; secs > 0 {
+		return time.Duration(secs) * time.Second
+	}
+	if secs := d.cfg.Heartbeat.IntervalSeconds; secs > 0 {
+		return time.Duration(secs) * time.Second
+	}
+	return time.Hour
+}
+
+func (d *Daemon) newConsolidationHeartbeat() (*schedule.HeartbeatDaemon, schedule.DomainIntervals, func() *schedule.TickContext) {
+	task := &schedule.MemoryLoopTask{
+		Consolidate: func(ctx context.Context, force bool) string {
+			report := pipeline.RunMemoryConsolidation(ctx, d.store, force, pipeline.ConsolidationOpts{
+				EmbedClient: d.embedClient,
+				LLMService:  d.llm,
+			})
+			log.Info().
+				Int("indexed", report.Indexed).
+				Int("deduped", report.Deduped).
+				Int("promoted", report.Promoted).
+				Int("pruned", report.Pruned).
+				Msg("memory consolidation completed")
+			return fmt.Sprintf("indexed=%d deduped=%d promoted=%d pruned=%d", report.Indexed, report.Deduped, report.Promoted, report.Pruned)
+		},
+	}
+	interval := d.consolidationHeartbeatInterval()
+	daemon := schedule.NewHeartbeatDaemon(interval, []schedule.HeartbeatTask{task})
+	intervals := schedule.DefaultDomainIntervals()
+	intervals.Memory = interval
+	return daemon, intervals, func() *schedule.TickContext {
+		return &schedule.TickContext{
+			SurvivalTier: core.SurvivalTierStable,
+			Timestamp:    time.Now(),
+		}
+	}
+}
+
 // runConsolidationHeartbeat runs memory consolidation on a periodic schedule.
 // Matches Rust's heartbeat-triggered MemoryPrune signal.
 func (d *Daemon) runConsolidationHeartbeat(ctx context.Context) {
@@ -193,27 +231,9 @@ func (d *Daemon) runConsolidationHeartbeat(ctx context.Context) {
 	case <-time.After(30 * time.Second):
 	}
 
-	ticker := time.NewTicker(1 * time.Hour)
-	defer ticker.Stop()
-	log.Info().Msg("memory consolidation heartbeat started (1h interval)")
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			report := pipeline.RunMemoryConsolidation(ctx, d.store, false, pipeline.ConsolidationOpts{
-				EmbedClient: d.embedClient,
-				LLMService:  d.llm,
-			})
-			log.Info().
-				Int("indexed", report.Indexed).
-				Int("deduped", report.Deduped).
-				Int("promoted", report.Promoted).
-				Int("pruned", report.Pruned).
-				Msg("memory consolidation completed")
-		}
-	}
+	daemon, intervals, tickCtxFn := d.newConsolidationHeartbeat()
+	log.Info().Dur("interval", intervals.Memory).Msg("memory consolidation heartbeat started")
+	daemon.RunDistributed(ctx, intervals, tickCtxFn)
 }
 
 // runTelegramPoller polls the Telegram adapter for inbound messages via long polling.
