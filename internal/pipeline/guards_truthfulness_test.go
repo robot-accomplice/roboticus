@@ -77,6 +77,17 @@ func TestExecutionTruthGuard_DeniedCapability(t *testing.T) {
 	}
 }
 
+func TestExecutionTruthGuard_AllowsRealPolicyDenial(t *testing.T) {
+	g := &ExecutionTruthGuard{}
+	ctx := &GuardContext{
+		ToolResults: []ToolResultEntry{{ToolName: "bash", Output: "Policy denied: dangerous tools require self-generated or higher authority"}},
+	}
+	result := g.CheckWithContext("I can't execute that command because it requires higher authority.", ctx)
+	if !result.Passed {
+		t.Fatalf("expected pass for real policy denial, got reason: %s", result.Reason)
+	}
+}
+
 func TestFilesystemDenialGuard_AllowsActualSandboxDenial(t *testing.T) {
 	g := &FilesystemDenialGuard{}
 	ctx := &GuardContext{

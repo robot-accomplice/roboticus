@@ -38,13 +38,7 @@ func (g *ActionVerificationGuard) CheckWithContext(content string, ctx *GuardCon
 
 	// Check for success claims when tool output indicates failure.
 	for _, tr := range financialResults {
-		outputLower := strings.ToLower(tr.Output)
-		hasFailure := strings.Contains(outputLower, "error") ||
-			strings.Contains(outputLower, "failed") ||
-			strings.Contains(outputLower, "insufficient") ||
-			strings.Contains(outputLower, "rejected")
-
-		if hasFailure {
+		if toolResultSignalsFailure(tr) {
 			// Verify the response doesn't claim success.
 			successClaims := []string{
 				"successfully transferred", "payment completed",

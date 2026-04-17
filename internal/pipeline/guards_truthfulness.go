@@ -164,6 +164,11 @@ func (g *ExecutionTruthGuard) CheckWithContext(content string, ctx *GuardContext
 
 	// Check 2: Tools ran but model denies capability.
 	if len(ctx.ToolResults) > 0 {
+		for _, tr := range ctx.ToolResults {
+			if toolResultSignalsPolicyOrSandboxDenial(tr) {
+				return GuardResult{Passed: true}
+			}
+		}
 		lower := strings.ToLower(content)
 		denialPatterns := []string{
 			"i cannot", "i'm unable to", "i don't have the ability",
@@ -337,15 +342,6 @@ var filesystemDenialPatterns = []string{
 	"as an ai text-based interface, i'm not able to directly access",
 }
 
-var filesystemToolDenialMarkers = []string{
-	"absolute paths must be in allowed_paths list",
-	"home-directory shortcuts are not allowed",
-	"path escapes workspace boundary",
-	"path resolves outside workspace",
-	"path traversal detected",
-	"not in allowed paths",
-}
-
 func (g *FilesystemDenialGuard) Name() string { return "filesystem_denial" }
 func (g *FilesystemDenialGuard) Check(content string) GuardResult {
 	lower := strings.ToLower(content)
@@ -367,11 +363,8 @@ func (g *FilesystemDenialGuard) Check(content string) GuardResult {
 func (g *FilesystemDenialGuard) CheckWithContext(content string, ctx *GuardContext) GuardResult {
 	if ctx != nil {
 		for _, tr := range ctx.ToolResults {
-			outputLower := strings.ToLower(tr.Output)
-			for _, marker := range filesystemToolDenialMarkers {
-				if strings.Contains(outputLower, marker) {
-					return GuardResult{Passed: true}
-				}
+			if toolResultSignalsPolicyOrSandboxDenial(tr) {
+				return GuardResult{Passed: true}
 			}
 		}
 	}

@@ -94,6 +94,7 @@ The key artifacts are:
 | SYS-10-005 | P1 | `FilesystemDenialGuard` treated all filesystem-access disclaimers as false, even when the tool layer had returned a real sandbox denial | Rust intent is to suppress fake capability disclaimers, not overwrite legitimate policy outcomes | Go now lets `FilesystemDenialGuard` pass when tool results contain a real sandbox/path denial marker, while still rewriting false "can't access your files" boilerplate when the turn context contradicts it | Improved, not closed | Open | `internal/pipeline/guards_truthfulness.go`, `internal/pipeline/guards_truthfulness_test.go` |
 | SYS-10-006 | P1 | `pathProtectionRule` matched generic content nouns like `secret`, so a content string could trip a path rule even when no protected path was referenced | Rust intent is for path protection to guard protected paths, not arbitrary text payloads | Go now limits `protectedPatterns` to actual protected path/file markers (`.env`, `.ssh`, `/etc/`, `roboticus.toml`, etc.). Sensitive config fields remain protected by the shared config-protection matcher instead of leaking into the path rule | Improved, not closed | Open | `internal/agent/policy/engine.go`, `internal/agent/policy/engine_test.go`, `internal/security/config_protection.go` |
 | SYS-10-007 | P1 | Workspace-only allowlist matching used naive prefix checks, so `/data/vault` could incorrectly admit `/data/vaultBackup` | Rust intent is boundary-safe path admission | Go now cleans both paths and enforces exact-match-or-subtree semantics in `pathProtectionRule`, aligning the policy layer with the already-fixed runtime path resolution behavior | Improved, not closed | Open | `internal/agent/policy/engine.go`, `internal/agent/policy/engine_test.go` |
+| SYS-10-008 | P1 | Post-inference truth guards still treated any "I can't execute" / financial-success language as false whenever a tool name appeared, even if the actual tool result was a real policy/sandbox denial or failed financial action | Rust intent is to suppress fabricated capabilities, not overwrite legitimate runtime denials or bless fabricated success after denied execution | Go now classifies tool-result denial/failure markers once and reuses that across `ExecutionTruthGuard`, `FilesystemDenialGuard`, `FinancialActionTruthGuard`, and `ActionVerificationGuard`. Real policy/sandbox denials now pass through as truth, while fabricated success after denied financial execution still retries. No canned replacement prose was added for this fix path | Improved, not closed | Open | `internal/pipeline/guard_context.go`, `internal/pipeline/guards_truthfulness.go`, `internal/pipeline/guards_financial_truth.go`, `internal/pipeline/guards_financial_verification.go`, related tests |
 
 ## Intentional Deviations
 
@@ -133,6 +134,10 @@ Current known good state:
 - workspace-only allowlist enforcement now uses path-boundary matching rather
   than naive string prefixes, so sibling paths like `/data/vaultBackup` are not
   accidentally admitted by an allowlist entry for `/data/vault`
+- guard truthfulness is now closer to the actual runtime contract: real
+  policy/sandbox denials are treated as legitimate outcomes, while fabricated
+  "I transferred..." / "I can't execute..." language after denied execution is
+  retried instead of being masked by canned rewrites
 
 ## Downstream Systems Affected
 
@@ -180,3 +185,8 @@ Current known good state:
   workspace-only mode. Allowed absolute paths now require exact match or
   subtree semantics, mirroring the runtime helper contract instead of using
   naive prefix checks.
+- 2026-04-17: Unified post-inference denial/failure classification across
+  execution, filesystem, and financial truth guards. Real policy/sandbox
+  denials now pass as truthful outcomes; fabricated success claims after denied
+  financial execution still trigger retry. This closes another policy/guard
+  shadowing seam without introducing canned response templates.
