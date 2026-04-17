@@ -166,6 +166,9 @@ func TestSignalProcessWebhook(t *testing.T) {
 			if tt.wantGrp && msg.ChatID != "group:grp123" {
 				t.Fatalf("expected group chat ID, got %q", msg.ChatID)
 			}
+			if got := msg.Metadata["is_group"]; got != tt.wantGrp {
+				t.Fatalf("is_group = %v, want %v", got, tt.wantGrp)
+			}
 		})
 	}
 }

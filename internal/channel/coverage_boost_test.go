@@ -389,6 +389,12 @@ func TestWhatsAppProcessWebhook_AllTypes(t *testing.T) {
 			if msg.Platform != "whatsapp" {
 				t.Fatalf("platform = %s", msg.Platform)
 			}
+			if got := msg.Metadata["is_group"]; got != false {
+				t.Fatalf("is_group = %v, want false", got)
+			}
+			if got := msg.Metadata["sender_phone"]; got != msg.SenderID {
+				t.Fatalf("sender_phone = %v, want %s", got, msg.SenderID)
+			}
 		})
 	}
 }

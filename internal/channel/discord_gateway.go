@@ -336,6 +336,10 @@ func (a *DiscordAdapter) handleMessageCreate(data json.RawMessage) {
 		SenderID:  m.Author.ID,
 		Content:   m.Content,
 		Timestamp: time.Now(),
+		Metadata: map[string]any{
+			"guild_id": m.GuildID,
+			"is_group": m.GuildID != "",
+		},
 	})
 	a.mu.Unlock()
 }

@@ -60,6 +60,7 @@ Blocking commands for feature-complete releases:
 | R-CH-02 | Retry queue persistence survives restart and supports dead-letter replay | queue/channel tests + smoke | L1/L2/L3 |
 | R-CH-03 | Channel reply formatting does not leak orchestration metadata | guard/behavior tests | L2/L4 |
 | R-CH-04 | Telegram and WhatsApp webhook ingress is adapter-owned: routes consume normalized `InboundMessage` batches, WhatsApp challenge verification uses the adapter verifier, and POST webhook bodies validate adapter-owned signatures before pipeline dispatch | `internal/api/routes/admin_webhooks_test.go`, `internal/channel/telegram_coverage_test.go`, `internal/channel/coverage_boost_test.go` | L1/L2 |
+| R-CH-05 | Adapters preserve baseline normalized metadata for shared filters instead of forcing downstream inference: Telegram/Signal/Discord/WhatsApp now emit explicit `is_group` context plus transport-specific identifiers where available | `internal/channel/telegram_coverage_test.go`, `internal/channel/signal_coverage_test.go`, `internal/channel/discord_coverage_test.go`, `internal/channel/coverage_boost_test.go` | L1/L2 |
 
 ### R-SESS: Sessions And Scope
 

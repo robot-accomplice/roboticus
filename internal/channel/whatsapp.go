@@ -215,6 +215,11 @@ func (w *WhatsAppAdapter) ProcessWebhookBatch(data []byte) ([]InboundMessage, er
 					SenderID:  msg.From,
 					ChatID:    msg.From,
 					Timestamp: time.Now(),
+					Metadata: map[string]any{
+						"is_group":     false,
+						"sender_phone": msg.From,
+						"message_type": msg.Type,
+					},
 				}
 
 				switch msg.Type {
