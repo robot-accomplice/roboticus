@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 )
 
 // mockTransport is a test double for the Transport interface.
@@ -17,6 +18,61 @@ type mockTransport struct {
 	recvErr   error
 	closeErr  error
 	closed    bool
+}
+
+type queuedTransport struct {
+	mu      sync.Mutex
+	sent    []json.RawMessage
+	recv    chan json.RawMessage
+	closeCh chan struct{}
+	closed  bool
+}
+
+func newQueuedTransport() *queuedTransport {
+	return &queuedTransport{
+		recv:    make(chan json.RawMessage, 16),
+		closeCh: make(chan struct{}),
+	}
+}
+
+func (q *queuedTransport) Send(_ context.Context, msg json.RawMessage) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.sent = append(q.sent, msg)
+	return nil
+}
+
+func (q *queuedTransport) Receive(_ context.Context) (json.RawMessage, error) {
+	select {
+	case msg := <-q.recv:
+		return msg, nil
+	case <-q.closeCh:
+		return nil, fmt.Errorf("closed")
+	}
+}
+
+func (q *queuedTransport) Close() error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if !q.closed {
+		close(q.closeCh)
+		q.closed = true
+	}
+	return nil
+}
+
+func (q *queuedTransport) sentID(t *testing.T, index int) int64 {
+	t.Helper()
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if len(q.sent) <= index {
+		t.Fatalf("sent %d messages, want index %d", len(q.sent), index)
+	}
+	var req jsonRPCRequest
+	if err := json.Unmarshal(q.sent[index], &req); err != nil {
+		t.Fatalf("unmarshal sent request: %v", err)
+	}
+	return req.ID
 }
 
 func (m *mockTransport) Send(_ context.Context, msg json.RawMessage) error {
@@ -248,6 +304,96 @@ func TestConnection_Call_RPCError(t *testing.T) {
 	}
 	if got := err.Error(); got != "mcp rpc error -32601: method not found" {
 		t.Errorf("error = %q", got)
+	}
+}
+
+func TestConnection_Call_ContextTimeoutDoesNotCloseConnection(t *testing.T) {
+	qt := newQueuedTransport()
+	conn := &Connection{Name: "test", transport: qt}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	_, err := conn.call(ctx, "test/method", nil)
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+	if err != context.DeadlineExceeded {
+		t.Fatalf("expected deadline exceeded, got %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("call should return promptly after timeout, took %v", elapsed)
+	}
+	if qt.closed {
+		t.Fatal("per-call timeout should not close transport")
+	}
+	if conn.receiverErr() != nil {
+		t.Fatalf("timeout should not poison the connection, got receiver error %v", conn.receiverErr())
+	}
+}
+
+func TestConnection_Call_TimeoutDropsLateResponseAndAllowsNextCall(t *testing.T) {
+	qt := newQueuedTransport()
+	conn := &Connection{Name: "test", transport: qt}
+
+	ctx1, cancel1 := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel1()
+	_, err := conn.call(ctx1, "slow/method", nil)
+	if err == nil {
+		t.Fatal("expected timeout on first call")
+	}
+
+	firstID := qt.sentID(t, 0)
+	qt.recv <- makeResponse(firstID, map[string]string{"status": "late"})
+
+	ctx2, cancel2 := context.WithTimeout(context.Background(), time.Second)
+	defer cancel2()
+	resultCh := make(chan struct {
+		result json.RawMessage
+		err    error
+	}, 1)
+	go func() {
+		result, err := conn.call(ctx2, "next/method", nil)
+		resultCh <- struct {
+			result json.RawMessage
+			err    error
+		}{result: result, err: err}
+	}()
+
+	deadline := time.Now().Add(time.Second)
+	var secondID int64
+	for time.Now().Before(deadline) {
+		qt.mu.Lock()
+		if len(qt.sent) >= 2 {
+			var req jsonRPCRequest
+			_ = json.Unmarshal(qt.sent[1], &req)
+			secondID = req.ID
+			qt.mu.Unlock()
+			break
+		}
+		qt.mu.Unlock()
+		time.Sleep(10 * time.Millisecond)
+	}
+	if secondID == 0 {
+		t.Fatal("second request was not sent")
+	}
+
+	qt.recv <- makeResponse(secondID, map[string]string{"status": "ok"})
+
+	res := <-resultCh
+	if res.err != nil {
+		t.Fatalf("second call failed: %v", res.err)
+	}
+	var parsed map[string]string
+	if err := json.Unmarshal(res.result, &parsed); err != nil {
+		t.Fatalf("unmarshal second result: %v", err)
+	}
+	if parsed["status"] != "ok" {
+		t.Fatalf("status = %q, want ok", parsed["status"])
+	}
+	if qt.closed {
+		t.Fatal("late response should not force connection closure")
 	}
 }
 

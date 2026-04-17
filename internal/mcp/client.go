@@ -28,6 +28,19 @@ type Connection struct {
 	ServerName    string
 	ServerVersion string
 	transport     Transport
+	recvCtx       context.Context
+	recvCancel    context.CancelFunc
+	receiverOnce  sync.Once
+	closeOnce     sync.Once
+	pendingMu     sync.Mutex
+	pending       map[int64]chan callResult
+	recvErrMu     sync.RWMutex
+	recvErr       error
+}
+
+type callResult struct {
+	result json.RawMessage
+	err    error
 }
 
 // jsonRPCRequest is a JSON-RPC 2.0 request (with mandatory id).
@@ -266,6 +279,16 @@ func (t *StdioTransport) Close() error {
 	return t.cmd.Process.Kill()
 }
 
+func newConnection(name string, transport Transport) *Connection {
+	conn := &Connection{
+		Name:      name,
+		transport: transport,
+		pending:   make(map[int64]chan callResult),
+	}
+	conn.recvCtx, conn.recvCancel = context.WithCancel(context.Background())
+	return conn
+}
+
 // ConnectStdio connects to an MCP server via subprocess stdio.
 //
 // v1.0.6: the initialize / list-tools error paths now include the
@@ -281,10 +304,7 @@ func ConnectStdio(ctx context.Context, name, command string, args []string, env 
 		return nil, err
 	}
 
-	conn := &Connection{
-		Name:      name,
-		transport: transport,
-	}
+	conn := newConnection(name, transport)
 
 	// Initialize: send "initialize" request. On failure, give the
 	// child a brief moment to flush any final stderr (collectStderr
@@ -346,6 +366,11 @@ func waitForStderrDrain(t *StdioTransport, timeout time.Duration) {
 var nextID atomic.Int64
 
 func (c *Connection) call(ctx context.Context, method string, params any) (json.RawMessage, error) {
+	c.startReceiver()
+	if err := c.receiverErr(); err != nil {
+		return nil, err
+	}
+
 	id := nextID.Add(1)
 	req := jsonRPCRequest{JSONRPC: "2.0", ID: id, Method: method, Params: params}
 	data, err := json.Marshal(req)
@@ -353,36 +378,14 @@ func (c *Connection) call(ctx context.Context, method string, params any) (json.
 		return nil, err
 	}
 
-	type callResult struct {
-		result json.RawMessage
-		err    error
+	done := c.registerPending(id)
+	defer c.unregisterPending(id, done)
+	if err := c.transport.Send(ctx, data); err != nil {
+		return nil, err
 	}
-	done := make(chan callResult, 1)
-	go func() {
-		if err := c.transport.Send(ctx, data); err != nil {
-			done <- callResult{err: err}
-			return
-		}
-		respData, err := c.transport.Receive(ctx)
-		if err != nil {
-			done <- callResult{err: err}
-			return
-		}
-		var resp jsonRPCResponse
-		if err := json.Unmarshal(respData, &resp); err != nil {
-			done <- callResult{err: fmt.Errorf("mcp: invalid response: %w", err)}
-			return
-		}
-		if resp.Error != nil {
-			done <- callResult{err: fmt.Errorf("mcp rpc error %d: %s", resp.Error.Code, resp.Error.Message)}
-			return
-		}
-		done <- callResult{result: resp.Result}
-	}()
 
 	select {
 	case <-ctx.Done():
-		_ = c.Close()
 		return nil, ctx.Err()
 	case res := <-done:
 		return res.result, res.err
@@ -486,8 +489,123 @@ func (c *Connection) CallTool(ctx context.Context, name string, input json.RawMe
 
 // Close terminates the connection.
 func (c *Connection) Close() error {
-	if c.transport != nil {
-		return c.transport.Close()
+	var err error
+	c.closeOnce.Do(func() {
+		if c.recvCancel != nil {
+			c.recvCancel()
+		}
+		c.failAllPending(fmt.Errorf("mcp: connection closed"))
+		c.setReceiverErr(fmt.Errorf("mcp: connection closed"))
+		if c.transport != nil {
+			err = c.transport.Close()
+		}
+	})
+	return err
+}
+
+func (c *Connection) startReceiver() {
+	c.receiverOnce.Do(func() {
+		if c.recvCtx == nil || c.recvCancel == nil {
+			c.recvCtx, c.recvCancel = context.WithCancel(context.Background())
+		}
+		go c.receiveLoop()
+	})
+}
+
+func (c *Connection) registerPending(id int64) chan callResult {
+	ch := make(chan callResult, 1)
+	c.pendingMu.Lock()
+	if c.pending == nil {
+		c.pending = make(map[int64]chan callResult)
 	}
-	return nil
+	c.pending[id] = ch
+	c.pendingMu.Unlock()
+	return ch
+}
+
+func (c *Connection) unregisterPending(id int64, ch chan callResult) {
+	c.pendingMu.Lock()
+	if current, ok := c.pending[id]; ok && current == ch {
+		delete(c.pending, id)
+	}
+	c.pendingMu.Unlock()
+}
+
+func (c *Connection) takePending(id int64) chan callResult {
+	c.pendingMu.Lock()
+	defer c.pendingMu.Unlock()
+	ch := c.pending[id]
+	delete(c.pending, id)
+	return ch
+}
+
+func (c *Connection) failAllPending(err error) {
+	c.pendingMu.Lock()
+	defer c.pendingMu.Unlock()
+	for id, ch := range c.pending {
+		delete(c.pending, id)
+		ch <- callResult{err: err}
+	}
+}
+
+func (c *Connection) setReceiverErr(err error) {
+	if err == nil {
+		return
+	}
+	c.recvErrMu.Lock()
+	if c.recvErr == nil {
+		c.recvErr = err
+	}
+	c.recvErrMu.Unlock()
+}
+
+func (c *Connection) receiverErr() error {
+	c.recvErrMu.RLock()
+	defer c.recvErrMu.RUnlock()
+	return c.recvErr
+}
+
+func (c *Connection) receiveLoop() {
+	for {
+		respData, err := c.transport.Receive(c.recvCtx)
+		if err != nil {
+			if c.recvCtx.Err() != nil {
+				return
+			}
+			c.setReceiverErr(err)
+			c.failAllPending(err)
+			return
+		}
+
+		if !responseHasID(respData) {
+			continue
+		}
+
+		var resp jsonRPCResponse
+		if err := json.Unmarshal(respData, &resp); err != nil {
+			err = fmt.Errorf("mcp: invalid response: %w", err)
+			c.setReceiverErr(err)
+			c.failAllPending(err)
+			return
+		}
+
+		done := c.takePending(resp.ID)
+		if done == nil {
+			continue
+		}
+		if resp.Error != nil {
+			done <- callResult{err: fmt.Errorf("mcp rpc error %d: %s", resp.Error.Code, resp.Error.Message)}
+			continue
+		}
+		done <- callResult{result: resp.Result}
+	}
+}
+
+func responseHasID(respData json.RawMessage) bool {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(respData, &raw); err != nil {
+		return true
+	}
+	_, ok := raw["id"]
+	return ok
 }

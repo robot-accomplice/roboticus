@@ -122,7 +122,7 @@ docs describe them honestly.
 | SYS-08-003 | P1 | Release-truth drift around MCP readiness can reappear even when code improves | Docs must state exactly what was validated | Go has already had overstated MCP confidence in prior iterations; this remains an audit target, not a one-time fix | Degradation risk | Open | MCP checklist + release notes + runtime validation evidence |
 | SYS-08-004 | P2 | Stdio/SSE transport behavior still needs line-by-line parity classification | Transport timeouts, env propagation, diagnostics, and reconnect semantics should be explicit and tested | Several hardening fixes landed (stderr capture, env inheritance, release-blocker evidence), but the full cross-transport classification is not yet complete in this program | Open | Open | `internal/mcp/client.go`, manager/tests, checklist artifacts |
 | SYS-08-005 | P2 | Integration-test guidance and checklist evidence are now stronger, but must remain synchronized with the real blessed targets | Validation guidance should point at the same targets the release checklist certifies | Go now documents current Playwright guidance and stores a checklist artifact with explicit targets/evidence; this is a genuine improvement but requires ongoing synchronization discipline | Improvement with governance requirement | Open | `internal/mcp/integration_test.go`, `docs/testing/mcp-release-blocker-checklist.md` |
-| SYS-08-006 | P1 | Per-call timeout/cancellation currently tears down the whole MCP connection | A timed-out `tools/call` should fail that call without silently degrading the server's future availability unless the transport itself is irrecoverable | Go enforces timeout by selecting on `ctx.Done()` in `Connection.call(...)` and then closing the entire connection, because `Send`/`Receive` are blocking and not individually cancellable | Degradation seam | Open | `internal/mcp/client.go:287-322`, `internal/mcp/client.go:246-257` |
+| SYS-08-006 | P1 | Per-call timeout/cancellation must not tear down the whole MCP connection | A timed-out `tools/call` should fail that call without silently degrading the server's future availability unless the transport itself is irrecoverable | Go now uses a long-lived receive loop plus per-request pending-call channels. Timed-out calls are removed from the pending map; late responses are dropped; only real transport failure poisons the connection. This keeps stdio/SSE transport availability tied to transport health instead of a single caller timeout. | Improvement / remediation | Remediated | `internal/mcp/client.go`, `internal/mcp/client_test.go` |
 | SYS-08-007 | P2 | WebSocket/HTTP operational evidence for MCP status is stronger when it reuses canonical handlers instead of a second summary path | Operator-facing status surfaces should share one data source where possible | Go's topic snapshots invoke the same HTTP handlers through `httptest`, which is a real improvement in observability truthfulness even though transport semantics still need classification | Improvement candidate | Open / cross-check with System 09 | `internal/api/ws_topics.go:12-68`, `internal/api/routes/mcp.go` |
 
 ## Intentional Deviations
@@ -150,6 +150,8 @@ The key discipline for this system is governance as much as code:
   improved docs do not accidentally mask unfinished transport semantics work
 - classify whether destructive timeout handling is an accepted transport tradeoff
   or still a release-grade operator-contract gap
+- preserve the new request/response dispatcher model: per-call timeout is now a
+  call-local failure, while transport failure remains connection-fatal
 
 ## Downstream Systems Affected
 
@@ -183,3 +185,7 @@ The key discipline for this system is governance as much as code:
 - 2026-04-16: Recorded that WebSocket topic snapshots reuse HTTP handlers,
   which is a meaningful observability-truth improvement that should be
   preserved when classifying MCP operator surfaces.
+- 2026-04-17: Remediated the per-call timeout seam by moving `Connection` onto
+  a long-lived receive loop with per-request pending-call channels. Timed-out
+  calls now fail locally without closing the transport, and late responses are
+  dropped instead of poisoning the next call.
