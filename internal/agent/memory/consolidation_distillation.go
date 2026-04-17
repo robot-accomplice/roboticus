@@ -66,7 +66,7 @@ func (p *ConsolidationPipeline) phaseEpisodeDistillation(ctx context.Context, st
 	}
 
 	rows, err := store.QueryContext(ctx,
-		`SELECT content FROM episodic_memory
+		`SELECT content, COALESCE(content_json, '') FROM episodic_memory
 		  WHERE classification = 'episode_summary'
 		    AND memory_state = 'active'
 		  ORDER BY created_at DESC
@@ -90,11 +90,11 @@ func (p *ConsolidationPipeline) phaseEpisodeDistillation(ctx context.Context, st
 	relationExemplar := make(map[string]EpisodeRelation)
 	var episodes []episodeFields
 	for rows.Next() {
-		var content string
-		if err := rows.Scan(&content); err != nil {
+		var content, contentJSON string
+		if err := rows.Scan(&content, &contentJSON); err != nil {
 			continue
 		}
-		fields := parseEpisodeSummary(content)
+		fields := parseEpisodeSummaryStructured(content, contentJSON)
 		if !fields.HighQuality {
 			continue
 		}
@@ -357,6 +357,36 @@ func parseEpisodeSummary(content string) episodeFields {
 	// Only episodes we are confident about contribute to distillation so
 	// failures and low-quality partials cannot drag patterns into semantic
 	// memory.
+	fields.HighQuality = fields.Outcome == "success" || fields.QualityLabel == "high" || fields.QualityLabel == "medium"
+	return fields
+}
+
+func parseEpisodeSummaryStructured(content, contentJSON string) episodeFields {
+	if summary, err := ParseEpisodeSummaryJSON(contentJSON); err == nil && summary != nil {
+		return episodeFieldsFromSummary(summary)
+	}
+	return parseEpisodeSummary(content)
+}
+
+func episodeFieldsFromSummary(summary *EpisodeSummary) episodeFields {
+	if summary == nil {
+		return episodeFields{}
+	}
+	fields := episodeFields{
+		Outcome:      strings.TrimSpace(summary.Outcome),
+		Learnings:    append([]string(nil), summary.Learnings...),
+		FixPatterns:  append([]string(nil), summary.FixPatterns...),
+		EvidenceRefs: append([]string(nil), summary.EvidenceRefs...),
+		Relations:    append([]EpisodeRelation(nil), summary.Relations...),
+	}
+	switch {
+	case summary.ResultQuality >= 0.85:
+		fields.QualityLabel = "high"
+	case summary.ResultQuality >= 0.65:
+		fields.QualityLabel = "medium"
+	case summary.ResultQuality > 0:
+		fields.QualityLabel = "low"
+	}
 	fields.HighQuality = fields.Outcome == "success" || fields.QualityLabel == "high" || fields.QualityLabel == "medium"
 	return fields
 }

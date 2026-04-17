@@ -14,9 +14,9 @@ import (
 func writeEpisodeSummary(t *testing.T, store *db.Store, summary *EpisodeSummary) {
 	t.Helper()
 	if _, err := store.ExecContext(context.Background(),
-		`INSERT INTO episodic_memory (id, classification, content, importance)
-		 VALUES (?, 'episode_summary', ?, 8)`,
-		db.NewID(), summary.FormatForStorage(),
+		`INSERT INTO episodic_memory (id, classification, content, content_json, importance)
+		 VALUES (?, 'episode_summary', ?, ?, 8)`,
+		db.NewID(), summary.FormatForStorage(), summary.JSON(),
 	); err != nil {
 		t.Fatalf("seed episode summary: %v", err)
 	}
@@ -47,6 +47,28 @@ func TestParseEpisodeSummary_PullsEnrichedFields(t *testing.T) {
 	}
 	if !fields.HighQuality {
 		t.Fatal("expected success outcome to mark HighQuality")
+	}
+}
+
+func TestParseEpisodeSummaryStructured_PrefersJSONPayload(t *testing.T) {
+	summary := &EpisodeSummary{
+		Goal:         "deploy",
+		Outcome:      "success",
+		Learnings:    []string{"guard-triggered revision required before final answer"},
+		FixPatterns:  []string{"shell: fail→success on retry"},
+		EvidenceRefs: []string{"cache TTL 24h"},
+		ResultQuality: 0.9,
+	}
+
+	fields := parseEpisodeSummaryStructured("Goal: stale | Outcome: failure", summary.JSON())
+	if fields.Outcome != "success" {
+		t.Fatalf("expected JSON outcome to win, got %q", fields.Outcome)
+	}
+	if len(fields.Learnings) != 1 || fields.Learnings[0] != "guard-triggered revision required before final answer" {
+		t.Fatalf("expected JSON learnings, got %+v", fields.Learnings)
+	}
+	if !fields.HighQuality {
+		t.Fatal("expected JSON quality to mark HighQuality")
 	}
 }
 

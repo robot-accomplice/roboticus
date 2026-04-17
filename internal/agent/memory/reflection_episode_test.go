@@ -163,3 +163,34 @@ func TestAnalyzeEpisode_UsesStructuredInferenceArtifacts(t *testing.T) {
 		t.Fatalf("expected structured guard learning, got %+v", summary.Learnings)
 	}
 }
+
+func TestEpisodeSummary_JSONRoundTrip(t *testing.T) {
+	original := &EpisodeSummary{
+		Goal:               "deploy",
+		Outcome:            "success",
+		Learnings:          []string{"guard-triggered revision required before final answer"},
+		ModelUsed:          "openai/gpt-5.4",
+		ReactTurns:         3,
+		VerifiedRecorded:   1,
+		QuestionsOpened:    2,
+		QuestionsResolved:  1,
+		AssumptionsRecorded: 4,
+		ResultQuality:      0.9,
+	}
+	decoded, err := ParseEpisodeSummaryJSON(original.JSON())
+	if err != nil {
+		t.Fatalf("ParseEpisodeSummaryJSON: %v", err)
+	}
+	if decoded == nil {
+		t.Fatal("expected decoded summary")
+	}
+	if decoded.ModelUsed != original.ModelUsed || decoded.ReactTurns != original.ReactTurns {
+		t.Fatalf("decoded inference metadata = %+v", decoded)
+	}
+	if decoded.VerifiedRecorded != 1 || decoded.QuestionsOpened != 2 || decoded.QuestionsResolved != 1 || decoded.AssumptionsRecorded != 4 {
+		t.Fatalf("decoded executive counts = %+v", decoded)
+	}
+	if len(decoded.Learnings) != 1 || decoded.Learnings[0] != original.Learnings[0] {
+		t.Fatalf("decoded learnings = %+v", decoded.Learnings)
+	}
+}

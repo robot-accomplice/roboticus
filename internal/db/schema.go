@@ -118,6 +118,7 @@ CREATE TABLE IF NOT EXISTS episodic_memory (
     id TEXT PRIMARY KEY,
     classification TEXT NOT NULL,
     content TEXT NOT NULL,
+    content_json TEXT,
     importance INTEGER NOT NULL DEFAULT 5,
     owner_id TEXT,
     memory_state TEXT NOT NULL DEFAULT 'active',
@@ -919,6 +920,7 @@ func (s *Store) ensureOptionalColumns() error {
 	nullableColumns := []optionalNullableColumn{
 		{Table: "session_messages", Column: "topic_tag", ColType: "TEXT"},
 		{Table: "episodic_memory", Column: "owner_id", ColType: "TEXT"},
+		{Table: "episodic_memory", Column: "content_json", ColType: "TEXT"},
 		{Table: "skills", Column: "last_used_at", ColType: "TEXT"},
 		{Table: "approval_requests", Column: "turn_id", ColType: "TEXT"},
 		{Table: "sub_agents", Column: "last_used_at", ColType: "TEXT"},

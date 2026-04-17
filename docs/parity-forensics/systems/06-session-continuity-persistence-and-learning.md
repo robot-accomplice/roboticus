@@ -91,6 +91,8 @@ The artifact boundaries for this system are:
 - episodic `episode_summary` rows written post-turn
 - executive-state entries written after a turn
 - semantic and `knowledge_facts` rows produced by consolidation
+- structured `episodic_memory.content_json` payloads that preserve turn-state
+  beyond the compact textual summary
 
 Parity is not satisfied unless those persisted artifacts match the intended
 ownership and promotion rules.
@@ -101,12 +103,15 @@ ownership and promotion rules.
   - persisted/restored `working_memory` rows
   - checkpoint rows and any checkpoint-derived live state
   - stored `episode_summary` entries
+  - stored `episode_summary` structured payloads (`content_json`)
   - executive-state entries written post-turn
   - semantic / `knowledge_facts` rows promoted by consolidation
 - Live-path proof:
   - restart/restore tests prove the vetted working-memory continuity path
   - post-turn tests prove reflection and executive-state growth write the
     intended records on the live path
+  - reflection/consolidation tests prove the structured episodic payload is
+    written and then consumed preferentially over lossy string reparsing
   - checkpoint lifecycle is proven through the same path production uses, not a
     test-only repository abstraction
   - consolidation promotions are classified against live stored artifacts
@@ -126,11 +131,11 @@ ownership and promotion rules.
 | ID | Priority | Concern | Rust behavior | Go behavior | Classification | Status | Evidence |
 |----|----------|---------|---------------|-------------|----------------|--------|----------|
 | SYS-06-001 | P1 | Working-memory persistence/vetting must remain treated as a core success, not an open gap | Rust baseline preserves active task-relevant state across continuity boundaries | Go has a real persisted/vetted working-memory path and should preserve it as an invariant | Improvement | Closed / retain as evidence | `internal/agent/memory/working_persistence.go:1-184` |
-| SYS-06-002 | P1 | Reflection had been heuristic and under-captured turn quality/timing | Rust continuity/learning path includes richer session/governor/checkpoint context | Go reflection now reads persisted `tool_calls` and `pipeline_traces.total_ms` for the current turn before falling back to message adjacency, records the executive-state delta the turn actually wrote, and distillation consumes recurring `Learnings` from stored episode summaries instead of dropping them at the episodic layer. Remaining seam is broader reflection richness/classification, not basic artifact ownership | Improved, narrower seam | Open | `internal/pipeline/post_turn.go:171-244`, `internal/pipeline/post_turn_test.go`, `internal/agent/memory/consolidation_distillation.go` |
+| SYS-06-002 | P1 | Reflection had been heuristic and under-captured turn quality/timing | Rust continuity/learning path includes richer session/governor/checkpoint context | Go reflection now reads persisted `tool_calls` and `pipeline_traces.total_ms` for the current turn before falling back to message adjacency, records the executive-state delta the turn actually wrote, persists a structured `content_json` episode payload alongside the compact summary, and distillation consumes recurring `Learnings` from stored episode summaries instead of dropping them at the episodic layer. Remaining seam is broader reflection richness/classification, not basic artifact ownership | Improved, narrower seam | Open | `internal/pipeline/post_turn.go:171-244`, `internal/pipeline/post_turn_test.go`, `internal/agent/memory/consolidation_distillation.go` |
 | SYS-06-003 | P1 | Consolidation behavior must be classified, not assumed parity | Rust has an explicit consolidation pipeline | Go distillation now promotes recurring learnings, fix patterns, evidence refs, and canonical relations into longer-lived stores. This is stronger than the earlier Go path, but the exact parity target for promotion breadth still needs explicit classification | Improvement candidate | Open, narrower seam | `internal/agent/memory/consolidation_distillation.go:1-320`, Rust `consolidation.rs` |
 | SYS-06-004 | P1 | Checkpoint ownership had been split between a lightweight live save path and a separate repository abstraction | Rust has explicit checkpoint persistence and pruning APIs with clearer lifecycle ownership | Go now routes live save, prune, and restore through repository-owned lifecycle seams and also honors pipeline-owned checkpoint policy (`enabled`, `interval_turns`) from operator config. The remaining seam is not lifecycle ownership, but the final restore shape relative to Rust's fuller checkpoint injection | Improved, narrower seam | Open | `internal/pipeline/pipeline_gaps.go`, `internal/db/checkpoint_repo.go`, `internal/pipeline/checkpoint_lifecycle_test.go`, `internal/daemon/daemon_adapters.go`, `internal/pipeline/pipeline.go` |
 | SYS-06-005 | P2 | Executive-state growth is stronger than earlier versions, but needs classification against Rust task-state ownership | Rust threads task state through planning/inference/guards | Go grows executive state post-turn from verification results; this looks like a real improvement, but needs explicit parity classification so it is protected rather than flattened away | Improvement candidate | Open | `internal/pipeline/post_turn.go:246+` |
-| SYS-06-006 | P1 | Reflection remains under-specified relative to the richer memory architecture now in place | Rust continuity/learning path ties more directly into checkpoint/session lifecycle | Go reflection now uses turn-owned artifacts for tool outcomes, duration, selected model, react-turn count, final guard outcomes, and the executive-state delta the turn actually produced; the resulting `Learnings` are consumed by consolidation. The remaining seam is no longer lifecycle disconnect, but whether the summary format should evolve into a still more structured turn-state model | Degradation, narrower seam | Open | `internal/pipeline/post_turn.go:171-244`, `internal/pipeline/post_turn_test.go`, `internal/agent/memory/reflection_episode_test.go`, `internal/agent/memory/consolidation_distillation.go` |
+| SYS-06-006 | P1 | Reflection remains under-specified relative to the richer memory architecture now in place | Rust continuity/learning path ties more directly into checkpoint/session lifecycle | Go reflection now uses turn-owned artifacts for tool outcomes, duration, selected model, react-turn count, final guard outcomes, and the executive-state delta the turn actually produced; it also persists a structured `EpisodeSummary` JSON payload that consolidation consumes preferentially over reparsing the human-readable summary string. The remaining seam is no longer artifact loss, but whether the structured turn-state model should expand further | Degradation, narrower seam | Open | `internal/pipeline/post_turn.go:171-244`, `internal/pipeline/post_turn_test.go`, `internal/agent/memory/reflection_episode_test.go`, `internal/agent/memory/consolidation_distillation.go` |
 | SYS-06-007 | P1 | Checkpoint repository abstraction is currently only partially authoritative | Checkpoint persistence APIs should either own the live save/load/delete lifecycle or be explicitly demoted as helper/test scaffolding | `CheckpointRepository` now owns the live save path (`SaveRecord(...)`), stable latest-record load (`LoadLatestRecord(...)`), and prune path (`DeleteOld(...)`), all exercised by production code. Remaining work is classification of the compact restore shape, not repository ownership itself | Improved, nearly closed | Open | `internal/db/checkpoint_repo.go`, `internal/db/coverage_boost_test.go`, `internal/pipeline/pipeline_gaps.go`, `internal/pipeline/checkpoint_lifecycle_test.go`, `internal/daemon/daemon_adapters.go`, `internal/daemon/daemon_adapters_test.go` |
 | SYS-06-008 | P2 | Tool-fact harvesting into executive-state assumptions is a novel extension that needs explicit protection | Baseline continuity systems preserve task-relevant state; memory growth should be deliberate rather than accidental | Go now extracts a narrow allowlist of referenced tool-derived facts and records them as executive assumptions post-turn; this is beyond simple Rust parity and should be classified as a deliberate synthesis of recall discipline plus working-memory continuity | Improvement candidate | Open | `internal/pipeline/post_turn.go:378-407` |
 
@@ -183,8 +188,8 @@ Protected invariants for this system:
 - Is `CheckpointRepository` intended to become the authoritative live path, or
   is it now effectively test/support scaffolding around a direct SQL path?
 - Should post-turn reflection remain heuristic above the now-correct
-  turn-owned artifact layer, or is there a richer structured turn-state model
-  we should feed it next?
+  turn-owned artifact layer, or should the new structured `EpisodeSummary`
+  payload expand further beyond the current JSON mirror?
 - Which consolidation behaviors are intentionally beyond parity and which are
   silent semantic changes?
 - Should the lightweight `maybeCheckpoint(...)` path be considered a temporary
@@ -256,3 +261,8 @@ Protected invariants for this system:
   unsupported claims), rather than on every whole-turn verifier failure. This
   preserves supported subgoal continuity while still preventing polluted
   durable state from untrustworthy answers.
+- 2026-04-17: Added `episodic_memory.content_json` and now persist a structured
+  `EpisodeSummary` payload alongside the compact textual summary. Consolidation
+  prefers the structured payload over reparsing the summary string, which
+  materially reduces artifact loss in the reflection/distillation path without
+  giving up the human-readable summary surface.

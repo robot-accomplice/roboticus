@@ -9,6 +9,7 @@
 package memory
 
 import (
+	"encoding/json"
 	"strconv"
 	"strings"
 	"time"
@@ -209,6 +210,30 @@ func (es *EpisodeSummary) FormatForStorage() string {
 		b.WriteString(es.Duration.Round(time.Second).String())
 	}
 	return b.String()
+}
+
+// JSON returns the structured episode summary for machine-consumable storage.
+func (es *EpisodeSummary) JSON() string {
+	if es == nil {
+		return ""
+	}
+	b, err := json.Marshal(es)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// ParseEpisodeSummaryJSON reconstructs an EpisodeSummary from stored JSON.
+func ParseEpisodeSummaryJSON(raw string) (*EpisodeSummary, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	var summary EpisodeSummary
+	if err := json.Unmarshal([]byte(raw), &summary); err != nil {
+		return nil, err
+	}
+	return &summary, nil
 }
 
 // EpisodeInput carries the extra context the enriched reflection needs

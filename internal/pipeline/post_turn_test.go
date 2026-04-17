@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"database/sql"
 	"strings"
 	"testing"
 
@@ -177,13 +178,14 @@ func TestReflectOnTurn_UsesPersistedTurnArtifacts(t *testing.T) {
 	})
 
 	var content string
+	var contentJSON sql.NullString
 	if err := store.QueryRowContext(ctx,
-		`SELECT content
+		`SELECT content, content_json
 		   FROM episodic_memory
 		  WHERE classification = 'episode_summary'
 		  ORDER BY created_at DESC, rowid DESC
 		  LIMIT 1`,
-	).Scan(&content); err != nil {
+	).Scan(&content, &contentJSON); err != nil {
 		t.Fatalf("load episode summary: %v", err)
 	}
 	if content == "" {
@@ -204,6 +206,9 @@ func TestReflectOnTurn_UsesPersistedTurnArtifacts(t *testing.T) {
 		"ExecutiveAssumptions: 3",
 	) {
 		t.Fatalf("episode summary did not reflect persisted turn artifacts: %q", content)
+	}
+	if !contentJSON.Valid || !strings.Contains(contentJSON.String, "\"ModelUsed\":\"ollama/llama3\"") || !strings.Contains(contentJSON.String, "\"VerifiedRecorded\":1") {
+		t.Fatalf("episode summary JSON did not carry structured payload: %+v", contentJSON)
 	}
 }
 

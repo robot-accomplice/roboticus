@@ -216,10 +216,11 @@ func (p *Pipeline) reflectOnTurn(ctx context.Context, turnID, userContent string
 
 	// Store as episodic memory with high importance.
 	formatted := summary.FormatForStorage()
+	summaryJSON := summary.JSON()
 	_, err := p.store.ExecContext(ctx,
-		`INSERT INTO episodic_memory (id, classification, content, importance)
-		 VALUES (?, 'episode_summary', ?, 8)`,
-		db.NewID(), formatted)
+		`INSERT INTO episodic_memory (id, classification, content, content_json, importance)
+		 VALUES (?, 'episode_summary', ?, ?, 8)`,
+		db.NewID(), formatted, summaryJSON)
 	if err != nil {
 		log.Debug().Err(err).Msg("reflection: failed to store episode summary")
 	} else {
