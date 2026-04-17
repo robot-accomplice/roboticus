@@ -178,10 +178,20 @@ func latestUserMessageContent(sess *session.Session) string {
 // back to always_include + the tool set sorted by registration order
 // within budget — callers still get a bounded tool surface, just
 // without query-relevance ranking.
-func buildAgentContext(ctx context.Context, sess *session.Session, tools *agent.ToolRegistry, embedClient *llm.EmbeddingClient, toolSearchCfg agenttools.ToolSearchConfig, promptCfg agent.PromptConfig, budgetCfg *core.ContextBudgetConfig) *agent.ContextBuilder {
+func buildAgentContext(ctx context.Context, sess *session.Session, tools *agent.ToolRegistry, embedClient *llm.EmbeddingClient, toolSearchCfg agenttools.ToolSearchConfig, promptCfg agent.PromptConfig, budgetCfg *core.ContextBudgetConfig, cacheCfg *core.CacheConfig) *agent.ContextBuilder {
 	ccfg := agent.DefaultContextConfig()
 	if budgetCfg != nil {
 		ccfg.BudgetConfig = budgetCfg
+	}
+	// Prompt compression gate (SYS-01-005). When operators enable
+	// compression in [cache] the ContextBuilder's BuildRequest runs
+	// CompressContextMessages on the final assembled slice; zero or
+	// unset CompressionTargetRatio is fine — BuildRequest falls back
+	// to 0.6, matching Rust's cfg.cache.compression_target_ratio
+	// default.
+	if cacheCfg != nil {
+		ccfg.PromptCompression = cacheCfg.PromptCompression
+		ccfg.CompressionTargetRatio = cacheCfg.CompressionTargetRatio
 	}
 	ctxBuilder := agent.NewContextBuilder(ccfg)
 
@@ -335,11 +345,12 @@ type executorAdapter struct {
 	toolSearchCfg   agenttools.ToolSearchConfig
 	promptConfig    agent.PromptConfig
 	budgetCfg       *core.ContextBudgetConfig
+	cacheCfg        *core.CacheConfig
 	maxTurnDuration time.Duration
 }
 
 func (a *executorAdapter) RunLoop(ctx context.Context, sess *session.Session) (string, int, error) {
-	ctxBuilder := buildAgentContext(ctx, sess, a.tools, a.embedClient, a.toolSearchCfg, a.promptConfig, a.budgetCfg)
+	ctxBuilder := buildAgentContext(ctx, sess, a.tools, a.embedClient, a.toolSearchCfg, a.promptConfig, a.budgetCfg, a.cacheCfg)
 
 	loopCfg := agent.DefaultLoopConfig()
 	if a.maxTurnDuration > 0 {
@@ -531,10 +542,11 @@ type streamAdapter struct {
 	toolSearchCfg agenttools.ToolSearchConfig
 	promptConfig  agent.PromptConfig
 	budgetCfg     *core.ContextBudgetConfig
+	cacheCfg      *core.CacheConfig
 }
 
 func (a *streamAdapter) PrepareStream(ctx context.Context, sess *session.Session) (*llm.Request, error) {
-	ctxBuilder := buildAgentContext(ctx, sess, a.tools, a.embedClient, a.toolSearchCfg, a.promptConfig, a.budgetCfg)
+	ctxBuilder := buildAgentContext(ctx, sess, a.tools, a.embedClient, a.toolSearchCfg, a.promptConfig, a.budgetCfg, a.cacheCfg)
 	req := ctxBuilder.BuildRequest(sess)
 	req.Stream = true
 	return req, nil

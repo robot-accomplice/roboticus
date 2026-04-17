@@ -569,6 +569,7 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 			toolSearchCfg:   toolSearchCfg,
 			promptConfig:    basePromptCfg,
 			budgetCfg:       &cfg.ContextBudget,
+			cacheCfg:        &cfg.Cache,
 			maxTurnDuration: time.Duration(cfg.Agent.AutonomyMaxTurnDurationSecs) * time.Second,
 		},
 		Ingestor: &ingestorAdapter{m: memMgr},
@@ -580,6 +581,7 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 			toolSearchCfg: toolSearchCfg,
 			promptConfig:  basePromptCfg,
 			budgetCfg:     &cfg.ContextBudget,
+			cacheCfg:      &cfg.Cache,
 		},
 		Pruner: &prunerAdapter{
 			tools:         tools,

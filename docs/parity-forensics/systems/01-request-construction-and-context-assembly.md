@@ -113,6 +113,8 @@ Parity for this system is not satisfied unless tests can assert:
   - those tests prove the selected tool set is pruned, memory is compacted,
     empty compacted messages are absent, and any hippocampus/checkpoint/prompt
     compression injections are present or absent intentionally
+  - if prompt compression is enabled on the live path, paired off-vs-on soak
+    evidence shows no pass→fail regression on the managed isolated scenario set
   - routing annotations are generated from the same effective request shape
     used by runtime model selection
 - Blocking conditions:
@@ -125,6 +127,10 @@ Parity for this system is not satisfied unless tests can assert:
   - any retained prompt-layer differences from Rust must be explicitly
     justified as Go-only or synthesis behavior and tied back to the final
     request artifact
+  - prompt compression may intentionally apply to a narrower surface than
+    Rust if that is required to preserve Go's richer memory/system-context
+    fidelity; such narrowing must be documented and covered by request-artifact
+    tests plus paired live-soak evidence
 
 ## Divergence Register
 
@@ -239,6 +245,33 @@ is re-audited.
     (compression ownership split), and SYS-01-008 (empty compacted
     messages) remain open and are the target of the next remediation
     passes after audit re-validation of SYS-01-001/002.
+- 2026-04-17: Observed additional in-flight System 01 remediation in the
+  worktree:
+  - memory injection now compacts over-budget memory through
+    `memory.CompactText(...)` instead of naive char truncation
+  - prompt compression is wired onto the live `ContextBuilder.BuildRequest`
+    path via `agent.CompressContextMessages(...)`
+  - older `llm.PromptCompressor` / topic-compression wrapper owners are being
+    deleted in favor of clearer ownership boundaries
+  - `llm.Service.Complete` / `Stream` now scrub empty messages at the service
+    boundary
+  These are meaningful live-path improvements, but System 01 is still not
+  closure-ready because the current evidence is mixed: hippocampus stage
+  wiring and tool-pruning stage wiring have explicit tests, while prompt
+  compression / empty-message handling still need stronger direct
+  request-artifact proof before any status is upgraded.
+- 2026-04-17: Added a dedicated paired compression soak harness at
+  `scripts/run-prompt-compression-soak.py`. This does not close SYS-01-005 by
+  itself; it defines the required quality gate for that item:
+  prompt compression is only acceptable if the compression-enabled lane does
+  not turn baseline-passing live scenarios into failures.
+- 2026-04-17: Prompt compression was deliberately narrowed relative to the
+  broader Rust-era behavior. The current Go owner compresses only older
+  conversational history (`user` / `assistant`) and leaves system prompt,
+  memory, memory index, hippocampus/system notes, and tool payload messages
+  verbatim. This is classified as a synthesis improvement, not a parity miss:
+  Go's system layer carries richer memory architecture and should not be fed
+  through a lossy compressor just because Rust historically allowed it.
 - 2026-04-16: v1.0.6 P1 memory-compaction + hippocampus-summary
   remediation landed (touches SYS-01-003 and SYS-01-004). Changes:
   - `internal/agent/memory/compaction.go` ports Rust's

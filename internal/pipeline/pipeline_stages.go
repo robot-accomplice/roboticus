@@ -28,6 +28,10 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 		return nil, core.NewError(core.ErrConfig, "no tool executor configured")
 	}
 
+	ctx = core.WithSessionID(ctx, session.ID)
+	ctx = core.WithTurnID(ctx, turnID)
+	ctx = core.WithChannelLabel(ctx, cfg.ChannelLabel)
+
 	// Compact context window before inference to stay within token budget.
 	if msgs := session.Messages(); len(msgs) > 0 {
 		compacted := CompactContext(msgs, defaultTokenBudget)
@@ -49,11 +53,16 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 		return nil, core.WrapError(core.ErrLLM, "inference failed", err)
 	}
 
+	var finalGuardResult *ApplyResult
+	guardRetried := false
+
 	// Guard chain with full context and retry support.
 	if p.guards != nil && cfg.GuardSet != GuardSetNone {
 		guardStart := time.Now()
 		guardCtx := p.buildGuardContext(session)
 		guardResult := p.guards.ApplyFullWithContext(result, guardCtx)
+		finalGuard := guardResult
+		finalGuardResult = &finalGuard
 		result = guardResult.Content
 		guardDur := time.Since(guardStart).Milliseconds()
 		log.Debug().
@@ -101,9 +110,13 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 			if retryErr != nil {
 				log.Debug().Err(retryErr).Msg("guard retry inference failed, using original result")
 			} else {
+				guardRetried = true
 				turns += retryTurns
 				// Apply guards again on the retry result (no further retries).
-				retryGuardResult := p.guards.ApplyFullWithContext(retryContent, guardCtx)
+				retryGuardCtx := p.buildGuardContext(session)
+				retryGuardResult := p.guards.ApplyFullWithContext(retryContent, retryGuardCtx)
+				finalGuard := retryGuardResult
+				finalGuardResult = &finalGuard
 				result = retryGuardResult.Content
 			}
 		}
@@ -130,6 +143,8 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 			if p.guards != nil && cfg.GuardSet != GuardSetNone {
 				guardCtx := p.buildGuardContext(session)
 				retryGuardResult := p.guards.ApplyFullWithContext(retryContent, guardCtx)
+				finalGuard := retryGuardResult
+				finalGuardResult = &finalGuard
 				retryContent = retryGuardResult.Content
 			}
 			result = retryContent
@@ -180,12 +195,10 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 		ModelRequested: cfg.ModelOverride,
 		ReactTurns:     turns,
 	}
-	if p.guards != nil && cfg.GuardSet != GuardSetNone {
-		// Guard violations were logged above; capture in params for tracing.
-		guardCtx2 := p.buildGuardContext(session)
-		guardResult2 := p.guards.ApplyFullWithContext(result, guardCtx2)
-		if len(guardResult2.Violations) > 0 {
-			params.GuardViolations = guardResult2.Violations
+	if finalGuardResult != nil {
+		params.GuardRetried = guardRetried
+		if len(finalGuardResult.Violations) > 0 {
+			params.GuardViolations = append([]string(nil), finalGuardResult.Violations...)
 		}
 	}
 
@@ -207,6 +220,9 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 // behavior (memory ingest, embedding, observer dispatch, assistant storage,
 // nickname refinement) runs identically to the standard path.
 func (p *Pipeline) prepareStreamInference(ctx context.Context, cfg Config, session *Session, msgID string) (*Outcome, error) {
+	ctx = core.WithSessionID(ctx, session.ID)
+	ctx = core.WithChannelLabel(ctx, cfg.ChannelLabel)
+
 	var streamReq *llm.Request
 	if p.streamer != nil {
 		req, err := p.streamer.PrepareStream(ctx, session)

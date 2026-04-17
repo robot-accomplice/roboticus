@@ -4,7 +4,7 @@
 
 - Owner: parity-forensics program
 - Audit status: `in progress`
-- Last updated: 2026-04-16
+- Last updated: 2026-04-17
 - Related release: v1.0.6
 
 ## Why This System Matters
@@ -117,8 +117,8 @@ inputs on the live path rather than depending on formatting conventions.
 | SYS-04-005 | P1 | Some guard application paths still bypass contextual guard evaluation entirely | Guard behavior should not silently get weaker on specific early-return paths | `guardOutcome(...)` applies `p.guards.Apply(...)` without `GuardContext`, so any contextual guards on those paths degrade to text-only behavior | Degradation seam | Open | `internal/pipeline/pipeline.go:373-381`, `internal/pipeline/guard_context.go:82-96` |
 | SYS-04-006 | P2 | Go verifier appears more featureful than earlier parity baseline, but needs explicit classification | Rust guard pipeline has typed context, retries, and deterministic fallbacks | Go now has claim audits, typed evidence, richer freshness checks, and structured verifier trace output, which may be true improvements rather than parity regressions | Improvement candidate | Open | Rust `guard_registry.rs`, `guard_retry.rs`; Go `verifier.go`, `trace.go:164-184` |
 | SYS-04-007 | P2 | Guard registry parity still needs its own line-by-line sweep | Rust guard ownership is centralized and explicit | Go now has a centralized `GuardRegistry` with Rust-aligned ordering plus additive Go-only guards, but this system audit has not yet traced every live call site and preset against Rust expectations | Improvement candidate | Open | `internal/pipeline/guard_registry.go`, `internal/pipeline/guards*.go` |
-| SYS-04-008 | P1 | Guard retry reuses stale `GuardContext` when evaluating the retry result | Guard retries should evaluate against context derived from the actual retry attempt, not the pre-retry session snapshot | Go builds `guardCtx` once before the first guard application, then reuses it when checking the retry response even though `RunLoop(...)` has already mutated the session with new tool calls/messages | Degradation seam | Open | `internal/pipeline/pipeline_stages.go:47-102` |
-| SYS-04-009 | P2 | Trace/inference metadata capture re-runs guards after the fact instead of preserving the exact applied result | Observability for guards should be derived from the actual guard outcome used on the live path | Go recomputes guard violations at the end of `runStandardInferenceWithTrace(...)` when building `InferenceParams`, which risks divergence from the exact first-pass or retry-pass guard result that actually shaped the response | Degradation risk | Open | `internal/pipeline/pipeline_stages.go:172-182` |
+| SYS-04-008 | P1 | Guard retry reuses stale `GuardContext` when evaluating the retry result | Guard retries should evaluate against context derived from the actual retry attempt, not the pre-retry session snapshot | Go now rebuilds `GuardContext` after the retry `RunLoop(...)` before reapplying contextual guards, so retry evaluation sees newly-attached tool results/messages from the actual retry attempt | Fixed | Closed 2026-04-17 | `internal/pipeline/pipeline_stages.go`, `internal/pipeline/guard_retry_artifacts_test.go::TestStandardInference_GuardRetryUsesFreshContext` |
+| SYS-04-009 | P2 | Trace/inference metadata capture re-runs guards after the fact instead of preserving the exact applied result | Observability for guards should be derived from the actual guard outcome used on the live path | Go now carries the final applied guard result forward and serializes `InferenceParams.GuardViolations` / `GuardRetried` from that live outcome instead of recomputing on already-sanitized content | Fixed | Closed 2026-04-17 | `internal/pipeline/pipeline_stages.go`, `internal/pipeline/guard_retry_artifacts_test.go::TestStandardInference_InferenceParamsCaptureAppliedGuardViolations` |
 
 ## Intentional Deviations
 
@@ -145,6 +145,9 @@ The main architectural target here is clear:
   leaving a reusable retry helper and a separate hand-rolled live orchestration
 - retry-time guard evaluation should rebuild `GuardContext` from the actual
   post-retry session state instead of reusing the pre-retry snapshot
+- trace / `InferenceParams` capture must serialize the actual final guard
+  outcome used on the live path, not a post-hoc recomputation on the final
+  content
 - `GuardContext` should either be fully populated on the live path or shrunk so
   it does not imply richer runtime context than guards actually receive
 - every live guard-application path should either supply `GuardContext` or be
@@ -182,3 +185,7 @@ The main architectural target here is clear:
 - 2026-04-16: Added two more live-path seams: guard retry currently reuses a
   stale pre-retry `GuardContext`, and final inference metadata recomputes guard
   violations instead of preserving the exact applied guard outcome.
+- 2026-04-17: Closed the two concrete live-path seams above. Standard
+  inference now rebuilds `GuardContext` after a guard-triggered retry and
+  persists `InferenceParams.GuardViolations` / `GuardRetried` from the exact
+  final applied guard result instead of re-running guards after the fact.

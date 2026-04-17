@@ -90,6 +90,27 @@ The artifacts for this system are operational, not prompt-level:
 Parity is not satisfied unless those artifacts reflect the operator’s intended
 config/workspace/runtime and behave safely across supported platforms.
 
+## Success Criteria
+
+- Closure artifact(s):
+  - installed service args/env as registered with the platform service manager
+  - updater side effects on the binary and sidecar files
+  - migrated firmware/config files on disk
+  - installer/updater repo identity and checksum behavior
+- Live-path proof:
+  - platform-facing tests or dry-run evidence prove install/start/stop/status
+    honor the operator’s intended config and runtime context
+  - updater tests cover the supported platform replacement strategy rather than
+    only helper functions
+  - maintenance migration is proven against real configured workspace paths
+- Blocking conditions:
+  - service install can still silently lose config/workspace intent
+  - updater safety depends on untested edge-case assumptions
+  - installer and in-app updater can drift to different release sources
+- Accepted deviations:
+  - hardened installer posture and sidecar-based Windows update flow may remain
+    only if they are classified as intentional operator-contract improvements
+
 ## Divergence Register
 
 | ID | Priority | Concern | Rust/operator baseline | Go behavior | Classification | Status | Evidence |

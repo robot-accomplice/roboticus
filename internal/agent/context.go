@@ -40,14 +40,38 @@ func stageFromExcess(ratio float64) CompactionStage {
 
 // ContextConfig controls context window management.
 type ContextConfig struct {
-	MaxTokens         int     // Token budget for context (used if BudgetTier not set)
-	BudgetTier        int     // 0=L0, 1=L1, 2=L2, 3=L3 — overrides MaxTokens when BudgetConfig is set
+	MaxTokens         int                       // Token budget for context (used if BudgetTier not set)
+	BudgetTier        int                       // 0=L0, 1=L1, 2=L2, 3=L3 — overrides MaxTokens when BudgetConfig is set
 	BudgetConfig      *core.ContextBudgetConfig // Tier-aware budget config (nil = use MaxTokens)
-	SoulMaxContextPct float64 // Personality cap as fraction of budget (default 0.4)
-	SoftTrimRatio     float64 // Start trimming at this fraction (default 0.8)
-	HardClearRatio    float64 // Emergency clear at this fraction (default 0.95)
-	CharsPerToken     int     // Rough estimation factor (default 4)
-	AntiFadeAfter     int     // Inject reminder after this many non-system turns
+	SoulMaxContextPct float64                   // Personality cap as fraction of budget (default 0.4)
+	SoftTrimRatio     float64                   // Start trimming at this fraction (default 0.8)
+	HardClearRatio    float64                   // Emergency clear at this fraction (default 0.95)
+	CharsPerToken     int                       // Rough estimation factor (default 4)
+	AntiFadeAfter     int                       // Inject reminder after this many non-system turns
+
+	// PromptCompression controls the Rust-parity ratio-based prompt
+	// compression pass (SYS-01-005). When true, BuildRequest runs
+	// CompressContextMessages on the assembled []llm.Message before
+	// returning the request — preserves the last user message and
+	// compresses every other message over ~200 chars through
+	// llm.SmartCompress at CompressionTargetRatio.
+	//
+	// False (the default) is a no-op; the request is returned with
+	// the full content of every message. Operators flip this on when
+	// model context ceilings force aggressive reduction; the trade
+	// is information density (less verbose history) vs fidelity
+	// (keyword-only compressed content).
+	//
+	// Rust gate anchor: context_builder.rs:436-445.
+	PromptCompression bool
+
+	// CompressionTargetRatio is the fraction of tokens to retain when
+	// PromptCompression is true. Clamped to [0.1, 1.0] by
+	// llm.SmartCompress. Rust default is 0.6; zero or unset values
+	// here are treated as 0.6 by BuildRequest to give operators a
+	// sensible behavior when they flip on PromptCompression but
+	// haven't thought about the ratio yet.
+	CompressionTargetRatio float64
 }
 
 // DefaultContextConfig returns sensible defaults.
@@ -385,6 +409,38 @@ func (cb *ContextBuilder) BuildRequest(session *Session) *llm.Request {
 	// Inject off-topic summaries before current-topic history.
 	result = append(result, topicSummaries...)
 	result = append(result, historyMessages...)
+
+	// Prompt compression gate (SYS-01-005 remediation).
+	//
+	// When the operator has enabled compression in core.CacheConfig
+	// (plumbed into ContextConfig at adapter construction), we run
+	// the Rust-parity CompressContextMessages pass over the fully
+	// assembled message slice — the last user message is preserved
+	// verbatim (it's the query we want the model to answer), every
+	// other message over ~200 chars gets rewritten through
+	// llm.SmartCompress at CompressionTargetRatio.
+	//
+	// Rust gate anchor: context_builder.rs:436-445.
+	//
+	// The gate intentionally operates on `result` in place after all
+	// upstream stages (tool pruning, memory compaction, hippocampus
+	// summary, topic partitioning, anti-fade reminder) have landed
+	// their contributions. That ordering matches Rust's arrangement
+	// and preserves one clear invariant: compression never deletes
+	// messages or moves them, so the index of every pipeline-injected
+	// system note is unchanged after compression runs.
+	//
+	// Zero or unset CompressionTargetRatio is treated as 0.6 so
+	// operators who flip on PromptCompression without tuning the
+	// ratio get a sensible default rather than the "clamp to 0.1"
+	// floor SmartCompress would otherwise apply.
+	if cb.config.PromptCompression {
+		ratio := cb.config.CompressionTargetRatio
+		if ratio <= 0 {
+			ratio = 0.6
+		}
+		CompressContextMessages(result, ratio)
+	}
 
 	return &llm.Request{
 		Messages: result,

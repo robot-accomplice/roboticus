@@ -599,7 +599,7 @@ func TestBuildAgentContext_Basic(t *testing.T) {
 	// No tools, no retriever — should not panic.
 	ctx := buildAgentContext(context.Background(), sess, nil, nil, tools.DefaultToolSearchConfig(), agent.PromptConfig{
 		AgentName: "TestBot",
-	}, nil)
+	}, nil, nil)
 	if ctx == nil {
 		t.Fatal("context builder should not be nil")
 	}
@@ -614,7 +614,7 @@ func TestBuildAgentContext_WithTools(t *testing.T) {
 
 	ctx := buildAgentContext(context.Background(), sess, reg, nil, tools.DefaultToolSearchConfig(), agent.PromptConfig{
 		AgentName: "TestBot",
-	}, nil)
+	}, nil, nil)
 	if ctx == nil {
 		t.Fatal("context builder should not be nil")
 	}
@@ -632,7 +632,7 @@ func TestBuildAgentContext_WithRetriever(t *testing.T) {
 
 	ctx := buildAgentContext(context.Background(), sess, nil, nil, tools.DefaultToolSearchConfig(), agent.PromptConfig{
 		AgentName: "TestBot",
-	}, nil)
+	}, nil, nil)
 	if ctx == nil {
 		t.Fatal("context builder should not be nil")
 	}
@@ -648,7 +648,7 @@ func TestBuildAgentContext_NoUserMessages(t *testing.T) {
 	// No messages.
 	ctx := buildAgentContext(context.Background(), sess, nil, nil, tools.DefaultToolSearchConfig(), agent.PromptConfig{
 		AgentName: "TestBot",
-	}, nil)
+	}, nil, nil)
 	if ctx == nil {
 		t.Fatal("context builder should not be nil")
 	}
@@ -691,7 +691,7 @@ func TestBuildAgentContext_PrefersPipelineMemoryContext(t *testing.T) {
 
 	ctx := buildAgentContext(context.Background(), sess, nil, nil, tools.DefaultToolSearchConfig(), agent.PromptConfig{
 		AgentName: "TestBot",
-	}, nil)
+	}, nil, nil)
 	req := ctx.BuildRequest(sess)
 
 	var sawPipeline bool
@@ -732,7 +732,7 @@ func TestBuildAgentContext_PrefersPipelineMemoryIndex(t *testing.T) {
 
 	ctx := buildAgentContext(context.Background(), sess, nil, nil, tools.DefaultToolSearchConfig(), agent.PromptConfig{
 		AgentName: "TestBot",
-	}, nil)
+	}, nil, nil)
 	req := ctx.BuildRequest(sess)
 
 	var sawPipeline bool
@@ -763,7 +763,7 @@ func TestBuildAgentContext_SetsAgentName(t *testing.T) {
 
 	ctx := buildAgentContext(context.Background(), sess, nil, nil, tools.DefaultToolSearchConfig(), agent.PromptConfig{
 		AgentName: "DefaultName",
-	}, nil)
+	}, nil, nil)
 	if ctx == nil {
 		t.Fatal("nil")
 	}

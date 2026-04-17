@@ -179,6 +179,15 @@ func (s *Service) loadPersistedRoutingWeights(store *db.Store) {
 
 // Complete sends a non-streaming request through the full pipeline.
 func (s *Service) Complete(ctx context.Context, req *Request) (*Response, error) {
+	// Empty-message drop (SYS-01-008 message-history analogue). Any
+	// system/user/assistant message with blank content that does NOT
+	// carry tool calls is a drafting bug — some upstream compactor
+	// produced an empty string we should not dispatch. Providers
+	// either reject these outright or (worse) accept them and drift
+	// the context. Scrub + log loudly so the regression is visible
+	// in operator logs.
+	req.Messages = dropEmptyMessages(req.Messages, "Service.Complete")
+
 	// Dedup: collapse concurrent identical requests.
 	dedupKey := hashRequest(req)
 	return s.dedup.Do(ctx, dedupKey, func() (*Response, error) {
@@ -214,7 +223,9 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 	// Route: select model if not explicitly set.
 	if req.Model == "" {
 		target := s.router.Select(req)
+		annotateRoutingDecision(ctx, s.router, req, target)
 		req.Model = ModelSpecForTarget(target)
+		s.recordModelSelectionFromRequest(ctx, req, req.Model, "routed")
 	}
 	// Fall back to configured primary if routing didn't produce a model.
 	if req.Model == "" && s.primary != "" {
@@ -408,6 +419,11 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 func (s *Service) Stream(ctx context.Context, req *Request) (<-chan StreamChunk, <-chan error) {
 	req.Stream = true
 
+	// Empty-message drop (SYS-01-008 message-history analogue) — same
+	// rationale as Service.Complete. Apply here so the streaming
+	// dispatch path gets the guard too.
+	req.Messages = dropEmptyMessages(req.Messages, "Service.Stream")
+
 	// Cache check: if we have a cached response, emit it as a single chunk.
 	if cached := s.cache.Get(ctx, req); cached != nil {
 		chunks := make(chan StreamChunk, 1)
@@ -421,7 +437,9 @@ func (s *Service) Stream(ctx context.Context, req *Request) (<-chan StreamChunk,
 	// Route if needed.
 	if req.Model == "" {
 		target := s.router.Select(req)
+		annotateRoutingDecision(ctx, s.router, req, target)
 		req.Model = ModelSpecForTarget(target)
+		s.recordModelSelectionFromRequest(ctx, req, req.Model, "routed")
 	}
 	// Fall back to configured primary if routing didn't produce a model.
 	if req.Model == "" && s.primary != "" {
@@ -747,6 +765,31 @@ func (s *Service) RecordModelSelection(ctx context.Context, turnID, sessionID, a
 	); err != nil {
 		s.errBus.ReportIfErr(err, "llm", "record_selection_event", core.SevDebug)
 	}
+}
+
+func (s *Service) recordModelSelectionFromRequest(ctx context.Context, req *Request, selectedModel, strategy string) {
+	if s.store == nil || req == nil || selectedModel == "" {
+		return
+	}
+	turnID := core.TurnIDFromCtx(ctx)
+	sessionID := core.SessionIDFromCtx(ctx)
+	channel := core.ChannelLabelFromCtx(ctx)
+	if turnID == "" || sessionID == "" {
+		return
+	}
+	s.RecordModelSelection(ctx, turnID, sessionID, "", channel, selectedModel, strategy, lastUserExcerpt(req))
+}
+
+func lastUserExcerpt(req *Request) string {
+	if req == nil {
+		return ""
+	}
+	for i := len(req.Messages) - 1; i >= 0; i-- {
+		if req.Messages[i].Role == "user" {
+			return req.Messages[i].Content
+		}
+	}
+	return ""
 }
 
 // ProviderStatus reports the health of each configured provider.

@@ -1,3 +1,33 @@
+// Package llm — compression.go holds the SmartCompress primitive that
+// backs the pipeline's Rust-parity prompt-compression pass.
+//
+// Historically this file carried a `PromptCompressor` wrapper plus a
+// separate `CompressWithTopicAwareness` topic-aware primitive plus an
+// unused `CompressionStrategy` enum. The wrapper had zero production
+// callers; the topic-aware primitive had zero callers; only SmartCompress
+// was live (indirectly, through the dead wrapper). All three are gone as
+// of v1.0.6 P2 — tracked under SYS-01-007 (unify compression ownership).
+//
+// The live compression entrypoints after v1.0.6 P2 are:
+//
+//   - llm.SmartCompress(text, targetRatio) — the entropy-based primitive
+//     (Rust parity for `roboticus-llm::compression::PromptCompressor`)
+//   - agent.CompressContextMessages(messages, targetRatio) — the
+//     Rust-parity `compress_context` wrapper that preserves the last
+//     user message and compresses each other message over ~200 chars
+//     (Rust `compress_context` in `roboticus-agent/src/context.rs`)
+//   - agent.ContextBuilder.compact — the message-level history-trim
+//     ladder (StageVerbatim → StageSkeleton) that operates inside
+//     ContextBuilder.BuildRequest for budget enforcement
+//   - agent.PartitionByTopic / SummarizeTopicBlock — the Go-novelty
+//     topic-aware condensation (used by ContextBuilder for off-topic
+//     history)
+//
+// The three remaining owners have distinct responsibilities: the
+// compressor is ratio-based and message-targeted; the history-trim
+// ladder is message-level and budget-targeted; the topic summary is
+// block-level and narrative-targeted. They do not overlap in scope.
+
 package llm
 
 import (
@@ -6,75 +36,6 @@ import (
 	"strings"
 	"unicode"
 )
-
-// CompressionStrategy defines how to compress messages.
-type CompressionStrategy int
-
-const (
-	StrategyTruncate         CompressionStrategy = iota // Drop oldest messages
-	StrategyDropLowRelevance                            // Drop least relevant
-)
-
-// PromptCompressor reduces token count before inference.
-type PromptCompressor struct {
-	strategy CompressionStrategy
-}
-
-// NewPromptCompressor creates a compressor with the given strategy.
-func NewPromptCompressor(strategy CompressionStrategy) *PromptCompressor {
-	return &PromptCompressor{strategy: strategy}
-}
-
-// Compress reduces messages to fit within tokenBudget.
-func (pc *PromptCompressor) Compress(messages []Message, tokenBudget int) []Message {
-	if len(messages) == 0 {
-		return nil
-	}
-
-	total := estimateMessageTokens(messages)
-	if total <= tokenBudget {
-		return messages
-	}
-
-	switch pc.strategy {
-	case StrategyTruncate:
-		return pc.truncateOldest(messages, tokenBudget)
-	case StrategyDropLowRelevance:
-		return pc.truncateOldest(messages, tokenBudget) // same for now, upgradeable
-	case StrategyTopicAware:
-		return CompressWithTopicAwareness(messages, tokenBudget)
-	default:
-		return pc.truncateOldest(messages, tokenBudget)
-	}
-}
-
-func (pc *PromptCompressor) truncateOldest(messages []Message, budget int) []Message {
-	// Keep messages from the end until budget is hit.
-	var result []Message
-	tokens := 0
-	for i := len(messages) - 1; i >= 0; i-- {
-		msgTokens := EstimateTokens(messages[i].Content)
-		if tokens+msgTokens > budget {
-			break
-		}
-		result = append([]Message{messages[i]}, result...)
-		tokens += msgTokens
-	}
-	if len(result) == 0 && len(messages) > 0 {
-		result = messages[len(messages)-1:]
-	}
-	return result
-}
-
-func estimateMessageTokens(msgs []Message) int {
-	total := 0
-	for _, m := range msgs {
-		total += EstimateTokens(m.Content)
-	}
-	return total
-}
-
-// ---------- Smart compression (Rust parity: entropy-based scoring) ----------
 
 // stopWords is the canonical stop list matching Rust's compression.rs STOP_WORDS exactly.
 // Rust parity: 78 words from is_stop_word() in compression.rs.
@@ -197,6 +158,13 @@ func scoreToken(token string, index, totalTokens int) float64 {
 // SmartCompress compresses text using entropy-based token scoring.
 // targetRatio is clamped to [0.1, 1.0]. Tokens are scored by importance,
 // top-N are kept, and original order is restored.
+//
+// Rust parity: `PromptCompressor::compress` in
+// `crates/roboticus-llm/src/compression.rs`. The Go implementation
+// matches the scoring formula and tokenization exactly; behavior
+// diverges only in character handling (Go uses Unicode-aware
+// strings.Fields / strings.ToLower whereas Rust uses ASCII-only
+// `split_whitespace` / `to_ascii_lowercase`).
 func SmartCompress(text string, targetRatio float64) string {
 	// Clamp ratio.
 	if targetRatio < 0.1 {

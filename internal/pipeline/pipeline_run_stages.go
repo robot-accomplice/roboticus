@@ -762,40 +762,14 @@ func (p *Pipeline) stagePrepareInference(ctx context.Context, pc *pipelineContex
 		AnnotateContextBudgetTrace(pc.tr, budget, sysToks, 0, memToks, histToks)
 	}
 
-	// Annotate routing decision: which model was selected and why.
+	// Annotate stable routing config. The actual routing winner/candidates
+	// are emitted later at the real selection site inside llm.Service
+	// using the final llm.Request, not a synthetic user-only request.
 	{
-		var candidates []string
-		var winner string
-		var winnerScore float64
-		routingMode := "fallback"
-
 		if pc.cfg.ModelOverride != "" {
-			winner = pc.cfg.ModelOverride
-			routingMode = "override"
-		} else if p.llmSvc != nil && p.llmSvc.Router() != nil {
-			router := p.llmSvc.Router()
-			for _, t := range router.Targets() {
-				candidates = append(candidates, t.Model)
-			}
-			userContent := ""
-			msgs := pc.session.Messages()
-			for i := len(msgs) - 1; i >= 0; i-- {
-				if msgs[i].Role == "user" {
-					userContent = msgs[i].Content
-					break
-				}
-			}
-			target := router.Select(&llm.Request{
-				Messages: []llm.Message{{Role: "user", Content: userContent}},
-			})
-			winner = target.Model
-			if router.MetascoreSelector != nil {
-				routingMode = "metascore"
-			} else {
-				routingMode = "heuristic"
-			}
+			AnnotateRoutingTrace(pc.tr, nil, pc.cfg.ModelOverride, 0.0, "override")
+			pc.tr.Annotate(TraceNSInference+".routing.trace_source", "model_override")
 		}
-		AnnotateRoutingTrace(pc.tr, candidates, winner, winnerScore, routingMode)
 
 		if p.llmSvc != nil && p.llmSvc.Router() != nil {
 			w := p.llmSvc.Router().GetRoutingWeights()
@@ -826,6 +800,7 @@ func (p *Pipeline) stagePrepareInference(ctx context.Context, pc *pipelineContex
 
 func (p *Pipeline) stageInference(ctx context.Context, pc *pipelineContext) (*Outcome, error) {
 	pc.tr.BeginSpan("inference")
+	ctx = llm.WithRoutingTracer(ctx, pc.tr)
 	p.dashNotify("stream_start", map[string]string{
 		"session_id": pc.session.ID, "agent_id": pc.input.AgentID,
 	})

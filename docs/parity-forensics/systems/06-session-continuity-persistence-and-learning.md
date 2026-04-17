@@ -95,6 +95,32 @@ The artifact boundaries for this system are:
 Parity is not satisfied unless those persisted artifacts match the intended
 ownership and promotion rules.
 
+## Success Criteria
+
+- Closure artifact(s):
+  - persisted/restored `working_memory` rows
+  - checkpoint rows and any checkpoint-derived live state
+  - stored `episode_summary` entries
+  - executive-state entries written post-turn
+  - semantic / `knowledge_facts` rows promoted by consolidation
+- Live-path proof:
+  - restart/restore tests prove the vetted working-memory continuity path
+  - post-turn tests prove reflection and executive-state growth write the
+    intended records on the live path
+  - checkpoint lifecycle is proven through the same path production uses, not a
+    test-only repository abstraction
+  - consolidation promotions are classified against live stored artifacts
+- Blocking conditions:
+  - checkpoint ownership remains split without an explicit authoritative path
+  - reflection fidelity depends on obvious TODO proxies that materially weaken
+    the learned artifact
+  - novel continuity features are being treated as disposable parity drift
+    instead of explicitly classified synthesis or improvement
+- Accepted deviations:
+  - richer executive-state growth, tool-fact harvesting, and graph promotion
+    may remain only if they are explicitly classified as deliberate strengths of
+    the combined architecture
+
 ## Divergence Register
 
 | ID | Priority | Concern | Rust behavior | Go behavior | Classification | Status | Evidence |

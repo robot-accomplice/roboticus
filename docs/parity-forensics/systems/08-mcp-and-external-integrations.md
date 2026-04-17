@@ -91,6 +91,28 @@ The artifact boundaries for this system are:
 Parity/readiness is not satisfied unless those artifacts are consistent and the
 docs describe them honestly.
 
+## Success Criteria
+
+- Closure artifact(s):
+  - connection/runtime metadata for configured MCP servers
+  - real `initialize`, `tools/list`, and `tools/call` evidence
+  - actionable stdio failure diagnostics
+  - bridged MCP tool descriptors as they appear on the live tool surface
+- Live-path proof:
+  - at least one blessed stdio and one blessed SSE target are exercised through
+    the actual runtime path
+  - timeout/failure behavior is classified on the live connection path, not
+    only in helper tests
+  - MCP tool bridging is proven on the same request/tool surface audited in
+    System 02
+- Blocking conditions:
+  - docs still overstate practical readiness beyond the available evidence
+  - connection teardown / timeout semantics remain ambiguous or operator-hostile
+  - blessed validation targets and integration guidance can drift apart
+- Accepted deviations:
+  - governance improvements, better diagnostics, and richer provenance may
+    remain only if transport semantics are still described honestly
+
 ## Divergence Register
 
 | ID | Priority | Concern | Baseline / desired behavior | Go behavior | Classification | Status | Evidence |

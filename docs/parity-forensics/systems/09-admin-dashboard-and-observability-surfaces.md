@@ -79,6 +79,31 @@ The artifacts for this system are:
 Parity/truth is not satisfied unless those artifacts accurately reflect live
 runtime behavior.
 
+## Success Criteria
+
+- Closure artifact(s):
+  - canonical trace rows / stage annotations
+  - canonical admin/runtime JSON responses
+  - WebSocket snapshot payloads
+  - release-facing truth surfaces that summarize runtime behavior
+- Live-path proof:
+  - route-shape tests and trace evidence prove the documented operator surfaces
+    are generated from the same runtime facts the backend actually used
+  - overlapping surfaces are mapped so a reader can tell which one is
+    canonical for a given signal
+  - release docs and observability routes are cross-checked against current
+    backend behavior after remediation
+- Blocking conditions:
+  - a canonical operator-facing surface still reports an approximation while
+    another surface reports runtime truth
+  - route overlap remains undocumented enough that operators can draw the wrong
+    conclusion from the wrong endpoint
+  - release-facing docs drift from the backend again
+- Accepted deviations:
+  - richer trace namespaces, WebSocket snapshot reuse, and explicit confidence
+    caveats may remain only if they are documented as intentional truth-surface
+    improvements
+
 ## Divergence Register
 
 | ID | Priority | Concern | Baseline / desired behavior | Go behavior | Classification | Status | Evidence |

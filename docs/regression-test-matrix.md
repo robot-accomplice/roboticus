@@ -98,6 +98,8 @@ Blocking commands for feature-complete releases:
 | R-RT-08 | Tool result messages serialize `tool_call_id`, `content`, and `name` fields | `internal/llm/client_formats_test.go` | L1 |
 | R-RT-09 | IntentMemoryRecall scoring rewards tool use and penalizes confabulation | `internal/llm/exercise_memory_recall_test.go` | L1 |
 | R-RT-10 | Every model in CommonIntentBaselines has a MEMORY_RECALL entry | `internal/llm/exercise_memory_recall_test.go` | L1 |
+| R-RT-11 | Routing trace annotations are emitted from the actual `llm.Request` selection site, including real message/tool counts, not a synthetic user-only approximation | `internal/llm/routing_trace_test.go` | L1 |
+| R-RT-12 | Model-selection events persist the actual routed request's winner and user excerpt when turn/session/channel context is present | `internal/llm/model_selection_event_test.go` | L1 |
 
 ### R-BOT: Bot Commands
 
@@ -231,6 +233,7 @@ Blocking commands for feature-complete releases:
 | R-SOAK-01 | Soak test default timeout is 1800s (30 min), not 240s | `scripts/run-agent-behavior-soak.py` | L4 |
 | R-SOAK-02 | Per-scenario `max_latency_s` override works for heavy scenarios | `scripts/run-agent-behavior-soak.py` | L4 |
 | R-SOAK-03 | Managed live behavior soak supports `external`, `clone`, and `fresh` modes so copied-state and clean-state lanes can both be exercised without touching the operator's live config or database | `scripts/run-agent-behavior-soak.py` (audit) | A |
+| R-SOAK-04 | Prompt compression quality is evaluated as a paired live soak (`off` vs `on`) on isolated configs, with pass→fail drift treated as a release-blocking regression | `scripts/run-prompt-compression-soak.py`, `scripts/prompt_compression_soak_test.go` | L1/L4 |
 
 ### R-CMD: CLI Subpackages (v1.0.4)
 
@@ -422,6 +425,8 @@ Blocking commands for feature-complete releases:
 | R-AGENT-155 | M3.3 — a tier observed below the sample minimum is NOT dormant even if every observation was on the FTS path (small-sample guard) | `internal/agent/memory/retrieval_path_telemetry_test.go` | L1 |
 | R-AGENT-156 | M3.3 — multiple `retrieval.path.<tier>` annotations within the same trace span are tallied independently across tiers | `internal/agent/memory/retrieval_path_telemetry_test.go` | L1 |
 | R-AGENT-157 | M3.3 — `RetrievalPathDistribution.SortedTiers` returns deterministic alphabetical ordering for stable dashboard / report output | `internal/agent/memory/retrieval_path_telemetry_test.go` | L1 |
+| R-AGENT-158 | Guard-triggered standard-inference retry rebuilds `GuardContext` from the post-retry session state, so contextual guards see retry-added tool results/messages instead of the stale pre-retry snapshot | `internal/pipeline/guard_retry_artifacts_test.go` | L1/L2 |
+| R-AGENT-159 | `InferenceParams.GuardViolations` and `GuardRetried` come from the actual final applied guard result, not a clean re-run over already-rewritten content | `internal/pipeline/guard_retry_artifacts_test.go` | L1/L2 |
 | R-UPGRADE-1 | `applyProvidersUpdate` mismatch error is self-describing: includes URL fetched, expected hash from manifest, and received hash computed from downloaded bytes — symmetric with the binary-update narration so operators can triage without re-running curl | `cmd/updatecmd/update_parity_test.go` | L1 |
 | R-UPGRADE-2 | `applySkillsUpdate` mismatch error identifies the specific skill file plus URL / expected / received hashes so operators can tell whether one file or the whole pack is misaligned | `cmd/updatecmd/update_parity_test.go` | L1 |
 | R-UPGRADE-3 | `applyProvidersUpdate(refreshConfig=false)` preserves a customized local providers.toml: no fetch, no SHA check, no overwrite — even when the registry manifest declares a stale SHA. Local edits (API keys, custom providers) survive `roboticus upgrade all` | `cmd/updatecmd/update_parity_test.go` | L1 |

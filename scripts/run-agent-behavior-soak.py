@@ -34,6 +34,11 @@ Environment:
                                 latency causes the ReAct loop to miss its
                                 wall-clock deadline before tool chains
                                 complete. Prod configs are never touched.
+  SOAK_PROMPT_COMPRESSION       inherit|off|on (default: inherit). For
+                                clone/fresh runs, force the isolated
+                                [cache].prompt_compression setting.
+  SOAK_PROMPT_COMPRESSION_RATIO Optional float ratio override for the
+                                isolated [cache].compression_target_ratio.
 """
 import atexit
 import hashlib
@@ -123,6 +128,21 @@ SOURCE_ROOT = Path(os.environ.get("SOAK_SOURCE_ROOT", str(Path.home() / ".roboti
 REPO_ROOT = Path(os.environ.get("SOAK_REPO_ROOT", str(Path(__file__).resolve().parents[1]))).resolve()
 SERVER_START_TIMEOUT = int(os.environ.get("SOAK_SERVER_START_TIMEOUT", "90"))
 KEEP_ISOLATED_ROOT = os.environ.get("SOAK_KEEP_ISOLATED_ROOT", "0") == "1"
+PROMPT_COMPRESSION_MODE = os.environ.get("SOAK_PROMPT_COMPRESSION", "inherit").strip().lower()
+if PROMPT_COMPRESSION_MODE not in {"inherit", "off", "on"}:
+    raise SystemExit(
+        f"unsupported SOAK_PROMPT_COMPRESSION={PROMPT_COMPRESSION_MODE!r}; expected inherit|off|on"
+    )
+_raw_prompt_compression_ratio = os.environ.get("SOAK_PROMPT_COMPRESSION_RATIO", "").strip()
+PROMPT_COMPRESSION_RATIO: Optional[float] = None
+if _raw_prompt_compression_ratio:
+    try:
+        PROMPT_COMPRESSION_RATIO = float(_raw_prompt_compression_ratio)
+    except ValueError as _exc:
+        sys.stderr.write(
+            f"[behavior-soak] ignoring SOAK_PROMPT_COMPRESSION_RATIO={_raw_prompt_compression_ratio!r}: {_exc}\n"
+        )
+        PROMPT_COMPRESSION_RATIO = None
 REAL_CONFIG = SOURCE_ROOT / "roboticus.toml"
 REAL_DB = SOURCE_ROOT / "state.db"
 REAL_WALLET = SOURCE_ROOT / "wallet.enc"
@@ -405,6 +425,20 @@ def build_isolated_config(mode: str, source_root: Path, isolated_root: Path, hos
     text = extend_allowed_paths_for_soak(text)
     if AUTONOMY_MAX_LOOP_SECS is not None:
         text = patch_autonomy_duration(text, AUTONOMY_MAX_LOOP_SECS)
+    if PROMPT_COMPRESSION_MODE != "inherit":
+        text = upsert_toml_setting(
+            text,
+            "cache",
+            "prompt_compression",
+            PROMPT_COMPRESSION_MODE == "on",
+        )
+    if PROMPT_COMPRESSION_RATIO is not None:
+        text = upsert_toml_setting(
+            text,
+            "cache",
+            "compression_target_ratio",
+            PROMPT_COMPRESSION_RATIO,
+        )
     config_path.write_text(text, encoding="utf-8")
     return config_path
 
@@ -1007,6 +1041,13 @@ def run() -> int:
     # Operators reading old reports can immediately see whether the
     # soak was exercising cached or uncached behavior.
     print(f"[behavior-soak] clear_cache={CLEAR_CACHE} bypass_cache={BYPASS_CACHE}")
+    if PROMPT_COMPRESSION_MODE != "inherit" or PROMPT_COMPRESSION_RATIO is not None:
+        ratio_note = (
+            f" ratio={PROMPT_COMPRESSION_RATIO}"
+            if PROMPT_COMPRESSION_RATIO is not None
+            else ""
+        )
+        print(f"[behavior-soak] prompt_compression={PROMPT_COMPRESSION_MODE}{ratio_note}")
     if AUTONOMY_MAX_LOOP_SECS is not None:
         print(f"[behavior-soak] autonomy_max_loop_secs={AUTONOMY_MAX_LOOP_SECS} (isolated config override)")
     if managed is not None:
@@ -1118,6 +1159,8 @@ def run() -> int:
         "runtime": "goboticus",
         "base_url": BASE_URL,
         "server_mode": SERVER_MODE,
+        "prompt_compression": PROMPT_COMPRESSION_MODE,
+        "prompt_compression_ratio": PROMPT_COMPRESSION_RATIO,
         "timeout_s": TIMEOUT,
         "max_latency_s": MAX_LATENCY,
         "total": total,
