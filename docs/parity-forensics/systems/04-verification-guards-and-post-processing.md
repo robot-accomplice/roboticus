@@ -120,6 +120,7 @@ inputs on the live path rather than depending on formatting conventions.
 | SYS-04-007 | P2 | Guard registry parity still needs its own line-by-line sweep | Rust guard ownership is centralized and explicit | Go now has a centralized `GuardRegistry` with Rust-aligned ordering plus additive Go-only guards, but this system audit has not yet traced every live call site and preset against Rust expectations | Improvement candidate | Open | `internal/pipeline/guard_registry.go`, `internal/pipeline/guards*.go` |
 | SYS-04-008 | P1 | Guard retry reuses stale `GuardContext` when evaluating the retry result | Guard retries should evaluate against context derived from the actual retry attempt, not the pre-retry session snapshot | Go now rebuilds `GuardContext` after the retry `RunLoop(...)` before reapplying contextual guards, so retry evaluation sees newly-attached tool results/messages from the actual retry attempt | Fixed | Closed 2026-04-17 | `internal/pipeline/pipeline_stages.go`, `internal/pipeline/guard_retry_artifacts_test.go::TestStandardInference_GuardRetryUsesFreshContext` |
 | SYS-04-009 | P2 | Trace/inference metadata capture re-runs guards after the fact instead of preserving the exact applied result | Observability for guards should be derived from the actual guard outcome used on the live path | Go now carries the final applied guard result forward and serializes `InferenceParams.GuardViolations` / `GuardRetried` from that live outcome instead of recomputing on already-sanitized content | Fixed | Closed 2026-04-17 | `internal/pipeline/pipeline_stages.go`, `internal/pipeline/guard_retry_artifacts_test.go::TestStandardInference_InferenceParamsCaptureAppliedGuardViolations` |
+| SYS-04-010 | P1 | Cached responses still bypassed contextual guards on the live path | Cached responses should be filtered through the same session-derived contextual guard surface as other early-return paths | Go now applies cache-hit guards with `ApplyFullWithContext(...)`, using the live session-derived `GuardContext` and cached model metadata instead of the weaker text-only `ApplyFull(...)` path | Fixed | Closed 2026-04-17 | `internal/pipeline/pipeline_run_stages.go`, `internal/pipeline/guard_retry_artifacts_test.go::TestCacheHit_UsesContextualGuardsWhenSessionAvailable` |
 
 ## Intentional Deviations
 
@@ -209,3 +210,7 @@ The main architectural target here is clear:
   fresh-context rebuild across retries, retry prompt injection, and final
   applied guard-result capture. The older `retryWithGuards(...)` entry point is
   now just a thin wrapper for unit-compatibility callers.
+- 2026-04-17: Closed the remaining cached-response contextual-guard gap.
+  Cache hits now apply `ApplyFullWithContext(...)` using the live session
+  state instead of bypassing contextual guards through the older text-only
+  cache path.

@@ -199,3 +199,37 @@ func TestGuardOutcome_UsesContextualGuardsWhenSessionAvailable(t *testing.T) {
 		t.Fatalf("result.Content = %q, want context-aware rewrite", result.Content)
 	}
 }
+
+func TestCacheHit_UsesContextualGuardsWhenSessionAvailable(t *testing.T) {
+	store := testutil.TempStore(t)
+	pipe := New(PipelineDeps{
+		Store:    store,
+		Executor: &staticExecutor{content: "unused because cache should hit"},
+		Guards:   NewGuardChain(&promptEchoContextGuard{}),
+		BGWorker: testutil.BGWorker(t, 4),
+	})
+
+	cfg := PresetAPI()
+	cfg.PostTurnIngest = false
+	cfg.NicknameRefinement = false
+	cfg.GuardSet = GuardSetNone
+	cfg.CacheGuardSet = GuardSetCached
+
+	prompt := "context please"
+	pipe.StoreInCache(context.Background(), prompt, "cached raw response with enough length", "cache-model")
+
+	outcome, err := RunPipeline(context.Background(), pipe, cfg, Input{
+		Content:   prompt,
+		AgentID:   "agent-1",
+		AgentName: "TestBot",
+	})
+	if err != nil {
+		t.Fatalf("RunPipeline: %v", err)
+	}
+	if !outcome.FromCache {
+		t.Fatal("expected cache hit")
+	}
+	if outcome.Content != "context-aware rewrite" {
+		t.Fatalf("outcome.Content = %q, want context-aware rewrite", outcome.Content)
+	}
+}

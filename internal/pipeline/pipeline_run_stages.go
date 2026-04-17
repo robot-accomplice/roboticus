@@ -608,7 +608,11 @@ func (p *Pipeline) stageCacheCheck(ctx context.Context, pc *pipelineContext) (*O
 			if p.guards != nil && pc.cfg.CacheGuardSet != GuardSetNone {
 				pc.tr.BeginSpan("cache_guard")
 				cacheGuardStart := time.Now()
-				cacheGuardResult := p.guards.ApplyFull(cacheOutcome.Content)
+				cacheGuardCtx := p.buildGuardContext(pc.session)
+				if cacheGuardCtx != nil && cacheOutcome.Model != "" {
+					cacheGuardCtx.ResolvedModel = cacheOutcome.Model
+				}
+				cacheGuardResult := p.guards.ApplyFullWithContext(cacheOutcome.Content, cacheGuardCtx)
 				cacheOutcome.Content = cacheGuardResult.Content
 				cacheGuardDur := time.Since(cacheGuardStart).Milliseconds()
 				cacheGuardEntries := make(map[string]GuardTraceEntry)
