@@ -176,13 +176,11 @@ func (g *ExecutionTruthGuard) CheckWithContext(content string, ctx *GuardContext
 		}
 		for _, denial := range denialPatterns {
 			if strings.Contains(lower, denial) {
-				// Rewrite with actual tool results.
-				var summary strings.Builder
-				summary.WriteString("Here are the results from the tools I executed:\n\n")
-				for _, tr := range ctx.ToolResults {
-					fmt.Fprintf(&summary, "**%s**: %s\n", tr.ToolName, truncate(tr.Output, 500))
+				return GuardResult{
+					Passed: false,
+					Retry:  true,
+					Reason: "falsely denied execution despite real tool results",
 				}
-				return GuardResult{Passed: false, Content: summary.String()}
 			}
 		}
 	}

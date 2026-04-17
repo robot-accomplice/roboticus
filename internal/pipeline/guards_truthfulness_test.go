@@ -70,10 +70,13 @@ func TestExecutionTruthGuard_DeniedCapability(t *testing.T) {
 	}
 	result := g.CheckWithContext("I'm unable to execute commands on your system.", ctx)
 	if result.Passed {
-		t.Error("should rewrite denial when tools actually ran")
+		t.Error("should reject false denial when tools actually ran")
 	}
-	if !strings.Contains(result.Content, "bash") {
-		t.Errorf("rewritten content should include tool results, got: %s", result.Content)
+	if !result.Retry {
+		t.Fatal("expected retry instead of canned rewrite for false denial")
+	}
+	if result.Content != "" {
+		t.Fatalf("expected no canned content rewrite, got: %q", result.Content)
 	}
 }
 
