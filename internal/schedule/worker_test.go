@@ -45,7 +45,7 @@ func TestCronExecutorFunc_Error(t *testing.T) {
 func TestNewCronWorker(t *testing.T) {
 	store := testutil.TempStore(t)
 	exec := CronExecutorFunc(func(ctx context.Context, job *CronJob) error { return nil })
-	w := NewCronWorker(store,"instance-1", 5*time.Second, exec, nil)
+	w := NewCronWorker(store, "instance-1", 5*time.Second, exec, nil)
 
 	if w.instanceID != "instance-1" {
 		t.Fatalf("expected instance-1, got %s", w.instanceID)
@@ -61,7 +61,7 @@ func TestNewCronWorker(t *testing.T) {
 func TestCronWorkerRun_CancelledImmediately(t *testing.T) {
 	store := testutil.TempStore(t)
 	exec := CronExecutorFunc(func(ctx context.Context, job *CronJob) error { return nil })
-	w := NewCronWorker(store,"inst", 50*time.Millisecond, exec, nil)
+	w := NewCronWorker(store, "inst", 50*time.Millisecond, exec, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately.
@@ -98,7 +98,7 @@ func TestCronWorkerTick_ExecutesJob(t *testing.T) {
 		return nil
 	})
 
-	w := NewCronWorker(store,"test-inst", time.Second, exec, nil)
+	w := NewCronWorker(store, "test-inst", time.Second, exec, nil)
 	// Directly call tick to avoid timing issues.
 	w.tick(bgCtx)
 
@@ -121,13 +121,13 @@ func TestLease_AcquireAndRelease(t *testing.T) {
 	ctx := context.Background()
 	insertTestJob(t, store, "lease-1")
 
-	w := NewCronWorker(store,"A", time.Second, nopExecutor(), nil)
+	w := NewCronWorker(store, "A", time.Second, nopExecutor(), nil)
 
 	if !w.acquireLease(ctx, "lease-1") {
 		t.Fatal("should acquire on first attempt")
 	}
 	// Second instance cannot acquire while held.
-	w2 := NewCronWorker(store,"B", time.Second, nopExecutor(), nil)
+	w2 := NewCronWorker(store, "B", time.Second, nopExecutor(), nil)
 	if w2.acquireLease(ctx, "lease-1") {
 		t.Fatal("should NOT acquire while held by A")
 	}
@@ -143,14 +143,14 @@ func TestLease_ExpiryAllowsReacquisition(t *testing.T) {
 	ctx := context.Background()
 	insertTestJob(t, store, "lease-2")
 
-	w := NewCronWorker(store,"A", time.Second, nopExecutor(), nil)
+	w := NewCronWorker(store, "A", time.Second, nopExecutor(), nil)
 	w.acquireLease(ctx, "lease-2")
 
 	// Force-expire the lease.
 	_, _ = store.ExecContext(ctx,
 		`UPDATE cron_jobs SET lease_expires_at = datetime('now', '-10 seconds') WHERE id = 'lease-2'`)
 
-	w2 := NewCronWorker(store,"B", time.Second, nopExecutor(), nil)
+	w2 := NewCronWorker(store, "B", time.Second, nopExecutor(), nil)
 	if !w2.acquireLease(ctx, "lease-2") {
 		t.Fatal("should claim expired lease")
 	}
@@ -166,7 +166,7 @@ func TestLease_Contention_ExactlyOneWinner(t *testing.T) {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			w := NewCronWorker(store,fmt.Sprintf("c-%d", idx), time.Second, nopExecutor(), nil)
+			w := NewCronWorker(store, fmt.Sprintf("c-%d", idx), time.Second, nopExecutor(), nil)
 			if w.acquireLease(context.Background(), "lease-3") {
 				atomic.AddInt32(&acquired, 1)
 			}
@@ -186,7 +186,7 @@ func TestRetry_ExponentialBackoff(t *testing.T) {
 	_, _ = store.ExecContext(ctx,
 		`UPDATE cron_jobs SET max_retries = 5, retry_delay_ms = 100 WHERE id = 'retry-1'`)
 
-	w := NewCronWorker(store,"retrier", time.Second, nopExecutor(), nil)
+	w := NewCronWorker(store, "retrier", time.Second, nopExecutor(), nil)
 	now := time.Now()
 
 	// Retry 3 times — should set next_run_at with increasing delays.
@@ -210,7 +210,7 @@ func TestRetry_Exhaustion(t *testing.T) {
 	_, _ = store.ExecContext(ctx,
 		`UPDATE cron_jobs SET max_retries = 2, retry_delay_ms = 50 WHERE id = 'retry-2'`)
 
-	w := NewCronWorker(store,"retrier", time.Second, nopExecutor(), nil)
+	w := NewCronWorker(store, "retrier", time.Second, nopExecutor(), nil)
 
 	// Exceed max retries.
 	job := &CronJob{ID: "retry-2", Name: "exhaust", MaxRetries: 2, RetryDelayMs: 50, RetryCount: 3}
@@ -230,7 +230,7 @@ func TestRunRecording_SuccessAndFailure(t *testing.T) {
 	ctx := context.Background()
 	insertTestJob(t, store, "run-1")
 
-	w := NewCronWorker(store,"recorder", time.Second, nopExecutor(), nil)
+	w := NewCronWorker(store, "recorder", time.Second, nopExecutor(), nil)
 
 	w.recordRun(ctx, &CronRun{JobID: "run-1", Status: CronRunSuccess, DurationMs: 42, Timestamp: time.Now()})
 	w.recordRun(ctx, &CronRun{JobID: "run-1", Status: CronRunFailed, DurationMs: 99, ErrorMsg: "boom", Timestamp: time.Now()})
@@ -243,6 +243,34 @@ func TestRunRecording_SuccessAndFailure(t *testing.T) {
 
 	if successCount != 1 || failCount != 1 {
 		t.Errorf("success=%d fail=%d, want 1 each", successCount, failCount)
+	}
+}
+
+func TestRunJobNow_UsesRunLifecycle(t *testing.T) {
+	store := testutil.TempStore(t)
+	ctx := context.Background()
+	insertTestJob(t, store, "run-now-1")
+
+	var executedID string
+	w := NewCronWorker(store, "manual", time.Second, CronExecutorFunc(func(ctx context.Context, job *CronJob) error {
+		executedID = job.ID
+		return nil
+	}), nil)
+
+	if err := w.RunJobNow(ctx, "run-now-1"); err != nil {
+		t.Fatalf("RunJobNow: %v", err)
+	}
+	if executedID != "run-now-1" {
+		t.Fatalf("executed job = %q, want run-now-1", executedID)
+	}
+
+	var status string
+	row := store.QueryRowContext(ctx, `SELECT status FROM cron_runs WHERE job_id = 'run-now-1' ORDER BY rowid DESC LIMIT 1`)
+	if err := row.Scan(&status); err != nil {
+		t.Fatalf("scan cron run: %v", err)
+	}
+	if status != string(CronRunSuccess) {
+		t.Fatalf("cron_runs.status = %q, want %q", status, CronRunSuccess)
 	}
 }
 

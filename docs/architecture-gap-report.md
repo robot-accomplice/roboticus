@@ -34,6 +34,14 @@ older architecture docs had left too generic:
   longer own transport JSON parsing; adapters own normalization and WhatsApp
   verification/signature checks, while routes only bridge normalized inbound
   messages into the pipeline.
+- **Plugin runtime ownership is sharper.** Daemon startup now owns plugin
+  registry construction, directory scan, manifest parsing, init, and
+  `AppState.Plugins` wiring. Plugin install/catalog UX still exists, but it no
+  longer stands in for a missing runtime lifecycle.
+- **Manual cron execution now shares the durable scheduler lifecycle.** The
+  live `/api/cron/{id}/run` path no longer bypasses lease/run-history/retry
+  ownership; it delegates through `CronWorker.RunJobNow(...)` and preserves the
+  same execution contract as scheduled runs.
 
 | Category | Compliant | Gaps |
 |----------|-----------|------|

@@ -118,7 +118,7 @@ Blocking commands for feature-complete releases:
 | --- | --- | --- | --- |
 | R-TOOLS-01 | Tool policy + approval loops remain enforceable end-to-end | integration tests | L2/L3 |
 | R-TOOLS-02 | Browser admin/runtime actions fail safely and perform advertised actions | browser tests + smoke | L1/L2/L3 |
-| R-TOOLS-03 | Plugin discovery/execute remains stable | plugin tests + route tests | L1/L2 |
+| R-TOOLS-03 | Plugin discovery/execute remains stable, including daemon-owned startup scan/init into the live registry | plugin tests + daemon tests + route tests | L1/L2 |
 | R-TOOLS-04 | MCP management surfaces stay aligned across API/UI/CLI where advertised | MCP tests + smoke | L2/L3 |
 | R-TOOLS-05 | Config-protection and action-verification guards block forbidden or fabricated behavior | guard tests + behavior tests | L1/L2/L4 |
 
@@ -138,6 +138,7 @@ Blocking commands for feature-complete releases:
 | R-SCHED-02 | Cron worker executes due jobs, leases safely, and records runs | scheduler tests + smoke | L1/L2/L3 |
 | R-SCHED-03 | UI-created schedule kinds are executable by the worker | integration tests | L2/L3 |
 | R-SCHED-04 | Background maintenance tasks do real work or are explicitly disabled | smoke + subsystem tests | L2/L3 |
+| R-SCHED-05 | Manual "run now" execution reuses the durable cron worker lifecycle instead of bypassing lease/run-history/retry ownership | route + scheduler tests | L1/L2 |
 
 ### R-WAL: Wallet, Treasury, Payments
 

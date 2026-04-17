@@ -24,6 +24,8 @@ This file follows the same C4 conventions used elsewhere in the repo:
 - transport adapters shown as adapters, not as owners of behavior
 - transport payload normalization owned once per transport, not duplicated
   across route and adapter layers
+- extension discovery/init owned once at daemon composition, not split between
+  admin install UX and route handlers
 - pipeline shown as the central factory
 - supporting non-C4 diagrams clearly labeled as such
 
@@ -94,7 +96,7 @@ C4Component
         Component(streaming, "Streaming / SSE Routes", "Go", "Parse stream request, call unified pipeline, format chunked output")
         Component(ws, "WebSocket Transport", "Go", "Ticket auth, topic subscription, EventBus broadcast. No business logic.")
         Component(channels, "Channel Adapters", "Go", "Translate Telegram, Discord, Signal, WhatsApp, Email, Voice, A2A to pipeline input. Own canonical transport normalization for those protocols.")
-        Component(cron, "Cron Connectors", "Go", "Translate scheduled execution into pipeline input")
+        Component(cron, "Cron Connectors", "Go", "Translate scheduled execution into pipeline input. Manual 'run now' must reuse the durable worker lifecycle, not bypass it.")
         Component(cli, "CLI / Admin Adapters", "Go", "Call API or runtime surfaces without owning shared business rules")
     }
 
@@ -250,6 +252,30 @@ flowchart LR
     pipeline["RunPipeline(...)"]
 
     http --> verify --> normalize --> bridge --> pipeline
+```
+
+## 8.5 Supplementary Rule View — Extension Runtime Ownership
+
+Plugin administration and plugin runtime are not the same thing. Install/search
+surfaces may write plugin files or inspect catalogs, but the live runtime must
+own registry construction, directory discovery, manifest parsing, and init.
+Routes consume that runtime-owned registry; they do not create their own view
+of plugin state.
+
+```mermaid
+flowchart LR
+    install["Install / Catalog UX"]
+    fs["Plugin Directory"]
+    daemon["Daemon Composition Root"]
+    registry["plugin.Registry\n(scan + init + active statuses)"]
+    routes["Plugin Routes / Dashboard"]
+    runtime["Runtime Tool Surface"]
+
+    install --> fs
+    daemon --> registry
+    fs --> daemon
+    registry --> routes
+    registry --> runtime
 ```
 
 ## 9. Supplementary Rule View — Request Construction Ownership
