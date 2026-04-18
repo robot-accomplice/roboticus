@@ -137,6 +137,9 @@ func TestMatrixAdapter_SyncOnce(t *testing.T) {
 		if got := msg.Metadata["is_direct"]; got != true {
 			t.Errorf("is_direct = %v", got)
 		}
+		if got := msg.Metadata["is_group"]; got != false {
+			t.Errorf("is_group = %v", got)
+		}
 	default:
 		t.Error("should have received an inbound message")
 	}

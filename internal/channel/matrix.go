@@ -227,6 +227,16 @@ func (m *MatrixAdapter) syncOnce(ctx context.Context) error {
 			if content == "" {
 				continue
 			}
+			isDirect := directRooms[roomID]
+			metadata := map[string]any{
+				"room_id":     roomID,
+				"sender_mxid": event.Sender,
+				"is_direct":   isDirect,
+			}
+			if isDirect {
+				metadata["is_group"] = false
+			}
+
 			m.inbound <- InboundMessage{
 				ID:        event.EventID,
 				Platform:  "matrix",
@@ -234,11 +244,7 @@ func (m *MatrixAdapter) syncOnce(ctx context.Context) error {
 				ChatID:    roomID,
 				Content:   content,
 				Timestamp: time.Now(), // Rust parity: Utc::now() — use agent's local clock, not server TS
-				Metadata: map[string]any{
-					"room_id":     roomID,
-					"sender_mxid": event.Sender,
-					"is_direct":   directRooms[roomID],
-				},
+				Metadata:  metadata,
 			}
 		}
 	}

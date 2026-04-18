@@ -61,7 +61,7 @@ Blocking commands for feature-complete releases:
 | R-CH-03 | Channel reply formatting does not leak orchestration metadata | guard/behavior tests | L2/L4 |
 | R-CH-04 | Telegram and WhatsApp webhook ingress is adapter-owned: routes consume normalized `InboundMessage` batches, WhatsApp challenge verification uses the adapter verifier, and POST webhook bodies validate adapter-owned signatures before pipeline dispatch | `internal/api/routes/admin_webhooks_test.go`, `internal/channel/telegram_coverage_test.go`, `internal/channel/coverage_boost_test.go` | L1/L2 |
 | R-CH-05 | Adapters preserve baseline normalized metadata for shared filters instead of forcing downstream inference: Telegram/Signal/Discord/WhatsApp emit explicit `is_group` context plus transport-specific identifiers where available, and Matrix preserves explicit `room_id` / `sender_mxid` identifiers on the live path | `internal/channel/telegram_coverage_test.go`, `internal/channel/signal_coverage_test.go`, `internal/channel/discord_coverage_test.go`, `internal/channel/coverage_boost_test.go`, `internal/channel/matrix_test.go` | L1/L2 |
-| R-CH-06 | Matrix preserves authoritative `is_direct` when `m.direct` account data is present, without inventing a stronger `is_group` claim when the homeserver provides no direct-chat signal | `internal/channel/matrix_test.go` | L1/L2 |
+| R-CH-06 | Matrix preserves authoritative `is_direct` when `m.direct` account data is present, and emits `is_group=false` only for those proven direct rooms without inventing a stronger group claim for unknown rooms | `internal/channel/matrix_test.go` | L1/L2 |
 
 ### R-SESS: Sessions And Scope
 
