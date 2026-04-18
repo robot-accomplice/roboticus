@@ -19,7 +19,9 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+from queue import Empty, Queue
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -36,6 +38,32 @@ except ValueError as exc:
     raise SystemExit(
         f"unsupported SOAK_LANE_TIMEOUT_SECONDS={_raw_lane_timeout!r}: {exc}"
     ) from exc
+_raw_lane_heartbeat = os.environ.get("SOAK_LANE_HEARTBEAT_SECONDS", "").strip()
+try:
+    LANE_HEARTBEAT_SECONDS = int(_raw_lane_heartbeat) if _raw_lane_heartbeat else 30
+except ValueError as exc:
+    raise SystemExit(
+        f"unsupported SOAK_LANE_HEARTBEAT_SECONDS={_raw_lane_heartbeat!r}: {exc}"
+    ) from exc
+
+
+def ts_now() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime())
+
+
+def log_line(message: str, *, file=sys.stdout) -> None:
+    print(f"{ts_now()} {message}", file=file, flush=True)
+
+
+def _stream_reader(stream, sink, queue: Queue[Tuple[str, str]]) -> None:
+    try:
+        for line in iter(stream.readline, ""):
+            sink.write(line)
+            sink.flush()
+            queue.put(("line", line))
+    finally:
+        stream.close()
+        queue.put(("eof", ""))
 
 
 def run_lane(label: str, compression_mode: str, report_path: Path) -> Tuple[int, Dict[str, object]]:
@@ -49,27 +77,66 @@ def run_lane(label: str, compression_mode: str, report_path: Path) -> Tuple[int,
     if RATIO:
         env["SOAK_PROMPT_COMPRESSION_RATIO"] = RATIO
 
-    print(
+    log_line(
         f"[prompt-compression-soak] lane={label} "
         f"compression={compression_mode} clear_cache={env['SOAK_CLEAR_CACHE']} "
         f"bypass_cache={env['SOAK_BYPASS_CACHE']}"
         + (f" ratio={RATIO}" if RATIO else "")
     )
 
-    try:
-        proc = subprocess.run(
-            [sys.executable, str(BASE_SOAK)],
-            cwd=str(REPO_ROOT),
-            env=env,
-            text=True,
-            capture_output=True,
-            timeout=LANE_TIMEOUT_SECONDS if LANE_TIMEOUT_SECONDS > 0 else None,
-        )
-    except subprocess.TimeoutExpired as exc:
-        if exc.stdout:
-            sys.stdout.write(exc.stdout)
-        if exc.stderr:
-            sys.stderr.write(exc.stderr)
+    proc = subprocess.Popen(
+        [sys.executable, str(BASE_SOAK)],
+        cwd=str(REPO_ROOT),
+        env=env,
+        text=True,
+        bufsize=1,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert proc.stdout is not None
+    assert proc.stderr is not None
+
+    queue: Queue[Tuple[str, str]] = Queue()
+    readers = [
+        threading.Thread(target=_stream_reader, args=(proc.stdout, sys.stdout, queue), daemon=True),
+        threading.Thread(target=_stream_reader, args=(proc.stderr, sys.stderr, queue), daemon=True),
+    ]
+    for reader in readers:
+        reader.start()
+
+    started = time.time()
+    next_heartbeat = started + max(LANE_HEARTBEAT_SECONDS, 1)
+    eof_count = 0
+    timed_out = False
+
+    while True:
+        now = time.time()
+        if LANE_TIMEOUT_SECONDS > 0 and now - started > LANE_TIMEOUT_SECONDS:
+            timed_out = True
+            proc.kill()
+            break
+        if now >= next_heartbeat:
+            elapsed = int(now - started)
+            report_state = "present" if report_path.exists() else "pending"
+            log_line(
+                f"[prompt-compression-soak] lane={label} heartbeat "
+                f"elapsed={elapsed}s report={report_state}"
+            )
+            next_heartbeat = now + max(LANE_HEARTBEAT_SECONDS, 1)
+        if proc.poll() is not None and eof_count >= 2:
+            break
+        try:
+            kind, _ = queue.get(timeout=1.0)
+            if kind == "eof":
+                eof_count += 1
+        except Empty:
+            pass
+
+    return_code = proc.wait()
+    for reader in readers:
+        reader.join(timeout=1.0)
+
+    if timed_out:
         return 124, {
             "runtime": "goboticus",
             "kind": "behavior-soak-lane",
@@ -85,12 +152,8 @@ def run_lane(label: str, compression_mode: str, report_path: Path) -> Tuple[int,
             ),
         }
 
-    if proc.stdout:
-        sys.stdout.write(proc.stdout)
-    if proc.stderr:
-        sys.stderr.write(proc.stderr)
     if not report_path.exists():
-        return proc.returncode, {
+        return return_code, {
             "runtime": "goboticus",
             "kind": "behavior-soak-lane",
             "lane": label,
@@ -100,14 +163,14 @@ def run_lane(label: str, compression_mode: str, report_path: Path) -> Tuple[int,
             "total": 0,
             "results": [],
             "harness_error": (
-                f"underlying soak exited {proc.returncode} without producing "
+                f"underlying soak exited {return_code} without producing "
                 f"report {report_path}"
             ),
         }
     with report_path.open("r", encoding="utf-8") as fh:
         report = json.load(fh)
-    report["exit_code"] = proc.returncode
-    return proc.returncode, report
+    report["exit_code"] = return_code
+    return return_code, report
 
 
 def index_results(report: Dict[str, object]) -> Dict[str, Dict[str, object]]:
@@ -183,7 +246,7 @@ def summarize_diffs(
 
 def main() -> int:
     if SERVER_MODE not in {"clone", "fresh"}:
-        print(
+        log_line(
             "[prompt-compression-soak] SOAK_SERVER_MODE must be clone or fresh "
             "so the isolated config can force prompt compression on/off safely",
             file=sys.stderr,
@@ -220,31 +283,31 @@ def main() -> int:
     with final_report_path.open("w", encoding="utf-8") as fh:
         json.dump(combined, fh, indent=2)
 
-    print(f"[prompt-compression-soak] report={final_report_path}")
-    print(
+    log_line(f"[prompt-compression-soak] report={final_report_path}")
+    log_line(
         f"[prompt-compression-soak] baseline={baseline_report.get('passed')}/{baseline_report.get('total')} "
         f"compressed={compressed_report.get('passed')}/{compressed_report.get('total')}"
     )
-    print(
+    log_line(
         f"[prompt-compression-soak] regressions={len(regressions)} "
         f"improvements={len(improvements)} unchanged_failures={len(unchanged_failures)}"
     )
 
     if regressions:
-        print("[prompt-compression-soak] FAIL prompt compression introduced regressions", file=sys.stderr)
+        log_line("[prompt-compression-soak] FAIL prompt compression introduced regressions", file=sys.stderr)
         for row in regressions:
-            print(f"  - {row['name']}: {row['reason']}", file=sys.stderr)
+            log_line(f"[prompt-compression-soak] regression {row['name']}: {row['reason']}", file=sys.stderr)
         return 1
 
     if baseline_exit != 0 or compressed_exit != 0:
-        print(
+        log_line(
             "[prompt-compression-soak] FAIL one or both underlying soaks failed "
             "without a compression-specific regression; inspect the combined report",
             file=sys.stderr,
         )
         return 1
 
-    print("[prompt-compression-soak] PASS no compression-specific regressions detected")
+    log_line("[prompt-compression-soak] PASS no compression-specific regressions detected")
     return 0
 
 

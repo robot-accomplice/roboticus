@@ -51,6 +51,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -128,6 +129,8 @@ SOURCE_ROOT = Path(os.environ.get("SOAK_SOURCE_ROOT", str(Path.home() / ".roboti
 REPO_ROOT = Path(os.environ.get("SOAK_REPO_ROOT", str(Path(__file__).resolve().parents[1]))).resolve()
 SERVER_START_TIMEOUT = int(os.environ.get("SOAK_SERVER_START_TIMEOUT", "90"))
 KEEP_ISOLATED_ROOT = os.environ.get("SOAK_KEEP_ISOLATED_ROOT", "0") == "1"
+REQUEST_HEARTBEAT_SECONDS = int(os.environ.get("SOAK_REQUEST_HEARTBEAT_SECONDS", "30"))
+HEALTH_HEARTBEAT_SECONDS = int(os.environ.get("SOAK_HEALTH_HEARTBEAT_SECONDS", "10"))
 PROMPT_COMPRESSION_MODE = os.environ.get("SOAK_PROMPT_COMPRESSION", "inherit").strip().lower()
 if PROMPT_COMPRESSION_MODE not in {"inherit", "off", "on"}:
     raise SystemExit(
@@ -147,6 +150,14 @@ REAL_CONFIG = SOURCE_ROOT / "roboticus.toml"
 REAL_DB = SOURCE_ROOT / "state.db"
 REAL_WALLET = SOURCE_ROOT / "wallet.enc"
 REAL_PID = SOURCE_ROOT / "roboticus.pid"
+
+
+def ts_now() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime())
+
+
+def log_line(message: str, *, file=sys.stdout) -> None:
+    print(f"{ts_now()} {message}", file=file, flush=True)
 
 
 @dataclass
@@ -238,6 +249,7 @@ def parse_base_url() -> Tuple[str, int]:
 def wait_for_health(base_url: str, timeout_s: int) -> Dict[str, object]:
     deadline = time.time() + timeout_s
     last_err: Optional[Exception] = None
+    next_heartbeat = time.time() + max(HEALTH_HEARTBEAT_SECONDS, 1)
     while time.time() < deadline:
         try:
             req = urllib.request.Request(base_url + "/api/health", method="GET")
@@ -245,6 +257,14 @@ def wait_for_health(base_url: str, timeout_s: int) -> Dict[str, object]:
                 return json.loads(resp.read().decode("utf-8", "replace"))
         except Exception as err:  # pragma: no cover - exercised in live mode
             last_err = err
+            now = time.time()
+            if now >= next_heartbeat:
+                elapsed = int(timeout_s - max(deadline - now, 0))
+                log_line(
+                    f"[behavior-soak] waiting for health elapsed={elapsed}s "
+                    f"last_error={err!r}"
+                )
+                next_heartbeat = now + max(HEALTH_HEARTBEAT_SECONDS, 1)
             time.sleep(1.0)
     raise RuntimeError(f"managed server not healthy within {timeout_s}s: {last_err}")
 
@@ -552,7 +572,7 @@ def clear_response_cache(db_path: Path) -> None:
         finally:
             conn.close()
     except Exception as e:
-        print(f"[behavior-soak] WARN could not clear response cache: {e}", file=sys.stderr)
+        log_line(f"[behavior-soak] WARN could not clear response cache: {e}", file=sys.stderr)
 
 
 def backup_real_state() -> Tuple[Path, Dict[str, Optional[str]]]:
@@ -683,6 +703,18 @@ def send_message(prompt: str, session_id: str = None, retries: int = 6) -> Dict[
     attempt = 0
     while True:
         attempt += 1
+        stop_heartbeat = threading.Event()
+
+        def heartbeat() -> None:
+            while not stop_heartbeat.wait(max(REQUEST_HEARTBEAT_SECONDS, 1)):
+                elapsed = int(time.time() - started)
+                log_line(
+                    f"[behavior-soak] request in flight attempt={attempt} "
+                    f"session_id={session_id or '-'} elapsed={elapsed}s"
+                )
+
+        heartbeat_thread = threading.Thread(target=heartbeat, daemon=True)
+        heartbeat_thread.start()
         try:
             with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
                 body = json.loads(resp.read().decode("utf-8", "replace"))
@@ -693,6 +725,9 @@ def send_message(prompt: str, session_id: str = None, retries: int = 6) -> Dict[
             if not retryable or attempt >= retries:
                 raise
             time.sleep(min(2 ** (attempt - 1), 20))
+        finally:
+            stop_heartbeat.set()
+            heartbeat_thread.join(timeout=1.0)
 
 
 def create_session(agent_id: str = AGENT_ID) -> str:
@@ -1030,46 +1065,47 @@ SCENARIOS = [
 
 def run() -> int:
     managed = prepare_managed_server()
-    print(f"[behavior-soak] base_url={BASE_URL}")
-    print(
+    log_line(f"[behavior-soak] base_url={BASE_URL}")
+    log_line(
         f"[behavior-soak] timeout={TIMEOUT}s max_latency={MAX_LATENCY}s "
         f"pause={SCENARIO_PAUSE}s isolated_sessions={SESSION_ISOLATION}"
     )
-    print(f"[behavior-soak] server_mode={SERVER_MODE}")
+    log_line(f"[behavior-soak] server_mode={SERVER_MODE}")
     # v1.0.6: surface the cache-toggle state in the report header so
     # results are unambiguous about which mode generated them.
     # Operators reading old reports can immediately see whether the
     # soak was exercising cached or uncached behavior.
-    print(f"[behavior-soak] clear_cache={CLEAR_CACHE} bypass_cache={BYPASS_CACHE}")
+    log_line(f"[behavior-soak] clear_cache={CLEAR_CACHE} bypass_cache={BYPASS_CACHE}")
     if PROMPT_COMPRESSION_MODE != "inherit" or PROMPT_COMPRESSION_RATIO is not None:
         ratio_note = (
             f" ratio={PROMPT_COMPRESSION_RATIO}"
             if PROMPT_COMPRESSION_RATIO is not None
             else ""
         )
-        print(f"[behavior-soak] prompt_compression={PROMPT_COMPRESSION_MODE}{ratio_note}")
+        log_line(f"[behavior-soak] prompt_compression={PROMPT_COMPRESSION_MODE}{ratio_note}")
     if AUTONOMY_MAX_LOOP_SECS is not None:
-        print(f"[behavior-soak] autonomy_max_loop_secs={AUTONOMY_MAX_LOOP_SECS} (isolated config override)")
+        log_line(f"[behavior-soak] autonomy_max_loop_secs={AUTONOMY_MAX_LOOP_SECS} (isolated config override)")
     if managed is not None:
-        print(f"[behavior-soak] isolated_root={managed.isolated_root}")
-        print(f"[behavior-soak] isolated_config={managed.config_path}")
-        print(f"[behavior-soak] isolated_db={managed.db_path}")
-        print(f"[behavior-soak] backup_dir={managed.backup_dir}")
+        log_line(f"[behavior-soak] isolated_root={managed.isolated_root}")
+        log_line(f"[behavior-soak] isolated_config={managed.config_path}")
+        log_line(f"[behavior-soak] isolated_db={managed.db_path}")
+        log_line(f"[behavior-soak] backup_dir={managed.backup_dir}")
 
     # Pre-flight: check server is reachable.
     try:
         req = urllib.request.Request(BASE_URL + "/api/health", method="GET")
         with urllib.request.urlopen(req, timeout=10) as resp:
             health = json.loads(resp.read().decode("utf-8", "replace"))
-        print(f"[behavior-soak] server health: {health.get('status', 'unknown')}")
+        log_line(f"[behavior-soak] server health: {health.get('status', 'unknown')}")
     except Exception as err:
-        print(f"[behavior-soak] FATAL: server not reachable at {BASE_URL}: {err}", file=sys.stderr)
+        log_line(f"[behavior-soak] FATAL: server not reachable at {BASE_URL}: {err}", file=sys.stderr)
         return 1
 
     session_id = None
     results: List[Dict[str, object]] = []
 
-    for scenario in SCENARIOS:
+    for idx, scenario in enumerate(SCENARIOS, start=1):
+        log_line(f"[behavior-soak] START {idx}/{len(SCENARIOS)} {scenario.name}")
         if SESSION_ISOLATION:
             try:
                 session_id = create_session()
@@ -1091,7 +1127,7 @@ def run() -> int:
                     "content": "",
                 }
                 results.append(row)
-                print(f"[behavior-soak] FAIL {scenario.name} session error: {err}")
+                log_line(f"[behavior-soak] FAIL {scenario.name} session error: {err}")
                 continue
 
         try:
@@ -1108,7 +1144,7 @@ def run() -> int:
                 "content": "",
             }
             results.append(row)
-            print(f"[behavior-soak] FAIL {scenario.name} request error: {err}")
+            log_line(f"[behavior-soak] FAIL {scenario.name} request error: {err}")
             continue
 
         session_id = str(resp.get("session_id") or session_id or "")
@@ -1145,11 +1181,11 @@ def run() -> int:
         results.append(row)
 
         status = "PASS" if passed else "FAIL"
-        print(f"[behavior-soak] {status} {scenario.name} latency={resp.get('_latency_s')}s")
+        log_line(f"[behavior-soak] {status} {scenario.name} latency={resp.get('_latency_s')}s")
         if not passed:
             for c in checks:
                 if not c["ok"]:
-                    print(f"  - {c['check']}: {c['detail']}")
+                    log_line(f"[behavior-soak] detail {scenario.name} {c['check']}: {c['detail']}")
 
         time.sleep(SCENARIO_PAUSE)
 
@@ -1186,14 +1222,14 @@ def run() -> int:
     with open(REPORT_PATH, "w", encoding="utf-8") as f:
         json.dump(report, f, indent=2)
 
-    print(f"\n[behavior-soak] report={REPORT_PATH}")
-    print(f"[behavior-soak] {total - len(failed)}/{total} scenarios passed")
+    log_line(f"[behavior-soak] report={REPORT_PATH}")
+    log_line(f"[behavior-soak] {total - len(failed)}/{total} scenarios passed")
     if failed:
-        print(f"[behavior-soak] FAIL {len(failed)}/{total} scenarios failed", file=sys.stderr)
+        log_line(f"[behavior-soak] FAIL {len(failed)}/{total} scenarios failed", file=sys.stderr)
         for r in failed:
-            print(f"  - {r['name']}", file=sys.stderr)
+            log_line(f"[behavior-soak] failed_scenario={r['name']}", file=sys.stderr)
         return 1
-    print("[behavior-soak] PASS all scenarios")
+    log_line("[behavior-soak] PASS all scenarios")
     return 0
 
 
@@ -1201,8 +1237,8 @@ if __name__ == "__main__":
     try:
         raise SystemExit(run())
     except urllib.error.HTTPError as e:
-        print(f"[behavior-soak] HTTP error: {e.code} {e.reason}", file=sys.stderr)
+        log_line(f"[behavior-soak] HTTP error: {e.code} {e.reason}", file=sys.stderr)
         raise
     except Exception as e:
-        print(f"[behavior-soak] FAIL: {e}", file=sys.stderr)
+        log_line(f"[behavior-soak] FAIL: {e}", file=sys.stderr)
         raise
