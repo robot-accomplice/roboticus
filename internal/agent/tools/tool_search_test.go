@@ -190,6 +190,28 @@ func TestSearchAndPrune_ReportsNoQueryEmbeddingStatus(t *testing.T) {
 	}
 }
 
+func TestSearchAndPrune_PreservesDescriptorOrderOnEqualScores(t *testing.T) {
+	tools := []*ToolDescriptor{
+		{Name: "alpha", Source: ToolSourceBuiltIn, TokenCost: 10},
+		{Name: "beta", Source: ToolSourceBuiltIn, TokenCost: 10},
+		{Name: "gamma", Source: ToolSourceBuiltIn, TokenCost: 10},
+	}
+
+	cfg := DefaultToolSearchConfig()
+	cfg.TopK = 3
+	cfg.TokenBudget = 100
+	cfg.AlwaysInclude = nil
+
+	selected, _ := SearchAndPrune(tools, nil, cfg)
+	names := extractNames(selected)
+	want := []string{"alpha", "beta", "gamma"}
+	for i := range want {
+		if names[i] != want[i] {
+			t.Fatalf("selection[%d] = %q, want %q", i, names[i], want[i])
+		}
+	}
+}
+
 // TestDefaultToolSearchConfig_MatchesRustParity freezes the Rust-
 // parity defaults. If a future edit changes these, it should be a
 // deliberate choice that breaks the test, not an accidental drift.

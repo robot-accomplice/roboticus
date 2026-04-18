@@ -61,6 +61,58 @@ func TestRegistry_ToolDefs(t *testing.T) {
 	}
 }
 
+func TestRegistry_PreservesRegistrationOrderAcrossSurfaces(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(&RuntimeContextTool{})
+	reg.Register(&EchoTool{})
+	reg.Register(&BashTool{})
+
+	names := reg.Names()
+	want := []string{"get_runtime_context", "echo", "bash"}
+	if len(names) != len(want) {
+		t.Fatalf("Names len = %d, want %d", len(names), len(want))
+	}
+	for i := range want {
+		if names[i] != want[i] {
+			t.Fatalf("Names[%d] = %q, want %q", i, names[i], want[i])
+		}
+	}
+
+	defs := reg.ToolDefs()
+	for i := range want {
+		if defs[i].Function.Name != want[i] {
+			t.Fatalf("ToolDefs[%d] = %q, want %q", i, defs[i].Function.Name, want[i])
+		}
+	}
+
+	descs := reg.Descriptors()
+	for i := range want {
+		if descs[i].Name != want[i] {
+			t.Fatalf("Descriptors[%d] = %q, want %q", i, descs[i].Name, want[i])
+		}
+	}
+}
+
+func TestRegistry_UnregisterRemovesFromStableOrder(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(&EchoTool{})
+	reg.Register(&BashTool{})
+	reg.Register(&RuntimeContextTool{})
+
+	reg.Unregister("bash")
+
+	names := reg.Names()
+	want := []string{"echo", "get_runtime_context"}
+	if len(names) != len(want) {
+		t.Fatalf("Names len = %d, want %d", len(names), len(want))
+	}
+	for i := range want {
+		if names[i] != want[i] {
+			t.Fatalf("Names[%d] = %q, want %q", i, names[i], want[i])
+		}
+	}
+}
+
 func TestRegistry_Get_IntrospectionAlias(t *testing.T) {
 	reg := NewRegistry()
 	base := NewIntrospectionTool("roboticus", "0.1.0", reg.Names)

@@ -31,6 +31,7 @@ type Registry struct {
 	mu          sync.RWMutex
 	tools       map[string]Tool
 	descriptors map[string]*ToolDescriptor // parallel cache; keyed by tool name
+	order       []string                   // stable registration order
 }
 
 // NewRegistry creates an empty tool registry.
@@ -49,6 +50,9 @@ func NewRegistry() *Registry {
 func (r *Registry) Register(t Tool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if _, exists := r.tools[t.Name()]; !exists {
+		r.order = append(r.order, t.Name())
+	}
 	r.tools[t.Name()] = t
 
 	// Token cost: rough estimate of the full tool-def payload
@@ -153,8 +157,10 @@ func (r *Registry) Descriptors() []*ToolDescriptor {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	out := make([]*ToolDescriptor, 0, len(r.descriptors))
-	for _, d := range r.descriptors {
-		out = append(out, d)
+	for _, name := range r.order {
+		if d, ok := r.descriptors[name]; ok {
+			out = append(out, d)
+		}
 	}
 	return out
 }
@@ -172,6 +178,12 @@ func (r *Registry) Unregister(name string) {
 	defer r.mu.Unlock()
 	delete(r.tools, name)
 	delete(r.descriptors, name)
+	for i, existing := range r.order {
+		if existing == name {
+			r.order = append(r.order[:i], r.order[i+1:]...)
+			break
+		}
+	}
 }
 
 // SyncPluginTools refreshes plugin-backed bridge tools from the live plugin registry.
@@ -184,8 +196,10 @@ func (r *Registry) List() []Tool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	result := make([]Tool, 0, len(r.tools))
-	for _, t := range r.tools {
-		result = append(result, t)
+	for _, name := range r.order {
+		if t, ok := r.tools[name]; ok {
+			result = append(result, t)
+		}
 	}
 	return result
 }
@@ -194,10 +208,7 @@ func (r *Registry) List() []Tool {
 func (r *Registry) Names() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	names := make([]string, 0, len(r.tools))
-	for name := range r.tools {
-		names = append(names, name)
-	}
+	names := append([]string(nil), r.order...)
 	return names
 }
 
@@ -206,8 +217,10 @@ func (r *Registry) NamesWithDescriptions() [][2]string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	pairs := make([][2]string, 0, len(r.tools))
-	for _, t := range r.tools {
-		pairs = append(pairs, [2]string{t.Name(), t.Description()})
+	for _, name := range r.order {
+		if t, ok := r.tools[name]; ok {
+			pairs = append(pairs, [2]string{t.Name(), t.Description()})
+		}
 	}
 	return pairs
 }
@@ -217,15 +230,17 @@ func (r *Registry) ToolDefs() []llm.ToolDef {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	defs := make([]llm.ToolDef, 0, len(r.tools))
-	for _, t := range r.tools {
-		defs = append(defs, llm.ToolDef{
-			Type: "function",
-			Function: llm.ToolFuncDef{
-				Name:        t.Name(),
-				Description: t.Description(),
-				Parameters:  t.ParameterSchema(),
-			},
-		})
+	for _, name := range r.order {
+		if t, ok := r.tools[name]; ok {
+			defs = append(defs, llm.ToolDef{
+				Type: "function",
+				Function: llm.ToolFuncDef{
+					Name:        t.Name(),
+					Description: t.Description(),
+					Parameters:  t.ParameterSchema(),
+				},
+			})
+		}
 	}
 	return defs
 }
