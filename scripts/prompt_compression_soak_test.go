@@ -35,6 +35,8 @@ func TestPromptCompressionSoakScript_PinsQualityGate(t *testing.T) {
 		`run_lane("compressed", "on"`,
 		`env.setdefault("SOAK_CLEAR_CACHE", "1")`,
 		`env.setdefault("SOAK_BYPASS_CACHE", "1")`,
+		`if not report_path.exists():`,
+		`"harness_error": (`,
 		`if SERVER_MODE not in {"clone", "fresh"}`,
 		`compression caused a pass->fail regression`,
 		`PASS no compression-specific regressions detected`,

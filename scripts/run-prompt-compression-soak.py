@@ -55,6 +55,21 @@ def run_lane(label: str, compression_mode: str, report_path: Path) -> Tuple[int,
         env=env,
         text=True,
     )
+    if not report_path.exists():
+        return proc.returncode, {
+            "runtime": "goboticus",
+            "kind": "behavior-soak-lane",
+            "lane": label,
+            "prompt_compression": compression_mode,
+            "passed": 0,
+            "failed": 0,
+            "total": 0,
+            "results": [],
+            "harness_error": (
+                f"underlying soak exited {proc.returncode} without producing "
+                f"report {report_path}"
+            ),
+        }
     with report_path.open("r", encoding="utf-8") as fh:
         report = json.load(fh)
     report["exit_code"] = proc.returncode
