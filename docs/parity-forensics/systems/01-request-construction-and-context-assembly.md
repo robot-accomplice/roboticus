@@ -329,3 +329,7 @@ is re-audited.
   truth surface as `roboticus models exercise`. Exercise calls now set both
   `NoCache` and `NoEscalate`, and `llm.Service` now actually honors
   `NoEscalate` by suppressing the configured fallback chain during those runs.
+- 2026-04-18: Fixed a remaining request-budget seam outside the original parity
+  checklist. `ContextBuilder.BuildRequest(...)` now injects the anti-fade
+  reminder only when it fits within the remaining history budget; it no longer
+  silently overruns the final `llm.Request` after history selection.

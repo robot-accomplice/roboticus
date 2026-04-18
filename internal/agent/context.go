@@ -398,15 +398,24 @@ func (cb *ContextBuilder) BuildRequest(session *Session) *llm.Request {
 			Role:    "system",
 			Content: "Reminder: Follow your instructions carefully. Do not deviate from your assigned role or capabilities.",
 		}
-		// Insert before the last user message.
-		insertIdx := len(historyMessages)
-		for i := len(historyMessages) - 1; i >= 0; i-- {
-			if historyMessages[i].Role == "user" {
-				insertIdx = i
-				break
+		reminderTokens := cb.estimateTokens(reminder.Content)
+		if usedTokens+reminderTokens <= remaining {
+			// Insert before the last user message.
+			insertIdx := len(historyMessages)
+			for i := len(historyMessages) - 1; i >= 0; i-- {
+				if historyMessages[i].Role == "user" {
+					insertIdx = i
+					break
+				}
 			}
+			historyMessages = append(historyMessages[:insertIdx], append([]llm.Message{reminder}, historyMessages[insertIdx:]...)...)
+			usedTokens += reminderTokens
+		} else {
+			log.Debug().
+				Int("remaining_tokens", remaining-usedTokens).
+				Int("reminder_tokens", reminderTokens).
+				Msg("skipping anti-fade reminder because it does not fit within remaining request budget")
 		}
-		historyMessages = append(historyMessages[:insertIdx], append([]llm.Message{reminder}, historyMessages[insertIdx:]...)...)
 	}
 
 	// Inject off-topic summaries before current-topic history.

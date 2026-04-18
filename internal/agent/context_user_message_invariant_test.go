@@ -201,3 +201,36 @@ func TestBuildRequest_DropsEmptyCompactedHistoryMessages(t *testing.T) {
 	}
 	t.Fatal("latest user prompt missing after dropping empty compacted history")
 }
+
+func TestBuildRequest_SkipsAntiFadeReminderWhenItDoesNotFitBudget(t *testing.T) {
+	cfg := DefaultContextConfig()
+	cfg.MaxTokens = 20
+	cfg.AntiFadeAfter = 1
+
+	cb := NewContextBuilder(cfg)
+	cb.SetSystemPrompt("system prompt fits")
+
+	sess := NewSession("s1", "agent-id", "Test")
+	sess.AddUserMessage("first question")
+	sess.AddAssistantMessage("first answer", nil)
+	sess.AddUserMessage("FINAL_PROMPT")
+
+	req := cb.BuildRequest(sess)
+
+	for _, m := range req.Messages {
+		if m.Role == "system" && strings.Contains(m.Content, "Reminder: Follow your instructions carefully.") {
+			t.Fatal("anti-fade reminder should be skipped when it would exceed the remaining request budget")
+		}
+	}
+
+	foundFinal := false
+	for _, m := range req.Messages {
+		if m.Role == "user" && strings.Contains(m.Content, "FINAL_PROMPT") {
+			foundFinal = true
+			break
+		}
+	}
+	if !foundFinal {
+		t.Fatal("final user prompt missing after anti-fade budget check")
+	}
+}
