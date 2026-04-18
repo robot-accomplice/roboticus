@@ -110,7 +110,7 @@ func TestMaintenanceLoopTask_Run_ExecutesCleanupQueries(t *testing.T) {
 	if len(store.queries) != 2 {
 		t.Fatalf("query count = %d, want 2", len(store.queries))
 	}
-	if !strings.Contains(store.queries[0], "DELETE FROM response_cache") || !strings.Contains(store.queries[0], "expires_at") {
+	if !strings.Contains(store.queries[0], "DELETE FROM semantic_cache") || !strings.Contains(store.queries[0], "expires_at") {
 		t.Fatalf("first query should evict by expires_at, got %q", store.queries[0])
 	}
 	if !strings.Contains(store.queries[1], "UPDATE cron_jobs SET lease_holder = NULL") {

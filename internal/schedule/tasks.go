@@ -164,7 +164,7 @@ func (t *MaintenanceLoopTask) Run(ctx context.Context, _ *TickContext) TaskResul
 
 	// Evict expired cache entries using the live TTL contract.
 	res, err := t.Store.ExecContext(ctx,
-		`DELETE FROM response_cache
+		`DELETE FROM semantic_cache
 		 WHERE expires_at IS NOT NULL AND expires_at <= datetime('now')`)
 	evicted := int64(0)
 	if err == nil {
