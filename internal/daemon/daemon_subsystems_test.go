@@ -80,6 +80,58 @@ func TestMaintenanceHeartbeatEnabled_RequiresConfiguredInterval(t *testing.T) {
 	}
 }
 
+func TestTreasuryRefreshEnabled_RequiresDedicatedInterval(t *testing.T) {
+	cfg := core.DefaultConfig()
+	cfg.Heartbeat.IntervalSeconds = 300
+	cfg.Heartbeat.TreasuryIntervalSeconds = 0
+
+	d := &Daemon{cfg: &cfg}
+	if d.treasuryRefreshEnabled() {
+		t.Fatal("treasury refresh should be disabled without a dedicated interval")
+	}
+}
+
+func TestTreasuryRefreshInterval_UsesDedicatedIntervalOnly(t *testing.T) {
+	cfg := core.DefaultConfig()
+	cfg.Heartbeat.IntervalSeconds = 60
+	cfg.Heartbeat.TreasuryIntervalSeconds = 300
+
+	d := &Daemon{cfg: &cfg}
+	if got := d.treasuryRefreshInterval(); got != 300*time.Second {
+		t.Fatalf("interval = %v, want %v", got, 300*time.Second)
+	}
+}
+
+func TestNewTreasuryRefresh_ConfiguresTreasuryTaskAndIntervals(t *testing.T) {
+	cfg := core.DefaultConfig()
+	cfg.Database.Path = t.TempDir() + "/treasury.db"
+	cfg.Heartbeat.TreasuryIntervalSeconds = 300
+
+	d, err := New(&cfg, BootOptions{})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	defer func() { _ = d.Stop(nil) }()
+
+	heartbeat, intervals, tickCtxFn := d.newTreasuryRefresh()
+	if heartbeat == nil {
+		t.Fatal("heartbeat should not be nil")
+	}
+	if len(heartbeat.Tasks()) != 1 {
+		t.Fatalf("task count = %d, want 1", len(heartbeat.Tasks()))
+	}
+	if heartbeat.Tasks()[0].Kind() != schedule.TaskSurvivalCheck {
+		t.Fatalf("task kind = %q, want %q", heartbeat.Tasks()[0].Kind(), schedule.TaskSurvivalCheck)
+	}
+	if intervals.Financial != 300*time.Second {
+		t.Fatalf("financial interval = %v, want %v", intervals.Financial, 300*time.Second)
+	}
+	tctx := tickCtxFn()
+	if tctx == nil || tctx.Timestamp.IsZero() {
+		t.Fatal("tick context should be populated")
+	}
+}
+
 func TestMaintenanceHeartbeatInterval_PrefersMaintenanceInterval(t *testing.T) {
 	cfg := core.DefaultConfig()
 	cfg.Heartbeat.IntervalSeconds = 300

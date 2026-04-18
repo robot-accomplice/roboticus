@@ -172,6 +172,16 @@ func (d *Daemon) run() {
 	// Start wallet balance poller.
 	startWalletPoller(ctx, d.cfg, d.store, d.appState.Keystore)
 
+	// Treasury refresh loop — derives treasury_state from cached wallet balances
+	// on its own slower cadence, not the application-health heartbeat.
+	if d.treasuryRefreshEnabled() {
+		d.wg.Add(1)
+		go func() {
+			defer d.wg.Done()
+			d.runTreasuryRefresh(ctx)
+		}()
+	}
+
 	// Memory consolidation heartbeat — runs the dreaming cycle periodically.
 	// Matches Rust's heartbeat-triggered consolidation.
 	d.wg.Add(1)
@@ -201,6 +211,31 @@ func (d *Daemon) consolidationHeartbeatInterval() time.Duration {
 		return time.Duration(secs) * time.Second
 	}
 	return time.Hour
+}
+
+func (d *Daemon) treasuryRefreshEnabled() bool {
+	return d.cfg.Heartbeat.TreasuryIntervalSeconds > 0
+}
+
+func (d *Daemon) treasuryRefreshInterval() time.Duration {
+	if secs := d.cfg.Heartbeat.TreasuryIntervalSeconds; secs > 0 {
+		return time.Duration(secs) * time.Second
+	}
+	return 0
+}
+
+func (d *Daemon) newTreasuryRefresh() (*schedule.HeartbeatDaemon, schedule.DomainIntervals, func() *schedule.TickContext) {
+	task := &schedule.TreasuryLoopTask{Store: d.store}
+	interval := d.treasuryRefreshInterval()
+	daemon := schedule.NewHeartbeatDaemon(interval, []schedule.HeartbeatTask{task})
+	intervals := schedule.DefaultDomainIntervals()
+	intervals.Financial = interval
+	return daemon, intervals, func() *schedule.TickContext {
+		return &schedule.TickContext{
+			SurvivalTier: core.SurvivalTierStable,
+			Timestamp:    time.Now(),
+		}
+	}
 }
 
 func (d *Daemon) newConsolidationHeartbeat() (*schedule.HeartbeatDaemon, schedule.DomainIntervals, func() *schedule.TickContext) {
@@ -271,6 +306,18 @@ func (d *Daemon) runConsolidationHeartbeat(ctx context.Context) {
 
 	daemon, intervals, tickCtxFn := d.newConsolidationHeartbeat()
 	log.Info().Dur("interval", intervals.Memory).Msg("memory consolidation heartbeat started")
+	daemon.RunDistributed(ctx, intervals, tickCtxFn)
+}
+
+func (d *Daemon) runTreasuryRefresh(ctx context.Context) {
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(30 * time.Second):
+	}
+
+	daemon, intervals, tickCtxFn := d.newTreasuryRefresh()
+	log.Info().Dur("interval", intervals.Financial).Msg("treasury refresh loop started")
 	daemon.RunDistributed(ctx, intervals, tickCtxFn)
 }
 

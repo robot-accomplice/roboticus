@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"roboticus/internal/core"
+	"roboticus/testutil"
 )
 
 type stubDB struct {
@@ -105,5 +106,42 @@ func TestMaintenanceLoopTask_Run_ExecutesCleanupQueries(t *testing.T) {
 	}
 	if result.Message != "evicted=1 leases_cleared=1" {
 		t.Fatalf("message = %q", result.Message)
+	}
+}
+
+func TestTreasuryLoopTask_Run_PersistsTreasuryState(t *testing.T) {
+	store := testutil.TempStore(t)
+
+	if _, err := store.ExecContext(context.Background(),
+		`INSERT INTO wallet_balances (symbol, name, balance, contract, decimals, is_native, updated_at)
+		 VALUES ('USDC', 'USD Coin', 42.5, '', 6, 0, datetime('now')),
+		        ('aUSDC', 'Aave USDC', 7.25, '', 6, 0, datetime('now'))`); err != nil {
+		t.Fatalf("seed balances: %v", err)
+	}
+
+	task := &TreasuryLoopTask{Store: store}
+	tctx := &TickContext{SurvivalTier: core.SurvivalTierStable}
+	result := task.Run(context.Background(), tctx)
+	if !result.Success {
+		t.Fatalf("task should succeed: %+v", result)
+	}
+	if tctx.USDCBalance != 49.75 {
+		t.Fatalf("tick usdc balance = %v, want 49.75", tctx.USDCBalance)
+	}
+
+	var usdc, atoken float64
+	var tier string
+	if err := store.QueryRowContext(context.Background(),
+		`SELECT usdc_balance, atoken_balance, survival_tier FROM treasury_state WHERE id = 1`).Scan(&usdc, &atoken, &tier); err != nil {
+		t.Fatalf("query treasury_state: %v", err)
+	}
+	if usdc != 49.75 {
+		t.Fatalf("usdc_balance = %v, want 49.75", usdc)
+	}
+	if atoken != 7.25 {
+		t.Fatalf("atoken_balance = %v, want 7.25", atoken)
+	}
+	if tier != core.SurvivalTierStable.String() {
+		t.Fatalf("survival_tier = %q", tier)
 	}
 }
