@@ -127,6 +127,7 @@ Blocking commands for feature-complete releases:
 | R-TOOLS-04 | MCP management surfaces stay aligned across API/UI/CLI where advertised | MCP tests + smoke | L2/L3 |
 | R-TOOLS-07 | Runtime MCP connect/discover/disconnect keeps the live tool surface aligned with the connection manager instead of requiring daemon restart for MCP tool registration/pruning truth | MCP route tests + agent tool tests | L1/L2 |
 | R-TOOLS-08 | Maintenance cache eviction targets the live `semantic_cache` table and uses the same `expires_at` TTL contract as cache lookup/write paths | scheduler tests | L1/L2 |
+| R-TOOLS-09 | Prompt-layer tool roster is derived from the same selected per-request tool surface as `llm.Request.Tools`, including the authoritative zero-tools case | daemon adapter tests | L1/L2 |
 | R-TOOLS-05 | Config-protection and action-verification guards block forbidden or fabricated behavior | guard tests + behavior tests | L1/L2/L4 |
 | R-TOOLS-06 | Per-call MCP timeout fails only the timed-out call: the transport stays open, late responses are dropped, and a follow-on call can still succeed on the same connection | `internal/mcp/client_test.go` | L1/L2 |
 

@@ -235,15 +235,18 @@ func buildAgentContext(ctx context.Context, sess *session.Session, store *db.Sto
 		selectedDefs []llm.ToolDef
 		searchStats  agenttools.ToolSearchStats
 		searchSource string
+		selectedSet  bool
 	)
 	if pruned := sess.SelectedToolDefs(); pruned != nil {
 		selectedDefs = pruned
 		searchSource = "pipeline"
+		selectedSet = true
 		ctxBuilder.SetTools(selectedDefs)
 	} else if tools != nil {
 		query := latestUserMessageContent(sess)
 		selectedDefs, searchStats = agenttools.SelectToolDefs(ctx, tools, embedClient, query, toolSearchCfg)
 		searchSource = "fallback"
+		selectedSet = true
 		ctxBuilder.SetTools(selectedDefs)
 	}
 
@@ -257,7 +260,7 @@ func buildAgentContext(ctx context.Context, sess *session.Session, store *db.Sto
 	// sent in llm.Request.Tools. Pre-v1.0.6 this block kept the daemon boot's
 	// full registry roster in PromptConfig while the request carried a pruned
 	// set, which told the model about tools it could not actually call.
-	if len(selectedDefs) > 0 {
+	if selectedSet {
 		cfg.ToolNames, cfg.ToolDescs = promptToolSurface(selectedDefs)
 	}
 	systemPrompt := agent.BuildSystemPrompt(cfg)
