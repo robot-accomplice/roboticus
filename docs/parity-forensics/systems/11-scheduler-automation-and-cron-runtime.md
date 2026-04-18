@@ -82,6 +82,7 @@ Today that lifecycle is already split into two families:
 | SYS-11-003 | P2 | Durable cron execution is correctly pipeline-owned once a job reaches execution | Rust intent is pipeline-owned business behavior | `CronWorker` delegates actual job behavior through `pipeline.RunPipeline(...PresetCron())` and daemon cron execution enqueues delivery after pipeline outcome | Idiomatic shift / likely improvement | Accepted | `internal/daemon/daemon_subsystems.go`, `internal/schedule/worker.go` |
 | SYS-11-004 | P2 | Scheduler compatibility logic carried schema-fallback debt in the hot path | Rust schema contract needs comparison | `recordRun(...)` now writes only the authoritative `cron_runs(error_msg, timestamp)` shape; runtime no longer branches across legacy column names during live execution. Remaining work is broader heartbeat/runtime classification, not cron-run schema ambiguity | Degradation remediated | Accepted | `internal/schedule/worker.go`, `internal/schedule/worker_test.go` |
 | SYS-11-005 | P2 | Dormant heartbeat tasks must at least match the live schema they target | Rust heartbeat task/storage contract needs explicit comparison | `MetricSnapshotTask` now writes the current `metric_snapshots(id, metrics_json, alerts_json)` schema instead of targeting nonexistent `timestamp/tier/usdc_balance` columns | Degradation remediated | Accepted | `internal/schedule/tasks.go`, `internal/schedule/tasks_test.go`, `internal/db/schema.go` |
+| SYS-11-006 | P2 | Daemon-owned maintenance duties should use the shared heartbeat runtime instead of staying as dead helpers | Rust maintenance-loop ownership needs explicit comparison | Go daemon now starts a maintenance heartbeat backed by `HeartbeatDaemon` + `MaintenanceLoopTask`, so cache eviction and expired-lease cleanup are no longer just dormant task definitions | Degradation remediated / maintenance ownership restored | Accepted | `internal/daemon/daemon_subsystems.go`, `internal/daemon/daemon_subsystems_test.go`, `internal/schedule/tasks.go`, `internal/schedule/tasks_test.go` |
 
 ## Intentional Deviations
 
@@ -129,3 +130,7 @@ collection of partially used helpers.
 - 2026-04-17: Corrected `MetricSnapshotTask` to write the current
   `metric_snapshots(id, metrics_json, alerts_json)` schema instead of a stale
   column set that no longer exists.
+- 2026-04-17: Promoted maintenance cleanup onto the daemon-owned shared
+  heartbeat runtime. Cache eviction and expired-lease cleanup now run through
+  `HeartbeatDaemon` + `MaintenanceLoopTask` instead of existing only as dormant
+  task definitions.

@@ -180,6 +180,16 @@ func (d *Daemon) run() {
 		d.runConsolidationHeartbeat(ctx)
 	}()
 
+	// Maintenance heartbeat — runs cache and lease cleanup on a shared
+	// heartbeat runtime instead of a bespoke maintenance loop.
+	if d.maintenanceHeartbeatEnabled() {
+		d.wg.Add(1)
+		go func() {
+			defer d.wg.Done()
+			d.runMaintenanceHeartbeat(ctx)
+		}()
+	}
+
 	log.Info().Msg("all subsystems started")
 }
 
@@ -221,6 +231,34 @@ func (d *Daemon) newConsolidationHeartbeat() (*schedule.HeartbeatDaemon, schedul
 	}
 }
 
+func (d *Daemon) maintenanceHeartbeatEnabled() bool {
+	return d.cfg.Heartbeat.MaintenanceIntervalSeconds > 0 || d.cfg.Heartbeat.IntervalSeconds > 0
+}
+
+func (d *Daemon) maintenanceHeartbeatInterval() time.Duration {
+	if secs := d.cfg.Heartbeat.MaintenanceIntervalSeconds; secs > 0 {
+		return time.Duration(secs) * time.Second
+	}
+	if secs := d.cfg.Heartbeat.IntervalSeconds; secs > 0 {
+		return time.Duration(secs) * time.Second
+	}
+	return 0
+}
+
+func (d *Daemon) newMaintenanceHeartbeat() (*schedule.HeartbeatDaemon, schedule.DomainIntervals, func() *schedule.TickContext) {
+	task := &schedule.MaintenanceLoopTask{Store: d.store}
+	interval := d.maintenanceHeartbeatInterval()
+	daemon := schedule.NewHeartbeatDaemon(interval, []schedule.HeartbeatTask{task})
+	intervals := schedule.DefaultDomainIntervals()
+	intervals.Memory = interval
+	return daemon, intervals, func() *schedule.TickContext {
+		return &schedule.TickContext{
+			SurvivalTier: core.SurvivalTierStable,
+			Timestamp:    time.Now(),
+		}
+	}
+}
+
 // runConsolidationHeartbeat runs memory consolidation on a periodic schedule.
 // Matches Rust's heartbeat-triggered MemoryPrune signal.
 func (d *Daemon) runConsolidationHeartbeat(ctx context.Context) {
@@ -233,6 +271,18 @@ func (d *Daemon) runConsolidationHeartbeat(ctx context.Context) {
 
 	daemon, intervals, tickCtxFn := d.newConsolidationHeartbeat()
 	log.Info().Dur("interval", intervals.Memory).Msg("memory consolidation heartbeat started")
+	daemon.RunDistributed(ctx, intervals, tickCtxFn)
+}
+
+func (d *Daemon) runMaintenanceHeartbeat(ctx context.Context) {
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(30 * time.Second):
+	}
+
+	daemon, intervals, tickCtxFn := d.newMaintenanceHeartbeat()
+	log.Info().Dur("interval", intervals.Memory).Msg("maintenance heartbeat started")
 	daemon.RunDistributed(ctx, intervals, tickCtxFn)
 }
 

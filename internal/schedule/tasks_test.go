@@ -14,9 +14,11 @@ type stubDB struct {
 	execQuery string
 	execArgs  []any
 	execErr   error
+	execCount int
 }
 
 func (s *stubDB) ExecContext(_ context.Context, query string, args ...any) (sql.Result, error) {
+	s.execCount++
 	s.execQuery = query
 	s.execArgs = args
 	return stubResult(1), s.execErr
@@ -87,5 +89,21 @@ func TestMetricSnapshotTask_Run_WritesCurrentSchema(t *testing.T) {
 	}
 	if payload["timestamp"] != "2026-04-17T10:30:00Z" {
 		t.Fatalf("timestamp = %v", payload["timestamp"])
+	}
+}
+
+func TestMaintenanceLoopTask_Run_ExecutesCleanupQueries(t *testing.T) {
+	store := &stubDB{}
+	task := &MaintenanceLoopTask{Store: store}
+
+	result := task.Run(context.Background(), &TickContext{})
+	if !result.Success {
+		t.Fatalf("task should succeed: %+v", result)
+	}
+	if store.execCount != 2 {
+		t.Fatalf("exec count = %d, want 2", store.execCount)
+	}
+	if result.Message != "evicted=1 leases_cleared=1" {
+		t.Fatalf("message = %q", result.Message)
 	}
 }
