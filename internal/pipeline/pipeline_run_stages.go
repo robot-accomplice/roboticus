@@ -593,9 +593,12 @@ func (p *Pipeline) stageShortcut(ctx context.Context, pc *pipelineContext) (*Out
 // ── Stage 11.5: Cache check ────────────────────────────────────────────
 
 func (p *Pipeline) stageCacheCheck(ctx context.Context, pc *pipelineContext) (*Outcome, error) {
-	if pc.cfg.CacheEnabled && !pc.input.NoCache {
+	if pc.cfg.CacheEnabled && !pc.input.NoCache && !pc.cfg.NoEscalate {
+		if pc.cacheFingerprint == "" {
+			pc.cacheFingerprint = cacheFingerprint(pc.session, pc.cfg, pc.content)
+		}
 		pc.tr.BeginSpan("cache_check")
-		if hit := p.CheckCache(ctx, pc.content); hit != nil {
+		if hit := p.checkCacheByFingerprint(ctx, pc.content, pc.cacheFingerprint); hit != nil {
 			pc.tr.Annotate("cache_hit", true)
 			pc.tr.Annotate("cache_model", hit.Model)
 			pc.tr.EndSpan("ok")
@@ -843,9 +846,12 @@ func (p *Pipeline) stageInference(ctx context.Context, pc *pipelineContext) (*Ou
 
 func (p *Pipeline) stagePostInference(ctx context.Context, pc *pipelineContext, outcome *Outcome) {
 	// Cache store (Rust: store_in_cache).
-	if pc.cfg.CacheEnabled && !pc.input.NoCache && outcome != nil && !outcome.Stream && outcome.Content != "" {
+	if pc.cfg.CacheEnabled && !pc.input.NoCache && !pc.cfg.NoEscalate && outcome != nil && !outcome.Stream && outcome.Content != "" {
+		if pc.cacheFingerprint == "" {
+			pc.cacheFingerprint = cacheFingerprint(pc.session, pc.cfg, pc.content)
+		}
 		p.bgWorker.Submit("storeCache", func(bgCtx context.Context) {
-			p.StoreInCache(bgCtx, pc.content, outcome.Content, outcome.Model)
+			p.storeInCacheByFingerprint(bgCtx, outcome.Content, outcome.Model, pc.cacheFingerprint)
 		})
 	}
 

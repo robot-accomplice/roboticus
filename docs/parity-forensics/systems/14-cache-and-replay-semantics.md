@@ -4,7 +4,7 @@
 
 - Owner: parity-forensics program
 - Audit status: `in progress`
-- Last updated: 2026-04-17
+- Last updated: 2026-04-18
 - Related release: v1.0.6
 
 ## Why This System Matters
@@ -78,6 +78,7 @@ replay-specific logic.
 | SYS-14-002 | P1 | Prompt compression quality risk needs its own cache-aware audit surface | Rust had a compression gate, but quality acceptance must be proved, not assumed | Go now has a paired soak harness specifically because the feature is considered suspect until live evidence clears it | Open | Open | `scripts/run-prompt-compression-soak.py`, release notes |
 | SYS-14-003 | P1 | Streaming no-escalate requests previously still allowed cache replay | Benchmark/no-escalate paths should measure fresh model behavior consistently across complete and stream modes | Closed in v1.0.6: `Service.Stream(...)` now mirrors `Complete(...)` and skips cache replay when `NoEscalate` is set directly or via context | Remediated | Closed | `internal/llm/service.go`, `internal/llm/coverage_boost_test.go` |
 | SYS-14-004 | P2 | Maintenance cleanup carried a second cache-expiry rule outside the live cache path | Cache cleanup should age out rows on the same `expires_at` contract used by lookup/write paths | `MaintenanceLoopTask` now deletes expired rows from the live `semantic_cache` table by `expires_at <= now` instead of a separate age heuristic on a stale `response_cache` name, removing both the second expiration rule and the stale-table drift | Remediated | Closed | `internal/schedule/tasks.go`, `internal/schedule/tasks_test.go`, `internal/pipeline/pipeline_cache.go`, `internal/llm/cache.go` |
+| SYS-14-005 | P1 | Pipeline cache keyed only on normalized user text and ran before request shaping completed | Cache replay should not cross materially different conversation/memory/tool scaffolds, and benchmark/no-escalate turns must bypass replay on the live pipeline path too | Closed in v1.0.6: pipeline cache lookup now runs after tool pruning and hippocampus summary, fingerprints the shaped session scaffold (history, memory artifacts, selected tools, channel/agent context), and skips both replay and store when `NoEscalate` is set | Remediated | Closed | `internal/pipeline/pipeline.go`, `internal/pipeline/pipeline_cache.go`, `internal/pipeline/pipeline_run_stages.go`, `internal/pipeline/behavioral_fitness_test.go` |
 
 ## Intentional Deviations
 
@@ -113,3 +114,8 @@ surprise behavior and deserve a first-class artifact boundary.
   carries a second age-based eviction rule for a stale cache-table name; it now
   deletes expired rows from the live `semantic_cache` table on the same
   `expires_at` contract used by the cache read/write paths.
+- 2026-04-18: Closed the pipeline replay-equivalence seam. The pipeline cache
+  no longer keys on bare prompt text or runs before the request-shaping stages
+  complete. Cache lookup now happens after tool pruning and hippocampus summary,
+  fingerprints the shaped session scaffold, and treats `NoEscalate` as a
+  replay/store bypass on the pipeline path just like the lower LLM cache path.

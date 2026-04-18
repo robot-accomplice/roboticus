@@ -12,6 +12,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"strings"
 	"time"
 
@@ -35,11 +36,24 @@ type CacheHit struct {
 //
 // Returns nil if no valid cache hit is found.
 func (p *Pipeline) CheckCache(ctx context.Context, content string) *CacheHit {
+	return p.CheckCacheForSession(ctx, nil, Config{}, content)
+}
+
+// CheckCacheForSession looks up a cached response using the full request-shaping
+// scaffold that is available on the live pipeline path.
+func (p *Pipeline) CheckCacheForSession(ctx context.Context, sess *Session, cfg Config, content string) *CacheHit {
 	if p.store == nil {
 		return nil
 	}
 
-	fp := cacheFingerprint(content)
+	fp := cacheFingerprint(sess, cfg, content)
+	return p.checkCacheByFingerprint(ctx, content, fp)
+}
+
+func (p *Pipeline) checkCacheByFingerprint(ctx context.Context, content, fp string) *CacheHit {
+	if p.store == nil {
+		return nil
+	}
 
 	var cached, model string
 	row := p.store.QueryRowContext(ctx,
@@ -97,6 +111,12 @@ func (p *Pipeline) CheckCache(ctx context.Context, content string) *CacheHit {
 // StoreInCache persists a response in the pipeline semantic cache.
 // Only stores responses that pass the same quality guards used by CheckCache.
 func (p *Pipeline) StoreInCache(ctx context.Context, content, response, model string) {
+	p.StoreInCacheForSession(ctx, nil, Config{}, content, response, model)
+}
+
+// StoreInCacheForSession persists a response using the same request-context
+// fingerprint that the live pipeline uses for cache replay.
+func (p *Pipeline) StoreInCacheForSession(ctx context.Context, sess *Session, cfg Config, content, response, model string) {
 	if p.store == nil {
 		return
 	}
@@ -124,7 +144,15 @@ func (p *Pipeline) StoreInCache(ctx context.Context, content, response, model st
 		return
 	}
 
-	fp := cacheFingerprint(content)
+	fp := cacheFingerprint(sess, cfg, content)
+	p.storeInCacheByFingerprint(ctx, response, model, fp)
+}
+
+func (p *Pipeline) storeInCacheByFingerprint(ctx context.Context, response, model, fp string) {
+	if p.store == nil {
+		return
+	}
+
 	now := time.Now()
 	expiresAt := db.FormatTime(now.Add(p.cacheTTL))
 	createdAt := db.FormatTime(now)
@@ -139,11 +167,44 @@ func (p *Pipeline) StoreInCache(ctx context.Context, content, response, model st
 	}
 }
 
-// cacheFingerprint generates a deterministic fingerprint for cache lookup.
-// Uses SHA-256 of the normalized content (lowercase, trimmed, collapsed whitespace).
-func cacheFingerprint(content string) string {
-	normalized := strings.ToLower(strings.TrimSpace(content))
-	normalized = strings.Join(strings.Fields(normalized), " ")
-	h := sha256.Sum256([]byte(normalized))
+// cacheFingerprint generates a deterministic fingerprint for pipeline cache
+// lookup. Unlike the lower LLM cache, the pipeline cache now keys on the
+// shaped pre-inference scaffold available on the live path so it does not
+// replay across materially different conversation/memory/tool contexts.
+func cacheFingerprint(sess *Session, cfg Config, content string) string {
+	var b strings.Builder
+	writeNormalizedCachePart(&b, "content", content)
+	writeNormalizedCachePart(&b, "channel", cfg.ChannelLabel)
+	writeNormalizedCachePart(&b, "model_override", cfg.ModelOverride)
+	fmt.Fprintf(&b, "inference_mode=%d\n", cfg.InferenceMode)
+	fmt.Fprintf(&b, "inject_diagnostics=%t\n", cfg.InjectDiagnostics)
+	if sess != nil {
+		writeNormalizedCachePart(&b, "agent_id", sess.AgentID)
+		writeNormalizedCachePart(&b, "agent_name", sess.AgentName)
+		writeNormalizedCachePart(&b, "scope_key", sess.ScopeKey)
+		writeNormalizedCachePart(&b, "workspace", sess.Workspace)
+		fmt.Fprintf(&b, "authority=%d\n", sess.Authority)
+		for _, msg := range sess.Messages() {
+			writeNormalizedCachePart(&b, "msg_role", msg.Role)
+			writeNormalizedCachePart(&b, "msg_content", msg.Content)
+		}
+		writeNormalizedCachePart(&b, "memory_context", sess.MemoryContext())
+		writeNormalizedCachePart(&b, "memory_index", sess.MemoryIndex())
+		writeNormalizedCachePart(&b, "hippocampus_summary", sess.HippocampusSummary())
+		for _, td := range sess.SelectedToolDefs() {
+			writeNormalizedCachePart(&b, "tool_name", td.Function.Name)
+			writeNormalizedCachePart(&b, "tool_desc", td.Function.Description)
+		}
+	}
+	h := sha256.Sum256([]byte(b.String()))
 	return hex.EncodeToString(h[:16])
+}
+
+func writeNormalizedCachePart(b *strings.Builder, key, value string) {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	normalized = strings.Join(strings.Fields(normalized), " ")
+	b.WriteString(key)
+	b.WriteByte('=')
+	b.WriteString(normalized)
+	b.WriteByte('\n')
 }

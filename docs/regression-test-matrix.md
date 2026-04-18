@@ -230,6 +230,8 @@ Blocking commands for feature-complete releases:
 | R-PIPE-05 | Cache rejects parroting responses (>60% text overlap) | `internal/pipeline/pipeline_cache_test.go` | L1 |
 | R-PIPE-06 | `FinancialActionTruthGuard` verifies financial claims against tool output | `internal/pipeline/guards_financial_truth_test.go` | L1/L2 |
 | R-PIPE-07 | Pipeline cache honors TTL on reads and stamps explicit `created_at` / `expires_at` metadata on writes instead of creating timeless rows | `internal/pipeline/behavioral_fitness_test.go::TestFitness_CacheRejectsExpiredEntries` | L1/L2 |
+| R-PIPE-08 | Pipeline cache fingerprint includes the shaped session scaffold, so the same user text does not replay across materially different memory/system/tool context | `internal/pipeline/behavioral_fitness_test.go::TestFitness_PipelineCacheKeyIncludesSessionScaffold` | L1/L2 |
+| R-PIPE-09 | Pipeline-level `NoEscalate` turns bypass semantic cache replay and store just like lower-level LLM no-escalate paths | `internal/pipeline/behavioral_fitness_test.go::TestFitness_NoEscalateBypassesPipelineCache` | L1/L2 |
 
 ### R-SEC: Security Hardening (v1.0.4)
 

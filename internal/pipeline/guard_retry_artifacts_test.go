@@ -216,15 +216,25 @@ func TestCacheHit_UsesContextualGuardsWhenSessionAvailable(t *testing.T) {
 	cfg.CacheGuardSet = GuardSetCached
 
 	prompt := "context please"
-	pipe.StoreInCache(context.Background(), prompt, "cached raw response with enough length", "cache-model")
+	cacheSess := session.New("", "agent-1", "TestBot")
+	cacheSess.AddUserMessage(prompt)
+	pipe.StoreInCacheForSession(context.Background(), cacheSess, cfg, prompt, "cached raw response with enough length", "cache-model")
 
-	outcome, err := RunPipeline(context.Background(), pipe, cfg, Input{
-		Content:   prompt,
-		AgentID:   "agent-1",
-		AgentName: "TestBot",
-	})
+	pc := &pipelineContext{
+		cfg:     cfg,
+		input:   Input{Content: prompt},
+		session: cacheSess,
+		content: prompt,
+		msgID:   "msg-1",
+		tr:      NewTraceRecorder(),
+	}
+
+	outcome, err := pipe.stageCacheCheck(context.Background(), pc)
 	if err != nil {
-		t.Fatalf("RunPipeline: %v", err)
+		t.Fatalf("stageCacheCheck: %v", err)
+	}
+	if outcome == nil {
+		t.Fatal("expected cache hit outcome")
 	}
 	if !outcome.FromCache {
 		t.Fatal("expected cache hit")

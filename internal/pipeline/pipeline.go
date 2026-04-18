@@ -400,14 +400,11 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 		return out, err
 	}
 
-	// Stage 10-11.5: skill-first, shortcut, cache (each may return early).
+	// Stage 10-11.65: skill-first, shortcut, request shaping, cache.
 	if out, err := p.stageSkillFirst(ctx, pc); out != nil || err != nil {
 		return out, err
 	}
 	if out, err := p.stageShortcut(ctx, pc); out != nil || err != nil {
-		return out, err
-	}
-	if out, err := p.stageCacheCheck(ctx, pc); out != nil || err != nil {
 		return out, err
 	}
 
@@ -416,6 +413,11 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 
 	// Stage 11.65: hippocampus summary (database surface ambient note).
 	p.stageHippocampusSummary(ctx, pc)
+
+	// Stage 11.7: cache check on the shaped pre-inference surface.
+	if out, err := p.stageCacheCheck(ctx, pc); out != nil || err != nil {
+		return out, err
+	}
 
 	// Stage 11.75: prepare inference context.
 	p.stagePrepareInference(ctx, pc)

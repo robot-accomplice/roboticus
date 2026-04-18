@@ -31,5 +31,6 @@ type pipelineContext struct {
 	synthesis        TaskSynthesis
 	memoryBlock      string
 	delegationResult string
+	cacheFingerprint string
 	secClaim         core.SecurityClaim
 }
