@@ -69,8 +69,11 @@ func SearchTraces(store *db.Store) http.HandlerFunc {
 			query += ` AND created_at >= ?`
 			args = append(args, since)
 		}
-		query += ` ORDER BY created_at DESC LIMIT ?`
-		args = append(args, limit)
+		query += ` ORDER BY created_at DESC`
+		if guardName == "" {
+			query += ` LIMIT ?`
+			args = append(args, limit)
+		}
 
 		rows, err := db.NewRouteQueries(store).Query(r.Context(), query, args...)
 		if err != nil {
@@ -98,6 +101,9 @@ func SearchTraces(store *db.Store) http.HandlerFunc {
 				"created_at":  createdAt,
 				"stages_json": stagesJSON,
 			})
+			if len(results) >= limit {
+				break
+			}
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"results": results,

@@ -102,10 +102,10 @@ Blocking commands for feature-complete releases:
 | R-RT-09 | IntentMemoryRecall scoring rewards tool use and penalizes confabulation | `internal/llm/exercise_memory_recall_test.go` | L1 |
 | R-RT-10 | Every model in CommonIntentBaselines has a MEMORY_RECALL entry | `internal/llm/exercise_memory_recall_test.go` | L1 |
 | R-RT-11 | Routing trace annotations are emitted from the actual `llm.Request` selection site, including real message/tool counts, not a synthetic user-only approximation | `internal/llm/routing_trace_test.go` | L1 |
-| R-RT-12 | `/api/traces/search` uses exact `tool_calls.tool_name` matching and parsed guard JSON instead of SQL `LIKE` over serialized trace blobs | `internal/api/routes/routes_test.go` | L1/L2 |
-| R-RT-12 | Model-selection events persist the actual routed request's winner and user excerpt when turn/session/channel context is present | `internal/llm/model_selection_event_test.go` | L1 |
-| R-RT-13 | `/api/models/exercise` now exercises the same pipeline-owned request path as the CLI, with `NoCache` + `NoEscalate`, instead of bypassing into direct LLM scoring | `internal/api/routes/routing_admin_exercise_test.go`, `internal/llm/service_complete_test.go` | L1/L2 |
-| R-RT-14 | Streaming `NoEscalate` requests skip cache replay just like non-streaming `Complete`, so benchmark/raw-capability paths are not contaminated by cached content | `internal/llm/coverage_boost_test.go::TestService_Stream_NoEscalateSkipsCache` | L1/L2 |
+| R-RT-12 | `/api/traces/search` uses exact `tool_calls.tool_name` matching and parsed guard JSON instead of SQL `LIKE` over serialized trace blobs, and applies the `guard_name` filter before the final result limit so matching guarded traces are not hidden behind newer non-matching rows | `internal/api/routes/routes_test.go` | L1/L2 |
+| R-RT-13 | Model-selection events persist the actual routed request's winner and user excerpt when turn/session/channel context is present | `internal/llm/model_selection_event_test.go` | L1 |
+| R-RT-14 | `/api/models/exercise` now exercises the same pipeline-owned request path as the CLI, with `NoCache` + `NoEscalate`, instead of bypassing into direct LLM scoring | `internal/api/routes/routing_admin_exercise_test.go`, `internal/llm/service_complete_test.go` | L1/L2 |
+| R-RT-15 | Streaming `NoEscalate` requests skip cache replay just like non-streaming `Complete`, so benchmark/raw-capability paths are not contaminated by cached content | `internal/llm/coverage_boost_test.go::TestService_Stream_NoEscalateSkipsCache` | L1/L2 |
 
 ### R-BOT: Bot Commands
 

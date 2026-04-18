@@ -355,6 +355,39 @@ func TestSearchTraces_ToolFilterUsesExactToolCalls(t *testing.T) {
 	}
 }
 
+func TestSearchTraces_GuardFilterAppliesBeforeLimit(t *testing.T) {
+	store := testutil.TempStore(t)
+	_, _ = store.ExecContext(bgCtx, `INSERT INTO sessions (id, agent_id, scope_key) VALUES ('s1', 'a1', 'test')`)
+	_, _ = store.ExecContext(bgCtx, `INSERT INTO sessions (id, agent_id, scope_key) VALUES ('s2', 'a2', 'test')`)
+	_, _ = store.ExecContext(bgCtx, `INSERT INTO turns (id, session_id) VALUES ('t1', 's1')`)
+	_, _ = store.ExecContext(bgCtx, `INSERT INTO turns (id, session_id) VALUES ('t2', 's2')`)
+
+	// Newer row does NOT match the guard filter.
+	_, _ = store.ExecContext(bgCtx,
+		`INSERT INTO pipeline_traces (id, turn_id, session_id, channel, total_ms, stages_json, react_trace_json, created_at)
+		 VALUES ('pt1', 't1', 's1', 'api', 250, '[{"tool":"search_files"}]', '{"guard":"none"}', datetime('now'))`)
+	// Older row DOES match the guard filter.
+	_, _ = store.ExecContext(bgCtx,
+		`INSERT INTO pipeline_traces (id, turn_id, session_id, channel, total_ms, stages_json, react_trace_json, created_at)
+		 VALUES ('pt2', 't2', 's2', 'api', 250, '[{"tool":"search_files"}]', '{"guard":"approval"}', datetime('now', '-1 second'))`)
+
+	req := httptest.NewRequest("GET", "/api/traces/search?guard_name=approval&limit=1", nil)
+	rec := httptest.NewRecorder()
+	SearchTraces(store).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	body := jsonBody(t, rec)
+	if body["count"] != float64(1) {
+		t.Fatalf("count = %v, want 1", body["count"])
+	}
+	results := body["results"].([]any)
+	first := results[0].(map[string]any)
+	if first["turn_id"] != "t2" {
+		t.Fatalf("turn_id = %v, want t2", first["turn_id"])
+	}
+}
+
 func TestSetActiveTheme_InvalidTheme(t *testing.T) {
 	store := testutil.TempStore(t)
 
