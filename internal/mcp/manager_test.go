@@ -185,6 +185,58 @@ func TestConnectionManager_CallTool_NoServer(t *testing.T) {
 	}
 }
 
+func TestConnectionManager_RefreshTools_UpdatesLiveConnection(t *testing.T) {
+	mgr := NewConnectionManager()
+
+	expectedID := nextID.Load() + 1
+	mt := &mockTransport{
+		responses: []json.RawMessage{
+			makeResponse(expectedID, map[string]any{
+				"tools": []map[string]any{
+					{"name": "fresh_tool", "description": "fresh"},
+				},
+			}),
+		},
+	}
+
+	injectConnection(mgr, &Connection{
+		Name: "refreshable",
+		Tools: []ToolDescriptor{
+			{Name: "stale_tool", Description: "stale"},
+		},
+		transport: mt,
+	})
+
+	tools, err := mgr.RefreshTools(context.Background(), "refreshable")
+	if err != nil {
+		t.Fatalf("RefreshTools: %v", err)
+	}
+	if len(tools) != 1 || tools[0].Name != "fresh_tool" {
+		t.Fatalf("returned tools = %#v", tools)
+	}
+
+	all := mgr.AllTools()
+	if len(all) != 1 || all[0].Name != "fresh_tool" {
+		t.Fatalf("live manager tools = %#v, want refreshed tool", all)
+	}
+
+	conn, ok := mgr.Connection("refreshable")
+	if !ok {
+		t.Fatal("expected refreshed connection snapshot")
+	}
+	if len(conn.Tools) != 1 || conn.Tools[0].Name != "fresh_tool" {
+		t.Fatalf("connection snapshot tools = %#v, want refreshed tool", conn.Tools)
+	}
+}
+
+func TestConnectionManager_RefreshTools_NoServer(t *testing.T) {
+	mgr := NewConnectionManager()
+	_, err := mgr.RefreshTools(context.Background(), "nonexistent")
+	if err == nil {
+		t.Fatal("expected error for missing server")
+	}
+}
+
 func TestConnectionManager_Disconnect_Success(t *testing.T) {
 	mgr := NewConnectionManager()
 

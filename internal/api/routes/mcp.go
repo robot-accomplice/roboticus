@@ -84,27 +84,27 @@ func DiscoverMCPTools(mgr *mcp.ConnectionManager, surface MCPToolSurface) http.H
 			return
 		}
 		name := chi.URLParam(r, "name")
-		conn, ok := mgr.Connection(name)
-		if !ok {
+		if _, ok := mgr.Connection(name); !ok {
 			writeError(w, http.StatusNotFound, fmt.Sprintf("MCP client %q not connected", name))
 			return
 		}
-		if err := conn.RefreshTools(r.Context()); err != nil {
+		tools, err := mgr.RefreshTools(r.Context(), name)
+		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("tool discovery failed: %v", err))
 			return
 		}
 		syncMCPToolSurface(r.Context(), surface, mgr)
-		tools := make([]map[string]any, 0, len(conn.Tools))
-		for _, t := range conn.Tools {
-			tools = append(tools, map[string]any{
+		toolRows := make([]map[string]any, 0, len(tools))
+		for _, t := range tools {
+			toolRows = append(toolRows, map[string]any{
 				"name":        t.Name,
 				"description": t.Description,
 			})
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"name":       name,
-			"tools":      tools,
-			"tool_count": len(tools),
+			"tools":      toolRows,
+			"tool_count": len(toolRows),
 		})
 	}
 }

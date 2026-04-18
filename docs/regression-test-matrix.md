@@ -129,6 +129,7 @@ Blocking commands for feature-complete releases:
 | R-TOOLS-08 | Maintenance cache eviction targets the live `semantic_cache` table and uses the same `expires_at` TTL contract as cache lookup/write paths | scheduler tests | L1/L2 |
 | R-TOOLS-09 | Prompt-layer tool roster is derived from the same selected per-request tool surface as `llm.Request.Tools`, including the authoritative zero-tools case | daemon adapter tests | L1/L2 |
 | R-TOOLS-10 | Registry-backed tool surfaces are deterministic: names, descriptors, tool defs, and equal-score pruning all preserve stable registration order instead of drifting on Go map iteration | agent tool tests | L1/L2 |
+| R-TOOLS-11 | Runtime MCP discover mutates the manager-owned live connection, so refreshed MCP tools reach `AllTools()`, route responses, and the synced semantic tool surface instead of updating only a copied snapshot | MCP manager tests | L1/L2 |
 | R-TOOLS-05 | Config-protection and action-verification guards block forbidden or fabricated behavior | guard tests + behavior tests | L1/L2/L4 |
 | R-TOOLS-06 | Per-call MCP timeout fails only the timed-out call: the transport stays open, late responses are dropped, and a follow-on call can still succeed on the same connection | `internal/mcp/client_test.go` | L1/L2 |
 

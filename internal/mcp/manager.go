@@ -138,6 +138,22 @@ func (m *ConnectionManager) CallTool(ctx context.Context, serverName, toolName s
 	return conn.CallTool(ctx, toolName, input)
 }
 
+// RefreshTools re-discovers tools for a connected server and updates the live
+// connection held by the manager.
+func (m *ConnectionManager) RefreshTools(ctx context.Context, name string) ([]ToolDescriptor, error) {
+	m.mu.RLock()
+	conn, ok := m.connections[name]
+	m.mu.RUnlock()
+
+	if !ok {
+		return nil, fmt.Errorf("mcp: server %q not connected", name)
+	}
+	if err := conn.RefreshTools(ctx); err != nil {
+		return nil, err
+	}
+	return append([]ToolDescriptor(nil), conn.Tools...), nil
+}
+
 // Connection returns a snapshot of a named connection if present.
 func (m *ConnectionManager) Connection(name string) (*Connection, bool) {
 	m.mu.RLock()
