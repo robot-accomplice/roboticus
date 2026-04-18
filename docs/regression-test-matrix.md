@@ -150,6 +150,7 @@ Blocking commands for feature-complete releases:
 | R-SCHED-09 | Daemon-owned maintenance cleanup uses the shared heartbeat runtime, and maintenance cadence follows config/fallback policy instead of staying as dead helper code | daemon + scheduler tests | L1/L2 |
 | R-SCHED-10 | Treasury refresh runs only on its dedicated low-frequency cadence and does not fall back onto the application-health heartbeat interval | daemon + scheduler tests | L1/L2 |
 | R-SCHED-11 | Treasury-state writers and readers use the live schema consistently: `usdc_balance`/`native_balance`/`atoken_balance` are written by meaning, and `/status` reads `usdc_balance` instead of a phantom `total_balance` field | scheduler + pipeline tests | L1/L2 |
+| R-SCHED-12 | Scheduler status readers use the authoritative `cron_runs.timestamp` schema instead of carrying dead `created_at` fallback probing after writer normalization | pipeline tests | L1/L2 |
 
 ### R-WAL: Wallet, Treasury, Payments
 

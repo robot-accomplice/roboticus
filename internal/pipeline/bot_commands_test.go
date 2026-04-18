@@ -115,6 +115,30 @@ func TestBotCommand_Status_UsesTreasuryStateUSDCBalance(t *testing.T) {
 	}
 }
 
+func TestBotCommand_Status_UsesAuthoritativeCronTimestamp(t *testing.T) {
+	store := testutil.TempStore(t)
+	if _, err := store.ExecContext(context.Background(),
+		`INSERT INTO cron_jobs (id, name, agent_id, schedule_kind, schedule_expr, payload_json, enabled)
+		 VALUES ('job1', 'Job 1', 'agent1', 'cron', '* * * * *', '{}', 1)`); err != nil {
+		t.Fatalf("seed cron job: %v", err)
+	}
+	if _, err := store.ExecContext(context.Background(),
+		`INSERT INTO cron_runs (job_id, status, duration_ms, error_msg, timestamp)
+		 VALUES ('job1', 'failed', 10, 'boom', datetime('now'))`); err != nil {
+		t.Fatalf("seed cron run: %v", err)
+	}
+
+	handler := NewBotCommandHandler(nil, store)
+	session := NewSession("s1", "agent1", "TestBot")
+	result, matched := handler.TryHandle(context.Background(), "/status", session)
+	if !matched {
+		t.Fatal("/status should match")
+	}
+	if !strings.Contains(result.Content, "Cron: 1 jobs (1 failed/24h)") {
+		t.Fatalf("status content missing cron line: %s", result.Content)
+	}
+}
+
 // ── Authority gating (Rust parity) ───────────────────────────────────────────
 
 func TestBotCommand_ModelSetRequiresCreator(t *testing.T) {
