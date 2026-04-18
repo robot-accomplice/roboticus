@@ -46,7 +46,13 @@ func ListObservabilityTraces(store *db.Store) http.HandlerFunc {
 		}
 
 		writeJSON(w, http.StatusOK, map[string]any{
-			"traces": traces, "total": total, "limit": limit, "offset": offset,
+			"route_family": "observability_traces",
+			"artifact":     "trace_observability_page",
+			"fidelity":     "observability_page",
+			"traces":       traces,
+			"total":        total,
+			"limit":        limit,
+			"offset":       offset,
 		})
 	}
 }
@@ -72,9 +78,16 @@ func TraceWaterfall(store *db.Store) http.HandlerFunc {
 		}
 
 		writeJSON(w, http.StatusOK, map[string]any{
-			"id": traceID, "turn_id": turnID, "channel": channel,
-			"total_ms": totalMs, "stages": stages, "created_at": createdAt,
-			"format": "waterfall",
+			"route_family": "observability_traces",
+			"artifact":     "trace_waterfall",
+			"fidelity":     "waterfall",
+			"id":           traceID,
+			"turn_id":      turnID,
+			"channel":      channel,
+			"total_ms":     totalMs,
+			"stages":       stages,
+			"created_at":   createdAt,
+			"format":       "waterfall",
 		})
 	}
 }

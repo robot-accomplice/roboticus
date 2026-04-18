@@ -43,6 +43,7 @@ Blocking commands for feature-complete releases:
 | R-API-02 | Write paths must reject invalid persisted state instead of accepting it silently | route tests for config/theme/subagent/config-key flows | L2 |
 | R-API-03 | Any intentionally unavailable surface must return explicit disabled/unavailable semantics | route tests + smoke | L2/L3 |
 | R-API-04 | Stream and non-stream message surfaces preserve behavior parity where required | route/integration tests + smoke | L2/L3 |
+| R-API-05 | Trace route families are self-describing at the API boundary: `/api/traces` emits `route_family=traces` with summary/search artifact markers, while `/api/observability/traces` emits `route_family=observability_traces` with observability-page / waterfall markers | `internal/api/routes/routes_test.go`, `internal/api/routes/audit_observability_test.go`, `internal/api/response_shape_test.go` | L1/L2 |
 
 ### R-CORE: Entry Path Behavior
 

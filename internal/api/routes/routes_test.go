@@ -309,6 +309,15 @@ func TestSearchTraces(t *testing.T) {
 		t.Fatalf("status = %d", rec.Code)
 	}
 	body := jsonBody(t, rec)
+	if body["route_family"] != "traces" {
+		t.Fatalf("route_family = %v, want traces", body["route_family"])
+	}
+	if body["artifact"] != "trace_search_results" {
+		t.Fatalf("artifact = %v, want trace_search_results", body["artifact"])
+	}
+	if body["fidelity"] != "summary_search" {
+		t.Fatalf("fidelity = %v, want summary_search", body["fidelity"])
+	}
 	if body["count"] != float64(1) {
 		t.Fatalf("count = %v, want 1", body["count"])
 	}
@@ -345,6 +354,9 @@ func TestSearchTraces_ToolFilterUsesExactToolCalls(t *testing.T) {
 		t.Fatalf("status = %d", rec.Code)
 	}
 	body := jsonBody(t, rec)
+	if body["route_family"] != "traces" {
+		t.Fatalf("route_family = %v, want traces", body["route_family"])
+	}
 	if body["count"] != float64(1) {
 		t.Fatalf("count = %v, want 1", body["count"])
 	}
@@ -378,6 +390,9 @@ func TestSearchTraces_GuardFilterAppliesBeforeLimit(t *testing.T) {
 		t.Fatalf("status = %d", rec.Code)
 	}
 	body := jsonBody(t, rec)
+	if body["route_family"] != "traces" {
+		t.Fatalf("route_family = %v, want traces", body["route_family"])
+	}
 	if body["count"] != float64(1) {
 		t.Fatalf("count = %v, want 1", body["count"])
 	}
@@ -463,6 +478,15 @@ func TestListTraces(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	body := jsonBody(t, rec)
+	if body["route_family"] != "traces" {
+		t.Fatalf("route_family = %v, want traces", body["route_family"])
+	}
+	if body["artifact"] != "trace_summary_list" {
+		t.Fatalf("artifact = %v, want trace_summary_list", body["artifact"])
+	}
+	if body["fidelity"] != "summary" {
+		t.Fatalf("fidelity = %v, want summary", body["fidelity"])
+	}
 	traces := body["traces"].([]any)
 	if len(traces) != 1 {
 		t.Errorf("got %d traces, want 1", len(traces))

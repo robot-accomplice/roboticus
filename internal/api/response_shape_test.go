@@ -98,6 +98,33 @@ func TestCacheStatsEndpoint_Shape(t *testing.T) {
 	_ = parseJSON(t, resp)
 }
 
+func TestTracesEndpoint_Shape(t *testing.T) {
+	srv := createTestServer(t)
+	resp := doGet(t, srv, "/api/traces")
+	assertStatus(t, resp, 200)
+	data := parseJSON(t, resp)
+
+	requireField(t, data, "route_family")
+	requireField(t, data, "artifact")
+	requireField(t, data, "fidelity")
+	requireField(t, data, "traces")
+}
+
+func TestObservabilityTracesEndpoint_Shape(t *testing.T) {
+	srv := createTestServer(t)
+	resp := doGet(t, srv, "/api/observability/traces")
+	assertStatus(t, resp, 200)
+	data := parseJSON(t, resp)
+
+	requireField(t, data, "route_family")
+	requireField(t, data, "artifact")
+	requireField(t, data, "fidelity")
+	requireField(t, data, "traces")
+	requireField(t, data, "total")
+	requireField(t, data, "limit")
+	requireField(t, data, "offset")
+}
+
 func TestChannelsStatusEndpoint_Shape(t *testing.T) {
 	srv := createTestServer(t)
 	resp := doGet(t, srv, "/api/channels/status")

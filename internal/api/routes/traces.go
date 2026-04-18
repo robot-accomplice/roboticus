@@ -34,7 +34,12 @@ func ListTraces(store *db.Store) http.HandlerFunc {
 				"total_ms": totalMs, "created_at": createdAt,
 			})
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"traces": traces})
+		writeJSON(w, http.StatusOK, map[string]any{
+			"route_family": "traces",
+			"artifact":     "trace_summary_list",
+			"fidelity":     "summary",
+			"traces":       traces,
+		})
 	}
 }
 
@@ -106,8 +111,11 @@ func SearchTraces(store *db.Store) http.HandlerFunc {
 			}
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
-			"results": results,
-			"count":   len(results),
+			"route_family": "traces",
+			"artifact":     "trace_search_results",
+			"fidelity":     "summary_search",
+			"results":      results,
+			"count":        len(results),
 		})
 	}
 }
@@ -170,8 +178,15 @@ func GetTrace(store *db.Store) http.HandlerFunc {
 		}
 
 		writeJSON(w, http.StatusOK, map[string]any{
-			"id": id, "turn_id": tid, "channel": channel,
-			"total_ms": totalMs, "stages": stages, "created_at": createdAt,
+			"route_family": "traces",
+			"artifact":     "trace_detail",
+			"fidelity":     "detail",
+			"id":           id,
+			"turn_id":      tid,
+			"channel":      channel,
+			"total_ms":     totalMs,
+			"stages":       stages,
+			"created_at":   createdAt,
 		})
 	}
 }
@@ -201,6 +216,9 @@ func GetReactTrace(store *db.Store) http.HandlerFunc {
 		}
 
 		writeJSON(w, http.StatusOK, map[string]any{
+			"route_family":      "traces",
+			"artifact":          "react_trace_detail",
+			"fidelity":          "detail",
 			"id":                id,
 			"pipeline_trace_id": pipelineTraceID,
 			"react_trace":       parsed,
