@@ -119,3 +119,8 @@ surprise behavior and deserve a first-class artifact boundary.
   complete. Cache lookup now happens after tool pruning and hippocampus summary,
   fingerprints the shaped session scaffold, and treats `NoEscalate` as a
   replay/store bypass on the pipeline path just like the lower LLM cache path.
+- 2026-04-18: Hardened the paired prompt-compression soak harness so a stalled
+  lane now fails decisively with structured `harness_error` output when it
+  times out before producing a report. This does not clear prompt compression;
+  it makes the remaining quality gate produce actionable failure artifacts
+  instead of hanging or dying opaquely.

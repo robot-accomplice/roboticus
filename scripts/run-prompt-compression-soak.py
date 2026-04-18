@@ -29,6 +29,13 @@ BASE_SOAK = REPO_ROOT / "scripts" / "run-agent-behavior-soak.py"
 DEFAULT_REPORT = "/tmp/roboticus-prompt-compression-soak-report.json"
 SERVER_MODE = os.environ.get("SOAK_SERVER_MODE", "clone").strip().lower()
 RATIO = os.environ.get("SOAK_PROMPT_COMPRESSION_RATIO", "").strip()
+_raw_lane_timeout = os.environ.get("SOAK_LANE_TIMEOUT_SECONDS", "").strip()
+try:
+    LANE_TIMEOUT_SECONDS = int(_raw_lane_timeout) if _raw_lane_timeout else 0
+except ValueError as exc:
+    raise SystemExit(
+        f"unsupported SOAK_LANE_TIMEOUT_SECONDS={_raw_lane_timeout!r}: {exc}"
+    ) from exc
 
 
 def run_lane(label: str, compression_mode: str, report_path: Path) -> Tuple[int, Dict[str, object]]:
@@ -49,12 +56,39 @@ def run_lane(label: str, compression_mode: str, report_path: Path) -> Tuple[int,
         + (f" ratio={RATIO}" if RATIO else "")
     )
 
-    proc = subprocess.run(
-        [sys.executable, str(BASE_SOAK)],
-        cwd=str(REPO_ROOT),
-        env=env,
-        text=True,
-    )
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(BASE_SOAK)],
+            cwd=str(REPO_ROOT),
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=LANE_TIMEOUT_SECONDS if LANE_TIMEOUT_SECONDS > 0 else None,
+        )
+    except subprocess.TimeoutExpired as exc:
+        if exc.stdout:
+            sys.stdout.write(exc.stdout)
+        if exc.stderr:
+            sys.stderr.write(exc.stderr)
+        return 124, {
+            "runtime": "goboticus",
+            "kind": "behavior-soak-lane",
+            "lane": label,
+            "prompt_compression": compression_mode,
+            "passed": 0,
+            "failed": 0,
+            "total": 0,
+            "results": [],
+            "harness_error": (
+                f"underlying soak timed out after {LANE_TIMEOUT_SECONDS}s "
+                f"before producing report {report_path}"
+            ),
+        }
+
+    if proc.stdout:
+        sys.stdout.write(proc.stdout)
+    if proc.stderr:
+        sys.stderr.write(proc.stderr)
     if not report_path.exists():
         return proc.returncode, {
             "runtime": "goboticus",

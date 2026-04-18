@@ -260,6 +260,7 @@ Blocking commands for feature-complete releases:
 | R-SOAK-02 | Per-scenario `max_latency_s` override works for heavy scenarios | `scripts/run-agent-behavior-soak.py` | L4 |
 | R-SOAK-03 | Managed live behavior soak supports `external`, `clone`, and `fresh` modes so copied-state and clean-state lanes can both be exercised without touching the operator's live config or database | `scripts/run-agent-behavior-soak.py` (audit) | A |
 | R-SOAK-04 | Prompt compression quality is evaluated as a paired live soak (`off` vs `on`) on isolated configs, with pass→fail drift treated as a release-blocking regression | `scripts/run-prompt-compression-soak.py`, `scripts/prompt_compression_soak_test.go` | L1/L4 |
+| R-SOAK-05 | Paired prompt-compression lanes fail decisively with structured `harness_error` output when an underlying lane times out before producing a report, instead of hanging or surfacing a secondary missing-file crash | `scripts/run-prompt-compression-soak.py`, `scripts/prompt_compression_soak_test.go` | L1/L4 |
 
 ### R-CMD: CLI Subpackages (v1.0.4)
 
