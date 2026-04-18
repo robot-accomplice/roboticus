@@ -115,6 +115,7 @@ func TestTreasuryLoopTask_Run_PersistsTreasuryState(t *testing.T) {
 	if _, err := store.ExecContext(context.Background(),
 		`INSERT INTO wallet_balances (symbol, name, balance, contract, decimals, is_native, updated_at)
 		 VALUES ('USDC', 'USD Coin', 42.5, '', 6, 0, datetime('now')),
+		        ('ETH', 'Ethereum', 1.5, '', 18, 1, datetime('now')),
 		        ('aUSDC', 'Aave USDC', 7.25, '', 6, 0, datetime('now'))`); err != nil {
 		t.Fatalf("seed balances: %v", err)
 	}
@@ -125,18 +126,21 @@ func TestTreasuryLoopTask_Run_PersistsTreasuryState(t *testing.T) {
 	if !result.Success {
 		t.Fatalf("task should succeed: %+v", result)
 	}
-	if tctx.USDCBalance != 49.75 {
-		t.Fatalf("tick usdc balance = %v, want 49.75", tctx.USDCBalance)
+	if tctx.USDCBalance != 42.5 {
+		t.Fatalf("tick usdc balance = %v, want 42.5", tctx.USDCBalance)
 	}
 
-	var usdc, atoken float64
+	var usdc, native, atoken float64
 	var tier string
 	if err := store.QueryRowContext(context.Background(),
-		`SELECT usdc_balance, atoken_balance, survival_tier FROM treasury_state WHERE id = 1`).Scan(&usdc, &atoken, &tier); err != nil {
+		`SELECT usdc_balance, native_balance, atoken_balance, survival_tier FROM treasury_state WHERE id = 1`).Scan(&usdc, &native, &atoken, &tier); err != nil {
 		t.Fatalf("query treasury_state: %v", err)
 	}
-	if usdc != 49.75 {
-		t.Fatalf("usdc_balance = %v, want 49.75", usdc)
+	if usdc != 42.5 {
+		t.Fatalf("usdc_balance = %v, want 42.5", usdc)
+	}
+	if native != 1.5 {
+		t.Fatalf("native_balance = %v, want 1.5", native)
 	}
 	if atoken != 7.25 {
 		t.Fatalf("atoken_balance = %v, want 7.25", atoken)

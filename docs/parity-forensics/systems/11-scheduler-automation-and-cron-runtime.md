@@ -84,6 +84,7 @@ Today that lifecycle is already split into two families:
 | SYS-11-005 | P2 | Dormant heartbeat tasks must at least match the live schema they target | Rust heartbeat task/storage contract needs explicit comparison | `MetricSnapshotTask` now writes the current `metric_snapshots(id, metrics_json, alerts_json)` schema instead of targeting nonexistent `timestamp/tier/usdc_balance` columns | Degradation remediated | Accepted | `internal/schedule/tasks.go`, `internal/schedule/tasks_test.go`, `internal/db/schema.go` |
 | SYS-11-006 | P2 | Daemon-owned maintenance duties should use the shared heartbeat runtime instead of staying as dead helpers | Rust maintenance-loop ownership needs explicit comparison | Go daemon now starts a maintenance heartbeat backed by `HeartbeatDaemon` + `MaintenanceLoopTask`, so cache eviction and expired-lease cleanup are no longer just dormant task definitions | Degradation remediated / maintenance ownership restored | Accepted | `internal/daemon/daemon_subsystems.go`, `internal/daemon/daemon_subsystems_test.go`, `internal/schedule/tasks.go`, `internal/schedule/tasks_test.go` |
 | SYS-11-007 | P1 | Treasury state should not depend on a dormant parity helper if live commands read it | Rust treasury-loop ownership needs explicit comparison | Go daemon now starts a dedicated low-frequency treasury refresh loop backed by `HeartbeatDaemon` + `TreasuryLoopTask`, driven only by `heartbeat.treasury_interval_seconds`, so `treasury_state` is refreshed from cached wallet balances without sharing the application-health heartbeat cadence | Degradation remediated / treasury ownership restored | Accepted | `internal/daemon/daemon_subsystems.go`, `internal/daemon/daemon_subsystems_test.go`, `internal/schedule/tasks.go`, `internal/schedule/tasks_test.go`, `internal/pipeline/bot_commands.go` |
+| SYS-11-008 | P1 | Treasury-state field semantics must match the schema that downstream readers consume | Rust treasury-state semantics need explicit comparison | `TreasuryLoopTask` now writes `usdc_balance`, `native_balance`, and `atoken_balance` by their real meanings, and `/status` now reads the live `usdc_balance` column instead of a nonexistent `total_balance` field | Degradation remediated / field semantics restored | Accepted | `internal/schedule/tasks.go`, `internal/schedule/tasks_test.go`, `internal/pipeline/bot_commands.go`, `internal/pipeline/bot_commands_test.go` |
 
 ## Intentional Deviations
 
@@ -140,3 +141,6 @@ collection of partially used helpers.
   `HeartbeatDaemon` + `TreasuryLoopTask` path driven only by
   `heartbeat.treasury_interval_seconds`, instead of relying on dormant
   parity-shaped code while downstream commands read the table.
+- 2026-04-18: Corrected treasury-state field semantics. The runtime now writes
+  real `usdc_balance` / `native_balance` / `atoken_balance` values and `/status`
+  reads `usdc_balance` instead of a phantom `total_balance` column.

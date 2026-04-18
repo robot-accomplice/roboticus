@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"roboticus/internal/core"
+	"roboticus/testutil"
 )
 
 func TestBotCommandHandler_Match(t *testing.T) {
@@ -92,6 +93,25 @@ func TestBotCommand_BotNameStripping(t *testing.T) {
 				t.Errorf("matched = %v, want %v for %q", matched, tt.wantMatch, tt.input)
 			}
 		})
+	}
+}
+
+func TestBotCommand_Status_UsesTreasuryStateUSDCBalance(t *testing.T) {
+	store := testutil.TempStore(t)
+	if _, err := store.ExecContext(context.Background(),
+		`INSERT INTO treasury_state (id, usdc_balance, native_balance, atoken_balance, survival_tier, updated_at)
+		 VALUES (1, 42.50, 1.25, 7.00, 'stable', datetime('now'))`); err != nil {
+		t.Fatalf("seed treasury_state: %v", err)
+	}
+
+	handler := NewBotCommandHandler(nil, store)
+	session := NewSession("s1", "agent1", "TestBot")
+	result, matched := handler.TryHandle(context.Background(), "/status", session)
+	if !matched {
+		t.Fatal("/status should match")
+	}
+	if !strings.Contains(result.Content, "Wallet: $42.50") {
+		t.Fatalf("status content missing wallet line: %s", result.Content)
 	}
 }
 

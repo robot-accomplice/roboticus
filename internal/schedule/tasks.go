@@ -41,14 +41,21 @@ func (t *TreasuryLoopTask) Run(ctx context.Context, tctx *TickContext) TaskResul
 		return TaskResult{Success: false, Message: "no store configured"}
 	}
 
-	var totalBalance float64
+	var usdcBalance float64
 	row := t.Store.QueryRowContext(ctx,
-		`SELECT COALESCE(SUM(balance), 0) FROM wallet_balances`)
-	if err := row.Scan(&totalBalance); err != nil {
-		return TaskResult{Success: false, Message: fmt.Sprintf("query balance: %v", err)}
+		`SELECT COALESCE(SUM(balance), 0) FROM wallet_balances WHERE symbol = 'USDC'`)
+	if err := row.Scan(&usdcBalance); err != nil {
+		return TaskResult{Success: false, Message: fmt.Sprintf("query usdc balance: %v", err)}
 	}
 
-	tctx.USDCBalance = totalBalance
+	tctx.USDCBalance = usdcBalance
+
+	var nativeBalance float64
+	nRow := t.Store.QueryRowContext(ctx,
+		`SELECT COALESCE(SUM(balance), 0) FROM wallet_balances WHERE is_native = 1`)
+	if err := nRow.Scan(&nativeBalance); err != nil {
+		return TaskResult{Success: false, Message: fmt.Sprintf("query native balance: %v", err)}
+	}
 
 	// Read aToken/yield balance for persistence.
 	var atokenBalance float64
@@ -58,24 +65,27 @@ func (t *TreasuryLoopTask) Run(ctx context.Context, tctx *TickContext) TaskResul
 
 	// Persist treasury state to DB (Rust parity: treasury loop writes state).
 	_, err := t.Store.ExecContext(ctx,
-		`INSERT INTO treasury_state (id, usdc_balance, atoken_balance, survival_tier, updated_at)
-		 VALUES (1, ?, ?, ?, datetime('now'))
+		`INSERT INTO treasury_state (id, usdc_balance, native_balance, atoken_balance, survival_tier, updated_at)
+		 VALUES (1, ?, ?, ?, ?, datetime('now'))
 		 ON CONFLICT(id) DO UPDATE SET
 		   usdc_balance = excluded.usdc_balance,
+		   native_balance = excluded.native_balance,
 		   atoken_balance = excluded.atoken_balance,
 		   survival_tier = excluded.survival_tier,
 		   updated_at = datetime('now')`,
-		totalBalance, atokenBalance, tctx.SurvivalTier.String())
+		usdcBalance, nativeBalance, atokenBalance, tctx.SurvivalTier.String())
 	if err != nil {
 		log.Debug().Err(err).Msg("treasury loop: state persistence failed (table may not exist)")
 	}
 
 	log.Debug().
-		Float64("total_balance", totalBalance).
+		Float64("usdc_balance", usdcBalance).
+		Float64("native_balance", nativeBalance).
+		Float64("atoken_balance", atokenBalance).
 		Str("tier", tctx.SurvivalTier.String()).
-		Msg("treasury loop: balance check")
+		Msg("treasury loop: balance refresh")
 
-	return TaskResult{Success: true, Message: fmt.Sprintf("balance=%.4f", totalBalance)}
+	return TaskResult{Success: true, Message: fmt.Sprintf("usdc=%.4f native=%.4f atoken=%.4f", usdcBalance, nativeBalance, atokenBalance)}
 }
 
 // ---------------------------------------------------------------------------
