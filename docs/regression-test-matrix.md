@@ -233,6 +233,7 @@ Blocking commands for feature-complete releases:
 | R-PIPE-07 | Pipeline cache honors TTL on reads and stamps explicit `created_at` / `expires_at` metadata on writes instead of creating timeless rows | `internal/pipeline/behavioral_fitness_test.go::TestFitness_CacheRejectsExpiredEntries` | L1/L2 |
 | R-PIPE-08 | Pipeline cache fingerprint includes the shaped session scaffold, so the same user text does not replay across materially different memory/system/tool context | `internal/pipeline/behavioral_fitness_test.go::TestFitness_PipelineCacheKeyIncludesSessionScaffold` | L1/L2 |
 | R-PIPE-09 | Pipeline-level `NoEscalate` turns bypass semantic cache replay and store just like lower-level LLM no-escalate paths | `internal/pipeline/behavioral_fitness_test.go::TestFitness_NoEscalateBypassesPipelineCache` | L1/L2 |
+| R-PIPE-10 | Pre-inference compaction mutates the live session artifact before inference instead of only logging a smaller hypothetical slice | `internal/pipeline/prepare_inference_test.go::TestPrepareForInference_CompactsSessionMessagesInPlace`, `internal/pipeline/prepare_inference_test.go::TestRunStandardInference_CompactsSessionMessagesInPlace` | L1/L2 |
 
 ### R-SEC: Security Hardening (v1.0.4)
 

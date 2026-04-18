@@ -36,6 +36,7 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 	if msgs := session.Messages(); len(msgs) > 0 {
 		compacted := CompactContext(msgs, defaultTokenBudget)
 		if len(compacted) < len(msgs) {
+			session.SetMessages(compacted)
 			log.Trace().
 				Int("before", len(msgs)).
 				Int("after", len(compacted)).
@@ -378,6 +379,7 @@ func (p *Pipeline) PrepareForInference(ctx context.Context, session *Session, me
 		}
 		compacted := CompactContext(msgs, budget)
 		if len(compacted) < len(msgs) {
+			session.SetMessages(compacted)
 			log.Trace().
 				Int("before", len(msgs)).
 				Int("after", len(compacted)).

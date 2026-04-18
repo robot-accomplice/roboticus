@@ -92,6 +92,13 @@ func New(id, agentID, agentName string) *Session {
 // Messages returns the full message history.
 func (s *Session) Messages() []llm.Message { return s.messages }
 
+// SetMessages replaces the full message history.
+// The caller owns the replacement slice and should treat it as immutable after
+// handing it to the session.
+func (s *Session) SetMessages(messages []llm.Message) {
+	s.messages = messages
+}
+
 // AddUserMessage appends a user message.
 func (s *Session) AddUserMessage(content string) {
 	s.messages = append(s.messages, llm.Message{Role: "user", Content: content})

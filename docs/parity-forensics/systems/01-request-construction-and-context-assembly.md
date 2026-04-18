@@ -4,7 +4,7 @@
 
 - Owner: parity-forensics program
 - Audit status: `in progress`
-- Last updated: 2026-04-16
+- Last updated: 2026-04-18
 - Related release: v1.0.6
 
 ## Why This System Matters
@@ -147,6 +147,7 @@ Parity for this system is not satisfied unless tests can assert:
 | SYS-01-009 | P2 | Rust request assembly restores context checkpoints directly into the live request; Go currently uses a compact checkpoint digest restore instead of the full checkpoint blob | Rust loads the latest checkpoint and injects it as a system message during request construction | Go now loads the latest checkpoint through `CheckpointRepository.LoadLatestRecord(...)` and injects a compact `[Checkpoint Digest]` ambient note during `buildAgentContext(...)`; this closes the missing live restore seam but remains a deliberate synthesis rather than verbatim Rust replay | Synthesis / improvement candidate | Improved, not closed | Rust: `context_builder.rs:387-410`; Go: `internal/daemon/daemon_adapters.go`, `internal/db/checkpoint_repo.go`, `internal/daemon/daemon_adapters_test.go` |
 | SYS-01-010 | P1 | Prompt-layer tool discoverability could drift from the structured tool list | Rust injects textual tool-use instructions derived from the pruned tool set into the system prompt, helping models without perfect native tool-calling priors | Go already had a textual tool roster block, but it was populated from the daemon boot's full registry instead of the selected per-request tool set. The live path now rewrites `PromptConfig.ToolNames` / `ToolDescs` from `selectedDefs` before building the prompt, including the authoritative zero-tools case, so the model sees one coherent tool surface across prompt and `llm.Request.Tools` | Improved | Closed 2026-04-18 | Rust: `context_builder.rs:214-269`; Go: `internal/daemon/daemon_adapters.go`, `internal/daemon/daemon_adapters_test.go::TestBuildAgentContext_PromptToolRosterUsesSelectedDefs`, `internal/daemon/daemon_adapters_test.go::TestBuildAgentContext_PromptToolRosterClearsWhenSelectedDefsEmpty` |
 | SYS-01-011 | P2 | Prompt assembly tiering differs | Rust varies prompt blocks by complexity level (compact L0/L1 vs verbose L2/L3) within the same request builder | Go currently has one primary prompt-assembly path plus independent compaction rules, but no equivalent committed complexity-tiered prompt block assembly in `ContextBuilder` | Open | Open | Rust: `context_builder.rs:270-310`; Go: `internal/agent/context.go:98-343` |
+| SYS-01-012 | P1 | Live pre-inference compaction was computed but not applied | Rust’s request-preparation path mutates the live context artifact that inference actually consumes | Go computed compacted history in both `PrepareForInference(...)` and `runStandardInferenceWithTrace(...)`, logged the before/after counts, then left the session unmodified. The live inference path therefore still consumed the un-compacted history. Both entrypoints now write the compacted slice back through `session.SetMessages(...)` before inference proceeds | Degradation | Closed 2026-04-18 | Go: `internal/pipeline/pipeline_stages.go`, `internal/pipeline/prepare_inference_test.go::TestPrepareForInference_CompactsSessionMessagesInPlace`, `internal/pipeline/prepare_inference_test.go::TestRunStandardInference_CompactsSessionMessagesInPlace` |
 
 ## Intentional Deviations
 
@@ -333,3 +334,9 @@ is re-audited.
   checklist. `ContextBuilder.BuildRequest(...)` now injects the anti-fade
   reminder only when it fits within the remaining history budget; it no longer
   silently overruns the final `llm.Request` after history selection.
+- 2026-04-18: Closed SYS-01-012. Pipeline-side pre-inference compaction no
+  longer stops at logging. Both `PrepareForInference(...)` and
+  `runStandardInferenceWithTrace(...)` now write the compacted slice back onto
+  the live session through `session.SetMessages(...)`, and direct regressions
+  prove the executor sees the compacted history instead of the stale
+  pre-compaction artifact.
