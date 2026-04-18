@@ -162,9 +162,10 @@ func (t *MaintenanceLoopTask) Run(ctx context.Context, _ *TickContext) TaskResul
 		return TaskResult{Success: false, Message: "no store configured"}
 	}
 
-	// Evict stale cache entries (response cache older than 24h).
+	// Evict expired cache entries using the live TTL contract.
 	res, err := t.Store.ExecContext(ctx,
-		`DELETE FROM response_cache WHERE created_at < datetime('now', '-24 hours')`)
+		`DELETE FROM response_cache
+		 WHERE expires_at IS NOT NULL AND expires_at <= datetime('now')`)
 	evicted := int64(0)
 	if err == nil {
 		evicted, _ = res.RowsAffected()

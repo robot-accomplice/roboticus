@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,12 +17,14 @@ type stubDB struct {
 	execArgs  []any
 	execErr   error
 	execCount int
+	queries   []string
 }
 
 func (s *stubDB) ExecContext(_ context.Context, query string, args ...any) (sql.Result, error) {
 	s.execCount++
 	s.execQuery = query
 	s.execArgs = args
+	s.queries = append(s.queries, query)
 	return stubResult(1), s.execErr
 }
 
@@ -103,6 +106,15 @@ func TestMaintenanceLoopTask_Run_ExecutesCleanupQueries(t *testing.T) {
 	}
 	if store.execCount != 2 {
 		t.Fatalf("exec count = %d, want 2", store.execCount)
+	}
+	if len(store.queries) != 2 {
+		t.Fatalf("query count = %d, want 2", len(store.queries))
+	}
+	if !strings.Contains(store.queries[0], "DELETE FROM response_cache") || !strings.Contains(store.queries[0], "expires_at") {
+		t.Fatalf("first query should evict by expires_at, got %q", store.queries[0])
+	}
+	if !strings.Contains(store.queries[1], "UPDATE cron_jobs SET lease_holder = NULL") {
+		t.Fatalf("second query should clear expired leases, got %q", store.queries[1])
 	}
 	if result.Message != "evicted=1 leases_cleared=1" {
 		t.Fatalf("message = %q", result.Message)

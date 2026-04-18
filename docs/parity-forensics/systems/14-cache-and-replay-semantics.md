@@ -77,6 +77,7 @@ replay-specific logic.
 | SYS-14-001 | P1 | Pipeline cache stage previously drifted from live TTL semantics | Cached responses should remain behaviorally equivalent enough to fresh inference | Closed in v1.0.6: pipeline cache reads now honor `expires_at`, pipeline cache writes stamp the same SQLite-friendly TTL window as the main LLM cache, and the pipeline owns its configured TTL explicitly instead of relying on timeless rows | Remediated | Closed | `internal/pipeline/pipeline_cache.go`, `internal/pipeline/pipeline.go`, `internal/daemon/daemon.go`, `internal/pipeline/behavioral_fitness_test.go` |
 | SYS-14-002 | P1 | Prompt compression quality risk needs its own cache-aware audit surface | Rust had a compression gate, but quality acceptance must be proved, not assumed | Go now has a paired soak harness specifically because the feature is considered suspect until live evidence clears it | Open | Open | `scripts/run-prompt-compression-soak.py`, release notes |
 | SYS-14-003 | P1 | Streaming no-escalate requests previously still allowed cache replay | Benchmark/no-escalate paths should measure fresh model behavior consistently across complete and stream modes | Closed in v1.0.6: `Service.Stream(...)` now mirrors `Complete(...)` and skips cache replay when `NoEscalate` is set directly or via context | Remediated | Closed | `internal/llm/service.go`, `internal/llm/coverage_boost_test.go` |
+| SYS-14-004 | P2 | Maintenance cleanup carried a second cache-expiry rule outside the live cache path | Cache cleanup should age out rows on the same `expires_at` contract used by lookup/write paths | `MaintenanceLoopTask` now deletes `response_cache` rows by `expires_at <= now` instead of a separate `created_at < now-24h` heuristic, removing a second expiration rule | Remediated | Closed | `internal/schedule/tasks.go`, `internal/schedule/tasks_test.go`, `internal/pipeline/pipeline_cache.go`, `internal/llm/cache.go` |
 
 ## Intentional Deviations
 
@@ -108,3 +109,7 @@ surprise behavior and deserve a first-class artifact boundary.
 - 2026-04-17: Closed the stream replay contamination seam. `NoEscalate`
   now suppresses cache replay for streaming requests too, so benchmark/raw
   capability paths do not diverge between complete and stream modes.
+- 2026-04-18: Closed the maintenance-expiry seam. Scheduler cleanup no longer
+  carries a second age-based eviction rule for `response_cache`; it now deletes
+  rows on the same `expires_at` contract used by the live cache read/write
+  paths.

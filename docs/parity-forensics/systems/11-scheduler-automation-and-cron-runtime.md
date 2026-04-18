@@ -86,6 +86,7 @@ Today that lifecycle is already split into two families:
 | SYS-11-007 | P1 | Treasury state should not depend on a dormant parity helper if live commands read it | Rust treasury-loop ownership needs explicit comparison | Go daemon now starts a dedicated low-frequency treasury refresh loop backed by `HeartbeatDaemon` + `TreasuryLoopTask`, driven only by `heartbeat.treasury_interval_seconds`, so `treasury_state` is refreshed from cached wallet balances without sharing the application-health heartbeat cadence | Degradation remediated / treasury ownership restored | Accepted | `internal/daemon/daemon_subsystems.go`, `internal/daemon/daemon_subsystems_test.go`, `internal/schedule/tasks.go`, `internal/schedule/tasks_test.go`, `internal/pipeline/bot_commands.go` |
 | SYS-11-008 | P1 | Treasury-state field semantics must match the schema that downstream readers consume | Rust treasury-state semantics need explicit comparison | `TreasuryLoopTask` now writes `usdc_balance`, `native_balance`, and `atoken_balance` by their real meanings, and `/status` now reads the live `usdc_balance` column instead of a nonexistent `total_balance` field | Degradation remediated / field semantics restored | Accepted | `internal/schedule/tasks.go`, `internal/schedule/tasks_test.go`, `internal/pipeline/bot_commands.go`, `internal/pipeline/bot_commands_test.go` |
 | SYS-11-009 | P2 | Status readers should not carry legacy cron-run schema probing after the writer contract was normalized | Rust status-command schema contract needs explicit comparison | `/status` now counts failed cron runs only via the authoritative `cron_runs.timestamp` column instead of probing a dead `created_at` fallback path | Degradation remediated / reader-writer contract aligned | Accepted | `internal/pipeline/bot_commands.go`, `internal/pipeline/bot_commands_test.go`, `internal/schedule/worker.go` |
+| SYS-11-010 | P2 | Maintenance cleanup should use the live cache expiry contract, not a second age-based rule | Rust maintenance-loop / cache contract needs explicit comparison | `MaintenanceLoopTask` now evicts `response_cache` rows by `expires_at <= now` instead of `created_at < now-24h`, aligning maintenance cleanup with the live cache TTL surface | Degradation remediated / cache-maintenance contract aligned | Accepted | `internal/schedule/tasks.go`, `internal/schedule/tasks_test.go`, `internal/pipeline/pipeline_cache.go`, `internal/llm/cache.go` |
 
 ## Intentional Deviations
 
@@ -148,3 +149,6 @@ collection of partially used helpers.
 - 2026-04-18: Removed legacy `cron_runs.created_at` probing from `/status`.
   The scheduler status reader now matches the authoritative writer contract on
   `cron_runs.timestamp`.
+- 2026-04-18: Corrected maintenance cache eviction to use `expires_at` rather
+  than an ad hoc `created_at - 24h` rule, so the cleanup task now honors the
+  same TTL contract as the live cache paths.
