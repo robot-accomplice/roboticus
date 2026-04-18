@@ -125,6 +125,7 @@ Blocking commands for feature-complete releases:
 | R-TOOLS-02 | Browser admin/runtime actions fail safely and perform advertised actions | browser tests + smoke | L1/L2/L3 |
 | R-TOOLS-03 | Plugin discovery/execute remains stable, including daemon-owned startup scan/init, install/enable-time hot syncing into the live registry and semantic tool surface, and the shared script execution contract across skills and manifest-backed plugins | plugin tests + daemon tests + route tests + core script tests | L1/L2 |
 | R-TOOLS-04 | MCP management surfaces stay aligned across API/UI/CLI where advertised | MCP tests + smoke | L2/L3 |
+| R-TOOLS-07 | Runtime MCP connect/discover/disconnect keeps the live tool surface aligned with the connection manager instead of requiring daemon restart for MCP tool registration/pruning truth | MCP route tests + agent tool tests | L1/L2 |
 | R-TOOLS-05 | Config-protection and action-verification guards block forbidden or fabricated behavior | guard tests + behavior tests | L1/L2/L4 |
 | R-TOOLS-06 | Per-call MCP timeout fails only the timed-out call: the transport stays open, late responses are dropped, and a follow-on call can still succeed on the same connection | `internal/mcp/client_test.go` | L1/L2 |
 

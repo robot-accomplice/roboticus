@@ -118,7 +118,7 @@ docs describe them honestly.
 | ID | Priority | Concern | Baseline / desired behavior | Go behavior | Classification | Status | Evidence |
 |----|----------|---------|-----------------------------|-------------|----------------|--------|----------|
 | SYS-08-001 | P1 | Practical MCP confidence must remain separate from generic plumbing confidence | Real-server readiness must not be inferred from unit coverage alone | Go now has a release-blocker checklist and improved diagnostics, but this distinction must remain enforced | Improvement with ongoing governance requirement | Open | `docs/testing/mcp-release-blocker-checklist.md`, `docs/releases/v1.0.6-release-notes.md` |
-| SYS-08-002 | P1 | MCP tool bridging affects live tool surface and must stay aligned with pruning/provenance | External tools should enter the runtime through a single truthful bridge | Go bridges MCP tools into the registry and classifies them for tool-search penalties/provenance | Improvement | Open / cross-check with System 02 | `internal/agent/tools/mcp_bridge.go`, `internal/agent/tools/registry.go`, `internal/agent/tools/tool_search.go` |
+| SYS-08-002 | P1 | MCP tool bridging affects live tool surface and must stay aligned with pruning/provenance | External tools should enter the runtime through a single truthful bridge | Go now hot-syncs MCP tools into the same live registry/embedding surface on connect, discover, and disconnect instead of leaving runtime-added MCP servers restart-only. Bridged MCP tools now stay aligned with the live selected tool surface instead of stopping at the connection manager. | Improvement / remediation | Remediated / cross-check with System 02 | `internal/agent/tools/mcp_bridge.go`, `internal/api/mcp_tool_surface.go`, `internal/api/routes/mcp.go`, `internal/agent/tools/tool_search.go` |
 | SYS-08-003 | P1 | Release-truth drift around MCP readiness can reappear even when code improves | Docs must state exactly what was validated | Go has already had overstated MCP confidence in prior iterations; this remains an audit target, not a one-time fix | Degradation risk | Open | MCP checklist + release notes + runtime validation evidence |
 | SYS-08-004 | P2 | Stdio/SSE transport behavior still needs line-by-line parity classification | Transport timeouts, env propagation, diagnostics, and reconnect semantics should be explicit and tested | Several hardening fixes landed (stderr capture, env inheritance, release-blocker evidence), but the full cross-transport classification is not yet complete in this program | Open | Open | `internal/mcp/client.go`, manager/tests, checklist artifacts |
 | SYS-08-005 | P2 | Integration-test guidance and checklist evidence are now stronger, but must remain synchronized with the real blessed targets | Validation guidance should point at the same targets the release checklist certifies | Go now documents current Playwright guidance and stores a checklist artifact with explicit targets/evidence; this is a genuine improvement but requires ongoing synchronization discipline | Improvement with governance requirement | Open | `internal/mcp/integration_test.go`, `docs/testing/mcp-release-blocker-checklist.md` |
@@ -152,6 +152,9 @@ The key discipline for this system is governance as much as code:
   or still a release-grade operator-contract gap
 - preserve the new request/response dispatcher model: per-call timeout is now a
   call-local failure, while transport failure remains connection-fatal
+- preserve runtime MCP tool-surface truth: connect/discover/disconnect must
+  sync the same registry/embedding surface that startup wiring uses, so runtime
+  MCP changes do not require daemon restart to reach tool pruning or execution
 
 ## Downstream Systems Affected
 
@@ -189,3 +192,7 @@ The key discipline for this system is governance as much as code:
   a long-lived receive loop with per-request pending-call channels. Timed-out
   calls now fail locally without closing the transport, and late responses are
   dropped instead of poisoning the next call.
+- 2026-04-18: Remediated hot MCP tool-surface drift. Runtime connect, discover,
+  and disconnect paths now sync the live agent registry/descriptor embeddings
+  through an API-owned MCP tool-surface adapter instead of leaving runtime MCP
+  tool changes restart-only.

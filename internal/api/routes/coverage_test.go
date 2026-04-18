@@ -421,7 +421,7 @@ func TestListMCPTools_EmptyManager(t *testing.T) {
 }
 
 func TestConnectMCPServer_NilManager(t *testing.T) {
-	handler := ConnectMCPServer(nil)
+	handler := ConnectMCPServer(nil, nil)
 	req := httptest.NewRequest("POST", "/api/mcp/connect",
 		strings.NewReader(`{"name":"test","transport":"stdio","command":"echo"}`))
 	rec := httptest.NewRecorder()
@@ -434,7 +434,7 @@ func TestConnectMCPServer_NilManager(t *testing.T) {
 
 func TestConnectMCPServer_InvalidJSON(t *testing.T) {
 	mgr := mcp.NewConnectionManager()
-	handler := ConnectMCPServer(mgr)
+	handler := ConnectMCPServer(mgr, nil)
 	req := httptest.NewRequest("POST", "/api/mcp/connect",
 		strings.NewReader(`{bad`))
 	rec := httptest.NewRecorder()
@@ -447,7 +447,7 @@ func TestConnectMCPServer_InvalidJSON(t *testing.T) {
 
 func TestConnectMCPServer_BadTransport(t *testing.T) {
 	mgr := mcp.NewConnectionManager()
-	handler := ConnectMCPServer(mgr)
+	handler := ConnectMCPServer(mgr, nil)
 	req := httptest.NewRequest("POST", "/api/mcp/connect",
 		strings.NewReader(`{"name":"test","transport":"unknown"}`))
 	rec := httptest.NewRecorder()
@@ -459,7 +459,7 @@ func TestConnectMCPServer_BadTransport(t *testing.T) {
 }
 
 func TestDisconnectMCPServer_NilManager(t *testing.T) {
-	r := chiRouter("POST", "/api/mcp/disconnect/{name}", DisconnectMCPServer(nil))
+	r := chiRouter("POST", "/api/mcp/disconnect/{name}", DisconnectMCPServer(nil, nil))
 	req := httptest.NewRequest("POST", "/api/mcp/disconnect/test", nil)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
@@ -471,7 +471,7 @@ func TestDisconnectMCPServer_NilManager(t *testing.T) {
 
 func TestDisconnectMCPServer_NotFound(t *testing.T) {
 	mgr := mcp.NewConnectionManager()
-	r := chiRouter("POST", "/api/mcp/disconnect/{name}", DisconnectMCPServer(mgr))
+	r := chiRouter("POST", "/api/mcp/disconnect/{name}", DisconnectMCPServer(mgr, nil))
 	req := httptest.NewRequest("POST", "/api/mcp/disconnect/nonexistent", nil)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)

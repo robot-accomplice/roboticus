@@ -12,6 +12,10 @@ import (
 	"roboticus/internal/mcp"
 )
 
+type MCPToolSurface interface {
+	SyncMCPToolSurface(context.Context, *mcp.ConnectionManager)
+}
+
 // ListMCPConnections returns all MCP server connection statuses.
 func ListMCPConnections(mgr *mcp.ConnectionManager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -35,7 +39,7 @@ func ListMCPTools(mgr *mcp.ConnectionManager) http.HandlerFunc {
 }
 
 // ConnectMCPServer connects to an MCP server by config.
-func ConnectMCPServer(mgr *mcp.ConnectionManager) http.HandlerFunc {
+func ConnectMCPServer(mgr *mcp.ConnectionManager, surface MCPToolSurface) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if mgr == nil {
 			writeError(w, http.StatusServiceUnavailable, "MCP not configured")
@@ -50,12 +54,13 @@ func ConnectMCPServer(mgr *mcp.ConnectionManager) http.HandlerFunc {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		syncMCPToolSurface(r.Context(), surface, mgr)
 		writeJSON(w, http.StatusOK, map[string]string{"status": "connected"})
 	}
 }
 
 // DisconnectMCPServer disconnects an MCP server by name.
-func DisconnectMCPServer(mgr *mcp.ConnectionManager) http.HandlerFunc {
+func DisconnectMCPServer(mgr *mcp.ConnectionManager, surface MCPToolSurface) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if mgr == nil {
 			writeError(w, http.StatusServiceUnavailable, "MCP not configured")
@@ -66,12 +71,13 @@ func DisconnectMCPServer(mgr *mcp.ConnectionManager) http.HandlerFunc {
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
+		syncMCPToolSurface(r.Context(), surface, mgr)
 		writeJSON(w, http.StatusOK, map[string]string{"status": "disconnected"})
 	}
 }
 
 // DiscoverMCPTools triggers tool discovery on a connected MCP client by name.
-func DiscoverMCPTools(mgr *mcp.ConnectionManager) http.HandlerFunc {
+func DiscoverMCPTools(mgr *mcp.ConnectionManager, surface MCPToolSurface) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if mgr == nil {
 			writeError(w, http.StatusServiceUnavailable, "MCP not configured")
@@ -87,6 +93,7 @@ func DiscoverMCPTools(mgr *mcp.ConnectionManager) http.HandlerFunc {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("tool discovery failed: %v", err))
 			return
 		}
+		syncMCPToolSurface(r.Context(), surface, mgr)
 		tools := make([]map[string]any, 0, len(conn.Tools))
 		for _, t := range conn.Tools {
 			tools = append(tools, map[string]any{
@@ -103,7 +110,7 @@ func DiscoverMCPTools(mgr *mcp.ConnectionManager) http.HandlerFunc {
 }
 
 // DisconnectMCPClient disconnects a specific MCP client by name (runtime path).
-func DisconnectMCPClient(mgr *mcp.ConnectionManager) http.HandlerFunc {
+func DisconnectMCPClient(mgr *mcp.ConnectionManager, surface MCPToolSurface) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if mgr == nil {
 			writeError(w, http.StatusServiceUnavailable, "MCP not configured")
@@ -114,6 +121,7 @@ func DisconnectMCPClient(mgr *mcp.ConnectionManager) http.HandlerFunc {
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
+		syncMCPToolSurface(r.Context(), surface, mgr)
 		writeJSON(w, http.StatusOK, map[string]string{"status": "disconnected", "name": name})
 	}
 }
@@ -271,6 +279,13 @@ func toolsForConnection(mgr *mcp.ConnectionManager, name string) []mcp.ToolDescr
 		return nil
 	}
 	return conn.Tools
+}
+
+func syncMCPToolSurface(ctx context.Context, surface MCPToolSurface, mgr *mcp.ConnectionManager) {
+	if surface == nil || mgr == nil {
+		return
+	}
+	surface.SyncMCPToolSurface(ctx, mgr)
 }
 
 func testMCPServer(ctx context.Context, cfg mcp.McpServerConfig) (mcp.ServerStatus, error) {

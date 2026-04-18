@@ -79,6 +79,7 @@ func DefaultServerConfig() ServerConfig {
 // The context controls the lifetime of background goroutines (rate limit cleanup, ticket cleanup).
 func NewServer(ctx context.Context, cfg ServerConfig, state *AppState) *http.Server {
 	r := chi.NewRouter()
+	mcpToolSurface := newMCPToolSurface(state.Tools, state.Embeddings)
 
 	// Global middleware.
 	r.Use(chimw.RequestID)
@@ -358,8 +359,8 @@ func NewServer(ctx context.Context, cfg ServerConfig, state *AppState) *http.Ser
 		r.Post("/api/runtime/devices/{id}/verify", routes.VerifyPairedDevice(state.Store))
 		r.Delete("/api/runtime/devices/{id}", routes.UnpairDevice(state.Store))
 		r.Get("/api/runtime/mcp", routes.GetMCPRuntime(state.Config, state.MCP))
-		r.Post("/api/runtime/mcp/clients/{name}/discover", routes.DiscoverMCPTools(state.MCP))
-		r.Post("/api/runtime/mcp/clients/{name}/disconnect", routes.DisconnectMCPClient(state.MCP))
+		r.Post("/api/runtime/mcp/clients/{name}/discover", routes.DiscoverMCPTools(state.MCP, mcpToolSurface))
+		r.Post("/api/runtime/mcp/clients/{name}/disconnect", routes.DisconnectMCPClient(state.MCP, mcpToolSurface))
 
 		// Provider key management.
 		r.Put("/api/providers/{provider}/key", routes.SetProviderKey(state.Keystore))
@@ -389,8 +390,8 @@ func NewServer(ctx context.Context, cfg ServerConfig, state *AppState) *http.Ser
 		r.Post("/api/mcp/servers/{name}/test", routes.TestMCPServer(state.Config))
 		r.Get("/api/mcp/connections", routes.ListMCPConnections(state.MCP))
 		r.Get("/api/mcp/tools", routes.ListMCPTools(state.MCP))
-		r.Post("/api/mcp/connect", routes.ConnectMCPServer(state.MCP))
-		r.Post("/api/mcp/disconnect/{name}", routes.DisconnectMCPServer(state.MCP))
+		r.Post("/api/mcp/connect", routes.ConnectMCPServer(state.MCP, mcpToolSurface))
+		r.Post("/api/mcp/disconnect/{name}", routes.DisconnectMCPServer(state.MCP, mcpToolSurface))
 
 		// Browser.
 		if state.Browser != nil {
