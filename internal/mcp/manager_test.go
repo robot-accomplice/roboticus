@@ -137,6 +137,32 @@ func TestConnectionManager_Statuses_AreDeterministicByServerName(t *testing.T) {
 	}
 }
 
+func TestConnectionManager_Statuses_ReportDeadConnectionsAsDisconnected(t *testing.T) {
+	mgr := NewConnectionManager()
+	conn := &Connection{
+		Name:          "server-dead",
+		ServerName:    "Dead",
+		ServerVersion: "1.0",
+		Tools:         []ToolDescriptor{{Name: "stale_tool"}},
+	}
+	conn.setReceiverErr(fmt.Errorf("transport closed"))
+	injectConnection(mgr, conn)
+
+	statuses := mgr.Statuses()
+	if len(statuses) != 1 {
+		t.Fatalf("statuses count = %d, want 1", len(statuses))
+	}
+	if statuses[0].Connected {
+		t.Fatal("dead connection should report connected=false")
+	}
+	if statuses[0].ToolCount != 0 {
+		t.Fatalf("dead connection tool_count = %d, want 0", statuses[0].ToolCount)
+	}
+	if statuses[0].Error == "" {
+		t.Fatal("dead connection should surface status error")
+	}
+}
+
 func TestConnectionManager_AllTools_WithConnections(t *testing.T) {
 	mgr := NewConnectionManager()
 
@@ -195,6 +221,40 @@ func TestConnectionManager_AllTools_AreDeterministicByServerName(t *testing.T) {
 	}
 }
 
+func TestConnectionManager_AllTools_ExcludesDeadConnections(t *testing.T) {
+	mgr := NewConnectionManager()
+
+	live := &Connection{Name: "live", Tools: []ToolDescriptor{{Name: "live_tool"}}}
+	dead := &Connection{Name: "dead", Tools: []ToolDescriptor{{Name: "stale_tool"}}}
+	dead.setReceiverErr(fmt.Errorf("transport closed"))
+
+	injectConnection(mgr, dead)
+	injectConnection(mgr, live)
+
+	tools := mgr.AllTools()
+	if len(tools) != 1 {
+		t.Fatalf("tool count = %d, want 1", len(tools))
+	}
+	if tools[0].Name != "live_tool" {
+		t.Fatalf("tool[0] = %q, want live_tool", tools[0].Name)
+	}
+}
+
+func TestConnectionManager_ConnectedCount_ExcludesDeadConnections(t *testing.T) {
+	mgr := NewConnectionManager()
+
+	live := &Connection{Name: "live"}
+	dead := &Connection{Name: "dead"}
+	dead.setReceiverErr(fmt.Errorf("transport closed"))
+
+	injectConnection(mgr, live)
+	injectConnection(mgr, dead)
+
+	if got := mgr.ConnectedCount(); got != 1 {
+		t.Fatalf("ConnectedCount = %d, want 1", got)
+	}
+}
+
 func TestConnectionManager_CallTool_Success(t *testing.T) {
 	mgr := NewConnectionManager()
 
@@ -234,22 +294,19 @@ func TestConnectionManager_RefreshTools_UpdatesLiveConnection(t *testing.T) {
 	mgr := NewConnectionManager()
 
 	expectedID := nextID.Load() + 1
-	mt := &mockTransport{
-		responses: []json.RawMessage{
-			makeResponse(expectedID, map[string]any{
-				"tools": []map[string]any{
-					{"name": "fresh_tool", "description": "fresh"},
-				},
-			}),
+	qt := newQueuedTransport()
+	qt.recv <- makeResponse(expectedID, map[string]any{
+		"tools": []map[string]any{
+			{"name": "fresh_tool", "description": "fresh"},
 		},
-	}
+	})
 
 	injectConnection(mgr, &Connection{
 		Name: "refreshable",
 		Tools: []ToolDescriptor{
 			{Name: "stale_tool", Description: "stale"},
 		},
-		transport: mt,
+		transport: qt,
 	})
 
 	tools, err := mgr.RefreshTools(context.Background(), "refreshable")

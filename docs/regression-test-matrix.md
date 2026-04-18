@@ -132,6 +132,7 @@ Blocking commands for feature-complete releases:
 | R-TOOLS-10 | Registry-backed tool surfaces are deterministic: names, descriptors, tool defs, and equal-score pruning all preserve stable registration order instead of drifting on Go map iteration | agent tool tests | L1/L2 |
 | R-TOOLS-11 | Runtime MCP discover mutates the manager-owned live connection, so refreshed MCP tools reach `AllTools()`, route responses, and the synced semantic tool surface instead of updating only a copied snapshot | MCP manager tests | L1/L2 |
 | R-TOOLS-12 | MCP connection statuses and aggregated tool lists are deterministic by server name instead of drifting on Go map iteration, so operator/admin surfaces stay reproducible across runs | MCP manager tests | L1/L2 |
+| R-TOOLS-13 | Dead MCP transports stay visible for diagnostics but no longer masquerade as healthy: `Statuses()` reports `connected=false` with an error, `tool_count=0`, and `AllTools()` excludes stale tools from the live aggregated surface | MCP manager tests | L1/L2 |
 | R-TOOLS-05 | Config-protection and action-verification guards block forbidden or fabricated behavior | guard tests + behavior tests | L1/L2/L4 |
 | R-TOOLS-06 | Per-call MCP timeout fails only the timed-out call: the transport stays open, late responses are dropped, and a follow-on call can still succeed on the same connection | `internal/mcp/client_test.go` | L1/L2 |
 

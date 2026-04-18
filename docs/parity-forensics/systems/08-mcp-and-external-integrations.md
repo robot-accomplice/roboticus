@@ -4,7 +4,7 @@
 
 - Owner: parity-forensics program
 - Audit status: `in progress`
-- Last updated: 2026-04-16
+- Last updated: 2026-04-18
 - Related release: v1.0.6
 
 ## Why This System Matters
@@ -125,6 +125,7 @@ docs describe them honestly.
 | SYS-08-006 | P1 | Per-call timeout/cancellation must not tear down the whole MCP connection | A timed-out `tools/call` should fail that call without silently degrading the server's future availability unless the transport itself is irrecoverable | Go now uses a long-lived receive loop plus per-request pending-call channels. Timed-out calls are removed from the pending map; late responses are dropped; only real transport failure poisons the connection. This keeps stdio/SSE transport availability tied to transport health instead of a single caller timeout. | Improvement / remediation | Remediated | `internal/mcp/client.go`, `internal/mcp/client_test.go` |
 | SYS-08-007 | P2 | WebSocket/HTTP operational evidence for MCP status is stronger when it reuses canonical handlers instead of a second summary path | Operator-facing status surfaces should share one data source where possible | Go's topic snapshots invoke the same HTTP handlers through `httptest`, which is a real improvement in observability truthfulness even though transport semantics still need classification | Improvement candidate | Open / cross-check with System 09 | `internal/api/ws_topics.go:12-68`, `internal/api/routes/mcp.go` |
 | SYS-08-008 | P2 | MCP status/tool management surfaces should not drift on Go map iteration order | Operator-facing MCP lists should be stable across runs so UI/admin surfaces and downstream syncs are reproducible | `ConnectionManager.Statuses()` and `AllTools()` now emit connections in deterministic server-name order instead of inheriting Go map iteration order. This keeps route responses and live tool-surface sync stable across runs. | Improvement / remediation | Remediated | `internal/mcp/manager.go`, `internal/mcp/manager_test.go` |
+| SYS-08-009 | P1 | Dead MCP transports were still reported as connected and kept advertising stale tools | Operator/runtime surfaces should distinguish a configured connection object from a live healthy transport | Go now keeps dead connections visible in `Statuses()` but marks them `connected=false`, zeros their live `tool_count`, and surfaces the transport error. Aggregated `AllTools()` excludes those dead connections, and runtime summaries count only healthy connections. | Improvement / remediation | Remediated | `internal/mcp/manager.go`, `internal/mcp/manager_test.go`, `internal/api/routes/mcp.go` |
 
 ## Intentional Deviations
 
@@ -205,3 +206,7 @@ The key discipline for this system is governance as much as code:
   statuses and aggregated tools now emit in stable server-name order instead
   of drifting on Go map iteration, which keeps route/UI surfaces and tool-sync
   behavior reproducible across runs.
+- 2026-04-18: Remediated dead-connection truth drift. Manager status output now
+  keeps failed connections visible for diagnostics but marks them
+  `connected=false` with an error string and zero live `tool_count`, while
+  aggregated tool surfaces exclude those dead transports entirely.

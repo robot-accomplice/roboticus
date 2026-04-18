@@ -104,13 +104,19 @@ func (m *ConnectionManager) Statuses() []ServerStatus {
 
 	statuses := make([]ServerStatus, 0, len(m.connections))
 	for _, conn := range orderedConnections(m.connections) {
-		statuses = append(statuses, ServerStatus{
+		status := ServerStatus{
 			Name:          conn.Name,
 			Connected:     true,
 			ToolCount:     len(conn.Tools),
 			ServerName:    conn.ServerName,
 			ServerVersion: conn.ServerVersion,
-		})
+		}
+		if err := conn.receiverErr(); err != nil {
+			status.Connected = false
+			status.ToolCount = 0
+			status.Error = err.Error()
+		}
+		statuses = append(statuses, status)
 	}
 	return statuses
 }
@@ -122,9 +128,27 @@ func (m *ConnectionManager) AllTools() []ToolDescriptor {
 
 	var tools []ToolDescriptor
 	for _, conn := range orderedConnections(m.connections) {
+		if conn.receiverErr() != nil {
+			continue
+		}
 		tools = append(tools, conn.Tools...)
 	}
 	return tools
+}
+
+// ConnectedCount returns the number of live MCP connections whose transport is
+// still healthy enough to serve tool calls.
+func (m *ConnectionManager) ConnectedCount() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	count := 0
+	for _, conn := range m.connections {
+		if conn.receiverErr() == nil {
+			count++
+		}
+	}
+	return count
 }
 
 // CallTool dispatches a tool call to the appropriate server.

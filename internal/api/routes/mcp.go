@@ -138,10 +138,16 @@ func GetMCPRuntime(cfg *core.Config, mgr *mcp.ConnectionManager) http.HandlerFun
 				enabled++
 			}
 		}
+		connected := 0
+		for _, status := range statuses {
+			if status.Connected {
+				connected++
+			}
+		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"configured_servers": configured,
 			"enabled_servers":    enabled,
-			"connected_servers":  len(statuses),
+			"connected_servers":  connected,
 			"clients":            statuses,
 		})
 	}
@@ -200,8 +206,11 @@ func GetMCPServer(cfg *core.Config, mgr *mcp.ConnectionManager) http.HandlerFunc
 			body["tool_count"] = status.ToolCount
 			body["server_name"] = status.ServerName
 			body["server_version"] = status.ServerVersion
+			if status.Error != "" {
+				body["error"] = status.Error
+			}
 		}
-		if mgr != nil {
+		if mgr != nil && body["connected"] == true {
 			tools := toolsForConnection(mgr, server.Name)
 			if len(tools) > 0 {
 				body["tools"] = tools
