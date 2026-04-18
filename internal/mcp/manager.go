@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 
 	"github.com/rs/zerolog/log"
@@ -102,7 +103,7 @@ func (m *ConnectionManager) Statuses() []ServerStatus {
 	defer m.mu.RUnlock()
 
 	statuses := make([]ServerStatus, 0, len(m.connections))
-	for _, conn := range m.connections {
+	for _, conn := range orderedConnections(m.connections) {
 		statuses = append(statuses, ServerStatus{
 			Name:          conn.Name,
 			Connected:     true,
@@ -120,7 +121,7 @@ func (m *ConnectionManager) AllTools() []ToolDescriptor {
 	defer m.mu.RUnlock()
 
 	var tools []ToolDescriptor
-	for _, conn := range m.connections {
+	for _, conn := range orderedConnections(m.connections) {
 		tools = append(tools, conn.Tools...)
 	}
 	return tools
@@ -180,4 +181,17 @@ func (m *ConnectionManager) CloseAll() {
 		}
 	}
 	m.connections = make(map[string]*Connection)
+}
+
+func orderedConnections(connections map[string]*Connection) []*Connection {
+	names := make([]string, 0, len(connections))
+	for name := range connections {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	ordered := make([]*Connection, 0, len(names))
+	for _, name := range names {
+		ordered = append(ordered, connections[name])
+	}
+	return ordered
 }

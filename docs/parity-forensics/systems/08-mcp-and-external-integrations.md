@@ -124,6 +124,7 @@ docs describe them honestly.
 | SYS-08-005 | P2 | Integration-test guidance and checklist evidence are now stronger, but must remain synchronized with the real blessed targets | Validation guidance should point at the same targets the release checklist certifies | Go now documents current Playwright guidance and stores a checklist artifact with explicit targets/evidence; this is a genuine improvement but requires ongoing synchronization discipline | Improvement with governance requirement | Open | `internal/mcp/integration_test.go`, `docs/testing/mcp-release-blocker-checklist.md` |
 | SYS-08-006 | P1 | Per-call timeout/cancellation must not tear down the whole MCP connection | A timed-out `tools/call` should fail that call without silently degrading the server's future availability unless the transport itself is irrecoverable | Go now uses a long-lived receive loop plus per-request pending-call channels. Timed-out calls are removed from the pending map; late responses are dropped; only real transport failure poisons the connection. This keeps stdio/SSE transport availability tied to transport health instead of a single caller timeout. | Improvement / remediation | Remediated | `internal/mcp/client.go`, `internal/mcp/client_test.go` |
 | SYS-08-007 | P2 | WebSocket/HTTP operational evidence for MCP status is stronger when it reuses canonical handlers instead of a second summary path | Operator-facing status surfaces should share one data source where possible | Go's topic snapshots invoke the same HTTP handlers through `httptest`, which is a real improvement in observability truthfulness even though transport semantics still need classification | Improvement candidate | Open / cross-check with System 09 | `internal/api/ws_topics.go:12-68`, `internal/api/routes/mcp.go` |
+| SYS-08-008 | P2 | MCP status/tool management surfaces should not drift on Go map iteration order | Operator-facing MCP lists should be stable across runs so UI/admin surfaces and downstream syncs are reproducible | `ConnectionManager.Statuses()` and `AllTools()` now emit connections in deterministic server-name order instead of inheriting Go map iteration order. This keeps route responses and live tool-surface sync stable across runs. | Improvement / remediation | Remediated | `internal/mcp/manager.go`, `internal/mcp/manager_test.go` |
 
 ## Intentional Deviations
 
@@ -200,3 +201,7 @@ The key discipline for this system is governance as much as code:
   `DiscoverMCPTools` now refreshes tools through `ConnectionManager` so
   runtime discovery mutates the live connection state instead of a copied
   snapshot that never reached the manager's authoritative tool surface.
+- 2026-04-18: Remediated MCP operator-surface nondeterminism. Connection
+  statuses and aggregated tools now emit in stable server-name order instead
+  of drifting on Go map iteration, which keeps route/UI surfaces and tool-sync
+  behavior reproducible across runs.

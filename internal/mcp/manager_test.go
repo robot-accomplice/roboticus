@@ -117,6 +117,26 @@ func TestConnectionManager_Statuses_WithConnections(t *testing.T) {
 	}
 }
 
+func TestConnectionManager_Statuses_AreDeterministicByServerName(t *testing.T) {
+	mgr := NewConnectionManager()
+
+	injectConnection(mgr, &Connection{Name: "server-c"})
+	injectConnection(mgr, &Connection{Name: "server-a"})
+	injectConnection(mgr, &Connection{Name: "server-b"})
+
+	statuses := mgr.Statuses()
+	if len(statuses) != 3 {
+		t.Fatalf("statuses count = %d, want 3", len(statuses))
+	}
+	got := []string{statuses[0].Name, statuses[1].Name, statuses[2].Name}
+	want := []string{"server-a", "server-b", "server-c"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("statuses order = %v, want %v", got, want)
+		}
+	}
+}
+
 func TestConnectionManager_AllTools_WithConnections(t *testing.T) {
 	mgr := NewConnectionManager()
 
@@ -146,6 +166,31 @@ func TestConnectionManager_AllTools_WithConnections(t *testing.T) {
 	for _, expected := range []string{"t1", "t2", "t3"} {
 		if !nameSet[expected] {
 			t.Errorf("missing tool %s", expected)
+		}
+	}
+}
+
+func TestConnectionManager_AllTools_AreDeterministicByServerName(t *testing.T) {
+	mgr := NewConnectionManager()
+
+	injectConnection(mgr, &Connection{
+		Name:  "server-b",
+		Tools: []ToolDescriptor{{Name: "b1"}, {Name: "b2"}},
+	})
+	injectConnection(mgr, &Connection{
+		Name:  "server-a",
+		Tools: []ToolDescriptor{{Name: "a1"}},
+	})
+
+	tools := mgr.AllTools()
+	if len(tools) != 3 {
+		t.Fatalf("tool count = %d, want 3", len(tools))
+	}
+	got := []string{tools[0].Name, tools[1].Name, tools[2].Name}
+	want := []string{"a1", "b1", "b2"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("tool order = %v, want %v", got, want)
 		}
 	}
 }
