@@ -99,7 +99,7 @@ func RunWarmupStage(
 
 	if !isLocal {
 		out.Skipped = true
-		fmt.Fprintf(progress, "    Warm-up: skipped (cloud model)\n\n")
+		_, _ = fmt.Fprintf(progress, "    Warm-up: skipped (cloud model)\n\n")
 		return out
 	}
 
@@ -119,11 +119,11 @@ func RunWarmupStage(
 	out.ColdStartTimedOut = coldRes.TimedOut
 	switch {
 	case coldRes.TimedOut:
-		fmt.Fprintf(progress, "TIMEOUT  (cold-start exceeded %s — recorded as lower bound)\n", coldTimeout)
+		_, _ = fmt.Fprintf(progress, "TIMEOUT  (cold-start exceeded %s — recorded as lower bound)\n", coldTimeout)
 	case coldRes.Err != nil:
-		fmt.Fprintf(progress, "ERROR  %v\n", coldRes.Err)
+		_, _ = fmt.Fprintf(progress, "ERROR  %v\n", coldRes.Err)
 	default:
-		fmt.Fprintf(progress, "%.1fs\n", float64(coldRes.LatencyMs)/1000.0)
+		_, _ = fmt.Fprintf(progress, "%.1fs\n", float64(coldRes.LatencyMs)/1000.0)
 	}
 
 	// Warm-up #2: warm-transition. Normal timeout. Confirms the
@@ -138,16 +138,16 @@ func RunWarmupStage(
 	out.WarmTransitionOK = !warmRes.TimedOut && warmRes.Err == nil && warmRes.LatencyMs < warmTransitionOKCeilingMs
 	switch {
 	case warmRes.TimedOut:
-		fmt.Fprintf(progress, "TIMEOUT  (warm-up didn't take — scored prompts may be unreliable)\n")
+		_, _ = fmt.Fprintf(progress, "TIMEOUT  (warm-up didn't take — scored prompts may be unreliable)\n")
 	case warmRes.Err != nil:
-		fmt.Fprintf(progress, "ERROR  %v\n", warmRes.Err)
+		_, _ = fmt.Fprintf(progress, "ERROR  %v\n", warmRes.Err)
 	default:
 		marker := "OK"
 		if !out.WarmTransitionOK {
 			marker = "SLOW — warm-up may not have fully primed the model"
 		}
-		fmt.Fprintf(progress, "%.1fs  (%s)\n", float64(warmRes.LatencyMs)/1000.0, marker)
+		_, _ = fmt.Fprintf(progress, "%.1fs  (%s)\n", float64(warmRes.LatencyMs)/1000.0, marker)
 	}
-	fmt.Fprintln(progress)
+	_, _ = fmt.Fprintln(progress)
 	return out
 }

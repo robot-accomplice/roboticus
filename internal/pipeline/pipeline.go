@@ -527,7 +527,7 @@ func (p *Pipeline) buildGuardContext(session *Session) *GuardContext {
 		rows, err := p.store.QueryContext(context.Background(),
 			`SELECT name FROM sub_agents WHERE enabled = 1 ORDER BY name`)
 		if err == nil {
-			defer rows.Close()
+			defer func() { _ = rows.Close() }()
 			for rows.Next() {
 				var name string
 				if scanErr := rows.Scan(&name); scanErr == nil && strings.TrimSpace(name) != "" {

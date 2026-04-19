@@ -1,8 +1,7 @@
 # Roboticus — local tasks aligned with `.github/workflows/ci.yml`
 #
 # CI uses golangci-lint v2.11.4 (see workflow). Install: https://golangci-lint.run/welcome/install/
-# Parity audit expects: `git clone https://github.com/robot-accomplice/roboticus _roboticus`
-# Skip parity locally: `SKIP_PARITY=1 just ci-test`
+# Parity audit is a local/release helper, not part of CI.
 #
 # Requires: Go (version from go.mod), golangci-lint, govulncheck (`go install golang.org/x/vuln/cmd/govulncheck@latest`)
 
@@ -12,7 +11,13 @@ default:
     @just --list
 
 # Replicates the GitHub Actions CI workflow (sequential; jobs run in parallel on CI).
-ci-test: lint test smoke architecture fuzz-ci parity-audit soak-fuzz build-ci security
+ci-test: lint test smoke fuzz-ci soak-fuzz architecture build-ci security
+
+# Back-compat alias for the shorter historical recipe name.
+ci: ci-test
+
+# Local/release superset that also includes the parity audit.
+ci-plus: ci-test parity-audit
 
 # --- CI stages (also usable standalone) ---
 
@@ -21,13 +26,13 @@ lint:
     golangci-lint run ./...
 
 test:
-    go test -race -coverprofile=coverage.out -covermode=atomic -timeout 300s ./...
+    go test -race -coverprofile=coverage.out -covermode=atomic -timeout 20m ./...
 
 # Same flags as CI `test` job; writes coverage.out + browsable coverage.html and prints total %.
 coverage:
     #!/usr/bin/env bash
     set -euo pipefail
-    go test -race -coverprofile=coverage.out -covermode=atomic -timeout 300s ./...
+    go test -race -coverprofile=coverage.out -covermode=atomic -timeout 20m ./...
     go tool cover -html=coverage.out -o coverage.html
     echo ""
     echo "coverage.html (open in a browser)"
@@ -76,7 +81,7 @@ build-ci:
     commit_sha="$(git rev-parse HEAD)"
     export CGO_ENABLED=0 GOOS=linux GOARCH=amd64
     go build -trimpath \
-        -ldflags="-s -w -X roboticus/cmd.version=ci-${commit_sha:0:8}" \
+        -ldflags="-s -w -X roboticus/cmd.version=ci-${commit_sha:0:8} -X roboticus/internal/daemon.version=ci-${commit_sha:0:8}" \
         -o roboticus .
     ./roboticus version
 

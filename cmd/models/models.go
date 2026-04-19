@@ -1224,12 +1224,6 @@ func decodeExerciseConfig(config map[string]any) *core.Config {
 	return &cfg
 }
 
-// resolveModelTimeout determines the HTTP client timeout for a model based on config.
-// Priority: model_overrides[model].timeout_seconds > is_local (300s) > cloud default (120s).
-func resolveModelTimeout(config map[string]any, model string) time.Duration {
-	return llm.ExerciseModelTimeout(decodeExerciseConfig(config), model)
-}
-
 // isCloudModel reports whether the given model's provider is cloud-hosted.
 // Cloud models skip warm-up in the baseline harness because "cold start"
 // for them is opaque (provider-side model routing, autoscaler spin-up,

@@ -55,7 +55,7 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 	var result string
 	var turns int
 
-	var finalGuardResult *ApplyResult
+	finalGuardResult := ApplyResult{}
 	guardRetried := false
 	activeGuards := p.guardsForPreset(cfg.GuardSet)
 
@@ -74,8 +74,7 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 			return nil, core.WrapError(core.ErrLLM, "inference failed", guardErr)
 		}
 		guardResult := guardRun.InitialGuardResult
-		finalGuard := guardRun.FinalGuardResult
-		finalGuardResult = &finalGuard
+		finalGuardResult = guardRun.FinalGuardResult
 		result = guardRun.Content
 		turns = guardRun.Turns
 		guardRetried = guardRun.GuardRetried
@@ -138,10 +137,8 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 			turns += retryTurns
 			if activeGuards != nil {
 				guardCtx := p.buildGuardContext(session)
-				retryGuardResult := activeGuards.ApplyFullWithContext(retryContent, guardCtx)
-				finalGuard := retryGuardResult
-				finalGuardResult = &finalGuard
-				retryContent = retryGuardResult.Content
+				finalGuardResult = activeGuards.ApplyFullWithContext(retryContent, guardCtx)
+				retryContent = finalGuardResult.Content
 			}
 			result = retryContent
 		}
@@ -191,11 +188,9 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 		ModelRequested: cfg.ModelOverride,
 		ReactTurns:     turns,
 	}
-	if finalGuardResult != nil {
-		params.GuardRetried = guardRetried
-		if len(finalGuardResult.Violations) > 0 {
-			params.GuardViolations = append([]string(nil), finalGuardResult.Violations...)
-		}
+	params.GuardRetried = guardRetried
+	if len(finalGuardResult.Violations) > 0 {
+		params.GuardViolations = append([]string(nil), finalGuardResult.Violations...)
 	}
 
 	return &Outcome{

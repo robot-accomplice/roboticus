@@ -409,7 +409,6 @@ func (cb *ContextBuilder) BuildRequest(session *Session) *llm.Request {
 				}
 			}
 			historyMessages = append(historyMessages[:insertIdx], append([]llm.Message{reminder}, historyMessages[insertIdx:]...)...)
-			usedTokens += reminderTokens
 		} else {
 			log.Debug().
 				Int("remaining_tokens", remaining-usedTokens).

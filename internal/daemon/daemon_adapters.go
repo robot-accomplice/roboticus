@@ -263,9 +263,9 @@ func buildCapabilitySummary(
 
 	if len(cfg.Skills) > 0 {
 		limit := min(len(cfg.Skills), 8)
-		sb.WriteString(fmt.Sprintf("- Active skills (%d): %s\n", len(cfg.Skills), strings.Join(cfg.Skills[:limit], ", ")))
+		_, _ = fmt.Fprintf(&sb, "- Active skills (%d): %s\n", len(cfg.Skills), strings.Join(cfg.Skills[:limit], ", "))
 		if len(cfg.Skills) > limit {
-			sb.WriteString(fmt.Sprintf("- Additional skills not listed here: %d\n", len(cfg.Skills)-limit))
+			_, _ = fmt.Fprintf(&sb, "- Additional skills not listed here: %d\n", len(cfg.Skills)-limit)
 		}
 	}
 
@@ -281,9 +281,9 @@ func buildCapabilitySummary(
 	}
 	if len(toolNames) > 0 {
 		limit := min(len(toolNames), 12)
-		sb.WriteString(fmt.Sprintf("- Live tool surface (%d): %s\n", len(toolNames), strings.Join(toolNames[:limit], ", ")))
+		_, _ = fmt.Fprintf(&sb, "- Live tool surface (%d): %s\n", len(toolNames), strings.Join(toolNames[:limit], ", "))
 		if len(toolNames) > limit {
-			sb.WriteString(fmt.Sprintf("- Additional tools not listed here: %d\n", len(toolNames)-limit))
+			_, _ = fmt.Fprintf(&sb, "- Additional tools not listed here: %d\n", len(toolNames)-limit)
 		}
 	}
 
@@ -295,7 +295,7 @@ func buildCapabilitySummary(
 				enabled++
 			}
 		}
-		sb.WriteString(fmt.Sprintf("- Configured subagents: %d total, %d enabled\n", len(subagents), enabled))
+		_, _ = fmt.Fprintf(&sb, "- Configured subagents: %d total, %d enabled\n", len(subagents), enabled)
 		limit := min(len(subagents), 6)
 		for _, sa := range subagents[:limit] {
 			label := sa.Name
@@ -313,7 +313,7 @@ func buildCapabilitySummary(
 			sb.WriteString(line + "\n")
 		}
 		if len(subagents) > limit {
-			sb.WriteString(fmt.Sprintf("- Additional subagents not listed here: %d\n", len(subagents)-limit))
+			_, _ = fmt.Fprintf(&sb, "- Additional subagents not listed here: %d\n", len(subagents)-limit)
 		}
 	}
 

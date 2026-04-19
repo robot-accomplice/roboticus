@@ -45,7 +45,8 @@ func TestIntentsContext_EmptyIsNoOp(t *testing.T) {
 // places that occasionally propagate nil in tests — the reader should
 // degrade to "no intents" rather than panic.
 func TestIntentsContext_NilCtxSafe(t *testing.T) {
-	if got := intentsFromContext(nil); got != nil {
+	var nilCtx context.Context
+	if got := intentsFromContext(nilCtx); got != nil {
 		t.Fatalf("nil ctx should return nil intents; got %v", got)
 	}
 }

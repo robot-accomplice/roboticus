@@ -78,7 +78,11 @@ func (w *CronWorker) tick(ctx context.Context) {
 		if !w.acquireLease(ctx, job.ID) {
 			continue
 		}
-		w.executeJob(ctx, job, now)
+		if err := w.executeJob(ctx, job, now); err != nil {
+			// executeJob already records run history and retry state; here we only
+			// preserve visibility for the worker loop.
+			log.Debug().Err(err).Str("job_id", job.ID).Msg("cron worker: job execution returned error")
+		}
 		w.releaseLease(ctx, job.ID)
 	}
 }
