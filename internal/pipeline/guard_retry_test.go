@@ -123,3 +123,52 @@ func TestGuardRetry_NoGuards(t *testing.T) {
 		t.Errorf("content = %q, want %q", content, "any content")
 	}
 }
+
+type contextualRetryGuard struct{}
+
+func (g *contextualRetryGuard) Name() string { return "contextual_retry" }
+func (g *contextualRetryGuard) Check(content string) GuardResult {
+	return GuardResult{Passed: true, Content: content}
+}
+func (g *contextualRetryGuard) CheckWithContext(content string, ctx *GuardContext) GuardResult {
+	if ctx == nil || !ctx.HasToolResult("fixer") {
+		return GuardResult{Passed: false, Retry: true, Reason: "missing fixer"}
+	}
+	return GuardResult{Passed: true, Content: content}
+}
+
+type contextAwareExecutor struct{ calls int }
+
+func (e *contextAwareExecutor) RunLoop(_ context.Context, sess *Session) (string, int, error) {
+	e.calls++
+	if e.calls > 1 {
+		sess.AddToolResult("call-1", "fixer", "done", false)
+	}
+	return "answer", 1, nil
+}
+
+func TestGuardRetryDetailed_RebuildsContextAcrossRetry(t *testing.T) {
+	executor := &contextAwareExecutor{}
+	chain := NewGuardChain(&contextualRetryGuard{})
+	sess := NewSession("s", "a", "n")
+	sess.AddUserMessage("please fix this")
+
+	result, err := retryWithGuardsDetailed(context.Background(), executor, sess, chain, DefaultRetryPolicy(), func() *GuardContext {
+		return (&Pipeline{}).buildGuardContext(sess)
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.GuardRetried {
+		t.Fatal("GuardRetried = false, want true")
+	}
+	if executor.calls != 2 {
+		t.Fatalf("executor calls = %d, want 2", executor.calls)
+	}
+	if len(result.InitialGuardResult.Violations) != 1 || result.InitialGuardResult.Violations[0] != "contextual_retry" {
+		t.Fatalf("initial violations = %v, want [contextual_retry]", result.InitialGuardResult.Violations)
+	}
+	if result.FinalGuardResult.RetryRequested || len(result.FinalGuardResult.Violations) != 0 {
+		t.Fatalf("final guard result = %+v, want clean pass after retry", result.FinalGuardResult)
+	}
+}

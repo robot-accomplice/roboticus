@@ -183,7 +183,9 @@ func TestModelsCmd_SubcommandRegistration(t *testing.T) {
 	for _, sub := range cmd.Commands() {
 		subcommands[sub.Name()] = true
 	}
-	for _, name := range []string{"list", "diagnostics", "scan", "exercise", "suggest", "reset", "baseline"} {
+	// v1.0.6: `baseline` consolidated into `exercise` — see
+	// cmd/models/models.go modelsExerciseCmd docstring.
+	for _, name := range []string{"list", "diagnostics", "scan", "exercise", "suggest", "reset"} {
 		if !subcommands[name] {
 			t.Errorf("models command missing subcommand %q", name)
 		}

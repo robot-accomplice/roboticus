@@ -1,13 +1,13 @@
 package admin
 
 import (
-	"roboticus/cmd/internal/cmdutil"
 	"bufio"
 	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
+	"roboticus/cmd/internal/cmdutil"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -243,4 +243,5 @@ func runDefragCode() error {
 }
 
 func init() {
-	defragCmd.Flags().String("mode", "db", "Operation mode: 'db' (database maintenance) or 'code' (quality scan)")}
+	defragCmd.Flags().String("mode", "db", "Operation mode: 'db' (database maintenance) or 'code' (quality scan)")
+}

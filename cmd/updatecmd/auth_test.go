@@ -1,9 +1,9 @@
 package updatecmd
 
 import (
-	"roboticus/cmd/internal/testhelp"
 	"encoding/json"
 	"net/http"
+	"roboticus/cmd/internal/testhelp"
 	"testing"
 )
 

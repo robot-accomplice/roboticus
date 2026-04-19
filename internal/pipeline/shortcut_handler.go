@@ -21,6 +21,7 @@ type ShortcutContext struct {
 	DelegationProvenance   bool   // True if this turn was delegated from another agent
 	HasConversationContext bool   // True if session has prior turns (turn > 0)
 	AgentName              string // Agent identity for identity shortcuts
+	CapabilitySummary      string // runtime-owned capability snapshot for introspection shortcuts
 	SessionTurnCount       int    // Number of turns in the session
 	PreviousAssistantText  string // Last assistant response for context
 	ChannelLabel           string // Channel this turn arrived on
@@ -129,11 +130,46 @@ func (h *HelpShortcut) Respond(_ string, ctx *ShortcutContext) string {
 	return fmt.Sprintf("%s can help with:\n- General conversation and reasoning\n- File operations and code tasks\n- Web search and information retrieval\n- Scheduling and reminders\n- Financial operations\n\nJust describe what you need.", name)
 }
 
+// ── IntrospectionShortcut ────────────────────────────────────────────────
+// Matches capability/introspection questions and answers from runtime-owned
+// summary state instead of sending the model into an exploratory tool loop.
+
+type IntrospectionShortcut struct{}
+
+func (i *IntrospectionShortcut) TryMatch(content string, ctx *ShortcutContext) *ShortcutMatch {
+	if ctx == nil || strings.TrimSpace(ctx.CapabilitySummary) == "" {
+		return nil
+	}
+	lower := strings.TrimSpace(strings.ToLower(content))
+	markers := []string{
+		"introspect",
+		"introspection",
+		"current subagent functionality",
+		"what can you do",
+		"what tools",
+		"available tools",
+		"capabilities",
+		"subagent functionality",
+		"what can your subagents do",
+	}
+	for _, marker := range markers {
+		if strings.Contains(lower, marker) {
+			return &ShortcutMatch{Confidence: 0.98, Handler: "introspection"}
+		}
+	}
+	return nil
+}
+
+func (i *IntrospectionShortcut) Respond(_ string, ctx *ShortcutContext) string {
+	return ctx.CapabilitySummary
+}
+
 // ── DefaultShortcutHandlers ───────────────────────────────────────────────
 
 // DefaultShortcutHandlers returns the standard set of shortcut handlers.
 func DefaultShortcutHandlers() []ShortcutHandler {
 	return []ShortcutHandler{
+		&IntrospectionShortcut{},
 		&IdentityShortcut{},
 		&HelpShortcut{},
 		&AcknowledgementShortcut{},

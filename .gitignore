@@ -36,6 +36,11 @@ wallet.enc
 .env
 .env.local
 
+# Python bytecode (from scripts/ helpers — source-of-truth is the .py files)
+__pycache__/
+*.pyc
+*.pyo
+
 .serena/**
 roboticus
 

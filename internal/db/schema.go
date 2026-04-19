@@ -1,10 +1,10 @@
 // Package db provides the SQLite database layer.
 //
 // Schema management follows a two-phase model:
-//   1. Baseline DDL (schemaDDL constant below): CREATE TABLE IF NOT EXISTS statements
-//      that establish the initial schema for fresh installs. This is "version 0".
-//   2. Numbered migrations (internal/db/migrations/*.sql): ALTER TABLE, CREATE INDEX,
-//      and other incremental changes applied on top of the baseline.
+//  1. Baseline DDL (schemaDDL constant below): CREATE TABLE IF NOT EXISTS statements
+//     that establish the initial schema for fresh installs. This is "version 0".
+//  2. Numbered migrations (internal/db/migrations/*.sql): ALTER TABLE, CREATE INDEX,
+//     and other incremental changes applied on top of the baseline.
 //
 // Rules for contributors:
 //   - NEVER modify the baseline DDL to change existing tables (add/drop columns, etc.)
@@ -118,6 +118,7 @@ CREATE TABLE IF NOT EXISTS episodic_memory (
     id TEXT PRIMARY KEY,
     classification TEXT NOT NULL,
     content TEXT NOT NULL,
+    content_json TEXT,
     importance INTEGER NOT NULL DEFAULT 5,
     owner_id TEXT,
     memory_state TEXT NOT NULL DEFAULT 'active',
@@ -160,6 +161,22 @@ CREATE TABLE IF NOT EXISTS relationship_memory (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS knowledge_facts (
+    id TEXT PRIMARY KEY,
+    subject TEXT NOT NULL,
+    relation TEXT NOT NULL,
+    object TEXT NOT NULL,
+    source_table TEXT,
+    source_id TEXT,
+    confidence REAL NOT NULL DEFAULT 0.7,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_knowledge_facts_subject ON knowledge_facts(subject);
+CREATE INDEX IF NOT EXISTS idx_knowledge_facts_relation ON knowledge_facts(relation);
+CREATE INDEX IF NOT EXISTS idx_knowledge_facts_object ON knowledge_facts(object);
+CREATE INDEX IF NOT EXISTS idx_knowledge_facts_source ON knowledge_facts(source_table, source_id);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
     content,
     category,
@@ -196,6 +213,23 @@ END;
 
 CREATE TRIGGER IF NOT EXISTS relationship_ad AFTER DELETE ON relationship_memory BEGIN
     DELETE FROM memory_fts WHERE source_table = 'relationship_memory' AND source_id = old.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS knowledge_facts_ai AFTER INSERT ON knowledge_facts BEGIN
+    INSERT INTO memory_fts(content, category, source_table, source_id)
+    VALUES (new.subject || ' ' || new.relation || ' ' || new.object,
+            'graph', 'knowledge_facts', new.id);
+END;
+
+CREATE TRIGGER IF NOT EXISTS knowledge_facts_au AFTER UPDATE ON knowledge_facts BEGIN
+    DELETE FROM memory_fts WHERE source_table = 'knowledge_facts' AND source_id = old.id;
+    INSERT INTO memory_fts(content, category, source_table, source_id)
+    VALUES (new.subject || ' ' || new.relation || ' ' || new.object,
+            'graph', 'knowledge_facts', new.id);
+END;
+
+CREATE TRIGGER IF NOT EXISTS knowledge_facts_ad AFTER DELETE ON knowledge_facts BEGIN
+    DELETE FROM memory_fts WHERE source_table = 'knowledge_facts' AND source_id = old.id;
 END;
 
 CREATE TABLE IF NOT EXISTS tasks (
@@ -858,6 +892,11 @@ func (s *Store) ensureOptionalColumns() error {
 		{Table: "cron_jobs", Column: "retry_count", ColType: "INTEGER", Default: "0"},
 		{Table: "cron_jobs", Column: "max_retries", ColType: "INTEGER", Default: "3"},
 		{Table: "cron_jobs", Column: "retry_delay_ms", ColType: "INTEGER", Default: "60000"},
+		// treasury_state was introduced before the current full shape was stabilized.
+		// Older installs can carry a partial table forward while schema_version still
+		// reports current enough to skip the original CREATE TABLE migration.
+		{Table: "treasury_state", Column: "atoken_balance", ColType: "REAL", Default: "0.0"},
+		{Table: "treasury_state", Column: "survival_tier", ColType: "TEXT", Default: "'Normal'"},
 		// installed_themes columns for older DBs that created the table without them.
 		{Table: "installed_themes", Column: "name", ColType: "TEXT", Default: "''"},
 		{Table: "installed_themes", Column: "source", ColType: "TEXT", Default: "'catalog'"},
@@ -886,12 +925,16 @@ func (s *Store) ensureOptionalColumns() error {
 	nullableColumns := []optionalNullableColumn{
 		{Table: "session_messages", Column: "topic_tag", ColType: "TEXT"},
 		{Table: "episodic_memory", Column: "owner_id", ColType: "TEXT"},
+		{Table: "episodic_memory", Column: "content_json", ColType: "TEXT"},
 		{Table: "skills", Column: "last_used_at", ColType: "TEXT"},
 		{Table: "approval_requests", Column: "turn_id", ColType: "TEXT"},
 		{Table: "sub_agents", Column: "last_used_at", ColType: "TEXT"},
 		{Table: "pipeline_traces", Column: "react_trace_json", ColType: "TEXT"},
 		{Table: "pipeline_traces", Column: "inference_params_json", ColType: "TEXT"},
 		{Table: "memory_index", Column: "last_verified", ColType: "TEXT"},
+		{Table: "treasury_state", Column: "last_deposit_at", ColType: "TEXT"},
+		{Table: "treasury_state", Column: "last_withdrawal_at", ColType: "TEXT"},
+		{Table: "treasury_state", Column: "updated_at", ColType: "TEXT"},
 	}
 
 	for _, col := range nullableColumns {

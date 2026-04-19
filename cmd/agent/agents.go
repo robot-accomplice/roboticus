@@ -1,8 +1,8 @@
 package agent
 
 import (
-	"roboticus/cmd/internal/cmdutil"
 	"fmt"
+	"roboticus/cmd/internal/cmdutil"
 
 	"github.com/spf13/cobra"
 )
@@ -69,4 +69,5 @@ var agentsStopCmd = &cobra.Command{
 }
 
 func init() {
-	agentsCmd.AddCommand(agentsListCmd, agentsStartCmd, agentsStopCmd)}
+	agentsCmd.AddCommand(agentsListCmd, agentsStartCmd, agentsStopCmd)
+}

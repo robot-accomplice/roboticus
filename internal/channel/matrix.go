@@ -167,8 +167,11 @@ func (m *MatrixAdapter) syncOnce(ctx context.Context) error {
 	defer func() { _ = resp.Body.Close() }()
 
 	var syncResp struct {
-		NextBatch string `json:"next_batch"`
-		Rooms     struct {
+		NextBatch   string `json:"next_batch"`
+		AccountData struct {
+			Events []matrixAccountDataEvent `json:"events"`
+		} `json:"account_data"`
+		Rooms struct {
 			Join map[string]struct {
 				Timeline struct {
 					Events []matrixEvent `json:"events"`
@@ -182,6 +185,7 @@ func (m *MatrixAdapter) syncOnce(ctx context.Context) error {
 	}
 
 	m.syncToken = syncResp.NextBatch
+	directRooms := matrixDirectRooms(syncResp.AccountData.Events)
 
 	// Auto-join invited rooms.
 	if m.cfg.AutoJoin {
@@ -223,6 +227,16 @@ func (m *MatrixAdapter) syncOnce(ctx context.Context) error {
 			if content == "" {
 				continue
 			}
+			isDirect := directRooms[roomID]
+			metadata := map[string]any{
+				"room_id":     roomID,
+				"sender_mxid": event.Sender,
+				"is_direct":   isDirect,
+			}
+			if isDirect {
+				metadata["is_group"] = false
+			}
+
 			m.inbound <- InboundMessage{
 				ID:        event.EventID,
 				Platform:  "matrix",
@@ -230,6 +244,7 @@ func (m *MatrixAdapter) syncOnce(ctx context.Context) error {
 				ChatID:    roomID,
 				Content:   content,
 				Timestamp: time.Now(), // Rust parity: Utc::now() — use agent's local clock, not server TS
+				Metadata:  metadata,
 			}
 		}
 	}
@@ -286,6 +301,11 @@ type matrixEvent struct {
 	Content        matrixEventContent `json:"content"`
 }
 
+type matrixAccountDataEvent struct {
+	Type    string          `json:"type"`
+	Content json.RawMessage `json:"content"`
+}
+
 type matrixEventContent struct {
 	MsgType string         `json:"msgtype"`
 	Body    string         `json:"body"`
@@ -311,4 +331,23 @@ func contains(slice []string, s string) bool {
 		}
 	}
 	return false
+}
+
+func matrixDirectRooms(events []matrixAccountDataEvent) map[string]bool {
+	rooms := make(map[string]bool)
+	for _, event := range events {
+		if event.Type != "m.direct" {
+			continue
+		}
+		var direct map[string][]string
+		if err := json.Unmarshal(event.Content, &direct); err != nil {
+			continue
+		}
+		for _, userRooms := range direct {
+			for _, roomID := range userRooms {
+				rooms[roomID] = true
+			}
+		}
+	}
+	return rooms
 }

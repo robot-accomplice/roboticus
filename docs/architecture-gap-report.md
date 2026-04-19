@@ -1,6 +1,6 @@
 # Architecture Gap Report: Go Implementation vs Rust Reference
 
-**Date**: 2026-04-14 (updated for v1.0.5)
+**Date**: 2026-04-19
 **Auditor**: Automated deep audit (3 parallel agents)
 **Scope**: Connector-factory compliance, security architecture, tool execution, context management, real-time transport, agentic retrieval architecture
 **Reference**: `/Users/jmachen/code/roboticus-rust/ARCHITECTURE.md`
@@ -9,9 +9,43 @@
 
 ## Executive Summary
 
-The Go implementation achieves **full structural compliance** with the connector-factory pattern. The pipeline is the single source of truth for business logic, all 8 entry points use `RunPipeline()`, and architecture tests enforce connector thinness. **All 7 original systemic gaps are now CLOSED** (v1.0.1 + v1.0.2 + v1.0.4).
+The Go implementation achieves **full structural compliance** with the connector-factory pattern. The pipeline is the single source of truth for business logic, all 8 entry points use `RunPipeline()`, and architecture tests enforce connector thinness. **All 7 original systemic gaps are now CLOSED** (v1.0.1 + v1.0.2 + v1.0.4), and the broader parity-forensics program has now been distilled into final validated or explicitly deferred dispositions rather than exploratory runtime-classification seams.
 
-v1.0.5 introduces the **agentic retrieval architecture** — a 13-layer system that replaces the previous "embed query → search vector DB" approach with intent-driven routing, evidence filtering, query decomposition, structured context assembly, and post-turn reflection. Working memory persistence across restarts. All layers wired into production.
+v1.0.5 introduced the **agentic retrieval architecture** scaffold — decomposer, router, reranker, context assembly, reflection, and working-memory persistence. v1.0.6 has now carried that scaffold much farther into runtime reality: router-selected retrieval modes influence actual tier retrieval, semantic / procedural / relationship / workflow reads are HybridSearch-first with per-tier `retrieval.path.*` trace attribution, semantic and relationship evidence preserve stronger provenance/freshness signals, the verifier consumes pipeline-computed task hints and claim-level proof obligations, a persisted graph-fact store now exists in production with reusable traversal APIs, and enriched episode distillation now promotes recurring canonical triples into `knowledge_facts`. The main remaining retrieval cleanup is operator-observed retirement of residual `LIKE` safety nets by tier, not missing architecture plumbing.
+
+The parity-driven remediation effort also clarified several ownership seams that
+older architecture docs had left too generic:
+
+- **Request construction is now a first-class architecture seam.** Tool pruning,
+  memory preparation, checkpoint restore, and prompt assembly converge into one
+  `llm.Request`, and the request builder is now expected to preserve the latest
+  user message, align prompt-layer tool guidance with the structured tool list,
+  and drop empty compacted history before inference. Baseline/exercise now uses
+  that same runtime request path rather than a direct-LLM bypass.
+- **Continuity and learning are now explicitly artifact-driven.** Reflection,
+  executive growth, checkpoints, and consolidation are expected to consume
+  structured turn artifacts (`tool_calls`, `pipeline_traces`,
+  `model_selection_events`, structured `episodic_memory.content_json`) instead
+  of re-deriving durable state from lossy text summaries.
+- **Security/policy truth ownership is sharper.** Stage 8 owns claim
+  composition, policy/tool runtime own what actually happened, and
+  post-inference guards are no longer allowed to overwrite legitimate
+  policy/sandbox denials with fabricated canned outcomes.
+- **Webhook ingress ownership is sharper.** Telegram and WhatsApp routes no
+  longer own transport JSON parsing; adapters own normalization and WhatsApp
+  verification/signature checks, while routes only bridge normalized inbound
+  messages into the pipeline.
+- **Plugin runtime ownership is sharper.** Daemon startup now owns plugin
+  registry construction, directory scan, manifest parsing, init, and
+  `AppState.Plugins` wiring. Install-time plugin writes now hot-load into that
+  same registry, so plugin install/catalog UX no longer stands in for a missing
+  runtime lifecycle. Manifest-backed plugin scripts now also share the same
+  core execution contract as skill scripts, closing a policy drift seam at the
+  extension boundary.
+- **Manual cron execution now shares the durable scheduler lifecycle.** The
+  live `/api/cron/{id}/run` path no longer bypasses lease/run-history/retry
+  ownership; it delegates through `CronWorker.RunJobNow(...)` and preserves the
+  same execution contract as scheduled runs.
 
 | Category | Compliant | Gaps |
 |----------|-----------|------|
@@ -30,59 +64,60 @@ v1.0.5 introduces the **agentic retrieval architecture** — a 13-layer system t
 | Config Schema Derivation (v1.0.3) | Struct-driven | 0 |
 | Pipeline Cache Guards (v1.0.4) | Reject unparsed tool calls | 0 |
 | Session-Aware Routing (v1.0.4) | Escalation tracker | 0 |
-| **Agentic Retrieval Architecture (v1.0.5)** | **7 layers wired** | **0** |
+| **Agentic Retrieval Architecture (v1.0.5/v1.0.6)** | **Core runtime architecture materially wired** | **cleanup + follow-on gaps remain** |
 | **Working Memory Persistence (v1.0.5)** | **Shutdown/startup** | **0** |
 | **Post-Turn Reflection (v1.0.5)** | **Episode summaries** | **0** |
+| **Verifier/Critic (v1.0.6)** | **Claim-level verifier with proof obligations** | **Partial** |
 
-### v1.0.5 Agentic Architecture Layers
+### v1.0.6 Agentic Architecture Layers
 
 | Layer | Component | File | Status |
 |-------|-----------|------|--------|
 | 2 | Query Decomposer | `decomposer.go` | Wired into RetrieveWithMetrics |
 | 5 | Procedural Memory | `retrieval_tiers.go` + migration 040 | Enriched schema + learned_skills |
-| 8 | Retrieval Router | `router.go` | Wired into RetrieveWithMetrics |
+| 8 | Retrieval Router | `router.go` + `daemon_adapters.go` | Wired into retrieval with production intent signals |
 | 11 | Reranker | `reranker.go` | Wired into RetrieveWithMetrics |
-| 12 | Context Assembly | `context_assembly.go` | Wired into RetrieveWithMetrics |
+| 12 | Context Assembly | `context_assembly.go` | Structured evidence with provenance/authority labels |
+| 14 | Verifier/Critic | `verifier.go` + `pipeline_stages.go` | Claim-level verifier with retry, task-hint inputs, action-plan and canonical-source checks, freshness gating, subgoal evidence-support checks, and per-intent proof obligations |
 | 16 | Reflection | `reflection.go` | Wired into PostTurnIngest |
 | — | Working Memory Persistence | `working_persistence.go` | Wired into Daemon Stop/Start |
+| 7 | Graph Facts Persistence | `043_knowledge_facts.sql`, `manager.go`, `retrieval_tiers.go`, `graph.go` | Persisted typed relations with provenance/freshness, reusable traversal API, and retrieved first-class evidence with path/impact traversal |
 
-### v1.1.0 Planned Additions (not yet built)
+### Remaining Gaps To Full Vision
 
 | Layer | Component | Status |
 |-------|-----------|--------|
-| 4 | Parallel Retrieval | Tiers queried sequentially |
-| 7 | Knowledge Graph Persistence | Ephemeral in-memory only |
-| 10 | Verifier/Critic | Guards exist; formal verification not yet |
-| 11 | LLM-based Reranking | Score-based only in v1.0.5 |
+| 4 | Parallel Retrieval | Tiers are still queried sequentially |
+| 10 | Fusion Layer | Provenance and freshness survive farther now, but fusion signals are still thin |
+| 11 | LLM-based Reranking | Score-based only in v1.0.6 |
+| 14 | Verifier/Critic depth | Stronger claim-level checks exist, but there is still no full contradiction-resolution or proof-style evidence audit |
+| 3 | Semantic read-path cleanup | Residual `LIKE` safety nets remain until telemetry-backed dormancy justifies removal |
 
 ---
 
 ## Gap 1: SecurityClaim Resolvers Defined But Never Called
 
-**Severity**: HIGH
+**Severity**: CLOSED
 **Rust principle violated**: Section 5 (Clear Boundaries) — "Authority resolution" belongs in Pipeline
 
-**Current state**: `internal/core/security_claim.go` defines `ResolveChannelClaim()`, `ResolveAPIClaim()`, and `ResolveA2AClaim()` with proper grant/ceiling composition (`min(max(grants), min(ceilings))`). These are **never called in production**. Instead, authority flows through the simpler `pipeline.ResolveAuthority()` function in `internal/pipeline/config.go` which lacks:
-- Threat-based ceiling downgrades
-- Multi-source grant composition
-- SecurityClaim audit trail on ToolCallRequest
+**Current state**: Closed in v1.0.6. Stage 8 (`authority_resolution`) is the live owner for `SecurityClaim` composition. The pipeline resolves channel/API/A2A claims through the proper resolver path, attaches the resolved claim to the session, annotates `authority` and `claim_sources` on the trace, and applies threat-caution downgrade on the live path.
 
 **Rust behavior**: Every entry point constructs a proper SecurityClaim via the corresponding resolver. The claim carries through the entire pipeline and is attached to every tool call for audit.
 
-**Fix**: Wire the three resolvers into the pipeline's authority resolution stage. Replace or augment `ResolveAuthority()` to call the appropriate resolver and produce a `SecurityClaim` that flows through to the policy engine.
+**Fix**: Completed. Remaining work is transport-by-transport classification and broader cross-layer sandbox audit, not basic claim-owner wiring.
 
 ---
 
 ## Gap 2: API Routes Never Set Input.Claim
 
-**Severity**: MEDIUM
+**Severity**: CLOSED
 **Rust principle violated**: Section 6 (Feature Parity Across Channels) — all channels access same capabilities
 
-**Current state**: `internal/api/routes/agent.go` and `sessions.go` construct `pipeline.Input{}` with `Claim: nil`. The pipeline's `ResolveAuthority(AuthorityAPIKey, nil)` hardcodes `AuthorityCreator`, bypassing claim composition entirely. This works but creates an inconsistency: API requests skip the security claim pipeline while channel requests go through it.
+**Current state**: Closed in v1.0.6. API-key routes do not need to synthesize `ChannelClaimContext`; under `AuthorityAPIKey`, Stage 8 resolves the claim through `ResolveAPIClaim(...)`. The old route-level `Input.Claim` scaffolding was removed because it obscured the true live owner.
 
 **Rust behavior**: API requests also go through claim resolution (`resolve_api_claim`), producing a SecurityClaim with source tracking.
 
-**Fix**: Construct a proper `ChannelClaimContext` for API requests (with `SenderInAllowlist: true` since API keys are fully trusted). This ensures all paths produce claims for audit consistency.
+**Fix**: Completed by making Stage 8 the canonical API claim owner and removing dead route-layer claim placeholders.
 
 ---
 
@@ -201,6 +236,131 @@ This is a transport-layer change. The pipeline remains the single behavioral aut
 ### Financial Action Verification
 `FinancialActionTruthGuard` added to the guard chain (26th guard). Before a pipeline response claiming financial success is delivered, the guard verifies the claimed action against tool execution output. Prevents fabricated trading/transfer results.
 
+### Cross-Layer Security / Sandbox Truth Ownership
+v1.0.6 also tightened a cross-cutting architectural seam that had been too
+implicit in earlier releases:
+
+- Stage 8 is the live owner for `SecurityClaim` composition.
+- Policy evaluation and tool/runtime path resolution now share substantially
+  tighter sandbox and config-protection semantics.
+- Post-inference truth guards have been narrowed so they preserve real
+  policy/sandbox denials and failed execution outcomes instead of flattening
+  every denial-shaped answer into a fake-capability case.
+
+This is not just "more guards." It is an ownership correction: policy and tool
+runtime define what actually happened; post-inference guards are only allowed to
+police fabricated narration around that outcome.
+
+### v1.0.6 Final Closure Verdict
+
+The parity program for v1.0.6 is now **decision-complete**.
+
+- Every scoped parity system has a final disposition in
+  `docs/parity-forensics/parity-ledger.md`.
+- The codebase was materially strengthened in ways that are now backed by both
+  runtime tests and durable architecture documentation.
+- Prompt compression is **not** part of that strengthening story for this
+  release. It failed the corrected history-bearing soak gate and remains
+  disabled/deferred.
+
+The explicit release-readiness answer for v1.0.6 is:
+
+**Yes** — the code was materially strengthened, and the docs now record that
+strengthening truthfully, with the remaining deferred items called out
+explicitly rather than hidden behind vague unresolved language.
+
+### Final Audits
+
+#### Architectural Audit
+
+- Single ownership is now explicit for the highest-risk seams:
+  request construction, tool pruning, routing truth, checkpoint lifecycle,
+  plugin runtime lifecycle, webhook normalization, MCP runtime tool sync, and
+  policy/sandbox truth.
+- The major shadow-path contradictions found during parity work were either
+  removed or demoted out of the live path.
+- Durable docs now reflect the validated ownership model rather than the older
+  generic container story alone.
+
+#### Functional Audit
+
+- Release-facing claims are supportable by the runtime and tests.
+- Channel, scheduler, MCP, cache, and guard behavior now match their documented
+  operator contracts closely enough to treat remaining differences as accepted
+  deviations or explicit deferrals.
+- Prompt compression is clearly disabled/deferred and is not being presented as
+  a release-ready feature.
+
+#### Fitness Audit
+
+- Test coverage now pins the newly closed seams directly, including request
+  artifact invariants, selected tool-surface reuse, routing trace truth,
+  checkpoint lifecycle, MCP timeout/tool-surface truth, and route-family
+  observability contracts.
+- Observability surfaces are materially more truthful: canonical route-family
+  ownership is explicit, dead MCP transports no longer masquerade as healthy,
+  and release notes now function as audited truth surfaces rather than vague
+  confidence prose.
+- The recent fixes reduced ambiguity and drift overall; they did not add new
+  broad subsystems or placeholder abstractions.
+
+### v1.0.7 Root Cause Analysis + Final Parity Goal
+
+v1.0.7 should be treated as the **Root Cause Analysis build** for inference
+stalling and fallback behavior, and as the release that takes the remaining
+post-v1.0.6 deferred parity edges to final disposition.
+
+The current runtime can show that inference ran long and that a provider
+eventually timed out, but it still cannot attribute the delay precisely enough
+to distinguish:
+
+- bad route choice
+- provider queueing or cold start
+- machine saturation
+- time-to-first-header failure
+- fallback-chain delay
+
+That is a post-v1.0.6 architecture goal, not a v1.0.6 release blocker. The
+next release should add first-class per-attempt timing, fallback-chain
+attribution, router health inputs, and user-visible stall/reroute status so the
+system can explain and react to this class of failure from runtime truth rather
+than operator guesswork. It should also take the remaining accepted/deferred
+parity edges from v1.0.6 and either retire them, redesign them, or close them
+with explicit final rationale rather than leaving them as indefinite release
+residue.
+
+### Request Artifact Ownership
+v1.0.6 clarified that the final `llm.Request` is itself an architectural
+artifact, not just a local implementation detail. The validated ownership is:
+
+- Stage 8 / 8.5 prepare authority and memory artifacts.
+- Tool pruning writes the selected structured tool surface before request
+  assembly.
+- `ContextBuilder.BuildRequest` owns final message assembly, including
+  checkpoint digest restore, history compaction/compression, and prompt-layer
+  tool roster alignment.
+- Routing trace and model-selection audit must reflect that actual request,
+  rather than a synthetic user-only approximation.
+
+This closes an important class of migration errors where parity-looking helper
+code existed, but the actual inference artifact was still assembled by weaker
+or duplicate paths.
+
+### Continuity / Learning Artifact Ownership
+v1.0.6 also moved continuity work closer to long-term architecture instead of
+release-specific patching:
+
+- checkpoint save/load/prune now share repository-owned lifecycle seams
+- reflection reads real turn artifacts instead of zero-duration and adjacency
+  proxies
+- `episodic_memory` now stores both a compact human-readable summary and a
+  structured `content_json` payload
+- consolidation prefers the structured payload over reparsing compact text
+
+That is an architectural shift toward durable, machine-consumable turn state.
+It materially lowers the risk of future drift caused by helper-specific string
+formats becoming accidental downstream contracts.
+
 ---
 
 ## Compliant Areas (No Gaps)
@@ -244,4 +404,8 @@ Policy denials soft-fail with structured reason. Error dedup suppresses repeated
 | ~~P3~~ | ~~Gap 2: API routes never set Claim~~ | **CLOSED v1.0.2** | Both API routes now construct ChannelClaimContext |
 | ~~P3~~ | ~~Gap 7: Preset doc comments missing~~ | **CLOSED v1.0.4** | All 4 presets carry stage rationale doc comments |
 
-**All 7 original gaps are CLOSED.** No open architectural gaps remain.
+**All 7 original gaps are CLOSED.** That does **not** mean the parity or
+architecture program is complete. Open architectural/parity work still remains
+in request shaping, MCP transport semantics, cache/replay semantics, and the
+cross-cutting scheduler/plugin/channel families tracked in
+`docs/parity-forensics/`.

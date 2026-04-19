@@ -22,6 +22,7 @@ var defaultPartitionMap = map[string]string{
 	"semantic_memory":     "warm",
 	"procedural_memory":   "warm",
 	"relationship_memory": "warm",
+	"knowledge_facts":     "warm",
 }
 
 // PartitionedIndex fans out AddEntry/Search across tier-based partitions.

@@ -1,11 +1,40 @@
 # Memory Architecture Specification
 
 > Authoritative reference for the Roboticus memory system.
-> Updated for v1.0.5 agentic retrieval architecture.
+> Updated for **v1.0.6** (semantic FTS+vector closure, relational distillation, typed verification evidence).
 > Derived from exhaustive analysis of the Rust reference implementation (v0.11.4)
 > and extended with the 13-layer agentic AI reference architecture.
 >
 > **Guiding principle**: Retrieve broadly, reason narrowly, act cautiously, learn continuously.
+>
+> **What changed since v1.0.5**:
+> - The memory surface is now a **6-store system** (five persistent tiers + the
+>   `knowledge_facts` graph store). Graph facts carry canonical subject/relation/object
+>   triples distilled from ≥3 high-quality episodes via the write gate. See §2 and §7.
+> - **HybridSearch (FTS5 BM25 + vector cosine)** is the primary read path across
+>   semantic / procedural / relationship / workflow tiers. LIKE remains as a
+>   documented safety net pending operator-driven retirement per M3.3 telemetry.
+> - **Retrieval is per-call isolated**: intent classification travels via
+>   `memory.WithIntents(ctx, ...)` as a context value (no shared mutable state on
+>   `*Retriever`). See §7 "Concurrency contract".
+> - **Verifier consumes a typed artifact** (`session.VerificationEvidence`)
+>   attached by Stage 8.5, not rendered prompt markers. See §5 "Structured
+>   evidence hand-off" and v1.0.6 audit finding P2-C.
+> - **Pipeline is the single memory-assembly authority.** The daemon's
+>   fallback `RetrieveDirectOnly` + `BuildMemoryIndex` path was removed; Stage
+>   8.5 always populates the memory INDEX (recall handle) and conditionally
+>   populates the memory CONTEXT (tiered evidence) per retrieval strategy.
+> - **Episodic reflection is dual-surface by design.** `episodic_memory.content`
+>   remains the compact human-readable summary, while `episodic_memory.content_json`
+>   preserves structured turn-state for consolidation and future learning flows.
+> - **Continuity lifecycle is artifact-owned.** Checkpoint save/load/prune flows
+>   through `CheckpointRepository`, and post-turn reflection reads turn-owned
+>   artifacts (`tool_calls`, `pipeline_traces`, `model_selection_events`) rather
+>   than reconstructing durable state from summary text alone.
+> - **Compatibility normalization is intentionally session-boundary scoped.**
+>   Older callers that still set only rendered `MemoryContext` derive a typed
+>   `VerificationEvidence` artifact at the session boundary; downstream
+>   verifier/guard consumers stay on typed artifacts only.
 
 ---
 
@@ -77,13 +106,43 @@
 
 ### Core Principles
 
-1. **Memory = Index, Not Storage.** Only working memory and recent activity are
-   injected directly. All other tiers appear as compact index entries. The model
-   calls `recall_memory(id)` or `search_memories(query)` on demand.
+**Terminology note**: "store" and "tier" are used with intentionally
+different meanings in this spec:
+- **Store** = a distinct storage surface with its own table + schema
+  (Working, Episodic, Semantic, Procedural, Relationship, Knowledge
+  Facts = 6 stores total). Stores are the unit of data persistence.
+- **Tier** = the retrieval router's classification of stores by role
+  (direct-inject vs index-only vs graph-distilled). Used when talking
+  about routing plans and budget allocation.
 
-2. **Five-Tier Memory System.** Working (session-scoped), Episodic (event log),
-   Semantic (facts/knowledge), Procedural (tool statistics), Relationship
-   (entity trust tracking).
+The runtime has 6 stores; the retrieval router groups them into 3
+tier categories (direct-inject, indexed-tier, graph). Earlier drafts
+of this spec used "tier" and "store" interchangeably — v1.0.6
+consolidated the distinction.
+
+1. **Memory = Index, Not Storage.** Only working memory and recent activity
+   are injected directly. All other stores appear as compact index entries.
+   The model calls `recall_memory(id)` or `search_memories(query)` on demand.
+   Canonical knowledge facts are a special case: they're treated as
+   authoritative evidence rows and surfaced with the `canonical=true`
+   qualifier by the retrieval assembler.
+
+2. **Six-Store Memory System (v1.0.6).** Five persistent tiers (Working,
+   Episodic, Semantic, Procedural, Relationship) plus a distilled knowledge
+   store (Knowledge Facts, v1.0.6):
+   - **Working** (session-scoped scratchpad; active goals, decisions, observations)
+   - **Episodic** (event log / long-term experiences; verbatim episode rows)
+   - **Semantic** (facts / knowledge chunks; FTS5 + vector indexed)
+   - **Procedural** (tool usage statistics; latency, success rate, last-seen)
+   - **Relationship** (entity trust tracking; interaction counts + trust scores)
+   - **Knowledge Facts (graph store, v1.0.6)** (`knowledge_facts` table; canonical
+     subject/relation/object triples distilled from ≥3 independent high-quality
+     episodes via the write gate. Anecdote-hijacking guarded: low-quality or
+     failed episodes are ignored entirely. Writes flow through `UpsertFact` with
+     the canonical support counter; reads expose these as `canonical=true`
+     evidence rows in the retrieval surface — the verifier's
+     `HasCanonicalEvidence` flag is sourced from here, not from substring
+     matching on the word "canonical" in rendered text.)
 
 3. **Background Ingestion.** Turn processing happens asynchronously after the
    response is sent. Ingestion failures are degraded silently -- they never
@@ -121,6 +180,7 @@ CREATE TABLE episodic_memory (
     id            TEXT PRIMARY KEY,
     classification TEXT NOT NULL,
     content       TEXT NOT NULL,
+    content_json  TEXT,
     importance    INTEGER NOT NULL DEFAULT 5,
     owner_id      TEXT,
     memory_state  TEXT NOT NULL DEFAULT 'active',
@@ -131,6 +191,10 @@ CREATE INDEX idx_episodic_importance ON episodic_memory(importance DESC, created
 ```
 - Has `memory_state` + `state_reason` for lifecycle management.
 - FTS5 trigger-backed (INSERT + DELETE triggers).
+- `content` is the compact human-readable episode summary.
+- `content_json` is the structured `EpisodeSummary` payload used by
+  consolidation and other machine consumers; downstream stages should prefer it
+  over reparsing `content`.
 
 #### semantic_memory (facts / key-value knowledge)
 ```sql
@@ -525,7 +589,7 @@ This is enforced in `marshalOpenAI()` via explicit message construction
 back to the originating tool call.
 
 **File**: `internal/llm/client_formats.go`
-| `get_memory_stats` | none | Returns 5-tier budget allocations + live health snapshot. | Rust parity |
+| `get_memory_stats` | none | Returns 6-store memory counts + live health snapshot. | Go beyond-parity |
 | `get_runtime_context` | none | Includes hippocampus table listing. | Rust parity |
 
 ### 6.2 API Routes
@@ -566,19 +630,21 @@ roboticus memory reindex
 - **Semantic memory** answers: "What is true?"
 - **Episodic memory** answers: "What happened before?"
 - **Procedural memory** answers: "How do I do this?"
-- **Relationship/graph memory** answers: "What depends on what?"
+- **Relationship memory** answers: "Who interacts with whom, and how strongly?"
+- **Graph facts** answer: "What explicitly depends on what?"
 - **Working memory** answers: "What am I doing right now?" (NOT searched — direct injection)
 
-### Retrieval Pipeline (v1.0.5)
+### Retrieval Pipeline (v1.0.6)
 
 ```
 Query → Decompose (compound → subgoals)
       → Route (intent-driven tier selection)
-      → Retrieve (per-tier: BM25 + vector hybrid)
+      → Retrieve (per-tier: BM25 + vector hybrid, mode-aware by tier, relationship evidence with age/provenance, graph facts with typed relations and traversal-aware chains)
       → Rerank (discard weak, boost authority, detect collapse)
-      → Assemble (evidence + gaps + contradictions)
+      → Assemble (evidence + freshness risks + gaps + contradictions)
       → Working State (direct injection, not searched)
       → LLM Reasoning
+      → Verify (unsupported certainty / stale-currentness / contradictions / coverage / unsupported answered subgoals)
 ```
 
 ### Components
@@ -587,11 +653,29 @@ Query → Decompose (compound → subgoals)
 |-------|------|---------|
 | Decomposer | `decomposer.go` | Splits compound queries into subgoals |
 | Router | `router.go` | Selects tiers + modes based on intent/keywords |
-| Retriever | `retrieval_episodic.go`, `retrieval_tiers.go` | Per-tier BM25+vector hybrid search |
+| Retriever | `retrieval_episodic.go`, `retrieval_tiers.go`, `retrieval_path.go`, `retrieval_path_telemetry.go` | Per-tier retrieval with HybridSearch-first semantic/procedural/relationship/workflow paths, per-tier path attribution, and telemetry-gated LIKE retirement support |
 | Reranker | `reranker.go` | Evidence filter: authority, recency, collapse |
-| Assembler | `context_assembly.go` | Structured output: evidence + gaps + contradictions |
+| Assembler | `context_assembly.go` | Structured output: evidence + freshness risks + gaps + contradictions + provenance |
+| Verifier | `internal/pipeline/verifier.go` | Detects unsupported certainty, stale-currentness overclaim, ignored contradictions, missed multi-part coverage, missing action plans, unanchored policy answers, and answered subgoals that lack supporting retrieved evidence |
 | Reflection | `reflection.go` | Post-turn episode summaries |
 | Persistence | `working_persistence.go` | Working memory across restarts |
+| Graph Facts | `043_knowledge_facts.sql`, `manager.go`, `retrieval_tiers.go`, `graph.go`, `consolidation_distillation.go` | Persisted typed relations extracted from semantic knowledge and enriched episode distillation, surfaced as first-class evidence and traversable graph structure |
+
+### Current Behavioral Notes
+
+- Router intent signals are now propagated from production daemon retrieval into memory routing.
+- Semantic evidence retains source identity, source label, canonical status, and authority score through reranking and context assembly.
+- Relationship evidence now retains source identity, relationship summary, trust-derived score, and age through retrieval and assembly.
+- Graph facts are now persisted in `knowledge_facts` with `subject` / `relation` / `object`, source provenance, confidence, and freshness metadata.
+- Semantic ingestion now extracts typed facts such as `depends_on`, `owned_by`, `uses`, `blocks`, `causes`, and `version_of` into the graph-fact store.
+- Semantic / procedural / relationship / workflow retrieval are now HybridSearch-first; residual `LIKE` paths remain only as telemetry-gated safety nets.
+- Retrieval tier methods emit `retrieval.path.<tier>` annotations (`fts`, `vector`, `hybrid`, `like_fallback`, `empty`) through a per-call tracer carried on `context.Context`, so concurrent calls stay isolated without retriever-global state.
+- Graph retrieval can now synthesize explicit path evidence between named entities and reverse dependency chains for impact / blast-radius queries.
+- Enriched episode distillation now promotes recurring canonical `(subject, relation, object)` triples into `knowledge_facts` via the same canonical write gate used by direct graph ingestion.
+- Context assembly surfaces explicit freshness risks when supporting evidence is stale instead of leaving recency buried in scores.
+- The verifier now consumes pipeline-computed task hints (intent, subgoals, planned action) when available instead of reconstructing everything from the raw prompt.
+- The verifier now parses structured `[Retrieved Evidence]` items from the assembled context and checks answered subgoals for explicit support before letting them stand as resolved.
+- The verifier is currently heuristic, not model-based. It acts as a revision gate, not a final proof system.
 
 ### Working Memory Lifecycle
 
@@ -630,10 +714,13 @@ Rust starts all entries at 1.0 and recall resets to 1.0.
 **Go fix**: Default 0.8, recall reinforces +0.1 (capped at 1.0). Creates
 organic differentiation over time.
 
-### 7.4 ~~FTS Coverage Gaps~~ FIXED (Go v1.0.2)
+### 7.4 ~~FTS Coverage Gaps~~ FIXED (Go v1.0.6)
 
-All 5 tiers now have FTS triggers: episodic, semantic, working (pre-existing),
-procedural and relationship (added in v1.0.2 via migration 037).
+All memory-backed stores now have FTS coverage: episodic, semantic, working
+(pre-existing), procedural and relationship (added in v1.0.2 via migration 037),
+plus `knowledge_facts` (added in v1.0.6 via migration 043). Migration 048
+completed the missing trigger surface so INSERT/UPDATE/DELETE synchronization
+now holds across the FTS-covered tiers used by HybridSearch-first retrieval.
 
 ### 7.5 No UPDATE Trigger on Episodic FTS (OPEN)
 
@@ -649,6 +736,13 @@ retained for legacy data safety. JOIN simplified to direct match.
 
 Consolidation doc comments mention promotion but Phase 4 is actually
 tier-native index sync, not promotion.
+
+### 7.8 Telemetry-Gated LIKE Retirement (OPEN, operator-driven)
+
+HybridSearch-first retrieval is shipped for semantic, procedural,
+relationship, and workflow tiers, but residual `LIKE` blocks remain as safety
+nets until production trace telemetry shows they are dormant enough to retire
+per tier. `AggregateRetrievalPaths()` is the operator-facing gate.
 
 ---
 
@@ -667,12 +761,17 @@ tier-native index sync, not promotion.
 | Query-aware memory index (beyond-parity) | FIXED | `internal/agent/tools/memory_recall.go`, `internal/daemon/daemon.go` |
 | Confidence normalization (beyond-parity) | FIXED | `internal/agent/tools/memory_recall.go`, `internal/db/schema.go` |
 | OpenAI tool_call_id serialization | FIXED | `internal/llm/client_formats.go` |
+| FTS trigger completeness + backfill (M3.1) | FIXED | `internal/db/migrations/048_fts_trigger_completeness.sql`, `internal/db/fts_trigger_completeness_test.go` |
+| HybridSearch-first retrieval + per-tier path telemetry (M3.2) | FIXED | `internal/agent/memory/retrieval_tiers.go`, `internal/agent/memory/retrieval_path.go`, `internal/agent/memory/workflow.go` |
+| Relational distillation into `knowledge_facts` (M8) | FIXED | `internal/agent/memory/reflection.go`, `internal/agent/memory/consolidation_distillation.go` |
+| Telemetry-backed dormancy aggregator for LIKE retirement (M3.3) | FIXED | `internal/agent/memory/retrieval_path_telemetry.go` |
 
 ### 8.2 Remaining Gaps
 
 | Priority | Gap | Notes |
 |----------|-----|-------|
 | **P1** | Model tool-calling reliability | `gemma4` doesn't reliably call `search_memories` -- addressed by IntentMemoryRecall baselining (router escalates) |
+| **P2** | Telemetry-backed LIKE retirement still requires operator observation | `AggregateRetrievalPaths` shipped; tier-by-tier deletion is intentionally gated on production traces |
 | ~~P1~~ | ~~FTS table name mismatch~~ | **CLOSED v1.0.2** -- migration 037 normalizes to full names |
 | **P2** | Episodic-to-semantic promotion | Consolidation Phase 4 |
 | ~~P2~~ | ~~No FTS for procedural/relationship~~ | **CLOSED v1.0.2** -- triggers added |

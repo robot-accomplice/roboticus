@@ -328,41 +328,36 @@ func TestGuardChain_RegressionCorpus(t *testing.T) {
 func TestGuardChain_Ordering(t *testing.T) {
 	chain := FullGuardChain()
 
-	// The FullGuardChain has a specific order. Safety-critical guards must
-	// come before quality/truthfulness guards. Verify the expected order.
+	// The runtime full chain should follow the registry-authoritative order.
 	expectedOrder := []string{
-		// Core (safety-critical first)
 		"empty_response",
+		"subagent_claim",
+		"execution_truth",
+		"action_verification",
+		"task_deferral",
+		"clarification_deflection",
+		"output_contract",
+		"model_identity_truth",
+		"current_events_truth",
+		"literary_quote_retry",
+		"personality_integrity",
+		"internal_jargon",
+		"non_repetition_v2",
+		"low_value_parroting",
+		"perspective",
+		"declared_action",
+		"user_echo",
+		"internal_protocol",
+		"placeholder_content",
 		"content_classification",
 		"repetition",
 		"system_prompt_leak",
 		"internal_marker",
-		// Behavioral
-		"subagent_claim",
-		"task_deferral",
-		"internal_jargon",
-		"declared_action",
-		"perspective",       // Wave 8, #78
-		"internal_protocol", // Wave 8, #79
-		// Quality
-		"placeholder_content",
-		"low_value_parroting",
-		"non_repetition_v2",
-		"output_contract",
-		"user_echo",
-		// Truthfulness
-		"model_identity_truth",
-		"current_events_truth",
-		"execution_truth",
 		"execution_block",
 		"delegation_metadata",
 		"filesystem_denial",
-		"financial_action_truth",
-		"personality_integrity",
-		"action_verification",  // Wave 8, #76
-		"literary_quote_retry", // Wave 8, #77
-		// Protection
 		"config_protection",
+		"financial_action_truth",
 	}
 
 	if chain.Len() != len(expectedOrder) {
@@ -373,22 +368,6 @@ func TestGuardChain_Ordering(t *testing.T) {
 		if g.Name() != expectedOrder[i] {
 			t.Errorf("guard[%d] = %q, want %q", i, g.Name(), expectedOrder[i])
 		}
-	}
-
-	// Verify safety-critical guards (content_classification, system_prompt_leak)
-	// come before quality guards (low_value_parroting, non_repetition_v2).
-	safetyIdx := -1
-	qualityIdx := -1
-	for i, g := range chain.guards {
-		if g.Name() == "content_classification" && safetyIdx == -1 {
-			safetyIdx = i
-		}
-		if g.Name() == "low_value_parroting" && qualityIdx == -1 {
-			qualityIdx = i
-		}
-	}
-	if safetyIdx >= qualityIdx {
-		t.Errorf("content_classification (idx=%d) must come before low_value_parroting (idx=%d)", safetyIdx, qualityIdx)
 	}
 }
 
@@ -595,6 +574,12 @@ func TestContextualGuard_UsesContext(t *testing.T) {
 			},
 		},
 		{
+			name:    "ClarificationDeflectionGuard uses UserPrompt",
+			guard:   &ClarificationDeflectionGuard{},
+			content: "I understand. You need me to address the conversation flow in a more natural and context-aware way. Please provide the last message or the context you want me to respond to, and I will generate a revised answer.",
+			ctx:     &GuardContext{UserPrompt: "Rewrite the reply to sound more natural."},
+		},
+		{
 			name:    "InternalJargonGuard uses SubagentNames",
 			guard:   &InternalJargonGuard{},
 			content: "The researcher agent completed the analysis.",
@@ -696,6 +681,7 @@ func TestContextualGuard_NilContextSafe(t *testing.T) {
 	guards := []ContextualGuard{
 		&SubagentClaimGuard{},
 		&TaskDeferralGuard{},
+		&ClarificationDeflectionGuard{},
 		&InternalJargonGuard{},
 		&DeclaredActionGuard{},
 		&LowValueParrotingGuard{},

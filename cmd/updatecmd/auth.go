@@ -1,12 +1,12 @@
 package updatecmd
 
 import (
-	"roboticus/cmd/internal/cmdutil"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"roboticus/cmd/internal/cmdutil"
 	"strings"
 	"time"
 
@@ -179,4 +179,5 @@ func init() {
 	authLoginCmd.Flags().Bool("oauth", false, "Use OAuth PKCE flow instead of API key")
 	authCmd.AddCommand(authStatusCmd)
 	authCmd.AddCommand(authLoginCmd)
-	authCmd.AddCommand(authLogoutCmd)}
+	authCmd.AddCommand(authLogoutCmd)
+}

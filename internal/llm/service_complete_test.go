@@ -102,6 +102,37 @@ func TestService_Complete_Fallback(t *testing.T) {
 	}
 }
 
+func TestService_Complete_NoEscalateSkipsFallbackChain(t *testing.T) {
+	failMock := &mockHTTP{statusCode: 500, body: "error"}
+	successMock := &mockHTTP{
+		statusCode: 200,
+		body:       `{"id":"fb","model":"fallback","choices":[{"message":{"content":"fallback response"},"finish_reason":"stop"}],"usage":{}}`,
+	}
+
+	failClient, _ := NewClientWithHTTP(&Provider{
+		Name: "primary", URL: "http://fail", Format: FormatOpenAI,
+	}, failMock)
+	successClient, _ := NewClientWithHTTP(&Provider{
+		Name: "fallback", URL: "http://ok", Format: FormatOpenAI,
+	}, successMock)
+
+	svc, _ := NewService(ServiceConfig{
+		Primary:   "primary",
+		Fallbacks: []string{"fallback"},
+	}, nil)
+	svc.providers["primary"] = failClient
+	svc.providers["fallback"] = successClient
+
+	_, err := svc.Complete(context.Background(), &Request{
+		Model:      "gpt-4",
+		Messages:   []Message{{Role: "user", Content: "test"}},
+		NoEscalate: true,
+	})
+	if err == nil {
+		t.Fatal("expected primary failure without fallback when NoEscalate is set")
+	}
+}
+
 func TestService_Complete_AllProvidersFail(t *testing.T) {
 	failMock := &mockHTTP{statusCode: 500, body: "error"}
 	client, _ := NewClientWithHTTP(&Provider{

@@ -389,6 +389,12 @@ func TestWhatsAppProcessWebhook_AllTypes(t *testing.T) {
 			if msg.Platform != "whatsapp" {
 				t.Fatalf("platform = %s", msg.Platform)
 			}
+			if got := msg.Metadata["is_group"]; got != false {
+				t.Fatalf("is_group = %v, want false", got)
+			}
+			if got := msg.Metadata["sender_phone"]; got != msg.SenderID {
+				t.Fatalf("sender_phone = %v, want %s", got, msg.SenderID)
+			}
 		})
 	}
 }
@@ -1349,6 +1355,12 @@ func TestMatrixAdapter_RecvAndSync(t *testing.T) {
 	}
 	if msg.SenderID != "@alice:test" {
 		t.Errorf("sender = %q", msg.SenderID)
+	}
+	if got := msg.Metadata["room_id"]; got != "!room1:test" {
+		t.Errorf("room_id = %v", got)
+	}
+	if got := msg.Metadata["sender_mxid"]; got != "@alice:test" {
+		t.Errorf("sender_mxid = %v", got)
 	}
 }
 

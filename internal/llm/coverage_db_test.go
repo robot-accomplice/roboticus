@@ -435,10 +435,10 @@ func TestNewClient_EnvVarMissing(t *testing.T) {
 	// (they fail at request time). This enables the service to start
 	// even when some providers are unconfigured.
 	client, err := NewClient(&Provider{
-		Name:      "test",
-		URL:       "http://test",
-		Format:    FormatOpenAI,
-		IsLocal:   false,
+		Name:    "test",
+		URL:     "http://test",
+		Format:  FormatOpenAI,
+		IsLocal: false,
 	})
 	if err != nil {
 		t.Errorf("construction should succeed with missing key: %v", err)

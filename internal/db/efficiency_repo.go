@@ -182,15 +182,15 @@ func trendLabel(firstHalf, secondHalf float64) string {
 // ── rawModelRow ─────────────────────────────────────────────────────────
 
 type rawModelRow struct {
-	model           string
-	totalTurns      int64
-	lastInvokedAt   sql.NullString
-	avgOutputDens   float64
-	totalCost       float64
-	totalTokensOut  int64
-	totalTokensIn   int64
-	cachedCount     int64
-	avgCostPerTurn  float64
+	model          string
+	totalTurns     int64
+	lastInvokedAt  sql.NullString
+	avgOutputDens  float64
+	totalCost      float64
+	totalTokensOut int64
+	totalTokensIn  int64
+	cachedCount    int64
+	avgCostPerTurn float64
 }
 
 // ── ComputeEfficiency ───────────────────────────────────────────────────
@@ -307,8 +307,14 @@ func (r *EfficiencyRepository) ComputeEfficiency(
 	models := make(map[string]ModelEfficiency)
 	var grandTotalCost float64
 	var grandTotalTurns int64
-	var mostExpensive *struct{ model string; cost float64 }
-	var mostEfficient *struct{ model string; density float64 }
+	var mostExpensive *struct {
+		model string
+		cost  float64
+	}
+	var mostEfficient *struct {
+		model   string
+		density float64
+	}
 
 	for _, rm := range rawRows {
 		cacheHitRate := 0.0
@@ -349,17 +355,29 @@ func (r *EfficiencyRepository) ComputeEfficiency(
 				avgSlice(second, func(p TimeSeriesPoint) float64 { return p.OutputDensity }))
 			trend.CostPerTurn = trendLabel(
 				avgSlice(first, func(p TimeSeriesPoint) float64 {
-					if p.Turns > 0 { return p.Cost / float64(p.Turns) }; return 0
+					if p.Turns > 0 {
+						return p.Cost / float64(p.Turns)
+					}
+					return 0
 				}),
 				avgSlice(second, func(p TimeSeriesPoint) float64 {
-					if p.Turns > 0 { return p.Cost / float64(p.Turns) }; return 0
+					if p.Turns > 0 {
+						return p.Cost / float64(p.Turns)
+					}
+					return 0
 				}))
 			trend.CacheHitRate = trendLabel(
 				avgSlice(first, func(p TimeSeriesPoint) float64 {
-					if p.Turns > 0 { return float64(p.CachedCount) / float64(p.Turns) }; return 0
+					if p.Turns > 0 {
+						return float64(p.CachedCount) / float64(p.Turns)
+					}
+					return 0
 				}),
 				avgSlice(second, func(p TimeSeriesPoint) float64 {
-					if p.Turns > 0 { return float64(p.CachedCount) / float64(p.Turns) }; return 0
+					if p.Turns > 0 {
+						return float64(p.CachedCount) / float64(p.Turns)
+					}
+					return 0
 				}))
 		}
 
@@ -376,12 +394,12 @@ func (r *EfficiencyRepository) ComputeEfficiency(
 		quality := r.computeQualityForModel(ctx, rm.model, cutoff, rm.totalTurns)
 
 		eff := ModelEfficiency{
-			Model:         rm.model,
-			TotalTurns:    rm.totalTurns,
-			LastInvokedAt: rm.lastInvokedAt.String,
-			SuccessCount:  rm.totalTurns,
+			Model:            rm.model,
+			TotalTurns:       rm.totalTurns,
+			LastInvokedAt:    rm.lastInvokedAt.String,
+			SuccessCount:     rm.totalTurns,
 			AvgOutputDensity: rm.avgOutputDens,
-			CacheHitRate:  cacheHitRate,
+			CacheHitRate:     cacheHitRate,
 			Cost: CostMetrics{
 				Total:            round6(rm.totalCost),
 				PerOutputToken:   round6(perOutputToken),
@@ -398,10 +416,16 @@ func (r *EfficiencyRepository) ComputeEfficiency(
 		grandTotalTurns += rm.totalTurns
 
 		if mostExpensive == nil || rm.totalCost > mostExpensive.cost {
-			mostExpensive = &struct{ model string; cost float64 }{rm.model, rm.totalCost}
+			mostExpensive = &struct {
+				model string
+				cost  float64
+			}{rm.model, rm.totalCost}
 		}
 		if mostEfficient == nil || rm.avgOutputDens > mostEfficient.density {
-			mostEfficient = &struct{ model string; density float64 }{rm.model, rm.avgOutputDens}
+			mostEfficient = &struct {
+				model   string
+				density float64
+			}{rm.model, rm.avgOutputDens}
 		}
 
 		models[rm.model] = eff

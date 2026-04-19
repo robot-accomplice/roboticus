@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 )
 
 // mockTransport is a test double for the Transport interface.
@@ -17,6 +18,61 @@ type mockTransport struct {
 	recvErr   error
 	closeErr  error
 	closed    bool
+}
+
+type queuedTransport struct {
+	mu      sync.Mutex
+	sent    []json.RawMessage
+	recv    chan json.RawMessage
+	closeCh chan struct{}
+	closed  bool
+}
+
+func newQueuedTransport() *queuedTransport {
+	return &queuedTransport{
+		recv:    make(chan json.RawMessage, 16),
+		closeCh: make(chan struct{}),
+	}
+}
+
+func (q *queuedTransport) Send(_ context.Context, msg json.RawMessage) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.sent = append(q.sent, msg)
+	return nil
+}
+
+func (q *queuedTransport) Receive(_ context.Context) (json.RawMessage, error) {
+	select {
+	case msg := <-q.recv:
+		return msg, nil
+	case <-q.closeCh:
+		return nil, fmt.Errorf("closed")
+	}
+}
+
+func (q *queuedTransport) Close() error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if !q.closed {
+		close(q.closeCh)
+		q.closed = true
+	}
+	return nil
+}
+
+func (q *queuedTransport) sentID(t *testing.T, index int) int64 {
+	t.Helper()
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if len(q.sent) <= index {
+		t.Fatalf("sent %d messages, want index %d", len(q.sent), index)
+	}
+	var req jsonRPCRequest
+	if err := json.Unmarshal(q.sent[index], &req); err != nil {
+		t.Fatalf("unmarshal sent request: %v", err)
+	}
+	return req.ID
 }
 
 func (m *mockTransport) Send(_ context.Context, msg json.RawMessage) error {
@@ -40,6 +96,24 @@ func (m *mockTransport) Receive(_ context.Context) (json.RawMessage, error) {
 	}
 	resp := m.responses[0]
 	m.responses = m.responses[1:]
+	var parsed jsonRPCResponse
+	if err := json.Unmarshal(resp, &parsed); err == nil && parsed.ID == 0 {
+		deadline := time.Now().Add(time.Second)
+		for len(m.sent) == 0 && time.Now().Before(deadline) {
+			m.mu.Unlock()
+			time.Sleep(time.Millisecond)
+			m.mu.Lock()
+		}
+		if len(m.sent) > 0 {
+			var req jsonRPCRequest
+			if err := json.Unmarshal(m.sent[len(m.sent)-1], &req); err == nil && req.ID != 0 {
+				parsed.ID = req.ID
+				if rewritten, err := json.Marshal(parsed); err == nil {
+					resp = rewritten
+				}
+			}
+		}
+	}
 	return resp, nil
 }
 
@@ -156,7 +230,7 @@ func TestServerStatus_JSON(t *testing.T) {
 
 func TestConnection_Call_Success(t *testing.T) {
 	// The atomic nextID is shared across tests; capture the next expected value.
-	expectedID := nextID.Load() + 1
+	expectedID := int64(0)
 
 	mt := &mockTransport{
 		responses: []json.RawMessage{
@@ -234,7 +308,7 @@ func TestConnection_Call_InvalidResponseJSON(t *testing.T) {
 }
 
 func TestConnection_Call_RPCError(t *testing.T) {
-	expectedID := nextID.Load() + 1
+	expectedID := int64(0)
 	mt := &mockTransport{
 		responses: []json.RawMessage{
 			makeErrorResponse(expectedID, -32601, "method not found"),
@@ -251,11 +325,101 @@ func TestConnection_Call_RPCError(t *testing.T) {
 	}
 }
 
+func TestConnection_Call_ContextTimeoutDoesNotCloseConnection(t *testing.T) {
+	qt := newQueuedTransport()
+	conn := &Connection{Name: "test", transport: qt}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	_, err := conn.call(ctx, "test/method", nil)
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+	if err != context.DeadlineExceeded {
+		t.Fatalf("expected deadline exceeded, got %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("call should return promptly after timeout, took %v", elapsed)
+	}
+	if qt.closed {
+		t.Fatal("per-call timeout should not close transport")
+	}
+	if conn.receiverErr() != nil {
+		t.Fatalf("timeout should not poison the connection, got receiver error %v", conn.receiverErr())
+	}
+}
+
+func TestConnection_Call_TimeoutDropsLateResponseAndAllowsNextCall(t *testing.T) {
+	qt := newQueuedTransport()
+	conn := &Connection{Name: "test", transport: qt}
+
+	ctx1, cancel1 := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel1()
+	_, err := conn.call(ctx1, "slow/method", nil)
+	if err == nil {
+		t.Fatal("expected timeout on first call")
+	}
+
+	firstID := qt.sentID(t, 0)
+	qt.recv <- makeResponse(firstID, map[string]string{"status": "late"})
+
+	ctx2, cancel2 := context.WithTimeout(context.Background(), time.Second)
+	defer cancel2()
+	resultCh := make(chan struct {
+		result json.RawMessage
+		err    error
+	}, 1)
+	go func() {
+		result, err := conn.call(ctx2, "next/method", nil)
+		resultCh <- struct {
+			result json.RawMessage
+			err    error
+		}{result: result, err: err}
+	}()
+
+	deadline := time.Now().Add(time.Second)
+	var secondID int64
+	for time.Now().Before(deadline) {
+		qt.mu.Lock()
+		if len(qt.sent) >= 2 {
+			var req jsonRPCRequest
+			_ = json.Unmarshal(qt.sent[1], &req)
+			secondID = req.ID
+			qt.mu.Unlock()
+			break
+		}
+		qt.mu.Unlock()
+		time.Sleep(10 * time.Millisecond)
+	}
+	if secondID == 0 {
+		t.Fatal("second request was not sent")
+	}
+
+	qt.recv <- makeResponse(secondID, map[string]string{"status": "ok"})
+
+	res := <-resultCh
+	if res.err != nil {
+		t.Fatalf("second call failed: %v", res.err)
+	}
+	var parsed map[string]string
+	if err := json.Unmarshal(res.result, &parsed); err != nil {
+		t.Fatalf("unmarshal second result: %v", err)
+	}
+	if parsed["status"] != "ok" {
+		t.Fatalf("status = %q, want ok", parsed["status"])
+	}
+	if qt.closed {
+		t.Fatal("late response should not force connection closure")
+	}
+}
+
 // --- Connection.initialize tests ---
 
 func TestConnection_Initialize_Success(t *testing.T) {
 	// initialize calls call() which increments nextID; then sends a notification (another send).
-	expectedID := nextID.Load() + 1
+	expectedID := int64(0)
 
 	initResult := map[string]any{
 		"protocolVersion": "2024-11-05",
@@ -290,7 +454,7 @@ func TestConnection_Initialize_Success(t *testing.T) {
 }
 
 func TestConnection_Initialize_ErrorResponse(t *testing.T) {
-	expectedID := nextID.Load() + 1
+	expectedID := int64(0)
 	mt := &mockTransport{
 		responses: []json.RawMessage{
 			makeErrorResponse(expectedID, -32600, "bad request"),
@@ -307,7 +471,7 @@ func TestConnection_Initialize_ErrorResponse(t *testing.T) {
 func TestConnection_Initialize_MalformedServerInfo(t *testing.T) {
 	// If serverInfo is missing or malformed, initialize should still succeed
 	// (it ignores unmarshal errors for the info struct).
-	expectedID := nextID.Load() + 1
+	expectedID := int64(0)
 
 	mt := &mockTransport{
 		responses: []json.RawMessage{
@@ -329,7 +493,7 @@ func TestConnection_Initialize_MalformedServerInfo(t *testing.T) {
 // --- Connection.listTools tests ---
 
 func TestConnection_ListTools_Success(t *testing.T) {
-	expectedID := nextID.Load() + 1
+	expectedID := int64(0)
 
 	toolsResult := map[string]any{
 		"tools": []map[string]any{
@@ -369,7 +533,7 @@ func TestConnection_ListTools_Success(t *testing.T) {
 }
 
 func TestConnection_ListTools_Empty(t *testing.T) {
-	expectedID := nextID.Load() + 1
+	expectedID := int64(0)
 
 	mt := &mockTransport{
 		responses: []json.RawMessage{
@@ -388,7 +552,7 @@ func TestConnection_ListTools_Empty(t *testing.T) {
 }
 
 func TestConnection_ListTools_Error(t *testing.T) {
-	expectedID := nextID.Load() + 1
+	expectedID := int64(0)
 	mt := &mockTransport{
 		responses: []json.RawMessage{
 			makeErrorResponse(expectedID, -32000, "internal error"),
@@ -403,7 +567,7 @@ func TestConnection_ListTools_Error(t *testing.T) {
 }
 
 func TestConnection_ListTools_BadJSON(t *testing.T) {
-	expectedID := nextID.Load() + 1
+	expectedID := int64(0)
 	// Return a result that is valid JSON-RPC but unparseable tools list.
 	mt := &mockTransport{
 		responses: []json.RawMessage{
@@ -421,7 +585,7 @@ func TestConnection_ListTools_BadJSON(t *testing.T) {
 // --- Connection.CallTool tests ---
 
 func TestConnection_CallTool_Success(t *testing.T) {
-	expectedID := nextID.Load() + 1
+	expectedID := int64(0)
 
 	toolResult := map[string]any{
 		"content": []map[string]string{
@@ -461,7 +625,7 @@ func TestConnection_CallTool_Success(t *testing.T) {
 }
 
 func TestConnection_CallTool_IsError(t *testing.T) {
-	expectedID := nextID.Load() + 1
+	expectedID := int64(0)
 
 	toolResult := map[string]any{
 		"content": []map[string]string{
@@ -489,7 +653,7 @@ func TestConnection_CallTool_IsError(t *testing.T) {
 }
 
 func TestConnection_CallTool_RPCError(t *testing.T) {
-	expectedID := nextID.Load() + 1
+	expectedID := int64(0)
 	mt := &mockTransport{
 		responses: []json.RawMessage{
 			makeErrorResponse(expectedID, -32000, "server error"),
@@ -506,7 +670,7 @@ func TestConnection_CallTool_RPCError(t *testing.T) {
 func TestConnection_CallTool_NonStandardResult(t *testing.T) {
 	// When the result doesn't match the expected content structure,
 	// CallTool returns the raw result as content string.
-	expectedID := nextID.Load() + 1
+	expectedID := int64(0)
 	mt := &mockTransport{
 		responses: []json.RawMessage{
 			makeResponse(expectedID, "plain string result"),
@@ -525,7 +689,7 @@ func TestConnection_CallTool_NonStandardResult(t *testing.T) {
 }
 
 func TestConnection_CallTool_MultipleContentBlocks(t *testing.T) {
-	expectedID := nextID.Load() + 1
+	expectedID := int64(0)
 
 	toolResult := map[string]any{
 		"content": []map[string]string{

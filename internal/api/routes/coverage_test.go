@@ -6,11 +6,16 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	agent "roboticus/internal/agent"
+	agenttools "roboticus/internal/agent/tools"
 	"roboticus/internal/browser"
 	"roboticus/internal/core"
+	"roboticus/internal/llm"
 	"roboticus/internal/mcp"
 	"roboticus/internal/plugin"
 	"roboticus/testutil"
@@ -212,7 +217,7 @@ func TestListPluginTools_WithTools(t *testing.T) {
 }
 
 func TestEnablePlugin_NilRegistry(t *testing.T) {
-	r := chiRouter("POST", "/api/plugins/{name}/enable", EnablePlugin(nil))
+	r := chiRouter("POST", "/api/plugins/{name}/enable", EnablePlugin(nil, nil, nil))
 	req := httptest.NewRequest("POST", "/api/plugins/test-plugin/enable", nil)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
@@ -224,7 +229,7 @@ func TestEnablePlugin_NilRegistry(t *testing.T) {
 
 func TestEnablePlugin_NotFound(t *testing.T) {
 	reg := newTestRegistry(t)
-	r := chiRouter("POST", "/api/plugins/{name}/enable", EnablePlugin(reg))
+	r := chiRouter("POST", "/api/plugins/{name}/enable", EnablePlugin(reg, nil, nil))
 	req := httptest.NewRequest("POST", "/api/plugins/nonexistent/enable", nil)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
@@ -236,9 +241,10 @@ func TestEnablePlugin_NotFound(t *testing.T) {
 
 func TestEnablePlugin_Success(t *testing.T) {
 	reg := newTestRegistry(t)
+	tools := agent.NewToolRegistry()
 	// First disable it.
 	_ = reg.Disable("test-plugin")
-	r := chiRouter("POST", "/api/plugins/{name}/enable", EnablePlugin(reg))
+	r := chiRouter("POST", "/api/plugins/{name}/enable", EnablePlugin(reg, tools, nil))
 	req := httptest.NewRequest("POST", "/api/plugins/test-plugin/enable", nil)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
@@ -246,11 +252,16 @@ func TestEnablePlugin_Success(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
+	if tools.Get("test-tool") == nil {
+		t.Fatal("plugin tool should be synced into main tool registry")
+	}
 }
 
 func TestDisablePlugin_Success(t *testing.T) {
 	reg := newTestRegistry(t)
-	r := chiRouter("POST", "/api/plugins/{name}/disable", DisablePlugin(reg))
+	tools := agent.NewToolRegistry()
+	agenttools.RegisterPluginTools(tools, reg)
+	r := chiRouter("POST", "/api/plugins/{name}/disable", DisablePlugin(reg, tools, nil))
 	req := httptest.NewRequest("POST", "/api/plugins/test-plugin/disable", nil)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
@@ -258,10 +269,13 @@ func TestDisablePlugin_Success(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
+	if tools.Get("test-tool") != nil {
+		t.Fatal("disabled plugin tool should be removed from main tool registry")
+	}
 }
 
 func TestDisablePlugin_NilRegistry(t *testing.T) {
-	r := chiRouter("POST", "/api/plugins/{name}/disable", DisablePlugin(nil))
+	r := chiRouter("POST", "/api/plugins/{name}/disable", DisablePlugin(nil, nil, nil))
 	req := httptest.NewRequest("POST", "/api/plugins/test-plugin/disable", nil)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
@@ -273,7 +287,7 @@ func TestDisablePlugin_NilRegistry(t *testing.T) {
 
 func TestDisablePlugin_NotFound(t *testing.T) {
 	reg := newTestRegistry(t)
-	r := chiRouter("POST", "/api/plugins/{name}/disable", DisablePlugin(reg))
+	r := chiRouter("POST", "/api/plugins/{name}/disable", DisablePlugin(reg, nil, nil))
 	req := httptest.NewRequest("POST", "/api/plugins/nonexistent/disable", nil)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
@@ -407,7 +421,7 @@ func TestListMCPTools_EmptyManager(t *testing.T) {
 }
 
 func TestConnectMCPServer_NilManager(t *testing.T) {
-	handler := ConnectMCPServer(nil)
+	handler := ConnectMCPServer(nil, nil)
 	req := httptest.NewRequest("POST", "/api/mcp/connect",
 		strings.NewReader(`{"name":"test","transport":"stdio","command":"echo"}`))
 	rec := httptest.NewRecorder()
@@ -420,7 +434,7 @@ func TestConnectMCPServer_NilManager(t *testing.T) {
 
 func TestConnectMCPServer_InvalidJSON(t *testing.T) {
 	mgr := mcp.NewConnectionManager()
-	handler := ConnectMCPServer(mgr)
+	handler := ConnectMCPServer(mgr, nil)
 	req := httptest.NewRequest("POST", "/api/mcp/connect",
 		strings.NewReader(`{bad`))
 	rec := httptest.NewRecorder()
@@ -433,7 +447,7 @@ func TestConnectMCPServer_InvalidJSON(t *testing.T) {
 
 func TestConnectMCPServer_BadTransport(t *testing.T) {
 	mgr := mcp.NewConnectionManager()
-	handler := ConnectMCPServer(mgr)
+	handler := ConnectMCPServer(mgr, nil)
 	req := httptest.NewRequest("POST", "/api/mcp/connect",
 		strings.NewReader(`{"name":"test","transport":"unknown"}`))
 	rec := httptest.NewRecorder()
@@ -445,7 +459,7 @@ func TestConnectMCPServer_BadTransport(t *testing.T) {
 }
 
 func TestDisconnectMCPServer_NilManager(t *testing.T) {
-	r := chiRouter("POST", "/api/mcp/disconnect/{name}", DisconnectMCPServer(nil))
+	r := chiRouter("POST", "/api/mcp/disconnect/{name}", DisconnectMCPServer(nil, nil))
 	req := httptest.NewRequest("POST", "/api/mcp/disconnect/test", nil)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
@@ -457,7 +471,7 @@ func TestDisconnectMCPServer_NilManager(t *testing.T) {
 
 func TestDisconnectMCPServer_NotFound(t *testing.T) {
 	mgr := mcp.NewConnectionManager()
-	r := chiRouter("POST", "/api/mcp/disconnect/{name}", DisconnectMCPServer(mgr))
+	r := chiRouter("POST", "/api/mcp/disconnect/{name}", DisconnectMCPServer(mgr, nil))
 	req := httptest.NewRequest("POST", "/api/mcp/disconnect/nonexistent", nil)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
@@ -889,7 +903,7 @@ func TestIntToNegStr(t *testing.T) {
 
 func TestInstallPlugin_InvalidJSON(t *testing.T) {
 	cfg := coverageTestConfig()
-	handler := InstallPlugin(cfg)
+	handler := InstallPlugin(cfg, nil, nil, nil)
 	req := httptest.NewRequest("POST", "/api/plugins/install",
 		strings.NewReader(`{bad`))
 	rec := httptest.NewRecorder()
@@ -902,7 +916,7 @@ func TestInstallPlugin_InvalidJSON(t *testing.T) {
 
 func TestInstallPlugin_MissingFields(t *testing.T) {
 	cfg := coverageTestConfig()
-	handler := InstallPlugin(cfg)
+	handler := InstallPlugin(cfg, nil, nil, nil)
 	req := httptest.NewRequest("POST", "/api/plugins/install",
 		strings.NewReader(`{"name":"test"}`))
 	rec := httptest.NewRecorder()
@@ -916,7 +930,7 @@ func TestInstallPlugin_MissingFields(t *testing.T) {
 func TestInstallPlugin_Success(t *testing.T) {
 	cfg := coverageTestConfig()
 	cfg.Plugins.Dir = t.TempDir()
-	handler := InstallPlugin(cfg)
+	handler := InstallPlugin(cfg, nil, nil, nil)
 	req := httptest.NewRequest("POST", "/api/plugins/install",
 		strings.NewReader(`{"name":"my-plugin","content":"print('hello')"}`))
 	rec := httptest.NewRecorder()
@@ -928,6 +942,55 @@ func TestInstallPlugin_Success(t *testing.T) {
 	body := jsonBody(t, rec)
 	if body["name"] != "my-plugin" {
 		t.Errorf("name = %v", body["name"])
+	}
+}
+
+func TestInstallPlugin_SourcePathHotRegisters(t *testing.T) {
+	cfg := coverageTestConfig()
+	cfg.Plugins.Dir = t.TempDir()
+	reg := plugin.NewRegistry(nil, nil, plugin.PermissionPolicy{})
+	tools := agent.NewToolRegistry()
+	embedClient := llm.NewEmbeddingClient(nil)
+
+	sourceDir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(sourceDir, "manifest.toml"), []byte(strings.TrimSpace(`
+name = "hot-plugin"
+version = "1.0.0"
+
+[[tools]]
+name = "echo"
+description = "Echo"
+`)), 0o644)
+	_ = os.WriteFile(filepath.Join(sourceDir, "echo"), []byte("#!/bin/sh\necho ok\n"), 0o755)
+
+	handler := InstallPlugin(cfg, reg, tools, embedClient)
+	req := httptest.NewRequest("POST", "/api/plugins/install",
+		strings.NewReader(fmt.Sprintf(`{"name":"hot-plugin","source_path":%q}`, sourceDir)))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201", rec.Code)
+	}
+	pluginTools := reg.AllTools()
+	if len(pluginTools) != 1 || pluginTools[0].Name != "echo" {
+		t.Fatalf("plugin registry tools = %+v, want echo", pluginTools)
+	}
+	if tools.Get("echo") == nil {
+		t.Fatal("plugin tool should be synced into main tool registry")
+	}
+	var descriptorFound bool
+	for _, descriptor := range tools.Descriptors() {
+		if descriptor.Name != "echo" {
+			continue
+		}
+		descriptorFound = true
+		if len(descriptor.Embedding) == 0 {
+			t.Fatal("plugin tool descriptor should be embedded after hot install")
+		}
+	}
+	if !descriptorFound {
+		t.Fatal("plugin tool descriptor should exist after hot install")
 	}
 }
 

@@ -14,9 +14,9 @@ import (
 
 // RetrievalConfig controls hybrid RAG behavior.
 type RetrievalConfig struct {
-	HybridWeight     float64 // FTS vs embedding blend (0=FTS only, 1=embedding only, 0.5=balanced)
-	EpisodicHalfLife float64 // Days for episodic decay (default 7)
-	DecayFloor       float64 // Minimum decay factor (default 0.05)
+	HybridWeight     float64        // FTS vs embedding blend (0=FTS only, 1=embedding only, 0.5=balanced)
+	EpisodicHalfLife float64        // Days for episodic decay (default 7)
+	DecayFloor       float64        // Minimum decay factor (default 0.05)
 	Reranker         RerankerConfig // reranker tuning parameters
 }
 
@@ -30,14 +30,23 @@ func DefaultRetrievalConfig() RetrievalConfig {
 	}
 }
 
-// Retriever coordinates retrieval across all 5 memory tiers.
+// Retriever coordinates retrieval across all memory stores.
+//
+// Concurrency contract: *Retriever is constructed once at daemon startup
+// and shared across every concurrent request. No per-turn mutable state
+// may live on this struct — per-call inputs (query, sessionID, budget,
+// intent classification) must travel via function parameters or
+// context.Context. Pre-v1.0.6 this struct carried an `intents` field
+// that was set by a call-site helper before every Retrieve; under
+// concurrent traffic turn A's SetIntents raced turn B's read in the
+// routing logic. See intents_context.go for the ctx-value replacement
+// (mirrors the RetrievalTracer pattern in retrieval_path.go).
 type Retriever struct {
 	config        RetrievalConfig
 	store         *db.Store
 	budgets       TierBudget
 	embedClient   *llm.EmbeddingClient
-	vectorIndex     db.VectorIndex
-	intents       []IntentSignal // set before retrieval if intent classifier available
+	vectorIndex   db.VectorIndex
 	charsPerToken int
 }
 
@@ -61,11 +70,11 @@ func (mr *Retriever) SetVectorIndex(idx db.VectorIndex) {
 	mr.vectorIndex = idx
 }
 
-// SetIntents provides intent classification results for the current query.
-// Called by the pipeline after Stage 7 (intent classification) before retrieval.
-func (mr *Retriever) SetIntents(intents []IntentSignal) {
-	mr.intents = intents
-}
+// (v1.0.6) SetIntents was removed — intents now travel via
+// memory.WithIntents(ctx, ...) and are read by intentsFromContext(ctx)
+// inside Retrieve. See intents_context.go for the rationale. Old callers
+// that still used SetIntents will fail at compile time, which is the
+// intended behavior: the shared-state pattern is gone, not renamed.
 
 // MemoryEntry represents a memory result from ANN retrieval.
 type MemoryEntry struct {
@@ -122,11 +131,11 @@ type RetrievalMetrics struct {
 
 	// Collapse detection signals — these track the health of retrieval precision.
 	// ScoreSpread approaching 0 indicates semantic collapse (all results score alike).
-	ScoreSpread     float64 `json:"score_spread"`      // top-1 minus top-k score delta
-	AvgFTSScore     float64 `json:"avg_fts_score"`     // mean FTS leg score across results
-	AvgVectorScore  float64 `json:"avg_vector_score"`  // mean vector leg score across results
-	CorpusSize      int     `json:"corpus_size"`        // memory_index entries at query time
-	HybridWeight    float64 `json:"hybrid_weight"`      // effective weight used (adaptive)
+	ScoreSpread    float64 `json:"score_spread"`     // top-1 minus top-k score delta
+	AvgFTSScore    float64 `json:"avg_fts_score"`    // mean FTS leg score across results
+	AvgVectorScore float64 `json:"avg_vector_score"` // mean vector leg score across results
+	CorpusSize     int     `json:"corpus_size"`      // memory_index entries at query time
+	HybridWeight   float64 `json:"hybrid_weight"`    // effective weight used (adaptive)
 }
 
 // historyKeywords trigger inclusion of inactive/stale memories when present in query.
@@ -142,39 +151,19 @@ func (mr *Retriever) Retrieve(ctx context.Context, sessionID, query string, tota
 	return text
 }
 
-// RetrieveDirectOnly returns only working memory + recent ambient activity.
-// This matches Rust's two-stage pattern: direct injection is limited to cheap,
-// session-scoped, always-relevant content. All other tiers (episodic, semantic,
-// procedural, relationship) are accessed via the memory index + recall_memory tool.
+// RetrieveDirectOnly was removed in v1.0.6 (self-audit P2-L). It was
+// the sole consumer of the daemon's fallback memory-assembly path
+// (internal/daemon/daemon_adapters.go buildAgentContext), which was
+// itself removed in v1.0.6 P1-B because the pipeline's Stage 8.5 is
+// now the single authority for memory preparation. Leaving
+// RetrieveDirectOnly as unused API surface would invite a future
+// engineer to reintroduce the fallback pattern without realizing it's
+// explicitly architecturally discouraged.
 //
-// This prevents the model from treating the injected block as "all of my memories"
-// and confabulating when a topic isn't present.
-func (mr *Retriever) RetrieveDirectOnly(ctx context.Context, sessionID, query string, totalTokens int) string {
-	if mr.store == nil {
-		return ""
-	}
-
-	var sections []string
-
-	// Working memory (session-scoped).
-	if budget := int(float64(totalTokens) * mr.budgets.Working); budget > 0 {
-		working := mr.retrieveWorkingMemory(ctx, sessionID, budget)
-		if working != "" {
-			sections = append(sections, "[Working Memory]\n"+working)
-		}
-	}
-
-	// Ambient recency: recent episodic memories (last 2 hours).
-	ambient := mr.retrieveAmbientRecent(ctx, 2)
-	if ambient != "" {
-		sections = append(sections, "[Recent Activity]\n"+ambient)
-	}
-
-	if len(sections) == 0 {
-		return ""
-	}
-	return strings.Join(sections, "\n\n")
-}
+// If a future feature genuinely needs working+ambient-only memory
+// without the full retrieval pipeline, the replacement is a new
+// dedicated method with that specific purpose — NOT resurrecting this
+// one under the same name.
 
 // RetrieveWithMetrics fetches memories and returns both the injected text
 // and observability metrics (Rust parity: retrieve_with_metrics).
@@ -247,8 +236,11 @@ func (mr *Retriever) RetrieveWithMetrics(ctx context.Context, sessionID, query s
 	router := NewRouter(corpusSize)
 	var allEvidence []Evidence
 
+	// Intents are per-call ambient state from the request's intent classifier.
+	// See memory.WithIntents for the context-value contract.
+	intents := intentsFromContext(ctx)
 	for _, sg := range subgoals {
-		plan := router.Plan(sg.Question, mr.intents)
+		plan := router.Plan(sg.Question, intents)
 
 		// 3. Retrieve from each targeted tier.
 		for _, target := range plan.Targets {
@@ -256,29 +248,22 @@ func (mr *Retriever) RetrieveWithMetrics(ctx context.Context, sessionID, query s
 			if tierBudget <= 0 {
 				continue
 			}
-			tierResults := mr.retrieveTier(ctx, target.Tier, sg.Question, queryEmbed, tierBudget/mr.charsPerToken, corpusSize)
-			for i, content := range tierResults {
-				// Extract sim score from episodic format "(sim=0.85) content..."
-				score := target.Weight
-				if strings.HasPrefix(content, "(sim=") {
-					if end := strings.Index(content, ") "); end > 5 {
-						var parsed float64
-						if _, err := fmt.Sscanf(content[5:end], "%f", &parsed); err == nil {
-							score = parsed
-							content = content[end+2:] // strip sim prefix from display
-						}
-					}
+			tierResults := mr.retrieveTier(ctx, target.Tier, target.Mode, sg.Question, queryEmbed, tierBudget/mr.charsPerToken, corpusSize)
+			for i, ev := range tierResults {
+				if ev.Score == 0 {
+					ev.Score = target.Weight
 				}
-				// Position decay as tiebreaker for entries without sim scores.
+				// Position decay as tiebreaker for entries without explicit ranking metadata.
 				positionDecay := 1.0 - (float64(i) * 0.02)
 				if positionDecay < 0.1 {
 					positionDecay = 0.1
 				}
-				allEvidence = append(allEvidence, Evidence{
-					Content:    content,
-					SourceTier: target.Tier,
-					Score:      score * positionDecay,
-				})
+				ev.Score *= positionDecay
+				ev.SourceTier = target.Tier
+				if ev.RetrievalMode == "" {
+					ev.RetrievalMode = target.Mode.String()
+				}
+				allEvidence = append(allEvidence, ev)
 			}
 		}
 	}
@@ -293,6 +278,15 @@ func (mr *Retriever) RetrieveWithMetrics(ctx context.Context, sessionID, query s
 
 	// 5. Structured context assembly: evidence + gaps + contradictions.
 	assembled := AssembleContext(ctx, mr.store, sessionID, filtered, workingText, ambientText)
+
+	// Publish the typed evidence artifact to any caller that attached
+	// an evidence sink to ctx. This lets the pipeline hand a
+	// format-independent view of the same assembly state to the
+	// verifier stage — no string parsing of rendered output. See
+	// evidence_sink.go and v1.0.6 P2-C.
+	if sink := evidenceSinkFromContext(ctx); sink != nil && assembled != nil {
+		sink.Evidence = assembled.EvidenceArtifact
+	}
 
 	// ── Metrics ─────────────────────────────────────────────────────
 	metrics.EpisodicCount = countByTier(filtered, TierEpisodic)
@@ -400,30 +394,48 @@ func (mr *Retriever) retrieveWorkingMemory(ctx context.Context, sessionID string
 }
 
 // retrieveTier dispatches a query to a specific memory tier and returns content strings.
-func (mr *Retriever) retrieveTier(ctx context.Context, tier MemoryTier, query string, queryEmbed []float32, budgetTokens int, corpusSize int) []string {
-	var raw string
+func (mr *Retriever) retrieveTier(ctx context.Context, tier MemoryTier, mode RetrievalMode, query string, queryEmbed []float32, budgetTokens int, corpusSize int) []Evidence {
 	switch tier {
 	case TierEpisodic:
-		raw = mr.retrieveEpisodic(ctx, query, queryEmbed, budgetTokens, corpusSize)
+		return wrapTierEntries(tier, mode, mr.retrieveEpisodic(ctx, query, queryEmbed, budgetTokens, corpusSize))
 	case TierSemantic:
-		raw = mr.retrieveSemanticMemory(ctx, query, budgetTokens)
+		return mr.retrieveSemanticEvidence(ctx, query, queryEmbed, mode, budgetTokens)
 	case TierProcedural:
-		raw = mr.retrieveProceduralMemory(ctx, budgetTokens)
+		return wrapTierEntries(tier, mode, mr.retrieveProceduralMemory(ctx, query, queryEmbed, mode, budgetTokens))
 	case TierRelationship:
-		raw = mr.retrieveRelationshipMemory(ctx, budgetTokens)
+		return mr.retrieveRelationshipEvidence(ctx, query, queryEmbed, mode, budgetTokens)
 	default:
 		return nil
 	}
+}
+
+func wrapTierEntries(tier MemoryTier, mode RetrievalMode, raw string) []Evidence {
 	if raw == "" {
 		return nil
 	}
-	// Split tier output into individual entries.
-	var entries []string
+	var entries []Evidence
 	for _, line := range strings.Split(raw, "\n") {
 		line = strings.TrimSpace(line)
-		if line != "" && strings.HasPrefix(line, "- ") {
-			entries = append(entries, strings.TrimPrefix(line, "- "))
+		if line == "" || !strings.HasPrefix(line, "- ") {
+			continue
 		}
+		content := strings.TrimPrefix(line, "- ")
+		score := 0.0
+		if strings.HasPrefix(content, "(sim=") {
+			if end := strings.Index(content, ") "); end > 5 {
+				var parsed float64
+				if _, err := fmt.Sscanf(content[5:end], "%f", &parsed); err == nil {
+					score = parsed
+					content = content[end+2:]
+				}
+			}
+		}
+		entries = append(entries, Evidence{
+			Content:       content,
+			SourceTier:    tier,
+			Score:         score,
+			RetrievalMode: mode.String(),
+		})
 	}
 	return entries
 }

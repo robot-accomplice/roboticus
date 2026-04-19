@@ -34,7 +34,12 @@ func ListTraces(store *db.Store) http.HandlerFunc {
 				"total_ms": totalMs, "created_at": createdAt,
 			})
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"traces": traces})
+		writeJSON(w, http.StatusOK, map[string]any{
+			"route_family": "traces",
+			"artifact":     "trace_summary_list",
+			"fidelity":     "summary",
+			"traces":       traces,
+		})
 	}
 }
 
@@ -50,16 +55,16 @@ func SearchTraces(store *db.Store) http.HandlerFunc {
 		minDuration := parseIntParam(r, "min_duration_ms", 0)
 		since := strings.TrimSpace(r.URL.Query().Get("since"))
 
-		query := `SELECT turn_id, session_id, channel, total_ms, created_at, stages_json
+		query := `SELECT turn_id, session_id, channel, total_ms, created_at, stages_json, COALESCE(react_trace_json, '')
 			FROM pipeline_traces WHERE 1=1`
 		args := make([]any, 0, 5)
 		if toolName != "" {
-			query += ` AND stages_json LIKE ?`
-			args = append(args, "%"+toolName+"%")
-		}
-		if guardName != "" {
-			query += ` AND (react_trace_json LIKE ? OR stages_json LIKE ?)`
-			args = append(args, "%"+guardName+"%", "%"+guardName+"%")
+			query += ` AND EXISTS (
+				SELECT 1 FROM tool_calls tc
+				WHERE tc.turn_id = pipeline_traces.turn_id
+				  AND tc.tool_name = ?
+			)`
+			args = append(args, toolName)
 		}
 		if minDuration > 0 {
 			query += ` AND total_ms >= ?`
@@ -69,8 +74,11 @@ func SearchTraces(store *db.Store) http.HandlerFunc {
 			query += ` AND created_at >= ?`
 			args = append(args, since)
 		}
-		query += ` ORDER BY created_at DESC LIMIT ?`
-		args = append(args, limit)
+		query += ` ORDER BY created_at DESC`
+		if guardName == "" {
+			query += ` LIMIT ?`
+			args = append(args, limit)
+		}
 
 		rows, err := db.NewRouteQueries(store).Query(r.Context(), query, args...)
 		if err != nil {
@@ -81,11 +89,14 @@ func SearchTraces(store *db.Store) http.HandlerFunc {
 
 		results := make([]map[string]any, 0)
 		for rows.Next() {
-			var turnID, sessionID, channel, createdAt, stagesJSON string
+			var turnID, sessionID, channel, createdAt, stagesJSON, reactTraceJSON string
 			var totalMs int64
-			if err := rows.Scan(&turnID, &sessionID, &channel, &totalMs, &createdAt, &stagesJSON); err != nil {
+			if err := rows.Scan(&turnID, &sessionID, &channel, &totalMs, &createdAt, &stagesJSON, &reactTraceJSON); err != nil {
 				writeError(w, http.StatusInternalServerError, "failed to read trace search row")
 				return
+			}
+			if guardName != "" && !traceContainsGuard(stagesJSON, reactTraceJSON, guardName) {
+				continue
 			}
 			results = append(results, map[string]any{
 				"turn_id":     turnID,
@@ -95,12 +106,57 @@ func SearchTraces(store *db.Store) http.HandlerFunc {
 				"created_at":  createdAt,
 				"stages_json": stagesJSON,
 			})
+			if len(results) >= limit {
+				break
+			}
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
-			"results": results,
-			"count":   len(results),
+			"route_family": "traces",
+			"artifact":     "trace_search_results",
+			"fidelity":     "summary_search",
+			"results":      results,
+			"count":        len(results),
 		})
 	}
+}
+
+func traceContainsGuard(stagesJSON, reactTraceJSON, guardName string) bool {
+	needle := strings.ToLower(strings.TrimSpace(guardName))
+	if needle == "" {
+		return true
+	}
+	return jsonBlobContainsNeedle(stagesJSON, needle) || jsonBlobContainsNeedle(reactTraceJSON, needle)
+}
+
+func jsonBlobContainsNeedle(blob, needle string) bool {
+	if strings.TrimSpace(blob) == "" {
+		return false
+	}
+	var parsed any
+	if err := json.Unmarshal([]byte(blob), &parsed); err != nil {
+		return strings.Contains(strings.ToLower(blob), needle)
+	}
+	return jsonValueContainsNeedle(parsed, needle)
+}
+
+func jsonValueContainsNeedle(v any, needle string) bool {
+	switch x := v.(type) {
+	case string:
+		return strings.Contains(strings.ToLower(x), needle)
+	case []any:
+		for _, item := range x {
+			if jsonValueContainsNeedle(item, needle) {
+				return true
+			}
+		}
+	case map[string]any:
+		for key, item := range x {
+			if strings.Contains(strings.ToLower(key), needle) || jsonValueContainsNeedle(item, needle) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // GetTrace returns a pipeline trace by turn ID with parsed stages.
@@ -122,8 +178,15 @@ func GetTrace(store *db.Store) http.HandlerFunc {
 		}
 
 		writeJSON(w, http.StatusOK, map[string]any{
-			"id": id, "turn_id": tid, "channel": channel,
-			"total_ms": totalMs, "stages": stages, "created_at": createdAt,
+			"route_family": "traces",
+			"artifact":     "trace_detail",
+			"fidelity":     "detail",
+			"id":           id,
+			"turn_id":      tid,
+			"channel":      channel,
+			"total_ms":     totalMs,
+			"stages":       stages,
+			"created_at":   createdAt,
 		})
 	}
 }
@@ -153,6 +216,9 @@ func GetReactTrace(store *db.Store) http.HandlerFunc {
 		}
 
 		writeJSON(w, http.StatusOK, map[string]any{
+			"route_family":      "traces",
+			"artifact":          "react_trace_detail",
+			"fidelity":          "detail",
 			"id":                id,
 			"pipeline_trace_id": pipelineTraceID,
 			"react_trace":       parsed,

@@ -129,7 +129,6 @@ func (c *Client) marshalAnthropic(req *Request) ([]byte, error) {
 	return json.Marshal(payload)
 }
 
-
 func (c *Client) marshalGoogle(req *Request) ([]byte, error) {
 	var systemParts []string
 	var contents []map[string]any
@@ -202,6 +201,9 @@ func (c *Client) unmarshalResponse(body io.Reader) (*Response, error) {
 	// tool_call markers, parse them from text (Rust: parse_tool_calls).
 	if len(resp.ToolCalls) == 0 && strings.Contains(resp.Content, `"tool_call"`) {
 		resp.ToolCalls = ParseToolCallsFromText(resp.Content)
+		if len(resp.ToolCalls) > 0 {
+			resp.Content = StripToolCallsFromText(resp.Content)
+		}
 	}
 
 	return resp, nil

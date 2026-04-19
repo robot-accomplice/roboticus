@@ -41,8 +41,8 @@ func (t *MemoryRecallTool) ParameterSchema() json.RawMessage {
 			},
 			"source_table": {
 				"type": "string",
-				"description": "The source table: episodic_memory, semantic_memory, working_memory, procedural_memory",
-				"enum": ["episodic_memory", "semantic_memory", "working_memory", "procedural_memory", "relationship_memory"]
+				"description": "The source table: episodic_memory, semantic_memory, working_memory, procedural_memory, relationship_memory, knowledge_facts",
+				"enum": ["episodic_memory", "semantic_memory", "working_memory", "procedural_memory", "relationship_memory", "knowledge_facts"]
 			}
 		},
 		"required": ["memory_id"]
@@ -88,6 +88,7 @@ func (t *MemoryRecallTool) Execute(ctx context.Context, argsJSON string, tctx *C
 			{"working_memory", "entry_type, content, importance, created_at"},
 			{"procedural_memory", "name, steps, success_count, failure_count, created_at"},
 			{"relationship_memory", "entity_name, trust_score, interaction_summary, interaction_count, last_interaction"},
+			{"knowledge_facts", "subject, relation, object, confidence, updated_at"},
 		}
 		for _, tbl := range tables {
 			row := t.store.QueryRowContext(ctx,
@@ -116,6 +117,8 @@ func (t *MemoryRecallTool) Execute(ctx context.Context, argsJSON string, tctx *C
 		columns = "name, steps, success_count, failure_count, created_at"
 	case "relationship_memory":
 		columns = "entity_name, trust_score, interaction_summary, interaction_count, last_interaction"
+	case "knowledge_facts":
+		columns = "subject, relation, object, confidence, updated_at"
 	default:
 		return &Result{Output: "unknown source table: " + sourceTable}, nil
 	}
@@ -260,14 +263,38 @@ func (t *MemorySearchTool) Execute(ctx context.Context, argsJSON string, tctx *C
 		}
 	}
 
-	// Leg 2: LIKE fallback for tiers not in FTS (procedural, relationship)
+	// Leg 2: LIKE fallback for tiers not surfaced strongly enough via FTS
 	// and as backup if FTS returned few results.
 	if len(results) < args.Limit {
 		remaining := args.Limit - len(results)
 		likePattern := "%" + args.Query + "%"
 
-		// Relationship memory (not in FTS).
 		rows, err := t.store.QueryContext(ctx,
+			`SELECT 'knowledge_facts', id,
+			   subject || ' ' || relation || ' ' || object,
+			   'graph'
+			 FROM knowledge_facts
+			 WHERE subject LIKE ? OR relation LIKE ? OR object LIKE ?
+			 LIMIT ?`, likePattern, likePattern, likePattern, remaining)
+		if err == nil {
+			for rows.Next() {
+				var r memResult
+				if rows.Scan(&r.SourceTable, &r.SourceID, &r.Content, &r.Category) != nil {
+					continue
+				}
+				key := r.SourceTable + "|" + r.SourceID
+				if _, dup := seen[key]; dup {
+					continue
+				}
+				seen[key] = struct{}{}
+				results = append(results, r)
+			}
+			_ = rows.Close()
+		}
+
+		// Relationship memory (not in FTS).
+		remaining = args.Limit - len(results)
+		rows, err = t.store.QueryContext(ctx,
 			`SELECT 'relationship_memory', id,
 			   entity_name || ' (trust=' || CAST(trust_score AS TEXT) || ', interactions=' || CAST(interaction_count AS TEXT) || '): ' || COALESCE(interaction_summary, ''),
 			   ''
@@ -438,13 +465,14 @@ func BuildMemoryIndex(ctx context.Context, store *db.Store, limit int, query ...
 			   CASE source_table
 			     WHEN 'semantic_memory' THEN 1
 			     WHEN 'semantic' THEN 1
-			     WHEN 'learned_skills' THEN 2
-			     WHEN 'relationship_memory' THEN 3
-			     WHEN 'procedural_memory' THEN 4
-			     WHEN 'obsidian' THEN 5
-			     WHEN 'episodic_memory' THEN 6
-			     WHEN 'episodic' THEN 6
-			     ELSE 7
+			     WHEN 'knowledge_facts' THEN 2
+			     WHEN 'learned_skills' THEN 3
+			     WHEN 'relationship_memory' THEN 4
+			     WHEN 'procedural_memory' THEN 5
+			     WHEN 'obsidian' THEN 6
+			     WHEN 'episodic_memory' THEN 7
+			     WHEN 'episodic' THEN 7
+			     ELSE 8
 			   END,
 			   confidence DESC, created_at DESC
 			 LIMIT ?`, remaining+10) // fetch extra to account for dedup

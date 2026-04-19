@@ -78,33 +78,27 @@ func (w *CronWorker) tick(ctx context.Context) {
 		if !w.acquireLease(ctx, job.ID) {
 			continue
 		}
-
-		// Execute.
-		start := time.Now()
-		err := w.executor.Execute(ctx, job)
-		duration := time.Since(start)
-
-		run := &CronRun{
-			JobID:      job.ID,
-			DurationMs: duration.Milliseconds(),
-			Timestamp:  now,
+		if err := w.executeJob(ctx, job, now); err != nil {
+			// executeJob already records run history and retry state; here we only
+			// preserve visibility for the worker loop.
+			log.Debug().Err(err).Str("job_id", job.ID).Msg("cron worker: job execution returned error")
 		}
-		if err != nil {
-			run.Status = CronRunFailed
-			run.ErrorMsg = err.Error()
-			log.Warn().Str("job", job.Name).Str("job_id", job.ID).Str("agent_id", job.AgentID).Err(err).Int64("duration_ms", duration.Milliseconds()).Msg("cron job failed")
-			w.recordRun(ctx, run)
-			w.handleRetry(ctx, job, now)
-		} else {
-			run.Status = CronRunSuccess
-			log.Info().Str("job", job.Name).Str("job_id", job.ID).Str("agent_id", job.AgentID).Int64("duration_ms", duration.Milliseconds()).Msg("cron job completed")
-			w.recordRun(ctx, run)
-			w.resetRetry(ctx, job.ID)
-			w.updateLastRun(ctx, job, now)
-		}
-
 		w.releaseLease(ctx, job.ID)
 	}
+}
+
+// RunJobNow executes a single enabled cron job through the same lease/run-history
+// lifecycle used by the durable worker loop.
+func (w *CronWorker) RunJobNow(ctx context.Context, jobID string) error {
+	job, err := w.loadEnabledJob(ctx, jobID)
+	if err != nil {
+		return err
+	}
+	if !w.acquireLease(ctx, job.ID) {
+		return &LeaseError{JobID: job.ID, Holder: "another instance"}
+	}
+	defer w.releaseLease(ctx, job.ID)
+	return w.executeJob(ctx, job, time.Now())
 }
 
 func (w *CronWorker) listEnabledJobs(ctx context.Context) ([]*CronJob, error) {
@@ -166,22 +160,73 @@ func (w *CronWorker) releaseLease(ctx context.Context, jobID string) {
 	}
 }
 
+func (w *CronWorker) executeJob(ctx context.Context, job *CronJob, now time.Time) error {
+	start := time.Now()
+	err := w.executor.Execute(ctx, job)
+	duration := time.Since(start)
+
+	run := &CronRun{
+		JobID:      job.ID,
+		DurationMs: duration.Milliseconds(),
+		Timestamp:  now,
+	}
+	if err != nil {
+		run.Status = CronRunFailed
+		run.ErrorMsg = err.Error()
+		log.Warn().Str("job", job.Name).Str("job_id", job.ID).Str("agent_id", job.AgentID).Err(err).Int64("duration_ms", duration.Milliseconds()).Msg("cron job failed")
+		w.recordRun(ctx, run)
+		w.handleRetry(ctx, job, now)
+		return err
+	}
+
+	run.Status = CronRunSuccess
+	log.Info().Str("job", job.Name).Str("job_id", job.ID).Str("agent_id", job.AgentID).Int64("duration_ms", duration.Milliseconds()).Msg("cron job completed")
+	w.recordRun(ctx, run)
+	w.resetRetry(ctx, job.ID)
+	w.updateLastRun(ctx, job, now)
+	return nil
+}
+
+func (w *CronWorker) loadEnabledJob(ctx context.Context, jobID string) (*CronJob, error) {
+	row := w.store.QueryRowContext(ctx,
+		`SELECT id, name, agent_id, schedule_kind, schedule_expr, schedule_every_ms,
+		        payload_json, enabled, last_run_at, next_run_at,
+		        COALESCE(retry_count, 0), COALESCE(max_retries, 3), COALESCE(retry_delay_ms, 60000),
+		        COALESCE(delivery_mode, 'none'), COALESCE(delivery_channel, '')
+		 FROM cron_jobs
+		 WHERE id = ? AND enabled = 1`,
+		jobID,
+	)
+
+	var job CronJob
+	var lastRun, nextRun *string
+	var intervalMs *int64
+	if err := row.Scan(&job.ID, &job.Name, &job.AgentID, &job.Kind, &job.Expression,
+		&intervalMs, &job.PayloadJSON, &job.Enabled, &lastRun, &nextRun,
+		&job.RetryCount, &job.MaxRetries, &job.RetryDelayMs,
+		&job.DeliveryMode, &job.DeliveryChannel); err != nil {
+		return nil, err
+	}
+	if intervalMs != nil {
+		job.IntervalMs = *intervalMs
+	}
+	if lastRun != nil {
+		t, _ := time.Parse(time.RFC3339, *lastRun)
+		job.LastRunAt = &t
+	}
+	if nextRun != nil {
+		t, _ := time.Parse(time.RFC3339, *nextRun)
+		job.NextRunAt = &t
+	}
+	return &job, nil
+}
+
 func (w *CronWorker) recordRun(ctx context.Context, run *CronRun) {
-	// Use column names compatible with both old schema (error, created_at)
-	// and new schema (error_msg, timestamp). Try new first, fall back to old.
 	_, err := w.store.ExecContext(ctx,
 		`INSERT INTO cron_runs (job_id, status, duration_ms, error_msg, timestamp)
 		 VALUES (?, ?, ?, ?, ?)`,
 		run.JobID, run.Status, run.DurationMs, run.ErrorMsg,
 		run.Timestamp.UTC().Format(time.RFC3339))
-	if err != nil {
-		// Old schema: columns are 'error' and 'created_at'.
-		_, err = w.store.ExecContext(ctx,
-			`INSERT INTO cron_runs (job_id, status, duration_ms, error, created_at)
-			 VALUES (?, ?, ?, ?, ?)`,
-			run.JobID, run.Status, run.DurationMs, run.ErrorMsg,
-			run.Timestamp.UTC().Format(time.RFC3339))
-	}
 	if err != nil {
 		w.errBus.ReportIfErr(err, "scheduler", "record_run", core.SevWarning)
 	}

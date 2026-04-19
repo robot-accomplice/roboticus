@@ -24,25 +24,25 @@ import (
 //	Circuit breaker → Client (format translation + HTTP) →
 //	Cache store → Response
 type Service struct {
-	providers     map[string]*Client
-	router        *Router
-	breakers      *BreakerRegistry
-	cache         *Cache
-	dedup         *Dedup
-	transforms    *TransformPipeline
-	primary       string   // primary model name
-	fallbacks     []string // fallback model names
-	store         *db.Store
-	bgWorker      *core.BackgroundWorker
-	Confidence    *ConfidenceEvaluator
+	providers         map[string]*Client
+	router            *Router
+	breakers          *BreakerRegistry
+	cache             *Cache
+	dedup             *Dedup
+	transforms        *TransformPipeline
+	primary           string   // primary model name
+	fallbacks         []string // fallback model names
+	store             *db.Store
+	bgWorker          *core.BackgroundWorker
+	Confidence        *ConfidenceEvaluator
 	Escalation        *EscalationTracker
 	SessionEscalation *SessionEscalationTracker
 	quality           *QualityTracker
-	intentQuality *IntentQualityTracker
-	latency       *LatencyTracker
-	errBus        *core.ErrorBus
-	toolBlocklist []string // models that don't support tools (config override)
-	toolAllowlist []string // force tool support (config override)
+	intentQuality     *IntentQualityTracker
+	latency           *LatencyTracker
+	errBus            *core.ErrorBus
+	toolBlocklist     []string // models that don't support tools (config override)
+	toolAllowlist     []string // force tool support (config override)
 }
 
 // ServiceConfig holds configuration for the LLM service.
@@ -122,25 +122,25 @@ func NewService(cfg ServiceConfig, store *db.Store) (*Service, error) {
 	}
 
 	svc := &Service{
-		providers:     clients,
-		router:        NewRouter(targets, cfg.Router),
-		breakers:      NewBreakerRegistry(cfg.Breaker),
-		cache:         NewCache(cfg.Cache, store, cfg.ErrBus),
-		dedup:         NewDedup(120 * time.Second), // Rust parity: 120s dedup window
-		transforms:    DefaultTransformPipeline(),
-		primary:       cfg.Primary,
-		fallbacks:     cfg.Fallbacks,
-		store:         store,
-		bgWorker:      bgw,
-		Confidence:    NewConfidenceEvaluator(floor),
+		providers:         clients,
+		router:            NewRouter(targets, cfg.Router),
+		breakers:          NewBreakerRegistry(cfg.Breaker),
+		cache:             NewCache(cfg.Cache, store, cfg.ErrBus),
+		dedup:             NewDedup(120 * time.Second), // Rust parity: 120s dedup window
+		transforms:        DefaultTransformPipeline(),
+		primary:           cfg.Primary,
+		fallbacks:         cfg.Fallbacks,
+		store:             store,
+		bgWorker:          bgw,
+		Confidence:        NewConfidenceEvaluator(floor),
 		Escalation:        NewEscalationTracker(),
 		SessionEscalation: NewSessionEscalationTracker(cfg.Fallbacks),
-		quality:       NewQualityTracker(100),
-		intentQuality: NewIntentQualityTracker(100),
-		latency:       NewLatencyTracker(100),
-		errBus:        cfg.ErrBus,
-		toolBlocklist: cfg.ToolBlocklist,
-		toolAllowlist: cfg.ToolAllowlist,
+		quality:           NewQualityTracker(100),
+		intentQuality:     NewIntentQualityTracker(100),
+		latency:           NewLatencyTracker(100),
+		errBus:            cfg.ErrBus,
+		toolBlocklist:     cfg.ToolBlocklist,
+		toolAllowlist:     cfg.ToolAllowlist,
 	}
 
 	// Metascore routing is always enabled when the service has quality/latency
@@ -179,6 +179,15 @@ func (s *Service) loadPersistedRoutingWeights(store *db.Store) {
 
 // Complete sends a non-streaming request through the full pipeline.
 func (s *Service) Complete(ctx context.Context, req *Request) (*Response, error) {
+	// Empty-message drop (SYS-01-008 message-history analogue). Any
+	// system/user/assistant message with blank content that does NOT
+	// carry tool calls is a drafting bug — some upstream compactor
+	// produced an empty string we should not dispatch. Providers
+	// either reject these outright or (worse) accept them and drift
+	// the context. Scrub + log loudly so the regression is visible
+	// in operator logs.
+	req.Messages = dropEmptyMessages(req.Messages, "Service.Complete")
+
 	// Dedup: collapse concurrent identical requests.
 	dedupKey := hashRequest(req)
 	return s.dedup.Do(ctx, dedupKey, func() (*Response, error) {
@@ -187,6 +196,10 @@ func (s *Service) Complete(ctx context.Context, req *Request) (*Response, error)
 }
 
 func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Response, error) {
+	if core.NoEscalateFromCtx(ctx) {
+		req.NoEscalate = true
+	}
+
 	// Cache check. Skip during exercise/baseline (NoEscalate) — we need
 	// fresh inference to measure actual model performance.
 	if !req.Stream && !req.NoEscalate {
@@ -214,7 +227,9 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 	// Route: select model if not explicitly set.
 	if req.Model == "" {
 		target := s.router.Select(req)
+		annotateRoutingDecision(ctx, s.router, req, target)
 		req.Model = ModelSpecForTarget(target)
+		s.recordModelSelectionFromRequest(ctx, req, req.Model, "routed")
 	}
 	// Fall back to configured primary if routing didn't produce a model.
 	if req.Model == "" && s.primary != "" {
@@ -249,8 +264,12 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 			// Known provider — use it with its own name as model (unusual case).
 			primaryModel = primaryProvider
 			chain = append(chain, providerModel{primaryProvider, primaryModel})
+		} else if s.primary != "" {
+			// Bare model name — route it through the configured primary provider.
+			primaryModel = req.Model
+			chain = append(chain, providerModel{s.primary, primaryModel})
 		} else {
-			// Not a known provider — treat as bare model name, try all providers.
+			// No configured primary — last-resort fanout across providers.
 			primaryModel = req.Model
 			for name := range s.providers {
 				chain = append(chain, providerModel{name, primaryModel})
@@ -258,30 +277,34 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 		}
 	}
 
-	// Fallbacks: each has its own provider/model pair.
-	for _, fb := range s.fallbacks {
-		fbProvider, fbModel := splitModelSpec(fb)
-		if fbModel != "" {
-			// Explicit "provider/model" — use as-is.
-		} else {
-			// Bare name — if it's a known provider, use it with the primary model.
-			if _, ok := s.providers[fbProvider]; ok {
-				fbModel = primaryModel
+	// Exercise/baseline requests must measure the requested model, not the
+	// configured fallback chain.
+	if !req.NoEscalate {
+		// Fallbacks: each has its own provider/model pair.
+		for _, fb := range s.fallbacks {
+			fbProvider, fbModel := splitModelSpec(fb)
+			if fbModel != "" {
+				// Explicit "provider/model" — use as-is.
 			} else {
-				// Unknown provider, no model — skip.
-				continue
+				// Bare name — if it's a known provider, use it with the primary model.
+				if _, ok := s.providers[fbProvider]; ok {
+					fbModel = primaryModel
+				} else {
+					// Unknown provider, no model — skip.
+					continue
+				}
 			}
-		}
-		// Deduplicate: skip if already in chain.
-		dup := false
-		for _, existing := range chain {
-			if existing.provider == fbProvider && existing.model == fbModel {
-				dup = true
-				break
+			// Deduplicate: skip if already in chain.
+			dup := false
+			for _, existing := range chain {
+				if existing.provider == fbProvider && existing.model == fbModel {
+					dup = true
+					break
+				}
 			}
-		}
-		if !dup {
-			chain = append(chain, providerModel{fbProvider, fbModel})
+			if !dup {
+				chain = append(chain, providerModel{fbProvider, fbModel})
+			}
 		}
 	}
 
@@ -407,21 +430,34 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 // error channels. The chunk channel closes when streaming completes.
 func (s *Service) Stream(ctx context.Context, req *Request) (<-chan StreamChunk, <-chan error) {
 	req.Stream = true
+	if core.NoEscalateFromCtx(ctx) {
+		req.NoEscalate = true
+	}
 
-	// Cache check: if we have a cached response, emit it as a single chunk.
-	if cached := s.cache.Get(ctx, req); cached != nil {
-		chunks := make(chan StreamChunk, 1)
-		errs := make(chan error)
-		chunks <- StreamChunk{Delta: cached.Content, FinishReason: "stop"}
-		close(chunks)
-		close(errs)
-		return chunks, errs
+	// Empty-message drop (SYS-01-008 message-history analogue) — same
+	// rationale as Service.Complete. Apply here so the streaming
+	// dispatch path gets the guard too.
+	req.Messages = dropEmptyMessages(req.Messages, "Service.Stream")
+
+	// Cache check. Skip during benchmark/no-escalate paths for the same reason as
+	// Complete(): cache replay would contaminate raw model measurement.
+	if !req.NoEscalate {
+		if cached := s.cache.Get(ctx, req); cached != nil {
+			chunks := make(chan StreamChunk, 1)
+			errs := make(chan error)
+			chunks <- StreamChunk{Delta: cached.Content, FinishReason: "stop"}
+			close(chunks)
+			close(errs)
+			return chunks, errs
+		}
 	}
 
 	// Route if needed.
 	if req.Model == "" {
 		target := s.router.Select(req)
+		annotateRoutingDecision(ctx, s.router, req, target)
 		req.Model = ModelSpecForTarget(target)
+		s.recordModelSelectionFromRequest(ctx, req, req.Model, "routed")
 	}
 	// Fall back to configured primary if routing didn't produce a model.
 	if req.Model == "" && s.primary != "" {
@@ -642,7 +678,7 @@ type CostMetadata struct {
 	Quality   float64 // 0–1
 	Escalated bool
 	Cached    bool
-	Tier      string  // routing tier (e.g., "local", "cloud", "premium")
+	Tier      string // routing tier (e.g., "local", "cloud", "premium")
 }
 
 // recordCost logs inference cost to the database for analytics.
@@ -741,12 +777,47 @@ func (s *Service) RecordModelSelection(ctx context.Context, turnID, sessionID, a
 	}
 	if _, err := s.store.ExecContext(ctx,
 		`INSERT INTO model_selection_events (id, turn_id, session_id, agent_id, channel, selected_model, strategy, primary_model, user_excerpt, candidates_json, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', datetime('now'))`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', datetime('now'))
+		 ON CONFLICT(id) DO UPDATE SET
+		   session_id = excluded.session_id,
+		   agent_id = excluded.agent_id,
+		   channel = excluded.channel,
+		   selected_model = excluded.selected_model,
+		   strategy = excluded.strategy,
+		   primary_model = excluded.primary_model,
+		   user_excerpt = excluded.user_excerpt,
+		   candidates_json = excluded.candidates_json,
+		   created_at = datetime('now')`,
 		fmt.Sprintf("mse-%s", turnID), turnID, sessionID, agentID, channel,
 		selectedModel, strategy, primary, excerpt,
 	); err != nil {
 		s.errBus.ReportIfErr(err, "llm", "record_selection_event", core.SevDebug)
 	}
+}
+
+func (s *Service) recordModelSelectionFromRequest(ctx context.Context, req *Request, selectedModel, strategy string) {
+	if s.store == nil || req == nil || selectedModel == "" {
+		return
+	}
+	turnID := core.TurnIDFromCtx(ctx)
+	sessionID := core.SessionIDFromCtx(ctx)
+	channel := core.ChannelLabelFromCtx(ctx)
+	if turnID == "" || sessionID == "" {
+		return
+	}
+	s.RecordModelSelection(ctx, turnID, sessionID, "", channel, selectedModel, strategy, lastUserExcerpt(req))
+}
+
+func lastUserExcerpt(req *Request) string {
+	if req == nil {
+		return ""
+	}
+	for i := len(req.Messages) - 1; i >= 0; i-- {
+		if req.Messages[i].Role == "user" {
+			return req.Messages[i].Content
+		}
+	}
+	return ""
 }
 
 // ProviderStatus reports the health of each configured provider.

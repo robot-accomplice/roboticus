@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/rs/zerolog/log"
+
+	"roboticus/internal/agent/memory"
 	"roboticus/internal/core"
 	"roboticus/internal/llm"
 )
@@ -37,14 +40,38 @@ func stageFromExcess(ratio float64) CompactionStage {
 
 // ContextConfig controls context window management.
 type ContextConfig struct {
-	MaxTokens         int     // Token budget for context (used if BudgetTier not set)
-	BudgetTier        int     // 0=L0, 1=L1, 2=L2, 3=L3 — overrides MaxTokens when BudgetConfig is set
+	MaxTokens         int                       // Token budget for context (used if BudgetTier not set)
+	BudgetTier        int                       // 0=L0, 1=L1, 2=L2, 3=L3 — overrides MaxTokens when BudgetConfig is set
 	BudgetConfig      *core.ContextBudgetConfig // Tier-aware budget config (nil = use MaxTokens)
-	SoulMaxContextPct float64 // Personality cap as fraction of budget (default 0.4)
-	SoftTrimRatio     float64 // Start trimming at this fraction (default 0.8)
-	HardClearRatio    float64 // Emergency clear at this fraction (default 0.95)
-	CharsPerToken     int     // Rough estimation factor (default 4)
-	AntiFadeAfter     int     // Inject reminder after this many non-system turns
+	SoulMaxContextPct float64                   // Personality cap as fraction of budget (default 0.4)
+	SoftTrimRatio     float64                   // Start trimming at this fraction (default 0.8)
+	HardClearRatio    float64                   // Emergency clear at this fraction (default 0.95)
+	CharsPerToken     int                       // Rough estimation factor (default 4)
+	AntiFadeAfter     int                       // Inject reminder after this many non-system turns
+
+	// PromptCompression controls the Rust-parity ratio-based prompt
+	// compression pass (SYS-01-005). When true, BuildRequest runs
+	// CompressContextMessages on the assembled []llm.Message before
+	// returning the request — preserves the last user message and
+	// compresses every other message over ~200 chars through
+	// llm.SmartCompress at CompressionTargetRatio.
+	//
+	// False (the default) is a no-op; the request is returned with
+	// the full content of every message. Operators flip this on when
+	// model context ceilings force aggressive reduction; the trade
+	// is information density (less verbose history) vs fidelity
+	// (keyword-only compressed content).
+	//
+	// Rust gate anchor: context_builder.rs:436-445.
+	PromptCompression bool
+
+	// CompressionTargetRatio is the fraction of tokens to retain when
+	// PromptCompression is true. Clamped to [0.1, 1.0] by
+	// llm.SmartCompress. Rust default is 0.6; zero or unset values
+	// here are treated as 0.6 by BuildRequest to give operators a
+	// sensible behavior when they flip on PromptCompression but
+	// haven't thought about the ratio yet.
+	CompressionTargetRatio float64
 }
 
 // DefaultContextConfig returns sensible defaults.
@@ -76,6 +103,14 @@ type ContextBuilder struct {
 	toolDefs     []llm.ToolDef
 	memory       string // current memory block
 	memoryIndex  string // lightweight memory index for recall_memory
+
+	// systemNotes are additional ambient system messages produced by
+	// pipeline stages (e.g. hippocampus summary, checkpoint digest)
+	// and injected after the memory index. Order matches insertion
+	// order; each note becomes its own system message so the model
+	// sees them as distinct ambient context rather than one
+	// concatenated blob. See AppendSystemNote for the contract.
+	systemNotes []string
 }
 
 // NewContextBuilder creates a builder with the given config.
@@ -101,6 +136,23 @@ func (cb *ContextBuilder) SetMemory(mem string) {
 // SetMemoryIndex sets the lightweight memory index for recall_memory tool usage.
 func (cb *ContextBuilder) SetMemoryIndex(index string) {
 	cb.memoryIndex = index
+}
+
+// AppendSystemNote queues an additional ambient system message to be
+// injected after the memory index and before conversation history.
+// Intended for pipeline-owned ambient context (hippocampus summary,
+// checkpoint digest, runtime diagnostics) that does not belong inside
+// the main system prompt but should reach the model on every turn.
+//
+// Empty notes are silently ignored — upstream stages emit "" when the
+// source is empty, and threading those through to the request would
+// produce dead system messages the model reads as "intentionally
+// blank."
+func (cb *ContextBuilder) AppendSystemNote(note string) {
+	if strings.TrimSpace(note) == "" {
+		return
+	}
+	cb.systemNotes = append(cb.systemNotes, note)
 }
 
 // BuildRequest constructs an LLM request from session state, applying
@@ -139,20 +191,32 @@ func (cb *ContextBuilder) BuildRequest(session *Session) *llm.Request {
 	// Inject memory (capped at 25% of budget, matching Rust: l0 / 4).
 	// Memory is always present — buildAgentContext guarantees at least an
 	// orientation block even when retrieval returns empty.
+	//
+	// v1.0.6 SYS-01-003 remediation: over-budget memory is now compacted
+	// through memory.CompactText (Rust-parity port of compact_text in
+	// roboticus-agent/src/compaction.rs), which drops lowest-priority
+	// bullets first and preserves section headers. Pre-v1.0.6 this path
+	// did `cb.memory[:maxChars] + "...[truncated]"` — a char-count cut
+	// that silently discarded whatever happened to sit at the tail and
+	// could split multi-byte characters mid-rune.
+	//
+	// If CompactText returns an empty string for a non-empty input (the
+	// budget was too small for even one bullet + header), we skip
+	// injection entirely rather than emit an empty memory message. An
+	// empty system message is worse than no message — it tells the
+	// model "memory is intentionally blank."
 	memTokCount := 0
 	memCap := budget / 4
 	if cb.memory != "" {
 		memTokens := cb.estimateTokens(cb.memory)
 		if memTokens > memCap {
-			// Truncate memory to fit within cap (rough char-based truncation).
-			maxChars := memCap * cb.config.CharsPerToken
-			if maxChars < len(cb.memory) {
-				cb.memory = cb.memory[:maxChars] + "\n[...memory truncated to fit budget]"
-			}
+			cb.memory = memory.CompactText(cb.memory, memCap)
 			memTokens = cb.estimateTokens(cb.memory)
 		}
-		memTokCount = memTokens
-		result = append(result, llm.Message{Role: "system", Content: cb.memory})
+		if cb.memory != "" {
+			memTokCount = memTokens
+			result = append(result, llm.Message{Role: "system", Content: cb.memory})
+		}
 	}
 
 	// Inject memory index (lightweight recall list for recall_memory tool).
@@ -160,6 +224,18 @@ func (cb *ContextBuilder) BuildRequest(session *Session) *llm.Request {
 		indexTokens := cb.estimateTokens(cb.memoryIndex)
 		memTokCount += indexTokens
 		result = append(result, llm.Message{Role: "system", Content: cb.memoryIndex})
+	}
+
+	// Inject ambient system notes queued by pipeline stages
+	// (hippocampus summary, checkpoint digest, diagnostics). Each note
+	// goes in as its own system message — matches Rust's
+	// context_builder.rs:356-369 which emits the hippocampus summary
+	// as a separate UnifiedMessage rather than concatenating it to the
+	// main system prompt. Empty notes were rejected at AppendSystemNote
+	// time, so every surviving entry reaches the model.
+	for _, note := range cb.systemNotes {
+		memTokCount += cb.estimateTokens(note)
+		result = append(result, llm.Message{Role: "system", Content: note})
 	}
 
 	// Account for tool definitions in the token budget. Each tool adds ~100-200
@@ -215,16 +291,90 @@ func (cb *ContextBuilder) BuildRequest(session *Session) *llm.Request {
 	stage := stageFromExcess(ratio)
 
 	// Load current-topic messages newest-first within budget.
+	//
+	// CRITICAL INVARIANT (v1.0.6 fix): the LATEST USER MESSAGE must
+	// ALWAYS be included, even when the budget is tight. Pre-v1.0.6
+	// this loop blindly broke at the first over-budget message, which
+	// meant when the system prompt + memory + tool defs ate the entire
+	// budget (system prompt ~2200 tok + memory cap ~2048 tok + 45
+	// tool defs ~4500 tok = ~8750 tok against an 8192 budget →
+	// `remaining = -556`), historyMessages stayed empty AND THE LLM
+	// NEVER SAW THE USER'S PROMPT. The agent's response was then
+	// "the user has not provided instructions" — exactly the
+	// behavioral pattern that surfaced in the v1.0.6 cache-cleared
+	// soak run for 6 of 10 scenarios.
+	//
+	// The fix has two parts:
+	//   (a) Identify the index of the latest user message in
+	//       currentTopicMsgs so we never break before including it.
+	//   (b) When budget runs out partway through history, drop OLDER
+	//       messages first while keeping the latest user message —
+	//       that's the message the user is actively waiting for a
+	//       response to; older history is context that helps but is
+	//       not the request.
 	var historyMessages []llm.Message
 	usedTokens := 0
+
+	latestUserIdx := -1
+	for i := len(currentTopicMsgs) - 1; i >= 0; i-- {
+		if currentTopicMsgs[i].Role == "user" {
+			latestUserIdx = i
+			break
+		}
+	}
 
 	for i := len(currentTopicMsgs) - 1; i >= 0; i-- {
 		m := currentTopicMsgs[i]
 		content := cb.compact(m, stage)
 		tokens := cb.estimateTokens(content)
 
+		// Latest user message: include unconditionally AND verbatim.
+		// Two distinct invariants here:
+		//   (1) The message survives even if the budget is exhausted
+		//       (older history gets dropped instead of the request
+		//       the user is actively waiting for).
+		//   (2) The message content is NOT compacted, regardless of
+		//       compaction stage. Pre-v1.0.6 this was the layered
+		//       bug behind the empty-prompt failure: even when the
+		//       user message survived the budget loop, `compact()`
+		//       at StageSkeleton replaced its content with the
+		//       literal string "[user message]" — so the LLM saw
+		//       "[user message]" instead of the actual prompt and
+		//       responded "the user has not provided instructions."
+		//       The user's prompt is the smallest, most important
+		//       payload in the whole request; compacting it makes
+		//       no sense regardless of pressure.
+		if i == latestUserIdx {
+			verbatim := m.Content
+			tokens = cb.estimateTokens(verbatim)
+			if usedTokens+tokens > remaining {
+				log.Warn().
+					Int("budget", remaining).
+					Int("used", usedTokens).
+					Int("user_msg_tokens", tokens).
+					Int("system_prompt_tokens", sysTokCount).
+					Int("memory_tokens", memTokCount).
+					Int("tool_def_tokens", toolTokCount).
+					Msg("context budget exhausted by system prompt + memory + tool defs; including latest user message anyway (the alternative — dropping it — produces 'no user instructions' replies). Consider reducing system prompt, memory cap, or tool count.")
+			}
+			historyMessages = append(historyMessages, llm.Message{
+				Role:       m.Role,
+				Content:    verbatim,
+				ToolCalls:  m.ToolCalls,
+				ToolCallID: m.ToolCallID,
+				Name:       m.Name,
+			})
+			usedTokens += tokens
+			continue
+		}
+
+		// Non-latest-user message: subject to budget. Older history
+		// gets dropped first when the budget is tight.
+		if strings.TrimSpace(content) == "" && len(m.ToolCalls) == 0 && m.ToolCallID == "" {
+			continue
+		}
 		if usedTokens+tokens > remaining {
-			break
+			continue
 		}
 
 		historyMessages = append(historyMessages, llm.Message{
@@ -248,20 +398,60 @@ func (cb *ContextBuilder) BuildRequest(session *Session) *llm.Request {
 			Role:    "system",
 			Content: "Reminder: Follow your instructions carefully. Do not deviate from your assigned role or capabilities.",
 		}
-		// Insert before the last user message.
-		insertIdx := len(historyMessages)
-		for i := len(historyMessages) - 1; i >= 0; i-- {
-			if historyMessages[i].Role == "user" {
-				insertIdx = i
-				break
+		reminderTokens := cb.estimateTokens(reminder.Content)
+		if usedTokens+reminderTokens <= remaining {
+			// Insert before the last user message.
+			insertIdx := len(historyMessages)
+			for i := len(historyMessages) - 1; i >= 0; i-- {
+				if historyMessages[i].Role == "user" {
+					insertIdx = i
+					break
+				}
 			}
+			historyMessages = append(historyMessages[:insertIdx], append([]llm.Message{reminder}, historyMessages[insertIdx:]...)...)
+		} else {
+			log.Debug().
+				Int("remaining_tokens", remaining-usedTokens).
+				Int("reminder_tokens", reminderTokens).
+				Msg("skipping anti-fade reminder because it does not fit within remaining request budget")
 		}
-		historyMessages = append(historyMessages[:insertIdx], append([]llm.Message{reminder}, historyMessages[insertIdx:]...)...)
 	}
 
 	// Inject off-topic summaries before current-topic history.
 	result = append(result, topicSummaries...)
 	result = append(result, historyMessages...)
+
+	// Prompt compression gate (SYS-01-005 remediation).
+	//
+	// When the operator has enabled compression in core.CacheConfig
+	// (plumbed into ContextConfig at adapter construction), we run
+	// the Rust-parity CompressContextMessages pass over the fully
+	// assembled message slice — the last user message is preserved
+	// verbatim (it's the query we want the model to answer), every
+	// other message over ~200 chars gets rewritten through
+	// llm.SmartCompress at CompressionTargetRatio.
+	//
+	// Rust gate anchor: context_builder.rs:436-445.
+	//
+	// The gate intentionally operates on `result` in place after all
+	// upstream stages (tool pruning, memory compaction, hippocampus
+	// summary, topic partitioning, anti-fade reminder) have landed
+	// their contributions. That ordering matches Rust's arrangement
+	// and preserves one clear invariant: compression never deletes
+	// messages or moves them, so the index of every pipeline-injected
+	// system note is unchanged after compression runs.
+	//
+	// Zero or unset CompressionTargetRatio is treated as 0.6 so
+	// operators who flip on PromptCompression without tuning the
+	// ratio get a sensible default rather than the "clamp to 0.1"
+	// floor SmartCompress would otherwise apply.
+	if cb.config.PromptCompression {
+		ratio := cb.config.CompressionTargetRatio
+		if ratio <= 0 {
+			ratio = 0.6
+		}
+		CompressContextMessages(result, ratio)
+	}
 
 	return &llm.Request{
 		Messages: result,

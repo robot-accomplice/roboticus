@@ -13,22 +13,23 @@ import (
 
 // PromptConfig holds parameters for system prompt construction.
 type PromptConfig struct {
-	AgentName   string
-	Firmware    string               // optional platform instructions
-	Personality string               // optional OS personality/identity
-	Operator    string               // optional operator context (OPERATOR.toml)
-	Directives  string               // optional goals/missions (DIRECTIVES.toml)
-	Version     string               // runtime version
-	Model       string               // primary model name
-	Workspace   string               // workspace root path
-	Skills            []string            // active skill names
-	SkillDescriptions map[string]string   // optional: skill name -> description
-	IsSubagent        bool                // include orchestration workflow block
-	BoundaryKey []byte               // HMAC-SHA256 key for trust boundary signing (nil = no signing)
-	ToolNames   []string             // registered tool names for introspection block
-	ToolDescs   [][2]string          // (name, description) pairs for tool roster in prompt
-	BudgetTier  int                  // 0=L0, 1=L1, 2=L2, 3=L3 — controls prompt compaction
-	Obsidian    *core.ObsidianConfig // optional Obsidian config for vault directive
+	AgentName         string
+	Firmware          string               // optional platform instructions
+	Personality       string               // optional OS personality/identity
+	Operator          string               // optional operator context (OPERATOR.toml)
+	Directives        string               // optional goals/missions (DIRECTIVES.toml)
+	Version           string               // runtime version
+	Model             string               // primary model name
+	Workspace         string               // workspace root path
+	Skills            []string             // active skill names
+	SkillDescriptions map[string]string    // optional: skill name -> description
+	IsSubagent        bool                 // include orchestration workflow block
+	BoundaryKey       []byte               // HMAC-SHA256 key for trust boundary signing (nil = no signing)
+	ToolNames         []string             // registered tool names for introspection block
+	ToolDescs         [][2]string          // (name, description) pairs for tool roster in prompt
+	CapabilitySummary string               // compact runtime-owned capability snapshot for introspection-shaped turns
+	BudgetTier        int                  // 0=L0, 1=L1, 2=L2, 3=L3 — controls prompt compaction
+	Obsidian          *core.ObsidianConfig // optional Obsidian config for vault directive
 }
 
 // BuildSystemPrompt constructs the full system prompt from config sections.
@@ -91,6 +92,11 @@ func BuildSystemPrompt(cfg PromptConfig) string {
 
 	// 6. Tool use instructions — ported from Rust's tool_use_instructions().
 	sections = append(sections, buildToolUseBlock(cfg))
+
+	// 6a. Runtime-owned capability snapshot for introspection-shaped turns.
+	if cfg.CapabilitySummary != "" {
+		sections = append(sections, "## Capability Snapshot\n"+cfg.CapabilitySummary+"\n")
+	}
 
 	// 7. Safety (integrated into behavioral contract for L2+, explicit for L0/L1).
 	if cfg.BudgetTier <= 1 {
@@ -306,6 +312,38 @@ func buildRuntimeMetadataBlock(cfg PromptConfig) string {
 	sb.WriteString("- `bash` executes in the workspace root. Check `get_runtime_context` for allowed paths.\n")
 	sb.WriteString("- When reporting tool output, attribute it: 'The bash command returned...' not 'I found...'\n")
 	sb.WriteString("- If a tool returns an error, report the error clearly — don't hide failures.\n")
+	// v1.0.6: attempt-then-report directive. The behavioral soak found
+	// the agent preemptively refusing to operate on paths outside its
+	// configured allowlist ("this operation involves an absolute path
+	// outside of my allowed workspace paths, it cannot be executed
+	// directly") WITHOUT actually invoking the tool. The policy engine
+	// is the source of truth for what's allowed; the agent should call
+	// the tool and surface the actual decision (permitted result, OR
+	// the policy's denial reason) rather than reasoning preemptively
+	// about the policy from its own model of the rules. Self-censoring
+	// produces wrong refusals when the model's understanding of the
+	// policy diverges from the real config — and operators have no
+	// way to act on a refusal that didn't surface a real denial reason.
+	sb.WriteString("- ATTEMPT then report. Do NOT refuse a tool operation based on your own assumptions about what the policy will allow. Call the tool; let the policy engine return the actual decision. If denied, surface the policy's exact reason so the operator can act on it.\n")
+	// The user's count-style asks (e.g., "return only the number")
+	// also revealed the agent narrating around minimal-output requests.
+	// The directive below covers the format-discipline gap: when the
+	// user explicitly asks for a specific output shape, deliver that
+	// shape — not commentary about how it'll be produced.
+	sb.WriteString("- Honor explicit output-format requests. If the user asks for 'only the number', 'just the answer', a single sentence, etc., deliver that shape verbatim. Don't preface, don't explain — produce the requested output.\n")
+	// v1.0.6 third iteration on filesystem_count_only: even after
+	// the path-allowlisting fix and the attempt-then-report
+	// directive, the agent still produced acknowledgement-without-
+	// execution responses ("Got it. I'll count..."). The model
+	// interpreted "perform a task" as "accept the task, defer the
+	// execution to a future turn." For action verbs the user issues
+	// in the imperative ("count X", "list Y", "find Z", "run W"),
+	// the right behavior is a single-turn execute-then-report cycle:
+	// call the tool, get the result, return the result. Acknowledging
+	// without executing wastes a turn AND hides whatever the
+	// underlying tool would have surfaced (real errors, real counts,
+	// etc.).
+	sb.WriteString("- EXECUTE IMMEDIATELY for imperative requests. When the user asks you to perform a discrete action (count X, list Y, find Z, run W, fetch V), do it in this turn — call the tool, observe the result, and return the result in this same response. Do NOT acknowledge intent (\"Got it, I'll do that\") and stop — that strands the user waiting for an execution that never comes.\n")
 	return sb.String()
 }
 

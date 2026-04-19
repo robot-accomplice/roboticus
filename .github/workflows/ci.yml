@@ -73,7 +73,13 @@ jobs:
           go-version-file: ${{ env.GO_VERSION_FILE }}
 
       - name: Run unit tests with race detector
-        run: go test -race -coverprofile=coverage.out -covermode=atomic -timeout 300s ./...
+        # -timeout bumped from 300s -> 20m in v1.0.6: race detector adds
+        # 2-10x overhead per package, and the test surface grew (agentic
+        # retrieval, memory consolidation, executive state, knowledge graph).
+        # Locally ~275s without race; under -race on CI the old 300s cap
+        # was exceeded by internal/db alone. 20m gives headroom to surface
+        # real test failures instead of spurious timeouts.
+        run: go test -race -coverprofile=coverage.out -covermode=atomic -timeout 20m ./...
 
       - name: Upload coverage report
         if: matrix.os == 'ubuntu-latest'
@@ -121,28 +127,28 @@ jobs:
           go-version-file: ${{ env.GO_VERSION_FILE }}
 
       - name: "Fuzz: InjectionDetector_CheckInput"
-        run: go test -fuzz=FuzzInjectionDetector_CheckInput -fuzztime=10s ./internal/agent/
+        run: go test -run='^$' -fuzz=FuzzInjectionDetector_CheckInput -fuzztime=10s ./internal/agent/
 
       - name: "Fuzz: InjectionDetector_Sanitize"
-        run: go test -fuzz=FuzzInjectionDetector_Sanitize -fuzztime=10s ./internal/agent/
+        run: go test -run='^$' -fuzz=FuzzInjectionDetector_Sanitize -fuzztime=10s ./internal/agent/
 
       - name: "Fuzz: TelegramFormatter"
-        run: go test -fuzz=FuzzTelegramFormatter -fuzztime=10s ./internal/channel/
+        run: go test -run='^$' -fuzz=FuzzTelegramFormatter -fuzztime=10s ./internal/channel/
 
       - name: "Fuzz: SignalFormatter"
-        run: go test -fuzz=FuzzSignalFormatter -fuzztime=10s ./internal/channel/
+        run: go test -run='^$' -fuzz=FuzzSignalFormatter -fuzztime=10s ./internal/channel/
 
       - name: "Fuzz: WhatsAppFormatter"
-        run: go test -fuzz=FuzzWhatsAppFormatter -fuzztime=10s ./internal/channel/
+        run: go test -run='^$' -fuzz=FuzzWhatsAppFormatter -fuzztime=10s ./internal/channel/
 
       - name: "Fuzz: ValidateE164"
-        run: go test -fuzz=FuzzValidateE164 -fuzztime=10s ./internal/channel/
+        run: go test -run='^$' -fuzz=FuzzValidateE164 -fuzztime=10s ./internal/channel/
 
       - name: "Fuzz: IsValidCronExpression"
-        run: go test -fuzz=FuzzIsValidCronExpression -fuzztime=10s ./internal/schedule/
+        run: go test -run='^$' -fuzz=FuzzIsValidCronExpression -fuzztime=10s ./internal/schedule/
 
       - name: "Fuzz: MatchesCron"
-        run: go test -fuzz=FuzzMatchesCron -fuzztime=10s ./internal/schedule/
+        run: go test -run='^$' -fuzz=FuzzMatchesCron -fuzztime=10s ./internal/schedule/
 
   # --------------------------------------------------------------------------
   # Stage 2d: Soak/Fuzz Battery

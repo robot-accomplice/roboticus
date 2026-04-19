@@ -1,8 +1,8 @@
 package admin
 
 import (
-	"roboticus/cmd/internal/cmdutil"
 	"fmt"
+	"roboticus/cmd/internal/cmdutil"
 
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -23,10 +23,23 @@ var daemonInstallCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if err := daemon.Install(&cfg); err != nil {
+		// Pin the service registration to the exact config the operator
+		// just loaded. We must absolutize at install time because the
+		// service manager's working directory when it later invokes
+		// roboticus is /, /var, or some other system-controlled
+		// location — a relative `--config configs/prod.toml` would
+		// resolve against that, not the operator's install-time shell
+		// CWD. See daemon.ServiceInstallConfig for the full rationale
+		// and cmdutil.EffectiveConfigPathAbs for why we error out
+		// rather than silently install with a fragile path.
+		configPath, err := cmdutil.EffectiveConfigPathAbs()
+		if err != nil {
 			return fmt.Errorf("install failed: %w", err)
 		}
-		log.Info().Msg("service installed")
+		if err := daemon.Install(&cfg, configPath); err != nil {
+			return fmt.Errorf("install failed: %w", err)
+		}
+		log.Info().Str("config", configPath).Msg("service installed (absolute config path embedded)")
 		return nil
 	},
 }
@@ -114,4 +127,5 @@ var daemonUninstallCmd = &cobra.Command{
 
 func init() {
 	daemonCmd.AddCommand(daemonInstallCmd, daemonStartCmd, daemonStopCmd,
-		daemonRestartCmd, daemonStatusCmd, daemonUninstallCmd)}
+		daemonRestartCmd, daemonStatusCmd, daemonUninstallCmd)
+}

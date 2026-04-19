@@ -28,10 +28,15 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 		return nil, core.NewError(core.ErrConfig, "no tool executor configured")
 	}
 
+	ctx = core.WithSessionID(ctx, session.ID)
+	ctx = core.WithTurnID(ctx, turnID)
+	ctx = core.WithChannelLabel(ctx, cfg.ChannelLabel)
+
 	// Compact context window before inference to stay within token budget.
 	if msgs := session.Messages(); len(msgs) > 0 {
 		compacted := CompactContext(msgs, defaultTokenBudget)
 		if len(compacted) < len(msgs) {
+			session.SetMessages(compacted)
 			log.Trace().
 				Int("before", len(msgs)).
 				Int("after", len(compacted)).
@@ -43,28 +48,48 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 	if cfg.ModelOverride != "" {
 		ctx = core.WithModelOverride(ctx, cfg.ModelOverride)
 	}
-
-	result, turns, err := p.executor.RunLoop(ctx, session)
-	if err != nil {
-		return nil, core.WrapError(core.ErrLLM, "inference failed", err)
+	if cfg.NoEscalate {
+		ctx = core.WithNoEscalate(ctx)
 	}
 
-	// Guard chain with full context and retry support.
-	if p.guards != nil && cfg.GuardSet != GuardSetNone {
+	var result string
+	var turns int
+
+	finalGuardResult := ApplyResult{}
+	guardRetried := false
+	activeGuards := p.guardsForPreset(cfg.GuardSet)
+
+	// Guard chain with full context and retry support. The helper owns the live
+	// guard-triggered retry path even when no guards are configured, so there is
+	// one authoritative inference+guard implementation.
+	{
 		guardStart := time.Now()
-		guardCtx := p.buildGuardContext(session)
-		guardResult := p.guards.ApplyFullWithContext(result, guardCtx)
-		result = guardResult.Content
+		liveRetryPolicy := DefaultRetryPolicy()
+		liveRetryPolicy.MaxRetries = 1
+		liveRetryPolicy.ErrorOnExhaust = false
+		guardRun, guardErr := retryWithGuardsDetailed(ctx, p.executor, session, activeGuards, liveRetryPolicy, func() *GuardContext {
+			return p.buildGuardContext(session)
+		})
+		if guardErr != nil {
+			return nil, core.WrapError(core.ErrLLM, "inference failed", guardErr)
+		}
+		guardResult := guardRun.InitialGuardResult
+		finalGuardResult = guardRun.FinalGuardResult
+		result = guardRun.Content
+		turns = guardRun.Turns
+		guardRetried = guardRun.GuardRetried
 		guardDur := time.Since(guardStart).Milliseconds()
-		log.Debug().
-			Str("session", session.ID).
-			Bool("retry", guardResult.RetryRequested).
-			Strs("violations", guardResult.Violations).
-			Str("reason", guardResult.RetryReason).
-			Msg("guard chain evaluated")
+		if activeGuards != nil {
+			log.Debug().
+				Str("session", session.ID).
+				Bool("retry", guardResult.RetryRequested).
+				Strs("violations", guardResult.Violations).
+				Str("reason", guardResult.RetryReason).
+				Msg("guard chain evaluated")
+		}
 
 		// Build per-guard trace entries for the dashboard.
-		if tr != nil {
+		if tr != nil && activeGuards != nil {
 			guardResults := make(map[string]GuardTraceEntry)
 			for _, v := range guardResult.Violations {
 				// Violations are in "name: reason" format from ApplyFull,
@@ -90,22 +115,32 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 			}
 			AnnotateGuardTrace(tr, guardResults, chainType, guardDur)
 		}
+	}
 
-		// If guard requests retry, re-run inference once with the rejection reason.
-		if guardResult.RetryRequested {
-			session.AddSystemMessage(fmt.Sprintf(
-				"Your previous response was rejected by the %s guard: %s. Please revise.",
-				strings.Join(guardResult.Violations, ", "), guardResult.RetryReason,
-			))
-			retryContent, retryTurns, retryErr := p.executor.RunLoop(ctx, session)
-			if retryErr != nil {
-				log.Debug().Err(retryErr).Msg("guard retry inference failed, using original result")
-			} else {
-				turns += retryTurns
-				// Apply guards again on the retry result (no further retries).
-				retryGuardResult := p.guards.ApplyFullWithContext(retryContent, guardCtx)
-				result = retryGuardResult.Content
+	// Lightweight verifier pass: if the answer ignores clear evidence gaps,
+	// contradictions, or multi-part coverage, request one revision before we
+	// persist the assistant message.
+	verifyCtx := BuildVerificationContext(session)
+	verifyCtx.CertaintyClassifier = p.certaintyClass
+	verifyResult := VerifyResponse(result, verifyCtx)
+	AnnotateVerifierTrace(tr, verifyResult)
+	if !verifyResult.Passed {
+		log.Debug().
+			Str("session", session.ID).
+			Str("issues", verifyResult.RetryMessage()).
+			Msg("verifier requested retry")
+		session.AddSystemMessage(verifyResult.RetryMessage())
+		retryContent, retryTurns, retryErr := p.executor.RunLoop(ctx, session)
+		if retryErr != nil {
+			log.Debug().Err(retryErr).Msg("verifier retry inference failed, using pre-verifier result")
+		} else {
+			turns += retryTurns
+			if activeGuards != nil {
+				guardCtx := p.buildGuardContext(session)
+				finalGuardResult = activeGuards.ApplyFullWithContext(retryContent, guardCtx)
+				retryContent = finalGuardResult.Content
 			}
+			result = retryContent
 		}
 	}
 
@@ -153,13 +188,9 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 		ModelRequested: cfg.ModelOverride,
 		ReactTurns:     turns,
 	}
-	if p.guards != nil && cfg.GuardSet != GuardSetNone {
-		// Guard violations were logged above; capture in params for tracing.
-		guardCtx2 := p.buildGuardContext(session)
-		guardResult2 := p.guards.ApplyFullWithContext(result, guardCtx2)
-		if len(guardResult2.Violations) > 0 {
-			params.GuardViolations = guardResult2.Violations
-		}
+	params.GuardRetried = guardRetried
+	if len(finalGuardResult.Violations) > 0 {
+		params.GuardViolations = append([]string(nil), finalGuardResult.Violations...)
 	}
 
 	return &Outcome{
@@ -180,6 +211,9 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 // behavior (memory ingest, embedding, observer dispatch, assistant storage,
 // nickname refinement) runs identically to the standard path.
 func (p *Pipeline) prepareStreamInference(ctx context.Context, cfg Config, session *Session, msgID string) (*Outcome, error) {
+	ctx = core.WithSessionID(ctx, session.ID)
+	ctx = core.WithChannelLabel(ctx, cfg.ChannelLabel)
+
 	var streamReq *llm.Request
 	if p.streamer != nil {
 		req, err := p.streamer.PrepareStream(ctx, session)
@@ -340,6 +374,7 @@ func (p *Pipeline) PrepareForInference(ctx context.Context, session *Session, me
 		}
 		compacted := CompactContext(msgs, budget)
 		if len(compacted) < len(msgs) {
+			session.SetMessages(compacted)
 			log.Trace().
 				Int("before", len(msgs)).
 				Int("after", len(compacted)).
@@ -432,9 +467,7 @@ func (p *Pipeline) resolveSession(ctx context.Context, cfg Config, input Input) 
 
 func (p *Pipeline) loadSession(ctx context.Context, input Input) (*Session, error) {
 	sess := NewSession(input.SessionID, input.AgentID, input.AgentName)
-	sess.Channel = input.Platform
-	sess.Workspace = p.workspace
-	sess.AllowedPaths = p.allowedPaths
+	p.applyRuntimeSessionContext(sess, input)
 
 	rows, err := p.store.QueryContext(ctx,
 		`SELECT role, content FROM session_messages WHERE session_id = ? ORDER BY created_at ASC LIMIT 50`,
@@ -489,10 +522,14 @@ func (p *Pipeline) createSessionWithID(ctx context.Context, input Input, id, sco
 		return nil, err
 	}
 	sess := NewSession(id, input.AgentID, input.AgentName)
+	p.applyRuntimeSessionContext(sess, input)
+	return sess, nil
+}
+
+func (p *Pipeline) applyRuntimeSessionContext(sess *Session, input Input) {
 	sess.Channel = input.Platform
 	sess.Workspace = p.workspace
-	sess.AllowedPaths = p.allowedPaths
-	return sess, nil
+	sess.AllowedPaths = append([]string(nil), p.allowedPaths...)
 }
 
 // expandShortFollowup detects short reactions and prepends prior context.
@@ -524,18 +561,22 @@ func (p *Pipeline) trySkillFirst(ctx context.Context, cfg Config, authority core
 // tryShortcut evaluates the shortcut handler system against user input.
 // Uses DispatchShortcut with rich context (correction_turn, delegation_provenance)
 // so handlers can make context-aware decisions about whether to match.
-func (p *Pipeline) tryShortcut(_ context.Context, session *Session, content string, correctionTurn bool, channelLabel string) *Outcome {
-	ctx := &ShortcutContext{
+func (p *Pipeline) tryShortcut(ctx context.Context, session *Session, content string, correctionTurn bool, channelLabel string) *Outcome {
+	sctx := &ShortcutContext{
 		CorrectionTurn:         correctionTurn,
 		DelegationProvenance:   false, // Set by caller when applicable
 		HasConversationContext: session.TurnCount() > 0,
 		AgentName:              session.AgentName,
+		CapabilitySummary:      "",
 		SessionTurnCount:       session.TurnCount(),
 		PreviousAssistantText:  session.LastAssistantContent(),
 		ChannelLabel:           channelLabel,
 	}
+	if p.capabilities != nil {
+		sctx.CapabilitySummary = p.capabilities.Summarize(ctx, session, content)
+	}
 
-	result := DispatchShortcut(DefaultShortcutHandlers(), content, ctx)
+	result := DispatchShortcut(DefaultShortcutHandlers(), content, sctx)
 	if result == nil {
 		return nil
 	}

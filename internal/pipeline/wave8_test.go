@@ -280,51 +280,17 @@ func TestSpecialistProposal(t *testing.T) {
 	}
 }
 
-// --- #84 Tool Pruning by Embedding Tests ---
-
-func TestPruneByEmbedding(t *testing.T) {
-	tools := []ToolDef{
-		{Name: "search", Description: "Search the web", Embedding: []float64{1, 0, 0}},
-		{Name: "calculate", Description: "Do math", Embedding: []float64{0, 1, 0}},
-		{Name: "browse", Description: "Browse web pages", Embedding: []float64{0.9, 0.1, 0}},
-	}
-	query := []float64{1, 0, 0} // Should be closest to "search" and "browse"
-
-	result := PruneByEmbedding(tools, query, 2)
-	if len(result) != 2 {
-		t.Fatalf("expected 2 tools, got %d", len(result))
-	}
-	if result[0].Name != "search" {
-		t.Errorf("first tool should be 'search', got %q", result[0].Name)
-	}
-}
-
-func TestPruneByEmbedding_NoEmbeddings(t *testing.T) {
-	tools := []ToolDef{
-		{Name: "a", Description: "A tool"},
-		{Name: "b", Description: "B tool"},
-	}
-	result := PruneByEmbedding(tools, []float64{1, 0}, 1)
-	// Should still return results (with default 0.5 score).
-	if len(result) != 1 {
-		t.Fatalf("expected 1 tool, got %d", len(result))
-	}
-}
-
-func TestCosineSimilarity(t *testing.T) {
-	a := []float64{1, 0, 0}
-	b := []float64{1, 0, 0}
-	sim := cosineSimilarity(a, b)
-	if sim < 0.99 {
-		t.Errorf("identical vectors should have similarity ~1.0, got %f", sim)
-	}
-
-	c := []float64{0, 1, 0}
-	sim2 := cosineSimilarity(a, c)
-	if sim2 > 0.01 {
-		t.Errorf("orthogonal vectors should have similarity ~0.0, got %f", sim2)
-	}
-}
+// --- #84 Tool Pruning by Embedding ---
+//
+// The pipeline-local `ToolPruner` struct and `PruneByEmbedding` helper
+// this section used to exercise were deleted in v1.0.6 as dead code —
+// zero production callers; the authoritative query-time pruner lives
+// in internal/agent/tools/tool_search.go and runs as part of the
+// pipeline's stageToolPruning. Tests for the live pruner live in
+// internal/agent/tools/tool_search_test.go and the end-to-end pipeline
+// tests under internal/pipeline/tool_pruning_integration_test.go. See
+// docs/parity-forensics/systems/02-tool-exposure-pruning-and-execution-loop.md
+// for the deduplication history.
 
 // --- #85 Event Bus Tests ---
 

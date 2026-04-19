@@ -4,6 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
+	"path/filepath"
+
 	"github.com/rs/zerolog/log"
 
 	"roboticus/internal/core"
@@ -15,8 +18,8 @@ import (
 // Arc<Mutex<Connection>>, Go's *sql.DB is already safe for concurrent use
 // and manages a connection pool internally.
 type Store struct {
-	db                 *sql.DB
-	onSessionArchived  []func(ctx context.Context, sessionID string)
+	db                *sql.DB
+	onSessionArchived []func(ctx context.Context, sessionID string)
 }
 
 // OnSessionArchived registers a callback that fires after a session is archived.
@@ -27,7 +30,28 @@ func (s *Store) OnSessionArchived(fn func(ctx context.Context, sessionID string)
 
 // Open creates a new Store, configures SQLite pragmas (WAL, foreign keys),
 // initializes the schema, and runs any pending migrations.
+//
+// File permissions: the database file holds conversation history, working
+// memory contents (which can include credentials or PII the agent has
+// observed), graph facts, and lives alongside other sensitive artifacts
+// (wallet.enc, plugin keys). Default umask on macOS is 022, which would
+// leave a freshly-created SQLite file at 0644 — world-readable by any
+// other user account or process on the host. Open() explicitly tightens
+// the file mode to 0600 (and the parent directory to 0700 if it sits
+// inside a roboticus-owned tree) on every call. The chmod is best-effort:
+// if the file is owned by another user (e.g., it was created under sudo
+// in a previous session) the chmod will fail with EPERM. We log a
+// warning rather than failing the open so the daemon can boot and the
+// operator can fix ownership manually — but the warning makes the
+// security-relevant condition impossible to miss.
 func Open(dbPath string) (*Store, error) {
+	// Capture whether the file existed BEFORE sql.Open's lazy
+	// creation — used below for the audit-log distinction between
+	// "opened existing DB" and "created new DB at this path." The
+	// pre-existence flag is meaningful only for on-disk paths;
+	// in-memory and other special forms always read as "fresh."
+	preExisted := dbPathExisted(dbPath)
+
 	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode%%3Dwal&_pragma=foreign_keys%%3Don&_pragma=auto_vacuum%%3Dincremental&_pragma=busy_timeout%%3D5000", dbPath)
 
 	db, err := sql.Open("sqlite", dsn)
@@ -61,8 +85,97 @@ func Open(dbPath string) (*Store, error) {
 		return nil, err
 	}
 
-	log.Info().Str("path", dbPath).Msg("database opened")
+	// Tighten permissions on the DB file and (best-effort) the parent
+	// directory. Done AFTER schema init so we know SQLite has actually
+	// created the file (sql.Open is lazy — the file may not exist until
+	// the first statement runs).
+	tightenDatabasePermissions(dbPath)
+
+	// Audit trail: distinguish "opened existing DB" from "created new
+	// DB on disk." The latter is the silent-default-creation pattern
+	// that produced the v1.0.5 rogue-roboticus.db report — when an
+	// invocation fell through to defaults and materialized a fresh
+	// SQLite file at ~/.roboticus/roboticus.db without anyone asking.
+	// We surface the warning in three places: zerolog Warn (post-hoc
+	// triage), the system-warnings collector (dashboard banner + boot
+	// prompt), and stderr (the operator running the command sees it).
+	if !preExisted && dbPath != "" && dbPath != ":memory:" && dbPath != "file::memory:" {
+		log.Warn().
+			Str("path", dbPath).
+			Msg("database created (no prior file existed at this path) — verify this is the intended database for this invocation; ambient creation at a default path may indicate a missing or unloaded config")
+		core.AddSystemWarning(core.SystemWarning{
+			Code:     core.WarningCodeDatabaseCreatedAtPath,
+			Title:    "New database created on disk",
+			Detail:   "A new SQLite database was just created at " + dbPath + ". If this isn't the database you expected this invocation to use, the most common cause is a missing or unloaded config file (the daemon falls back to defaults that point at ~/.roboticus/roboticus.db).",
+			Remedy:   "Verify ~/.roboticus/roboticus.toml exists and sets [database] path = correctly. If you were running under sudo or a wrapper script, check that HOME / ROBOTICUS_CONFIG propagated to the daemon process.",
+			Severity: core.SystemWarningSeverityHigh,
+		})
+	} else {
+		log.Info().Str("path", dbPath).Msg("database opened")
+	}
 	return s, nil
+}
+
+// dbPathExisted reports whether the file at dbPath was on disk before
+// sql.Open's lazy creation. Used by Open() to log "created new" vs
+// "opened existing" — the audit trail that lets operators spot
+// ambient creation of the wrong database.
+//
+// In-memory and other non-file DB paths return true (no creation
+// happens for them so the "created new" warning would be wrong).
+func dbPathExisted(dbPath string) bool {
+	if dbPath == "" || dbPath == ":memory:" || dbPath == "file::memory:" {
+		return true
+	}
+	_, err := os.Stat(dbPath)
+	return err == nil
+}
+
+// tightenDatabasePermissions sets restrictive POSIX mode on the SQLite
+// database file and its sidecar files (-wal and -shm, used by WAL mode).
+// Best-effort: any chmod failure (e.g., file owned by another user from a
+// previous sudo invocation) is logged as a warning rather than failing
+// the daemon boot. The warning is loud enough that an operator can spot
+// and remediate it without the daemon being blocked from running.
+//
+// In-memory databases (`:memory:` and the file::memory: variants) have
+// no on-disk file to chmod and are skipped silently.
+func tightenDatabasePermissions(dbPath string) {
+	if dbPath == "" || dbPath == ":memory:" || dbPath == "file::memory:" {
+		return
+	}
+
+	// Main DB file. WAL mode also creates `<path>-wal` and `<path>-shm`
+	// alongside it; both can hold uncommitted page data and warrant the
+	// same protection.
+	for _, path := range []string{dbPath, dbPath + "-wal", dbPath + "-shm"} {
+		if _, err := os.Stat(path); err != nil {
+			// Sidecar files only exist while WAL is active; absence is normal.
+			continue
+		}
+		if err := os.Chmod(path, 0o600); err != nil {
+			log.Warn().
+				Err(err).
+				Str("path", path).
+				Msg("could not tighten database file permissions; check file ownership (chown to current user)")
+		}
+	}
+
+	// Parent directory: 0700 prevents directory traversal from other
+	// users. We only tighten the immediate parent; we don't walk further
+	// up because the user may have intentionally placed the dataDir
+	// under a wider-permission tree (e.g., a shared workspace dir).
+	if dir := filepath.Dir(dbPath); dir != "" && dir != "." && dir != "/" {
+		if err := os.Chmod(dir, 0o700); err != nil {
+			// Directory chmod is informational only — failures are common
+			// when the parent dir is owned by a different user (e.g.,
+			// /tmp). Log at debug to avoid noise.
+			log.Debug().
+				Err(err).
+				Str("dir", dir).
+				Msg("could not tighten database parent directory permissions")
+		}
+	}
 }
 
 // Close closes the underlying database connection.
@@ -100,7 +213,7 @@ func (s *Store) TruncateAllData() error {
 	tables := []string{
 		"session_messages", "turns", "tool_calls", "policy_decisions",
 		"working_memory", "episodic_memory", "semantic_memory",
-		"procedural_memory", "relationship_memory",
+		"procedural_memory", "relationship_memory", "knowledge_facts",
 		"tasks", "cron_runs", "cron_jobs",
 		"transactions", "service_requests", "revenue_opportunities", "revenue_feedback",
 		"inference_costs", "semantic_cache",

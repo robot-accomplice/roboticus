@@ -131,11 +131,11 @@ func TestRoutingProfile_PersistenceRoundTrip(t *testing.T) {
 }
 
 // TestRoutingProfile_E2E_WeightVerification is the full end-to-end test:
-// 1. Sets custom weights via PUT
-// 2. Verifies GET returns both persisted and active weights
-// 3. Verifies the weights differ from defaults
-// 4. Simulates a "reload" by creating a new router with the same store
-//    and verifying weights persist across the reload boundary.
+//  1. Sets custom weights via PUT
+//  2. Verifies GET returns both persisted and active weights
+//  3. Verifies the weights differ from defaults
+//  4. Simulates a "reload" by creating a new router with the same store
+//     and verifying weights persist across the reload boundary.
 func TestRoutingProfile_E2E_WeightVerification(t *testing.T) {
 	store := testutil.TempStore(t)
 	router := llm.NewRouter(nil, llm.RouterConfig{})

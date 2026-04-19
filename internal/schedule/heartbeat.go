@@ -61,6 +61,16 @@ func NewHeartbeatDaemon(interval time.Duration, tasks []HeartbeatTask) *Heartbea
 	}
 }
 
+// Tasks returns a snapshot of the configured heartbeat tasks.
+func (d *HeartbeatDaemon) Tasks() []HeartbeatTask {
+	if len(d.tasks) == 0 {
+		return nil
+	}
+	out := make([]HeartbeatTask, len(d.tasks))
+	copy(out, d.tasks)
+	return out
+}
+
 // Run starts the heartbeat loop. Blocks until context is cancelled.
 func (d *HeartbeatDaemon) Run(ctx context.Context, tickCtxFn func() *TickContext) {
 	ticker := time.NewTicker(d.interval)

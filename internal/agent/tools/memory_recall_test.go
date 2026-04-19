@@ -63,6 +63,24 @@ func TestMemoryRecallTool_FindsEntry(t *testing.T) {
 	}
 }
 
+func TestMemoryRecallTool_FindsKnowledgeFact(t *testing.T) {
+	store := testutil.TempStore(t)
+	ctx := context.Background()
+
+	_, _ = store.ExecContext(ctx,
+		`INSERT INTO knowledge_facts (id, subject, relation, object, confidence)
+		 VALUES ('fact-1', 'Billing Service', 'depends_on', 'Ledger Service', 0.8)`)
+
+	tool := NewMemoryRecallTool(store)
+	result, err := tool.Execute(ctx, `{"memory_id": "fact-1", "source_table": "knowledge_facts"}`, nil)
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if !contains(result.Output, "Billing Service") || !contains(result.Output, "depends_on") {
+		t.Fatalf("expected knowledge fact output, got %s", result.Output)
+	}
+}
+
 func TestBuildMemoryIndex_EmptyStore(t *testing.T) {
 	store := testutil.TempStore(t)
 	result := BuildMemoryIndex(context.Background(), store, 20)

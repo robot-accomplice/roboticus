@@ -86,7 +86,8 @@ var profileDeleteCmd = &cobra.Command{
 
 func init() {
 	profileCreateCmd.Flags().StringP("description", "d", "", "Profile description")
-	profileCmd.AddCommand(profileListCmd, profileCreateCmd, profileSwitchCmd, profileDeleteCmd)}
+	profileCmd.AddCommand(profileListCmd, profileCreateCmd, profileSwitchCmd, profileDeleteCmd)
+}
 
 func loadProfileRegistry() *core.ProfileRegistry {
 	home, _ := os.UserHomeDir()

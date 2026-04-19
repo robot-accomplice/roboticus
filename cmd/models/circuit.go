@@ -1,8 +1,8 @@
 package models
 
 import (
-	"roboticus/cmd/internal/cmdutil"
 	"fmt"
+	"roboticus/cmd/internal/cmdutil"
 
 	"github.com/spf13/cobra"
 )
@@ -52,4 +52,5 @@ var circuitResetCmd = &cobra.Command{
 }
 
 func init() {
-	circuitCmd.AddCommand(circuitStatusCmd, circuitResetCmd)}
+	circuitCmd.AddCommand(circuitStatusCmd, circuitResetCmd)
+}

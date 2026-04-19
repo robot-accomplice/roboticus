@@ -21,6 +21,7 @@ type ScriptPlugin struct {
 	timeout  time.Duration
 	env      map[string]string
 	runner   core.ProcessRunner // nil defaults to OSProcessRunner
+	policy   PermissionPolicy
 }
 
 // NewScriptPlugin creates a script-based plugin with default OS process runner.
@@ -93,41 +94,37 @@ func (sp *ScriptPlugin) ExecuteTool(ctx context.Context, toolName string, input 
 		return nil, fmt.Errorf("script plugin %s: tool %q not found", sp.manifest.Name, toolName)
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, sp.timeout)
-	defer cancel()
-
-	// Build environment: inherit OS env + plugin env + input.
-	env := os.Environ()
-	env = append(env, fmt.Sprintf("ROBOTICUS_INPUT=%s", string(input)))
+	baseEnv := make(map[string]string, len(sp.env)+1)
+	baseEnv["ROBOTICUS_INPUT"] = string(input)
 	for k, v := range sp.env {
-		env = append(env, k+"="+v)
+		baseEnv[k] = v
 	}
 
-	// Use the injected ProcessRunner if available, otherwise fall back to OS runner.
-	runner := sp.runner
-	if runner == nil {
-		runner = core.OSProcessRunner{}
-	}
-
-	stdout, stderr, err := runner.Run(ctx, scriptPath, nil, sp.dir, env)
-
-	// Truncate output at 10MB.
-	const maxOutput = 10 * 1024 * 1024
-	output := string(stdout)
-	if len(output) > maxOutput {
-		output = output[:maxOutput] + "\n...[truncated]"
-	}
-
+	result, err := core.ExecuteScript(ctx, scriptPath, nil, sp.timeout, core.ScriptExecConfig{
+		RootDir:             sp.dir,
+		AllowAbsolutePath:   true,
+		AllowedInterpreters: sp.policy.AllowedInterpreters,
+		MaxOutputBytes:      sp.policy.MaxOutputBytes,
+		SandboxEnv:          sp.policy.SandboxEnv,
+		BaseEnv:             baseEnv,
+		Runner:              sp.runner,
+	})
 	if err != nil {
 		return &ToolResult{
 			Success: false,
-			Output:  fmt.Sprintf("error: %v\nstderr: %s", err, string(stderr)),
+			Output:  fmt.Sprintf("error: %v", err),
+		}, nil
+	}
+	if result.ExitCode != 0 {
+		return &ToolResult{
+			Success: false,
+			Output:  fmt.Sprintf("exit status %d\nstderr: %s", result.ExitCode, result.Stderr),
 		}, nil
 	}
 
 	return &ToolResult{
 		Success: true,
-		Output:  output,
+		Output:  result.Stdout,
 	}, nil
 }
 
@@ -144,6 +141,12 @@ func (sp *ScriptPlugin) WithEnv(env map[string]string) *ScriptPlugin {
 	for k, v := range env {
 		sp.env[k] = v
 	}
+	return sp
+}
+
+// WithPolicy applies the shared execution policy used by registry-owned plugins.
+func (sp *ScriptPlugin) WithPolicy(policy PermissionPolicy) *ScriptPlugin {
+	sp.policy = policy
 	return sp
 }
 

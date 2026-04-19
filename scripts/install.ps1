@@ -14,7 +14,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$Repo = "roboticus/roboticus"
+$Repo = "robot-accomplice/roboticus"
 $BinaryName = "roboticus.exe"
 
 if (-not $InstallDir) {
@@ -63,12 +63,52 @@ function Test-Checksum {
 
 function Add-ToPath {
     param([string]$Dir)
+
+    # Pre-v1.0.6 this function used substring matching
+    # (`$userPath -notlike "*$Dir*"`) which is both false-positive and
+    # false-negative prone. For example:
+    #   Dir = "C:\roboticus"
+    #   existing PATH contains "C:\roboticus-old"
+    #   substring match says "already present" — we skip the add, so
+    #   the install dir silently never gets on PATH.
+    # Or:
+    #   Dir = "C:\Tools"
+    #   existing PATH contains "C:\ToolsPrev"
+    #   again: false positive.
+    #
+    # v1.0.6: split PATH on `;` and compare entries exactly (case-
+    # insensitive on Windows). Trailing backslashes are normalized so
+    # "C:\roboticus" and "C:\roboticus\" are treated as the same entry.
     $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-    if ($userPath -notlike "*$Dir*") {
-        [Environment]::SetEnvironmentVariable("Path", "$userPath;$Dir", "User")
-        $env:Path = "$env:Path;$Dir"
-        Write-Host "Added $Dir to user PATH."
+    if (-not $userPath) { $userPath = "" }
+
+    $normalizedTarget = $Dir.TrimEnd("\").ToLower()
+    $entries = @()
+    foreach ($raw in $userPath.Split(";")) {
+        $trimmed = $raw.Trim()
+        if ($trimmed) { $entries += $trimmed }
     }
+
+    $alreadyPresent = $false
+    foreach ($e in $entries) {
+        if ($e.TrimEnd("\").ToLower() -eq $normalizedTarget) {
+            $alreadyPresent = $true
+            break
+        }
+    }
+
+    if ($alreadyPresent) {
+        Write-Host "$Dir already on user PATH; leaving PATH unchanged."
+        return
+    }
+
+    # Rebuild PATH by appending the new entry, preserving existing
+    # entries verbatim (we don't mutate casing or trailing-slash shape
+    # of entries the operator may have added intentionally).
+    $newUserPath = ($entries + $Dir) -join ";"
+    [Environment]::SetEnvironmentVariable("Path", $newUserPath, "User")
+    $env:Path = "$env:Path;$Dir"
+    Write-Host "Added $Dir to user PATH."
 }
 
 # Main install flow.

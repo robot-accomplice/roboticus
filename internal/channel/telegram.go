@@ -148,7 +148,8 @@ func (t *TelegramAdapter) Recv(ctx context.Context) (*InboundMessage, error) {
 					Username string `json:"username"`
 				} `json:"from"`
 				Chat *struct {
-					ID int64 `json:"id"`
+					ID   int64  `json:"id"`
+					Type string `json:"type"`
 				} `json:"chat"`
 				Date int64  `json:"date"`
 				Text string `json:"text"`
@@ -190,6 +191,16 @@ func (t *TelegramAdapter) Recv(ctx context.Context) (*InboundMessage, error) {
 			senderID = strconv.FormatInt(msg.From.ID, 10)
 		}
 
+		metadata := map[string]any{
+			"is_group": telegramChatIsGroup(msg.Chat.Type, msg.Chat.ID),
+		}
+		if msg.Chat.Type != "" {
+			metadata["chat_type"] = msg.Chat.Type
+		}
+		if msg.From != nil && msg.From.Username != "" {
+			metadata["sender_username"] = msg.From.Username
+		}
+
 		messages = append(messages, InboundMessage{
 			ID:        strconv.FormatInt(msg.MessageID, 10),
 			Platform:  "telegram",
@@ -197,6 +208,7 @@ func (t *TelegramAdapter) Recv(ctx context.Context) (*InboundMessage, error) {
 			ChatID:    chatID,
 			Content:   msg.Text,
 			Timestamp: time.Unix(msg.Date, 0),
+			Metadata:  metadata,
 		})
 	}
 
@@ -306,6 +318,19 @@ func (t *TelegramAdapter) sendChatAction(ctx context.Context, chatID, action str
 
 // ProcessWebhook handles an incoming Telegram webhook payload.
 func (t *TelegramAdapter) ProcessWebhook(data []byte) (*InboundMessage, error) {
+	msgs, err := t.ProcessWebhookBatch(data)
+	if err != nil {
+		return nil, err
+	}
+	if len(msgs) == 0 {
+		return nil, nil
+	}
+	return &msgs[0], nil
+}
+
+// ProcessWebhookBatch normalizes a Telegram webhook payload into zero or one
+// canonical inbound messages without invoking pipeline behavior.
+func (t *TelegramAdapter) ProcessWebhookBatch(data []byte) ([]InboundMessage, error) {
 	var update struct {
 		UpdateID int64 `json:"update_id"`
 		Message  *struct {
@@ -315,7 +340,8 @@ func (t *TelegramAdapter) ProcessWebhook(data []byte) (*InboundMessage, error) {
 				Username string `json:"username"`
 			} `json:"from"`
 			Chat *struct {
-				ID int64 `json:"id"`
+				ID   int64  `json:"id"`
+				Type string `json:"type"`
 			} `json:"chat"`
 			Date int64  `json:"date"`
 			Text string `json:"text"`
@@ -339,14 +365,35 @@ func (t *TelegramAdapter) ProcessWebhook(data []byte) (*InboundMessage, error) {
 		senderID = strconv.FormatInt(msg.From.ID, 10)
 	}
 
-	return &InboundMessage{
+	inbound := InboundMessage{
 		ID:        strconv.FormatInt(msg.MessageID, 10),
 		Platform:  "telegram",
 		SenderID:  senderID,
 		ChatID:    strconv.FormatInt(chatID, 10),
 		Content:   msg.Text,
 		Timestamp: time.Unix(msg.Date, 0),
-	}, nil
+		Metadata: map[string]any{
+			"is_group": telegramChatIsGroup(msg.Chat.Type, chatID),
+		},
+	}
+	if msg.Chat.Type != "" {
+		inbound.Metadata["chat_type"] = msg.Chat.Type
+	}
+	if msg.From != nil && msg.From.Username != "" {
+		inbound.Metadata["sender_username"] = msg.From.Username
+	}
+	SanitizeInbound(&inbound)
+	return []InboundMessage{inbound}, nil
+}
+
+func telegramChatIsGroup(chatType string, chatID int64) bool {
+	switch chatType {
+	case "group", "supergroup":
+		return true
+	case "private":
+		return false
+	}
+	return chatID < 0
 }
 
 // chunkText splits text into chunks of at most maxLen bytes.

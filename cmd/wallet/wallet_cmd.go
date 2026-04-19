@@ -1,8 +1,8 @@
 package wallet
 
 import (
-	"roboticus/cmd/internal/cmdutil"
 	"fmt"
+	"roboticus/cmd/internal/cmdutil"
 
 	"github.com/spf13/cobra"
 )
@@ -152,4 +152,5 @@ func fmtDollar(m map[string]any, key string) string {
 }
 
 func init() {
-	walletCmd.AddCommand(walletBalanceCmd, walletAddressCmd, walletShowCmd)}
+	walletCmd.AddCommand(walletBalanceCmd, walletAddressCmd, walletShowCmd)
+}

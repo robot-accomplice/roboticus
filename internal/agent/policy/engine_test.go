@@ -51,6 +51,67 @@ func TestPolicy_BlocksProtectedPaths(t *testing.T) {
 	}
 }
 
+func TestPolicy_PathProtection_DoesNotTreatGenericContentWordsAsPaths(t *testing.T) {
+	pe := NewEngine(DefaultConfig())
+	req := &ToolCallRequest{
+		ToolName:  "write_file",
+		Arguments: `{"path":"data/notes.txt","content":"this note contains the word secret but no protected path"}`,
+		Authority: core.AuthorityCreator,
+	}
+	result := pe.Evaluate(req)
+	if result.Denied() {
+		t.Fatalf("expected generic content words not to trigger path protection, denied by %s: %s", result.Rule, result.Reason)
+	}
+}
+
+func TestPolicy_BlocksHomeShortcutInWorkspaceOnlyMode(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.WorkspaceOnly = true
+	pe := NewEngine(cfg)
+	req := &ToolCallRequest{
+		ToolName:  "bash",
+		Arguments: `{"command":"find ~/Downloads -maxdepth 1 -type f"}`,
+		Authority: core.AuthorityCreator,
+	}
+	result := pe.Evaluate(req)
+	if !result.Denied() {
+		t.Fatal("expected home-directory shortcut to be denied")
+	}
+	if result.Rule != "path_protection" {
+		t.Fatalf("rule = %s, want path_protection", result.Rule)
+	}
+}
+
+func TestPolicy_WorkspaceOnlyAllowedPaths_UsesPathBoundaries(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.WorkspaceOnly = true
+	cfg.AllowedPaths = []string{"/data/vault"}
+	pe := NewEngine(cfg)
+
+	req := &ToolCallRequest{
+		ToolName:  "read_file",
+		Arguments: `{"path":"/data/vaultBackup/secrets.txt"}`,
+		Authority: core.AuthorityCreator,
+	}
+	result := pe.Evaluate(req)
+	if !result.Denied() {
+		t.Fatal("expected /data/vaultBackup to be denied when only /data/vault is allowed")
+	}
+	if result.Rule != "path_protection" {
+		t.Fatalf("rule = %s, want path_protection", result.Rule)
+	}
+
+	req = &ToolCallRequest{
+		ToolName:  "read_file",
+		Arguments: `{"path":"/data/vault/notes.txt"}`,
+		Authority: core.AuthorityCreator,
+	}
+	result = pe.Evaluate(req)
+	if result.Denied() {
+		t.Fatalf("expected /data/vault/notes.txt to be allowed, denied by %s: %s", result.Rule, result.Reason)
+	}
+}
+
 func TestPolicy_BlocksShellInjection(t *testing.T) {
 	pe := NewEngine(DefaultConfig())
 	req := &ToolCallRequest{
@@ -128,10 +189,10 @@ func TestPolicy_AuthorityGating(t *testing.T) {
 func TestConfigProtectionRule_Direct(t *testing.T) {
 	rule := &configProtectionRule{}
 	tests := []struct {
-		name    string
-		tool    string
-		args    string
-		denied  bool
+		name   string
+		tool   string
+		args   string
+		denied bool
 	}{
 		{"write_file with api_key in config", "write_file", `{"path":"roboticus.toml","content":"api_key = \"secret\""}`, true},
 		{"write_file with admin_token in overrides", "write_file", `{"path":"config-overrides.toml","content":"admin_token = \"abc\""}`, true},
@@ -139,6 +200,8 @@ func TestConfigProtectionRule_Direct(t *testing.T) {
 		{"write_file with keystore", "write_file", `{"path":"roboticus.toml","content":"keystore = \"/tmp\""}`, true},
 		{"write_file with trusted_proxy", "write_file", `{"path":"config-overrides.toml","content":"trusted_proxy = \"*\""}`, true},
 		{"write_file with private_key", "write_file", `{"path":"roboticus.toml","content":"private_key = \"0x...\""}`, true},
+		{"write_file with server auth token", "write_file", `{"path":"roboticus.toml","content":"server.auth_token = \"abc\""}`, true},
+		{"write_file with wallet keyfile", "write_file", `{"path":"config-overrides.toml","content":"wallet.keyfile = \"/tmp/key.json\""}`, true},
 		{"write_file with _secret suffix", "write_file", `{"path":"roboticus.toml","content":"db_secret = \"pass\""}`, true},
 		{"write_file with _token suffix", "write_file", `{"path":"roboticus.toml","content":"refresh_token = \"tok\""}`, true},
 		{"bash with config and key", "bash", `{"command":"echo api_key > roboticus.toml"}`, true},

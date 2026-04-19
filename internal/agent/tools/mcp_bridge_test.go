@@ -21,7 +21,6 @@ func TestMcpBridgeTool_Accessors(t *testing.T) {
 		schema:      schema,
 		risk:        RiskCaution,
 		serverName:  "brave",
-		manager:     mcp.NewConnectionManager(),
 	}
 
 	if bt.Name() != "search" {
@@ -59,5 +58,24 @@ func TestRegisterMCPTools_NilManager(t *testing.T) {
 	count := RegisterMCPTools(registry, nil)
 	if count != 0 {
 		t.Errorf("RegisterMCPTools(nil) = %d, want 0", count)
+	}
+}
+
+func TestSyncMCPTools_RemovesDisconnectedServerTools(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&McpBridgeTool{
+		name:        "echo",
+		description: "echo",
+		schema:      json.RawMessage(`{"type":"object"}`),
+		risk:        RiskCaution,
+		serverName:  "srv",
+	})
+
+	count := SyncMCPTools(registry, mcp.NewConnectionManager())
+	if count != 0 {
+		t.Fatalf("SyncMCPTools() = %d, want 0", count)
+	}
+	if got := registry.Get("echo"); got != nil {
+		t.Fatalf("registry.Get(echo) = %T, want nil after sync pruning", got)
 	}
 }

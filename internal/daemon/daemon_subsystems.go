@@ -54,6 +54,17 @@ func (d *Daemon) run() {
 		}
 	}
 
+	// Tool embeddings for semantic tool search (Rust parity:
+	// roboticus-agent/src/tool_search.rs). Runs AFTER all tools are
+	// registered (builtins + MCP bridges) so the embedding pass
+	// covers the full set. One batch call; failures are non-fatal
+	// (ranker falls back to always_include-only selection).
+	if d.appState.Tools != nil && d.embedClient != nil {
+		if err := d.appState.Tools.EmbedDescriptors(ctx, d.embedClient); err != nil {
+			log.Warn().Err(err).Msg("tool descriptor embedding failed; tool pruning will degrade to always_include-only")
+		}
+	}
+
 	// ── Startup Phase: Sub-agent registry (Rust parity) ──────────────────
 	// Load enabled sub-agents from DB and register them.
 	d.loadSubAgents(ctx)
@@ -161,6 +172,16 @@ func (d *Daemon) run() {
 	// Start wallet balance poller.
 	startWalletPoller(ctx, d.cfg, d.store, d.appState.Keystore)
 
+	// Treasury refresh loop — derives treasury_state from cached wallet balances
+	// on its own slower cadence, not the application-health heartbeat.
+	if d.treasuryRefreshEnabled() {
+		d.wg.Add(1)
+		go func() {
+			defer d.wg.Done()
+			d.runTreasuryRefresh(ctx)
+		}()
+	}
+
 	// Memory consolidation heartbeat — runs the dreaming cycle periodically.
 	// Matches Rust's heartbeat-triggered consolidation.
 	d.wg.Add(1)
@@ -169,7 +190,108 @@ func (d *Daemon) run() {
 		d.runConsolidationHeartbeat(ctx)
 	}()
 
+	// Maintenance heartbeat — runs cache and lease cleanup on a shared
+	// heartbeat runtime instead of a bespoke maintenance loop.
+	if d.maintenanceHeartbeatEnabled() {
+		d.wg.Add(1)
+		go func() {
+			defer d.wg.Done()
+			d.runMaintenanceHeartbeat(ctx)
+		}()
+	}
+
 	log.Info().Msg("all subsystems started")
+}
+
+func (d *Daemon) consolidationHeartbeatInterval() time.Duration {
+	if secs := d.cfg.Heartbeat.MemoryIntervalSeconds; secs > 0 {
+		return time.Duration(secs) * time.Second
+	}
+	if secs := d.cfg.Heartbeat.IntervalSeconds; secs > 0 {
+		return time.Duration(secs) * time.Second
+	}
+	return time.Hour
+}
+
+func (d *Daemon) treasuryRefreshEnabled() bool {
+	return d.cfg.Heartbeat.TreasuryIntervalSeconds > 0
+}
+
+func (d *Daemon) treasuryRefreshInterval() time.Duration {
+	if secs := d.cfg.Heartbeat.TreasuryIntervalSeconds; secs > 0 {
+		return time.Duration(secs) * time.Second
+	}
+	return 0
+}
+
+func (d *Daemon) newTreasuryRefresh() (*schedule.HeartbeatDaemon, schedule.DomainIntervals, func() *schedule.TickContext) {
+	task := &schedule.TreasuryLoopTask{Store: d.store}
+	interval := d.treasuryRefreshInterval()
+	daemon := schedule.NewHeartbeatDaemon(interval, []schedule.HeartbeatTask{task})
+	intervals := schedule.DefaultDomainIntervals()
+	intervals.Financial = interval
+	return daemon, intervals, func() *schedule.TickContext {
+		return &schedule.TickContext{
+			SurvivalTier: core.SurvivalTierStable,
+			Timestamp:    time.Now(),
+		}
+	}
+}
+
+func (d *Daemon) newConsolidationHeartbeat() (*schedule.HeartbeatDaemon, schedule.DomainIntervals, func() *schedule.TickContext) {
+	task := &schedule.MemoryLoopTask{
+		Consolidate: func(ctx context.Context, force bool) string {
+			report := pipeline.RunMemoryConsolidation(ctx, d.store, force, pipeline.ConsolidationOpts{
+				EmbedClient: d.embedClient,
+				LLMService:  d.llm,
+			})
+			log.Info().
+				Int("indexed", report.Indexed).
+				Int("deduped", report.Deduped).
+				Int("promoted", report.Promoted).
+				Int("pruned", report.Pruned).
+				Msg("memory consolidation completed")
+			return fmt.Sprintf("indexed=%d deduped=%d promoted=%d pruned=%d", report.Indexed, report.Deduped, report.Promoted, report.Pruned)
+		},
+	}
+	interval := d.consolidationHeartbeatInterval()
+	daemon := schedule.NewHeartbeatDaemon(interval, []schedule.HeartbeatTask{task})
+	intervals := schedule.DefaultDomainIntervals()
+	intervals.Memory = interval
+	return daemon, intervals, func() *schedule.TickContext {
+		return &schedule.TickContext{
+			SurvivalTier: core.SurvivalTierStable,
+			Timestamp:    time.Now(),
+		}
+	}
+}
+
+func (d *Daemon) maintenanceHeartbeatEnabled() bool {
+	return d.cfg.Heartbeat.MaintenanceIntervalSeconds > 0 || d.cfg.Heartbeat.IntervalSeconds > 0
+}
+
+func (d *Daemon) maintenanceHeartbeatInterval() time.Duration {
+	if secs := d.cfg.Heartbeat.MaintenanceIntervalSeconds; secs > 0 {
+		return time.Duration(secs) * time.Second
+	}
+	if secs := d.cfg.Heartbeat.IntervalSeconds; secs > 0 {
+		return time.Duration(secs) * time.Second
+	}
+	return 0
+}
+
+func (d *Daemon) newMaintenanceHeartbeat() (*schedule.HeartbeatDaemon, schedule.DomainIntervals, func() *schedule.TickContext) {
+	task := &schedule.MaintenanceLoopTask{Store: d.store}
+	interval := d.maintenanceHeartbeatInterval()
+	daemon := schedule.NewHeartbeatDaemon(interval, []schedule.HeartbeatTask{task})
+	intervals := schedule.DefaultDomainIntervals()
+	intervals.Memory = interval
+	return daemon, intervals, func() *schedule.TickContext {
+		return &schedule.TickContext{
+			SurvivalTier: core.SurvivalTierStable,
+			Timestamp:    time.Now(),
+		}
+	}
 }
 
 // runConsolidationHeartbeat runs memory consolidation on a periodic schedule.
@@ -182,27 +304,33 @@ func (d *Daemon) runConsolidationHeartbeat(ctx context.Context) {
 	case <-time.After(30 * time.Second):
 	}
 
-	ticker := time.NewTicker(1 * time.Hour)
-	defer ticker.Stop()
-	log.Info().Msg("memory consolidation heartbeat started (1h interval)")
+	daemon, intervals, tickCtxFn := d.newConsolidationHeartbeat()
+	log.Info().Dur("interval", intervals.Memory).Msg("memory consolidation heartbeat started")
+	daemon.RunDistributed(ctx, intervals, tickCtxFn)
+}
 
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			report := pipeline.RunMemoryConsolidation(ctx, d.store, false, pipeline.ConsolidationOpts{
-				EmbedClient: d.embedClient,
-				LLMService:  d.llm,
-			})
-			log.Info().
-				Int("indexed", report.Indexed).
-				Int("deduped", report.Deduped).
-				Int("promoted", report.Promoted).
-				Int("pruned", report.Pruned).
-				Msg("memory consolidation completed")
-		}
+func (d *Daemon) runTreasuryRefresh(ctx context.Context) {
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(30 * time.Second):
 	}
+
+	daemon, intervals, tickCtxFn := d.newTreasuryRefresh()
+	log.Info().Dur("interval", intervals.Financial).Msg("treasury refresh loop started")
+	daemon.RunDistributed(ctx, intervals, tickCtxFn)
+}
+
+func (d *Daemon) runMaintenanceHeartbeat(ctx context.Context) {
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(30 * time.Second):
+	}
+
+	daemon, intervals, tickCtxFn := d.newMaintenanceHeartbeat()
+	log.Info().Dur("interval", intervals.Memory).Msg("maintenance heartbeat started")
+	daemon.RunDistributed(ctx, intervals, tickCtxFn)
 }
 
 // runTelegramPoller polls the Telegram adapter for inbound messages via long polling.

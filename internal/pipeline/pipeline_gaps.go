@@ -357,15 +357,23 @@ func (p *Pipeline) recordShortcutCost(ctx context.Context, turnID, sessionID, ch
 // Matches Rust's periodic context checkpoint in post_turn_ingest.
 
 const checkpointIntervalTurns = 10
+const checkpointRetentionCount = 3
 
 // maybeCheckpoint saves a context checkpoint if the turn count hits the interval.
 func (p *Pipeline) maybeCheckpoint(ctx context.Context, session *Session, turnID string) {
 	if p.store == nil {
 		return
 	}
+	if !p.checkpointPolicy.Enabled {
+		return
+	}
+	interval := p.checkpointPolicy.IntervalTurns
+	if interval <= 0 {
+		interval = checkpointIntervalTurns
+	}
 
 	turnCount := session.TurnCount()
-	if turnCount == 0 || turnCount%checkpointIntervalTurns != 0 {
+	if turnCount == 0 || turnCount%interval != 0 {
 		return
 	}
 
@@ -395,14 +403,26 @@ func (p *Pipeline) maybeCheckpoint(ctx context.Context, session *Session, turnID
 	h := sha256.Sum256([]byte(memorySummary))
 	promptHash := hex.EncodeToString(h[:8])
 
-	_, err := p.store.ExecContext(ctx,
-		`INSERT INTO context_checkpoints (id, session_id, system_prompt_hash, memory_summary, conversation_digest, turn_count)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		db.NewID(), session.ID, promptHash, memorySummary, digest, turnCount,
-	)
+	repo := db.NewCheckpointRepository(p.store)
+	err := repo.SaveRecord(ctx, db.CheckpointRecord{
+		SessionID:          session.ID,
+		SystemPromptHash:   promptHash,
+		MemorySummary:      memorySummary,
+		ConversationDigest: digest,
+		TurnCount:          turnCount,
+	})
 	if err != nil {
 		log.Warn().Err(err).Str("session", session.ID).Int("turn", turnCount).Msg("checkpoint save failed")
-	} else {
-		log.Debug().Str("session", session.ID).Int("turn", turnCount).Msg("context checkpoint saved")
+		return
 	}
+	if _, err := repo.DeleteOld(ctx, checkpointRetentionCount); err != nil {
+		log.Warn().Err(err).Str("session", session.ID).Int("turn", turnCount).Msg("checkpoint prune failed")
+		return
+	}
+	log.Debug().
+		Str("session", session.ID).
+		Int("turn", turnCount).
+		Int("interval", interval).
+		Int("retained", checkpointRetentionCount).
+		Msg("context checkpoint saved")
 }

@@ -130,10 +130,7 @@ func ConnectSSE(ctx context.Context, name, url string) (*Connection, error) {
 		return nil, err
 	}
 
-	conn := &Connection{
-		Name:      name,
-		transport: transport,
-	}
+	conn := newConnection(name, transport)
 
 	if err := conn.initialize(ctx); err != nil {
 		_ = transport.Close()

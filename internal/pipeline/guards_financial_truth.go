@@ -48,34 +48,41 @@ func (g *FinancialActionTruthGuard) CheckWithContext(content string, ctx *GuardC
 		return GuardResult{Passed: true}
 	}
 
-	// Check if any financial tool was actually called.
+	// Check if any financial tool was actually called, and whether those calls
+	// ended in real denial/failure signals. A tool name alone is not proof that
+	// the action completed.
 	hasFinancialTool := false
+	hasFinancialFailure := false
 	for _, tr := range ctx.ToolResults {
 		lower := strings.ToLower(tr.ToolName)
 		for _, prefix := range financialToolPrefixes {
 			if strings.Contains(lower, prefix) {
 				hasFinancialTool = true
+				if toolResultSignalsFailure(tr) {
+					hasFinancialFailure = true
+				}
 				break
 			}
 		}
-		if hasFinancialTool {
-			break
-		}
 	}
 
-	// If financial tools were called, the claims may be legitimate.
-	if hasFinancialTool {
-		return GuardResult{Passed: true}
-	}
-
-	// Check for fabricated financial claims.
 	lower := strings.ToLower(content)
 	for _, claim := range financialActionClaims {
-		if strings.Contains(lower, claim) {
+		if !strings.Contains(lower, claim) {
+			continue
+		}
+		if !hasFinancialTool {
 			return GuardResult{
 				Passed: false,
 				Retry:  true,
 				Reason: "claimed financial action without calling a financial tool",
+			}
+		}
+		if hasFinancialFailure {
+			return GuardResult{
+				Passed: false,
+				Retry:  true,
+				Reason: "claimed financial action despite denied or failed financial tool result",
 			}
 		}
 	}

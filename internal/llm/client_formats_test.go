@@ -438,6 +438,36 @@ func TestMarshalOpenAI_ToolResultContentPresent(t *testing.T) {
 	}
 }
 
+func TestUnmarshalResponse_StripsParsedToolCallJSONFromContent(t *testing.T) {
+	c := &Client{provider: &Provider{Format: FormatOpenAI}}
+	body := strings.NewReader(`{
+		"id":"resp_1",
+		"model":"gpt-4",
+		"choices":[{
+			"message":{
+				"role":"assistant",
+				"content":"I'll count the files.\n{\"tool_call\": {\"name\": \"bash\", \"params\": {\"command\": \"find . -type f | wc -l\"}}}\nThen I'll answer with just the number."
+			},
+			"finish_reason":"stop"
+		}],
+		"usage":{"prompt_tokens":10,"completion_tokens":5}
+	}`)
+
+	resp, err := c.unmarshalResponse(body)
+	if err != nil {
+		t.Fatalf("unmarshalResponse: %v", err)
+	}
+	if len(resp.ToolCalls) != 1 {
+		t.Fatalf("got %d tool calls, want 1", len(resp.ToolCalls))
+	}
+	if strings.Contains(resp.Content, `"tool_call"`) {
+		t.Fatalf("content still contains tool call JSON: %q", resp.Content)
+	}
+	if resp.Content != "I'll count the files.\nThen I'll answer with just the number." {
+		t.Fatalf("unexpected content: %q", resp.Content)
+	}
+}
+
 func TestParseErrorResponse_401(t *testing.T) {
 	c := &Client{provider: &Provider{Name: "test"}}
 	resp := &http.Response{

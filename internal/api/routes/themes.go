@@ -13,9 +13,9 @@ import (
 
 // ThemeTexture describes a CSS texture or pattern overlay.
 type ThemeTexture struct {
-	Kind  string `json:"kind"`            // "css", "url", or "file"
-	Value string `json:"value"`           // CSS gradient/pattern string, URL, or local filename
-	Tile  bool   `json:"tile,omitempty"`  // true = repeat/tile, false = cover (for photos)
+	Kind  string `json:"kind"`           // "css", "url", or "file"
+	Value string `json:"value"`          // CSS gradient/pattern string, URL, or local filename
+	Tile  bool   `json:"tile,omitempty"` // true = repeat/tile, false = cover (for photos)
 }
 
 // ThemeRegistryBaseURL returns the base URL for theme assets from the first configured registry.
@@ -95,10 +95,10 @@ var catalogThemes = []ThemeManifest{
 		Variables: map[string]string{
 			"--bg": "#2a2118", "--surface": "#352a1f", "--surface-2": "#3f3326",
 			"--accent": "#c17f3a", "--text": "#f5e6c8", "--muted": "#b8a080",
-			"--border": "#6b5540",
-			"--theme-separator":       "linear-gradient(90deg, transparent, #8b5e3c 20%, #c17f3a 50%, #8b5e3c 80%, transparent)",
+			"--border":                 "#6b5540",
+			"--theme-separator":        "linear-gradient(90deg, transparent, #8b5e3c 20%, #c17f3a 50%, #8b5e3c 80%, transparent)",
 			"--theme-separator-height": "2px",
-			"--theme-scrollbar":       "rgba(193,127,58,0.3)",
+			"--theme-scrollbar":        "rgba(193,127,58,0.3)",
 		},
 		Textures: map[string]ThemeTexture{
 			"body": {Kind: "url", Value: ThemeRegistryBaseURL + "/parchment/textures/parchment.jpg"},
@@ -108,11 +108,11 @@ var catalogThemes = []ThemeManifest{
 		Variables: map[string]string{
 			"--bg": "#0a1628", "--surface": "#0e1f3a", "--surface-2": "#132848",
 			"--accent": "#0d9488", "--text": "#c8e1f5", "--muted": "#6b8ab0",
-			"--border": "#1e3a5f",
-			"--theme-body-texture": "radial-gradient(ellipse at 50% 0%, rgba(13,148,136,0.08) 0%, transparent 60%)",
-			"--theme-separator":    "linear-gradient(90deg, transparent, #0d9488 15%, #1e3a5f 50%, #0d9488 85%, transparent)",
+			"--border":                 "#1e3a5f",
+			"--theme-body-texture":     "radial-gradient(ellipse at 50% 0%, rgba(13,148,136,0.08) 0%, transparent 60%)",
+			"--theme-separator":        "linear-gradient(90deg, transparent, #0d9488 15%, #1e3a5f 50%, #0d9488 85%, transparent)",
 			"--theme-separator-height": "2px",
-			"--theme-scrollbar":    "rgba(13,148,136,0.3)",
+			"--theme-scrollbar":        "rgba(13,148,136,0.3)",
 		},
 		Textures: map[string]ThemeTexture{
 			"body": {Kind: "url", Value: ThemeRegistryBaseURL + "/midnight-ocean/textures/ocean.jpg"},
@@ -129,7 +129,7 @@ var catalogThemes = []ThemeManifest{
 		Variables: map[string]string{
 			"--bg": "#282a36", "--surface": "#2d303e", "--surface-2": "#343746",
 			"--accent": "#bd93f9", "--text": "#f8f8f2", "--muted": "#6272a4",
-			"--border": "#44475a",
+			"--border":          "#44475a",
 			"--theme-scrollbar": "rgba(189,147,249,0.25)",
 		},
 		Version: "1.0.0", Source: "catalog"},

@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -57,6 +58,7 @@ type Input struct {
 	ChatID        string // channel chat identifier
 	ModelOverride string // force a specific model, bypassing router
 	NoCache       bool   // skip semantic cache (used by exercise/baseline)
+	NoEscalate    bool   // disable routing escalation/fallback contamination for benchmark paths
 	Claim         *ChannelClaimContext
 }
 
@@ -70,6 +72,12 @@ type Runner interface {
 // The api.EventBus satisfies this interface — defined here to avoid circular imports.
 type DashboardNotifier interface {
 	PublishEvent(eventType string, data any)
+}
+
+// CapabilitySummarizer provides a compact runtime-owned capability summary for
+// introspection-style fast paths.
+type CapabilitySummarizer interface {
+	Summarize(ctx context.Context, session *Session, query string) string
 }
 
 // StreamFinalizer runs post-turn work after streaming completes.
@@ -86,47 +94,70 @@ var _ Runner = (*Pipeline)(nil)
 // Pipeline is the unified factory. Connectors call Run() with a Config preset
 // and an Input — the pipeline handles everything else.
 type Pipeline struct {
-	store        *db.Store
-	llmSvc       *llm.Service
-	injection    InjectionChecker
-	retriever    MemoryRetriever
-	skills       SkillMatcher
-	executor     ToolExecutor
-	ingestor     Ingestor
-	refiner      NicknameRefiner
-	streamer     StreamPreparer
-	guards       *GuardChain
-	bgWorker     *core.BackgroundWorker
-	dedup        *DedupTracker
-	tasks        *TaskTracker
-	botCmds      *BotCommandHandler
-	embeddings   *llm.EmbeddingClient
-	errBus       *core.ErrorBus
-	dashboard    DashboardNotifier
-	workspace    string   // agent workspace root — propagated to sessions for tool sandbox
-	allowedPaths []string // extra paths outside workspace that tools may access
+	store           *db.Store
+	llmSvc          *llm.Service
+	injection       InjectionChecker
+	retriever       MemoryRetriever
+	skills          SkillMatcher
+	executor        ToolExecutor
+	ingestor        Ingestor
+	refiner         NicknameRefiner
+	streamer        StreamPreparer
+	pruner          ToolPruner
+	guards          *GuardChain
+	guardRegistry   *GuardRegistry
+	usePresetGuards bool
+	bgWorker        *core.BackgroundWorker
+	dedup           *DedupTracker
+	tasks           *TaskTracker
+	botCmds         *BotCommandHandler
+	embeddings      *llm.EmbeddingClient
+	// certaintyClass is the embedding-backed semantic claim certainty
+	// classifier (M6 follow-on). Built once per pipeline so the corpus
+	// embedding cost is amortised across every turn.
+	certaintyClass   *llm.SemanticClassifier
+	errBus           *core.ErrorBus
+	dashboard        DashboardNotifier
+	capabilities     CapabilitySummarizer
+	workspace        string   // agent workspace root — propagated to sessions for tool sandbox
+	allowedPaths     []string // extra paths outside workspace that tools may access
+	cacheTTL         time.Duration
+	checkpointPolicy CheckpointPolicy
 }
 
 // PipelineDeps bundles dependencies for the Pipeline.
 type PipelineDeps struct {
-	Store      *db.Store
-	LLM        *llm.Service
-	Injection  InjectionChecker
-	Retriever  MemoryRetriever
-	Skills     SkillMatcher
-	Executor   ToolExecutor
-	Ingestor   Ingestor
-	Refiner    NicknameRefiner
-	Streamer   StreamPreparer
-	Guards     *GuardChain
-	BGWorker   *core.BackgroundWorker
-	Embeddings *llm.EmbeddingClient
-	ErrBus     *core.ErrorBus
-	Dashboard  DashboardNotifier
+	Store        *db.Store
+	LLM          *llm.Service
+	Injection    InjectionChecker
+	Retriever    MemoryRetriever
+	Skills       SkillMatcher
+	Executor     ToolExecutor
+	Ingestor     Ingestor
+	Refiner      NicknameRefiner
+	Streamer     StreamPreparer
+	Pruner       ToolPruner
+	Guards       *GuardChain
+	BGWorker     *core.BackgroundWorker
+	Embeddings   *llm.EmbeddingClient
+	ErrBus       *core.ErrorBus
+	Dashboard    DashboardNotifier
+	Capabilities CapabilitySummarizer
 
 	// Sandbox: workspace root and extra allowed paths propagated to every session.
 	Workspace    string
 	AllowedPaths []string
+	CacheTTL     time.Duration
+
+	// Optional lifecycle policy. Nil means use package defaults so tests and
+	// ad-hoc callers keep the historical behavior unless they opt in.
+	CheckpointPolicy *CheckpointPolicy
+}
+
+// CheckpointPolicy controls periodic context checkpoint behavior.
+type CheckpointPolicy struct {
+	Enabled       bool
+	IntervalTurns int
 }
 
 // New creates the unified pipeline.
@@ -135,32 +166,148 @@ func New(deps PipelineDeps) *Pipeline {
 	if bgw == nil {
 		bgw = core.NewBackgroundWorker(16)
 	}
-	return &Pipeline{
-		store:      deps.Store,
-		llmSvc:     deps.LLM,
-		injection:  deps.Injection,
-		retriever:  deps.Retriever,
-		skills:     deps.Skills,
-		executor:   deps.Executor,
-		ingestor:   deps.Ingestor,
-		refiner:    deps.Refiner,
-		streamer:   deps.Streamer,
-		guards:     deps.Guards,
-		bgWorker:   bgw,
-		dedup:      NewDedupTracker(60 * time.Second),
-		tasks:      NewTaskTracker(),
-		embeddings:   deps.Embeddings,
-		errBus:       deps.ErrBus,
-		dashboard:    deps.Dashboard,
-		botCmds:      NewBotCommandHandler(deps.LLM, deps.Store),
-		workspace:    deps.Workspace,
-		allowedPaths: deps.AllowedPaths,
+	cp := CheckpointPolicy{
+		Enabled:       true,
+		IntervalTurns: checkpointIntervalTurns,
 	}
+	cacheTTL := llm.DefaultCacheConfig().TTL
+	if deps.CacheTTL > 0 {
+		cacheTTL = deps.CacheTTL
+	}
+	if deps.CheckpointPolicy != nil {
+		cp.Enabled = deps.CheckpointPolicy.Enabled
+		if deps.CheckpointPolicy.IntervalTurns > 0 {
+			cp.IntervalTurns = deps.CheckpointPolicy.IntervalTurns
+		}
+	}
+	return &Pipeline{
+		store:            deps.Store,
+		llmSvc:           deps.LLM,
+		injection:        deps.Injection,
+		retriever:        deps.Retriever,
+		skills:           deps.Skills,
+		executor:         deps.Executor,
+		ingestor:         deps.Ingestor,
+		refiner:          deps.Refiner,
+		streamer:         deps.Streamer,
+		pruner:           deps.Pruner,
+		guards:           deps.Guards,
+		guardRegistry:    NewDefaultGuardRegistry(),
+		usePresetGuards:  deps.Guards == nil,
+		bgWorker:         bgw,
+		dedup:            NewDedupTracker(60 * time.Second),
+		tasks:            NewTaskTracker(),
+		embeddings:       deps.Embeddings,
+		certaintyClass:   NewClaimCertaintyClassifier(deps.Embeddings),
+		errBus:           deps.ErrBus,
+		dashboard:        deps.Dashboard,
+		capabilities:     deps.Capabilities,
+		botCmds:          NewBotCommandHandler(deps.LLM, deps.Store),
+		workspace:        deps.Workspace,
+		allowedPaths:     deps.AllowedPaths,
+		cacheTTL:         cacheTTL,
+		checkpointPolicy: cp,
+	}
+}
+
+func (p *Pipeline) guardsForPreset(preset GuardSetPreset) *GuardChain {
+	if preset == GuardSetNone {
+		return nil
+	}
+	if p.usePresetGuards && p.guardRegistry != nil {
+		chain := p.guardRegistry.Chain(preset)
+		if chain == nil || chain.Len() == 0 {
+			return nil
+		}
+		return chain
+	}
+	if p.guards != nil {
+		return p.guards
+	}
+	if p.guardRegistry != nil {
+		chain := p.guardRegistry.Chain(preset)
+		if chain == nil || chain.Len() == 0 {
+			return nil
+		}
+		return chain
+	}
+	return nil
 }
 
 // RunPipeline is the canonical package-level entry point for all connectors.
 func RunPipeline(ctx context.Context, p Runner, cfg Config, input Input) (*Outcome, error) {
 	return p.Run(ctx, cfg, input)
+}
+
+// stageLivenessThreshold is the minimum stage duration before the
+// watchdog starts logging "stage X has been running for Y" warnings.
+// Set generously: most stages complete in milliseconds, but
+// stage_inference legitimately takes 30s+ for cold-start LLM loads
+// (especially Ollama 32B-class models). A 20s threshold catches real
+// hangs without spamming on legitimate slow stages — the first probe
+// fires at 20s, the second at 30s, etc.
+const stageLivenessThreshold = 20 * time.Second
+
+// stageLivenessProbeInterval is how often the watchdog checks the
+// in-flight stage. Short enough that operators see updates roughly
+// every 10s during a hang; long enough that the watchdog adds no
+// observable load on healthy runs (which complete sub-second).
+const stageLivenessProbeInterval = 10 * time.Second
+
+// runStageWatchdog logs a warning when a single pipeline stage runs
+// longer than stageLivenessThreshold. Exits when done is closed
+// (set up by Pipeline.Run via defer) or when the pipeline context
+// is cancelled.
+//
+// The function is intentionally simple: it does not attempt to
+// interrupt the stage. Operators get loud signal; the surrounding
+// timeout / context-cancel infrastructure handles the actual
+// recovery. This keeps the watchdog out of the hot path and out of
+// the recovery decisions (which are already nuanced — a cold-start
+// LLM is "slow" but not "stuck").
+func (p *Pipeline) runStageWatchdog(ctx context.Context, tr *TraceRecorder, done <-chan struct{}) {
+	if tr == nil {
+		return
+	}
+	ticker := time.NewTicker(stageLivenessProbeInterval)
+	defer ticker.Stop()
+
+	// Track the previous span so we don't re-log the same warning
+	// every probe. We log the FIRST time a stage exceeds the
+	// threshold, then again every probe interval thereafter — that
+	// gives operators a fresh "still hung" signal without blasting
+	// duplicates.
+	var lastLoggedSpan string
+	var lastLogTime time.Time
+
+	for {
+		select {
+		case <-done:
+			return
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			cs := tr.CurrentSpan()
+			if cs.Name == "" {
+				lastLoggedSpan = ""
+				continue
+			}
+			if cs.Duration < stageLivenessThreshold {
+				continue
+			}
+			// Log on first detection OR after another probe
+			// interval has elapsed. Prevents both spam (every
+			// probe) and silence (only on transitions).
+			if cs.Name != lastLoggedSpan || time.Since(lastLogTime) >= stageLivenessProbeInterval {
+				log.Warn().
+					Str("stage", cs.Name).
+					Dur("running_for", cs.Duration).
+					Msg("pipeline stage running longer than expected — possible cold-start latency or hang")
+				lastLoggedSpan = cs.Name
+				lastLogTime = time.Now()
+			}
+		}
+	}
 }
 
 // dashNotify publishes a typed event to the dashboard if a notifier is configured.
@@ -203,6 +350,25 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 		"agent_id": pc.input.AgentID, "workstation": "llm", "skill": "inference",
 	})
 
+	// v1.0.6: per-stage liveness watchdog. If any single stage runs
+	// longer than stageLivenessThreshold, a goroutine logs which
+	// stage is in-flight and how long it's been running. This turns
+	// the cold-start hang reported in the v1.0.5 fresh-state soak
+	// (where the first turn started but never completed and the
+	// operator had no signal about which stage was stalling) into
+	// an actionable log line: operators can now identify the stuck
+	// stage from the daemon's running output rather than having to
+	// kill -QUIT and parse a goroutine dump.
+	//
+	// The watchdog runs at stageLivenessProbeInterval and re-checks
+	// the in-flight span; if it's the SAME span as the previous
+	// probe AND it's exceeded the threshold, log it. Polls are
+	// cheap (one RWMutex.RLock + tiny snapshot copy) so the
+	// instrumentation has no measurable steady-state cost.
+	watchdogDone := make(chan struct{})
+	go p.runStageWatchdog(ctx, pc.tr, watchdogDone)
+	defer close(watchdogDone)
+
 	// Stages 1-2: validation + injection defense.
 	if err := p.stageValidation(ctx, pc); err != nil {
 		return nil, err
@@ -243,13 +409,21 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 		return out, err
 	}
 
-	// Stage 10-11.5: skill-first, shortcut, cache (each may return early).
+	// Stage 10-11.65: skill-first, shortcut, request shaping, cache.
 	if out, err := p.stageSkillFirst(ctx, pc); out != nil || err != nil {
 		return out, err
 	}
 	if out, err := p.stageShortcut(ctx, pc); out != nil || err != nil {
 		return out, err
 	}
+
+	// Stage 11.6: tool pruning (query-time semantic ranking + budget).
+	p.stageToolPruning(ctx, pc)
+
+	// Stage 11.65: hippocampus summary (database surface ambient note).
+	p.stageHippocampusSummary(ctx, pc)
+
+	// Stage 11.7: cache check on the shaped pre-inference surface.
 	if out, err := p.stageCacheCheck(ctx, pc); out != nil || err != nil {
 		return out, err
 	}
@@ -279,9 +453,10 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 // guardOutcome applies the guard chain to an outcome if guards are configured.
 // This ensures skill, shortcut, and all other early-return paths are filtered.
 // Uses full context when a session is available for contextual guard evaluation.
-func (p *Pipeline) guardOutcome(cfg Config, outcome *Outcome) *Outcome {
-	if p.guards != nil && cfg.GuardSet != GuardSetNone && outcome != nil {
-		outcome.Content = p.guards.Apply(outcome.Content)
+func (p *Pipeline) guardOutcome(cfg Config, session *Session, outcome *Outcome) *Outcome {
+	if guards := p.guardsForPreset(cfg.GuardSet); guards != nil && outcome != nil {
+		guardCtx := p.buildGuardContext(session)
+		outcome.Content = guards.ApplyFullWithContext(outcome.Content, guardCtx).Content
 	}
 	return outcome
 }
@@ -294,6 +469,13 @@ func (p *Pipeline) buildGuardContext(session *Session) *GuardContext {
 
 	ctx := &GuardContext{
 		AgentName: session.AgentName,
+	}
+
+	if intent := strings.TrimSpace(session.TaskIntent()); intent != "" {
+		ctx.Intents = append(ctx.Intents, intent)
+	}
+	if action := strings.TrimSpace(session.TaskPlannedAction()); action == "delegate_to_specialist" || action == "compose_subagent" {
+		ctx.Intents = append(ctx.Intents, "delegation")
 	}
 
 	// Extract user prompt (last user message).
@@ -330,8 +512,38 @@ func (p *Pipeline) buildGuardContext(session *Session) *GuardContext {
 					ToolName: msgs[i].Name,
 					Output:   msgs[i].Content,
 				})
+				if strings.Contains(msgs[i].Name, "delegat") || strings.Contains(msgs[i].Name, "subagent") {
+					ctx.DelegationProvenance.SubagentTaskStarted = true
+					ctx.DelegationProvenance.SubagentTaskCompleted = true
+					if strings.TrimSpace(msgs[i].Content) != "" {
+						ctx.DelegationProvenance.SubagentResultAttached = true
+					}
+				}
 			}
 		}
+	}
+
+	if p.store != nil {
+		rows, err := p.store.QueryContext(context.Background(),
+			`SELECT name FROM sub_agents WHERE enabled = 1 ORDER BY name`)
+		if err == nil {
+			defer func() { _ = rows.Close() }()
+			for rows.Next() {
+				var name string
+				if scanErr := rows.Scan(&name); scanErr == nil && strings.TrimSpace(name) != "" {
+					ctx.SubagentNames = append(ctx.SubagentNames, strings.ToLower(name))
+				}
+			}
+		}
+
+		_ = p.store.QueryRowContext(context.Background(),
+			`SELECT selected_model
+			   FROM model_selection_events
+			  WHERE session_id = ?
+			  ORDER BY created_at DESC, rowid DESC
+			  LIMIT 1`,
+			session.ID,
+		).Scan(&ctx.ResolvedModel)
 	}
 
 	return ctx

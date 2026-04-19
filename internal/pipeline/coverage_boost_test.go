@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"roboticus/internal/core"
@@ -541,6 +542,27 @@ func TestTryShortcut_Help(t *testing.T) {
 	}
 }
 
+type stubCapabilitySummarizer struct {
+	summary string
+}
+
+func (s stubCapabilitySummarizer) Summarize(_ context.Context, _ *Session, _ string) string {
+	return s.summary
+}
+
+func TestTryShortcut_Introspection(t *testing.T) {
+	pipe := &Pipeline{capabilities: stubCapabilitySummarizer{summary: "Enabled subagents: researcher\nLive tool surface: introspection, get_subagent_status"}}
+	sess := NewSession("s1", "a1", "Bot")
+
+	result := pipe.tryShortcut(context.Background(), sess, "use your introspection tool to discover your current subagent functionality and summarize it for me", false, "test")
+	if result == nil {
+		t.Fatal("introspection shortcut should match")
+	}
+	if !strings.Contains(result.Content, "Enabled subagents: researcher") {
+		t.Fatalf("unexpected shortcut content: %q", result.Content)
+	}
+}
+
 func TestTryShortcut_NoMatch(t *testing.T) {
 	pipe := &Pipeline{}
 	sess := NewSession("s1", "a1", "Bot")
@@ -558,7 +580,7 @@ func TestTryShortcut_NoMatch(t *testing.T) {
 func TestGuardOutcome_NoGuards(t *testing.T) {
 	pipe := &Pipeline{}
 	outcome := &Outcome{Content: "hello"}
-	result := pipe.guardOutcome(Config{GuardSet: GuardSetFull}, outcome)
+	result := pipe.guardOutcome(Config{GuardSet: GuardSetFull}, nil, outcome)
 	if result.Content != "hello" {
 		t.Error("no guards should pass through")
 	}
@@ -567,7 +589,7 @@ func TestGuardOutcome_NoGuards(t *testing.T) {
 func TestGuardOutcome_WithGuards(t *testing.T) {
 	pipe := &Pipeline{guards: DefaultGuardChain()}
 	outcome := &Outcome{Content: "valid response"}
-	result := pipe.guardOutcome(Config{GuardSet: GuardSetFull}, outcome)
+	result := pipe.guardOutcome(Config{GuardSet: GuardSetFull}, nil, outcome)
 	if result == nil {
 		t.Fatal("should return outcome")
 	}
@@ -576,7 +598,7 @@ func TestGuardOutcome_WithGuards(t *testing.T) {
 func TestGuardOutcome_GuardSetNone(t *testing.T) {
 	pipe := &Pipeline{guards: DefaultGuardChain()}
 	outcome := &Outcome{Content: "anything"}
-	result := pipe.guardOutcome(Config{GuardSet: GuardSetNone}, outcome)
+	result := pipe.guardOutcome(Config{GuardSet: GuardSetNone}, nil, outcome)
 	if result.Content != "anything" {
 		t.Error("GuardSetNone should pass through")
 	}
@@ -584,7 +606,7 @@ func TestGuardOutcome_GuardSetNone(t *testing.T) {
 
 func TestGuardOutcome_NilOutcome(t *testing.T) {
 	pipe := &Pipeline{guards: DefaultGuardChain()}
-	result := pipe.guardOutcome(Config{GuardSet: GuardSetFull}, nil)
+	result := pipe.guardOutcome(Config{GuardSet: GuardSetFull}, nil, nil)
 	if result != nil {
 		t.Error("nil outcome should return nil")
 	}

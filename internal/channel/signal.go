@@ -187,8 +187,10 @@ func (s *SignalAdapter) ProcessWebhook(data []byte) (*InboundMessage, error) {
 	}
 
 	chatID := sender
+	isGroup := false
 	if env.DataMessage.GroupInfo != nil && env.DataMessage.GroupInfo.GroupID != "" {
 		chatID = "group:" + env.DataMessage.GroupInfo.GroupID
+		isGroup = true
 	}
 
 	msg := &InboundMessage{
@@ -198,6 +200,9 @@ func (s *SignalAdapter) ProcessWebhook(data []byte) (*InboundMessage, error) {
 		ChatID:    chatID,
 		Content:   env.DataMessage.Message,
 		Timestamp: time.UnixMilli(env.Timestamp),
+		Metadata: map[string]any{
+			"is_group": isGroup,
+		},
 	}
 
 	return msg, nil

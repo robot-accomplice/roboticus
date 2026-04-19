@@ -1,12 +1,12 @@
 package admin
 
 import (
-	"roboticus/cmd/internal/cmdutil"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"roboticus/cmd/internal/cmdutil"
 	"strings"
 
 	"github.com/rs/zerolog/log"
@@ -338,4 +338,5 @@ func init() {
 	migrateImportCmd.Flags().BoolVar(&migrateNoSafetyCheck, "no-safety-check", false, "overwrite existing files without safety checks")
 	migrateExportCmd.Flags().StringSliceVar(&migrateAreas, "areas", nil, "migration areas: config, personality, skills, sessions, cron, channels, agents")
 
-	migrateCmd.AddCommand(migrateDBCmd, migrateImportCmd, migrateExportCmd)}
+	migrateCmd.AddCommand(migrateDBCmd, migrateImportCmd, migrateExportCmd)
+}

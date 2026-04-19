@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -151,6 +152,16 @@ func TestBashTool_Execute(t *testing.T) {
 	}
 	if len(mr.calls) != 1 {
 		t.Errorf("calls = %d, want 1", len(mr.calls))
+	}
+}
+
+func TestResolvePath_RejectsHomeShortcut(t *testing.T) {
+	_, err := resolvePath("/workspace", "~/Downloads", nil)
+	if err == nil {
+		t.Fatal("expected home shortcut to be rejected")
+	}
+	if !strings.Contains(err.Error(), "home-directory shortcuts") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

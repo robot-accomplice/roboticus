@@ -228,6 +228,15 @@ func TestListObservabilityTraces_HappyPath(t *testing.T) {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
 	body := jsonBody(t, rec)
+	if body["route_family"] != "observability_traces" {
+		t.Fatalf("route_family = %v, want observability_traces", body["route_family"])
+	}
+	if body["artifact"] != "trace_observability_page" {
+		t.Fatalf("artifact = %v, want trace_observability_page", body["artifact"])
+	}
+	if body["fidelity"] != "observability_page" {
+		t.Fatalf("fidelity = %v, want observability_page", body["fidelity"])
+	}
 	traces := body["traces"].([]any)
 	if len(traces) != 2 {
 		t.Fatalf("got %d traces, want 2", len(traces))
@@ -261,6 +270,9 @@ func TestListObservabilityTraces_Pagination(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	body := jsonBody(t, rec)
+	if body["route_family"] != "observability_traces" {
+		t.Fatalf("route_family = %v, want observability_traces", body["route_family"])
+	}
 	traces := body["traces"].([]any)
 	if len(traces) != 1 {
 		t.Fatalf("got %d traces, want 1 (pagination)", len(traces))
@@ -311,6 +323,15 @@ func TestTraceWaterfall_HappyPath(t *testing.T) {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
 	body := jsonBody(t, rec)
+	if body["route_family"] != "observability_traces" {
+		t.Fatalf("route_family = %v, want observability_traces", body["route_family"])
+	}
+	if body["artifact"] != "trace_waterfall" {
+		t.Fatalf("artifact = %v, want trace_waterfall", body["artifact"])
+	}
+	if body["fidelity"] != "waterfall" {
+		t.Fatalf("fidelity = %v, want waterfall", body["fidelity"])
+	}
 	if body["id"] != "pt1" {
 		t.Errorf("id = %v, want pt1", body["id"])
 	}
@@ -351,6 +372,9 @@ func TestTraceWaterfall_InvalidJSON(t *testing.T) {
 		t.Fatalf("status = %d, want 200 (invalid JSON falls back to empty array)", rec.Code)
 	}
 	body := jsonBody(t, rec)
+	if body["route_family"] != "observability_traces" {
+		t.Fatalf("route_family = %v, want observability_traces", body["route_family"])
+	}
 	stages, ok := body["stages"].([]any)
 	if !ok {
 		t.Fatal("stages should be an empty array on invalid JSON")

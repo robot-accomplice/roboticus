@@ -75,8 +75,8 @@ func DefaultLoopConfig() LoopConfig {
 	return LoopConfig{
 		MaxTurns:        25,
 		MaxLoopDuration: 300 * time.Second, // 5 min — local models need 60-80s per call
-		IdleThreshold: 3,
-		LoopWindow:    3,
+		IdleThreshold:   3,
+		LoopWindow:      3,
 	}
 }
 
@@ -84,6 +84,29 @@ func DefaultLoopConfig() LoopConfig {
 type recentCall struct {
 	tool   string
 	params string
+}
+
+// lastRoleSnippet returns a truncated content snippet from the most
+// recent message with the given role in the request's messages
+// slice. Used by turn-by-turn instrumentation to surface what
+// actually reached the LLM. Returns "" when no message of that role
+// is present (a meaningful diagnostic in itself — e.g., empty
+// last_user means the LLM is being called with no user request,
+// which is the v1.0.6 empty-prompt bug pattern).
+func lastRoleSnippet(messages []llm.Message, role string, maxLen int) string {
+	if maxLen <= 0 {
+		maxLen = 200
+	}
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == role {
+			content := messages[i].Content
+			if len(content) > maxLen {
+				return content[:maxLen] + "…"
+			}
+			return content
+		}
+	}
+	return ""
 }
 
 // ReactTraceEntry records a single tool call for the flight recorder.
@@ -315,10 +338,33 @@ func (l *Loop) think(ctx context.Context, session *Session) (Action, error) {
 	// Build context-aware request.
 	req := l.context.BuildRequest(session)
 
-	log.Debug().
+	// v1.0.6: turn-by-turn instrumentation. Pre-v1.0.6 these log
+	// lines existed at DEBUG level without content snippets, so an
+	// operator watching live `roboticus serve` couldn't see WHICH
+	// specific user message reached the model on a given turn.
+	// That made the empty-prompt bug (where the user's request was
+	// being silently dropped from the LLM context due to budget
+	// underflow) invisible from the operator's perspective until the
+	// behavioral soak surfaced it after months. Promoting these to
+	// INFO with truncated content snippets means an operator
+	// running serve can now grep "agent loop: send/recv" and
+	// reconstruct the exact request/response of every turn — which
+	// would have caught the empty-prompt bug on first reproduction.
+	//
+	// Snippet length cap: 200 chars on each end of the
+	// representative content. Keeps log volume sane while
+	// preserving enough text for operators to recognize the
+	// scenario.
+	lastUserSnippet := lastRoleSnippet(req.Messages, "user", 200)
+	lastSystemSnippet := lastRoleSnippet(req.Messages, "system", 100)
+	log.Info().
+		Int("turn", turn).
+		Str("session", session.ID).
 		Int("tools_in_request", len(req.Tools)).
 		Int("messages", len(req.Messages)).
 		Str("model", req.Model).
+		Str("last_user", lastUserSnippet).
+		Str("last_system_prefix", lastSystemSnippet).
 		Msg("agent loop: sending LLM request")
 
 	resp, err := l.llm.Complete(ctx, req)
@@ -330,11 +376,18 @@ func (l *Loop) think(ctx context.Context, session *Session) (Action, error) {
 	// Matches Rust's sanitize_model_output pipeline.
 	resp.Content = SanitizeModelOutput(resp.Content, nil, l.injection)
 
-	log.Debug().
+	respSnippet := resp.Content
+	if len(respSnippet) > 200 {
+		respSnippet = respSnippet[:200] + "…"
+	}
+	log.Info().
+		Int("turn", turn).
+		Str("session", session.ID).
 		Int("tool_calls", len(resp.ToolCalls)).
 		Int("content_len", len(resp.Content)).
 		Str("finish_reason", resp.FinishReason).
 		Str("model", resp.Model).
+		Str("content_preview", respSnippet).
 		Msg("agent loop: LLM response received")
 
 	// Add assistant response to session history.

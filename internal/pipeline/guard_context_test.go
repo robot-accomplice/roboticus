@@ -59,16 +59,17 @@ func TestApplyFullWithContext_NilContext(t *testing.T) {
 
 func TestFullGuardChain_Length(t *testing.T) {
 	chain := FullGuardChain()
-	if len(chain.guards) != 27 {
-		t.Errorf("full chain has %d guards, want 27", len(chain.guards))
+	if len(chain.guards) != 28 {
+		t.Errorf("full chain has %d guards, want 28", len(chain.guards))
 	}
 }
 
 func TestStreamGuardChain_Length(t *testing.T) {
 	chain := StreamGuardChain()
-	// Rust parity: 6 guards (EmptyResponse, ExecutionTruth, TaskDeferral, ModelIdentityTruth, InternalJargon, NonRepetition)
-	if len(chain.guards) != 6 {
-		t.Errorf("stream chain has %d guards, want 6", len(chain.guards))
+	// Streaming chain includes clarification-deflection protection in addition
+	// to the lightweight truth/behavior guards.
+	if len(chain.guards) != 7 {
+		t.Errorf("stream chain has %d guards, want 7", len(chain.guards))
 	}
 }
 

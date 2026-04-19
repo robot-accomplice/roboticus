@@ -73,6 +73,16 @@ func TestMatrixAdapter_SyncOnce(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		resp := map[string]any{
 			"next_batch": "s12345",
+			"account_data": map[string]any{
+				"events": []map[string]any{
+					{
+						"type": "m.direct",
+						"content": map[string]any{
+							"@user:example.com": []string{"!room1:example.com"},
+						},
+					},
+				},
+			},
 			"rooms": map[string]any{
 				"join": map[string]any{
 					"!room1:example.com": map[string]any{
@@ -118,7 +128,37 @@ func TestMatrixAdapter_SyncOnce(t *testing.T) {
 		if msg.SenderID != "@user:example.com" {
 			t.Errorf("sender = %s", msg.SenderID)
 		}
+		if got := msg.Metadata["room_id"]; got != "!room1:example.com" {
+			t.Errorf("room_id = %v", got)
+		}
+		if got := msg.Metadata["sender_mxid"]; got != "@user:example.com" {
+			t.Errorf("sender_mxid = %v", got)
+		}
+		if got := msg.Metadata["is_direct"]; got != true {
+			t.Errorf("is_direct = %v", got)
+		}
+		if got := msg.Metadata["is_group"]; got != false {
+			t.Errorf("is_group = %v", got)
+		}
 	default:
 		t.Error("should have received an inbound message")
+	}
+}
+
+func TestMatrixDirectRooms_ParsesDirectAccountData(t *testing.T) {
+	events := []matrixAccountDataEvent{
+		{
+			Type:    "m.direct",
+			Content: json.RawMessage(`{"@alice:example.com":["!room1:example.com","!room2:example.com"]}`),
+		},
+		{
+			Type:    "m.ignored_user_list",
+			Content: json.RawMessage(`{"ignored_users":{}}`),
+		},
+	}
+
+	rooms := matrixDirectRooms(events)
+	if !rooms["!room1:example.com"] || !rooms["!room2:example.com"] {
+		t.Fatalf("direct rooms missing expected values: %#v", rooms)
 	}
 }

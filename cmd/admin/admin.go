@@ -1,8 +1,8 @@
 package admin
 
 import (
-	"roboticus/cmd/internal/cmdutil"
 	"fmt"
+	"roboticus/cmd/internal/cmdutil"
 
 	"github.com/spf13/cobra"
 )
@@ -75,4 +75,5 @@ var adminStatsCmd = &cobra.Command{
 func init() {
 	adminCmd.AddCommand(
 		adminRosterCmd, adminModelsCmd, adminSubagentsCmd, adminStatsCmd,
-	)}
+	)
+}

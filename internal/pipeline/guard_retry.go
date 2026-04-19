@@ -3,23 +3,26 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"roboticus/internal/core"
 )
 
 // RetryPolicy controls guard-triggered re-inference behavior.
 type RetryPolicy struct {
-	MaxRetries    int  // Maximum retry attempts (default 2)
-	InjectReason  bool // Append guard rejection reason to next prompt
-	PreserveChain bool // Carry forward rejected response as context
+	MaxRetries     int  // Maximum retry attempts (default 2)
+	InjectReason   bool // Append guard rejection reason to next prompt
+	PreserveChain  bool // Carry forward rejected response as context
+	ErrorOnExhaust bool // Return ErrGuardExhausted when last attempt still asks for retry
 }
 
 // DefaultRetryPolicy returns the standard retry policy.
 func DefaultRetryPolicy() RetryPolicy {
 	return RetryPolicy{
-		MaxRetries:    2,
-		InjectReason:  true,
-		PreserveChain: true,
+		MaxRetries:     2,
+		InjectReason:   true,
+		PreserveChain:  true,
+		ErrorOnExhaust: true,
 	}
 }
 
@@ -61,6 +64,11 @@ var guardRetryDirectives = map[string]RetryDirective{
 		GuardName:   "action_verification",
 		TokenBudget: 512,
 		Instruction: "Cross-reference your financial claims against actual tool execution results.",
+	},
+	"clarification_deflection": {
+		GuardName:   "clarification_deflection",
+		TokenBudget: 0,
+		Instruction: "Do not ask the user to restate context that is already present in the conversation. Answer directly from the available context unless a truly missing detail blocks progress.",
 	},
 }
 
@@ -113,37 +121,83 @@ func retryWithGuards(
 	guards *GuardChain,
 	policy RetryPolicy,
 ) (string, int, error) {
-	totalTurns := 0
+	result, err := retryWithGuardsDetailed(ctx, executor, session, guards, policy, nil)
+	if err != nil {
+		return "", result.Turns, err
+	}
+	return result.Content, result.Turns, nil
+}
+
+// GuardRetryRun is the full guard/inference retry outcome used by the live
+// pipeline path. It preserves the exact initial and final guard results so the
+// caller can annotate traces and persist the applied outcome without re-running
+// the guard chain out of band.
+type GuardRetryRun struct {
+	Content            string
+	Turns              int
+	GuardRetried       bool
+	InitialGuardResult ApplyResult
+	FinalGuardResult   ApplyResult
+}
+
+// retryWithGuardsDetailed is the authoritative guard-triggered retry
+// implementation for the live inference path.
+func retryWithGuardsDetailed(
+	ctx context.Context,
+	executor ToolExecutor,
+	session *Session,
+	guards *GuardChain,
+	policy RetryPolicy,
+	buildGuardContext func() *GuardContext,
+) (GuardRetryRun, error) {
+	run := GuardRetryRun{}
 	var lastReason string
+	var lastViolations []string
 
 	for attempt := 0; attempt <= policy.MaxRetries; attempt++ {
-		// Inject retry context if this is a retry.
 		if attempt > 0 && policy.InjectReason && lastReason != "" {
-			session.AddSystemMessage(fmt.Sprintf(
-				"Your previous response was rejected: %s. Please revise your response.",
-				lastReason,
-			))
+			prefix := "Your previous response was rejected"
+			if len(lastViolations) > 0 {
+				prefix = fmt.Sprintf("%s by the %s guard", prefix, strings.Join(lastViolations, ", "))
+			}
+			session.AddSystemMessage(fmt.Sprintf("%s: %s. Please revise.", prefix, lastReason))
 		}
 
 		content, turns, err := executor.RunLoop(ctx, session)
+		run.Turns += turns
 		if err != nil {
-			return "", totalTurns, err
-		}
-		totalTurns += turns
-
-		// No guards or empty chain — return as-is.
-		if guards == nil || guards.Len() == 0 {
-			return content, totalTurns, nil
+			return run, err
 		}
 
-		result := guards.ApplyFull(content)
-		if !result.RetryRequested {
-			return result.Content, totalTurns, nil
+		guardResult := applyGuardChainWithOptionalContext(guards, content, buildGuardContext)
+		if attempt == 0 {
+			run.InitialGuardResult = guardResult
+		}
+		run.FinalGuardResult = guardResult
+		run.Content = guardResult.Content
+
+		if guards == nil || guards.Len() == 0 || !guardResult.RetryRequested {
+			return run, nil
 		}
 
-		lastReason = result.RetryReason
+		run.GuardRetried = true
+		lastReason = guardResult.RetryReason
+		lastViolations = append([]string(nil), guardResult.Violations...)
 	}
 
-	return "", totalTurns, fmt.Errorf("%w: after %d attempts, last reason: %s",
+	if !policy.ErrorOnExhaust {
+		return run, nil
+	}
+	return run, fmt.Errorf("%w: after %d attempts, last reason: %s",
 		core.ErrGuardExhausted, policy.MaxRetries+1, lastReason)
+}
+
+func applyGuardChainWithOptionalContext(guards *GuardChain, content string, buildGuardContext func() *GuardContext) ApplyResult {
+	if guards == nil || guards.Len() == 0 {
+		return ApplyResult{Content: content}
+	}
+	if buildGuardContext != nil {
+		return guards.ApplyFullWithContext(content, buildGuardContext())
+	}
+	return guards.ApplyFull(content)
 }

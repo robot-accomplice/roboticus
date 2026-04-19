@@ -77,7 +77,7 @@ func TestAdaptiveBudget_TotalCharsWithinBudget(t *testing.T) {
 	result, metrics := retriever.RetrieveWithMetrics(ctx, sessionID, "test", totalTokens)
 
 	// Total chars used should never exceed the total budget.
-	maxChars := totalTokens * 4 // charsPerToken = 4
+	maxChars := totalTokens * 4     // charsPerToken = 4
 	if len(result) > maxChars+100 { // small tolerance for section headers
 		t.Errorf("result length %d exceeds budget %d chars", len(result), maxChars)
 	}

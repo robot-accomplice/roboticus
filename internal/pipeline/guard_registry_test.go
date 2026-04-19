@@ -8,9 +8,9 @@ func TestGuardRegistry_Chain(t *testing.T) {
 		preset    GuardSetPreset
 		wantCount int
 	}{
-		{"full set", GuardSetFull, 26},
-		{"stream set", GuardSetStream, 6},
-		{"cached set", GuardSetCached, 23}, // Includes FinancialActionTruthGuard
+		{"full set", GuardSetFull, 28},
+		{"stream set", GuardSetStream, 7},
+		{"cached set", GuardSetCached, 25}, // Includes Go-only additive guards such as placeholder_content
 		{"none set", GuardSetNone, 0},
 	}
 	for _, tt := range tests {
@@ -47,5 +47,44 @@ func TestGuardRegistry_Register(t *testing.T) {
 
 	if _, ok := reg.Get("empty_response"); !ok {
 		t.Error("registered guard not found")
+	}
+}
+
+func TestPipeline_GuardsForPreset_UsesRegistryWhenNoCustomGuards(t *testing.T) {
+	pipe := New(PipelineDeps{})
+
+	full := pipe.guardsForPreset(GuardSetFull)
+	cached := pipe.guardsForPreset(GuardSetCached)
+	stream := pipe.guardsForPreset(GuardSetStream)
+
+	if full == nil || cached == nil || stream == nil {
+		t.Fatal("expected preset guard chains to resolve from registry")
+	}
+	if full.Len() != NewDefaultGuardRegistry().Chain(GuardSetFull).Len() {
+		t.Fatalf("full preset len = %d, want registry len %d", full.Len(), NewDefaultGuardRegistry().Chain(GuardSetFull).Len())
+	}
+	if cached.Len() != NewDefaultGuardRegistry().Chain(GuardSetCached).Len() {
+		t.Fatalf("cached preset len = %d, want registry len %d", cached.Len(), NewDefaultGuardRegistry().Chain(GuardSetCached).Len())
+	}
+	if stream.Len() != NewDefaultGuardRegistry().Chain(GuardSetStream).Len() {
+		t.Fatalf("stream preset len = %d, want registry len %d", stream.Len(), NewDefaultGuardRegistry().Chain(GuardSetStream).Len())
+	}
+	if none := pipe.guardsForPreset(GuardSetNone); none != nil {
+		t.Fatal("GuardSetNone should resolve to nil guard chain")
+	}
+}
+
+func TestPipeline_GuardsForPreset_PreservesCustomGuardChains(t *testing.T) {
+	custom := NewGuardChain(&EmptyResponseGuard{})
+	pipe := New(PipelineDeps{Guards: custom})
+
+	if got := pipe.guardsForPreset(GuardSetFull); got != custom {
+		t.Fatal("custom guard chain should be preserved for explicit pipeline deps")
+	}
+	if got := pipe.guardsForPreset(GuardSetCached); got != custom {
+		t.Fatal("custom guard chain should be preserved across presets for explicit pipeline deps")
+	}
+	if got := pipe.guardsForPreset(GuardSetNone); got != nil {
+		t.Fatal("GuardSetNone should still disable custom guard chain")
 	}
 }

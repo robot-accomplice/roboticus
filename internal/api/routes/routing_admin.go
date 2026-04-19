@@ -3,6 +3,7 @@ package routes
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -11,8 +12,10 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"roboticus/internal/core"
 	"roboticus/internal/db"
 	"roboticus/internal/llm"
+	"roboticus/internal/pipeline"
 )
 
 const maxRoutingDatasetLimit = 50000
@@ -63,14 +66,15 @@ func GetRoutingDataset(store *db.Store) http.HandlerFunc {
 	}
 }
 
-// ExerciseModel runs the exercise matrix against a specific model and returns
-// per-prompt quality scores. This bypasses the pipeline (no session, no guards,
-// no memory) — it's a direct LLM quality measurement for baselining.
-func ExerciseModel(llmSvc *llm.Service, store *db.Store) http.HandlerFunc {
+// ExerciseModel runs the exercise matrix against a specific model through the
+// same pipeline-owned request path the CLI uses. Baselines must reflect real
+// runtime behavior, not a stripped direct-LLM bypass.
+func ExerciseModel(p pipeline.Runner, store *db.Store, cfg *core.Config, agentName string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			Model string `json:"model"`
-			RunID string `json:"run_id,omitempty"` // Caller-provided run ID for grouping results.
+			Model      string `json:"model"`
+			RunID      string `json:"run_id,omitempty"`     // Caller-provided run ID for grouping results.
+			Iterations int    `json:"iterations,omitempty"` // Optional parity with CLI exercise.
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid JSON body")
@@ -84,30 +88,9 @@ func ExerciseModel(llmSvc *llm.Service, store *db.Store) http.HandlerFunc {
 		if runID == "" {
 			runID = db.NewID()
 		}
-
-		// Persist each result as it completes — survives client disconnects.
-		// Uses background context so DB writes succeed even if the HTTP
-		// connection dies mid-exercise.
-		persistResult := llm.ExerciseCallback(func(index int, result llm.ExerciseResult) {
-			if store == nil {
-				return
-			}
-			_ = db.InsertExerciseResult(context.Background(), store, db.ExerciseResultRow{
-				ID:          db.NewID(),
-				RunID:       runID,
-				Model:       req.Model,
-				IntentClass: result.Prompt.Intent.String(),
-				Complexity:  result.Prompt.Complexity.String(),
-				Prompt:      result.Prompt.Prompt,
-				Content:     result.Content,
-				Quality:     result.Quality,
-				LatencyMs:   result.LatencyMs,
-				Passed:      result.Passed,
-				ErrorMsg:    result.Error,
-			})
-		})
-
-		results := llm.RunExercise(r.Context(), llmSvc, req.Model, llm.ExerciseMatrix, persistResult)
+		if req.Iterations < 1 {
+			req.Iterations = 1
+		}
 
 		type promptResult struct {
 			Intent     string  `json:"intent"`
@@ -119,58 +102,113 @@ func ExerciseModel(llmSvc *llm.Service, store *db.Store) http.HandlerFunc {
 			Passed     bool    `json:"passed"`
 			Error      string  `json:"error,omitempty"`
 		}
+		promptResults := make([]promptResult, 0, len(llm.ExerciseMatrix)*req.Iterations)
 
-		var pass, fail int
-		var totalQuality float64
-		intentQuality := make(map[string][]float64)
-		promptResults := make([]promptResult, len(results))
-
-		for i, res := range results {
-			intentStr := res.Prompt.Intent.String()
-			promptResults[i] = promptResult{
-				Intent:     intentStr,
-				Complexity: res.Prompt.Complexity.String(),
-				Prompt:     res.Prompt.Prompt,
-				Content:    res.Content,
-				Quality:    res.Quality,
-				LatencyMs:  res.LatencyMs,
-				Passed:     res.Passed,
-				Error:      res.Error,
+		onPrompt := func(o llm.PromptOutcome) {
+			pr := promptResult{
+				Intent:     o.Prompt.Intent.String(),
+				Complexity: o.Prompt.Complexity.String(),
+				Prompt:     o.Prompt.Prompt,
+				Content:    o.Content,
+				Quality:    o.Quality,
+				LatencyMs:  o.LatencyMs,
+				Passed:     o.Passed,
 			}
-			if res.Passed {
-				pass++
-			} else {
-				fail++
+			if o.Err != nil {
+				pr.Error = o.Err.Error()
 			}
-			totalQuality += res.Quality
-			intentQuality[intentStr] = append(intentQuality[intentStr], res.Quality)
+			promptResults = append(promptResults, pr)
+			if store == nil {
+				return
+			}
+			errMsg := ""
+			if o.Err != nil {
+				errMsg = o.Err.Error()
+			}
+			_ = db.InsertExerciseResult(context.Background(), store, db.ExerciseResultRow{
+				ID:          db.NewID(),
+				RunID:       runID,
+				Model:       req.Model,
+				IntentClass: o.Prompt.Intent.String(),
+				Complexity:  o.Prompt.Complexity.String(),
+				Prompt:      o.Prompt.Prompt,
+				Content:     o.Content,
+				Quality:     o.Quality,
+				LatencyMs:   o.LatencyMs,
+				Passed:      o.Passed,
+				ErrorMsg:    errMsg,
+			})
 		}
 
-		// Compute per-intent averages.
-		intentAvg := make(map[string]float64)
-		for intent, scores := range intentQuality {
-			var sum float64
-			for _, s := range scores {
-				sum += s
+		report, err := llm.ExerciseModels(r.Context(), llm.ExerciseRequest{
+			Models:       []string{req.Model},
+			Iterations:   req.Iterations,
+			SendPrompt:   pipelineExercisePromptSender(p, agentName),
+			SendWarmup:   pipelineExerciseWarmupSender(p, agentName),
+			OnPrompt:     onPrompt,
+			IsLocal:      func(model string) bool { return llm.ExerciseModelIsLocal(cfg, model) },
+			ModelTimeout: func(model string) time.Duration { return llm.ExerciseModelTimeout(cfg, model) },
+		})
+		if err != nil {
+			status := http.StatusInternalServerError
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				status = http.StatusRequestTimeout
 			}
-			intentAvg[intent] = sum / float64(len(scores))
+			writeError(w, status, err.Error())
+			return
 		}
-
-		avgQuality := 0.0
-		if len(results) > 0 {
-			avgQuality = totalQuality / float64(len(results))
-		}
+		modelResult := report.Models[0]
 
 		writeJSON(w, http.StatusOK, map[string]any{
 			"model":          req.Model,
 			"run_id":         runID,
-			"total":          len(results),
-			"pass":           pass,
-			"fail":           fail,
-			"avg_quality":    avgQuality,
-			"intent_quality": intentAvg,
+			"iterations":     req.Iterations,
+			"total":          len(promptResults),
+			"pass":           modelResult.Pass,
+			"fail":           modelResult.Fail,
+			"avg_quality":    modelResult.AvgQuality,
+			"intent_quality": modelResult.IntentQuality,
+			"warmup":         modelResult.Warmup,
 			"results":        promptResults,
 		})
+	}
+}
+
+func pipelineExercisePromptSender(p pipeline.Runner, agentName string) llm.ModelSender {
+	return func(ctx context.Context, model, content string, timeout time.Duration) (string, int64, error) {
+		callCtx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		start := time.Now()
+		outcome, err := pipeline.RunPipeline(callCtx, p, pipeline.PresetAPI(), pipeline.Input{
+			Content:       content,
+			AgentID:       "default",
+			AgentName:     agentName,
+			Platform:      "api",
+			ModelOverride: model,
+			NoCache:       true,
+			NoEscalate:    true,
+		})
+		latencyMs := time.Since(start).Milliseconds()
+		if err != nil {
+			return "", latencyMs, err
+		}
+		return outcome.Content, latencyMs, nil
+	}
+}
+
+func pipelineExerciseWarmupSender(p pipeline.Runner, agentName string) llm.WarmupSender {
+	sendPrompt := pipelineExercisePromptSender(p, agentName)
+	return func(ctx context.Context, model string, timeout time.Duration) llm.WarmupResult {
+		_, latencyMs, err := sendPrompt(ctx, model, llm.WarmupPrompt, timeout)
+		res := llm.WarmupResult{LatencyMs: latencyMs}
+		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+				res.TimedOut = true
+			} else {
+				res.Err = err
+			}
+		}
+		return res
 	}
 }
 

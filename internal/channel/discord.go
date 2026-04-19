@@ -156,7 +156,10 @@ func (d *DiscordAdapter) ProcessWebhook(data []byte) (*InboundMessage, error) {
 		ChatID:    msg.ChannelID,
 		Content:   msg.Content,
 		Timestamp: ts,
-		Metadata:  map[string]any{"guild_id": msg.GuildID},
+		Metadata: map[string]any{
+			"guild_id": msg.GuildID,
+			"is_group": msg.GuildID != "",
+		},
 	}, nil
 }
 

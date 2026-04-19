@@ -164,6 +164,11 @@ func (g *ExecutionTruthGuard) CheckWithContext(content string, ctx *GuardContext
 
 	// Check 2: Tools ran but model denies capability.
 	if len(ctx.ToolResults) > 0 {
+		for _, tr := range ctx.ToolResults {
+			if toolResultSignalsPolicyOrSandboxDenial(tr) {
+				return GuardResult{Passed: true}
+			}
+		}
 		lower := strings.ToLower(content)
 		denialPatterns := []string{
 			"i cannot", "i'm unable to", "i don't have the ability",
@@ -171,13 +176,11 @@ func (g *ExecutionTruthGuard) CheckWithContext(content string, ctx *GuardContext
 		}
 		for _, denial := range denialPatterns {
 			if strings.Contains(lower, denial) {
-				// Rewrite with actual tool results.
-				var summary strings.Builder
-				summary.WriteString("Here are the results from the tools I executed:\n\n")
-				for _, tr := range ctx.ToolResults {
-					fmt.Fprintf(&summary, "**%s**: %s\n", tr.ToolName, truncate(tr.Output, 500))
+				return GuardResult{
+					Passed: false,
+					Retry:  true,
+					Reason: "falsely denied execution despite real tool results",
 				}
-				return GuardResult{Passed: false, Content: summary.String()}
 			}
 		}
 	}
@@ -354,7 +357,15 @@ func (g *FilesystemDenialGuard) Check(content string) GuardResult {
 	}
 	return GuardResult{Passed: true}
 }
-func (g *FilesystemDenialGuard) CheckWithContext(content string, _ *GuardContext) GuardResult {
+
+func (g *FilesystemDenialGuard) CheckWithContext(content string, ctx *GuardContext) GuardResult {
+	if ctx != nil {
+		for _, tr := range ctx.ToolResults {
+			if toolResultSignalsPolicyOrSandboxDenial(tr) {
+				return GuardResult{Passed: true}
+			}
+		}
+	}
 	return g.Check(content)
 }
 

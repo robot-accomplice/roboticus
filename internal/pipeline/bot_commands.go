@@ -176,14 +176,9 @@ func (h *BotCommandHandler) cmdStatus(ctx context.Context, _ string, s *Session)
 		var cronTotal, cronFailed int
 		if err := h.store.QueryRowContext(ctx,
 			`SELECT COUNT(*) FROM cron_jobs`).Scan(&cronTotal); err == nil {
-			// Try both column names: 'timestamp' (new schema) and 'created_at' (old schema).
-			if h.store.QueryRowContext(ctx,
+			_ = h.store.QueryRowContext(ctx,
 				`SELECT COUNT(*) FROM cron_runs WHERE status = 'failed'
-				 AND timestamp > datetime('now', '-24 hours')`).Scan(&cronFailed) != nil {
-				_ = h.store.QueryRowContext(ctx,
-					`SELECT COUNT(*) FROM cron_runs WHERE status = 'failed'
-					 AND created_at > datetime('now', '-24 hours')`).Scan(&cronFailed)
-			}
+				 AND timestamp > datetime('now', '-24 hours')`).Scan(&cronFailed)
 			fmt.Fprintf(&b, "Cron: %d jobs (%d failed/24h)\n", cronTotal, cronFailed)
 		}
 
@@ -203,7 +198,7 @@ func (h *BotCommandHandler) cmdStatus(ctx context.Context, _ string, s *Session)
 		// Wallet balance.
 		var balance string
 		if err := h.store.QueryRowContext(ctx,
-			`SELECT COALESCE(total_balance, '0.00') FROM treasury_state
+			`SELECT printf('%.2f', COALESCE(usdc_balance, 0.0)) FROM treasury_state
 			 ORDER BY updated_at DESC LIMIT 1`).Scan(&balance); err == nil {
 			fmt.Fprintf(&b, "Wallet: $%s\n", balance)
 		}
