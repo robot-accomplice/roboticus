@@ -1,6 +1,6 @@
 # Architecture Gap Report: Go Implementation vs Rust Reference
 
-**Date**: 2026-04-15 (updated after M3.1 / M3.2 / M8 / M3.3)
+**Date**: 2026-04-19
 **Auditor**: Automated deep audit (3 parallel agents)
 **Scope**: Connector-factory compliance, security architecture, tool execution, context management, real-time transport, agentic retrieval architecture
 **Reference**: `/Users/jmachen/code/roboticus-rust/ARCHITECTURE.md`
@@ -9,7 +9,7 @@
 
 ## Executive Summary
 
-The Go implementation achieves **full structural compliance** with the connector-factory pattern. The pipeline is the single source of truth for business logic, all 8 entry points use `RunPipeline()`, and architecture tests enforce connector thinness. **All 7 original systemic gaps are now CLOSED** (v1.0.1 + v1.0.2 + v1.0.4), but the broader parity-forensics program is still in progress and continues to surface deeper runtime-classification seams outside that original seven-gap set.
+The Go implementation achieves **full structural compliance** with the connector-factory pattern. The pipeline is the single source of truth for business logic, all 8 entry points use `RunPipeline()`, and architecture tests enforce connector thinness. **All 7 original systemic gaps are now CLOSED** (v1.0.1 + v1.0.2 + v1.0.4), and the broader parity-forensics program has now been distilled into final validated or explicitly deferred dispositions rather than exploratory runtime-classification seams.
 
 v1.0.5 introduced the **agentic retrieval architecture** scaffold — decomposer, router, reranker, context assembly, reflection, and working-memory persistence. v1.0.6 has now carried that scaffold much farther into runtime reality: router-selected retrieval modes influence actual tier retrieval, semantic / procedural / relationship / workflow reads are HybridSearch-first with per-tier `retrieval.path.*` trace attribution, semantic and relationship evidence preserve stronger provenance/freshness signals, the verifier consumes pipeline-computed task hints and claim-level proof obligations, a persisted graph-fact store now exists in production with reusable traversal APIs, and enriched episode distillation now promotes recurring canonical triples into `knowledge_facts`. The main remaining retrieval cleanup is operator-observed retirement of residual `LIKE` safety nets by tier, not missing architecture plumbing.
 
@@ -250,6 +250,59 @@ implicit in earlier releases:
 This is not just "more guards." It is an ownership correction: policy and tool
 runtime define what actually happened; post-inference guards are only allowed to
 police fabricated narration around that outcome.
+
+### v1.0.6 Final Closure Verdict
+
+The parity program for v1.0.6 is now **decision-complete**.
+
+- Every scoped parity system has a final disposition in
+  `docs/parity-forensics/parity-ledger.md`.
+- The codebase was materially strengthened in ways that are now backed by both
+  runtime tests and durable architecture documentation.
+- Prompt compression is **not** part of that strengthening story for this
+  release. It failed the corrected history-bearing soak gate and remains
+  disabled/deferred.
+
+The explicit release-readiness answer for v1.0.6 is:
+
+**Yes** — the code was materially strengthened, and the docs now record that
+strengthening truthfully, with the remaining deferred items called out
+explicitly rather than hidden behind vague unresolved language.
+
+### Final Audits
+
+#### Architectural Audit
+
+- Single ownership is now explicit for the highest-risk seams:
+  request construction, tool pruning, routing truth, checkpoint lifecycle,
+  plugin runtime lifecycle, webhook normalization, MCP runtime tool sync, and
+  policy/sandbox truth.
+- The major shadow-path contradictions found during parity work were either
+  removed or demoted out of the live path.
+- Durable docs now reflect the validated ownership model rather than the older
+  generic container story alone.
+
+#### Functional Audit
+
+- Release-facing claims are supportable by the runtime and tests.
+- Channel, scheduler, MCP, cache, and guard behavior now match their documented
+  operator contracts closely enough to treat remaining differences as accepted
+  deviations or explicit deferrals.
+- Prompt compression is clearly disabled/deferred and is not being presented as
+  a release-ready feature.
+
+#### Fitness Audit
+
+- Test coverage now pins the newly closed seams directly, including request
+  artifact invariants, selected tool-surface reuse, routing trace truth,
+  checkpoint lifecycle, MCP timeout/tool-surface truth, and route-family
+  observability contracts.
+- Observability surfaces are materially more truthful: canonical route-family
+  ownership is explicit, dead MCP transports no longer masquerade as healthy,
+  and release notes now function as audited truth surfaces rather than vague
+  confidence prose.
+- The recent fixes reduced ambiguity and drift overall; they did not add new
+  broad subsystems or placeholder abstractions.
 
 ### Request Artifact Ownership
 v1.0.6 clarified that the final `llm.Request` is itself an architectural

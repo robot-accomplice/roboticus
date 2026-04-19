@@ -684,6 +684,60 @@ func TestBuildAgentContext_PromptToolRosterClearsWhenSelectedDefsEmpty(t *testin
 	}
 }
 
+func TestBuildAgentContext_ReusesSelectedToolSurfaceAcrossLoopTurns(t *testing.T) {
+	sess := session.New("s1", "a1", "TestBot")
+	sess.AddUserMessage("use a tool if needed")
+	sess.SetSelectedToolDefs([]llm.ToolDef{
+		{
+			Type: "function",
+			Function: llm.ToolFuncDef{
+				Name:        "echo",
+				Description: "Echo a string back",
+			},
+		},
+	})
+
+	reg := agent.NewToolRegistry()
+	reg.Register(&tools.EchoTool{})
+	reg.Register(&tools.WebSearchTool{})
+
+	ctx := buildAgentContext(context.Background(), sess, nil, reg, nil, tools.DefaultToolSearchConfig(), agent.PromptConfig{
+		AgentName: "TestBot",
+		ToolNames: []string{"echo", "web_search"},
+		ToolDescs: [][2]string{
+			{"echo", "Echo a string back"},
+			{"web_search", "Search the web"},
+		},
+	}, nil, nil)
+
+	req1 := ctx.BuildRequest(sess)
+	if len(req1.Tools) != 1 || req1.Tools[0].Function.Name != "echo" {
+		t.Fatalf("first request tool surface = %+v, want only echo", req1.Tools)
+	}
+
+	sess.AddAssistantMessage("I will use echo.", []llm.ToolCall{{
+		ID:   "call-1",
+		Type: "function",
+		Function: llm.ToolCallFunc{
+			Name:      "echo",
+			Arguments: `{"text":"hello"}`,
+		},
+	}})
+	sess.AddToolResult("call-1", "echo", "hello", false)
+	sess.AddUserMessage("continue")
+
+	req2 := ctx.BuildRequest(sess)
+	if len(req2.Tools) != 1 || req2.Tools[0].Function.Name != "echo" {
+		t.Fatalf("loop-turn request tool surface = %+v, want only echo", req2.Tools)
+	}
+	if strings.Contains(req2.Messages[0].Content, "**web_search**") {
+		t.Fatal("prompt roster drifted back to registry tools on later loop turn")
+	}
+	if !strings.Contains(req2.Messages[0].Content, "**echo**") {
+		t.Fatal("prompt roster lost the selected tool on later loop turn")
+	}
+}
+
 func TestBuildAgentContext_IntrospectionQueryGetsCapabilitySnapshot(t *testing.T) {
 	store := testutil.TempStore(t)
 	_, err := store.ExecContext(context.Background(),

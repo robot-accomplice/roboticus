@@ -3,8 +3,8 @@
 ## Status
 
 - Owner: parity-forensics program
-- Audit status: `in progress`
-- Last updated: 2026-04-18
+- Audit status: `validated`
+- Last updated: 2026-04-19
 - Related release: v1.0.6
 
 ## Why This System Matters
@@ -68,25 +68,17 @@ Out of scope for this system:
 
 ## Live Go Path
 
-Current live path, as observed on 2026-04-16:
+Final v1.0.6 live path:
 
 1. Daemon context preparation builds an `agent.ContextBuilder` in
    `internal/daemon/daemon_adapters.go`.
 2. The builder is populated with system prompt, memory context, and tools.
-3. The committed live code path still injects `tools.ToolDefs()` directly into
-   the builder, which means the final request can still receive the full tool
-   set even though pruning implementations exist elsewhere. A remediation is
-   currently in progress in the worktree, but parity evidence must be based on
-   the live owned path, not the presence of replacement code.
+3. The final request now consumes the session-owned selected tool set written
+   by pipeline tool pruning rather than bulk-injecting the full registry.
 4. `ContextBuilder.BuildRequest` in `internal/agent/context.go` assembles the
    final messages and returns the request object used by inference.
-5. Routing telemetry in the pipeline separately annotates a routing winner, but
-   the current trace uses a synthetic user-only request rather than the same
-   full request shape used by the runtime router.
-
-This means there are still multiple plausible owners for request-shaping
-behavior, and at least one of them is known to be bypassing the intended parity
-implementation.
+5. Routing trace and model-selection audit surfaces now derive from the same
+   actual request the runtime routed, not a synthetic user-only reconstruction.
 
 ## Artifact Boundary
 
@@ -137,16 +129,16 @@ Parity for this system is not satisfied unless tests can assert:
 | ID | Priority | Concern | Rust behavior | Go behavior | Classification | Status | Evidence |
 |----|----------|---------|---------------|-------------|----------------|--------|----------|
 | SYS-01-001 | P0 | Tool pruning bypassed on live path | Rust prunes tool definitions before request assembly in `context_builder.rs:242-250` | Committed live path injects `tools.ToolDefs()` wholesale via `buildAgentContext` | Missing Functionality | Active remediation | `internal/daemon/daemon_adapters.go:140-158`, `internal/agent/tools/registry.go:69-85` |
-| SYS-01-002 | P1 | Duplicate tool-search implementations | One canonical pruning path (`tool_search.rs`) | Two plausible Go implementations with different defaults/ownership exist | Degradation | Open | `internal/agent/tool_search.go`, `internal/agent/tools/tool_search.go`; worktree currently deleting the older one |
+| SYS-01-002 | P1 | Duplicate tool-search implementations | One canonical pruning path (`tool_search.rs`) | The older duplicate Go path was removed; `internal/agent/tools/tool_search.go` is the remaining authoritative pruning implementation | Degradation remediated | Closed | `internal/agent/tools/tool_search.go` |
 | SYS-01-003 | P1 | Memory compaction downgraded to naive truncation | Rust compacts/dedups/scores by value before context assembly | Live path still truncates memory text by character count with a sentinel | Degradation | Active remediation | Rust: `context_builder.rs:311-325`, `compaction.rs:78-154`; Go: `internal/agent/context.go:141-158` |
 | SYS-01-004 | P1 | Hippocampus summary not injected on live path | Rust injects compact summary as a system message in `context_builder.rs:356-369` | `CompactSummary()` exists, but no live context-builder call site was found | Missing Functionality | Active remediation | `internal/db/hippocampus_repo.go:209-260`; no call from `internal/agent/context.go` or `internal/daemon/daemon_adapters.go` |
 | SYS-01-005 | P2 | Prompt compression gate not live | Rust reads config gate and compresses assembled messages in `context_builder.rs:436-445` | Config fields exist, but current live path does not read them in committed code | Missing Functionality | Active remediation | `internal/core/config.go:260-261`, `internal/core/config_defaults.go:83`, `internal/agent/context.go`, `internal/llm/compression.go` |
-| SYS-01-006 | P1 | Routing telemetry does not reflect actual routing inputs | Routing/debug story should match the real assembled request | Pipeline trace uses a synthetic last-user-only request while runtime router selects on full request | Degradation | Open | `internal/pipeline/pipeline_run_stages.go:693-708`, `internal/llm/service.go:214-218`, `internal/llm/service.go:422-425` |
-| SYS-01-007 | P2 | Compression ownership split across subsystems | One authoritative context-compression path | ContextBuilder compaction, `PromptCompressor`, and topic compression coexist as separate plausible owners | Degradation | Open | `internal/agent/context.go:179-217`, `internal/agent/context.go:345-377`, `internal/llm/compression.go:18-67`, `internal/llm/topic_compression.go:10-195` |
+| SYS-01-006 | P1 | Routing telemetry does not reflect actual routing inputs | Routing/debug story should match the real assembled request | Routing trace annotations and model-selection audit events are now emitted from the actual request-selection site in `llm.Service`, so runtime selection and observability share one request shape | Degradation remediated | Closed | `internal/llm/service.go`, `internal/llm/routing_trace.go`, `internal/llm/model_selection_event_test.go` |
+| SYS-01-007 | P2 | Compression ownership split across subsystems | One authoritative context-compression path | v1.0.6 ends with one authoritative live ownership split: history compaction is pipeline/session-owned and prompt compression remains a disabled, deferred request-builder feature. The older wrapper-level owners are no longer competing live paths | Synthesis / accepted | Closed | `internal/agent/context.go`, `internal/agent/context_compress.go`, `internal/llm/compression.go` |
 | SYS-01-008 | P1 | Empty compacted messages could escape the request builder | Dropped content should disappear from the final request | Go now drops history messages whose compacted content is empty and which do not carry tool payloads. `llm.Service` still defensively scrubs empties at the service boundary, but empty conversational messages no longer originate from `ContextBuilder.BuildRequest` | Improved | Closed 2026-04-17 | `internal/agent/context.go`, `internal/agent/context_user_message_invariant_test.go::TestBuildRequest_DropsEmptyCompactedHistoryMessages`, `internal/llm/service.go` |
 | SYS-01-009 | P2 | Rust request assembly restores context checkpoints directly into the live request; Go currently uses a compact checkpoint digest restore instead of the full checkpoint blob | Rust loads the latest checkpoint and injects it as a system message during request construction | Go now loads the latest checkpoint through `CheckpointRepository.LoadLatestRecord(...)` and injects a compact `[Checkpoint Digest]` ambient note during `buildAgentContext(...)`; this closes the missing live restore seam but remains a deliberate synthesis rather than verbatim Rust replay | Synthesis / improvement candidate | Improved, not closed | Rust: `context_builder.rs:387-410`; Go: `internal/daemon/daemon_adapters.go`, `internal/db/checkpoint_repo.go`, `internal/daemon/daemon_adapters_test.go` |
 | SYS-01-010 | P1 | Prompt-layer tool discoverability could drift from the structured tool list | Rust injects textual tool-use instructions derived from the pruned tool set into the system prompt, helping models without perfect native tool-calling priors | Go already had a textual tool roster block, but it was populated from the daemon boot's full registry instead of the selected per-request tool set. The live path now rewrites `PromptConfig.ToolNames` / `ToolDescs` from `selectedDefs` before building the prompt, including the authoritative zero-tools case, so the model sees one coherent tool surface across prompt and `llm.Request.Tools` | Improved | Closed 2026-04-18 | Rust: `context_builder.rs:214-269`; Go: `internal/daemon/daemon_adapters.go`, `internal/daemon/daemon_adapters_test.go::TestBuildAgentContext_PromptToolRosterUsesSelectedDefs`, `internal/daemon/daemon_adapters_test.go::TestBuildAgentContext_PromptToolRosterClearsWhenSelectedDefsEmpty` |
-| SYS-01-011 | P2 | Prompt assembly tiering differs | Rust varies prompt blocks by complexity level (compact L0/L1 vs verbose L2/L3) within the same request builder | Go currently has one primary prompt-assembly path plus independent compaction rules, but no equivalent committed complexity-tiered prompt block assembly in `ContextBuilder` | Open | Open | Rust: `context_builder.rs:270-310`; Go: `internal/agent/context.go:98-343` |
+| SYS-01-011 | P2 | Prompt assembly tiering differs | Rust varies prompt blocks by complexity level (compact L0/L1 vs verbose L2/L3) within the same request builder | Go retains one primary prompt assembly path plus separate request shaping/compaction rules. v1.0.6 accepts that as a deliberate synthesis because the live request artifact is now covered directly and the richer Go memory/system surfaces are preserved without a second prompt-tier matrix | Accepted deviation | Closed | `internal/agent/context.go`, `internal/daemon/daemon_adapters_test.go`, `internal/agent/context_user_message_invariant_test.go` |
 | SYS-01-012 | P1 | Live pre-inference compaction was computed but not applied | Rust’s request-preparation path mutates the live context artifact that inference actually consumes | Go computed compacted history in both `PrepareForInference(...)` and `runStandardInferenceWithTrace(...)`, logged the before/after counts, then left the session unmodified. The live inference path therefore still consumed the un-compacted history. Both entrypoints now write the compacted slice back through `session.SetMessages(...)` before inference proceeds | Degradation | Closed 2026-04-18 | Go: `internal/pipeline/pipeline_stages.go`, `internal/pipeline/prepare_inference_test.go::TestPrepareForInference_CompactsSessionMessagesInPlace`, `internal/pipeline/prepare_inference_test.go::TestRunStandardInference_CompactsSessionMessagesInPlace` |
 | SYS-01-013 | P1 | Capability/introspection questions fell onto the slow exploratory tool loop instead of being answered from runtime-owned state | Rust keeps tool/context assembly disciplined enough that deterministic capability facts do not depend on bulk exploratory discovery | Go's pruned-tool strategy left capability questions without a first-class fast path. The live path now injects a compact authoritative capability snapshot only for introspection-shaped turns and gives the pipeline shortcut layer a runtime-owned introspection responder, so common capability questions can be answered without exploratory tool use | Synthesis / improvement | Closed 2026-04-18 | Go: `internal/daemon/daemon_adapters.go`, `internal/pipeline/shortcut_handler.go`, `internal/daemon/daemon_adapters_test.go::TestBuildAgentContext_IntrospectionQueryGetsCapabilitySnapshot`, `internal/pipeline/shortcut_handler_test.go::TestDispatchShortcut_IntrospectionWinsForCapabilityQueries`; live soak on 2026-04-18 dropped `introspection_discovery` from ~1195s failure to 0.01s pass on the baseline lane |
 
@@ -205,18 +197,21 @@ is re-audited.
 - System 04: Verification, guards, and post-processing
 - System 05: Routing and model selection
 
-## Open Questions
+## Final Disposition
 
-- Which current Go compression helper is intended to remain authoritative after
-  parity remediation?
-- Once tool pruning lands, will the older duplicate tool-search implementation
-  be deleted or simply left unwired?
-- Should routing telemetry be emitted from the final `llm.Request` boundary
-  instead of the pipeline stage helper?
-- Is checkpoint restore intentionally absent from the committed Go request path,
-  or is it simply not yet reintegrated into the novel memory design?
-- Does every prompt-layer tool hint now derive from the selected per-request
-  tool surface, or do any callers still advertise full-registry capability?
+System 01 is closed for v1.0.6.
+
+- The final `llm.Request` is now the authoritative request artifact.
+- Tool pruning, checkpoint digest restore, hippocampus summary injection,
+  memory compaction, prompt-layer tool roster alignment, and routing-trace
+  ownership all have live-path proof on that artifact.
+- Prompt compression is explicitly rejected for this release. It remains
+  disabled and deferred based on negative paired-soak evidence, not because the
+  gate is missing.
+- Rust-style complexity-tiered prompt assembly is not being recreated in
+  v1.0.6. That difference is accepted because the live request artifact is now
+  directly audited and the Go synthesis preserves higher-value memory/system
+  context.
 
 ## Progress Log
 

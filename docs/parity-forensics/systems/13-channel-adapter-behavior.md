@@ -3,8 +3,8 @@
 ## Status
 
 - Owner: parity-forensics program
-- Audit status: `in progress`
-- Last updated: 2026-04-17
+- Audit status: `validated`
+- Last updated: 2026-04-19
 - Related release: v1.0.6
 
 ## Why This System Matters
@@ -78,7 +78,7 @@ route preserves when constructing the normalized inbound message.
 |----|----------|---------|---------------|-------------|----------------|--------|----------|
 | SYS-13-001 | P1 | Webhook normalization is split between route handlers and adapters | Rust channel ingress ownership needs explicit comparison | Closed in v1.0.6 remediation: Telegram and WhatsApp routes now consume adapter-owned webhook normalization (`ProcessWebhookBatch(...)`) and bridge normalized `InboundMessage` values into the pipeline instead of parsing transport JSON directly in the route layer | Degradation / split ownership | Closed | `internal/api/routes/admin_webhooks.go`, `internal/api/routes/admin_webhooks_test.go`, `internal/channel/telegram.go`, `internal/channel/whatsapp.go` |
 | SYS-13-002 | P2 | Router remains structurally thin and formatting-owned, not behavior-owned | Rust connector thinness intent | `channel.Router` only polls adapters, formats outbound content per platform, and manages delivery/health state; it does not own business decisions | Idiomatic shift / accepted | Accepted | `internal/channel/router.go`, `internal/channel/formatter.go` |
-| SYS-13-003 | P2 | Transport metadata preservation differs by adapter and needs explicit classification | Rust per-channel metadata mapping needs comparison | The live adapters now preserve a more coherent normalized baseline: Telegram emits `is_group`, `chat_type`, and `sender_username`; Signal emits `is_group`; Discord emits `is_group` plus `guild_id`; WhatsApp emits `is_group`, `sender_phone`, and `message_type`; Matrix preserves `room_id`, `sender_mxid`, authoritative `is_direct`, and now explicit `is_group=false` when `m.direct` proves the room is a DM. Full Matrix room-vs-group classification is still open because absence of `m.direct` is not an authoritative group signal. | Improved, not closed | Open | `internal/channel/telegram.go`, `internal/channel/signal.go`, `internal/channel/discord.go`, `internal/channel/discord_gateway.go`, `internal/channel/whatsapp.go`, `internal/channel/matrix.go`, coverage tests |
+| SYS-13-003 | P2 | Transport metadata preservation differs by adapter and needs explicit classification | Rust per-channel metadata mapping needs comparison | The live adapters now preserve a coherent normalized baseline. Matrix intentionally stops at authoritative `is_direct` / `is_group=false` when `m.direct` is present and leaves other rooms unclassified rather than inventing stronger metadata than the transport can prove. v1.0.6 accepts that as a transport limitation, not a missing behavior | Accepted transport limitation | Closed | `internal/channel/telegram.go`, `internal/channel/signal.go`, `internal/channel/discord.go`, `internal/channel/discord_gateway.go`, `internal/channel/whatsapp.go`, `internal/channel/matrix.go`, coverage tests |
 | SYS-13-004 | P2 | Outbound formatting is richer and centralized | Rust formatter behavior needs comparison | `FormatFor(platform)` strips internal orchestration metadata and converts markdown to platform-native syntax before send | Likely improvement | Accepted | `internal/channel/formatter.go`, `internal/channel/formatter_parity_test.go` |
 | SYS-13-005 | P1 | WhatsApp challenge/signature checks were not owned by the adapter contract on the live route path | Rust transport verification ownership needs explicit comparison | Closed in v1.0.6 remediation: the WhatsApp GET verification route now uses the adapter verifier instead of an empty hardcoded token, and the POST webhook path validates `X-Hub-Signature-256` through the adapter before normalization | Missing functionality / split ownership | Closed | `internal/api/routes/admin_webhooks.go`, `internal/api/routes/admin_webhooks_test.go`, `internal/channel/whatsapp.go` |
 
@@ -102,12 +102,14 @@ metadata classification, not duplicate ingress parsing.
 - System 07: service/config lifecycle
 - System 09: observability
 
-## Open Questions
+## Final Disposition
 
-- Which channel surfaces are truly behaviorally distinct enough to require their
-  own sub-audits?
-- Telegram/WhatsApp now delegate webhook normalization to adapters. Should the
-  same single-owner rule be applied anywhere else ingress parsing is duplicated?
+System 13 is closed for v1.0.6.
+
+- Webhook normalization is adapter-owned where it should be.
+- The normalized metadata contract is explicit.
+- Matrix ambiguity beyond authoritative `m.direct` is accepted as a transport
+  limitation rather than patched with invented semantics.
 
 ## Progress Log
 

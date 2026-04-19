@@ -3,8 +3,8 @@
 ## Status
 
 - Owner: parity-forensics program
-- Audit status: `in progress`
-- Last updated: 2026-04-18
+- Audit status: `validated`
+- Last updated: 2026-04-19
 - Related release: v1.0.6
 
 ## Why This System Matters
@@ -75,7 +75,7 @@ replay-specific logic.
 | ID | Priority | Concern | Rust behavior | Go behavior | Classification | Status | Evidence |
 |----|----------|---------|---------------|-------------|----------------|--------|----------|
 | SYS-14-001 | P1 | Pipeline cache stage previously drifted from live TTL semantics | Cached responses should remain behaviorally equivalent enough to fresh inference | Closed in v1.0.6: pipeline cache reads now honor `expires_at`, pipeline cache writes stamp the same SQLite-friendly TTL window as the main LLM cache, and the pipeline owns its configured TTL explicitly instead of relying on timeless rows | Remediated | Closed | `internal/pipeline/pipeline_cache.go`, `internal/pipeline/pipeline.go`, `internal/daemon/daemon.go`, `internal/pipeline/behavioral_fitness_test.go` |
-| SYS-14-002 | P1 | Prompt compression quality risk needs its own cache-aware audit surface | Rust had a compression gate, but quality acceptance must be proved, not assumed | Go now has a paired soak harness specifically because the feature is considered suspect until live evidence clears it. The corrected multi-turn history-bearing soak failed decisively on 2026-04-19: baseline passed `3/3`, compression passed `0/3`, with severe latency inflation and lost history recall. Compression is therefore not accepted for v1.0.6. | Degradation | Open, rejected for release | `scripts/run-prompt-compression-soak.py`, `/tmp/roboticus-prompt-compression-soak-report-rerun.json`, release notes |
+| SYS-14-002 | P1 | Prompt compression quality risk needs its own cache-aware audit surface | Rust had a compression gate, but quality acceptance must be proved, not assumed | The corrected multi-turn history-bearing soak failed decisively on 2026-04-19: baseline passed `3/3`, compression passed `0/3`, with severe latency inflation and lost history recall. Prompt compression is explicitly deferred and disabled for v1.0.6 | Deferred with negative evidence | Closed for v1.0.6 | `scripts/run-prompt-compression-soak.py`, `/tmp/roboticus-prompt-compression-soak-report-rerun.json`, release notes |
 | SYS-14-003 | P1 | Streaming no-escalate requests previously still allowed cache replay | Benchmark/no-escalate paths should measure fresh model behavior consistently across complete and stream modes | Closed in v1.0.6: `Service.Stream(...)` now mirrors `Complete(...)` and skips cache replay when `NoEscalate` is set directly or via context | Remediated | Closed | `internal/llm/service.go`, `internal/llm/coverage_boost_test.go` |
 | SYS-14-004 | P2 | Maintenance cleanup carried a second cache-expiry rule outside the live cache path | Cache cleanup should age out rows on the same `expires_at` contract used by lookup/write paths | `MaintenanceLoopTask` now deletes expired rows from the live `semantic_cache` table by `expires_at <= now` instead of a separate age heuristic on a stale `response_cache` name, removing both the second expiration rule and the stale-table drift | Remediated | Closed | `internal/schedule/tasks.go`, `internal/schedule/tasks_test.go`, `internal/pipeline/pipeline_cache.go`, `internal/llm/cache.go` |
 | SYS-14-005 | P1 | Pipeline cache keyed only on normalized user text and ran before request shaping completed | Cache replay should not cross materially different conversation/memory/tool scaffolds, and benchmark/no-escalate turns must bypass replay on the live pipeline path too | Closed in v1.0.6: pipeline cache lookup now runs after tool pruning and hippocampus summary, fingerprints the shaped session scaffold (history, memory artifacts, selected tools, channel/agent context), and skips both replay and store when `NoEscalate` is set | Remediated | Closed | `internal/pipeline/pipeline.go`, `internal/pipeline/pipeline_cache.go`, `internal/pipeline/pipeline_run_stages.go`, `internal/pipeline/behavioral_fitness_test.go` |
@@ -95,10 +95,13 @@ surprise behavior and deserve a first-class artifact boundary.
 - System 04: guards and post-processing
 - System 05: routing and model selection
 
-## Open Questions
+## Final Disposition
 
-- Which replay surfaces besides the main semantic cache materially affect live
-  behavior?
+System 14 is closed for v1.0.6.
+
+- Cache replay semantics now follow the live TTL and shaped-request contract.
+- Prompt compression is not an open question anymore. It failed the release
+  gate and is explicitly deferred.
 
 ## Progress Log
 

@@ -3,7 +3,7 @@
 ## Status
 
 - Owner:
-- Audit status: `not started | in progress | remediation in progress | validated`
+- Audit status: `draft | validated | accepted deviation | deferred`
 - Last updated:
 - Related release:
 
@@ -71,7 +71,7 @@ Example prompts:
 
 | ID | Priority | Concern | Rust behavior | Go behavior | Classification | Status | Evidence |
 |----|----------|---------|---------------|-------------|----------------|--------|----------|
-| SYS-NN-001 | P1 | Example | ... | ... | Degradation | Open | file anchors |
+| SYS-NN-001 | P1 | Example | ... | ... | Degradation | Draft | file anchors |
 
 ## Intentional Deviations
 
@@ -95,9 +95,10 @@ Tie remediation notes back to the success criteria and artifact boundary.
 
 List systems that must be revisited after this one changes.
 
-## Open Questions
+## Final Disposition
 
-- Question 1
+- State the final disposition explicitly.
+- List accepted deviations or deferred items with rationale.
 
 ## Progress Log
 

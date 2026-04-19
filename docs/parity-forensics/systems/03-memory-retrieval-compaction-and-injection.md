@@ -3,8 +3,8 @@
 ## Status
 
 - Owner: parity-forensics program
-- Audit status: `in progress`
-- Last updated: 2026-04-16
+- Audit status: `validated`
+- Last updated: 2026-04-19
 - Related release: v1.0.6
 
 ## Why This System Matters
@@ -170,17 +170,19 @@ Acceptance bar for closure:
 - System 04: Verification, guards, and post-processing
 - System 06: Session continuity, persistence, and learning
 
-## Open Questions
+## Final Disposition
 
-- Once System 01 lands, does the final request still contain any naive memory
-  truncation path at all?
-- Is the session-boundary compatibility derivation still needed once all test,
-  smoke, and ad-hoc callers populate `VerificationEvidence` directly?
-- Does any live downstream consumer still depend on `MemoryContext` section
-  formatting, or is the remaining format-sensitive logic now fully isolated to
-  compatibility normalization?
-- Do the richer Go recall/search behaviors create any ranking or prompt-budget
-  side effects that need their own system-level audit?
+System 03 is closed for v1.0.6.
+
+- Stage 8.5 is the production owner for memory context, memory index, and
+  typed verification evidence.
+- The verifier no longer parses rendered memory text on the live path.
+- The only remaining format-sensitive logic is the session-boundary
+  compatibility normalization for older callers that still set only
+  `MemoryContext`. That is accepted as an intentional compatibility layer, not
+  a downstream degradation.
+- `search_memories` and the richer `recall_memory` lookup remain accepted
+  Go-native improvements.
 
 ## Progress Log
 

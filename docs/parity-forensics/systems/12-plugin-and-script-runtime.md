@@ -3,8 +3,8 @@
 ## Status
 
 - Owner: parity-forensics program
-- Audit status: `in progress`
-- Last updated: 2026-04-17
+- Audit status: `validated`
+- Last updated: 2026-04-19
 - Related release: v1.0.6
 
 ## Why This System Matters
@@ -107,14 +107,13 @@ ownership surface.
 - System 08: MCP and external integrations
 - System 10: security / policy / sandbox semantics
 
-## Open Questions
+## Final Disposition
 
-- Are plugins and scripts best kept in one system doc now that the execution
-  contract is shared, or should the wrappers split later once the remaining
-  wrapper-only seams are fully classified?
-- Are there still any plugin-backed tool lifecycles that bypass the main
-  selected/pruned `llm.Request.Tools` surface, or is the remaining work now
-  entirely about script-runtime classification?
+System 12 is closed for v1.0.6.
+
+- Plugin discovery/init, install-time hot loading, tool-surface sync, and
+  script execution contract now have one coherent runtime ownership story.
+- Remaining differences are wrapper ergonomics, not runtime drift.
 
 ## Progress Log
 

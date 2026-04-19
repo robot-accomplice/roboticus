@@ -3,8 +3,8 @@
 ## Status
 
 - Owner: parity-forensics program
-- Audit status: `in progress`
-- Last updated: 2026-04-16
+- Audit status: `validated`
+- Last updated: 2026-04-19
 - Related release: v1.0.6
 
 ## Why This System Matters
@@ -60,16 +60,16 @@ Out of scope:
 
 ## Live Go Path
 
-Current observed state on 2026-04-16:
+Final v1.0.6 state:
 
 1. `buildAgentContext` is the place where the final tool set reaches the
    `ContextBuilder`.
-2. On the committed path, that builder historically received the entire tool
-   set from `ToolDefs()`.
-3. A remediation is currently in progress to move live ownership to semantic
-   pruning using descriptor embeddings and a bounded budget.
-4. The repo has carried more than one plausible pruning implementation, which
-   is itself a migration risk until only one path remains authoritative.
+2. That builder now consumes the session-owned selected tool set written by the
+   pipeline tool-pruning stage.
+3. Query-time pruning uses descriptor embeddings, bounded top-k / token-budget
+   selection, and stable registry ordering.
+4. The older duplicate pruning implementations have been removed or demoted to
+   non-authoritative compatibility helpers; one live owner remains.
 
 ## Artifact Boundary
 
@@ -111,11 +111,11 @@ Parity is not satisfied unless tests prove:
 |----|----------|---------|---------------|-------------|----------------|--------|----------|
 | SYS-02-001 | P0 | Live tool surface historically unbounded | Rust prunes before request assembly with top-k + token budget | Go committed path bulk-injected all tool defs until current remediation | Missing Functionality | Active remediation | Rust: `context_builder.rs:242-250`; Go: `internal/daemon/daemon_adapters.go` |
 | SYS-02-002 | P1 | Duplicate pruning implementations | One canonical `tool_search.rs` | Go carried at least two plausible pruning implementations | Degradation | Active remediation | `internal/agent/tool_search.go`, `internal/agent/tools/tool_search.go` |
-| SYS-02-003 | P1 | Trace contract must match Rust telemetry surface | Rust writes `tool_search.candidates_considered`, `selected`, `pruned`, `token_savings`, `top_scores`, `embedding_status` | Go must prove that the emitted trace reflects the actual selected tool set reaching the request | Missing Functionality | Open | Rust: `trace_helpers.rs:57-104`; Go runtime re-audit pending after remediation lands |
-| SYS-02-004 | P1 | Loop-scoped reuse of selected tools | Rust request passes the selected tool set forward after pruning | Go docs claim per-user-request reuse; must be proven against the actual loop/runtime ownership | Missing Functionality | Open | Rust: `context_builder.rs:467-470`; Go: `internal/daemon/daemon_adapters.go` comments + runtime ownership path |
-| SYS-02-005 | P2 | Always-include semantics are broader than a simple Rust-defaults comparison | Rust has both a crate-level `SearchConfig::default()` pin set (`memory_store`, `delegate`) and a richer runtime operational-tool pin set in pipeline pruning | Go is converging on a Go-native functional analogue that pins memory recall/search and introspection tools; the audit risk is confusing the Rust test-fixture default with the richer runtime baseline | Improvement candidate / classification seam | Open | Rust: `tool_search.rs:30-45`, `crates/roboticus-pipeline/src/core/tool_prune.rs`; Go: `internal/agent/tools/tool_search.go`, `internal/agent/tools/prune.go` |
-| SYS-02-006 | P1 | Tool-surface divergence included prompt-vs-request split-brain | Desired behavior is not just "same top-k knobs," but a coherent tool surface across registry descriptors, prompt-layer discoverability, request injection, and runtime reuse | Go now has registry-time descriptors, descriptor embeddings, query-time `SelectToolDefs(...)`, and prompt-layer narrowing from `selectedDefs`. The remaining audit work is to prove loop/runtime reuse and any non-pipeline callers stay on that same authoritative surface | Improved, not closed | Open | `internal/agent/tools/registry.go`, `internal/agent/tools/prune.go`, `internal/daemon/daemon_adapters.go`, `internal/daemon/daemon_adapters_test.go::TestBuildAgentContext_PromptToolRosterUsesSelectedDefs` |
-| SYS-02-007 | P1 | Go registry is missing 10 of Rust's 12 runtime operational pinned tools | Rust `always_include_operational_tools` pins `get_memory_stats`, `get_runtime_context`, `list-subagent-roster`, `list-available-skills`, `compose-subagent`, `compose-skill`, `memory_store`, `delegate-subagent`, `orchestrate-subagents`, `task-status`, `retry-task`, `list-open-tasks` | Go registry registers `get_memory_stats`, `get_runtime_context`, and the closest analogue `get_subagent_status`; the other nine (subagent composition, orchestration, delegation, skill management, task lifecycle, explicit memory write) do not exist as agent-callable tools | Missing Functionality | Open | Discovered during v1.0.6 P0 remediation. Rust: `crates/roboticus-pipeline/src/core/tool_prune.rs:184-199`. Go registration sites: `internal/daemon/daemon.go:287-325`. Deferred to a later tool-surface remediation phase because each missing tool needs its own impl + tests + subagent/task/skill subsystem integration. |
+| SYS-02-003 | P1 | Trace contract must match Rust telemetry surface | Rust writes `tool_search.candidates_considered`, `selected`, `pruned`, `token_savings`, `top_scores`, `embedding_status` | Go now emits that telemetry from the pipeline pruning stage that writes the session-owned selected tool defs, and runtime-facing tests prove the trace keys and selected tool surface stay aligned | Missing functionality remediated | Closed | `internal/pipeline/tool_pruning_stage_test.go` |
+| SYS-02-004 | P1 | Loop-scoped reuse of selected tools | Rust request passes the selected tool set forward after pruning | Go now has direct runtime proof that `buildAgentContext(...).BuildRequest(...)` reuses the same selected tool surface across later loop turns instead of recomputing from the registry | Missing functionality remediated | Closed | `internal/daemon/daemon_adapters_test.go::TestBuildAgentContext_ReusesSelectedToolSurfaceAcrossLoopTurns` |
+| SYS-02-005 | P2 | Always-include semantics are broader than a simple Rust-defaults comparison | Rust has both a crate-level `SearchConfig::default()` pin set (`memory_store`, `delegate`) and a richer runtime operational-tool pin set in pipeline pruning | Go intentionally keeps a Go-native analogue that pins memory recall/search and runtime introspection surfaces. v1.0.6 accepts that as a synthesis target rather than forcing Rust's narrower fixture defaults or blindly recreating dead Rust names | Accepted synthesis | Closed | `internal/agent/tools/tool_search.go`, `internal/agent/tools/prune.go` |
+| SYS-02-006 | P1 | Tool-surface divergence included prompt-vs-request split-brain | Desired behavior is not just "same top-k knobs," but a coherent tool surface across registry descriptors, prompt-layer discoverability, request injection, and runtime reuse | Registry descriptors, descriptor embeddings, selected tool defs, prompt-layer roster, and `llm.Request.Tools` now share one authoritative selected surface on the live path | Improvement validated | Closed | `internal/agent/tools/registry.go`, `internal/daemon/daemon_adapters.go`, `internal/daemon/daemon_adapters_test.go`, `internal/pipeline/tool_pruning_stage_test.go` |
+| SYS-02-007 | P1 | Go registry is missing 10 of Rust's 12 runtime operational pinned tools | Rust `always_include_operational_tools` pins `get_memory_stats`, `get_runtime_context`, `list-subagent-roster`, `list-available-skills`, `compose-subagent`, `compose-skill`, `memory_store`, `delegate-subagent`, `orchestrate-subagents`, `task-status`, `retry-task`, `list-open-tasks` | v1.0.6 does not implement the missing Rust operational families. They are explicitly deferred because several are already covered by Go-native analogues (`get_subagent_status`, capability snapshot, shortcut-driven introspection, executive-state continuity), while the rest would require new subagent/task/skill lifecycles rather than narrow parity fixes | Deferred with rationale | Closed for v1.0.6 | Rust: `crates/roboticus-pipeline/src/core/tool_prune.rs:184-199`; Go registration sites: `internal/daemon/daemon.go:287-325` |
 | SYS-02-008 | P1 | A third parallel pruning implementation existed as dead code | Rust has one authoritative pruning owner (`core/tool_prune.rs` calling `agent::tool_search`) | Go previously carried THREE parallel implementations: `internal/agent/tool_search.go` (older, staged for deletion), `internal/agent/tools/tool_search.go` (new authoritative owner), and `internal/pipeline/tool_prune.go` (had its own `ToolPruner` struct + `PruneByEmbedding` + private `cosineSimilarity` — test-only, zero production callers) | Degradation | Landed / closed | `internal/pipeline/tool_prune.go` + tests deleted in v1.0.6 P0 remediation along with `TestPruneByEmbedding`/`TestCosineSimilarity` in `wave8_test.go`. Finding was not in prior audit passes — it was surfaced only when the new `ToolPruner` interface collided with the dead struct's name. |
 | SYS-02-009 | P1 | Registry-backed tool selection and request injection were still relying on Go map iteration order | Equal-score tools and emitted tool defs should remain deterministic across runs so the selected surface, prompt roster, and runtime loop do not drift on hash iteration noise | Go registry now preserves stable registration order across descriptors, names, and tool defs. Equal-score pruning remains stable because the ranker preserves descriptor order, and the registry now makes that order explicit instead of inheriting random map iteration. | Remediated | Closed | `internal/agent/tools/registry.go`, `internal/agent/tools/registry_test.go`, `internal/agent/tools/tool_search_test.go` |
 
@@ -177,19 +177,18 @@ Acceptance bar for closure:
 - System 05: Routing and model selection
 - System 08: MCP and external integrations
 
-## Open Questions
+## Final Disposition
 
-- Which exact Go file/function will be the durable authoritative pruning owner
-  after remediation lands?
-- Will the selected tool set be cached per request/session turn, or recomputed
-  in each loop iteration?
-- Which pinned-tool defaults are now considered the approved migration target?
-- Is the current SYS-02-005 pinned-tool/defaults row only part of a broader
-  tool-surface divergence that still needs to be split into additional
-  findings once the active remediation branch settles?
-- After the active remediation lands, is there exactly one authoritative tool
-  surface spanning registry descriptors, selected tool defs, trace output, and
-  loop reuse?
+System 02 is closed for v1.0.6.
+
+- The authoritative pruning owner is the pipeline tool-pruning stage plus the
+  `internal/agent/tools/tool_search.go` ranking implementation.
+- The selected tool surface is reused across the request/loop lifecycle rather
+  than recomputed from the registry on later turns.
+- The prompt roster, structured request tool defs, and trace telemetry now
+  describe the same selected surface.
+- Missing Rust operational pinned tools are not being backfilled in this
+  release. They are explicitly deferred where no Go-native analogue exists.
 
 ## Progress Log
 

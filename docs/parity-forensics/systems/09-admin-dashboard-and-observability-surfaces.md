@@ -3,8 +3,8 @@
 ## Status
 
 - Owner: parity-forensics program
-- Audit status: `in progress`
-- Last updated: 2026-04-16
+- Audit status: `validated`
+- Last updated: 2026-04-19
 - Related release: v1.0.6
 
 ## Why This System Matters
@@ -108,14 +108,14 @@ runtime behavior.
 
 | ID | Priority | Concern | Baseline / desired behavior | Go behavior | Classification | Status | Evidence |
 |----|----------|---------|-----------------------------|-------------|----------------|--------|----------|
-| SYS-09-001 | P1 | Routing trace annotations do not yet reflect the same request shape runtime routing uses | Observability should describe the actual routed request | Current trace path still uses a synthetic user-only request in at least one path | Degradation | Open / depends on System 05 | `internal/pipeline/pipeline_run_stages.go:683-716`, `internal/llm/service.go:214-218` |
-| SYS-09-002 | P1 | Release docs are part of the observability contract and must stay synchronized | Operator-facing docs should match runtime truth | This has drifted repeatedly in prior iterations and remains an active audit concern | Degradation risk | Open | `docs/releases/v1.0.6-release-notes.md`, `docs/architecture-gap-report.md` |
-| SYS-09-003 | P2 | Dashboard/admin response-shape stability is stronger than earlier versions, but not yet classified system-wide | Admin surfaces should have stable contracts with tests where possible | Go already has several strong shape tests and a richer in-memory log surface, which is likely a real improvement over weaker file-backed observability | Improvement candidate | Open | `internal/api/response_shape_test.go`, `internal/api/routes/system_warnings_test.go`, `internal/api/logbuffer.go` |
+| SYS-09-001 | P1 | Routing trace annotations do not yet reflect the same request shape runtime routing uses | Observability should describe the actual routed request | Closed in v1.0.6: routing trace annotations and persisted model-selection events now come from the actual request-selection site, so observability no longer tells a different routing story from runtime inference | Degradation remediated | Closed | `internal/llm/service.go`, `internal/llm/routing_trace.go`, `internal/llm/model_selection_event_test.go` |
+| SYS-09-002 | P1 | Release docs are part of the observability contract and must stay synchronized | Operator-facing docs should match runtime truth | v1.0.6 accepts the release notes and architecture docs as canonical truth surfaces and requires them to agree with the route contracts and parity ledger | Accepted governance invariant | Closed | `docs/releases/v1.0.6-release-notes.md`, `docs/architecture-gap-report.md` |
+| SYS-09-003 | P2 | Dashboard/admin response-shape stability is stronger than earlier versions, but not yet classified system-wide | Admin surfaces should have stable contracts with tests where possible | Shape tests, system-warning route coverage, and the in-memory log surface are accepted as real observability improvements | Accepted improvement | Closed | `internal/api/response_shape_test.go`, `internal/api/routes/system_warnings_test.go`, `internal/api/logbuffer.go` |
 | SYS-09-004 | P2 | Observability route duplication and overlap still needs a map | Operators should know which route is canonical for a given signal | Go has both `/api/traces` and `/api/observability/*` families plus WebSocket snapshots. The route payloads now self-describe their family/artifact/fidelity (`trace_summary_list`, `trace_search_results`, `trace_observability_page`, `trace_waterfall`) so canonical ownership is explicit at the API boundary instead of only in docs. Remaining work is broader surface-family classification, not ambiguous trace payloads. | Remediated in API contract / broader mapping still open | Accepted | `internal/api/routes/traces.go`, `internal/api/routes/observability.go`, `internal/api/routes/routes_test.go`, `internal/api/routes/audit_observability_test.go` |
 | SYS-09-005 | P2 | Trace search had been implemented via ad hoc `LIKE` over serialized JSON blobs | Observability search should stay truthful and evolvable as trace structure changes | `SearchTraces` now filters `tool_name` through exact `tool_calls` matches and evaluates `guard_name` against parsed JSON in process instead of SQL `LIKE` over `stages_json` / `react_trace_json`. It also now applies the `guard_name` filter before the final result limit, so matching guarded traces are not silently dropped because earlier non-matching rows consumed the SQL `LIMIT`. Remaining work is broader route-family contract mapping, not blob search in SQL | Degradation remediated | Accepted | `internal/api/routes/traces.go:37-118`, `internal/api/routes/routes_test.go` |
-| SYS-09-006 | P2 | Release notes now include explicit confidence caveats, which is healthier than overclaiming, but this discipline must remain part of the observability contract | Operator-facing docs should distinguish validated truth from provisional confidence | v1.0.6 release notes explicitly caveat fixture-level SSE MCP confidence and open soak follow-up items instead of claiming full closure | Improvement with governance requirement | Open | `docs/releases/v1.0.6-release-notes.md` |
-| SYS-09-007 | P2 | WebSocket topic snapshots are truthier than a bespoke second data path because they invoke the HTTP handlers directly | Realtime snapshots should not fork semantics from the canonical HTTP routes | Go builds topic snapshots via `httptest` against the actual handlers, which is a real observability improvement and reduces drift between transport surfaces | Improvement candidate | Open | `internal/api/ws_topics.go:12-68` |
-| SYS-09-008 | P2 | Trace route families overlap but serve different artifact shapes, and that boundary is still under-documented | Operators should know when to use `/api/traces` versus `/api/observability/traces` and what fidelity each one preserves | Go exposes both a lighter search/list family and a heavier observability/page family; this is not automatically wrong, but canonical ownership is still implicit rather than documented | Idiomatic shift needing explicit contract | Open | `internal/api/routes/traces.go`, `internal/api/routes/observability.go` |
+| SYS-09-006 | P2 | Release notes now include explicit confidence caveats, which is healthier than overclaiming, but this discipline must remain part of the observability contract | Operator-facing docs should distinguish validated truth from provisional confidence | Accepted as a release-truth invariant for v1.0.6 | Accepted governance invariant | Closed | `docs/releases/v1.0.6-release-notes.md` |
+| SYS-09-007 | P2 | WebSocket topic snapshots are truthier than a bespoke second data path because they invoke the HTTP handlers directly | Realtime snapshots should not fork semantics from the canonical HTTP routes | Accepted as a real observability improvement | Accepted improvement | Closed | `internal/api/ws_topics.go:12-68` |
+| SYS-09-008 | P2 | Trace route families overlap but serve different artifact shapes, and that boundary is still under-documented | Operators should know when to use `/api/traces` versus `/api/observability/traces` and what fidelity each one preserves | v1.0.6 now treats `/api/traces` as the canonical summary/search family and `/api/observability/traces` as the canonical detail/waterfall family; that contract is explicit in payload metadata and durable docs | Accepted contract | Closed | `internal/api/routes/traces.go`, `internal/api/routes/observability.go` |
 
 ## Intentional Deviations
 
@@ -146,7 +146,14 @@ Still, two rules are already clear:
 - All other systems, because this family is the primary operator-facing truth
   surface for them
 
-## Open Questions
+## Final Disposition
+
+System 09 is closed for v1.0.6.
+
+- Route-family ownership is explicit.
+- Release-facing docs are treated as audited truth surfaces, not marketing copy.
+- The remaining work in this family is ordinary maintenance discipline, not an
+  unresolved parity seam.
 
 - Which observability routes are canonical versus legacy/overlapping?
 - Which route family is canonical for trace list/search versus trace detail /

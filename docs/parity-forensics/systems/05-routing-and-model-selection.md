@@ -3,8 +3,8 @@
 ## Status
 
 - Owner: parity-forensics program
-- Audit status: `in progress`
-- Last updated: 2026-04-16
+- Audit status: `validated`
+- Last updated: 2026-04-19
 - Related release: v1.0.6
 
 ## Why This System Matters
@@ -105,9 +105,9 @@ Parity is not satisfied unless those three agree on the effective input.
 |----|----------|---------|---------------|-------------|----------------|--------|----------|
 | SYS-05-001 | P1 | Routing trace request shape drift | Downstream observability should describe the same prepared request that inference uses | Routing trace annotation is now emitted at the actual selection site inside `llm.Service` using the final `llm.Request`; the old synthetic pipeline winner path has been removed | Improvement / synthesis | Closed (retain) | `internal/llm/routing_trace.go`, `internal/llm/service.go:225-226`, `internal/llm/service.go:438-439`, `internal/pipeline/pipeline_run_stages.go:766-789` |
 | SYS-05-002 | P1 | Model-selection audit event request shape drift | Audit path should reflect the same routing decision surface as runtime inference | Routed model-selection events are now persisted from `llm.Service` using the actual request plus turn/session/channel context. The older synthetic `SelectAndAuditModel` path has been deleted, leaving one live audit owner | Improvement / synthesis | Closed (retain) | `internal/llm/service.go:225-227`, `internal/llm/service.go:438-440`, `internal/llm/model_selection_event_test.go`, `internal/core/context_keys.go`, `internal/pipeline/pipeline_stages.go:31-35` |
-| SYS-05-003 | P2 | Complexity estimation depends on final request shape | Router complexity heuristics include message count, tool count, and content signals | Any path that omits tools/history from the routed request will understate complexity versus real inference | Degradation | Open | `internal/llm/router.go:199-260` plus synthetic-call sites above |
+| SYS-05-003 | P2 | Complexity estimation depends on final request shape | Router complexity heuristics include message count, tool count, and content signals | v1.0.6 accepts the current router heuristics because the remaining authoritative call sites now all route the actual request rather than a synthetic approximation, so complexity is scored against the same request inference sees | Accepted | Closed | `internal/llm/router.go:199-260`, `internal/llm/service.go` |
 | SYS-05-004 | P1 | Per-call retrieval intents previously leaked across turns | Routing-adjacent retrieval planning should not use shared mutable intent state | This was a real bug, now fixed by context-carried intents | Improvement | Closed / retain as evidence | `internal/agent/memory/intents_context.go:1-52`, `internal/agent/memory/retrieval.go:236-244` |
-| SYS-05-005 | P2 | Metascore / weight tracing can become decorrelated from the actual routed request when the winner is chosen from a synthetic request | Routing observability should expose the same effective inputs that produced the selected model and weight application | Go traces routing mode and weights, but the winner is still computed from a user-only reconstruction in the trace path | Degradation | Open | `internal/pipeline/pipeline_run_stages.go:683-716`, `internal/pipeline/trace.go:384-401`, `internal/llm/router.go:150-174` |
+| SYS-05-005 | P2 | Metascore / weight tracing can become decorrelated from the actual routed request when the winner is chosen from a synthetic request | Routing observability should expose the same effective inputs that produced the selected model and weight application | v1.0.6 now emits routing annotations and persisted model-selection events from the actual request-selection site, so weights and winner metadata stay coupled to the live routed request | Degradation remediated | Closed | `internal/llm/routing_trace.go`, `internal/llm/service.go`, `internal/llm/model_selection_event_test.go` |
 
 ## Intentional Deviations
 
@@ -131,7 +131,15 @@ Expected closure conditions:
 - System 04: Verification, guards, and post-processing
 - System 09: Admin, dashboard, and observability surfaces
 
-## Open Questions
+## Final Disposition
+
+System 05 is closed for v1.0.6.
+
+- Runtime routing, routing trace annotations, and model-selection audit events
+  now share the same request shape.
+- The earlier synthetic-request observability drift is removed.
+- Remaining differences are accepted heuristic choices, not ambiguous
+  ownership seams.
 
 - Should routing trace annotation move to the point where the final
   `llm.Request` is available rather than reconstructing an approximation?

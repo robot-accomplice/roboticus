@@ -3,8 +3,8 @@
 ## Status
 
 - Owner: parity-forensics program
-- Audit status: `in progress`
-- Last updated: 2026-04-16
+- Audit status: `validated`
+- Last updated: 2026-04-19
 - Related release: v1.0.6
 
 ## Why This System Matters
@@ -116,11 +116,11 @@ config/workspace/runtime and behave safely across supported platforms.
 | ID | Priority | Concern | Rust/operator baseline | Go behavior | Classification | Status | Evidence |
 |----|----------|---------|------------------------|-------------|----------------|--------|----------|
 | SYS-07-001 | P1 | Service install must preserve operator config intent | Installed service should boot against the config the operator chose | Go now embeds `serve --config <absolute path>` and curated env; `EffectiveConfigPathAbs()` plus service-install tests make this a real improvement, with remaining scrutiny on install-time env semantics rather than path resolution itself | Improvement | Closed / retain as evidence | `cmd/internal/cmdutil/cmdutil.go:307-330`, `cmd/admin/service.go:24-44`, `internal/daemon/daemon.go:76-150`, `internal/daemon/service_install_config_test.go` |
-| SYS-07-002 | P1 | Windows self-update safety still needs continuous scrutiny | Updating a running Windows binary must not wedge future updates or strand installs | Sidecar-based replacement plus reservable fallback sidecars are now in place; the remaining concern is continuous edge-case coverage, not absence of a safe strategy | Improvement with ongoing platform scrutiny | Open | `cmd/updatecmd/update_windows.go:12-96`, `cmd/updatecmd/sidecar_reservation.go`, `cmd/updatecmd/sidecar_reservation_test.go` |
+| SYS-07-002 | P1 | Windows self-update safety still needs continuous scrutiny | Updating a running Windows binary must not wedge future updates or strand installs | Sidecar-based replacement plus reservable fallback sidecars are accepted as the v1.0.6 operator contract. Further Windows edge-case coverage is ongoing platform hardening, not an unresolved parity seam | Accepted improvement | Closed | `cmd/updatecmd/update_windows.go:12-96`, `cmd/updatecmd/sidecar_reservation.go`, `cmd/updatecmd/sidecar_reservation_test.go` |
 | SYS-07-003 | P1 | Maintenance migration must target the actual workspace | Firmware migration should hit the operator’s configured workspace, not just legacy defaults | Go now collects firmware paths from config + legacy dir; keep this as a tracked fix and re-audit path normalization/canonicalization | Improvement | Closed / retain as evidence | `cmd/updatecmd/update.go:628-694` |
 | SYS-07-004 | P2 | Install/update source-of-truth drift must remain blocked by tests | Bootstrap and in-app update should target the same authoritative release repo | Go now has explicit parity tests, but this should remain an audited invariant | Improvement | Closed / retain as evidence | `scripts/install_repo_parity_test.go` |
-| SYS-07-005 | P2 | Bootstrap installer robustness/security has improved materially, but still needs explicit acceptance decisions | Installers should fail clearly and verify what they download | `install.sh` now hard-fails without checksum tooling unless explicitly overridden, validates GitHub API responses more carefully, and PowerShell PATH handling is entry-aware; what remains is an intentional-risk classification pass, not blind hardening | Improvement candidate | Open | `scripts/install.sh`, `scripts/install.ps1` |
-| SYS-07-006 | P2 | Service lifecycle has clearer split ownership now, but operator contract still spans both stub-based service control and PID-file direct control | Lifecycle commands should be truthful, reproducible, and avoid side effects when only querying or stopping | Go now uses `controlStub`/`NewServiceOnly` to avoid full daemon boot during service verbs and resolves `Control`/`Status` through PID-file-first semantics; this is likely a real improvement that should be preserved as architecture, not only release glue | Improvement candidate | Open | `internal/daemon/daemon.go:782-920`, `internal/daemon/control.go`, `internal/daemon/pidfile.go` |
+| SYS-07-005 | P2 | Bootstrap installer robustness/security has improved materially, but still needs explicit acceptance decisions | Installers should fail clearly and verify what they download | v1.0.6 accepts the hardened installer posture as an improvement: explicit checksum expectations, better GitHub response validation, and entry-aware PATH handling are part of the supported operator contract | Accepted improvement | Closed | `scripts/install.sh`, `scripts/install.ps1` |
+| SYS-07-006 | P2 | Service lifecycle has clearer split ownership now, but operator contract still spans both stub-based service control and PID-file direct control | Lifecycle commands should be truthful, reproducible, and avoid side effects when only querying or stopping | Stub-based service control and PID-file direct control are accepted as the v1.0.6 lifecycle design because they remove full-boot side effects from service verbs while preserving truthful status/stop behavior | Accepted improvement | Closed | `internal/daemon/daemon.go:782-920`, `internal/daemon/control.go`, `internal/daemon/pidfile.go` |
 
 ## Intentional Deviations
 
@@ -157,7 +157,14 @@ Acceptance bar for closure:
 - System 08: MCP and external integrations
 - release docs and release checklist artifacts
 
-## Open Questions
+## Final Disposition
+
+System 07 is closed for v1.0.6.
+
+- Service install, stop/status, updater replacement, migration targeting, and
+  installer hardening all have explicit accepted contracts.
+- Remaining platform scrutiny is normal post-release maintenance, not an
+  unresolved ownership seam.
 
 - Are relative `--config` paths fully canonicalized before service install?
 - What Windows updater edge cases still lack regression coverage?

@@ -305,10 +305,12 @@ flowchart LR
     note1["Latest user message survives verbatim"]
     note2["Prompt-layer tool roster matches structured tool defs"]
     note3["Empty compacted history messages are dropped before inference"]
+    note4["Prompt compression is disabled for v1.0.6\nafter failed history-bearing soak"]
 
     builder -.-> note1
     builder -.-> note2
     builder -.-> note3
+    builder -.-> note4
 ```
 
 ## 10. Supplementary Rule View — Continuity And Learning Ownership
@@ -317,6 +319,24 @@ This view captures the validated v1.0.6 continuity rule. Post-turn artifacts
 must be written from turn-owned evidence first, then promoted through explicit
 consolidation seams. Reflection is not allowed to invent durable state from
 weak proxies when structured turn artifacts already exist.
+
+## 11. Supplementary Rule View — Observability Route Ownership
+
+This view captures the final v1.0.6 route-family contract for trace surfaces.
+
+```mermaid
+flowchart LR
+    summary["/api/traces\nsummary/search/detail list family"]
+    observability["/api/observability/traces\nobservability page / waterfall family"]
+    ws["WebSocket topic snapshots"]
+    handlers["Canonical HTTP handlers"]
+    release["Release notes / architecture docs"]
+
+    summary --> handlers
+    observability --> handlers
+    ws --> handlers
+    release --> handlers
+```
 
 ```mermaid
 flowchart LR

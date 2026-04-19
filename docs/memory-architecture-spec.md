@@ -31,6 +31,10 @@
 >   through `CheckpointRepository`, and post-turn reflection reads turn-owned
 >   artifacts (`tool_calls`, `pipeline_traces`, `model_selection_events`) rather
 >   than reconstructing durable state from summary text alone.
+> - **Compatibility normalization is intentionally session-boundary scoped.**
+>   Older callers that still set only rendered `MemoryContext` derive a typed
+>   `VerificationEvidence` artifact at the session boundary; downstream
+>   verifier/guard consumers stay on typed artifacts only.
 
 ---
 

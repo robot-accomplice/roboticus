@@ -3,8 +3,8 @@
 ## Status
 
 - Owner: parity-forensics program
-- Audit status: `in progress`
-- Last updated: 2026-04-17
+- Audit status: `validated`
+- Last updated: 2026-04-19
 - Related release: v1.0.6
 
 ## Why This System Matters
@@ -110,11 +110,13 @@ collection of partially used helpers.
 - System 07: install/update/service lifecycle
 - System 09: observability
 
-## Open Questions
+## Final Disposition
 
-- Are automation and cron semantics one system or two tightly-coupled layers?
-- Should immediate “run now” semantics reuse the durable cron lifecycle
-  artifacts, or is bypassing lease/run-history an accepted operator shortcut?
+System 11 is closed for v1.0.6.
+
+- Durable cron execution and manual "run now" now share one lifecycle owner.
+- Heartbeat-backed maintenance and treasury refresh are explicitly separate
+  runtime duties rather than an accidental parallel scheduler.
 
 ## Progress Log
 
