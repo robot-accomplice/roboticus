@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -181,14 +182,26 @@ func updateStatePath() string {
 	return filepath.Join(roboticusHome(), "update_state.json")
 }
 
+func legacyUpdateStatePath() string {
+	return filepath.Join(roboticusHome(), "update-state.json")
+}
+
 func loadUpdateState() (updateState, error) {
 	path := updateStatePath()
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return updateState{}, nil
+			legacyData, legacyErr := os.ReadFile(legacyUpdateStatePath())
+			if legacyErr != nil {
+				if os.IsNotExist(legacyErr) {
+					return updateState{}, nil
+				}
+				return updateState{}, legacyErr
+			}
+			data = legacyData
+		} else {
+			return updateState{}, err
 		}
-		return updateState{}, err
 	}
 	var state updateState
 	if err := json.Unmarshal(data, &state); err != nil {
@@ -207,6 +220,122 @@ func saveUpdateState(state updateState) error {
 		return err
 	}
 	return os.WriteFile(path, data, 0o600)
+}
+
+func fileSHA256(path string) (string, string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", "", err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", "", err
+	}
+	return BytesSHA256(data), info.ModTime().UTC().Format(time.RFC3339), nil
+}
+
+func skillHashes(dir string) (map[string]string, string, error) {
+	hashes := map[string]string{}
+	var latest time.Time
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return err
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if info.ModTime().After(latest) {
+			latest = info.ModTime()
+		}
+		hashes[filepath.ToSlash(rel)] = BytesSHA256(data)
+		return nil
+	})
+	if err != nil {
+		return nil, "", err
+	}
+	if len(hashes) == 0 {
+		return hashes, "", nil
+	}
+	return hashes, latest.UTC().Format(time.RFC3339), nil
+}
+
+func needsProviderStateRepair(rec *contentRecord) bool {
+	return rec == nil || strings.TrimSpace(rec.Version) == "" || strings.TrimSpace(rec.SHA256) == "" || strings.TrimSpace(rec.InstalledAt) == ""
+}
+
+func needsSkillsStateRepair(rec *skillsRecord) bool {
+	return rec == nil || strings.TrimSpace(rec.Version) == "" || strings.TrimSpace(rec.InstalledAt) == "" || len(rec.Files) == 0
+}
+
+func reconcileUpdateState(configPath, currentVersion string) (updateState, bool, error) {
+	state, err := loadUpdateState()
+	if err != nil {
+		return updateState{}, false, err
+	}
+	changed := false
+
+	if state.BinaryVersion == "" && strings.TrimSpace(currentVersion) != "" {
+		state.BinaryVersion = normalizeVersion(currentVersion)
+		changed = true
+	}
+	if state.RegistryURL == "" {
+		state.RegistryURL = ResolveRegistryURL(configPath)
+		changed = true
+	}
+
+	if needsProviderStateRepair(state.InstalledContent.Providers) {
+		providersPath := providersLocalPath(configPath)
+		if _, err := os.Stat(providersPath); err == nil {
+			hash, installedAt, err := fileSHA256(providersPath)
+			if err != nil {
+				return updateState{}, false, err
+			}
+			state.InstalledContent.Providers = &contentRecord{
+				Version:     "unknown",
+				SHA256:      hash,
+				InstalledAt: installedAt,
+			}
+			changed = true
+		}
+	}
+
+	if needsSkillsStateRepair(state.InstalledContent.Skills) {
+		skillsDir := skillsLocalDir(configPath)
+		if info, err := os.Stat(skillsDir); err == nil && info.IsDir() {
+			hashes, installedAt, err := skillHashes(skillsDir)
+			if err != nil {
+				return updateState{}, false, err
+			}
+			if len(hashes) > 0 {
+				state.InstalledContent.Skills = &skillsRecord{
+					Version:     "unknown",
+					Files:       hashes,
+					InstalledAt: installedAt,
+				}
+				changed = true
+			}
+		}
+	}
+
+	if !changed {
+		return state, false, nil
+	}
+	if state.LastCheck == "" {
+		state.LastCheck = nowRFC3339()
+	}
+	return state, true, saveUpdateState(state)
 }
 
 func loadRawUpdateConfig(path string) (rawUpdateConfig, error) {
@@ -551,6 +680,11 @@ func runUpdateAll(ctx context.Context, currentVersion string, yes, refreshConfig
 
 	configPath := cmdutil.EffectiveConfigPath()
 	registryURL := ResolveRegistryURL(configPath)
+	if _, repaired, err := reconcileUpdateState(configPath, currentVersion); err != nil {
+		return fmt.Errorf("failed to reconcile updater state: %w", err)
+	} else if repaired {
+		fmt.Println("Recovered updater state from existing local install.")
+	}
 	binaryChanged := false
 	if !upToDate || normalizeVersion(currentVersion) == "dev" {
 		if err := updateBinaryFunc(ctx, rel, yes); err != nil {
@@ -577,7 +711,11 @@ func runUpdateAll(ctx context.Context, currentVersion string, yes, refreshConfig
 		var pErr error
 		providersChanged, pErr = applyProvidersUpdate(ctx, registryURL, configPath, refreshConfig)
 		if pErr != nil {
-			return fmt.Errorf("provider update failed: %w", pErr)
+			if refreshConfig {
+				return fmt.Errorf("provider update failed: %w", pErr)
+			}
+			fmt.Printf("Warning: provider pack refresh skipped: %v\n", pErr)
+			providersChanged = false
 		}
 	}
 
@@ -590,7 +728,11 @@ func runUpdateAll(ctx context.Context, currentVersion string, yes, refreshConfig
 		var sErr error
 		skillsChanged, sErr = applySkillsUpdate(ctx, registryURL, configPath, refreshConfig)
 		if sErr != nil {
-			return fmt.Errorf("skills update failed: %w", sErr)
+			if refreshConfig {
+				return fmt.Errorf("skills update failed: %w", sErr)
+			}
+			fmt.Printf("Warning: skills refresh skipped: %v\n", sErr)
+			skillsChanged = false
 		}
 	}
 
