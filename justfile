@@ -48,14 +48,14 @@ architecture:
 fuzz-ci:
     #!/usr/bin/env bash
     set -euo pipefail
-    go test -fuzz=FuzzInjectionDetector_CheckInput -fuzztime=10s ./internal/agent/
-    go test -fuzz=FuzzInjectionDetector_Sanitize -fuzztime=10s ./internal/agent/
-    go test -fuzz=FuzzTelegramFormatter -fuzztime=10s ./internal/channel/
-    go test -fuzz=FuzzSignalFormatter -fuzztime=10s ./internal/channel/
-    go test -fuzz=FuzzWhatsAppFormatter -fuzztime=10s ./internal/channel/
-    go test -fuzz=FuzzValidateE164 -fuzztime=10s ./internal/channel/
-    go test -fuzz=FuzzIsValidCronExpression -fuzztime=10s ./internal/schedule/
-    go test -fuzz=FuzzMatchesCron -fuzztime=10s ./internal/schedule/
+    go test -run='^$' -fuzz=FuzzInjectionDetector_CheckInput -fuzztime=10s ./internal/agent/
+    go test -run='^$' -fuzz=FuzzInjectionDetector_Sanitize -fuzztime=10s ./internal/agent/
+    go test -run='^$' -fuzz=FuzzTelegramFormatter -fuzztime=10s ./internal/channel/
+    go test -run='^$' -fuzz=FuzzSignalFormatter -fuzztime=10s ./internal/channel/
+    go test -run='^$' -fuzz=FuzzWhatsAppFormatter -fuzztime=10s ./internal/channel/
+    go test -run='^$' -fuzz=FuzzValidateE164 -fuzztime=10s ./internal/channel/
+    go test -run='^$' -fuzz=FuzzIsValidCronExpression -fuzztime=10s ./internal/schedule/
+    go test -run='^$' -fuzz=FuzzMatchesCron -fuzztime=10s ./internal/schedule/
 
 parity-audit:
     #!/usr/bin/env bash
