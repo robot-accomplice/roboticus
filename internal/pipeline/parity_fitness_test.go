@@ -110,7 +110,7 @@ func TestParity_PresetDifferencesAreExhaustive(t *testing.T) {
 		"PostTurnIngest":         {true, true, true, true},
 		"NicknameRefinement":     {true, false, false, false},
 		"PreferLocalModel":       {false, false, false, false},
-		"NoEscalate":            {false, false, false, false},
+		"NoEscalate":             {false, false, false, false},
 		"CronDelegationWrap":     {false, false, false, true},
 		"BotCommandDispatch":     {false, false, true, false}, // Channel only (Rust parity)
 		"InjectDiagnostics":      {true, true, false, false},

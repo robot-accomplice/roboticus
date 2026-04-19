@@ -20,9 +20,9 @@ type PluginBridgeTool struct {
 	registry    *plugin.Registry
 }
 
-func (t *PluginBridgeTool) Name() string                  { return t.name }
-func (t *PluginBridgeTool) Description() string           { return t.description }
-func (t *PluginBridgeTool) Risk() RiskLevel               { return t.risk }
+func (t *PluginBridgeTool) Name() string                     { return t.name }
+func (t *PluginBridgeTool) Description() string              { return t.description }
+func (t *PluginBridgeTool) Risk() RiskLevel                  { return t.risk }
 func (t *PluginBridgeTool) ParameterSchema() json.RawMessage { return t.schema }
 
 func (t *PluginBridgeTool) Execute(ctx context.Context, params string, _ *Context) (*Result, error) {

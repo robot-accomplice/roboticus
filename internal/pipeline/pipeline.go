@@ -127,21 +127,21 @@ type Pipeline struct {
 
 // PipelineDeps bundles dependencies for the Pipeline.
 type PipelineDeps struct {
-	Store      *db.Store
-	LLM        *llm.Service
-	Injection  InjectionChecker
-	Retriever  MemoryRetriever
-	Skills     SkillMatcher
-	Executor   ToolExecutor
-	Ingestor   Ingestor
-	Refiner    NicknameRefiner
-	Streamer   StreamPreparer
-	Pruner     ToolPruner
-	Guards     *GuardChain
-	BGWorker   *core.BackgroundWorker
-	Embeddings *llm.EmbeddingClient
-	ErrBus     *core.ErrorBus
-	Dashboard  DashboardNotifier
+	Store        *db.Store
+	LLM          *llm.Service
+	Injection    InjectionChecker
+	Retriever    MemoryRetriever
+	Skills       SkillMatcher
+	Executor     ToolExecutor
+	Ingestor     Ingestor
+	Refiner      NicknameRefiner
+	Streamer     StreamPreparer
+	Pruner       ToolPruner
+	Guards       *GuardChain
+	BGWorker     *core.BackgroundWorker
+	Embeddings   *llm.EmbeddingClient
+	ErrBus       *core.ErrorBus
+	Dashboard    DashboardNotifier
 	Capabilities CapabilitySummarizer
 
 	// Sandbox: workspace root and extra allowed paths propagated to every session.

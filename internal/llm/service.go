@@ -443,13 +443,13 @@ func (s *Service) Stream(ctx context.Context, req *Request) (<-chan StreamChunk,
 	// Complete(): cache replay would contaminate raw model measurement.
 	if !req.NoEscalate {
 		if cached := s.cache.Get(ctx, req); cached != nil {
-		chunks := make(chan StreamChunk, 1)
-		errs := make(chan error)
-		chunks <- StreamChunk{Delta: cached.Content, FinishReason: "stop"}
-		close(chunks)
-		close(errs)
-		return chunks, errs
-	}
+			chunks := make(chan StreamChunk, 1)
+			errs := make(chan error)
+			chunks <- StreamChunk{Delta: cached.Content, FinishReason: "stop"}
+			close(chunks)
+			close(errs)
+			return chunks, errs
+		}
 	}
 
 	// Route if needed.

@@ -229,7 +229,7 @@ func loadCapabilitySubagents(ctx context.Context, store *db.Store) []capabilityS
 	for rows.Next() {
 		var (
 			name, displayName, model, role, description string
-			enabled                                      bool
+			enabled                                     bool
 		)
 		if err := rows.Scan(&name, &displayName, &model, &enabled, &role, &description); err != nil {
 			return out
