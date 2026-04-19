@@ -96,6 +96,24 @@ func (m *mockTransport) Receive(_ context.Context) (json.RawMessage, error) {
 	}
 	resp := m.responses[0]
 	m.responses = m.responses[1:]
+	var parsed jsonRPCResponse
+	if err := json.Unmarshal(resp, &parsed); err == nil && parsed.ID == 0 {
+		deadline := time.Now().Add(time.Second)
+		for len(m.sent) == 0 && time.Now().Before(deadline) {
+			m.mu.Unlock()
+			time.Sleep(time.Millisecond)
+			m.mu.Lock()
+		}
+		if len(m.sent) > 0 {
+			var req jsonRPCRequest
+			if err := json.Unmarshal(m.sent[len(m.sent)-1], &req); err == nil && req.ID != 0 {
+				parsed.ID = req.ID
+				if rewritten, err := json.Marshal(parsed); err == nil {
+					resp = rewritten
+				}
+			}
+		}
+	}
 	return resp, nil
 }
 
@@ -212,7 +230,7 @@ func TestServerStatus_JSON(t *testing.T) {
 
 func TestConnection_Call_Success(t *testing.T) {
 	// The atomic nextID is shared across tests; capture the next expected value.
-	expectedID := nextID.Load() + 1
+	expectedID := int64(0)
 
 	mt := &mockTransport{
 		responses: []json.RawMessage{
@@ -290,7 +308,7 @@ func TestConnection_Call_InvalidResponseJSON(t *testing.T) {
 }
 
 func TestConnection_Call_RPCError(t *testing.T) {
-	expectedID := nextID.Load() + 1
+	expectedID := int64(0)
 	mt := &mockTransport{
 		responses: []json.RawMessage{
 			makeErrorResponse(expectedID, -32601, "method not found"),
@@ -401,7 +419,7 @@ func TestConnection_Call_TimeoutDropsLateResponseAndAllowsNextCall(t *testing.T)
 
 func TestConnection_Initialize_Success(t *testing.T) {
 	// initialize calls call() which increments nextID; then sends a notification (another send).
-	expectedID := nextID.Load() + 1
+	expectedID := int64(0)
 
 	initResult := map[string]any{
 		"protocolVersion": "2024-11-05",
@@ -436,7 +454,7 @@ func TestConnection_Initialize_Success(t *testing.T) {
 }
 
 func TestConnection_Initialize_ErrorResponse(t *testing.T) {
-	expectedID := nextID.Load() + 1
+	expectedID := int64(0)
 	mt := &mockTransport{
 		responses: []json.RawMessage{
 			makeErrorResponse(expectedID, -32600, "bad request"),
@@ -453,7 +471,7 @@ func TestConnection_Initialize_ErrorResponse(t *testing.T) {
 func TestConnection_Initialize_MalformedServerInfo(t *testing.T) {
 	// If serverInfo is missing or malformed, initialize should still succeed
 	// (it ignores unmarshal errors for the info struct).
-	expectedID := nextID.Load() + 1
+	expectedID := int64(0)
 
 	mt := &mockTransport{
 		responses: []json.RawMessage{
@@ -475,7 +493,7 @@ func TestConnection_Initialize_MalformedServerInfo(t *testing.T) {
 // --- Connection.listTools tests ---
 
 func TestConnection_ListTools_Success(t *testing.T) {
-	expectedID := nextID.Load() + 1
+	expectedID := int64(0)
 
 	toolsResult := map[string]any{
 		"tools": []map[string]any{
@@ -515,7 +533,7 @@ func TestConnection_ListTools_Success(t *testing.T) {
 }
 
 func TestConnection_ListTools_Empty(t *testing.T) {
-	expectedID := nextID.Load() + 1
+	expectedID := int64(0)
 
 	mt := &mockTransport{
 		responses: []json.RawMessage{
@@ -534,7 +552,7 @@ func TestConnection_ListTools_Empty(t *testing.T) {
 }
 
 func TestConnection_ListTools_Error(t *testing.T) {
-	expectedID := nextID.Load() + 1
+	expectedID := int64(0)
 	mt := &mockTransport{
 		responses: []json.RawMessage{
 			makeErrorResponse(expectedID, -32000, "internal error"),
@@ -549,7 +567,7 @@ func TestConnection_ListTools_Error(t *testing.T) {
 }
 
 func TestConnection_ListTools_BadJSON(t *testing.T) {
-	expectedID := nextID.Load() + 1
+	expectedID := int64(0)
 	// Return a result that is valid JSON-RPC but unparseable tools list.
 	mt := &mockTransport{
 		responses: []json.RawMessage{
@@ -567,7 +585,7 @@ func TestConnection_ListTools_BadJSON(t *testing.T) {
 // --- Connection.CallTool tests ---
 
 func TestConnection_CallTool_Success(t *testing.T) {
-	expectedID := nextID.Load() + 1
+	expectedID := int64(0)
 
 	toolResult := map[string]any{
 		"content": []map[string]string{
@@ -607,7 +625,7 @@ func TestConnection_CallTool_Success(t *testing.T) {
 }
 
 func TestConnection_CallTool_IsError(t *testing.T) {
-	expectedID := nextID.Load() + 1
+	expectedID := int64(0)
 
 	toolResult := map[string]any{
 		"content": []map[string]string{
@@ -635,7 +653,7 @@ func TestConnection_CallTool_IsError(t *testing.T) {
 }
 
 func TestConnection_CallTool_RPCError(t *testing.T) {
-	expectedID := nextID.Load() + 1
+	expectedID := int64(0)
 	mt := &mockTransport{
 		responses: []json.RawMessage{
 			makeErrorResponse(expectedID, -32000, "server error"),
@@ -652,7 +670,7 @@ func TestConnection_CallTool_RPCError(t *testing.T) {
 func TestConnection_CallTool_NonStandardResult(t *testing.T) {
 	// When the result doesn't match the expected content structure,
 	// CallTool returns the raw result as content string.
-	expectedID := nextID.Load() + 1
+	expectedID := int64(0)
 	mt := &mockTransport{
 		responses: []json.RawMessage{
 			makeResponse(expectedID, "plain string result"),
@@ -671,7 +689,7 @@ func TestConnection_CallTool_NonStandardResult(t *testing.T) {
 }
 
 func TestConnection_CallTool_MultipleContentBlocks(t *testing.T) {
-	expectedID := nextID.Load() + 1
+	expectedID := int64(0)
 
 	toolResult := map[string]any{
 		"content": []map[string]string{

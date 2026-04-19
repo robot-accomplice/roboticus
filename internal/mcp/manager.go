@@ -189,9 +189,12 @@ func (m *ConnectionManager) Connection(name string) (*Connection, bool) {
 		return nil, false
 	}
 
-	copyConn := *conn
-	copyConn.Tools = append([]ToolDescriptor(nil), conn.Tools...)
-	return &copyConn, true
+	return &Connection{
+		Name:          conn.Name,
+		Tools:         append([]ToolDescriptor(nil), conn.Tools...),
+		ServerName:    conn.ServerName,
+		ServerVersion: conn.ServerVersion,
+	}, true
 }
 
 // CloseAll disconnects all servers.

@@ -237,6 +237,14 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 	ringBufSub := core.NewRingBufferSubscriber(1000)
 	errBus := core.NewErrorBus(errBusCtx, 256, logSub, metricSub, ringBufSub)
 	// errBusCancel stored in Daemon struct for shutdown ordering.
+	daemonReady := false
+	defer func() {
+		if daemonReady {
+			return
+		}
+		errBusCancel()
+		_ = store.Close()
+	}()
 
 	// Open keystore early so LLM providers can resolve API keys from it.
 	ks, ksErr := core.OpenKeystoreMachine()
@@ -263,8 +271,6 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 		ToolAllowlist: cfg.Models.ToolAllowlist,
 	}, store)
 	if err != nil {
-		errBusCancel()
-		_ = store.Close()
 		return nil, fmt.Errorf("daemon: init LLM: %w", err)
 	}
 
@@ -708,6 +714,7 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 	// ── Phase 12: Complete ──────────────────────────────────────────────
 	log.Info().Int64("startup_ms", time.Since(startupStart).Milliseconds()).Msg("[startup 12/12] daemon initialization complete")
 
+	daemonReady = true
 	return &Daemon{
 		cfg:          cfg,
 		store:        store,
