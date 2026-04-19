@@ -566,18 +566,22 @@ func (p *Pipeline) trySkillFirst(ctx context.Context, cfg Config, authority core
 // tryShortcut evaluates the shortcut handler system against user input.
 // Uses DispatchShortcut with rich context (correction_turn, delegation_provenance)
 // so handlers can make context-aware decisions about whether to match.
-func (p *Pipeline) tryShortcut(_ context.Context, session *Session, content string, correctionTurn bool, channelLabel string) *Outcome {
-	ctx := &ShortcutContext{
+func (p *Pipeline) tryShortcut(ctx context.Context, session *Session, content string, correctionTurn bool, channelLabel string) *Outcome {
+	sctx := &ShortcutContext{
 		CorrectionTurn:         correctionTurn,
 		DelegationProvenance:   false, // Set by caller when applicable
 		HasConversationContext: session.TurnCount() > 0,
 		AgentName:              session.AgentName,
+		CapabilitySummary:      "",
 		SessionTurnCount:       session.TurnCount(),
 		PreviousAssistantText:  session.LastAssistantContent(),
 		ChannelLabel:           channelLabel,
 	}
+	if p.capabilities != nil {
+		sctx.CapabilitySummary = p.capabilities.Summarize(ctx, session, content)
+	}
 
-	result := DispatchShortcut(DefaultShortcutHandlers(), content, ctx)
+	result := DispatchShortcut(DefaultShortcutHandlers(), content, sctx)
 	if result == nil {
 		return nil
 	}

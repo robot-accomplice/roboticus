@@ -39,6 +39,8 @@ Environment:
                                 [cache].prompt_compression setting.
   SOAK_PROMPT_COMPRESSION_RATIO Optional float ratio override for the
                                 isolated [cache].compression_target_ratio.
+  SOAK_SCENARIOS               Comma-separated scenario names to run from the
+                                built-in matrix. Unset = run all scenarios.
 """
 import atexit
 import hashlib
@@ -146,6 +148,10 @@ if _raw_prompt_compression_ratio:
             f"[behavior-soak] ignoring SOAK_PROMPT_COMPRESSION_RATIO={_raw_prompt_compression_ratio!r}: {_exc}\n"
         )
         PROMPT_COMPRESSION_RATIO = None
+_raw_scenario_filter = os.environ.get("SOAK_SCENARIOS", "").strip()
+SCENARIO_FILTER = [
+    name.strip() for name in _raw_scenario_filter.split(",") if name.strip()
+]
 REAL_CONFIG = SOURCE_ROOT / "roboticus.toml"
 REAL_DB = SOURCE_ROOT / "state.db"
 REAL_WALLET = SOURCE_ROOT / "wallet.enc"
@@ -869,6 +875,14 @@ def check_count_only_output(_resp: Dict[str, object], content: str) -> Tuple[boo
     return ok, "returns count-only numeric output" if bare_number else "returns count in natural language"
 
 
+def check_history_recall(_resp: Dict[str, object], content: str) -> Tuple[bool, str]:
+    lower = content.lower()
+    markers = ["basalt-orchid", "lowercase", "semicolon"]
+    found = [marker for marker in markers if marker in lower]
+    ok = len(found) == len(markers)
+    return ok, f"history recall markers found: {len(found)}/{len(markers)}"
+
+
 def check_cron(resp: Dict[str, object], content: str) -> Tuple[bool, str]:
     lower = content.lower()
     has_schedule = "*/5" in content or "every 5" in lower or "5 minute" in lower
@@ -957,12 +971,20 @@ def check_geopolitical_quality(_resp: Dict[str, object], content: str) -> Tuple[
 # ── Scenarios ───────────────────────────────────────────────────
 
 class Scenario:
-    def __init__(self, name: str, prompt: str, checks: List[Check], max_latency_s: float = None):
+    def __init__(
+        self,
+        name: str,
+        prompt: str,
+        checks: List[Check],
+        max_latency_s: float = None,
+        setup_prompts: List[str] = None,
+    ):
         self.name = name
         self.prompt = prompt
         self.checks = checks
         # Per-scenario latency override. None = use global MAX_LATENCY.
         self.max_latency_s = max_latency_s
+        self.setup_prompts = setup_prompts or []
 
 
 SCENARIOS = [
@@ -986,6 +1008,39 @@ SCENARIOS = [
         "introspection_followup",
         "and summarize the results for me",
         [check_latency, check_no_exec_block, check_no_stale, check_no_foreign_identity],
+    ),
+    Scenario(
+        "compression_history_recall",
+        "What codename and output rules did I tell you to remember? Reply on one line.",
+        [check_latency, check_history_recall, check_no_stale, check_no_foreign_identity],
+        setup_prompts=[
+            "Remember this exact project codename for later: basalt-orchid. Also remember these output rules for later replies: answer in lowercase, use semicolons, and mention the codename. Reply only with noted.",
+            "Reply with only the number 1.",
+            "Reply with only the number 2.",
+            "Reply with only the number 3.",
+        ],
+    ),
+    Scenario(
+        "compression_history_filesystem_count",
+        "Count markdown files recursively in the target docs dir and return only the number.",
+        [check_latency, check_no_exec_block, check_count_only_output, check_no_stale, check_no_foreign_identity],
+        setup_prompts=[
+            "For the rest of this session, 'target docs dir' means /Users/jmachen/code/roboticus/docs. When I ask for a count later, return only the number. Reply only with noted.",
+            "Reply with only the word ready.",
+            "Reply with only the word steady.",
+            "Reply with only the word set.",
+        ],
+    ),
+    Scenario(
+        "compression_history_cron_alias",
+        "Create the quiet ticker now and tell me exactly what was scheduled.",
+        [check_latency, check_no_exec_block, check_cron, check_no_foreign_identity],
+        setup_prompts=[
+            "For the rest of this session, 'quiet ticker' means a cron job that runs every 5 minutes. Reply only with noted.",
+            "Reply with only the word noted.",
+            "Reply with only the word retained.",
+            "Reply with only the word ready.",
+        ],
     ),
     Scenario(
         "tool_random_use",
@@ -1060,11 +1115,25 @@ SCENARIOS = [
     ),
 ]
 
+SCENARIO_INDEX = {scenario.name: scenario for scenario in SCENARIOS}
+
+
+def selected_scenarios() -> List[Scenario]:
+    if not SCENARIO_FILTER:
+        return list(SCENARIOS)
+    unknown = [name for name in SCENARIO_FILTER if name not in SCENARIO_INDEX]
+    if unknown:
+        raise RuntimeError(
+            f"unknown SOAK_SCENARIOS entries: {', '.join(unknown)}"
+        )
+    return [SCENARIO_INDEX[name] for name in SCENARIO_FILTER]
+
 
 # ── Runner ──────────────────────────────────────────────────────
 
 def run() -> int:
     managed = prepare_managed_server()
+    scenarios = selected_scenarios()
     log_line(f"[behavior-soak] base_url={BASE_URL}")
     log_line(
         f"[behavior-soak] timeout={TIMEOUT}s max_latency={MAX_LATENCY}s "
@@ -1083,6 +1152,10 @@ def run() -> int:
             else ""
         )
         log_line(f"[behavior-soak] prompt_compression={PROMPT_COMPRESSION_MODE}{ratio_note}")
+    if SCENARIO_FILTER:
+        log_line(
+            f"[behavior-soak] scenarios={','.join(scenario.name for scenario in scenarios)}"
+        )
     if AUTONOMY_MAX_LOOP_SECS is not None:
         log_line(f"[behavior-soak] autonomy_max_loop_secs={AUTONOMY_MAX_LOOP_SECS} (isolated config override)")
     if managed is not None:
@@ -1104,8 +1177,8 @@ def run() -> int:
     session_id = None
     results: List[Dict[str, object]] = []
 
-    for idx, scenario in enumerate(SCENARIOS, start=1):
-        log_line(f"[behavior-soak] START {idx}/{len(SCENARIOS)} {scenario.name}")
+    for idx, scenario in enumerate(scenarios, start=1):
+        log_line(f"[behavior-soak] START {idx}/{len(scenarios)} {scenario.name}")
         if SESSION_ISOLATION:
             try:
                 session_id = create_session()
@@ -1129,6 +1202,32 @@ def run() -> int:
                 results.append(row)
                 log_line(f"[behavior-soak] FAIL {scenario.name} session error: {err}")
                 continue
+
+        setup_failed = False
+        for setup_idx, setup_prompt in enumerate(scenario.setup_prompts, start=1):
+            log_line(
+                f"[behavior-soak] SETUP {scenario.name} {setup_idx}/{len(scenario.setup_prompts)}"
+            )
+            try:
+                setup_resp = send_message(setup_prompt, session_id)
+            except Exception as err:
+                row = {
+                    "name": scenario.name,
+                    "prompt": scenario.prompt,
+                    "latency_s": None,
+                    "model": None,
+                    "session_id": session_id,
+                    "passed": False,
+                    "checks": [{"ok": False, "detail": f"setup failure: {err}", "check": "setup"}],
+                    "content": "",
+                }
+                results.append(row)
+                log_line(f"[behavior-soak] FAIL {scenario.name} setup error: {err}")
+                setup_failed = True
+                break
+            session_id = str(setup_resp.get("session_id") or session_id or "")
+        if setup_failed:
+            continue
 
         try:
             resp = send_message(scenario.prompt, session_id)

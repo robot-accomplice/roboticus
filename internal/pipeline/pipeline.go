@@ -74,6 +74,12 @@ type DashboardNotifier interface {
 	PublishEvent(eventType string, data any)
 }
 
+// CapabilitySummarizer provides a compact runtime-owned capability summary for
+// introspection-style fast paths.
+type CapabilitySummarizer interface {
+	Summarize(ctx context.Context, session *Session, query string) string
+}
+
 // StreamFinalizer runs post-turn work after streaming completes.
 // Connectors MUST call this after assembling the full streamed content,
 // or streaming turns will silently lose memory ingestion, embedding
@@ -112,6 +118,7 @@ type Pipeline struct {
 	certaintyClass   *llm.SemanticClassifier
 	errBus           *core.ErrorBus
 	dashboard        DashboardNotifier
+	capabilities     CapabilitySummarizer
 	workspace        string   // agent workspace root — propagated to sessions for tool sandbox
 	allowedPaths     []string // extra paths outside workspace that tools may access
 	cacheTTL         time.Duration
@@ -135,6 +142,7 @@ type PipelineDeps struct {
 	Embeddings *llm.EmbeddingClient
 	ErrBus     *core.ErrorBus
 	Dashboard  DashboardNotifier
+	Capabilities CapabilitySummarizer
 
 	// Sandbox: workspace root and extra allowed paths propagated to every session.
 	Workspace    string
@@ -193,6 +201,7 @@ func New(deps PipelineDeps) *Pipeline {
 		certaintyClass:   NewClaimCertaintyClassifier(deps.Embeddings),
 		errBus:           deps.ErrBus,
 		dashboard:        deps.Dashboard,
+		capabilities:     deps.Capabilities,
 		botCmds:          NewBotCommandHandler(deps.LLM, deps.Store),
 		workspace:        deps.Workspace,
 		allowedPaths:     deps.AllowedPaths,

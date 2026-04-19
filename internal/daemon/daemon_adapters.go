@@ -126,6 +126,27 @@ type prunerAdapter struct {
 	toolSearchCfg agenttools.ToolSearchConfig
 }
 
+type capabilitySummaryAdapter struct {
+	store      *db.Store
+	tools      *agent.ToolRegistry
+	promptBase agent.PromptConfig
+}
+
+func (a *capabilitySummaryAdapter) Summarize(ctx context.Context, sess *session.Session, query string) string {
+	if a == nil {
+		return ""
+	}
+	cfg := a.promptBase
+	if sess != nil && sess.AgentName != "" && sess.AgentName != "default" {
+		cfg.AgentName = sess.AgentName
+	}
+	if a.tools != nil {
+		cfg.ToolNames = a.tools.Names()
+		cfg.ToolDescs = a.tools.NamesWithDescriptions()
+	}
+	return buildCapabilitySummary(ctx, a.store, cfg, nil, query)
+}
+
 // PruneTools extracts the latest user message as the ranking query and
 // delegates to SelectToolDefs. Returns the selected []llm.ToolDef plus
 // telemetry stats for the pipeline stage to annotate.
@@ -154,6 +175,149 @@ func latestUserMessageContent(sess *session.Session) string {
 		}
 	}
 	return ""
+}
+
+func isIntrospectionQuery(query string) bool {
+	lower := strings.ToLower(strings.TrimSpace(query))
+	if lower == "" {
+		return false
+	}
+	markers := []string{
+		"introspect",
+		"introspection",
+		"capability",
+		"capabilities",
+		"what can you do",
+		"what tools",
+		"what tool",
+		"tools you can use",
+		"tool you can use",
+		"available tools",
+		"subagent",
+		"subagents",
+		"functionality",
+		"runtime state",
+	}
+	for _, marker := range markers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+type capabilitySubagent struct {
+	Name        string
+	DisplayName string
+	Model       string
+	Role        string
+	Description string
+	Enabled     bool
+}
+
+func loadCapabilitySubagents(ctx context.Context, store *db.Store) []capabilitySubagent {
+	if store == nil {
+		return nil
+	}
+	rows, err := db.NewRouteQueries(store).ListSubAgentRoster(ctx)
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []capabilitySubagent
+	for rows.Next() {
+		var (
+			name, displayName, model, role, description string
+			enabled                                      bool
+		)
+		if err := rows.Scan(&name, &displayName, &model, &enabled, &role, &description); err != nil {
+			return out
+		}
+		out = append(out, capabilitySubagent{
+			Name:        name,
+			DisplayName: displayName,
+			Model:       model,
+			Role:        role,
+			Description: description,
+			Enabled:     enabled,
+		})
+	}
+	return out
+}
+
+func buildCapabilitySummary(
+	ctx context.Context,
+	store *db.Store,
+	cfg agent.PromptConfig,
+	selectedDefs []llm.ToolDef,
+	query string,
+) string {
+	if !isIntrospectionQuery(query) {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("This snapshot is authoritative runtime state for capability questions. ")
+	sb.WriteString("Use it directly before reaching for exploratory introspection tools.\n")
+
+	if len(cfg.Skills) > 0 {
+		limit := min(len(cfg.Skills), 8)
+		sb.WriteString(fmt.Sprintf("- Active skills (%d): %s\n", len(cfg.Skills), strings.Join(cfg.Skills[:limit], ", ")))
+		if len(cfg.Skills) > limit {
+			sb.WriteString(fmt.Sprintf("- Additional skills not listed here: %d\n", len(cfg.Skills)-limit))
+		}
+	}
+
+	toolNames := make([]string, 0, len(selectedDefs))
+	for _, def := range selectedDefs {
+		name := strings.TrimSpace(def.Function.Name)
+		if name != "" {
+			toolNames = append(toolNames, name)
+		}
+	}
+	if len(toolNames) == 0 {
+		toolNames = append(toolNames, cfg.ToolNames...)
+	}
+	if len(toolNames) > 0 {
+		limit := min(len(toolNames), 12)
+		sb.WriteString(fmt.Sprintf("- Live tool surface (%d): %s\n", len(toolNames), strings.Join(toolNames[:limit], ", ")))
+		if len(toolNames) > limit {
+			sb.WriteString(fmt.Sprintf("- Additional tools not listed here: %d\n", len(toolNames)-limit))
+		}
+	}
+
+	subagents := loadCapabilitySubagents(ctx, store)
+	if len(subagents) > 0 {
+		enabled := 0
+		for _, sa := range subagents {
+			if sa.Enabled {
+				enabled++
+			}
+		}
+		sb.WriteString(fmt.Sprintf("- Configured subagents: %d total, %d enabled\n", len(subagents), enabled))
+		limit := min(len(subagents), 6)
+		for _, sa := range subagents[:limit] {
+			label := sa.Name
+			if strings.TrimSpace(sa.DisplayName) != "" && sa.DisplayName != sa.Name {
+				label = sa.DisplayName + " (" + sa.Name + ")"
+			}
+			status := "disabled"
+			if sa.Enabled {
+				status = "enabled"
+			}
+			line := fmt.Sprintf("  - %s: role=%s, model=%s, status=%s", label, sa.Role, sa.Model, status)
+			if desc := strings.TrimSpace(sa.Description); desc != "" {
+				line += ", purpose=" + desc
+			}
+			sb.WriteString(line + "\n")
+		}
+		if len(subagents) > limit {
+			sb.WriteString(fmt.Sprintf("- Additional subagents not listed here: %d\n", len(subagents)-limit))
+		}
+	}
+
+	return strings.TrimSpace(sb.String())
 }
 
 func promptToolSurface(defs []llm.ToolDef) ([]string, [][2]string) {
@@ -263,6 +427,13 @@ func buildAgentContext(ctx context.Context, sess *session.Session, store *db.Sto
 	if selectedSet {
 		cfg.ToolNames, cfg.ToolDescs = promptToolSurface(selectedDefs)
 	}
+	cfg.CapabilitySummary = buildCapabilitySummary(
+		ctx,
+		store,
+		cfg,
+		selectedDefs,
+		latestUserMessageContent(sess),
+	)
 	systemPrompt := agent.BuildSystemPrompt(cfg)
 
 	// HMAC trust boundary: wrap system prompt so model output verification

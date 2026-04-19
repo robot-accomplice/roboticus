@@ -610,6 +610,11 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 			embedClient:   embedClient,
 			toolSearchCfg: toolSearchCfg,
 		},
+		Capabilities: &capabilitySummaryAdapter{
+			store:      store,
+			tools:      tools,
+			promptBase: basePromptCfg,
+		},
 		BGWorker:     bgWorker,
 		Embeddings:   embedClient,
 		ErrBus:       errBus,

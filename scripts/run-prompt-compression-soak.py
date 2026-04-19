@@ -16,6 +16,7 @@ script owns the paired-comparison/reporting logic.
 
 import json
 import os
+import socket
 import subprocess
 import sys
 import tempfile
@@ -29,11 +30,19 @@ from typing import Dict, List, Tuple
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BASE_SOAK = REPO_ROOT / "scripts" / "run-agent-behavior-soak.py"
 DEFAULT_REPORT = "/tmp/roboticus-prompt-compression-soak-report.json"
+DEFAULT_BASE_URL = os.environ.get("BASE_URL", "http://127.0.0.1:18790").rstrip("/")
 SERVER_MODE = os.environ.get("SOAK_SERVER_MODE", "clone").strip().lower()
+DEFAULT_COMPRESSION_SCENARIOS = ",".join(
+    [
+        "compression_history_recall",
+        "compression_history_filesystem_count",
+        "compression_history_cron_alias",
+    ]
+)
 RATIO = os.environ.get("SOAK_PROMPT_COMPRESSION_RATIO", "").strip()
 _raw_lane_timeout = os.environ.get("SOAK_LANE_TIMEOUT_SECONDS", "").strip()
 try:
-    LANE_TIMEOUT_SECONDS = int(_raw_lane_timeout) if _raw_lane_timeout else 0
+    LANE_TIMEOUT_SECONDS = int(_raw_lane_timeout) if _raw_lane_timeout else 7200
 except ValueError as exc:
     raise SystemExit(
         f"unsupported SOAK_LANE_TIMEOUT_SECONDS={_raw_lane_timeout!r}: {exc}"
@@ -44,6 +53,15 @@ try:
 except ValueError as exc:
     raise SystemExit(
         f"unsupported SOAK_LANE_HEARTBEAT_SECONDS={_raw_lane_heartbeat!r}: {exc}"
+    ) from exc
+_raw_port_free_timeout = os.environ.get("SOAK_PORT_FREE_TIMEOUT_SECONDS", "").strip()
+try:
+    PORT_FREE_TIMEOUT_SECONDS = (
+        int(_raw_port_free_timeout) if _raw_port_free_timeout else 90
+    )
+except ValueError as exc:
+    raise SystemExit(
+        f"unsupported SOAK_PORT_FREE_TIMEOUT_SECONDS={_raw_port_free_timeout!r}: {exc}"
     ) from exc
 
 
@@ -66,11 +84,61 @@ def _stream_reader(stream, sink, queue: Queue[Tuple[str, str]]) -> None:
         queue.put(("eof", ""))
 
 
-def run_lane(label: str, compression_mode: str, report_path: Path) -> Tuple[int, Dict[str, object]]:
+def parse_base_url(base_url: str) -> Tuple[str, int, str]:
+    from urllib.parse import urlparse
+
+    parsed = urlparse(base_url)
+    host = parsed.hostname or "127.0.0.1"
+    scheme = parsed.scheme or "http"
+    port = parsed.port
+    if port is None:
+        port = 443 if scheme == "https" else 80
+    return host, port, scheme
+
+
+def lane_base_url(base_url: str, lane_index: int) -> str:
+    host, port, scheme = parse_base_url(base_url)
+    lane_port = port + lane_index
+    return f"{scheme}://{host}:{lane_port}"
+
+
+def port_is_free(host: str, port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.5)
+        return sock.connect_ex((host, port)) != 0
+
+
+def wait_for_port_free(host: str, port: int, timeout_s: int) -> None:
+    deadline = time.time() + timeout_s
+    next_heartbeat = time.time() + max(LANE_HEARTBEAT_SECONDS, 1)
+    while time.time() < deadline:
+        if port_is_free(host, port):
+            return
+        now = time.time()
+        if now >= next_heartbeat:
+            elapsed = timeout_s - max(int(deadline - now), 0)
+            log_line(
+                f"[prompt-compression-soak] waiting for port free host={host} "
+                f"port={port} elapsed={elapsed}s"
+            )
+            next_heartbeat = now + max(LANE_HEARTBEAT_SECONDS, 1)
+        time.sleep(1.0)
+    raise RuntimeError(f"port {host}:{port} still busy after {timeout_s}s")
+
+
+def run_lane(
+    label: str,
+    compression_mode: str,
+    report_path: Path,
+    *,
+    lane_url: str,
+) -> Tuple[int, Dict[str, object]]:
     env = os.environ.copy()
     env["SOAK_SERVER_MODE"] = SERVER_MODE
     env["SOAK_PROMPT_COMPRESSION"] = compression_mode
     env["SOAK_REPORT_PATH"] = str(report_path)
+    env["BASE_URL"] = lane_url
+    env.setdefault("SOAK_SCENARIOS", DEFAULT_COMPRESSION_SCENARIOS)
     # Quality evaluation should exercise the live model path, not cache replay.
     env.setdefault("SOAK_CLEAR_CACHE", "1")
     env.setdefault("SOAK_BYPASS_CACHE", "1")
@@ -80,7 +148,8 @@ def run_lane(label: str, compression_mode: str, report_path: Path) -> Tuple[int,
     log_line(
         f"[prompt-compression-soak] lane={label} "
         f"compression={compression_mode} clear_cache={env['SOAK_CLEAR_CACHE']} "
-        f"bypass_cache={env['SOAK_BYPASS_CACHE']}"
+        f"bypass_cache={env['SOAK_BYPASS_CACHE']} base_url={lane_url} "
+        f"scenarios={env['SOAK_SCENARIOS']}"
         + (f" ratio={RATIO}" if RATIO else "")
     )
 
@@ -257,10 +326,33 @@ def main() -> int:
     baseline_report_path = tmpdir / "baseline-off.json"
     compressed_report_path = tmpdir / "compression-on.json"
     final_report_path = Path(os.environ.get("SOAK_REPORT_PATH", DEFAULT_REPORT))
+    baseline_url = lane_base_url(DEFAULT_BASE_URL, 0)
+    compressed_url = lane_base_url(DEFAULT_BASE_URL, 1)
 
     started = time.time()
-    baseline_exit, baseline_report = run_lane("baseline", "off", baseline_report_path)
-    compressed_exit, compressed_report = run_lane("compressed", "on", compressed_report_path)
+    baseline_exit, baseline_report = run_lane(
+        "baseline",
+        "off",
+        baseline_report_path,
+        lane_url=baseline_url,
+    )
+    _, baseline_port, baseline_scheme = parse_base_url(baseline_url)
+    baseline_host, _, _ = parse_base_url(baseline_url)
+    if baseline_scheme == "http":
+        try:
+            wait_for_port_free(
+                baseline_host,
+                baseline_port,
+                max(PORT_FREE_TIMEOUT_SECONDS, 1),
+            )
+        except RuntimeError as err:
+            log_line(f"[prompt-compression-soak] {err}", file=sys.stderr)
+    compressed_exit, compressed_report = run_lane(
+        "compressed",
+        "on",
+        compressed_report_path,
+        lane_url=compressed_url,
+    )
     regressions, improvements, unchanged_failures = summarize_diffs(baseline_report, compressed_report)
 
     combined = {

@@ -27,6 +27,7 @@ type PromptConfig struct {
 	BoundaryKey       []byte               // HMAC-SHA256 key for trust boundary signing (nil = no signing)
 	ToolNames         []string             // registered tool names for introspection block
 	ToolDescs         [][2]string          // (name, description) pairs for tool roster in prompt
+	CapabilitySummary string               // compact runtime-owned capability snapshot for introspection-shaped turns
 	BudgetTier        int                  // 0=L0, 1=L1, 2=L2, 3=L3 — controls prompt compaction
 	Obsidian          *core.ObsidianConfig // optional Obsidian config for vault directive
 }
@@ -91,6 +92,11 @@ func BuildSystemPrompt(cfg PromptConfig) string {
 
 	// 6. Tool use instructions — ported from Rust's tool_use_instructions().
 	sections = append(sections, buildToolUseBlock(cfg))
+
+	// 6a. Runtime-owned capability snapshot for introspection-shaped turns.
+	if cfg.CapabilitySummary != "" {
+		sections = append(sections, "## Capability Snapshot\n"+cfg.CapabilitySummary+"\n")
+	}
 
 	// 7. Safety (integrated into behavioral contract for L2+, explicit for L0/L1).
 	if cfg.BudgetTier <= 1 {

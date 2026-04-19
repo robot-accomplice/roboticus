@@ -64,6 +64,29 @@ func TestHelpShortcut_Matches(t *testing.T) {
 	}
 }
 
+func TestIntrospectionShortcut_MatchesWhenCapabilitySummaryPresent(t *testing.T) {
+	handler := &IntrospectionShortcut{}
+	ctx := &ShortcutContext{CapabilitySummary: "runtime-owned capability summary"}
+
+	for _, input := range []string{
+		"use your introspection tool to discover your current subagent functionality and summarize it for me",
+		"what can your subagents do?",
+		"what tools can you use?",
+	} {
+		m := handler.TryMatch(input, ctx)
+		if m == nil {
+			t.Errorf("expected match for %q", input)
+		}
+	}
+}
+
+func TestIntrospectionShortcut_DoesNotMatchWithoutSummary(t *testing.T) {
+	handler := &IntrospectionShortcut{}
+	if m := handler.TryMatch("what can you do?", &ShortcutContext{}); m != nil {
+		t.Fatal("should not match without runtime-owned capability summary")
+	}
+}
+
 func TestDispatchShortcut_PicksHighestConfidence(t *testing.T) {
 	handlers := DefaultShortcutHandlers()
 
@@ -74,6 +97,23 @@ func TestDispatchShortcut_PicksHighestConfidence(t *testing.T) {
 	}
 	if result.Handler != "identity" {
 		t.Errorf("expected identity handler, got %s", result.Handler)
+	}
+}
+
+func TestDispatchShortcut_IntrospectionWinsForCapabilityQueries(t *testing.T) {
+	handlers := DefaultShortcutHandlers()
+	result := DispatchShortcut(handlers, "what can your subagents do?", &ShortcutContext{
+		AgentName:         "Bot",
+		CapabilitySummary: "Enabled subagents: researcher",
+	})
+	if result == nil {
+		t.Fatal("expected a match")
+	}
+	if result.Handler != "introspection" {
+		t.Fatalf("expected introspection handler, got %s", result.Handler)
+	}
+	if result.Content != "Enabled subagents: researcher" {
+		t.Fatalf("unexpected introspection response: %q", result.Content)
 	}
 }
 

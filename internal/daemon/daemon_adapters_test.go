@@ -684,6 +684,120 @@ func TestBuildAgentContext_PromptToolRosterClearsWhenSelectedDefsEmpty(t *testin
 	}
 }
 
+func TestBuildAgentContext_IntrospectionQueryGetsCapabilitySnapshot(t *testing.T) {
+	store := testutil.TempStore(t)
+	_, err := store.ExecContext(context.Background(),
+		`INSERT INTO sub_agents (id, name, display_name, model, role, description, enabled)
+		 VALUES ('sa1', 'researcher', 'Researcher', 'qwen2.5:14b', 'specialist', 'research and synthesis', 1)`)
+	if err != nil {
+		t.Fatalf("insert subagent: %v", err)
+	}
+
+	sess := session.New("s1", "a1", "TestBot")
+	sess.AddUserMessage("use your introspection tool to discover your current subagent functionality and summarize it for me")
+	sess.SetSelectedToolDefs([]llm.ToolDef{
+		{
+			Type: "function",
+			Function: llm.ToolFuncDef{
+				Name:        "introspection",
+				Description: "Inspect agent capabilities, available tools, and runtime state.",
+			},
+		},
+		{
+			Type: "function",
+			Function: llm.ToolFuncDef{
+				Name:        "get_subagent_status",
+				Description: "Get status of all registered subagents including their model, role, and activity.",
+			},
+		},
+	})
+
+	ctx := buildAgentContext(context.Background(), sess, store, nil, nil, tools.DefaultToolSearchConfig(), agent.PromptConfig{
+		AgentName: "TestBot",
+		Skills:    []string{"research", "monitoring"},
+	}, nil, nil)
+	req := ctx.BuildRequest(sess)
+	if len(req.Messages) == 0 || req.Messages[0].Role != "system" {
+		t.Fatalf("expected system prompt in first message")
+	}
+	prompt := req.Messages[0].Content
+	if !strings.Contains(prompt, "## Capability Snapshot") {
+		t.Fatal("expected capability snapshot in system prompt")
+	}
+	if !strings.Contains(prompt, "This snapshot is authoritative runtime state") {
+		t.Fatal("expected authoritative capability snapshot guidance")
+	}
+	if !strings.Contains(prompt, "Live tool surface") || !strings.Contains(prompt, "introspection") {
+		t.Fatal("expected live selected tools in capability snapshot")
+	}
+	if !strings.Contains(prompt, "Configured subagents") || !strings.Contains(prompt, "Researcher (researcher)") {
+		t.Fatal("expected subagent roster in capability snapshot")
+	}
+}
+
+func TestBuildAgentContext_NonIntrospectionQueryDoesNotInjectCapabilitySnapshot(t *testing.T) {
+	sess := session.New("s1", "a1", "TestBot")
+	sess.AddUserMessage("count markdown files recursively in /Users/jmachen/code and return only the number")
+	sess.SetSelectedToolDefs([]llm.ToolDef{
+		{
+			Type: "function",
+			Function: llm.ToolFuncDef{
+				Name:        "bash",
+				Description: "Execute shell commands.",
+			},
+		},
+	})
+
+	ctx := buildAgentContext(context.Background(), sess, nil, nil, nil, tools.DefaultToolSearchConfig(), agent.PromptConfig{
+		AgentName: "TestBot",
+		Skills:    []string{"research"},
+	}, nil, nil)
+	req := ctx.BuildRequest(sess)
+	if len(req.Messages) == 0 || req.Messages[0].Role != "system" {
+		t.Fatalf("expected system prompt in first message")
+	}
+	if strings.Contains(req.Messages[0].Content, "## Capability Snapshot") {
+		t.Fatal("non-introspection turn should not pay capability snapshot prompt tax")
+	}
+}
+
+func TestBuildAgentContext_ToolCapabilityQueryGetsCapabilitySnapshot(t *testing.T) {
+	sess := session.New("s1", "a1", "TestBot")
+	sess.AddUserMessage("tell me about the tools you can use, pick one at random, and use it")
+	sess.SetSelectedToolDefs([]llm.ToolDef{
+		{
+			Type: "function",
+			Function: llm.ToolFuncDef{
+				Name:        "bash",
+				Description: "Execute shell commands.",
+			},
+		},
+		{
+			Type: "function",
+			Function: llm.ToolFuncDef{
+				Name:        "weather",
+				Description: "Fetch weather.",
+			},
+		},
+	})
+
+	ctx := buildAgentContext(context.Background(), sess, nil, nil, nil, tools.DefaultToolSearchConfig(), agent.PromptConfig{
+		AgentName: "TestBot",
+		Skills:    []string{"research"},
+	}, nil, nil)
+	req := ctx.BuildRequest(sess)
+	if len(req.Messages) == 0 || req.Messages[0].Role != "system" {
+		t.Fatalf("expected system prompt in first message")
+	}
+	prompt := req.Messages[0].Content
+	if !strings.Contains(prompt, "## Capability Snapshot") {
+		t.Fatal("expected capability snapshot for tool-capability query")
+	}
+	if !strings.Contains(prompt, "Live tool surface") || !strings.Contains(prompt, "bash") {
+		t.Fatal("expected selected tool surface in capability snapshot")
+	}
+}
+
 func TestBuildAgentContext_WithRetriever(t *testing.T) {
 	// v1.0.6: buildAgentContext no longer holds a retriever reference.
 	// Memory preparation is the pipeline's responsibility; this test now

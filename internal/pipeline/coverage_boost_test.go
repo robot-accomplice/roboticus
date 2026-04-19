@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"roboticus/internal/core"
@@ -538,6 +539,27 @@ func TestTryShortcut_Help(t *testing.T) {
 		if result == nil {
 			t.Errorf("tryShortcut(%q) should match help", h)
 		}
+	}
+}
+
+type stubCapabilitySummarizer struct {
+	summary string
+}
+
+func (s stubCapabilitySummarizer) Summarize(_ context.Context, _ *Session, _ string) string {
+	return s.summary
+}
+
+func TestTryShortcut_Introspection(t *testing.T) {
+	pipe := &Pipeline{capabilities: stubCapabilitySummarizer{summary: "Enabled subagents: researcher\nLive tool surface: introspection, get_subagent_status"}}
+	sess := NewSession("s1", "a1", "Bot")
+
+	result := pipe.tryShortcut(context.Background(), sess, "use your introspection tool to discover your current subagent functionality and summarize it for me", false, "test")
+	if result == nil {
+		t.Fatal("introspection shortcut should match")
+	}
+	if !strings.Contains(result.Content, "Enabled subagents: researcher") {
+		t.Fatalf("unexpected shortcut content: %q", result.Content)
 	}
 }
 
