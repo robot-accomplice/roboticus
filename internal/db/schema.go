@@ -892,6 +892,11 @@ func (s *Store) ensureOptionalColumns() error {
 		{Table: "cron_jobs", Column: "retry_count", ColType: "INTEGER", Default: "0"},
 		{Table: "cron_jobs", Column: "max_retries", ColType: "INTEGER", Default: "3"},
 		{Table: "cron_jobs", Column: "retry_delay_ms", ColType: "INTEGER", Default: "60000"},
+		// treasury_state was introduced before the current full shape was stabilized.
+		// Older installs can carry a partial table forward while schema_version still
+		// reports current enough to skip the original CREATE TABLE migration.
+		{Table: "treasury_state", Column: "atoken_balance", ColType: "REAL", Default: "0.0"},
+		{Table: "treasury_state", Column: "survival_tier", ColType: "TEXT", Default: "'Normal'"},
 		// installed_themes columns for older DBs that created the table without them.
 		{Table: "installed_themes", Column: "name", ColType: "TEXT", Default: "''"},
 		{Table: "installed_themes", Column: "source", ColType: "TEXT", Default: "'catalog'"},
@@ -927,6 +932,9 @@ func (s *Store) ensureOptionalColumns() error {
 		{Table: "pipeline_traces", Column: "react_trace_json", ColType: "TEXT"},
 		{Table: "pipeline_traces", Column: "inference_params_json", ColType: "TEXT"},
 		{Table: "memory_index", Column: "last_verified", ColType: "TEXT"},
+		{Table: "treasury_state", Column: "last_deposit_at", ColType: "TEXT"},
+		{Table: "treasury_state", Column: "last_withdrawal_at", ColType: "TEXT"},
+		{Table: "treasury_state", Column: "updated_at", ColType: "TEXT"},
 	}
 
 	for _, col := range nullableColumns {

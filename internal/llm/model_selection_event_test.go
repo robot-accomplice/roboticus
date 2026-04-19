@@ -68,3 +68,46 @@ func TestServiceComplete_RecordsModelSelectionFromActualRequest(t *testing.T) {
 		t.Fatalf("user_excerpt = %q", userExcerpt)
 	}
 }
+
+func TestRecordModelSelection_IsIdempotentPerTurn(t *testing.T) {
+	store := tempStore(t)
+
+	svc, err := NewService(ServiceConfig{}, store)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+
+	ctx := context.Background()
+	ctx = core.WithSessionID(ctx, "sess-1")
+	ctx = core.WithTurnID(ctx, "turn-1")
+	ctx = core.WithChannelLabel(ctx, "chat")
+
+	svc.RecordModelSelection(ctx, "turn-1", "sess-1", "", "chat", "ollama/qwen2.5:32b", "routed", "first excerpt")
+	svc.RecordModelSelection(ctx, "turn-1", "sess-1", "", "chat", "moonshot/kimi-k2-turbo-preview", "fallback", "second excerpt")
+
+	var (
+		count         int
+		selectedModel string
+		strategy      string
+		userExcerpt   string
+	)
+	if err := store.QueryRowContext(ctx,
+		`SELECT COUNT(*), selected_model, strategy, user_excerpt
+		   FROM model_selection_events
+		  WHERE turn_id = 'turn-1'`,
+	).Scan(&count, &selectedModel, &strategy, &userExcerpt); err != nil {
+		t.Fatalf("query model_selection_events: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("count = %d want 1", count)
+	}
+	if selectedModel != "moonshot/kimi-k2-turbo-preview" {
+		t.Fatalf("selected_model = %q", selectedModel)
+	}
+	if strategy != "fallback" {
+		t.Fatalf("strategy = %q", strategy)
+	}
+	if userExcerpt != "second excerpt" {
+		t.Fatalf("user_excerpt = %q", userExcerpt)
+	}
+}

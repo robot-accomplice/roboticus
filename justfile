@@ -83,12 +83,19 @@ build-ci:
     go build -trimpath \
         -ldflags="-s -w -X roboticus/cmd.version=ci-${commit_sha:0:8} -X roboticus/internal/daemon.version=ci-${commit_sha:0:8}" \
         -o roboticus .
-    ./roboticus version
+    if [[ "$(uname -s)" == "Linux" && "$(uname -m)" == "x86_64" ]]; then
+        ./roboticus version
+    else
+        file roboticus
+    fi
 
 security:
     govulncheck ./...
 
 # --- Common development shortcuts ---
+
+run-source log_level="INFO":
+    ROBOTICUS_LOG_LEVEL={{log_level}} go run . serve
 
 build:
     go build ./...

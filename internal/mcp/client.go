@@ -366,11 +366,6 @@ func waitForStderrDrain(t *StdioTransport, timeout time.Duration) {
 var nextID atomic.Int64
 
 func (c *Connection) call(ctx context.Context, method string, params any) (json.RawMessage, error) {
-	c.startReceiver()
-	if err := c.receiverErr(); err != nil {
-		return nil, err
-	}
-
 	id := nextID.Add(1)
 	req := jsonRPCRequest{JSONRPC: "2.0", ID: id, Method: method, Params: params}
 	data, err := json.Marshal(req)
@@ -378,8 +373,17 @@ func (c *Connection) call(ctx context.Context, method string, params any) (json.
 		return nil, err
 	}
 
+	if err := c.receiverErr(); err != nil {
+		return nil, err
+	}
+
 	done := c.registerPending(id)
 	defer c.unregisterPending(id, done)
+
+	c.startReceiver()
+	if err := c.receiverErr(); err != nil {
+		return nil, err
+	}
 	if err := c.transport.Send(ctx, data); err != nil {
 		return nil, err
 	}

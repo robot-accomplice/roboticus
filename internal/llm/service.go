@@ -777,7 +777,17 @@ func (s *Service) RecordModelSelection(ctx context.Context, turnID, sessionID, a
 	}
 	if _, err := s.store.ExecContext(ctx,
 		`INSERT INTO model_selection_events (id, turn_id, session_id, agent_id, channel, selected_model, strategy, primary_model, user_excerpt, candidates_json, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', datetime('now'))`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', datetime('now'))
+		 ON CONFLICT(id) DO UPDATE SET
+		   session_id = excluded.session_id,
+		   agent_id = excluded.agent_id,
+		   channel = excluded.channel,
+		   selected_model = excluded.selected_model,
+		   strategy = excluded.strategy,
+		   primary_model = excluded.primary_model,
+		   user_excerpt = excluded.user_excerpt,
+		   candidates_json = excluded.candidates_json,
+		   created_at = datetime('now')`,
 		fmt.Sprintf("mse-%s", turnID), turnID, sessionID, agentID, channel,
 		selectedModel, strategy, primary, excerpt,
 	); err != nil {

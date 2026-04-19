@@ -304,6 +304,31 @@ explicitly rather than hidden behind vague unresolved language.
 - The recent fixes reduced ambiguity and drift overall; they did not add new
   broad subsystems or placeholder abstractions.
 
+### v1.0.7 Root Cause Analysis + Final Parity Goal
+
+v1.0.7 should be treated as the **Root Cause Analysis build** for inference
+stalling and fallback behavior, and as the release that takes the remaining
+post-v1.0.6 deferred parity edges to final disposition.
+
+The current runtime can show that inference ran long and that a provider
+eventually timed out, but it still cannot attribute the delay precisely enough
+to distinguish:
+
+- bad route choice
+- provider queueing or cold start
+- machine saturation
+- time-to-first-header failure
+- fallback-chain delay
+
+That is a post-v1.0.6 architecture goal, not a v1.0.6 release blocker. The
+next release should add first-class per-attempt timing, fallback-chain
+attribution, router health inputs, and user-visible stall/reroute status so the
+system can explain and react to this class of failure from runtime truth rather
+than operator guesswork. It should also take the remaining accepted/deferred
+parity edges from v1.0.6 and either retire them, redesign them, or close them
+with explicit final rationale rather than leaving them as indefinite release
+residue.
+
 ### Request Artifact Ownership
 v1.0.6 clarified that the final `llm.Request` is itself an architectural
 artifact, not just a local implementation detail. The validated ownership is:
