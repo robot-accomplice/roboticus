@@ -89,6 +89,7 @@ func TestDashboard_ObservabilityNarrativeContract(t *testing.T) {
 		"Canonical diagnostics were not persisted for turn",
 		"Conclusion",
 		"Health",
+		"Learning",
 		"Host Resources",
 		"Decision Flow",
 		"Hover a flow block for quick evidence",
@@ -108,7 +109,7 @@ func TestDashboard_ObservabilityNarrativeContract(t *testing.T) {
 		"The first attempt succeeded, but",
 		"health-poor",
 		"fair aggregate",
-		"Aggregate of task, envelope, routing, execution, recovery, host resources, and outcome.",
+		"Aggregate of task, envelope, routing, execution, recovery, learning, host resources, and outcome.",
 	}
 	for _, needle := range required {
 		if !strings.Contains(content, needle) {

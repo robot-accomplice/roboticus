@@ -123,6 +123,29 @@ func (t *readOnlySearchTool) Execute(_ context.Context, _ string, _ *agenttools.
 	return &agenttools.Result{Output: "found prior notes", Source: "builtin"}, nil
 }
 
+type structuredArgsTool struct {
+	calls    int
+	lastArgs string
+}
+
+func (t *structuredArgsTool) Name() string               { return "query_table" }
+func (t *structuredArgsTool) Description() string        { return "structured args test tool" }
+func (t *structuredArgsTool) Risk() agenttools.RiskLevel { return agenttools.RiskSafe }
+func (t *structuredArgsTool) ParameterSchema() json.RawMessage {
+	return json.RawMessage(`{"type":"object"}`)
+}
+func (t *structuredArgsTool) Execute(_ context.Context, params string, _ *agenttools.Context) (*agenttools.Result, error) {
+	t.calls++
+	t.lastArgs = params
+	var payload struct {
+		Table string `json:"table"`
+	}
+	if err := json.Unmarshal([]byte(params), &payload); err != nil {
+		return nil, err
+	}
+	return &agenttools.Result{Output: "queried " + payload.Table, Source: "builtin"}, nil
+}
+
 func TestLoop_SimpleResponse(t *testing.T) {
 	mock := &mockCompleter{
 		responses: []*llm.Response{
@@ -441,6 +464,129 @@ func TestLoop_PersistsToolExecutionAndIncrementsRCACounter(t *testing.T) {
 	}
 	if got := obs.summary["tool_call_count"]; got != 1 {
 		t.Fatalf("tool_call_count = %v, want 1", got)
+	}
+}
+
+func TestLoop_NormalizesMalformedStructuredToolArgumentsBeforeExecution(t *testing.T) {
+	toolCall := llm.ToolCall{
+		ID:   "call-1",
+		Type: "function",
+		Function: llm.ToolCallFunc{
+			Name:      "query_table",
+			Arguments: `{"table": "sessions, "filters": {}{"table": "sessions", "filters": {}}`,
+		},
+	}
+	mock := &mockCompleter{
+		responses: []*llm.Response{
+			{Content: "", ToolCalls: []llm.ToolCall{toolCall}},
+			{Content: "done"},
+		},
+	}
+	recorder := &recordingToolCallRecorder{}
+	obs := &recordingObserver{}
+	reg := NewToolRegistry()
+	tool := &structuredArgsTool{}
+	reg.Register(tool)
+
+	loop := NewLoop(DefaultLoopConfig(), LoopDeps{
+		LLM:         mock,
+		Tools:       reg,
+		Recorder:    recorder,
+		Context:     NewContextBuilder(DefaultContextConfig()),
+		Normalizers: agenttools.NewNormalizationFactory(),
+	})
+
+	session := NewSession("sess-1", "agent-1", "TestBot")
+	session.AddUserMessage("query the sessions table")
+
+	ctx := llm.WithInferenceObserver(context.Background(), obs)
+	result, err := loop.Run(ctx, session)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "done" {
+		t.Fatalf("result = %q, want done", result)
+	}
+	if tool.calls != 1 {
+		t.Fatalf("tool calls = %d, want 1", tool.calls)
+	}
+	if tool.lastArgs != `{"table": "sessions", "filters": {}}` {
+		t.Fatalf("normalized args = %q", tool.lastArgs)
+	}
+	found := false
+	for _, ev := range obs.events {
+		if ev.eventType == "tool_call_normalized" {
+			found = true
+			if got := ev.details["transformer"]; got != "embedded_json_object" {
+				t.Fatalf("transformer = %v, want embedded_json_object", got)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected tool_call_normalized event")
+	}
+	if len(recorder.records) == 0 || recorder.records[0].Status != "success" {
+		t.Fatalf("expected persisted success record, got %+v", recorder.records)
+	}
+}
+
+func TestLoop_RejectsMalformedToolArgumentsWithoutQualifiedTransformer(t *testing.T) {
+	toolCall := llm.ToolCall{
+		ID:   "call-1",
+		Type: "function",
+		Function: llm.ToolCallFunc{
+			Name:      "query_table",
+			Arguments: `table=sessions limit=10`,
+		},
+	}
+	mock := &mockCompleter{
+		responses: []*llm.Response{
+			{Content: "", ToolCalls: []llm.ToolCall{toolCall}},
+			{Content: "done"},
+		},
+	}
+	recorder := &recordingToolCallRecorder{}
+	obs := &recordingObserver{}
+	reg := NewToolRegistry()
+	tool := &structuredArgsTool{}
+	reg.Register(tool)
+
+	loop := NewLoop(DefaultLoopConfig(), LoopDeps{
+		LLM:         mock,
+		Tools:       reg,
+		Recorder:    recorder,
+		Context:     NewContextBuilder(DefaultContextConfig()),
+		Normalizers: agenttools.NewNormalizationFactory(),
+	})
+
+	session := NewSession("sess-1", "agent-1", "TestBot")
+	session.AddUserMessage("query the sessions table")
+
+	ctx := llm.WithInferenceObserver(context.Background(), obs)
+	result, err := loop.Run(ctx, session)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "done" {
+		t.Fatalf("result = %q, want done", result)
+	}
+	if tool.calls != 0 {
+		t.Fatalf("tool should not have executed, calls=%d", tool.calls)
+	}
+	found := false
+	for _, ev := range obs.events {
+		if ev.eventType == "tool_call_normalization_failed" {
+			found = true
+			if got := ev.details["disposition"]; got != string(agenttools.NormalizationNoQualifiedTransformer) {
+				t.Fatalf("disposition = %v", got)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected tool_call_normalization_failed event")
+	}
+	if len(recorder.records) == 0 || recorder.records[0].Status != "invalid_arguments" {
+		t.Fatalf("expected invalid_arguments record, got %+v", recorder.records)
 	}
 }
 

@@ -54,3 +54,38 @@ func executionModelSpec(provider, model string) string {
 	}
 	return provider + "/" + model
 }
+
+// modelIdentityKeys returns the ordered alias set that may refer to the same
+// exercised model across routing, explicit benchmark specs, and direct-provider
+// execution. This lets the evidence layer reconcile:
+// - bare routed names like "gemma4"
+// - direct provider-qualified specs like "openai/gpt-4o-mini"
+// - nested execution-provider specs like "openrouter/openai/gpt-4o-mini"
+//
+// The first entries are the most routing-native identities; later entries are
+// compatibility aliases for persisted evidence recorded before or outside the
+// routed bare-name space.
+func modelIdentityKeys(provider, model string) []string {
+	add := func(items []string, value string) []string {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return items
+		}
+		for _, existing := range items {
+			if existing == value {
+				return items
+			}
+		}
+		return append(items, value)
+	}
+
+	var keys []string
+	rawModel := strings.TrimSpace(model)
+	rawSpec := strings.TrimSpace(executionModelSpec(provider, model))
+
+	keys = add(keys, canonicalModelKey(rawModel))
+	keys = add(keys, canonicalModelKey(rawSpec))
+	keys = add(keys, rawModel)
+	keys = add(keys, rawSpec)
+	return keys
+}

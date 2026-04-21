@@ -16,6 +16,11 @@ import (
 	"roboticus/internal/core"
 )
 
+type preparedRequest struct {
+	body                 []byte
+	messageNormalization ProviderMessageNormalizationResult
+}
+
 // MaxAutoPayUSDC is the safety rail for x402 micropayments. Any single payment
 // request exceeding this amount (in USDC) is rejected without user confirmation.
 const MaxAutoPayUSDC = 1.0
@@ -112,22 +117,55 @@ func (c *Client) SetPaymentHandler(h PaymentHandler) {
 
 // Complete sends a non-streaming request and returns the full response.
 func (c *Client) Complete(ctx context.Context, req *Request) (*Response, error) {
-	req.Stream = false
-	body, err := c.marshalRequest(req)
+	prepared, err := c.prepareRequest(req, false)
 	if err != nil {
 		return nil, err
 	}
+	resp, _, err := c.completePrepared(ctx, prepared)
+	return resp, err
+}
 
-	url := c.chatURL()
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+func (c *Client) prepareRequest(req *Request, stream bool) (*preparedRequest, error) {
+	req.Stream = stream
+	var (
+		body []byte
+		err  error
+		meta ProviderMessageNormalizationResult
+	)
+	switch c.provider.Format {
+	case FormatOpenAIResponses:
+		body, err = c.marshalOpenAIResponses(req)
+	case FormatAnthropic:
+		body, err = c.marshalAnthropic(req)
+	case FormatGoogle:
+		body, err = c.marshalGoogle(req)
+	default:
+		meta = NewToolMessageNormalizationFactory().NormalizeProviderMessages(ProviderMessageNormalizationInput{
+			Format:   c.provider.Format,
+			Messages: req.Messages,
+		})
+		if meta.Disposition == ToolMessageTransformFailed || meta.Disposition == ToolMessageNoQualifiedTransformer {
+			return nil, core.NewError(core.ErrLLM, fmt.Sprintf("provider message normalization failed: %s", meta.Reason))
+		}
+		body, err = c.marshalOpenAICompatibleWithMessages(req, meta.Messages)
+	}
 	if err != nil {
-		return nil, core.WrapError(core.ErrNetwork, "failed to create request", err)
+		return nil, err
+	}
+	return &preparedRequest{body: body, messageNormalization: meta}, nil
+}
+
+func (c *Client) completePrepared(ctx context.Context, prepared *preparedRequest) (*Response, []byte, error) {
+	url := c.chatURL()
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(prepared.body))
+	if err != nil {
+		return nil, nil, core.WrapError(core.ErrNetwork, "failed to create request", err)
 	}
 	c.setHeaders(httpReq)
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
-		return nil, core.WrapError(core.ErrNetwork, "request failed", err)
+		return nil, nil, core.WrapError(core.ErrNetwork, "request failed", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -136,29 +174,52 @@ func (c *Client) Complete(ctx context.Context, req *Request) (*Response, error) 
 	if resp.StatusCode == http.StatusPaymentRequired && c.paymentHandler != nil {
 		paymentHeader, payErr := c.handle402(resp)
 		if payErr != nil {
-			return nil, payErr
+			return nil, nil, payErr
 		}
 
 		// Retry the same request with the X-Payment header.
-		retryReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+		retryReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(prepared.body))
 		if err != nil {
-			return nil, core.WrapError(core.ErrNetwork, "failed to create payment retry request", err)
+			return nil, nil, core.WrapError(core.ErrNetwork, "failed to create payment retry request", err)
 		}
 		c.setHeaders(retryReq)
 		retryReq.Header.Set("X-Payment", paymentHeader)
 
 		resp, err = c.httpClient.Do(retryReq)
 		if err != nil {
-			return nil, core.WrapError(core.ErrNetwork, "payment retry request failed", err)
+			return nil, nil, core.WrapError(core.ErrNetwork, "payment retry request failed", err)
 		}
 		defer func() { _ = resp.Body.Close() }()
 	}
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, c.parseErrorResponse(resp)
+	rawBody, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		return nil, nil, core.WrapError(core.ErrNetwork, "failed to read response body", readErr)
 	}
 
-	return c.unmarshalResponse(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return nil, rawBody, c.parseErrorResponseBody(resp.StatusCode, rawBody)
+	}
+
+	parsed, err := c.unmarshalResponse(bytes.NewReader(rawBody))
+	return parsed, rawBody, err
+}
+
+// handle402 reads the 402 response body and delegates to the payment handler.
+// It returns the X-Payment header value on success.
+func (c *Client) handle402(resp *http.Response) (string, error) {
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", core.WrapError(core.ErrNetwork, "failed to read 402 body", err)
+	}
+
+	log.Info().Str("provider", c.provider.Name).Msg("received 402, attempting x402 payment")
+
+	paymentHeader, err := c.paymentHandler.HandlePayment(respBody)
+	if err != nil {
+		return "", core.WrapError(core.ErrWallet, "x402 payment failed", err)
+	}
+	return paymentHeader, nil
 }
 
 // Stream sends a streaming request and returns channels for chunks and errors.
@@ -170,15 +231,14 @@ func (c *Client) Stream(ctx context.Context, req *Request) (<-chan StreamChunk, 
 		defer close(chunks)
 		defer close(errs)
 
-		req.Stream = true
-		body, err := c.marshalRequest(req)
+		prepared, err := c.prepareRequest(req, true)
 		if err != nil {
 			errs <- err
 			return
 		}
 
 		url := c.chatURL()
-		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(prepared.body))
 		if err != nil {
 			errs <- core.WrapError(core.ErrNetwork, "failed to create request", err)
 			return
@@ -192,8 +252,6 @@ func (c *Client) Stream(ctx context.Context, req *Request) (<-chan StreamChunk, 
 		}
 		defer func() { _ = resp.Body.Close() }()
 
-		// x402 micropayment: if provider returns 402 and we have a handler,
-		// attempt to pay and retry exactly once.
 		if resp.StatusCode == http.StatusPaymentRequired && c.paymentHandler != nil {
 			paymentHeader, payErr := c.handle402(resp)
 			if payErr != nil {
@@ -201,7 +259,7 @@ func (c *Client) Stream(ctx context.Context, req *Request) (<-chan StreamChunk, 
 				return
 			}
 
-			retryReq, retryErr := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+			retryReq, retryErr := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(prepared.body))
 			if retryErr != nil {
 				errs <- core.WrapError(core.ErrNetwork, "failed to create payment retry request", retryErr)
 				return
@@ -226,23 +284,6 @@ func (c *Client) Stream(ctx context.Context, req *Request) (<-chan StreamChunk, 
 	}()
 
 	return chunks, errs
-}
-
-// handle402 reads the 402 response body and delegates to the payment handler.
-// It returns the X-Payment header value on success.
-func (c *Client) handle402(resp *http.Response) (string, error) {
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", core.WrapError(core.ErrNetwork, "failed to read 402 body", err)
-	}
-
-	log.Info().Str("provider", c.provider.Name).Msg("received 402, attempting x402 payment")
-
-	paymentHeader, err := c.paymentHandler.HandlePayment(respBody)
-	if err != nil {
-		return "", core.WrapError(core.ErrWallet, "x402 payment failed", err)
-	}
-	return paymentHeader, nil
 }
 
 // readSSE parses an SSE stream into StreamChunks.

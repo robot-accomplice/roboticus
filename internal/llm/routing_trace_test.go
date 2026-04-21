@@ -223,3 +223,46 @@ func TestAnnotateRoutingDecision_UsesCanonicalIntentEvidenceKeys(t *testing.T) {
 		}
 	}
 }
+
+func TestAnnotateRoutingDecision_UsesProviderAwareAliasKeysForLocalModels(t *testing.T) {
+	svc, err := NewService(ServiceConfig{
+		Primary: "openrouter/openai/gpt-4o-mini",
+		Fallbacks: []string{
+			"ollama/gemma4",
+			"ollama/phi4-mini:latest",
+		},
+		Providers: []Provider{
+			{Name: "openrouter", URL: "http://openrouter", Format: FormatOpenAIResponses},
+			{Name: "ollama", URL: "http://ollama", Format: FormatOllama, IsLocal: true},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	svc.intentQuality.RecordWithIntent("ollama/gemma4", IntentToolUse.String(), 0.71)
+	svc.intentQuality.RecordWithIntent("ollama/phi4-mini:latest", IntentToolUse.String(), 0.83)
+
+	req := &Request{
+		AgentRole:      "orchestrator",
+		TurnWeight:     "standard",
+		TaskIntent:     "task",
+		TaskComplexity: "simple",
+		IntentClass:    IntentToolUse.String(),
+		Tools:          []ToolDef{{Type: "function", Function: ToolFuncDef{Name: "obsidian_write"}}},
+		Messages:       []Message{{Role: "user", Content: "Create the note in the vault."}},
+	}
+	target := svc.router.Select(req)
+
+	tr := &traceCapture{}
+	annotateRoutingDecision(WithRoutingTracer(context.Background(), tr), svc, req, target)
+
+	if got := tr.values["inference.routing.ignored_for_missing_capability_evidence"]; got != nil {
+		if list, ok := got.([]string); ok {
+			for _, item := range list {
+				if item == "gemma4" || item == "phi4-mini:latest" || item == "ollama/gemma4" || item == "ollama/phi4-mini:latest" {
+					t.Fatalf("provider-aware alias mismatch: %v should not be listed as missing capability evidence", got)
+				}
+			}
+		}
+	}
+}

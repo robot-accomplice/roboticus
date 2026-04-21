@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"regexp"
 	"strings"
 	"unicode"
 
@@ -108,7 +109,7 @@ func appliedLearningHelpful(intent, lower string, capabilityFit float64, missing
 	if intent != "task" && intent != "code" {
 		return false
 	}
-	if looksLikeSingleStepAuthoringTask(lower, len(extractSubtasks(lower))) {
+	if looksLikeBoundedAuthoringTask(lower) {
 		return false
 	}
 	if hasProceduralLearningCue(lower) {
@@ -295,8 +296,20 @@ func containsIntentMarker(lower, marker string) bool {
 // Matches Rust's classify_complexity with feature extraction.
 func classifyComplexity(content string, sessionTurns int) string {
 	words := len(strings.Fields(content))
-	subtasks := extractSubtasks(content)
 	lower := strings.ToLower(content)
+	artifactCount := boundedAuthoringArtifactCount(lower)
+
+	// Direct artifact authoring/editing requests should not get upcast on word
+	// count or embedded artifact-body structure alone. Multiple explicit
+	// artifacts can still be bounded direct work.
+	if looksLikeBoundedAuthoringTask(lower) {
+		if artifactCount > 1 {
+			return "moderate"
+		}
+		return "simple"
+	}
+
+	subtasks := extractSubtasks(content)
 
 	// Multi-step tasks are inherently more complex.
 	if len(subtasks) >= 3 {
@@ -306,13 +319,6 @@ func classifyComplexity(content string, sessionTurns int) string {
 	// Long, detailed requests.
 	if words > 100 {
 		return "complex"
-	}
-
-	// Single-step direct authoring/editing requests should not get upcast on
-	// word count alone just because the operator was explicit about output
-	// constraints.
-	if looksLikeSingleStepAuthoringTask(lower, len(subtasks)) {
-		return "simple"
 	}
 
 	// Medium-length requests with technical markers.
@@ -335,10 +341,10 @@ func classifyComplexity(content string, sessionTurns int) string {
 }
 
 func looksLikeSingleStepAuthoringTask(lower string, subtaskCount int) bool {
-	if subtaskCount > 0 {
-		return false
-	}
+	return looksLikeBoundedAuthoringTask(lower) && boundedAuthoringArtifactCount(lower) <= 1
+}
 
+func looksLikeBoundedAuthoringTask(lower string) bool {
 	actionMarkers := []string{
 		"create", "write", "draft", "make", "add", "update", "edit",
 	}
@@ -348,6 +354,10 @@ func looksLikeSingleStepAuthoringTask(lower string, subtaskCount int) bool {
 	if !containsAnyMarker(lower, actionMarkers) || !containsAnyMarker(lower, artifactMarkers) {
 		return false
 	}
+	artifactCount := boundedAuthoringArtifactCount(lower)
+	if artifactCount == 0 || artifactCount > 3 {
+		return false
+	}
 
 	complexityEscalators := []string{
 		"analyze", "analysis", "investigate", "report", "summarize", "summary",
@@ -355,6 +365,37 @@ func looksLikeSingleStepAuthoringTask(lower string, subtaskCount int) bool {
 		"system", "architecture", "pipeline", "debug", "fix bug", "implement",
 	}
 	return !containsAnyMarker(lower, complexityEscalators)
+}
+
+var authoringFilePattern = regexp.MustCompile(`\b[a-z0-9][a-z0-9._-]*\.(md|markdown|txt|json|yaml|yml|toml)\b`)
+
+func boundedAuthoringArtifactCount(lower string) int {
+	matches := authoringFilePattern.FindAllString(lower, -1)
+	if len(matches) > 0 {
+		seen := make(map[string]struct{}, len(matches))
+		for _, match := range matches {
+			seen[match] = struct{}{}
+		}
+		return len(seen)
+	}
+
+	quantifiedArtifacts := []struct {
+		markers []string
+		count   int
+	}{
+		{[]string{"two notes", "two files", "two documents", "2 notes", "2 files", "2 documents"}, 2},
+		{[]string{"three notes", "three files", "three documents", "3 notes", "3 files", "3 documents"}, 3},
+	}
+	for _, qa := range quantifiedArtifacts {
+		if containsAnyMarker(lower, qa.markers) {
+			return qa.count
+		}
+	}
+
+	if containsAnyMarker(lower, []string{"note", "notes", "file", "files", "document", "documents", "doc", "docs"}) {
+		return 1
+	}
+	return 0
 }
 
 func containsAnyMarker(lower string, markers []string) bool {

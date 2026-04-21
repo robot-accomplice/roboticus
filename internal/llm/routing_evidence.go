@@ -86,7 +86,7 @@ func (s *Service) routingAssessment(req *Request, selectedModel string) ([]Routi
 
 	for _, p := range profiles {
 		if intentClass != "" && s.intentQuality != nil {
-			p.Quality = s.intentQuality.EstimatedQualityForIntent(p.Model, intentClass)
+			p.Quality = s.intentQuality.EstimatedQualityForIntentTarget(p.Provider, p.Model, intentClass)
 		}
 		applyIntentEvidence(&p, intentClass, s.intentQuality)
 		target := routeTargetForProfile(s.router.Targets(), p)

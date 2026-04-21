@@ -1588,7 +1588,7 @@
         ['Concern categories', fair],
         ['Healthy categories', good]
       ],
-      note: 'Task, envelope, routing, execution, recovery, host resources, and outcome all contribute to this aggregate.'
+      note: 'Task, envelope, routing, execution, recovery, learning, host resources, and outcome all contribute to this aggregate.'
     };
   }
   function aggregateRcaHealth(severities) {
@@ -1612,7 +1612,7 @@
     if (errors.length) return errors.length + ' warn';
     return 'captured';
   }
-  function deriveRcaConclusion(summary, attempts, guardRetryEv, verifierRetryEv, fallbackEvents, distinctAttemptRoutes, resourceSnapshot, routingEvidence) {
+  function deriveRcaConclusion(summary, attempts, guardRetryEv, verifierRetryEv, fallbackEvents, distinctAttemptRoutes, resourceSnapshot, routingEvidence, learningEvidence) {
     var status = String(summary && summary.status || 'unknown').toLowerCase();
     var finalModel = summary && summary.final_model || '';
     var finalProvider = summary && summary.final_provider || '';
@@ -1634,8 +1634,28 @@
     if (Array.isArray(ignoredForEvidence) && ignoredForEvidence.length) {
       evidenceClause = ' ' + (evidenceRecommendation || ('Ignored as unproven for this task class: ' + ignoredForEvidence.join(', ') + '.'));
     }
+    var appliedLearningEv = learningEvidence && learningEvidence.appliedLearningEv;
+    var learningCapturedEv = learningEvidence && learningEvidence.learningCapturedEv;
+    var knowledgePromotedEv = learningEvidence && learningEvidence.knowledgePromotedEv;
+    var learningClause = '';
+    if (appliedLearningEv) {
+      var retrievalDecision = String(diagEventValue(appliedLearningEv, 'retrieval_decision', '') || '').trim();
+      if (retrievalDecision === 'used') {
+        learningClause += ' The framework consulted prior procedural experience before inference.';
+      } else if (retrievalDecision === 'skipped') {
+        learningClause += ' The framework detected procedural uncertainty but skipped prior-experience retrieval.';
+      }
+    }
+    if (knowledgePromotedEv) {
+      learningClause += ' Reusable procedural knowledge was promoted for future turns.';
+    } else if (learningCapturedEv) {
+      var patternCount = Number(diagEventValue(learningCapturedEv, 'pattern_count', 0) || 0);
+      if (isFinite(patternCount) && patternCount > 0) {
+        learningClause += ' The turn captured ' + patternCount + ' reusable outcome pattern(s) for future reuse.';
+      }
+    }
     if (replaySuppressions > 0) {
-      return 'The turn completed after replay protection blocked ' + replaySuppressions + ' duplicate side-effecting tool call(s). The framework protected the underlying resource from a second execution.' + evidenceClause;
+      return 'The turn completed after replay protection blocked ' + replaySuppressions + ' duplicate side-effecting tool call(s). The framework protected the underlying resource from a second execution.' + evidenceClause + learningClause;
     }
     if (attemptCount > 1 && firstAttempt && firstAttempt.status === 'ok' && guardRetryEv) {
       var guardClause = guardName ? (guardName + ' forced a retry') : 'a post-response guard forced a retry';
@@ -1643,22 +1663,22 @@
       var outcomeClause = status === 'ok'
         ? ('The turn recovered after ' + attemptCount + ' attempts on ' + finalRoute + '.')
         : ('The turn still finished ' + status + ' after ' + attemptCount + ' attempts on ' + finalRoute + '.');
-      return 'The first attempt succeeded, but ' + guardClause + (retryReason ? ' (' + retryReason + ')' : '') + '. ' + routeClause + '. ' + outcomeClause + evidenceClause;
+      return 'The first attempt succeeded, but ' + guardClause + (retryReason ? ' (' + retryReason + ')' : '') + '. ' + routeClause + '. ' + outcomeClause + evidenceClause + learningClause;
     }
     if (fallbackCount > 0) {
-      return 'The initial route was not enough, so the system widened to fallback' + (attemptCount > 1 ? (' after ' + attemptCount + ' attempts') : '') + '. Final route: ' + finalRoute + '.' + evidenceClause;
+      return 'The initial route was not enough, so the system widened to fallback' + (attemptCount > 1 ? (' after ' + attemptCount + ' attempts') : '') + '. Final route: ' + finalRoute + '.' + evidenceClause + learningClause;
     }
     if (attemptCount > 1 && firstAttempt && firstAttempt.status === 'ok' && !guardRetryEv && !verifierRetryEv && fallbackCount <= 0) {
-      return 'The turn used an ordinary second inference pass on ' + finalRoute + ' after tool output changed the request state. This is follow-up execution, not retry churn.' + evidenceClause;
+      return 'The turn used an ordinary second inference pass on ' + finalRoute + ' after tool output changed the request state. This is follow-up execution, not retry churn.' + evidenceClause + learningClause;
     }
     if (status === 'ok' && attemptCount <= 1) {
-      return 'The turn completed cleanly on ' + finalRoute + ' with no recovery path triggered.' + evidenceClause;
+      return 'The turn completed cleanly on ' + finalRoute + ' with no recovery path triggered.' + evidenceClause + learningClause;
     }
     if (status !== 'ok') {
       var hostClause = hostSignal && hostSignal !== 'unavailable' && hostSignal !== 'captured' ? (' Host signal: ' + hostSignal + '.') : '';
-      return 'The turn finished ' + status + ' on ' + finalRoute + (attemptCount > 1 ? (' after ' + attemptCount + ' attempts.') : '.') + hostClause + evidenceClause;
+      return 'The turn finished ' + status + ' on ' + finalRoute + (attemptCount > 1 ? (' after ' + attemptCount + ' attempts.') : '.') + hostClause + evidenceClause + learningClause;
     }
-    return 'The turn completed on ' + finalRoute + ', and the recorded diagnostics did not show a fallback path.' + evidenceClause;
+    return 'The turn completed on ' + finalRoute + ', and the recorded diagnostics did not show a fallback path.' + evidenceClause + learningClause;
   }
   function classifyLaneHealth(summary, options) {
     var opts = options || {};
@@ -1678,6 +1698,12 @@
       case 'recovery':
         if ((opts.retryCount || 0) <= 0) return 'good';
         return status === 'ok' ? 'fair' : 'poor';
+      case 'learning':
+        if (opts.retrievalDecision === 'skipped') return 'fair';
+        if (opts.promoted) return 'good';
+        if ((opts.patternCount || 0) > 0) return 'good';
+        if (opts.recorded) return 'fair';
+        return 'good';
       case 'resources':
         if (opts.hasWarnings || opts.resourcePressure === 'critical' || opts.resourcePressure === 'high') return 'poor';
         if (opts.resourcePressure === 'medium' || opts.resourcePressure === 'unknown' || opts.snapshotMissing) return 'fair';
@@ -1746,6 +1772,7 @@
     if (type === 'routing_chain_built') return 'Routing';
     if (type === 'model_attempt_started' || type === 'model_attempt_finished' || type === 'fallback_triggered' || type === 'stage_liveness_warning') return 'Execution';
     if (type === 'guard_retry_scheduled' || type === 'verifier_retry_scheduled') return 'Recovery';
+    if (type === 'applied_learning_retrieval_planned' || type === 'procedural_learning_captured' || type === 'procedural_knowledge_promoted') return 'Learning';
     if (type === 'response_finalized') return 'Outcome';
     return 'Other';
   }
@@ -1834,6 +1861,9 @@
     var guardRetryEv = diagLatestEvent(events, 'guard_retry_scheduled');
     var verifierRetryEv = diagLatestEvent(events, 'verifier_retry_scheduled');
     var replaySuppressedEv = diagLatestEvent(events, 'tool_call_replay_suppressed');
+    var appliedLearningEv = diagLatestEvent(events, 'applied_learning_retrieval_planned');
+    var learningCapturedEv = diagLatestEvent(events, 'procedural_learning_captured');
+    var knowledgePromotedEv = diagLatestEvent(events, 'procedural_knowledge_promoted');
     var responseFinalizedEv = diagLatestEvent(events, 'response_finalized');
     var latestLiveness = livenessEvents.length ? livenessEvents[livenessEvents.length - 1] : null;
     var latestAttempt = attemptStarts.length ? attemptStarts[attemptStarts.length - 1] : null;
@@ -1881,10 +1911,33 @@
     }
     var ignoredForEvidence = routingDiagnosticValue('ignored_for_missing_capability_evidence', [], 'inference.routing.ignored_for_missing_capability_evidence');
     var evidenceRecommendation = String(routingDiagnosticValue('capability_evidence_recommendation', '', 'inference.routing.capability_evidence_recommendation') || '').trim();
+    var learningDecision = String(diagEventValue(appliedLearningEv, 'retrieval_decision', '') || '').trim();
+    var learningScope = diagEventValue(appliedLearningEv, 'outcome_scope', []);
+    if (!Array.isArray(learningScope)) learningScope = learningScope ? [learningScope] : [];
+    var learningTiers = diagEventValue(appliedLearningEv, 'required_memory_tiers', []);
+    if (!Array.isArray(learningTiers)) learningTiers = learningTiers ? [learningTiers] : [];
+    var learningPatternCount = Number(diagEventValue(learningCapturedEv, 'pattern_count', 0) || 0);
+    if (!isFinite(learningPatternCount) || learningPatternCount < 0) learningPatternCount = 0;
+    var reusablePatterns = diagEventValue(knowledgePromotedEv || learningCapturedEv, 'reusable_outcome_patterns', []);
+    if (!Array.isArray(reusablePatterns)) reusablePatterns = reusablePatterns ? [reusablePatterns] : [];
+    var learningPromotionState = knowledgePromotedEv ? 'promoted' : String(diagEventValue(learningCapturedEv, 'promotion_state', '') || '').trim();
+    var learningSignal = learningPromotionState === 'promoted'
+      ? 'promoted'
+      : learningDecision === 'used'
+        ? (learningPatternCount > 0 ? ('used · ' + learningPatternCount + ' patterns') : 'used')
+        : learningDecision === 'skipped'
+          ? 'skipped'
+          : learningPatternCount > 0
+            ? (learningPatternCount + ' patterns')
+            : (learningPromotionState || 'not needed');
 
     var conclusion = deriveRcaConclusion(summary, attempts, guardRetryEv, verifierRetryEv, fallbackEvents, distinctAttemptRoutes, resourceSnapshot, {
       ignoredForEvidence: ignoredForEvidence,
       evidenceRecommendation: evidenceRecommendation
+    }, {
+      appliedLearningEv: appliedLearningEv,
+      learningCapturedEv: learningCapturedEv,
+      knowledgePromotedEv: knowledgePromotedEv
     });
     var selectedModel = routeLabel;
     var resourceWarningCount = resourceErrors.length;
@@ -1923,6 +1976,13 @@
       kind: 'recovery',
       retryCount: (summary.guard_retry_count || 0) + (summary.verifier_retry_count || 0) + fallbackEvents.length + (summary.replay_suppression_count || 0)
     });
+    var learningSeverity = classifyLaneHealth(summary, {
+      kind: 'learning',
+      retrievalDecision: learningDecision,
+      promoted: learningPromotionState === 'promoted',
+      patternCount: learningPatternCount,
+      recorded: !!(appliedLearningEv || learningCapturedEv || knowledgePromotedEv)
+    });
     var resourcesSeverity = classifyLaneHealth(summary, {
       kind: 'resources',
       hasWarnings: resourceWarningCount > 0,
@@ -1936,10 +1996,11 @@
       routingSeverity,
       executionSeverity,
       recoverySeverity,
+      learningSeverity,
       resourcesSeverity,
       outcomeSeverity
     ]);
-    var healthInfo = describeHealthMetric(health, [taskSeverity, envelopeSeverity, routingSeverity, executionSeverity, recoverySeverity, resourcesSeverity, outcomeSeverity]);
+    var healthInfo = describeHealthMetric(health, [taskSeverity, envelopeSeverity, routingSeverity, executionSeverity, recoverySeverity, learningSeverity, resourcesSeverity, outcomeSeverity]);
     var statusSeverity = classifyStatusSeverity(summary.status);
     var statusInfo = describeStatusMetric(summary.status, statusSeverity);
     var latencySeverity = classifyLatencySeverity(summary.total_ms);
@@ -1951,7 +2012,7 @@
     var hostSeverity = classifyResourceSignalSeverity(resourceSignal, resourceSnapshot);
     var hostInfo = describeHostMetric(resourceSignal, resourceSnapshot, hostSeverity);
     var summaryBar = [
-      renderRcaMetric('Health', health.label + ' aggregate', healthLabelFromClass(health.className), 'Aggregate of task, envelope, routing, execution, recovery, host resources, and outcome.', healthInfo.subtitle, healthInfo.rows, healthInfo.note),
+      renderRcaMetric('Health', health.label + ' aggregate', healthLabelFromClass(health.className), 'Aggregate of task, envelope, routing, execution, recovery, learning, host resources, and outcome.', healthInfo.subtitle, healthInfo.rows, healthInfo.note),
       renderRcaMetric('Status', summary.status || 'unknown', statusSeverity, '', statusInfo.subtitle, statusInfo.rows, statusInfo.note),
       renderRcaMetric('Model', routeLabel || 'n/a', routingSeverity, '', 'The final selected model/provider route for this turn.', [
         ['Route', routeLabel || 'n/a'],
@@ -2102,6 +2163,28 @@
       }).length,
       resourcesSeverity
     );
+    var learningSection = renderRcaSection(
+      'Learning',
+      'Whether the framework consulted prior procedural experience and what reusable outcome semantics it carried forward.',
+      [
+        ['Applied learning', learningDecision || 'not used'],
+        ['Retrieval tiers', learningTiers.length ? learningTiers.join(', ') : 'n/a'],
+        ['Outcome scope', learningScope.length ? learningScope.join(', ') : 'n/a'],
+        ['Reuse state', learningPromotionState || (learningCapturedEv ? 'captured_only' : 'not recorded')],
+        ['Outcome patterns', learningPatternCount > 0 ? learningPatternCount : 'n/a'],
+        ['Pattern preview', reusablePatterns.length ? reusablePatterns.join('; ') : 'n/a']
+      ],
+      learningDecision === 'skipped'
+        ? 'The framework detected procedural uncertainty but still skipped prior-experience retrieval on this turn.'
+        : (!appliedLearningEv && !learningCapturedEv && !knowledgePromotedEv
+          ? 'This turn did not record procedural uncertainty or reusable procedural outcome capture.'
+          : 'Learning and reuse facts are sourced from canonical diagnostics, not inferred from conversation text.'),
+      '',
+      outcomeFlow,
+      learningSignal,
+      (appliedLearningEv ? 1 : 0) + (learningCapturedEv ? 1 : 0) + (knowledgePromotedEv ? 1 : 0),
+      learningSeverity
+    );
 
     var recHtml = recommendations.length ? '<ul class="rca-recommendations">' + recommendations.map(function(rec) {
       var label = rec.operator_explanation || rec.user_explanation || rec.human_reason || rec.reason_code || rec.kind || 'recommendation';
@@ -2131,7 +2214,7 @@
     return renderIntegratedNarrativeShell(
       summaryBar,
       renderRcaConclusion(conclusion, outcomeSeverity),
-      [taskSection, envelopeSection, routingSection, executionSection, recoverySection, resourcesSection, outcomeSection],
+      [taskSection, envelopeSection, routingSection, executionSection, recoverySection, learningSection, resourcesSection, outcomeSection],
       'Hover a flow block for quick evidence; use detail mode for the full chronological event timeline.'
     );
   }
@@ -2295,6 +2378,23 @@
       0,
       'fair'
     );
+    var learningSection = renderRcaSection(
+      'Learning',
+      'Applied-learning and reuse-capture facts were not persisted in canonical diagnostics for this turn.',
+      [
+        ['Applied learning', 'n/a'],
+        ['Retrieval tiers', 'n/a'],
+        ['Outcome scope', 'n/a'],
+        ['Reuse state', 'n/a'],
+        ['Outcome patterns', 'n/a']
+      ],
+      'Use a newer turn with canonical diagnostics to see whether prior procedural experience was consulted or promoted for future reuse.',
+      '',
+      inferenceNode,
+      'unavailable',
+      0,
+      'fair'
+    );
     var resourcesSection = renderRcaSection(
       'Host Resources',
       'Host resource snapshots were not persisted for this trace-only fallback turn.',
@@ -2329,7 +2429,7 @@
     return renderIntegratedNarrativeShell(
       summaryBar,
       renderRcaConclusion('Canonical diagnostics were not persisted for this turn. This explanation is reconstructed from pipeline stages only, so retry causality, host pressure, and richer diagnosis are unavailable.', 'fair'),
-      [taskSection, envelopeSection, routingSection, executionSection, recoverySection, resourcesSection, outcomeSection],
+      [taskSection, envelopeSection, routingSection, executionSection, recoverySection, learningSection, resourcesSection, outcomeSection],
       'This turn predates canonical diagnostics. Hover a flow block for trace-level detail or switch to detail mode for the stage record.'
     );
   }

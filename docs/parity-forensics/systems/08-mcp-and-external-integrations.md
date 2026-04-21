@@ -185,6 +185,16 @@ v1.0.7 execution stance:
 - fixture-only SSE evidence is no longer sufficient as the only positive proof
 - one authoritative named-target SSE validation harness and evidence artifact
   must own this claim instead of ad hoc checklist prose
+- the evidence artifact must record target, auth mode, discovery behavior,
+  `initialize`, `tools/list`, `tools/call`, returned server metadata, and the
+  closure verdict for each target
+- the active real-target prospect list is currently:
+  - Zapier MCP
+  - Atlassian Rovo MCP
+  - OnceHub MCP
+- closure requires more than one real third-party target to validate through
+  the same harness; one success plus one vendor-side transport deprecation does
+  not count as cross-vendor proof
 - MCP config-to-runtime conversion must be centralized so daemon startup, route
   tests, and validation harnesses cannot drift on auth/header/allowlist
   semantics

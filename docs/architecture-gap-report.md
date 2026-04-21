@@ -194,6 +194,26 @@ older architecture docs had left too generic:
   allowed to live only in trace annotations: canonical diagnostics must record
   a chronological event describing whether the framework looked for prior
   successes, prior failures, or both before the first inference call.
+- **Current-turn retrieved evidence is the first memory authority.**
+  Once the pipeline has already assembled `[Retrieved Evidence]`, `[Gaps]`, and
+  the memory index for the current turn, the prompt is not allowed to tell the
+  model to re-search memory unconditionally. Injected current-turn evidence must
+  be treated as the first memory authority for that turn, and follow-up
+  `recall_memory` / `search_memories` calls are only justified when that
+  injected evidence or index is actually insufficient for the specific task.
+  Otherwise the framework teaches the model to rediscover facts it already
+  provided, inflates tool-bearing turns, and creates exploratory memory churn
+  that RCA later has to explain as if it were model behavior instead of prompt
+  contradiction.
+- **Bounded multi-artifact authoring is still focused direct work.**
+  A turn that asks for a small, explicit set of concrete artifacts — for
+  example two or three notes/files with exact content and linking — is not
+  allowed to fall out of the focused authoring path merely because it is no
+  longer literally “single-step.” When the work is still direct, bounded, and
+  artifact-shaped, task synthesis and envelope policy must keep it on a focused
+  execution surface with artifact-proof requirements instead of classifying it
+  as `complex` specialist work and dragging a heavy generic tool surface back
+  into the request.
 - **Direct execution turns must not degrade into successful read-only research
   loops.**
   Once task synthesis says the turn should `execute_directly`, the loop is not
@@ -216,7 +236,51 @@ older architecture docs had left too generic:
   but also “did it work.” RCA must be able to show when a novel experience was
   judged reusable, which outcome polarity was captured, and whether the system
   merely stored an episodic lesson or promoted reusable procedural knowledge
-  for future turns.
+  for future turns. Those facts are not allowed to remain detail-only side
+  notes: the canonical RCA summary and the operator flow must treat
+  pre-inference applied-learning and post-turn reuse capture as first-class
+  causal facts in the same decision narrative as task, routing, execution,
+  recovery, and outcome.
+- **Structured tool I/O must pass through one normalization authority.**
+  That authority is not allowed to stop at argument salvage inside the agent
+  loop. Provider-facing tool message serialization and provider-returned tool
+  message normalization must also be owned centrally, so formats like
+  Ollama's documented `role=tool` + `tool_name` contract cannot drift behind
+  an OpenAI-compatible fallback. The same canonical seam must be able to say
+  `no_transform_needed`, `qualified_transform_applied`,
+  `transform_failed`, or `no_qualified_transformer`, and those outcomes must
+  be visible in RCA. Raw provider request/response envelopes for benchmark and
+  RCA analysis must be captured from that same seam rather than reconstructed
+  later from scored content alone.
+  The framework is not allowed to hand malformed provider-emitted tool
+  arguments straight to builtin/plugin/MCP tools and hope each tool invents
+  its own repair logic. Tool-call arguments must cross one ordered
+  normalization factory before policy evaluation and execution, and tool
+  results must cross that same normalization authority before they are written
+  back into session history or fed to the model. The zero-transform case is a
+  valid outcome of that same pipeline, not a parallel bypass. Normalization is
+  also not allowed to become a graveyard of silent one-off hacks: any repair,
+  fidelity loss, or hard failure must be emitted as canonical RCA evidence so
+  operators can see whether the framework repaired malformed tool I/O or
+  rejected it honestly. The factory must also treat lack of a qualified
+  transformer as a first-class outcome, because “we saw a malformed shape but
+  did not have a safe transformer for it” is operationally different from both
+  “no transform needed” and “repair failed.” Post-v1.0.7, this seam may be
+  worth opening to data-driven or externally supplied normalizer definitions,
+  but only after the core normalization contract, RCA visibility, and safety
+  boundaries are proven under one in-process authority first.
+- **Historical tool-call truth must not share mutable state with pending
+  execution state.**
+  The same tool-call set is used for two different purposes inside a turn:
+  preserving what the model actually requested in conversation history and
+  tracking which calls are still pending execution. Those are not allowed to
+  share one mutable backing slice or the framework will silently rewrite the
+  historical assistant message while resolving tool results. That poisons raw
+  provider follow-up requests, canonical RCA envelopes, and operator trust
+  because the system appears to have sent a different tool-call plan than the
+  model actually emitted. Session history must preserve the original assistant
+  tool-call set immutably, while pending execution state must be a separate
+  mutable projection.
 - **Agent roster surfaces must share one authoritative subagent projection.**
   The roster view and the editable subagent list are not allowed to drift by
   querying different route-local shapes over the same `sub_agents` corpus. The
@@ -327,9 +391,11 @@ older architecture docs had left too generic:
   can store true evidence while still claiming the model is “unexercised.”
   That is architectural drift, not acceptable uncertainty. Intent-capability
   evidence must be normalized through the same canonical model key that routing
-  policy and diagnostics already use, and routing recommendations must only say
-  “not exercised for TOOL_USE” when the canonical evidence store truly has no
-  matching intent observations.
+  policy and diagnostics already use. That authority must also resolve bare
+  routed names, direct provider-qualified names, and nested execution-provider
+  specs as aliases of the same exercised model where appropriate, and routing
+  recommendations must only say “not exercised for TOOL_USE” when the
+  canonical evidence store truly has no matching intent observations.
 - **Intent-scoped exercise must remain matrix-owned, not connector-owned.**
   Exercising only `TOOL_USE`, `MEMORY_RECALL`, or any other intent class is
   allowed only as a filtered projection of the canonical exercise matrix owned
@@ -345,6 +411,16 @@ older architecture docs had left too generic:
   `v1.0.7` intentionally keeps using the existing routing-policy seam plus RCA
   evidence to show where selection behavior actually needs to be hardened
   before introducing more routing modes.
+- **Future router consultation must be read-only expert advice, not a second
+  routing authority.**
+  If the orchestrator later needs help choosing a pinned model during subagent
+  composition, it must consult the router through a structured read-side
+  recommendation artifact owned by the same routing/evidence policy seam. The
+  orchestrator is not allowed to reimplement routing logic in prompt space or
+  mutate router truth ad hoc. Any future `recommend-model-for-task-profile`
+  style tool belongs to post-`v1.0.7` work and must return recommendation,
+  confidence, exclusions, and evidence gaps from the router’s single source of
+  truth.
 - **Turn identity must remain operator-usable on observability surfaces.**
   A trace row is not allowed to hide the authoritative turn identity behind a
   twelve-character truncation with no copy affordance. Operators must be able

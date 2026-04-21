@@ -526,8 +526,8 @@ func (p *Pipeline) stageMemoryRetrieval(ctx context.Context, pc *pipelineContext
 		if index == "" {
 			index = "[Memory Index: No memories stored yet. " +
 				"Memories will accumulate as conversations continue. " +
-				"When a user asks about a past topic, use search_memories(query) to check, " +
-				"or be honest that you don't have stored memories about it yet.]"
+				"If the current turn still needs prior knowledge and no retrieved evidence answers it, " +
+				"use search_memories(query) to check; otherwise be honest that you don't have stored memories about it yet.]"
 		}
 		pc.session.SetMemoryIndex(index)
 	}

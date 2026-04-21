@@ -142,6 +142,12 @@ func TestBuildSystemPrompt_OperationalIntrospectionBlock(t *testing.T) {
 	if !strings.Contains(prompt, "3 tools") {
 		t.Error("L2 should list tool count")
 	}
+	if !strings.Contains(prompt, "use that first") {
+		t.Error("L2 should treat injected current-turn evidence as the first memory authority")
+	}
+	if strings.Contains(prompt, "ALWAYS call `recall_memory` to search — even if injected memories are present") {
+		t.Error("L2 should not instruct unconditional memory re-search when injected evidence exists")
+	}
 }
 
 func TestBuildSystemPrompt_RuntimeMetadataBlock(t *testing.T) {

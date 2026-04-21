@@ -164,6 +164,11 @@ func DeriveInterpretiveDiagnosticsSummary(summary TurnDiagnosticSummary, events 
 	verifierRetry := latestDiagnosticEvent(events, "verifier_retry_scheduled")
 	loopTermination := latestDiagnosticEvent(events, "loop_terminated")
 	replaySuppressed := latestDiagnosticEvent(events, "tool_call_replay_suppressed")
+	callNormalized := latestDiagnosticEvent(events, "tool_call_normalized")
+	callNormalizationFailed := latestDiagnosticEvent(events, "tool_call_normalization_failed")
+	appliedLearning := latestDiagnosticEvent(events, "applied_learning_retrieval_planned")
+	learningCaptured := latestDiagnosticEvent(events, "procedural_learning_captured")
+	knowledgePromoted := latestDiagnosticEvent(events, "procedural_knowledge_promoted")
 	guardName := firstViolationName(guardRetry, latestDiagnosticEvent(events, "response_finalized"))
 	retryReason := diagnosticDetailString(guardRetry, "retry_reason")
 	if retryReason == "" {
@@ -178,6 +183,24 @@ func DeriveInterpretiveDiagnosticsSummary(summary TurnDiagnosticSummary, events 
 	userNarrative := summary.UserNarrative
 	if needsDerivedNarrative(userNarrative) {
 		switch {
+		case callNormalizationFailed != nil:
+			toolName := diagnosticDetailString(callNormalizationFailed, "tool_name")
+			if toolName == "" {
+				toolName = "the requested tool"
+			}
+			reason := diagnosticDetailString(callNormalizationFailed, "reason")
+			disposition := diagnosticDetailString(callNormalizationFailed, "disposition")
+			if reason == "" {
+				reason = "the structured arguments could not be normalized safely"
+			}
+			userNarrative = fmt.Sprintf("The framework rejected a malformed %s call before execution because %s. normalization=%s.%s", toolName, reason, nonEmpty(disposition, "unknown"), hostClause)
+		case callNormalized != nil:
+			toolName := diagnosticDetailString(callNormalized, "tool_name")
+			if toolName == "" {
+				toolName = "the requested tool"
+			}
+			transformer := diagnosticDetailString(callNormalized, "transformer")
+			userNarrative = fmt.Sprintf("The framework repaired malformed %s arguments before execution using %s, and the turn then continued on %s.%s", toolName, nonEmpty(transformer, "the normalization pipeline"), finalRoute, hostClause)
 		case replaySuppressed != nil || summary.ReplaySuppressionCount > 0:
 			toolName := diagnosticDetailString(replaySuppressed, "tool_name")
 			if toolName == "" {
@@ -222,6 +245,7 @@ func DeriveInterpretiveDiagnosticsSummary(summary TurnDiagnosticSummary, events 
 		default:
 			userNarrative = fmt.Sprintf("The turn finished %s on %s after %d attempt(s).%s", nonEmpty(summary.Status, "unknown"), finalRoute, maxDiagnosticInt(len(attempts), summary.InferenceAttempts), hostClause)
 		}
+		userNarrative = appendLearningNarrative(userNarrative, appliedLearning, learningCaptured, knowledgePromoted)
 	}
 
 	operatorNarrative := summary.OperatorNarrative
@@ -248,6 +272,27 @@ func DeriveInterpretiveDiagnosticsSummary(summary TurnDiagnosticSummary, events 
 				parts = append(parts, "blocked_tool="+toolName)
 			}
 		}
+		if callNormalizationFailed != nil {
+			if toolName := diagnosticDetailString(callNormalizationFailed, "tool_name"); toolName != "" {
+				parts = append(parts, "normalization_tool="+toolName)
+			}
+			if disposition := diagnosticDetailString(callNormalizationFailed, "disposition"); disposition != "" {
+				parts = append(parts, "normalization="+disposition)
+			}
+			if transformer := diagnosticDetailString(callNormalizationFailed, "transformer"); transformer != "" {
+				parts = append(parts, "normalizer="+transformer)
+			}
+		} else if callNormalized != nil {
+			if toolName := diagnosticDetailString(callNormalized, "tool_name"); toolName != "" {
+				parts = append(parts, "normalized_tool="+toolName)
+			}
+			if transformer := diagnosticDetailString(callNormalized, "transformer"); transformer != "" {
+				parts = append(parts, "normalizer="+transformer)
+			}
+			if fidelity := diagnosticDetailString(callNormalized, "fidelity"); fidelity != "" {
+				parts = append(parts, "normalization_fidelity="+fidelity)
+			}
+		}
 		if retryReason != "" {
 			parts = append(parts, "retry_reason="+retryReason)
 		}
@@ -268,6 +313,30 @@ func DeriveInterpretiveDiagnosticsSummary(summary TurnDiagnosticSummary, events 
 		}
 		if strings.TrimSpace(summary.ResourcePressure) != "" {
 			parts = append(parts, "resource_pressure="+summary.ResourcePressure)
+		}
+		if appliedLearning != nil {
+			if decision := diagnosticDetailString(appliedLearning, "retrieval_decision"); decision != "" {
+				parts = append(parts, "applied_learning="+decision)
+			}
+			if tiers := diagnosticDetailStrings(appliedLearning, "required_memory_tiers"); len(tiers) > 0 {
+				parts = append(parts, "learning_tiers="+strings.Join(tiers, ","))
+			}
+			if scope := diagnosticDetailStrings(appliedLearning, "outcome_scope"); len(scope) > 0 {
+				parts = append(parts, "learning_scope="+strings.Join(scope, ","))
+			}
+		}
+		if knowledgePromoted != nil {
+			parts = append(parts, "learning_promotion=promoted")
+			if patterns := diagnosticDetailStrings(knowledgePromoted, "reusable_outcome_patterns"); len(patterns) > 0 {
+				parts = append(parts, fmt.Sprintf("outcome_patterns=%d", len(patterns)))
+			}
+		} else if learningCaptured != nil {
+			if promotion := diagnosticDetailString(learningCaptured, "promotion_state"); promotion != "" {
+				parts = append(parts, "learning_promotion="+promotion)
+			}
+			if patterns := diagnosticDetailInt(learningCaptured, "pattern_count"); patterns > 0 {
+				parts = append(parts, fmt.Sprintf("outcome_patterns=%d", patterns))
+			}
 		}
 		operatorNarrative = strings.Join(parts, "; ")
 	}
@@ -404,6 +473,17 @@ func diagnosticDetailInt(ev *TurnDiagnosticEvent, key string) int {
 	return diagnosticToInt(value)
 }
 
+func diagnosticDetailStrings(ev *TurnDiagnosticEvent, key string) []string {
+	if ev == nil || ev.Details == nil {
+		return nil
+	}
+	value, ok := ev.Details[key]
+	if !ok || value == nil {
+		return nil
+	}
+	return diagnosticStringsFromAny(value)
+}
+
 func firstStringFromAny(value any) string {
 	switch v := value.(type) {
 	case []string:
@@ -418,6 +498,76 @@ func firstStringFromAny(value any) string {
 		return strings.TrimSpace(v)
 	}
 	return ""
+}
+
+func diagnosticStringsFromAny(value any) []string {
+	switch v := value.(type) {
+	case []string:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			item = strings.TrimSpace(item)
+			if item != "" {
+				out = append(out, item)
+			}
+		}
+		return out
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			text := strings.TrimSpace(fmt.Sprint(item))
+			if text != "" {
+				out = append(out, text)
+			}
+		}
+		return out
+	case string:
+		text := strings.TrimSpace(v)
+		if text == "" {
+			return nil
+		}
+		return []string{text}
+	default:
+		text := strings.TrimSpace(fmt.Sprint(value))
+		if text == "" {
+			return nil
+		}
+		return []string{text}
+	}
+}
+
+func appendLearningNarrative(base string, appliedLearning, learningCaptured, knowledgePromoted *TurnDiagnosticEvent) string {
+	clauses := make([]string, 0, 2)
+	if appliedLearning != nil {
+		decision := diagnosticDetailString(appliedLearning, "retrieval_decision")
+		scope := diagnosticDetailStrings(appliedLearning, "outcome_scope")
+		scopeClause := ""
+		if len(scope) > 0 {
+			scopeClause = " across " + strings.Join(scope, ", ") + " outcomes"
+		}
+		switch decision {
+		case "used":
+			clauses = append(clauses, "The framework consulted prior procedural experience"+scopeClause+" before inference.")
+		case "skipped":
+			clauses = append(clauses, "The framework detected procedural uncertainty but skipped prior-experience retrieval.")
+		}
+	}
+	if knowledgePromoted != nil {
+		clauses = append(clauses, "Reusable procedural knowledge was promoted for future turns.")
+	} else if learningCaptured != nil {
+		patternCount := diagnosticDetailInt(learningCaptured, "pattern_count")
+		if patternCount > 0 {
+			clauses = append(clauses, fmt.Sprintf("The turn captured %d reusable outcome pattern(s) for future reuse.", patternCount))
+		} else if promotion := diagnosticDetailString(learningCaptured, "promotion_state"); promotion != "" {
+			clauses = append(clauses, "The turn was recorded as reusable experience for future tasks.")
+		}
+	}
+	if len(clauses) == 0 {
+		return base
+	}
+	if strings.TrimSpace(base) == "" {
+		return strings.Join(clauses, " ")
+	}
+	return strings.TrimSpace(base) + " " + strings.Join(clauses, " ")
 }
 
 func needsDerivedNarrative(text string) bool {

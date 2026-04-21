@@ -89,7 +89,35 @@ This file follows the same C4 conventions used elsewhere in the repo:
   and avoid what already failed. Those facts are not allowed to stay buried
   in trace metadata or memory rows alone: canonical RCA must record both the
   pre-inference applied-learning decision and the post-turn reuse-capture
-  outcome in chronological order
+  outcome in chronological order, and the operator-facing decision flow must
+  expose that learning lane as a first-class part of the same integrated RCA
+  narrative rather than leaving it buried in detail mode
+- once the pipeline has already injected `[Retrieved Evidence]`, `[Gaps]`, and
+  a memory index for the current turn, that injected evidence is the first
+  memory authority for the turn. Prompt guidance is not allowed to tell the
+  model to re-search memory unconditionally “even if injected memories are
+  present”; follow-up `recall_memory` / `search_memories` calls are gap-filling
+  hydration steps only when the injected evidence or index is insufficient for
+  the task
+- bounded multi-artifact note/document/file authoring is still focused
+  authoring. A small explicit set of artifact writes with exact content and
+  linking is not allowed to become `complex` specialist work just because it is
+  no longer a literal single-file turn; task synthesis and envelope policy must
+  preserve direct execution plus artifact-proof requirements for that class
+- malformed or provider-skewed structured tool I/O is not allowed to leak
+  straight into tool implementations or session history. One central
+  normalization factory must own ordered tool-call argument normalization
+  before policy/execution and tool-result normalization before the observation
+  re-enters the model context. “No transform needed” is a valid outcome of
+  that same pipeline; it is not a bypass. Any repair, partial-fidelity
+  salvage, or normalization failure must be preserved as canonical RCA
+  evidence instead of disappearing into per-tool parsing code
+- provider-facing tool message serialization is part of that same authority.
+  Ollama/OpenRouter/OpenAI/Anthropic-specific tool result or tool call message
+  shapes are not allowed to live as ad hoc client-side special cases outside
+  the normalization seam. The same central authority must also emit raw
+  provider request/response envelopes into trace evidence so operators can
+  compare what we sent and what we got back against vendor documentation
 - direct execution turns are not allowed to drift into a successful read-only
   research loop. After a small amount of legitimate exploration, repeated
   successful runtime-context, workspace, capability, task-inspection, or
@@ -113,7 +141,15 @@ This file follows the same C4 conventions used elsewhere in the repo:
   from routing and policy. Baselines, imported exercise rows, live intent
   observations, and recommendation callouts must all normalize onto the same
   canonical model key so the system cannot record TOOL_USE evidence under one
-  name and tell operators the model is “unexercised” under another
+  name and tell operators the model is “unexercised” under another. Bare
+  routed names, direct provider-qualified names, and nested execution-provider
+  specs must resolve as aliases of the same exercised model when they point at
+  the same runtime target
+- assistant message history and pending tool execution state must not share one
+  mutable tool-call slice. Historical `tool_calls` are immutable provider/RCA
+  truth; pending-call state is a mutable execution ledger. Consuming one tool
+  result is not allowed to rewrite the recorded assistant tool-call plan that
+  gets replayed to the provider on the next inference pass
 - execution provider truth is not allowed to diverge from routing truth.
   RouteTarget provider/model identity must survive request formatting through
   one authoritative execution-spec seam, including nested provider-qualified

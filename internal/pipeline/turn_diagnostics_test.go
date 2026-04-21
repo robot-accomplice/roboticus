@@ -389,6 +389,117 @@ func TestStoreTurnDiagnostics_DerivesExploratoryToolChurnNarrative(t *testing.T)
 	}
 }
 
+func TestStoreTurnDiagnostics_DerivesAppliedLearningAndReuseNarrative(t *testing.T) {
+	store := testutil.TempStore(t)
+	pipe := New(PipelineDeps{Store: store})
+	dr := NewTurnDiagnosticsRecorder("sess-1", "turn-learning", "api")
+	dr.SetSummaryField("status", "ok")
+	dr.SetSummaryField("final_provider", "moonshot")
+	dr.SetSummaryField("final_model", "kimi-k2-turbo-preview")
+	dr.SetSummaryField("user_narrative", "The system is collecting evidence about request size, retries, and model behavior for this turn.")
+	dr.SetSummaryField("operator_narrative", "Turn diagnostics active: request-shape, fallback, and provider-attempt facts are being recorded.")
+	dr.RecordEvent("applied_learning_retrieval_planned", "ok", "", "", map[string]any{
+		"retrieval_decision":    "used",
+		"required_memory_tiers": []string{"procedural", "episodic"},
+		"outcome_scope":         []string{"success", "failure", "partial"},
+	})
+	dr.RecordEvent("procedural_learning_captured", "ok", "", "", map[string]any{
+		"promotion_state":       "captured_only",
+		"pattern_count":         2,
+		"success_pattern_count": 1,
+		"failure_pattern_count": 1,
+	})
+	pipe.storeTurnDiagnostics(context.Background(), dr)
+
+	var userNarrative, operatorNarrative string
+	if err := store.QueryRowContext(context.Background(),
+		`SELECT user_narrative, operator_narrative FROM turn_diagnostics WHERE turn_id = ?`,
+		"turn-learning",
+	).Scan(&userNarrative, &operatorNarrative); err != nil {
+		t.Fatalf("query narratives: %v", err)
+	}
+	if !strings.Contains(strings.ToLower(userNarrative), "consulted prior procedural experience") {
+		t.Fatalf("user_narrative = %q, want applied-learning explanation", userNarrative)
+	}
+	if !strings.Contains(strings.ToLower(userNarrative), "captured 2 reusable outcome pattern") {
+		t.Fatalf("user_narrative = %q, want reusable outcome explanation", userNarrative)
+	}
+	if !strings.Contains(operatorNarrative, "applied_learning=used") {
+		t.Fatalf("operator_narrative = %q, want applied_learning marker", operatorNarrative)
+	}
+	if !strings.Contains(operatorNarrative, "learning_scope=success,failure,partial") {
+		t.Fatalf("operator_narrative = %q, want learning scope", operatorNarrative)
+	}
+	if !strings.Contains(operatorNarrative, "learning_promotion=captured_only") {
+		t.Fatalf("operator_narrative = %q, want learning promotion state", operatorNarrative)
+	}
+	if !strings.Contains(operatorNarrative, "outcome_patterns=2") {
+		t.Fatalf("operator_narrative = %q, want outcome pattern count", operatorNarrative)
+	}
+}
+
+func TestStoreTurnDiagnostics_DerivesToolCallNormalizationNarrative(t *testing.T) {
+	store := testutil.TempStore(t)
+	pipe := New(PipelineDeps{Store: store})
+	dr := NewTurnDiagnosticsRecorder("sess-1", "turn-normalized-call", "api")
+	dr.SetSummaryField("status", "ok")
+	dr.SetSummaryField("final_provider", "openrouter")
+	dr.SetSummaryField("final_model", "ai21/jamba-large-1.7")
+	dr.SetSummaryField("user_narrative", "The system is collecting evidence about request size, retries, and model behavior for this turn.")
+	dr.SetSummaryField("operator_narrative", "Turn diagnostics active: request-shape, fallback, and provider-attempt facts are being recorded.")
+	dr.RecordEvent("tool_call_normalized", "warning", "", "", map[string]any{
+		"tool_name":   "query_table",
+		"transformer": "embedded_json_object",
+		"fidelity":    "repaired",
+	})
+	pipe.storeTurnDiagnostics(context.Background(), dr)
+
+	var userNarrative, operatorNarrative string
+	if err := store.QueryRowContext(context.Background(),
+		`SELECT user_narrative, operator_narrative FROM turn_diagnostics WHERE turn_id = ?`,
+		"turn-normalized-call",
+	).Scan(&userNarrative, &operatorNarrative); err != nil {
+		t.Fatalf("query narratives: %v", err)
+	}
+	if !strings.Contains(strings.ToLower(userNarrative), "repaired malformed query_table arguments") {
+		t.Fatalf("user_narrative = %q, want normalization interpretation", userNarrative)
+	}
+	if !strings.Contains(operatorNarrative, "normalizer=embedded_json_object") {
+		t.Fatalf("operator_narrative = %q, want normalizer marker", operatorNarrative)
+	}
+}
+
+func TestStoreTurnDiagnostics_DerivesRejectedMalformedToolCallNarrative(t *testing.T) {
+	store := testutil.TempStore(t)
+	pipe := New(PipelineDeps{Store: store})
+	dr := NewTurnDiagnosticsRecorder("sess-1", "turn-rejected-call", "api")
+	dr.SetSummaryField("status", "degraded")
+	dr.SetSummaryField("final_provider", "openrouter")
+	dr.SetSummaryField("final_model", "ai21/jamba-large-1.7")
+	dr.SetSummaryField("user_narrative", "The system is collecting evidence about request size, retries, and model behavior for this turn.")
+	dr.SetSummaryField("operator_narrative", "Turn diagnostics active: request-shape, fallback, and provider-attempt facts are being recorded.")
+	dr.RecordEvent("tool_call_normalization_failed", "error", "", "", map[string]any{
+		"tool_name":   "query_table",
+		"disposition": "no_qualified_transformer",
+		"reason":      "no qualified tool-call argument transformer for malformed structured input",
+	})
+	pipe.storeTurnDiagnostics(context.Background(), dr)
+
+	var userNarrative, operatorNarrative string
+	if err := store.QueryRowContext(context.Background(),
+		`SELECT user_narrative, operator_narrative FROM turn_diagnostics WHERE turn_id = ?`,
+		"turn-rejected-call",
+	).Scan(&userNarrative, &operatorNarrative); err != nil {
+		t.Fatalf("query narratives: %v", err)
+	}
+	if !strings.Contains(strings.ToLower(userNarrative), "rejected a malformed query_table call before execution") {
+		t.Fatalf("user_narrative = %q, want rejection interpretation", userNarrative)
+	}
+	if !strings.Contains(operatorNarrative, "normalization=no_qualified_transformer") {
+		t.Fatalf("operator_narrative = %q, want normalization disposition", operatorNarrative)
+	}
+}
+
 func TestTurnDiagnosticsRecorder_LivenessSnapshotDistinguishesRetryChurn(t *testing.T) {
 	dr := NewTurnDiagnosticsRecorder("sess-1", "turn-3", "telegram")
 	dr.RecordEvent("model_attempt_started", "running",

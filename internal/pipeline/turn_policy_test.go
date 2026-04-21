@@ -121,6 +121,40 @@ func TestDeriveTurnEnvelopePolicy_VerboseSingleStepAuthoringStillUsesFocusedEnve
 	}
 }
 
+func TestDeriveTurnEnvelopePolicy_BoundedMultiArtifactAuthoringUsesFocusedEnvelope(t *testing.T) {
+	prompt := "In the Obsidian vault, create two notes: project-bootstrap-check.md and project-bootstrap-actions.md. The first note should contain exactly: # Project Bootstrap Check. The second note should contain exactly: # Project Bootstrap Actions."
+	synthesis := SynthesizeTaskState(prompt, 1, nil)
+	policy := DeriveTurnEnvelopePolicy(prompt, synthesis, 1)
+
+	if synthesis.Intent != "task" {
+		t.Fatalf("intent = %q, want task", synthesis.Intent)
+	}
+	if synthesis.Complexity != "moderate" {
+		t.Fatalf("complexity = %q, want moderate", synthesis.Complexity)
+	}
+	if synthesis.PlannedAction != "execute_directly" {
+		t.Fatalf("planned action = %q, want execute_directly", synthesis.PlannedAction)
+	}
+	if policy.Weight != TurnWeightStandard {
+		t.Fatalf("weight = %q, want %q", policy.Weight, TurnWeightStandard)
+	}
+	if policy.AllowRetrieval {
+		t.Fatal("bounded multi-artifact authoring should not enable retrieval")
+	}
+	if policy.MaxTools != 6 {
+		t.Fatalf("max tools = %d, want 6", policy.MaxTools)
+	}
+	if !policy.RequireArtifactWrite {
+		t.Fatal("bounded multi-artifact authoring should still require artifact-writing proof")
+	}
+	if policy.AllowAuthorityMutation {
+		t.Fatal("bounded multi-artifact authoring should not allow authority mutation")
+	}
+	if policy.ToolProfile != ToolProfileFocusedAuthoring {
+		t.Fatalf("tool profile = %q, want %q", policy.ToolProfile, ToolProfileFocusedAuthoring)
+	}
+}
+
 func TestTurnEnvelopePolicy_ExpandedPromotesLightweightTurn(t *testing.T) {
 	expanded := (TurnEnvelopePolicy{
 		Weight:                 TurnWeightLight,

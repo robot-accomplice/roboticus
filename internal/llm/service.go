@@ -225,6 +225,17 @@ func lookupRoleEligibilityOverride(overrides map[string]RoleEligibility, model s
 	return RoleEligibility{}, false
 }
 
+func traceEnvelopeValue(raw []byte) (string, bool) {
+	if len(raw) == 0 {
+		return "", false
+	}
+	const maxEnvelopeBytes = 32768
+	if len(raw) <= maxEnvelopeBytes {
+		return string(raw), false
+	}
+	return string(raw[:maxEnvelopeBytes]), true
+}
+
 // loadPersistedRoutingWeights reads the user-configured routing profile from
 // the runtime_settings table and applies it to the router. If no profile is
 // saved (or the read fails), the router keeps its default weights.
@@ -420,19 +431,53 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 		// Set the model for this provider.
 		inferReq := *req
 		inferReq.Model = pm.model
+		prepared, err := client.prepareRequest(&inferReq, false)
+		if err != nil {
+			lastErr = err
+			log.Warn().Err(err).Str("provider", pm.provider).Str("model", pm.model).Msg("provider request preparation failed, trying next")
+			if obs := inferenceObserverFromContext(ctx); obs != nil {
+				reasonCode, pressure := classifyInferenceError(err)
+				obs.RecordEvent("fallback_triggered", "error",
+					"fallback triggered before provider call",
+					"The system could not safely serialize the provider request, so it switched to another model.",
+					map[string]any{
+						"provider":    pm.provider,
+						"model":       pm.model,
+						"reason_code": reasonCode,
+					},
+				)
+				obs.IncrementSummaryCounter("fallback_count", 1)
+				obs.SetSummaryField("resource_pressure", pressure)
+			}
+			continue
+		}
 		obs := inferenceObserverFromContext(ctx)
 		parentEventID := ""
 		attemptStartResources := hostresources.Sample(ctx)
 		if obs != nil {
+			requestJSON, requestTruncated := traceEnvelopeValue(prepared.body)
+			details := map[string]any{
+				"provider":       pm.provider,
+				"model":          pm.model,
+				"tools":          len(inferReq.Tools),
+				"host_resources": attemptStartResources,
+			}
+			if requestJSON != "" {
+				details["provider_request_json"] = requestJSON
+				details["provider_request_truncated"] = requestTruncated
+			}
+			if prepared.messageNormalization.Transformer != "" {
+				details["tool_message_transformer"] = prepared.messageNormalization.Transformer
+				details["tool_message_disposition"] = string(prepared.messageNormalization.Disposition)
+				details["tool_message_fidelity"] = string(prepared.messageNormalization.Fidelity)
+				if strings.TrimSpace(prepared.messageNormalization.Reason) != "" {
+					details["tool_message_reason"] = prepared.messageNormalization.Reason
+				}
+			}
 			parentEventID = obs.RecordEvent("model_attempt_started", "running",
 				"starting inference attempt",
 				"The system is trying one candidate model for this turn.",
-				map[string]any{
-					"provider":       pm.provider,
-					"model":          pm.model,
-					"tools":          len(inferReq.Tools),
-					"host_resources": attemptStartResources,
-				},
+				details,
 			)
 			obs.IncrementSummaryCounter("inference_attempts", 1)
 			obs.SetSummaryField("resource_snapshot", attemptStartResources)
@@ -446,7 +491,7 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 			Msg("sending inference request")
 
 		start := time.Now()
-		resp, err := client.Complete(ctx, &inferReq)
+		resp, rawResponse, err := client.completePrepared(ctx, prepared)
 		latencyMs := time.Since(start).Milliseconds()
 		if err != nil {
 			attemptEndResources := hostresources.Sample(ctx)
@@ -468,16 +513,22 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 			log.Warn().Err(err).Str("provider", pm.provider).Str("model", pm.model).Msg("provider failed, trying next")
 			if obs != nil {
 				reasonCode, pressure := classifyInferenceError(err)
+				responseJSON, responseTruncated := traceEnvelopeValue(rawResponse)
+				details := map[string]any{
+					"provider":       pm.provider,
+					"model":          pm.model,
+					"error":          err.Error(),
+					"reason_code":    reasonCode,
+					"host_resources": attemptEndResources,
+				}
+				if responseJSON != "" {
+					details["provider_response_json"] = responseJSON
+					details["provider_response_truncated"] = responseTruncated
+				}
 				obs.RecordTimedEvent("model_attempt_finished", "error",
 					"inference attempt failed",
 					"One model attempt failed, so the system will try another option.",
-					start, parentEventID, map[string]any{
-						"provider":       pm.provider,
-						"model":          pm.model,
-						"error":          err.Error(),
-						"reason_code":    reasonCode,
-						"host_resources": attemptEndResources,
-					},
+					start, parentEventID, details,
 				)
 				obs.IncrementSummaryCounter("fallback_count", 1)
 				obs.SetSummaryField("resource_pressure", pressure)
@@ -543,18 +594,24 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 		log.Debug().Str("provider", pm.provider).Str("model", resp.Model).Int("tokens_in", resp.Usage.InputTokens).Int("tokens_out", resp.Usage.OutputTokens).Int64("latency_ms", latencyMs).Msg("inference completed")
 		if obs != nil {
 			attemptEndResources := hostresources.Sample(ctx)
+			responseJSON, responseTruncated := traceEnvelopeValue(rawResponse)
+			details := map[string]any{
+				"provider":       pm.provider,
+				"model":          resp.Model,
+				"tokens_in":      resp.Usage.InputTokens,
+				"tokens_out":     resp.Usage.OutputTokens,
+				"latency_ms":     latencyMs,
+				"is_local":       resp.IsLocal,
+				"host_resources": attemptEndResources,
+			}
+			if responseJSON != "" {
+				details["provider_response_json"] = responseJSON
+				details["provider_response_truncated"] = responseTruncated
+			}
 			obs.RecordTimedEvent("model_attempt_finished", "ok",
 				"inference attempt succeeded",
 				"One model candidate completed successfully.",
-				start, parentEventID, map[string]any{
-					"provider":       pm.provider,
-					"model":          resp.Model,
-					"tokens_in":      resp.Usage.InputTokens,
-					"tokens_out":     resp.Usage.OutputTokens,
-					"latency_ms":     latencyMs,
-					"is_local":       resp.IsLocal,
-					"host_resources": attemptEndResources,
-				},
+				start, parentEventID, details,
 			)
 			obs.SetSummaryField("resource_snapshot", attemptEndResources)
 			obs.SetSummaryField("final_model", resp.Model)

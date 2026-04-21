@@ -205,6 +205,32 @@ func TestIntentQualityTracker_SeedFromExerciseResults_WithStore(t *testing.T) {
 	}
 }
 
+func TestIntentQualityTracker_SeedFromExerciseResults_ResolvesLocalAliasKeys(t *testing.T) {
+	store := tempStore(t)
+	ctx := context.Background()
+
+	for i := 0; i < 2; i++ {
+		_, err := store.ExecContext(ctx,
+			`INSERT INTO exercise_results (id, run_id, model, intent_class, complexity, prompt, content, quality, latency_ms, passed, error_msg, created_at)
+			 VALUES (?, 'run-local-tool', 'ollama/gemma4', 'TOOL_USE', 'simple', 'prompt', 'content', ?, 900, 1, NULL, datetime('now'))`,
+			fmt.Sprintf("exercise-local-%d", i), 0.65+float64(i)*0.1)
+		if err != nil {
+			t.Fatalf("insert local exercise_result %d: %v", i, err)
+		}
+	}
+
+	iq := NewIntentQualityTracker(50)
+	iq.SeedFromExerciseResults(ctx, store)
+
+	if got := iq.ObservationCountForIntentTarget("ollama", "gemma4", "TOOL_USE"); got != 2 {
+		t.Fatalf("local alias observation count = %d, want 2", got)
+	}
+	quality := iq.EstimatedQualityForIntentTarget("ollama", "gemma4", "TOOL_USE")
+	if quality < 0.69 || quality > 0.76 {
+		t.Fatalf("local alias quality = %f, want around 0.70", quality)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Service.Complete full pipeline with store (covers recordCost async path)
 // ---------------------------------------------------------------------------

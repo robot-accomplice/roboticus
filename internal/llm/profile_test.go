@@ -86,3 +86,47 @@ func TestApplyIntentEvidence_CanonicalObservationOverridesPriorAndAvoidsUnexerci
 		t.Fatalf("CapabilityEvidence = %q, want observed_for_intent", profile.CapabilityEvidence)
 	}
 }
+
+func TestApplyIntentEvidence_ProviderAwareAliasResolvesBareLocalRouteName(t *testing.T) {
+	iq := NewIntentQualityTracker(16)
+	iq.RecordWithIntent("ollama/gemma4", IntentToolUse.String(), 0.74)
+
+	profile := ModelProfile{
+		Model:                  "gemma4",
+		Provider:               "ollama",
+		GlobalObservationCount: 1,
+		Confidence:             1.0,
+	}
+	applyIntentEvidence(&profile, IntentToolUse.String(), iq)
+
+	if profile.IntentObservationCount != 1 {
+		t.Fatalf("IntentObservationCount = %d, want 1", profile.IntentObservationCount)
+	}
+	if profile.CapabilityEvidence != "observed_for_intent" {
+		t.Fatalf("CapabilityEvidence = %q, want observed_for_intent", profile.CapabilityEvidence)
+	}
+}
+
+func TestBuildModelProfiles_ProviderAwareAliasUsesQualifiedEvidenceForBareRouteTarget(t *testing.T) {
+	targets := []RouteTarget{{
+		Model:    "gemma4",
+		Provider: "ollama",
+		Tier:     TierMedium,
+		IsLocal:  true,
+		Cost:     0.0,
+	}}
+	qt := NewQualityTracker(16)
+	qt.Record("ollama/gemma4", 0.72)
+	qt.Record("ollama/gemma4", 0.82)
+
+	profiles := BuildModelProfiles(targets, qt, nil, nil, nil)
+	if len(profiles) != 1 {
+		t.Fatalf("len(profiles) = %d, want 1", len(profiles))
+	}
+	if profiles[0].GlobalObservationCount != 2 {
+		t.Fatalf("GlobalObservationCount = %d, want 2", profiles[0].GlobalObservationCount)
+	}
+	if profiles[0].Quality < 0.76 || profiles[0].Quality > 0.79 {
+		t.Fatalf("Quality = %f, want around 0.77", profiles[0].Quality)
+	}
+}

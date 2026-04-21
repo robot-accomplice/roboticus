@@ -12,6 +12,60 @@ v1.0.7 note:
 - The fixture evidence in this checklist remains useful as a transport
   regression, but it is no longer sufficient by itself to claim cross-vendor
   SSE readiness.
+- `PAR-008` is only closed by named-target evidence against more than one real
+  third-party SSE target, or by explicitly narrowing the release claim away
+  from cross-vendor SSE proof.
+- SSE is no longer a generic "it probably works" topic. Each candidate target
+  must produce an evidence record that can be attached to the release package.
+
+## v1.0.7 Named-Target Evidence Record
+
+Every real SSE validation run must capture one record with the following fields:
+
+- target name
+- vendor / product
+- public docs URL
+- endpoint URL used
+- auth mode used
+- whether endpoint discovery was required
+- `initialize` result
+- `tools/list` result
+- at least one `tools/call` result or interpretable failure
+- returned server name/version if present
+- returned tool count
+- transport quirks observed
+- verdict:
+  - `pass`
+  - `blocked_external`
+  - `blocked_credentials`
+  - `blocked_transport_mismatch`
+  - `fail`
+- notes on whether the target still documents SSE as a supported transport
+
+If a target cannot produce this record, it does not count toward closure.
+
+## v1.0.7 Prospects
+
+The current candidate set for real third-party SSE proof is:
+
+- Zapier MCP
+  - docs: [Use Zapier MCP with your client](https://help.zapier.com/hc/en-us/articles/36265392843917-Use-Zapier-MCP-with-your-client)
+  - current signal: Zapier documents a generated MCP endpoint and current
+    client guidance. This is the strongest prospect for a live proof target.
+  - expected blocker: per-account endpoint generation and scoped auth.
+- Atlassian Rovo MCP
+  - docs: [HTTP+SSE Deprecation Notice for Atlassian Rovo MCP server](https://community.atlassian.com/forums/Atlassian-Remote-MCP-Server/HTTP-SSE-Deprecation-Notice/ba-p/3205484)
+  - current signal: Atlassian still documents an SSE endpoint for backward
+    compatibility until 30 June 2026.
+  - expected blocker: SSE is deprecated, so a transport mismatch or shutdown is
+    a valid external blocker, not a hidden client failure.
+- OnceHub MCP
+  - docs: [Feb 12 2026: MCP Server for AI Agents and Expanded Zapier Integration](https://help.oncehub.com/help/feb-12-2026-mcp-server-expanded-zapier-integration)
+  - current signal: OnceHub documents a public MCP SSE endpoint.
+  - expected blocker: account-specific auth and server-side allowlisting.
+
+These are prospects, not proof. They only count once the evidence record above
+is completed from `roboticus mcp validate-sse <NAME>`.
 
 ## Validation Targets
 
@@ -23,11 +77,12 @@ Define these before running the checklist:
   - Version source: `npm view @playwright/mcp` → `0.0.70` (npm registry, fetched 2026-04-15 during v1.0.6 validation)
   - Expected server name/version: `Playwright` / `1.60.0-alpha-1774999321000`
   - Expected tool count: 21 (browser_close, browser_resize, browser_console_messages, browser_handle_dialog, browser_evaluate, plus 16 more)
-- Blessed SSE MCP target
-  - Exact URL: in-tree httptest fixture (no production third-party SSE MCP target available for v1.0.6 — see Section 6 confidence-level disclosure)
-  - Version source: `internal/mcp/sse_validation_test.go::TestSSEReleaseChecklist_FullValidation` fixture
-  - Expected server name/version: `release-checklist-sse-fixture` / `v1.0.6-validation`
-  - Expected tool count: 1 (`echo`, declared in the fixture's tools/list response)
+- Blessed SSE MCP target(s)
+  - For v1.0.7 this must be a named external target exercised through
+    `roboticus mcp validate-sse <NAME>`.
+  - The in-tree SSE fixture remains a transport regression only.
+  - The checklist must explicitly name each target that counted toward release
+    proof and include its evidence record.
 
 Do not use placeholder examples or stale package names. Validation targets must be currently resolvable and reproducible.
 
@@ -97,35 +152,29 @@ during v1.0.6 release validation.)
 
 ### 3. Blessed SSE target is practically validated
 
-- [x] The exact configured SSE endpoint is reachable in the release environment
-- [x] MCP `initialize` succeeds
-- [x] `tools/list` succeeds
-- [x] At least one `tools/call` completes with an expected result or an expected, interpretable error
-- [x] Returned server name/version matches expectations
-- [x] Tool count is non-zero or otherwise matches expectations
+- [ ] The exact configured SSE endpoint is reachable in the release environment
+- [ ] MCP `initialize` succeeds
+- [ ] `tools/list` succeeds
+- [ ] At least one `tools/call` completes with an expected result or an expected, interpretable error
+- [ ] Returned server name/version matches expectations
+- [ ] Tool count is non-zero or otherwise matches expectations
+- [ ] More than one real third-party vendor target has a completed evidence record
 
 Evidence:
 
 ```
-=== MCP checklist item 3 evidence ===
-  endpoint:      http://127.0.0.1:54238 (in-tree httptest fixture)
-  server name:   release-checklist-sse-fixture
-  server version: v1.0.6-validation
-  tool count:    1
-  tools/call:    echo({"text":"checklist-validation-payload"})
-                  → "echoed: checklist-validation-payload"
-  verdict:       PASS
-
-Reproducible via: go test ./internal/mcp/ -run
-TestSSEReleaseChecklist_FullValidation -v
-
-CONFIDENCE-LEVEL CAVEAT: this round is against an in-tree fixture, not
-a production third-party SSE MCP server. The fixture exercises the
-full ConnectSSE → initialize → tools/list → tools/call code path, so
-the SSE transport and protocol implementation are validated end to
-end — but the test does not prove compatibility with any specific
-real-world SSE MCP server. The release notes (see item 6) reflect
-this honestly.
+Target: <NAME>
+Vendor: <vendor>
+Docs: <url>
+Endpoint: <url used>
+Auth mode: <bearer/oauth/none/etc>
+Discovery required: <yes/no>
+Initialize: <pass/fail + notes>
+Tools/list: <pass/fail + tool count>
+Tools/call: <result or interpretable failure>
+Server name/version: <if returned>
+Verdict: <pass|blocked_external|blocked_credentials|blocked_transport_mismatch|fail>
+Observed transport notes: <notes>
 ```
 
 ### 4. Startup failure diagnostics are actionable
@@ -235,6 +284,15 @@ Pass only if:
 - all blockers pass
 - the validated targets are named explicitly
 - the evidence bundle is attached to the release record
+- the SSE proof contains more than one real third-party target
+
+If only one real third-party SSE target validates, or if every external target
+is blocked by credentials/vendor-side transport mismatch, the release must
+either:
+
+- keep `PAR-008` open
+- or narrow the release claim explicitly so cross-vendor SSE proof is no
+  longer asserted
 
 Fail if any of the following are true:
 

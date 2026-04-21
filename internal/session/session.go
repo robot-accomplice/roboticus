@@ -226,10 +226,12 @@ func (s *Session) HippocampusSummary() string { return s.hippocampusSummary }
 
 // AddAssistantMessage appends an assistant message with optional tool calls.
 func (s *Session) AddAssistantMessage(content string, toolCalls []llm.ToolCall) {
+	historyToolCalls := append([]llm.ToolCall(nil), toolCalls...)
+	pendingToolCalls := append([]llm.ToolCall(nil), toolCalls...)
 	s.messages = append(s.messages, llm.Message{
-		Role: "assistant", Content: content, ToolCalls: toolCalls,
+		Role: "assistant", Content: content, ToolCalls: historyToolCalls,
 	})
-	s.pendingCalls = toolCalls
+	s.pendingCalls = pendingToolCalls
 }
 
 // AddToolResult appends a tool result message.
@@ -251,7 +253,9 @@ func (s *Session) AddToolResult(callID, toolName, output string, isError bool) {
 }
 
 // PendingToolCalls returns tool calls not yet resolved.
-func (s *Session) PendingToolCalls() []llm.ToolCall { return s.pendingCalls }
+func (s *Session) PendingToolCalls() []llm.ToolCall {
+	return append([]llm.ToolCall(nil), s.pendingCalls...)
+}
 
 // LastAssistantContent returns the most recent assistant message content.
 func (s *Session) LastAssistantContent() string {

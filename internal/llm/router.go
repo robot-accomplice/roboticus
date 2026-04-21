@@ -167,7 +167,7 @@ func (r *Router) EnableMetascoreRouting(quality *QualityTracker, latency *Latenc
 		intentClass := requestIntentClass(req)
 		if intentClass != "" && r.intentQuality != nil {
 			for i := range profiles {
-				profiles[i].Quality = r.intentQuality.EstimatedQualityForIntent(profiles[i].Model, intentClass)
+				profiles[i].Quality = r.intentQuality.EstimatedQualityForIntentTarget(profiles[i].Provider, profiles[i].Model, intentClass)
 				applyIntentEvidence(&profiles[i], intentClass, r.intentQuality)
 			}
 		} else {

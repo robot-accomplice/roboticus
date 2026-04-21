@@ -39,7 +39,7 @@ type TurnEnvelopePolicy struct {
 
 func DeriveTurnEnvelopePolicy(content string, synthesis TaskSynthesis, sessionTurns int) TurnEnvelopePolicy {
 	words := len(strings.Fields(strings.TrimSpace(content)))
-	requiresArtifactWrite := looksLikeSingleStepAuthoringTask(strings.ToLower(content), 0)
+	requiresArtifactWrite := looksLikeBoundedAuthoringTask(strings.ToLower(content))
 	allowAuthorityMutation := requiresExplicitAuthorityMutation(content)
 
 	switch {
@@ -52,8 +52,8 @@ func DeriveTurnEnvelopePolicy(content string, synthesis TaskSynthesis, sessionTu
 			Reason:              "complex or action-oriented turn requires the full adaptive envelope",
 		}
 	case synthesis.Intent == "task" &&
-		synthesis.Complexity == "simple" &&
-		synthesis.PlannedAction == "execute_directly":
+		synthesis.PlannedAction == "execute_directly" &&
+		(synthesis.Complexity == "simple" || requiresArtifactWrite):
 		return TurnEnvelopePolicy{
 			Weight:                 TurnWeightStandard,
 			ContextBudget:          2048,
@@ -63,7 +63,7 @@ func DeriveTurnEnvelopePolicy(content string, synthesis TaskSynthesis, sessionTu
 			RequireArtifactWrite:   requiresArtifactWrite,
 			AllowAuthorityMutation: allowAuthorityMutation,
 			ToolProfile:            toolProfileForTurn(requiresArtifactWrite, allowAuthorityMutation),
-			Reason:                 "simple direct task should stay on a focused execution envelope",
+			Reason:                 "direct artifact authoring should stay on a focused execution envelope",
 		}
 	case synthesis.Intent == "task":
 		return TurnEnvelopePolicy{

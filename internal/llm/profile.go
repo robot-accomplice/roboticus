@@ -83,7 +83,7 @@ func BuildModelProfiles(
 
 		// Quality from tracker.
 		if quality != nil {
-			p.Quality = quality.EstimatedQuality(t.Model)
+			p.Quality = quality.EstimatedQualityForTarget(t.Provider, t.Model)
 		} else {
 			p.Quality = 0.5
 		}
@@ -119,7 +119,7 @@ func BuildModelProfiles(
 
 		// Confidence: penalize cold-start models with few observations.
 		if quality != nil {
-			obs := quality.ObservationCount(t.Model)
+			obs := quality.ObservationCountForTarget(t.Provider, t.Model)
 			p.GlobalObservationCount = obs
 			if obs >= confidenceThreshold {
 				p.Confidence = 1.0
@@ -161,7 +161,7 @@ func applyIntentEvidence(profile *ModelProfile, intentClass string, iq *IntentQu
 	}
 	intentObs := 0
 	if iq != nil {
-		intentObs = iq.ObservationCountForIntent(profile.Model, intentClass)
+		intentObs = iq.ObservationCountForIntentTarget(profile.Provider, profile.Model, intentClass)
 	}
 	profile.IntentObservationCount = intentObs
 	switch {

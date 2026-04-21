@@ -2,6 +2,9 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -42,6 +45,21 @@ func (r *recordingObserver) SetSummaryField(key string, value any) {
 
 func (r *recordingObserver) IncrementSummaryCounter(key string, delta int) {
 	r.counters[key] += delta
+}
+
+type recordingHTTPDoer struct {
+	statusCode int
+	body       string
+	requests   []*http.Request
+}
+
+func (r *recordingHTTPDoer) Do(req *http.Request) (*http.Response, error) {
+	r.requests = append(r.requests, req)
+	return &http.Response{
+		StatusCode: r.statusCode,
+		Body:       io.NopCloser(strings.NewReader(r.body)),
+		Header:     make(http.Header),
+	}, nil
 }
 
 func TestServiceComplete_ObserverCapturesFallbackDiagnostics(t *testing.T) {
@@ -127,6 +145,77 @@ func TestServiceComplete_ObserverCapturesFallbackDiagnostics(t *testing.T) {
 		if !seen {
 			t.Fatalf("expected event %q to be recorded", eventType)
 		}
+	}
+}
+
+func TestServiceComplete_ObserverCapturesProviderEnvelopesAndNormalization(t *testing.T) {
+	doer := &recordingHTTPDoer{
+		statusCode: 200,
+		body:       `{"id":"ok","model":"gemma4","choices":[{"message":{"content":"done"},"finish_reason":"stop"}],"usage":{"prompt_tokens":11,"completion_tokens":4}}`,
+	}
+	client, _ := NewClientWithHTTP(&Provider{
+		Name: "ollama", URL: "http://ollama", Format: FormatOllama, IsLocal: true,
+	}, doer)
+
+	svc, _ := NewService(ServiceConfig{
+		Primary: "ollama/gemma4",
+	}, nil)
+	svc.providers["ollama"] = client
+
+	obs := newRecordingObserver()
+	ctx := WithInferenceObserver(context.Background(), obs)
+	_, err := svc.Complete(ctx, &Request{
+		Messages: []Message{
+			{Role: "user", Content: "write the note"},
+			{Role: "assistant", ToolCalls: []ToolCall{{
+				ID: "call_1", Type: "function",
+				Function: ToolCallFunc{Name: "obsidian_write", Arguments: `{"path":"note.md","content":"# Note"}`},
+			}}},
+			{Role: "tool", ToolCallID: "call_1", Name: "obsidian_write", Content: "wrote 6 bytes"},
+		},
+		Model: "ollama/gemma4",
+	})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	var startEvent, finishEvent *observerEvent
+	for i := range obs.events {
+		switch obs.events[i].eventType {
+		case "model_attempt_started":
+			startEvent = &obs.events[i]
+		case "model_attempt_finished":
+			finishEvent = &obs.events[i]
+		}
+	}
+	if startEvent == nil || finishEvent == nil {
+		t.Fatalf("expected model attempt events, got %+v", obs.events)
+	}
+	if got := startEvent.details["tool_message_transformer"]; got != "ollama_tool_messages" {
+		t.Fatalf("tool_message_transformer = %v, want ollama_tool_messages", got)
+	}
+	if got := startEvent.details["tool_message_disposition"]; got != string(ToolMessageQualifiedTransform) {
+		t.Fatalf("tool_message_disposition = %v", got)
+	}
+	reqJSON, _ := startEvent.details["provider_request_json"].(string)
+	if !strings.Contains(reqJSON, `"tool_name":"obsidian_write"`) {
+		t.Fatalf("provider_request_json missing ollama tool_name shape: %s", reqJSON)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(reqJSON), &payload); err != nil {
+		t.Fatalf("provider_request_json did not unmarshal: %v", err)
+	}
+	msgs := payload["messages"].([]any)
+	assistant := msgs[1].(map[string]any)
+	toolCalls := assistant["tool_calls"].([]any)
+	function := toolCalls[0].(map[string]any)["function"].(map[string]any)
+	args, ok := function["arguments"].(map[string]any)
+	if !ok || args["path"] != "note.md" || args["content"] != "# Note" {
+		t.Fatalf("provider_request_json missing structured ollama arguments object: %s", reqJSON)
+	}
+	respJSON, _ := finishEvent.details["provider_response_json"].(string)
+	if !strings.Contains(respJSON, `"model":"gemma4"`) {
+		t.Fatalf("provider_response_json = %s", respJSON)
 	}
 }
 

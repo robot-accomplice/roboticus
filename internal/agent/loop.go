@@ -150,24 +150,26 @@ type Loop struct {
 	doneReason                string
 
 	// Dependencies injected at construction.
-	llm       llm.Completer
-	tools     *ToolRegistry
-	recorder  ToolCallRecorder
-	policy    *policy.Engine
-	injection *InjectionDetector
-	memory    *memory.Manager
-	context   *ContextBuilder
+	llm        llm.Completer
+	tools      *ToolRegistry
+	recorder   ToolCallRecorder
+	policy     *policy.Engine
+	injection  *InjectionDetector
+	memory     *memory.Manager
+	context    *ContextBuilder
+	normalizer *agenttools.NormalizationFactory
 }
 
 // LoopDeps bundles the dependencies for a Loop.
 type LoopDeps struct {
-	LLM       llm.Completer
-	Tools     *ToolRegistry
-	Recorder  ToolCallRecorder
-	Policy    *policy.Engine
-	Injection *InjectionDetector
-	Memory    *memory.Manager
-	Context   *ContextBuilder
+	LLM         llm.Completer
+	Tools       *ToolRegistry
+	Recorder    ToolCallRecorder
+	Policy      *policy.Engine
+	Injection   *InjectionDetector
+	Memory      *memory.Manager
+	Context     *ContextBuilder
+	Normalizers *agenttools.NormalizationFactory
 }
 
 type ToolExecutionRecord struct {
@@ -198,6 +200,7 @@ func NewLoop(cfg LoopConfig, deps LoopDeps) *Loop {
 		injection:       deps.Injection,
 		memory:          deps.Memory,
 		context:         deps.Context,
+		normalizer:      deps.Normalizers,
 	}
 }
 
@@ -626,8 +629,73 @@ func (l *Loop) act(ctx context.Context, session *Session) (Action, error) {
 			Channel:      session.Channel,
 		}
 
+		normFactory := l.normalizer
+		if normFactory == nil {
+			normFactory = agenttools.NewNormalizationFactory()
+		}
+		callNorm := normFactory.NormalizeToolCall(agenttools.ToolCallNormalizationInput{
+			ToolName:      tc.Function.Name,
+			RawArguments:  tc.Function.Arguments,
+			RequestModel:  "",
+			ResponseModel: "",
+			Provider:      "",
+		})
+		switch callNorm.Disposition {
+		case agenttools.NormalizationQualifiedTransform:
+			if obs := llm.InferenceObserverFromContext(ctx); obs != nil {
+				obs.RecordEvent("tool_call_normalized", "warning",
+					"tool-call arguments normalized before execution",
+					"The framework repaired malformed tool-call arguments before executing the tool.",
+					map[string]any{
+						"tool_call_id":  tc.ID,
+						"tool_name":     tc.Function.Name,
+						"transformer":   callNorm.Transformer,
+						"fidelity":      string(callNorm.Fidelity),
+						"disposition":   string(callNorm.Disposition),
+						"original_args": tc.Function.Arguments,
+					},
+				)
+			}
+		case agenttools.NormalizationTransformFailed, agenttools.NormalizationNoQualifiedTransformer:
+			l.resetReadOnlyExploration()
+			output := "[Tool " + tc.Function.Name + " rejected]: malformed structured arguments could not be normalized before execution"
+			if callNorm.Reason != "" {
+				output += " (" + callNorm.Reason + ")"
+			}
+			session.AddToolResult(tc.ID, tc.Function.Name, output, true)
+			if obs := llm.InferenceObserverFromContext(ctx); obs != nil {
+				obs.RecordEvent("tool_call_normalization_failed", "error",
+					"tool-call arguments were rejected before execution",
+					"The framework blocked a malformed tool call because it could not normalize the structured arguments safely.",
+					map[string]any{
+						"tool_call_id": tc.ID,
+						"tool_name":    tc.Function.Name,
+						"transformer":  callNorm.Transformer,
+						"fidelity":     string(callNorm.Fidelity),
+						"disposition":  string(callNorm.Disposition),
+						"reason":       callNorm.Reason,
+						"raw_args":     tc.Function.Arguments,
+					},
+				)
+			}
+			l.recordToolExecution(ctx, ToolExecutionRecord{
+				TurnID:     core.TurnIDFromCtx(ctx),
+				ToolCallID: tc.ID,
+				ToolName:   tc.Function.Name,
+				Input:      tc.Function.Arguments,
+				Output:     output,
+				Status:     "invalid_arguments",
+			})
+			continue
+		}
+
+		execArgs := callNorm.Arguments
+		if execArgs == "" {
+			execArgs = tc.Function.Arguments
+		}
+
 		toolStart := time.Now()
-		result, err := tool.Execute(ctx, tc.Function.Arguments, tctx)
+		result, err := tool.Execute(ctx, execArgs, tctx)
 		toolDuration := time.Since(toolStart).Milliseconds()
 
 		if err != nil {
@@ -649,7 +717,7 @@ func (l *Loop) act(ctx context.Context, session *Session) (Action, error) {
 				TurnID:     core.TurnIDFromCtx(ctx),
 				ToolCallID: tc.ID,
 				ToolName:   tc.Function.Name,
-				Input:      tc.Function.Arguments,
+				Input:      execArgs,
 				Output:     output,
 				Status:     "error",
 				DurationMs: toolDuration,
@@ -657,8 +725,31 @@ func (l *Loop) act(ctx context.Context, session *Session) (Action, error) {
 			continue
 		}
 
-		// Filter tool output (Rust: AnsiStripper + ProgressLineFilter + DuplicateLineDeduper + WhitespaceNormalizer).
-		result.Output = FilterToolOutput(result.Output)
+		resultNorm := normFactory.NormalizeToolResult(agenttools.ToolResultNormalizationInput{
+			ToolName:      tc.Function.Name,
+			Result:        result,
+			RequestModel:  "",
+			ResponseModel: "",
+			Provider:      "",
+		})
+		if resultNorm.Disposition == agenttools.NormalizationQualifiedTransform {
+			if obs := llm.InferenceObserverFromContext(ctx); obs != nil {
+				obs.RecordEvent("tool_result_normalized", "warning",
+					"tool result normalized before observation",
+					"The framework normalized tool output before it was fed back into the model context.",
+					map[string]any{
+						"tool_call_id": tc.ID,
+						"tool_name":    tc.Function.Name,
+						"transformer":  resultNorm.Transformer,
+						"fidelity":     string(resultNorm.Fidelity),
+						"disposition":  string(resultNorm.Disposition),
+					},
+				)
+			}
+		}
+		if resultNorm.Result != nil {
+			result = resultNorm.Result
+		}
 
 		// Scan tool output for injection (L4).
 		if l.injection != nil {
@@ -691,7 +782,7 @@ func (l *Loop) act(ctx context.Context, session *Session) (Action, error) {
 			TurnID:     core.TurnIDFromCtx(ctx),
 			ToolCallID: tc.ID,
 			ToolName:   tc.Function.Name,
-			Input:      tc.Function.Arguments,
+			Input:      execArgs,
 			Output:     result.Output,
 			Status:     "success",
 			DurationMs: toolDuration,

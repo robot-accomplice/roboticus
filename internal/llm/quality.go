@@ -101,6 +101,38 @@ func (qt *QualityTracker) EstimatedQuality(model string) float64 {
 	return rb.average()
 }
 
+// EstimatedQualityForTarget resolves the routed/provider-qualified aliases for a
+// model and combines any matching historical evidence into one quality view.
+func (qt *QualityTracker) EstimatedQualityForTarget(provider, model string) float64 {
+	keys := modelIdentityKeys(provider, model)
+	if len(keys) == 0 {
+		return 0.5
+	}
+	qt.mu.RLock()
+	defer qt.mu.RUnlock()
+
+	var sum float64
+	var count int
+	seen := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		canonical := canonicalModelKey(key)
+		if _, exists := seen[canonical]; exists {
+			continue
+		}
+		seen[canonical] = struct{}{}
+		rb, ok := qt.models[canonical]
+		if !ok || rb.count == 0 {
+			continue
+		}
+		sum += rb.average() * float64(rb.count)
+		count += rb.count
+	}
+	if count == 0 {
+		return 0.5
+	}
+	return sum / float64(count)
+}
+
 // ObservationCount returns the number of recorded observations for a model.
 func (qt *QualityTracker) ObservationCount(model string) int {
 	model = canonicalModelKey(model)
@@ -115,6 +147,33 @@ func (qt *QualityTracker) ObservationCount(model string) int {
 		return 0
 	}
 	return rb.count
+}
+
+// ObservationCountForTarget resolves the routed/provider-qualified aliases for
+// a model and sums the matching observation counts.
+func (qt *QualityTracker) ObservationCountForTarget(provider, model string) int {
+	keys := modelIdentityKeys(provider, model)
+	if len(keys) == 0 {
+		return 0
+	}
+	qt.mu.RLock()
+	defer qt.mu.RUnlock()
+
+	total := 0
+	seen := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		canonical := canonicalModelKey(key)
+		if _, exists := seen[canonical]; exists {
+			continue
+		}
+		seen[canonical] = struct{}{}
+		rb, ok := qt.models[canonical]
+		if !ok {
+			continue
+		}
+		total += rb.count
+	}
+	return total
 }
 
 // HasObservations returns true if any quality data exists for this model.
@@ -278,6 +337,56 @@ func (iq *IntentQualityTracker) EstimatedQualityForIntent(model, intentClass str
 	return 0.5
 }
 
+// EstimatedQualityForIntentTarget resolves the routed/provider-qualified alias
+// set for a model and combines any matching intent evidence into one quality
+// estimate. Falls back to priors/baselines when no observations exist.
+func (iq *IntentQualityTracker) EstimatedQualityForIntentTarget(provider, model, intentClass string) float64 {
+	keys := modelIdentityKeys(provider, model)
+	intentClass = strings.TrimSpace(strings.ToUpper(intentClass))
+	if len(keys) == 0 || intentClass == "" {
+		return 0.5
+	}
+
+	iq.mu.RLock()
+	defer iq.mu.RUnlock()
+
+	var sum float64
+	var count int
+	seenObserved := make(map[IntentClassKey]struct{}, len(keys))
+	for _, keyModel := range keys {
+		key := IntentClassKey{Model: canonicalModelKey(keyModel), IntentClass: intentClass}
+		if _, exists := seenObserved[key]; exists {
+			continue
+		}
+		seenObserved[key] = struct{}{}
+		rb, ok := iq.intents[key]
+		if !ok || rb.count == 0 {
+			continue
+		}
+		sum += rb.average() * float64(rb.count)
+		count += rb.count
+	}
+	if count > 0 {
+		return sum / float64(count)
+	}
+
+	seenPriors := make(map[IntentClassKey]struct{}, len(keys))
+	for _, keyModel := range keys {
+		key := IntentClassKey{Model: canonicalModelKey(keyModel), IntentClass: intentClass}
+		if _, exists := seenPriors[key]; exists {
+			continue
+		}
+		seenPriors[key] = struct{}{}
+		if prior, exists := iq.priors[key]; exists {
+			return prior
+		}
+	}
+	if baseline, exists := iq.baselines[intentClass]; exists {
+		return baseline
+	}
+	return 0.5
+}
+
 // ObservationCountForIntent returns the number of recorded observations for a
 // model+intentClass pair.
 func (iq *IntentQualityTracker) ObservationCountForIntent(model, intentClass string) int {
@@ -294,6 +403,35 @@ func (iq *IntentQualityTracker) ObservationCountForIntent(model, intentClass str
 		return 0
 	}
 	return rb.count
+}
+
+// ObservationCountForIntentTarget resolves the routed/provider-qualified alias
+// set for a model and sums matching intent-observation counts.
+func (iq *IntentQualityTracker) ObservationCountForIntentTarget(provider, model, intentClass string) int {
+	keys := modelIdentityKeys(provider, model)
+	intentClass = strings.TrimSpace(strings.ToUpper(intentClass))
+	if len(keys) == 0 || intentClass == "" {
+		return 0
+	}
+
+	iq.mu.RLock()
+	defer iq.mu.RUnlock()
+
+	total := 0
+	seen := make(map[IntentClassKey]struct{}, len(keys))
+	for _, keyModel := range keys {
+		key := IntentClassKey{Model: canonicalModelKey(keyModel), IntentClass: intentClass}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		rb, ok := iq.intents[key]
+		if !ok {
+			continue
+		}
+		total += rb.count
+	}
+	return total
 }
 
 // HasObservationsForIntent reports whether any quality data exists for the

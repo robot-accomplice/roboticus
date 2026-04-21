@@ -199,6 +199,29 @@ func TestSynthesizeTaskState_VerboseSingleStepAuthoringStaysSimple(t *testing.T)
 	}
 }
 
+func TestSynthesizeTaskState_BoundedMultiArtifactAuthoringStaysDirect(t *testing.T) {
+	result := SynthesizeTaskState(
+		"In the Obsidian vault, create two notes: project-bootstrap-check.md and project-bootstrap-actions.md. The first note should contain exactly: # Project Bootstrap Check. The second note should contain exactly: # Project Bootstrap Actions.",
+		1,
+		nil,
+	)
+	if result.Intent != "task" {
+		t.Fatalf("intent = %q, want task", result.Intent)
+	}
+	if result.Complexity != "moderate" {
+		t.Fatalf("complexity = %q, want moderate", result.Complexity)
+	}
+	if result.PlannedAction != "execute_directly" {
+		t.Fatalf("planned action = %q, want execute_directly", result.PlannedAction)
+	}
+	if result.RetrievalNeeded {
+		t.Fatal("bounded multi-artifact authoring should not require retrieval")
+	}
+	if result.ProceduralUncertainty {
+		t.Fatal("bounded multi-artifact authoring should not be treated as procedural uncertainty")
+	}
+}
+
 func TestSynthesizeTaskState_CapabilityFitRecognizesHyphenatedSkillConcepts(t *testing.T) {
 	result := SynthesizeTaskState(
 		"Create a new markdown document in the Obsidian vault for today's notes.",
