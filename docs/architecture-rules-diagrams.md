@@ -839,6 +839,10 @@ flowchart LR
   cron, channel, or CLI changes.
 - Use the pipeline component diagram when deciding whether behavior belongs in
   the factory.
+- Exercise/baseline prompt selection belongs to the shared exercise factory:
+  connectors may choose models, iterations, and an optional canonical intent
+  filter, but they must not define ad hoc prompt subsets or capability slices
+  outside the matrix owned by `internal/llm`.
 - Use the capability diagram when evaluating stage dependencies and service-bag
   creep.
 - Use the supporting diagrams when validating streaming parity, debugging

@@ -139,6 +139,9 @@ func TestExerciseRunLifecycleHelpers(t *testing.T) {
 			if body["initiator"] != "cli" {
 				t.Fatalf("initiator = %#v, want cli", body["initiator"])
 			}
+			if body["notes"] != "intent filter: TOOL_USE" {
+				t.Fatalf("notes = %#v, want intent filter note", body["notes"])
+			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"run_id": "run-123"})
 		case r.Method == http.MethodPost && r.URL.Path == "/api/models/exercise/runs/run-123/results":
 			sawResult = true
@@ -166,7 +169,7 @@ func TestExerciseRunLifecycleHelpers(t *testing.T) {
 	}))
 	defer cleanup()
 
-	runID, err := startExerciseRun([]string{"ollama/gemma4"}, 1, map[string]any{"llm": map[string]any{"primary": "ollama/gemma4"}})
+	runID, err := startExerciseRun([]string{"ollama/gemma4"}, 1, map[string]any{"llm": map[string]any{"primary": "ollama/gemma4"}}, "TOOL_USE")
 	if err != nil {
 		t.Fatalf("startExerciseRun: %v", err)
 	}
@@ -194,6 +197,27 @@ func TestExerciseRunLifecycleHelpers(t *testing.T) {
 	}
 	if !sawStart || !sawResult || !sawComplete {
 		t.Fatalf("lifecycle missing: start=%v result=%v complete=%v", sawStart, sawResult, sawComplete)
+	}
+}
+
+func TestStartExerciseRun_OmitsNotesWithoutIntentFilter(t *testing.T) {
+	cleanup := testhelp.SetupMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/models/exercise/runs" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode start body: %v", err)
+		}
+		if _, ok := body["notes"]; ok {
+			t.Fatalf("notes should be omitted when no intent filter is set")
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"run_id": "run-123"})
+	}))
+	defer cleanup()
+
+	if _, err := startExerciseRun([]string{"ollama/gemma4"}, 1, map[string]any{}, ""); err != nil {
+		t.Fatalf("startExerciseRun: %v", err)
 	}
 }
 

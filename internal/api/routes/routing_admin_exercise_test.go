@@ -159,6 +159,67 @@ func TestExerciseModel_SkipsWarmupForCloudModels(t *testing.T) {
 	}
 }
 
+func TestExerciseModel_FiltersSingleIntent(t *testing.T) {
+	store := testutil.TempStore(t)
+	runner := &stubExerciseRunner{}
+	cfg := &core.Config{
+		Providers: map[string]core.ProviderConfig{
+			"ollama": {IsLocal: true},
+		},
+	}
+
+	handler := ExerciseModel(runner, store, cfg, "ExerciseBot")
+	req := httptest.NewRequest(http.MethodPost, "/api/models/exercise", strings.NewReader(`{"model":"ollama/test-model","intent_class":"tool_use"}`))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	filteredCount := 0
+	for _, prompt := range llm.ExerciseMatrix {
+		if prompt.Intent == llm.IntentToolUse {
+			filteredCount++
+		}
+	}
+	if got, want := len(runner.inputs), filteredCount+2; got != want {
+		t.Fatalf("pipeline calls = %d, want %d", got, want)
+	}
+	body := jsonBody(t, rec)
+	if got := body["intent_class"]; got != "TOOL_USE" {
+		t.Fatalf("intent_class = %v, want TOOL_USE", got)
+	}
+	if int(body["total"].(float64)) != filteredCount {
+		t.Fatalf("total = %v, want %d", body["total"], filteredCount)
+	}
+	var persisted int
+	row := store.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM exercise_results WHERE model = ? AND intent_class = ?`, "ollama/test-model", "TOOL_USE")
+	if err := row.Scan(&persisted); err != nil {
+		t.Fatalf("scan exercise_results: %v", err)
+	}
+	if persisted != filteredCount {
+		t.Fatalf("persisted rows = %d, want %d", persisted, filteredCount)
+	}
+}
+
+func TestExerciseModel_RejectsUnknownIntent(t *testing.T) {
+	store := testutil.TempStore(t)
+	runner := &stubExerciseRunner{}
+	cfg := &core.Config{}
+
+	handler := ExerciseModel(runner, store, cfg, "ExerciseBot")
+	req := httptest.NewRequest(http.MethodPost, "/api/models/exercise", strings.NewReader(`{"model":"ollama/test-model","intent_class":"not_real"}`))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+	if len(runner.inputs) != 0 {
+		t.Fatalf("pipeline calls = %d, want 0", len(runner.inputs))
+	}
+}
+
 func TestExerciseRunLifecycleRoutes_PersistHistory(t *testing.T) {
 	stubResourceSamplerForTest(t)
 	store := testutil.TempStore(t)

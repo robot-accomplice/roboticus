@@ -81,6 +81,11 @@ type ExerciseRequest struct {
 	// preserved in the returned report. Must be non-empty.
 	Models []string
 
+	// IntentFilter optionally narrows the canonical ExerciseMatrix to a single
+	// intent class. The exercise factory owns this filtering so connectors do
+	// not drift into ad hoc prompt subsets.
+	IntentFilter *IntentClass
+
 	// Iterations is the number of passes each model makes through
 	// ExerciseMatrix. Values < 1 are coerced to 1.
 	Iterations int
@@ -173,6 +178,9 @@ func ExerciseModels(ctx context.Context, req ExerciseRequest) (ExerciseReport, e
 	if req.ModelTimeout == nil {
 		return ExerciseReport{}, errors.New("ExerciseModels: ModelTimeout is required")
 	}
+	if req.IntentFilter != nil && !IsValidIntentClass(*req.IntentFilter) {
+		return ExerciseReport{}, fmt.Errorf("ExerciseModels: invalid IntentFilter %d", *req.IntentFilter)
+	}
 	if req.Iterations < 1 {
 		req.Iterations = 1
 	}
@@ -182,6 +190,13 @@ func ExerciseModels(ctx context.Context, req ExerciseRequest) (ExerciseReport, e
 	// about progress output rely on this normalization.
 	if req.Progress == nil {
 		req.Progress = io.Discard
+	}
+	prompts := ExerciseMatrix
+	if req.IntentFilter != nil {
+		prompts = filterExerciseMatrix(*req.IntentFilter)
+	}
+	if len(prompts) == 0 {
+		return ExerciseReport{}, errors.New("ExerciseModels: no prompts matched the requested intent filter")
 	}
 
 	report := ExerciseReport{}
@@ -203,7 +218,7 @@ func ExerciseModels(ctx context.Context, req ExerciseRequest) (ExerciseReport, e
 		// for the per-phase rationale.
 		mr.Warmup = RunWarmupStage(ctx, req.Progress, model, req.IsLocal(model), modelTimeout, req.SendWarmup)
 
-		totalPrompts := len(ExerciseMatrix) * req.Iterations
+		totalPrompts := len(prompts) * req.Iterations
 
 		// Aggregation accumulators. Per-intent sums and counts so the
 		// final average isn't biased by intent-class sample-size imbalance.
@@ -213,7 +228,7 @@ func ExerciseModels(ctx context.Context, req ExerciseRequest) (ExerciseReport, e
 		var qualityCount int
 
 		for iter := 1; iter <= req.Iterations; iter++ {
-			for i, ep := range ExerciseMatrix {
+			for i, ep := range prompts {
 				if err := ctx.Err(); err != nil {
 					// Partial result is preserved on the report — the
 					// caller sees whatever accumulated before cancel.
@@ -229,7 +244,7 @@ func ExerciseModels(ctx context.Context, req ExerciseRequest) (ExerciseReport, e
 					return report, err
 				}
 
-				promptNum := (iter-1)*len(ExerciseMatrix) + i + 1
+				promptNum := (iter-1)*len(prompts) + i + 1
 
 				// Per the v1.0.6 "no silent blocking calls" rule:
 				// print a prefix line and run the prompt dispatch
@@ -312,4 +327,14 @@ func ExerciseModels(ctx context.Context, req ExerciseRequest) (ExerciseReport, e
 	}
 
 	return report, nil
+}
+
+func filterExerciseMatrix(intent IntentClass) []ExercisePrompt {
+	filtered := make([]ExercisePrompt, 0, len(ExerciseMatrix))
+	for _, prompt := range ExerciseMatrix {
+		if prompt.Intent == intent {
+			filtered = append(filtered, prompt)
+		}
+	}
+	return filtered
 }

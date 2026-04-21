@@ -276,6 +276,10 @@ they are not the release-driving backlog anymore.
 |------------|-------|---------------------------|
 | `PAR-008` | Cross-vendor SSE MCP proof | SSE transport confidence must flow through one authoritative named-target validation harness and evidence artifact, with central MCP config conversion plus endpoint-discovery/auth-capable SSE transport semantics, then be backed by more than one real blessed target |
 
+### Exercise Matrix Ownership
+
+- Intent-scoped exercise must remain matrix-owned, not connector-owned. CLI flags, HTTP request bodies, and future admin surfaces may choose a canonical intent filter, but they are not allowed to define ad hoc prompt subsets or reinterpret what a capability slice means. The shared exercise factory must validate requested intent classes against the canonical matrix taxonomy and persist the same intent labels the router and evidence surfaces consume.
+
 ---
 
 ## Gap 1: SecurityClaim Resolvers Defined But Never Called

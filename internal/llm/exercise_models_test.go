@@ -52,6 +52,10 @@ func TestExerciseModels_Rejects_EmptyInputs(t *testing.T) {
 		{"nil SendWarmup", func(r *ExerciseRequest) { r.SendWarmup = nil }, "SendWarmup is required"},
 		{"nil IsLocal", func(r *ExerciseRequest) { r.IsLocal = nil }, "IsLocal is required"},
 		{"nil ModelTimeout", func(r *ExerciseRequest) { r.ModelTimeout = nil }, "ModelTimeout is required"},
+		{"invalid intent filter", func(r *ExerciseRequest) {
+			invalid := IntentClass(999)
+			r.IntentFilter = &invalid
+		}, "invalid IntentFilter"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -65,6 +69,47 @@ func TestExerciseModels_Rejects_EmptyInputs(t *testing.T) {
 				t.Fatalf("error = %q; want substring %q", err.Error(), tc.wantIn)
 			}
 		})
+	}
+}
+
+func TestExerciseModels_FiltersToSingleIntent(t *testing.T) {
+	calls := 0
+	promptSender := func(ctx context.Context, model, content string, timeout time.Duration) (string, int64, error) {
+		calls++
+		return "ok", 1, nil
+	}
+	warmupSender := func(ctx context.Context, model string, timeout time.Duration) WarmupResult {
+		return WarmupResult{LatencyMs: 1}
+	}
+	intent := IntentToolUse
+
+	req := ExerciseRequest{
+		Models:       []string{"m"},
+		IntentFilter: &intent,
+		Iterations:   2,
+		SendPrompt:   promptSender,
+		SendWarmup:   warmupSender,
+		IsLocal:      func(string) bool { return true },
+		ModelTimeout: func(string) time.Duration { return time.Second },
+	}
+
+	report, err := ExerciseModels(context.Background(), req)
+	if err != nil {
+		t.Fatalf("ExerciseModels: %v", err)
+	}
+
+	expectedPrompts := len(filterExerciseMatrix(intent)) * req.Iterations
+	if calls != expectedPrompts {
+		t.Fatalf("prompt calls = %d, want %d", calls, expectedPrompts)
+	}
+	if len(report.Models) != 1 {
+		t.Fatalf("model results = %d, want 1", len(report.Models))
+	}
+	if len(report.Models[0].IntentQuality) != 1 {
+		t.Fatalf("intent quality entries = %d, want 1", len(report.Models[0].IntentQuality))
+	}
+	if _, ok := report.Models[0].IntentQuality[intent.String()]; !ok {
+		t.Fatalf("missing intent quality for %s", intent.String())
 	}
 }
 

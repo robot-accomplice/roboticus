@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -72,6 +73,16 @@ func ParseIntentClass(s string) IntentClass {
 	}
 }
 
+// ParseIntentClassStrict converts a string label to an IntentClass and rejects
+// unknown values instead of silently falling back to EXECUTION.
+func ParseIntentClassStrict(s string) (IntentClass, error) {
+	intent := ParseIntentClass(s)
+	if !IsValidIntentClass(intent) || !strings.EqualFold(intent.String(), strings.TrimSpace(s)) {
+		return IntentExecution, fmt.Errorf("unknown intent class %q", s)
+	}
+	return intent, nil
+}
+
 // AllIntentClasses returns all defined intent classes in order.
 func AllIntentClasses() []IntentClass {
 	return []IntentClass{
@@ -79,6 +90,17 @@ func AllIntentClasses() []IntentClass {
 		IntentConversation, IntentMemoryRecall, IntentToolUse,
 		IntentCoding,
 	}
+}
+
+// IsValidIntentClass reports whether intent is part of the canonical exercise
+// taxonomy.
+func IsValidIntentClass(intent IntentClass) bool {
+	for _, candidate := range AllIntentClasses() {
+		if candidate == intent {
+			return true
+		}
+	}
+	return false
 }
 
 // ComplexityLevel defines exercise difficulty.

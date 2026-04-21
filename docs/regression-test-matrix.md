@@ -130,6 +130,7 @@ Blocking commands for feature-complete releases:
 | R-RT-17 | Benchmark/run-start and single-model exercise paths reuse the shared model lifecycle policy seam; disabled models are rejected unless explicitly forced | `internal/api/routes/routing_admin_exercise_test.go` | L1/L2 |
 | R-RT-18 | Selected-model routing traces carry lifecycle state, reasons, and eligibility facts from the central model-policy seam so operator flow/RCA surfaces explain policy decisions truthfully | `internal/llm/routing_trace_test.go` | L1 |
 | R-RT-19 | Canonical turn diagnostics are retrievable as a self-describing trace-family artifact so operator flow views can render macro/detail RCA from persisted truth instead of reconstructing from logs | `internal/api/routes/traces_turndetail_test.go` | L1/L2 |
+| R-RT-22 | Intent-scoped exercise remains matrix-owned: CLI/API selectors can request one canonical intent class, but the shared exercise factory performs the filtering, validates the intent label, and preserves the same prompt-count / persisted-intent truth as the full matrix path | `internal/llm/exercise_models_test.go`, `internal/api/routes/routing_admin_exercise_test.go`, `cmd/models/models_test.go` | L1/L2 |
 
 ### R-BOT: Bot Commands
 

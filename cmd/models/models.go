@@ -39,14 +39,18 @@ func currentGitRevision() string {
 	return strings.TrimSpace(string(out))
 }
 
-func startExerciseRun(models []string, iterations int, config map[string]any) (string, error) {
-	resp, err := cmdutil.APIPost("/api/models/exercise/runs", map[string]any{
+func startExerciseRun(models []string, iterations int, config map[string]any, intentClass string) (string, error) {
+	payload := map[string]any{
 		"initiator":          "cli",
 		"models":             models,
 		"iterations":         iterations,
 		"config_fingerprint": exerciseConfigFingerprint(config),
 		"git_revision":       currentGitRevision(),
-	})
+	}
+	if strings.TrimSpace(intentClass) != "" {
+		payload["notes"] = "intent filter: " + intentClass
+	}
+	resp, err := cmdutil.APIPost("/api/models/exercise/runs", payload)
 	if err != nil {
 		return "", err
 	}
@@ -458,6 +462,8 @@ SELECTOR:
 FLAGS:
   -n N             Run the matrix N times per model for statistical
                    confidence. Default: 1.
+  --intent NAME    Exercise only one canonical intent slice from the
+                   matrix (for example TOOL_USE or MEMORY_RECALL).
   --new-only       Skip models that already have baseline data. Only
                    applies when no model args are given.
   --flush          Flush all existing quality observations before
@@ -478,6 +484,17 @@ scored latency averages. Cloud models skip warm-up.`,
 		minQuality, _ := cmd.Flags().GetFloat64("min-quality")
 		newOnly, _ := cmd.Flags().GetBool("new-only")
 		flush, _ := cmd.Flags().GetBool("flush")
+		intentName, _ := cmd.Flags().GetString("intent")
+		var intentFilter *llm.IntentClass
+		intentLabel := ""
+		if strings.TrimSpace(intentName) != "" {
+			intent, err := llm.ParseIntentClassStrict(intentName)
+			if err != nil {
+				return err
+			}
+			intentFilter = &intent
+			intentLabel = intent.String()
+		}
 
 		config, err := cmdutil.APIGet("/api/config")
 		if err != nil {
@@ -498,7 +515,16 @@ scored latency averages. Cloud models skip warm-up.`,
 
 		// Pre-flight summary: how many calls, estimated duration,
 		// what we'll do (flush or not).
-		totalPrompts := len(llm.ExerciseMatrix) * iterations
+		promptCount := len(llm.ExerciseMatrix)
+		if intentFilter != nil {
+			promptCount = 0
+			for _, prompt := range llm.ExerciseMatrix {
+				if prompt.Intent == *intentFilter {
+					promptCount++
+				}
+			}
+		}
+		totalPrompts := promptCount * iterations
 		fmt.Printf("\n  Exercising %d model(s):\n", len(models))
 		for _, m := range models {
 			label := "local"
@@ -507,7 +533,10 @@ scored latency averages. Cloud models skip warm-up.`,
 			}
 			fmt.Printf("    %-40s  %s\n", m, label)
 		}
-		fmt.Printf("  %d prompts × %d iteration(s) = %d scored calls per model.\n", len(llm.ExerciseMatrix), iterations, totalPrompts)
+		if intentFilter != nil {
+			fmt.Printf("  Intent filter: %s\n", intentLabel)
+		}
+		fmt.Printf("  %d prompts × %d iteration(s) = %d scored calls per model.\n", promptCount, iterations, totalPrompts)
 		if flush && len(args) == 0 {
 			fmt.Printf("  Quality scores will be FLUSHED before exercising (--flush).\n")
 		}
@@ -527,7 +556,7 @@ scored latency averages. Cloud models skip warm-up.`,
 		}
 
 		// Dispatch to the business-logic orchestrator.
-		runID, err := startExerciseRun(models, iterations, config)
+		runID, err := startExerciseRun(models, iterations, config, intentLabel)
 		if err != nil {
 			return fmt.Errorf("start exercise run: %w", err)
 		}
@@ -541,10 +570,11 @@ scored latency averages. Cloud models skip warm-up.`,
 
 		var persistErr error
 		req := llm.ExerciseRequest{
-			Models:     models,
-			Iterations: iterations,
-			SendPrompt: cliPromptSender,
-			SendWarmup: cliWarmupSender(config),
+			Models:       models,
+			IntentFilter: intentFilter,
+			Iterations:   iterations,
+			SendPrompt:   cliPromptSender,
+			SendWarmup:   cliWarmupSender(config),
 			OnPrompt: func(o llm.PromptOutcome) {
 				renderPromptProgress(o)
 				if persistErr != nil {
@@ -1230,6 +1260,7 @@ func init() {
 	// `exercise` and `baseline`; see the command Long description
 	// for the merge rationale.
 	modelsExerciseCmd.Flags().IntP("iterations", "n", 1, "Number of iterations over the prompt matrix")
+	modelsExerciseCmd.Flags().String("intent", "", "Exercise only one canonical intent class from the matrix")
 	modelsExerciseCmd.Flags().Float64("min-quality", 0, "Minimum quality threshold (0.0-1.0) — flag models below this for removal")
 	modelsExerciseCmd.Flags().Bool("new-only", false, "Only exercise models with no existing baseline data (ignored when explicit args are given)")
 	modelsExerciseCmd.Flags().Bool("flush", false, "Flush ALL existing quality observations before exercising (preserves the old `baseline` command's reset-first semantics)")

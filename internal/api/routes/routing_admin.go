@@ -351,10 +351,11 @@ func GetRoutingDataset(store *db.Store) http.HandlerFunc {
 func ExerciseModel(p pipeline.Runner, store *db.Store, cfg *core.Config, agentName string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			Model      string `json:"model"`
-			RunID      string `json:"run_id,omitempty"`     // Caller-provided run ID for grouping results.
-			Iterations int    `json:"iterations,omitempty"` // Optional parity with CLI exercise.
-			Force      bool   `json:"force,omitempty"`
+			Model       string `json:"model"`
+			RunID       string `json:"run_id,omitempty"`       // Caller-provided run ID for grouping results.
+			Iterations  int    `json:"iterations,omitempty"`   // Optional parity with CLI exercise.
+			IntentClass string `json:"intent_class,omitempty"` // Optional canonical matrix slice.
+			Force       bool   `json:"force,omitempty"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid JSON body")
@@ -371,12 +372,26 @@ func ExerciseModel(p pipeline.Runner, store *db.Store, cfg *core.Config, agentNa
 		if req.Iterations < 1 {
 			req.Iterations = 1
 		}
+		var intentFilter *llm.IntentClass
+		if strings.TrimSpace(req.IntentClass) != "" {
+			intent, err := llm.ParseIntentClassStrict(req.IntentClass)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			intentFilter = &intent
+			req.IntentClass = intent.String()
+		}
 		if !req.Force {
 			blocked := benchmarkBlockedModels([]string{req.Model}, effectiveModelPolicies(r.Context(), store, cfg))
 			if len(blocked) > 0 {
 				writeError(w, http.StatusConflict, "benchmark blocked by model policy: "+strings.Join(blocked, ", "))
 				return
 			}
+		}
+		notes := ""
+		if req.IntentClass != "" {
+			notes = "intent filter: " + req.IntentClass
 		}
 		if err := db.InsertBaselineRun(r.Context(), store, db.BaselineRunRow{
 			RunID:          runID,
@@ -385,6 +400,7 @@ func ExerciseModel(p pipeline.Runner, store *db.Store, cfg *core.Config, agentNa
 			ModelCount:     1,
 			Models:         []string{req.Model},
 			Iterations:     req.Iterations,
+			Notes:          notes,
 			StartResources: snapshotPtr(hostresources.Sample(r.Context())),
 		}); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to start exercise run")
@@ -412,7 +428,16 @@ func ExerciseModel(p pipeline.Runner, store *db.Store, cfg *core.Config, agentNa
 			Passed     bool    `json:"passed"`
 			Error      string  `json:"error,omitempty"`
 		}
-		promptResults := make([]promptResult, 0, len(llm.ExerciseMatrix)*req.Iterations)
+		promptCapacity := len(llm.ExerciseMatrix)
+		if intentFilter != nil {
+			promptCapacity = 0
+			for _, prompt := range llm.ExerciseMatrix {
+				if prompt.Intent == *intentFilter {
+					promptCapacity++
+				}
+			}
+		}
+		promptResults := make([]promptResult, 0, promptCapacity*req.Iterations)
 
 		onPrompt := func(o llm.PromptOutcome) {
 			pr := promptResult{
@@ -454,6 +479,7 @@ func ExerciseModel(p pipeline.Runner, store *db.Store, cfg *core.Config, agentNa
 
 		report, err := llm.ExerciseModels(r.Context(), llm.ExerciseRequest{
 			Models:       []string{req.Model},
+			IntentFilter: intentFilter,
 			Iterations:   req.Iterations,
 			SendPrompt:   pipelineExercisePromptSender(p, agentName),
 			SendWarmup:   pipelineExerciseWarmupSender(p, agentName),
@@ -475,6 +501,7 @@ func ExerciseModel(p pipeline.Runner, store *db.Store, cfg *core.Config, agentNa
 			"model":          req.Model,
 			"run_id":         runID,
 			"iterations":     req.Iterations,
+			"intent_class":   req.IntentClass,
 			"total":          len(promptResults),
 			"pass":           modelResult.Pass,
 			"fail":           modelResult.Fail,
