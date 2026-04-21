@@ -128,10 +128,13 @@ source tag looks.
 
 1. release workflow must validate the live published release object, not just
    local build artifacts
-2. source repo must trigger site sync on publication
-3. site sync must copy canonical installer scripts from the tagged source repo
-4. site sync must not assume absent release-tree directories are mandatory
-5. public site content must not advertise unsupported fallback installs
+2. release workflow must fail if the tagged tree does not contain both
+   `docs/releases/vX.Y.Z-release-notes.md` and a matching
+   `CHANGELOG.md` section for `X.Y.Z`
+3. source repo must trigger site sync on publication
+4. site sync must copy canonical installer scripts from the tagged source repo
+5. site sync must not assume absent release-tree directories are mandatory
+6. public site content must not advertise unsupported fallback installs
 
 ---
 

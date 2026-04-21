@@ -126,7 +126,17 @@ Release automation must produce:
 - all supported platform binaries
 - a canonical checksum file (`SHA256SUMS.txt`)
 - release notes
+- a matching `CHANGELOG.md` section for the exact released version
 - a changelog-aligned GitHub release body
+
+The source tree must contain both:
+
+- `docs/releases/vX.Y.Z-release-notes.md`
+- `CHANGELOG.md` section `## [X.Y.Z]`
+
+Those are separate required artifacts. Release notes are not a substitute for
+the changelog, and the changelog is not a substitute for the release notes.
+Future release automation must fail before publication if either is missing.
 
 Release automation must also verify, on the live published release object:
 
@@ -170,6 +180,8 @@ The site synchronization path must additionally guarantee:
 - the install page does not advertise a broken fallback path
 - the site sync workflow only depends on source artifacts/directories that
   actually exist in the tagged source repo
+- any fallback logic for malformed historical tags is explicitly scoped to
+  release-repair of already-published bad tags, not normal release operation
 
 ## 5. Announcement Readiness
 
