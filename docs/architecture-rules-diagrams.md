@@ -218,6 +218,14 @@ This view captures the release-distribution seam that `v1.0.6` exposed. The
 operator-facing release is not the git tag by itself; it is the full published
 control plane from tag through public site.
 
+Two source-tree artifacts are part of that control plane before publication:
+
+- `docs/releases/vX.Y.Z-release-notes.md`
+- `CHANGELOG.md` section `## [X.Y.Z]`
+
+If either is missing for the tagged version, the release is malformed and the
+publication path must stop before claiming a live operator-facing release.
+
 ```mermaid
 flowchart LR
     tag["Git tag"]

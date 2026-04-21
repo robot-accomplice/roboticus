@@ -120,7 +120,7 @@ Required outputs:
 - per-platform artifacts
 - canonical checksum manifest (`SHA256SUMS.txt`)
 - release notes
-- changelog entry
+- changelog entry in `CHANGELOG.md` for the exact released version
 - registry files or a Go-native equivalent canonical source
 - architecture/docs source for site indexing
 - metrics source or generation inputs
@@ -131,6 +131,12 @@ The source repo must also publish or expose:
 - a release object whose assets match the installer contract
 - a source tree layout that matches what the site sync workflow expects, or a
   site sync workflow that gracefully handles absent optional trees
+
+The site sync layer is allowed to carry a narrowly scoped repair path for
+historical broken tags whose source tree predates these guarantees. That repair
+path is not part of the normal release contract and must not weaken the rule
+that current releases publish both release notes and a matching changelog
+section before tagging.
 
 ## Required Site Changes For Cutover
 

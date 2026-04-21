@@ -32,9 +32,27 @@ jobs:
   test:
     name: Pre-release Tests
     runs-on: ubuntu-latest
+    env:
+      TAG_NAME: ${{ github.ref_name }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Validate release notes and changelog
+        run: |
+          set -euo pipefail
+          VERSION="${TAG_NAME#v}"
+          RELEASE_NOTES="docs/releases/v${VERSION}-release-notes.md"
+
+          [ -f "$RELEASE_NOTES" ] || {
+            echo "missing required release notes: $RELEASE_NOTES" >&2
+            exit 1
+          }
+
+          grep -Eq "^## \\[${VERSION//./\\.}\\]" CHANGELOG.md || {
+            echo "missing required CHANGELOG.md section for ${VERSION}" >&2
+            exit 1
+          }
 
       - name: Set up Go
         uses: actions/setup-go@v5
