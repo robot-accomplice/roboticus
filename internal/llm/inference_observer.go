@@ -22,6 +22,10 @@ func WithInferenceObserver(ctx context.Context, observer InferenceObserver) cont
 	return context.WithValue(ctx, inferenceObserverKey{}, observer)
 }
 
+func InferenceObserverFromContext(ctx context.Context) InferenceObserver {
+	return inferenceObserverFromContext(ctx)
+}
+
 func inferenceObserverFromContext(ctx context.Context) InferenceObserver {
 	if ctx == nil {
 		return nil

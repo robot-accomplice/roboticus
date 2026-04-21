@@ -1011,8 +1011,12 @@ func (s *Store) ensureOptionalColumns() error {
 		{Table: "treasury_state", Column: "updated_at", ColType: "TEXT"},
 		{Table: "baseline_runs", Column: "start_resources_json", ColType: "TEXT"},
 		{Table: "baseline_runs", Column: "end_resources_json", ColType: "TEXT"},
+		{Table: "baseline_runs", Column: "start_model_states_json", ColType: "TEXT"},
+		{Table: "baseline_runs", Column: "end_model_states_json", ColType: "TEXT"},
 		{Table: "exercise_results", Column: "resource_start_json", ColType: "TEXT"},
 		{Table: "exercise_results", Column: "resource_end_json", ColType: "TEXT"},
+		{Table: "exercise_results", Column: "model_state_start_json", ColType: "TEXT"},
+		{Table: "exercise_results", Column: "model_state_end_json", ColType: "TEXT"},
 		{Table: "turn_diagnostics", Column: "resource_snapshot_json", ColType: "TEXT"},
 	}
 

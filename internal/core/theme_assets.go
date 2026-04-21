@@ -1,6 +1,7 @@
 package core
 
 import (
+	"embed"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,6 +12,10 @@ import (
 
 	"github.com/rs/zerolog/log"
 )
+
+//go:embed theme_assets/*
+//go:embed theme_assets/**/*
+var bundledThemeAssets embed.FS
 
 // ThemeDir returns the base directory for installed themes.
 func ThemeDir() string {
@@ -39,8 +44,9 @@ func WriteThemeManifest(themeID string, manifestJSON []byte) error {
 	return os.WriteFile(filepath.Join(dir, "manifest.json"), manifestJSON, 0o644)
 }
 
-// DownloadThemeTextures downloads URL-based textures to the theme's textures/ dir.
-// Returns updated texture entries with Kind="file" and local filename as Value.
+// DownloadThemeTextures materializes URL-based or bundled textures into the
+// theme's textures/ dir. Returns updated texture entries with Kind="file" and
+// local filename as Value.
 func DownloadThemeTextures(themeID string, textures map[string]ThemeTextureEntry) (map[string]ThemeTextureEntry, error) {
 	dir := filepath.Join(ThemeAssetDir(themeID), "textures")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -49,19 +55,24 @@ func DownloadThemeTextures(themeID string, textures map[string]ThemeTextureEntry
 
 	result := make(map[string]ThemeTextureEntry, len(textures))
 	for name, tex := range textures {
-		if tex.Kind != "url" {
+		if tex.Kind != "url" && tex.Kind != "bundled" {
 			result[name] = tex
 			continue
 		}
-		filename := name + ".jpg"
-		if strings.HasSuffix(tex.Value, ".png") {
-			filename = name + ".png"
-		}
+		filename := textureFilename(name, tex.Value)
 		localPath := filepath.Join(dir, filename)
 
-		log.Info().Str("theme", themeID).Str("texture", name).Str("url", tex.Value).Msg("downloading theme texture")
-		if err := downloadFile(tex.Value, localPath); err != nil {
-			return textures, fmt.Errorf("download texture %s: %w", name, err)
+		switch tex.Kind {
+		case "url":
+			log.Info().Str("theme", themeID).Str("texture", name).Str("url", tex.Value).Msg("downloading theme texture")
+			if err := downloadFile(tex.Value, localPath); err != nil {
+				return textures, fmt.Errorf("download texture %s: %w", name, err)
+			}
+		case "bundled":
+			log.Info().Str("theme", themeID).Str("texture", name).Str("asset", tex.Value).Msg("materializing bundled theme texture")
+			if err := copyBundledThemeAsset(tex.Value, localPath); err != nil {
+				return textures, fmt.Errorf("materialize bundled texture %s: %w", name, err)
+			}
 		}
 
 		result[name] = ThemeTextureEntry{Kind: "file", Value: filename, Tile: tex.Tile}
@@ -69,6 +80,46 @@ func DownloadThemeTextures(themeID string, textures map[string]ThemeTextureEntry
 	}
 
 	return result, nil
+}
+
+func textureFilename(name, source string) string {
+	base := filepath.Base(strings.TrimSpace(source))
+	ext := strings.ToLower(filepath.Ext(base))
+	switch ext {
+	case ".png", ".jpg", ".jpeg", ".webp", ".gif":
+		return name + ext
+	default:
+		return name + ".jpg"
+	}
+}
+
+func bundledThemeAssetPath(rel string) (string, error) {
+	clean := filepath.ToSlash(filepath.Clean(strings.TrimSpace(rel)))
+	if clean == "." || clean == "" || strings.HasPrefix(clean, "../") || strings.Contains(clean, "/../") || filepath.IsAbs(clean) {
+		return "", fmt.Errorf("invalid bundled asset path")
+	}
+	return "theme_assets/" + clean, nil
+}
+
+func copyBundledThemeAsset(rel, localPath string) error {
+	data, err := ReadBundledThemeAsset(rel)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(localPath, data, 0o644)
+}
+
+// ReadBundledThemeAsset returns the bytes for a bundled theme asset.
+func ReadBundledThemeAsset(rel string) ([]byte, error) {
+	assetPath, err := bundledThemeAssetPath(rel)
+	if err != nil {
+		return nil, err
+	}
+	data, err := bundledThemeAssets.ReadFile(assetPath)
+	if err != nil {
+		return nil, fmt.Errorf("read bundled theme asset %s: %w", rel, err)
+	}
+	return data, nil
 }
 
 // downloadFile fetches a URL and writes it to localPath.

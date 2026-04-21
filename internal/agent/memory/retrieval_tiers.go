@@ -490,6 +490,80 @@ func (mr *Retriever) retrieveProceduralMemory(ctx context.Context, query string,
 		}
 	}
 
+	// Part 3: Reusable procedural outcome patterns promoted from structured
+	// episode summaries. These rows capture prior successes, failures, and
+	// mixed outcomes so the agent can reuse or avoid known approaches instead
+	// of treating only positive experience as learnable.
+	var outcomeRows *sql.Rows
+	if filtered {
+		ftsQuery := db.SanitizeFTSQuery(query)
+		if ftsQuery != "" {
+			outcomeRows, err = mr.store.QueryContext(ctx,
+				`SELECT sm.value, sm.confidence
+				   FROM memory_fts fts
+				   JOIN semantic_memory sm ON sm.id = fts.source_id
+				  WHERE fts.source_table = 'semantic_memory'
+				    AND memory_fts MATCH ?
+				    AND sm.category = 'procedural_outcome'
+				    AND sm.memory_state = 'active'
+				  ORDER BY bm25(memory_fts), sm.confidence DESC, sm.updated_at DESC
+				  LIMIT 5`,
+				ftsQuery,
+			)
+		}
+	} else {
+		outcomeRows, err = mr.store.QueryContext(ctx,
+			`SELECT value, confidence
+			   FROM semantic_memory
+			  WHERE category = 'procedural_outcome'
+			    AND memory_state = 'active'
+			  ORDER BY confidence DESC, updated_at DESC
+			  LIMIT 5`)
+	}
+	if err == nil && outcomeRows != nil {
+		emitted := 0
+		for outcomeRows.Next() {
+			var value string
+			var confidence float64
+			if outcomeRows.Scan(&value, &confidence) != nil {
+				continue
+			}
+			if strings.TrimSpace(value) == "" {
+				continue
+			}
+			fmt.Fprintf(&b, "- [outcome %.2f] %s\n", confidence, value)
+			emitted++
+		}
+		_ = outcomeRows.Close()
+		if filtered && emitted == 0 {
+			like := "%" + query + "%"
+			outcomeRows, err = mr.store.QueryContext(ctx,
+				`SELECT value, confidence
+				   FROM semantic_memory
+				  WHERE category = 'procedural_outcome'
+				    AND memory_state = 'active'
+				    AND value LIKE ?
+				  ORDER BY confidence DESC, updated_at DESC
+				  LIMIT 5`,
+				like,
+			)
+			if err == nil {
+				for outcomeRows.Next() {
+					var value string
+					var confidence float64
+					if outcomeRows.Scan(&value, &confidence) != nil {
+						continue
+					}
+					if strings.TrimSpace(value) == "" {
+						continue
+					}
+					fmt.Fprintf(&b, "- [outcome %.2f] %s\n", confidence, value)
+				}
+				_ = outcomeRows.Close()
+			}
+		}
+	}
+
 	return b.String()
 }
 

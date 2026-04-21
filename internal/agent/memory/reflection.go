@@ -60,6 +60,12 @@ type EpisodeSummary struct {
 	// so the relation vocabulary is identical across both paths and
 	// `db.IsCanonicalGraphRelation` is the single write gate.
 	Relations []EpisodeRelation
+
+	// OutcomePatterns preserves reusable procedural knowledge with explicit
+	// outcome polarity so later applied-learning retrieval can reuse what
+	// worked, avoid what failed, and recognize mixed-result patterns instead
+	// of flattening everything into positive-only learnings.
+	OutcomePatterns []EpisodeOutcomePattern
 }
 
 // EpisodeRelation is a single canonical relation triple extracted from an
@@ -70,6 +76,16 @@ type EpisodeRelation struct {
 	Subject  string
 	Relation string
 	Object   string
+}
+
+// EpisodeOutcomePattern is a reusable procedural lesson observed in a turn.
+// It carries the polarity of the experience (`success`, `failure`, `partial`),
+// the kind of pattern (learning, fix_pattern, error_mode, failed_hypothesis),
+// and the human-readable value preserved for future reuse.
+type EpisodeOutcomePattern struct {
+	Outcome string
+	Kind    string
+	Value   string
 }
 
 // Reflect produces a structured episode summary from turn data.
@@ -201,6 +217,19 @@ func (es *EpisodeSummary) FormatForStorage() string {
 		b.WriteString(" | Relations: ")
 		b.WriteString(strings.Join(triples, "; "))
 	}
+	if len(es.OutcomePatterns) > 0 {
+		var patterns []string
+		for _, pat := range es.OutcomePatterns {
+			if strings.TrimSpace(pat.Outcome) == "" || strings.TrimSpace(pat.Kind) == "" || strings.TrimSpace(pat.Value) == "" {
+				continue
+			}
+			patterns = append(patterns, pat.Outcome+"||"+pat.Kind+"||"+pat.Value)
+		}
+		if len(patterns) > 0 {
+			b.WriteString(" | OutcomePatterns: ")
+			b.WriteString(strings.Join(patterns, "; "))
+		}
+	}
 	if es.ResultQuality > 0 {
 		b.WriteString(" | Quality: ")
 		b.WriteString(formatQuality(es.ResultQuality))
@@ -290,8 +319,49 @@ func AnalyzeEpisode(input EpisodeInput) *EpisodeSummary {
 	summary.ResultQuality = computeResultQuality(input)
 	summary.Relations = extractEpisodeRelations(input)
 	summary.Learnings = mergeLearnings(summary.Learnings, structuredLearnings(input))
+	summary.OutcomePatterns = extractOutcomePatterns(summary)
 
 	return summary
+}
+
+func extractOutcomePatterns(summary *EpisodeSummary) []EpisodeOutcomePattern {
+	if summary == nil {
+		return nil
+	}
+	normalizedOutcome := strings.TrimSpace(summary.Outcome)
+	if normalizedOutcome == "" {
+		normalizedOutcome = "conversation"
+	}
+	var patterns []EpisodeOutcomePattern
+	for _, learning := range summary.Learnings {
+		patterns = append(patterns, EpisodeOutcomePattern{
+			Outcome: normalizedOutcome,
+			Kind:    "learning",
+			Value:   learning,
+		})
+	}
+	for _, pattern := range summary.FixPatterns {
+		patterns = append(patterns, EpisodeOutcomePattern{
+			Outcome: "success",
+			Kind:    "fix_pattern",
+			Value:   pattern,
+		})
+	}
+	for _, err := range summary.ErrorsSeen {
+		patterns = append(patterns, EpisodeOutcomePattern{
+			Outcome: normalizedOutcome,
+			Kind:    "error_mode",
+			Value:   err,
+		})
+	}
+	for _, hyp := range summary.FailedHypotheses {
+		patterns = append(patterns, EpisodeOutcomePattern{
+			Outcome: normalizedOutcome,
+			Kind:    "failed_hypothesis",
+			Value:   hyp,
+		})
+	}
+	return dedupeOutcomePatterns(patterns)
 }
 
 // extractEpisodeRelations runs the canonical relation extractor over the
@@ -521,6 +591,30 @@ func dedupeAndTrim(items []string, max, maxChars int) []string {
 		}
 	}
 	return trimmed
+}
+
+func dedupeOutcomePatterns(items []EpisodeOutcomePattern) []EpisodeOutcomePattern {
+	seen := make(map[string]struct{}, len(items))
+	var out []EpisodeOutcomePattern
+	for _, item := range items {
+		outcome := strings.TrimSpace(item.Outcome)
+		kind := strings.TrimSpace(item.Kind)
+		value := strings.TrimSpace(item.Value)
+		if outcome == "" || kind == "" || value == "" {
+			continue
+		}
+		key := strings.ToLower(outcome) + "|" + strings.ToLower(kind) + "|" + strings.ToLower(value)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, EpisodeOutcomePattern{
+			Outcome: outcome,
+			Kind:    kind,
+			Value:   value,
+		})
+	}
+	return out
 }
 
 func formatQuality(q float64) string {

@@ -24,9 +24,12 @@ func writeEpisodeSummary(t *testing.T, store *db.Store, summary *EpisodeSummary)
 
 func TestParseEpisodeSummary_PullsEnrichedFields(t *testing.T) {
 	summary := &EpisodeSummary{
-		Goal:          "deploy",
-		Outcome:       "success",
-		Learnings:     []string{"guard-triggered revision required before final answer"},
+		Goal:      "deploy",
+		Outcome:   "success",
+		Learnings: []string{"guard-triggered revision required before final answer"},
+		OutcomePatterns: []EpisodeOutcomePattern{
+			{Outcome: "success", Kind: "learning", Value: "guard-triggered revision required before final answer"},
+		},
 		FixPatterns:   []string{"shell: fail→success on retry"},
 		EvidenceRefs:  []string{"cache TTL 24h"},
 		ResultQuality: 0.9,
@@ -45,6 +48,9 @@ func TestParseEpisodeSummary_PullsEnrichedFields(t *testing.T) {
 	if len(fields.EvidenceRefs) != 1 || fields.EvidenceRefs[0] != "cache TTL 24h" {
 		t.Fatalf("expected evidence ref parsed, got %+v", fields.EvidenceRefs)
 	}
+	if len(fields.OutcomePatterns) != 1 || fields.OutcomePatterns[0].Kind != "learning" {
+		t.Fatalf("expected outcome pattern parsed, got %+v", fields.OutcomePatterns)
+	}
 	if !fields.HighQuality {
 		t.Fatal("expected success outcome to mark HighQuality")
 	}
@@ -52,9 +58,12 @@ func TestParseEpisodeSummary_PullsEnrichedFields(t *testing.T) {
 
 func TestParseEpisodeSummaryStructured_PrefersJSONPayload(t *testing.T) {
 	summary := &EpisodeSummary{
-		Goal:          "deploy",
-		Outcome:       "success",
-		Learnings:     []string{"guard-triggered revision required before final answer"},
+		Goal:      "deploy",
+		Outcome:   "success",
+		Learnings: []string{"guard-triggered revision required before final answer"},
+		OutcomePatterns: []EpisodeOutcomePattern{
+			{Outcome: "success", Kind: "learning", Value: "guard-triggered revision required before final answer"},
+		},
 		FixPatterns:   []string{"shell: fail→success on retry"},
 		EvidenceRefs:  []string{"cache TTL 24h"},
 		ResultQuality: 0.9,
@@ -69,6 +78,54 @@ func TestParseEpisodeSummaryStructured_PrefersJSONPayload(t *testing.T) {
 	}
 	if !fields.HighQuality {
 		t.Fatal("expected JSON quality to mark HighQuality")
+	}
+}
+
+func TestPhaseEpisodeDistillation_PromotesReusableOutcomeSemantics(t *testing.T) {
+	store := testutil.TempStore(t)
+	ctx := context.Background()
+
+	for i := 0; i < 3; i++ {
+		writeEpisodeSummary(t, store, &EpisodeSummary{
+			Goal:    "publish release note",
+			Outcome: "success",
+			OutcomePatterns: []EpisodeOutcomePattern{
+				{Outcome: "success", Kind: "learning", Value: "obsidian_write succeeded for release-note publication"},
+			},
+			ResultQuality: 0.9,
+		})
+		writeEpisodeSummary(t, store, &EpisodeSummary{
+			Goal:    "publish release note",
+			Outcome: "failure",
+			OutcomePatterns: []EpisodeOutcomePattern{
+				{Outcome: "failure", Kind: "error_mode", Value: "permission denied writing outside workspace"},
+			},
+			ResultQuality: 0.2,
+		})
+		writeEpisodeSummary(t, store, &EpisodeSummary{
+			Goal:    "publish release note",
+			Outcome: "partial",
+			OutcomePatterns: []EpisodeOutcomePattern{
+				{Outcome: "partial", Kind: "failed_hypothesis", Value: "correction: the first vault path was wrong"},
+			},
+			ResultQuality: 0.55,
+		})
+	}
+
+	pipeline := &ConsolidationPipeline{}
+	promoted := pipeline.phaseEpisodeDistillation(ctx, store)
+	if promoted == 0 {
+		t.Fatal("expected promoted artifacts")
+	}
+
+	var count int
+	if err := store.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM semantic_memory WHERE category = 'procedural_outcome'`,
+	).Scan(&count); err != nil {
+		t.Fatalf("count procedural_outcome rows: %v", err)
+	}
+	if count != 3 {
+		t.Fatalf("expected 3 procedural_outcome rows, got %d", count)
 	}
 }
 

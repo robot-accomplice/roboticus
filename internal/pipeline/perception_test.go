@@ -90,17 +90,38 @@ func TestBuildPerception_DecompositionForcesProceduralTier(t *testing.T) {
 	}
 }
 
+func TestBuildPerception_ProceduralUncertaintyPullsProceduralAndEpisodic(t *testing.T) {
+	synthesis := TaskSynthesis{
+		Intent:                "task",
+		Complexity:            "moderate",
+		RetrievalNeeded:       true,
+		ProceduralUncertainty: true,
+		RetrievalReason:       "applied_learning_uncertainty",
+	}
+	art := BuildPerception("Set up a canary release workflow for the auth service with rollout and rollback gates.", synthesis)
+	if art.SourceOfTruth != SourceProcedural {
+		t.Fatalf("expected SourceProcedural, got %s", art.SourceOfTruth)
+	}
+	if !containsTier(art.RequiredMemoryTiers, "procedural") {
+		t.Fatalf("expected procedural tier required, got %+v", art.RequiredMemoryTiers)
+	}
+	if !containsTier(art.RequiredMemoryTiers, "episodic") {
+		t.Fatalf("expected episodic tier required for prior outcome evidence, got %+v", art.RequiredMemoryTiers)
+	}
+}
+
 func TestAnnotatePerceptionTrace_EmitsFullArtifact(t *testing.T) {
 	tr := NewTraceRecorder()
 	tr.BeginSpan("task_synthesis")
 	art := PerceptionArtifact{
-		Intent:              "financial_action",
-		Risk:                RiskHigh,
-		SourceOfTruth:       SourceSemantic,
-		RequiredMemoryTiers: []string{"semantic", "relationship"},
-		DecompositionNeeded: true,
-		FreshnessRequired:   true,
-		Confidence:          0.8,
+		Intent:                "financial_action",
+		Risk:                  RiskHigh,
+		SourceOfTruth:         SourceSemantic,
+		RequiredMemoryTiers:   []string{"semantic", "relationship"},
+		DecompositionNeeded:   true,
+		ProceduralUncertainty: true,
+		FreshnessRequired:     true,
+		Confidence:            0.8,
 	}
 	AnnotatePerceptionTrace(tr, art)
 	tr.EndSpan("ok")
@@ -109,7 +130,7 @@ func TestAnnotatePerceptionTrace_EmitsFullArtifact(t *testing.T) {
 	for _, key := range []string{
 		"perception.intent", "perception.risk", "perception.source_of_truth",
 		"perception.required_tiers", "perception.decomposition_needed",
-		"perception.freshness_required", "perception.confidence",
+		"perception.procedural_uncertainty", "perception.freshness_required", "perception.confidence",
 	} {
 		if _, ok := meta[key]; !ok {
 			t.Fatalf("expected %s annotation, got %+v", key, meta)

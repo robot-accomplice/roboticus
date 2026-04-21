@@ -71,32 +71,46 @@ func TestServiceComplete_AnnotatesRoutingFromActualRequest(t *testing.T) {
 }
 
 func TestAnnotateRoutingDecision_NoTracerNoop(t *testing.T) {
-	router := NewRouter([]RouteTarget{{Model: "m1", Provider: "p1"}}, RouterConfig{})
+	svc, err := NewService(ServiceConfig{
+		Primary: "p1/m1",
+		Providers: []Provider{
+			{Name: "p1", URL: "http://p1", Format: FormatOpenAI},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
 	req := &Request{Messages: []Message{{Role: "user", Content: "hello"}}}
-	target := router.Select(req)
+	target := svc.router.Select(req)
 
-	annotateRoutingDecision(context.Background(), router, req, target)
+	annotateRoutingDecision(context.Background(), svc, req, target)
 }
 
 func TestAnnotateRoutingDecision_IncludesPolicyAnnotations(t *testing.T) {
-	router := NewRouter([]RouteTarget{{
-		Model:                "phi4-mini:latest",
-		Provider:             "ollama",
-		State:                ModelStateNiche,
-		PrimaryReasonCode:    "latency_nonviable",
-		ReasonCodes:          []string{"latency_nonviable", "user_preference"},
-		HumanReason:          "Keep this model only for latency-tolerant local work.",
-		EvidenceRefs:         []string{"baseline:run-1"},
-		PolicySource:         "persisted_policy",
-		OrchestratorEligible: true,
-		SubagentEligible:     true,
-		EligibilityReason:    "generalist_local_candidate",
-	}}, RouterConfig{})
+	svc, err := NewService(ServiceConfig{
+		Primary: "ollama/phi4-mini:latest",
+		Providers: []Provider{
+			{Name: "ollama", URL: "http://ollama", Format: FormatOllama, IsLocal: true},
+		},
+		Policies: map[string]ModelPolicy{
+			"phi4-mini:latest": {
+				State:             ModelStateNiche,
+				PrimaryReasonCode: "latency_nonviable",
+				ReasonCodes:       []string{"latency_nonviable", "user_preference"},
+				HumanReason:       "Keep this model only for latency-tolerant local work.",
+				EvidenceRefs:      []string{"baseline:run-1"},
+				Source:            "persisted_policy",
+			},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
 	req := &Request{AgentRole: "orchestrator", Messages: []Message{{Role: "user", Content: "hello"}}}
-	target := router.Select(req)
+	target := svc.router.Select(req)
 
 	tr := &traceCapture{}
-	annotateRoutingDecision(WithRoutingTracer(context.Background(), tr), router, req, target)
+	annotateRoutingDecision(WithRoutingTracer(context.Background(), tr), svc, req, target)
 
 	if got := tr.values["inference.routing.policy_state"]; got != ModelStateNiche {
 		t.Fatalf("policy_state = %#v, want %q", got, ModelStateNiche)
@@ -113,7 +127,99 @@ func TestAnnotateRoutingDecision_IncludesPolicyAnnotations(t *testing.T) {
 	if got := tr.values["inference.routing.benchmark_eligible"]; got != true {
 		t.Fatalf("benchmark_eligible = %#v, want true", got)
 	}
-	if got := tr.values["inference.routing.eligibility_reason"]; got != "generalist_local_candidate" {
+	if got := tr.values["inference.routing.eligibility_reason"]; got != "generalist_default" {
 		t.Fatalf("eligibility_reason = %#v", got)
+	}
+}
+
+func TestAnnotateRoutingDecision_ExplainsEvidenceAndExclusions(t *testing.T) {
+	svc, err := NewService(ServiceConfig{
+		Primary: "moonshot/kimi-k2-turbo-preview",
+		Fallbacks: []string{
+			"ollama/phi4-mini:latest",
+			"ollama/phi4-reasoning:14b",
+		},
+		Providers: []Provider{
+			{Name: "moonshot", URL: "http://moonshot", Format: FormatOpenAIResponses},
+			{Name: "ollama", URL: "http://ollama", Format: FormatOllama, IsLocal: true},
+		},
+		Policies: map[string]ModelPolicy{
+			"phi4-mini:latest": {
+				State:             ModelStateNiche,
+				PrimaryReasonCode: "under_scrutiny",
+				ReasonCodes:       []string{"under_scrutiny", "latency_heavy"},
+				Source:            "configured_policy",
+			},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	svc.intentQuality.RecordWithIntent("kimi-k2-turbo-preview", IntentToolUse.String(), 0.82)
+	req := &Request{
+		AgentRole:      "orchestrator",
+		TurnWeight:     "standard",
+		TaskIntent:     "task",
+		TaskComplexity: "simple",
+		IntentClass:    IntentToolUse.String(),
+		Tools:          []ToolDef{{Type: "function", Function: ToolFuncDef{Name: "obsidian_write"}}},
+		Messages:       []Message{{Role: "user", Content: "Create the note in the vault."}},
+	}
+	target := svc.router.Select(req)
+
+	tr := &traceCapture{}
+	annotateRoutingDecision(WithRoutingTracer(context.Background(), tr), svc, req, target)
+
+	if got := tr.values["inference.routing.request_eligible_candidates"]; got == nil {
+		t.Fatal("expected request_eligible_candidates annotation")
+	}
+	if got := tr.values["inference.routing.excluded_candidates"]; got == nil {
+		t.Fatal("expected excluded_candidates annotation")
+	}
+	if got := tr.values["inference.routing.ignored_for_missing_capability_evidence"]; got == nil {
+		t.Fatal("expected ignored_for_missing_capability_evidence annotation")
+	}
+	if got := tr.values["inference.routing.capability_evidence_recommendation"]; got == nil {
+		t.Fatal("expected capability evidence recommendation")
+	}
+}
+
+func TestAnnotateRoutingDecision_UsesCanonicalIntentEvidenceKeys(t *testing.T) {
+	svc, err := NewService(ServiceConfig{
+		Primary: "moonshot/kimi-k2-turbo-preview",
+		Fallbacks: []string{
+			"openrouter/openai/gpt-4o-mini",
+		},
+		Providers: []Provider{
+			{Name: "moonshot", URL: "http://moonshot", Format: FormatOpenAIResponses},
+			{Name: "openrouter", URL: "http://openrouter", Format: FormatOpenAIResponses},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	svc.intentQuality.RecordWithIntent("openrouter/openai/gpt-4o-mini", IntentToolUse.String(), 0.81)
+	req := &Request{
+		AgentRole:      "orchestrator",
+		TurnWeight:     "standard",
+		TaskIntent:     "task",
+		TaskComplexity: "simple",
+		IntentClass:    IntentToolUse.String(),
+		Tools:          []ToolDef{{Type: "function", Function: ToolFuncDef{Name: "obsidian_write"}}},
+		Messages:       []Message{{Role: "user", Content: "Create the note in the vault."}},
+	}
+	target := svc.router.Select(req)
+
+	tr := &traceCapture{}
+	annotateRoutingDecision(WithRoutingTracer(context.Background(), tr), svc, req, target)
+
+	if got := tr.values["inference.routing.ignored_for_missing_capability_evidence"]; got != nil {
+		if list, ok := got.([]string); ok {
+			for _, item := range list {
+				if item == "openai/gpt-4o-mini" || item == "openrouter/openai/gpt-4o-mini" {
+					t.Fatalf("canonical evidence mismatch: %v should not be listed as missing capability evidence", got)
+				}
+			}
+		}
 	}
 }

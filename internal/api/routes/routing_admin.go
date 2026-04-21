@@ -17,6 +17,7 @@ import (
 	"roboticus/internal/db"
 	"roboticus/internal/hostresources"
 	"roboticus/internal/llm"
+	"roboticus/internal/modelstate"
 	"roboticus/internal/pipeline"
 )
 
@@ -34,22 +35,25 @@ type baselineRunStartRequest struct {
 }
 
 type baselineRunResultRequest struct {
-	Model         string          `json:"model"`
-	IntentClass   string          `json:"intent_class"`
-	Complexity    string          `json:"complexity"`
-	Prompt        string          `json:"prompt"`
-	Content       string          `json:"content,omitempty"`
-	Quality       float64         `json:"quality"`
-	LatencyMs     int64           `json:"latency_ms"`
-	Passed        bool            `json:"passed"`
-	ErrorMsg      string          `json:"error_msg,omitempty"`
-	ResourceStart json.RawMessage `json:"resource_start,omitempty"`
-	ResourceEnd   json.RawMessage `json:"resource_end,omitempty"`
+	Model           string          `json:"model"`
+	IntentClass     string          `json:"intent_class"`
+	Complexity      string          `json:"complexity"`
+	Prompt          string          `json:"prompt"`
+	Content         string          `json:"content,omitempty"`
+	Quality         float64         `json:"quality"`
+	LatencyMs       int64           `json:"latency_ms"`
+	Passed          bool            `json:"passed"`
+	ErrorMsg        string          `json:"error_msg,omitempty"`
+	ResourceStart   json.RawMessage `json:"resource_start,omitempty"`
+	ResourceEnd     json.RawMessage `json:"resource_end,omitempty"`
+	ModelStateStart json.RawMessage `json:"model_state_start,omitempty"`
+	ModelStateEnd   json.RawMessage `json:"model_state_end,omitempty"`
 }
 
 type baselineRunCompleteRequest struct {
-	Status string `json:"status,omitempty"`
-	Notes  string `json:"notes,omitempty"`
+	Status string   `json:"status,omitempty"`
+	Notes  string   `json:"notes,omitempty"`
+	Models []string `json:"models,omitempty"`
 }
 
 type modelPolicyUpsertRequest struct {
@@ -207,6 +211,7 @@ func StartExerciseRun(store *db.Store, cfg *core.Config) http.HandlerFunc {
 			GitRevision:       req.GitRevision,
 			Notes:             req.Notes,
 			StartResources:    snapshotPtr(hostresources.Sample(r.Context())),
+			StartModelStates:  modelstate.SampleMany(r.Context(), cfg, req.Models),
 		}); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to start exercise run")
 			return
@@ -233,19 +238,21 @@ func AppendExerciseRunResult(store *db.Store) http.HandlerFunc {
 			return
 		}
 		if err := db.InsertExerciseResult(r.Context(), store, db.ExerciseResultRow{
-			ID:            db.NewID(),
-			RunID:         runID,
-			Model:         req.Model,
-			IntentClass:   req.IntentClass,
-			Complexity:    req.Complexity,
-			Prompt:        req.Prompt,
-			Content:       req.Content,
-			Quality:       req.Quality,
-			LatencyMs:     req.LatencyMs,
-			Passed:        req.Passed,
-			ErrorMsg:      req.ErrorMsg,
-			ResourceStart: hostresources.FromJSON(string(req.ResourceStart)),
-			ResourceEnd:   hostresources.FromJSON(string(req.ResourceEnd)),
+			ID:              db.NewID(),
+			RunID:           runID,
+			Model:           req.Model,
+			IntentClass:     req.IntentClass,
+			Complexity:      req.Complexity,
+			Prompt:          req.Prompt,
+			Content:         req.Content,
+			Quality:         req.Quality,
+			LatencyMs:       req.LatencyMs,
+			Passed:          req.Passed,
+			ErrorMsg:        req.ErrorMsg,
+			ResourceStart:   hostresources.FromJSON(string(req.ResourceStart)),
+			ResourceEnd:     hostresources.FromJSON(string(req.ResourceEnd)),
+			ModelStateStart: modelstate.FromJSON(string(req.ModelStateStart)),
+			ModelStateEnd:   modelstate.FromJSON(string(req.ModelStateEnd)),
 		}); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to persist exercise result")
 			return
@@ -255,7 +262,7 @@ func AppendExerciseRunResult(store *db.Store) http.HandlerFunc {
 }
 
 // CompleteExerciseRun marks a baseline run completed, failed, or canceled.
-func CompleteExerciseRun(store *db.Store) http.HandlerFunc {
+func CompleteExerciseRun(store *db.Store, cfg *core.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		runID := chi.URLParam(r, "runID")
 		if runID == "" {
@@ -276,7 +283,7 @@ func CompleteExerciseRun(store *db.Store) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "status must be completed, failed, or canceled")
 			return
 		}
-		if err := db.CompleteBaselineRun(r.Context(), store, runID, req.Status, req.Notes, snapshotPtr(hostresources.Sample(r.Context()))); err != nil {
+		if err := db.CompleteBaselineRun(r.Context(), store, runID, req.Status, req.Notes, snapshotPtr(hostresources.Sample(r.Context())), modelstate.SampleMany(r.Context(), cfg, req.Models)); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to finalize exercise run")
 			return
 		}
@@ -394,14 +401,15 @@ func ExerciseModel(p pipeline.Runner, store *db.Store, cfg *core.Config, agentNa
 			notes = "intent filter: " + req.IntentClass
 		}
 		if err := db.InsertBaselineRun(r.Context(), store, db.BaselineRunRow{
-			RunID:          runID,
-			Initiator:      "api",
-			Status:         "running",
-			ModelCount:     1,
-			Models:         []string{req.Model},
-			Iterations:     req.Iterations,
-			Notes:          notes,
-			StartResources: snapshotPtr(hostresources.Sample(r.Context())),
+			RunID:            runID,
+			Initiator:        "api",
+			Status:           "running",
+			ModelCount:       1,
+			Models:           []string{req.Model},
+			Iterations:       req.Iterations,
+			Notes:            notes,
+			StartResources:   snapshotPtr(hostresources.Sample(r.Context())),
+			StartModelStates: modelstate.SampleMany(r.Context(), cfg, []string{req.Model}),
 		}); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to start exercise run")
 			return
@@ -413,7 +421,7 @@ func ExerciseModel(p pipeline.Runner, store *db.Store, cfg *core.Config, agentNa
 				status = "canceled"
 				notes = r.Context().Err().Error()
 			}
-			if err := db.CompleteBaselineRun(context.Background(), store, runID, status, notes, snapshotPtr(hostresources.Sample(context.Background()))); err != nil {
+			if err := db.CompleteBaselineRun(context.Background(), store, runID, status, notes, snapshotPtr(hostresources.Sample(context.Background())), modelstate.SampleMany(context.Background(), cfg, []string{req.Model})); err != nil {
 				log.Warn().Err(err).Str("run_id", runID).Msg("exercise: failed to finalize API exercise run")
 			}
 		}()
@@ -461,19 +469,21 @@ func ExerciseModel(p pipeline.Runner, store *db.Store, cfg *core.Config, agentNa
 				errMsg = o.Err.Error()
 			}
 			_ = db.InsertExerciseResult(context.Background(), store, db.ExerciseResultRow{
-				ID:            db.NewID(),
-				RunID:         runID,
-				Model:         req.Model,
-				IntentClass:   o.Prompt.Intent.String(),
-				Complexity:    o.Prompt.Complexity.String(),
-				Prompt:        o.Prompt.Prompt,
-				Content:       o.Content,
-				Quality:       o.Quality,
-				LatencyMs:     o.LatencyMs,
-				Passed:        o.Passed,
-				ErrorMsg:      errMsg,
-				ResourceStart: o.ResourceStart,
-				ResourceEnd:   o.ResourceEnd,
+				ID:              db.NewID(),
+				RunID:           runID,
+				Model:           req.Model,
+				IntentClass:     o.Prompt.Intent.String(),
+				Complexity:      o.Prompt.Complexity.String(),
+				Prompt:          o.Prompt.Prompt,
+				Content:         o.Content,
+				Quality:         o.Quality,
+				LatencyMs:       o.LatencyMs,
+				Passed:          o.Passed,
+				ErrorMsg:        errMsg,
+				ResourceStart:   o.ResourceStart,
+				ResourceEnd:     o.ResourceEnd,
+				ModelStateStart: o.ModelStateStart,
+				ModelStateEnd:   o.ModelStateEnd,
 			})
 		}
 
@@ -484,6 +494,13 @@ func ExerciseModel(p pipeline.Runner, store *db.Store, cfg *core.Config, agentNa
 			SendPrompt:   pipelineExercisePromptSender(p, agentName),
 			SendWarmup:   pipelineExerciseWarmupSender(p, agentName),
 			OnPrompt:     onPrompt,
+			SampleModelState: func(ctx context.Context, model string) *modelstate.Snapshot {
+				snapshot := modelstate.Sample(ctx, cfg, model)
+				if snapshot.Empty() {
+					return nil
+				}
+				return &snapshot
+			},
 			IsLocal:      func(model string) bool { return llm.ExerciseModelIsLocal(cfg, model) },
 			ModelTimeout: func(model string) time.Duration { return llm.ExerciseModelTimeout(cfg, model) },
 		})

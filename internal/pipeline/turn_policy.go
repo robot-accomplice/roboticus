@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"sort"
 	"strings"
 
 	agenttools "roboticus/internal/agent/tools"
@@ -16,6 +17,13 @@ const (
 	TurnWeightHeavy    TurnWeight = "heavy"
 )
 
+type ToolProfile string
+
+const (
+	ToolProfileDefault          ToolProfile = "default"
+	ToolProfileFocusedAuthoring ToolProfile = "focused_authoring"
+)
+
 type TurnEnvelopePolicy struct {
 	Weight                 TurnWeight
 	ContextBudget          int
@@ -23,11 +31,16 @@ type TurnEnvelopePolicy struct {
 	LightweightToolSurface bool
 	MaxTools               int
 	AllowRetryExpansion    bool
+	RequireArtifactWrite   bool
+	AllowAuthorityMutation bool
+	ToolProfile            ToolProfile
 	Reason                 string
 }
 
 func DeriveTurnEnvelopePolicy(content string, synthesis TaskSynthesis, sessionTurns int) TurnEnvelopePolicy {
 	words := len(strings.Fields(strings.TrimSpace(content)))
+	requiresArtifactWrite := looksLikeSingleStepAuthoringTask(strings.ToLower(content), 0)
+	allowAuthorityMutation := requiresExplicitAuthorityMutation(content)
 
 	switch {
 	case synthesis.Complexity == "complex" || synthesis.Intent == "code":
@@ -42,12 +55,15 @@ func DeriveTurnEnvelopePolicy(content string, synthesis TaskSynthesis, sessionTu
 		synthesis.Complexity == "simple" &&
 		synthesis.PlannedAction == "execute_directly":
 		return TurnEnvelopePolicy{
-			Weight:              TurnWeightStandard,
-			ContextBudget:       2048,
-			AllowRetrieval:      synthesis.RetrievalNeeded,
-			MaxTools:            6,
-			AllowRetryExpansion: true,
-			Reason:              "simple direct task should stay on a focused execution envelope",
+			Weight:                 TurnWeightStandard,
+			ContextBudget:          2048,
+			AllowRetrieval:         synthesis.RetrievalNeeded,
+			MaxTools:               6,
+			AllowRetryExpansion:    true,
+			RequireArtifactWrite:   requiresArtifactWrite,
+			AllowAuthorityMutation: allowAuthorityMutation,
+			ToolProfile:            toolProfileForTurn(requiresArtifactWrite, allowAuthorityMutation),
+			Reason:                 "simple direct task should stay on a focused execution envelope",
 		}
 	case synthesis.Intent == "task":
 		return TurnEnvelopePolicy{
@@ -118,6 +134,11 @@ func (p TurnEnvelopePolicy) applyToolPolicy(ctx context.Context, session *Sessio
 	if err != nil {
 		return stats, err
 	}
+	defs, filtered := filterToolDefsForPolicy(defs, p)
+	if filtered > 0 {
+		stats.CandidatesPruned += filtered
+	}
+	stats.CandidatesSelected = len(defs)
 	if p.MaxTools > 0 && len(defs) > p.MaxTools {
 		original := len(defs)
 		defs = defs[:p.MaxTools]
@@ -128,4 +149,122 @@ func (p TurnEnvelopePolicy) applyToolPolicy(ctx context.Context, session *Sessio
 	}
 	session.SetSelectedToolDefs(defs)
 	return stats, nil
+}
+
+func filterToolDefsForPolicy(defs []llm.ToolDef, policy TurnEnvelopePolicy) ([]llm.ToolDef, int) {
+	if len(defs) == 0 {
+		return defs, 0
+	}
+
+	filtered := make([]llm.ToolDef, 0, len(defs))
+	removed := 0
+	for _, def := range defs {
+		name := strings.TrimSpace(def.Function.Name)
+		if name == "" {
+			filtered = append(filtered, def)
+			continue
+		}
+		if policy.RequireArtifactWrite && !policy.AllowAuthorityMutation && agenttools.MutatesAuthorityLayer(name) {
+			removed++
+			continue
+		}
+		if !toolAllowedForPolicy(name, policy) {
+			removed++
+			continue
+		}
+		filtered = append(filtered, def)
+	}
+
+	if !policy.RequireArtifactWrite {
+		return filtered, removed
+	}
+
+	sort.SliceStable(filtered, func(i, j int) bool {
+		return toolPriorityForPolicy(filtered[i].Function.Name, policy) < toolPriorityForPolicy(filtered[j].Function.Name, policy)
+	})
+	return filtered, removed
+}
+
+func toolPriorityForPolicy(name string, policy TurnEnvelopePolicy) int {
+	if policy.ToolProfile == ToolProfileFocusedAuthoring {
+		switch agenttools.OperationClassForName(name) {
+		case agenttools.OperationArtifactWrite:
+			return 0
+		case agenttools.OperationRuntimeContextRead:
+			return 1
+		case agenttools.OperationMemoryRead:
+			return 2
+		case agenttools.OperationWorkspaceInspect:
+			return 3
+		case agenttools.OperationExecution:
+			return 4
+		case agenttools.OperationTaskInspection:
+			return 5
+		case agenttools.OperationCapabilityInventory:
+			return 6
+		case agenttools.OperationDelegation:
+			return 7
+		case agenttools.OperationAuthorityWrite:
+			return 8
+		default:
+			return 9
+		}
+	}
+	if policy.RequireArtifactWrite {
+		switch agenttools.OperationClassForName(name) {
+		case agenttools.OperationArtifactWrite:
+			return 0
+		case agenttools.OperationRuntimeContextRead, agenttools.OperationWorkspaceInspect,
+			agenttools.OperationCapabilityInventory, agenttools.OperationTaskInspection,
+			agenttools.OperationInspection:
+			return 1
+		case agenttools.OperationExecution:
+			return 2
+		case agenttools.OperationMemoryRead:
+			return 3
+		case agenttools.OperationDelegation:
+			return 4
+		case agenttools.OperationAuthorityWrite:
+			return 5
+		default:
+			return 6
+		}
+	}
+	return 0
+}
+
+func toolProfileForTurn(requireArtifactWrite, allowAuthorityMutation bool) ToolProfile {
+	if requireArtifactWrite && !allowAuthorityMutation {
+		return ToolProfileFocusedAuthoring
+	}
+	return ToolProfileDefault
+}
+
+func toolAllowedForPolicy(name string, policy TurnEnvelopePolicy) bool {
+	switch policy.ToolProfile {
+	case ToolProfileFocusedAuthoring:
+		switch agenttools.OperationClassForName(name) {
+		case agenttools.OperationArtifactWrite, agenttools.OperationRuntimeContextRead:
+			return true
+		case agenttools.OperationMemoryRead:
+			return policy.AllowRetrieval
+		default:
+			return false
+		}
+	default:
+		return true
+	}
+}
+
+func requiresExplicitAuthorityMutation(content string) bool {
+	lower := strings.ToLower(content)
+	actionMarkers := []string{
+		"ingest", "record", "store", "save", "capture", "persist", "promote",
+		"register", "add", "create", "update", "revise",
+	}
+	authorityMarkers := []string{
+		"policy", "spec", "specification", "runbook", "procedure", "rule",
+		"playbook", "guideline", "canonical memory", "semantic memory",
+	}
+	return containsAnyMarker(lower, actionMarkers) && containsAnyMarker(lower, authorityMarkers)
 }

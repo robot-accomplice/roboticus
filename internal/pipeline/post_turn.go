@@ -54,20 +54,22 @@ func (p *Pipeline) PostTurnIngest(ctx context.Context, session *Session, turnID 
 		// 3. Observer subagent dispatch (Rust: role="observer" receives turn summary).
 		p.dispatchToObservers(bgCtx, sessionID, turnID, userContent, assistantContent)
 
-		// 4. Procedure detection: extract tool sequences and persist learned skills.
-		p.detectAndPersistProcedures(bgCtx, session)
-
-		// 5. Executive state growth: record verified conclusions for answered
+		// 4. Executive state growth: record verified conclusions for answered
 		// subgoals that have evidence support, open unresolved questions for
 		// subgoals the turn could not close, and resolve any prior unresolved
 		// questions the agent has now answered.
 		growth := p.growExecutiveState(bgCtx, session, assistantContent)
 
-		// 6. Reflection: generate structured episode summary (agentic
+		// 5. Reflection: generate structured episode summary (agentic
 		// architecture Layer 16). Reflection runs after executive growth so the
 		// stored episodic artifact can record what continuity state this turn
 		// actually changed instead of inferring it later from separate stores.
 		p.reflectOnTurn(bgCtx, turnID, userContent, session, growth)
+
+		// 6. Procedure detection/promotion: after the turn has already been
+		// captured as reusable experience, promote repeated multi-step tool
+		// chains into explicit workflow knowledge when warranted.
+		p.detectAndPersistProcedures(bgCtx, turnID, session)
 
 		// 7. Log the turn pair for analytics/debugging.
 		if userContent != "" {
@@ -226,6 +228,20 @@ func (p *Pipeline) reflectOnTurn(ctx context.Context, turnID, userContent string
 	} else {
 		log.Debug().Str("outcome", summary.Outcome).Int("actions", len(summary.Actions)).
 			Msg("reflection: episode summary stored")
+		p.appendTurnDiagnosticEvent(ctx, turnID, "procedural_learning_captured", "ok",
+			"turn captured reusable procedural outcome evidence",
+			"The system recorded this turn as reusable experience for future tasks.",
+			map[string]any{
+				"outcome":                   summary.Outcome,
+				"pattern_count":             len(summary.OutcomePatterns),
+				"success_pattern_count":     countOutcomePatterns(summary.OutcomePatterns, "success"),
+				"failure_pattern_count":     countOutcomePatterns(summary.OutcomePatterns, "failure"),
+				"partial_pattern_count":     countOutcomePatterns(summary.OutcomePatterns, "partial"),
+				"promotion_state":           "captured_only",
+				"storage_target":            "episodic_memory.episode_summary",
+				"reusable_outcome_patterns": append([]string(nil), outcomePatternStrings(summary.OutcomePatterns)...),
+			},
+		)
 	}
 }
 
@@ -731,7 +747,7 @@ func extractAssumptionClause(rest string) string {
 // detectAndPersistProcedures uses LearningExtractor's sliding-window procedure
 // detection to find recurring multi-step tool sequences and persist them.
 // This wires the full agent.LearningExtractor into production.
-func (p *Pipeline) detectAndPersistProcedures(ctx context.Context, session *Session) {
+func (p *Pipeline) detectAndPersistProcedures(ctx context.Context, turnID string, session *Session) {
 	if p.store == nil {
 		return
 	}
@@ -778,7 +794,7 @@ func (p *Pipeline) detectAndPersistProcedures(ctx context.Context, session *Sess
 		// record so procedural retrieval can surface them with steps and
 		// metadata instead of only a tool-stat rollup.
 		if proc.Count >= 3 {
-			p.promoteProcedureToWorkflow(ctx, session, proc)
+			p.promoteProcedureToWorkflow(ctx, turnID, session, proc)
 		}
 	}
 }
@@ -788,7 +804,7 @@ func (p *Pipeline) detectAndPersistProcedures(ctx context.Context, session *Sess
 // success_evidence list so operators can audit which run confirmed the
 // promotion. Failures on the promotion path are logged but non-fatal — the
 // learned_skills row is already persisted by the time we get here.
-func (p *Pipeline) promoteProcedureToWorkflow(ctx context.Context, session *Session, proc agent.Procedure) {
+func (p *Pipeline) promoteProcedureToWorkflow(ctx context.Context, turnID string, session *Session, proc agent.Procedure) {
 	if p.store == nil {
 		return
 	}
@@ -834,6 +850,43 @@ func (p *Pipeline) promoteProcedureToWorkflow(ctx context.Context, session *Sess
 		Str("session", session.ID).
 		Str("category", "workflow_promoted").
 		Msg("procedure promoted to workflow")
+	p.appendTurnDiagnosticEvent(ctx, turnID, "procedural_knowledge_promoted", "ok",
+		"reusable procedural knowledge promoted for future retrieval",
+		"The system promoted a repeated workflow into reusable knowledge for future tasks.",
+		map[string]any{
+			"workflow_name":    name,
+			"support_count":    proc.Count,
+			"steps":            append([]string(nil), proc.Steps...),
+			"promotion_target": "procedural_memory.workflow",
+		},
+	)
+}
+
+func countOutcomePatterns(patterns []agentmemory.EpisodeOutcomePattern, outcome string) int {
+	count := 0
+	for _, pattern := range patterns {
+		if strings.EqualFold(strings.TrimSpace(pattern.Outcome), outcome) {
+			count++
+		}
+	}
+	return count
+}
+
+func outcomePatternStrings(patterns []agentmemory.EpisodeOutcomePattern) []string {
+	if len(patterns) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(patterns))
+	for _, pattern := range patterns {
+		outcome := strings.TrimSpace(pattern.Outcome)
+		kind := strings.TrimSpace(pattern.Kind)
+		value := strings.TrimSpace(pattern.Value)
+		if outcome == "" || kind == "" || value == "" {
+			continue
+		}
+		out = append(out, outcome+":"+kind+":"+value)
+	}
+	return out
 }
 
 // truncatePreview truncates text for storage as a content preview.

@@ -201,7 +201,8 @@ type IntentClassKey struct {
 type IntentQualityTracker struct {
 	mu         sync.RWMutex
 	intents    map[IntentClassKey]*ringBuffer
-	baselines  map[string]float64 // intentClass → baseline quality
+	priors     map[IntentClassKey]float64 // model+intent cold-start priors
+	baselines  map[string]float64         // intentClass → baseline quality
 	windowSize int
 }
 
@@ -212,21 +213,31 @@ func NewIntentQualityTracker(windowSize int) *IntentQualityTracker {
 	}
 	return &IntentQualityTracker{
 		intents:    make(map[IntentClassKey]*ringBuffer),
+		priors:     make(map[IntentClassKey]float64),
 		baselines:  make(map[string]float64),
 		windowSize: windowSize,
 	}
 }
 
+func canonicalIntentClassKey(model, intentClass string) IntentClassKey {
+	return IntentClassKey{
+		Model:       canonicalModelKey(model),
+		IntentClass: strings.TrimSpace(strings.ToUpper(intentClass)),
+	}
+}
+
 // RecordWithIntent adds a quality observation for a model + intent class pair.
 func (iq *IntentQualityTracker) RecordWithIntent(model, intentClass string, score float64) {
+	key := canonicalIntentClassKey(model, intentClass)
+	if key.Model == "" || key.IntentClass == "" {
+		return
+	}
 	if score < 0 {
 		score = 0
 	}
 	if score > 1 {
 		score = 1
 	}
-
-	key := IntentClassKey{Model: model, IntentClass: intentClass}
 
 	iq.mu.Lock()
 	defer iq.mu.Unlock()
@@ -243,7 +254,10 @@ func (iq *IntentQualityTracker) RecordWithIntent(model, intentClass string, scor
 // model+intentClass pair. Falls back to the baseline for the intent class
 // if no observations exist, or 0.5 if no baseline is set either.
 func (iq *IntentQualityTracker) EstimatedQualityForIntent(model, intentClass string) float64 {
-	key := IntentClassKey{Model: model, IntentClass: intentClass}
+	key := canonicalIntentClassKey(model, intentClass)
+	if key.Model == "" || key.IntentClass == "" {
+		return 0.5
+	}
 
 	iq.mu.RLock()
 	defer iq.mu.RUnlock()
@@ -253,11 +267,39 @@ func (iq *IntentQualityTracker) EstimatedQualityForIntent(model, intentClass str
 		return rb.average()
 	}
 
+	if prior, exists := iq.priors[key]; exists {
+		return prior
+	}
+
 	// Fall back to baseline for this intent class.
-	if baseline, exists := iq.baselines[intentClass]; exists {
+	if baseline, exists := iq.baselines[key.IntentClass]; exists {
 		return baseline
 	}
 	return 0.5
+}
+
+// ObservationCountForIntent returns the number of recorded observations for a
+// model+intentClass pair.
+func (iq *IntentQualityTracker) ObservationCountForIntent(model, intentClass string) int {
+	key := canonicalIntentClassKey(model, intentClass)
+	if key.Model == "" || key.IntentClass == "" {
+		return 0
+	}
+
+	iq.mu.RLock()
+	defer iq.mu.RUnlock()
+
+	rb, ok := iq.intents[key]
+	if !ok {
+		return 0
+	}
+	return rb.count
+}
+
+// HasObservationsForIntent reports whether any quality data exists for the
+// model+intentClass pair.
+func (iq *IntentQualityTracker) HasObservationsForIntent(model, intentClass string) bool {
+	return iq.ObservationCountForIntent(model, intentClass) > 0
 }
 
 // SeedFromBaselines sets cold-start priors for intent classes. These are used
@@ -267,6 +309,10 @@ func (iq *IntentQualityTracker) SeedFromBaselines(baselines map[string]float64) 
 	defer iq.mu.Unlock()
 
 	for k, v := range baselines {
+		k = strings.TrimSpace(strings.ToUpper(k))
+		if k == "" {
+			continue
+		}
 		if v < 0 {
 			v = 0
 		}
@@ -274,6 +320,42 @@ func (iq *IntentQualityTracker) SeedFromBaselines(baselines map[string]float64) 
 			v = 1
 		}
 		iq.baselines[k] = v
+	}
+}
+
+// SeedFromExerciseResults warms the tracker from persisted benchmark/exercise
+// observations so routing evidence reflects real exercised capability rather
+// than only cold-start priors.
+func (iq *IntentQualityTracker) SeedFromExerciseResults(ctx context.Context, store *db.Store) {
+	if store == nil {
+		return
+	}
+
+	rows, err := store.QueryContext(ctx,
+		`SELECT model, intent_class, quality
+		 FROM exercise_results
+		 WHERE model != '' AND intent_class != ''
+		 ORDER BY created_at DESC
+		 LIMIT 1000`)
+	if err != nil {
+		log.Warn().Err(err).Msg("intent quality tracker: failed to seed from exercise results")
+		return
+	}
+	defer func() { _ = rows.Close() }()
+
+	seeded := 0
+	for rows.Next() {
+		var model, intentClass string
+		var quality float64
+		if err := rows.Scan(&model, &intentClass, &quality); err != nil {
+			continue
+		}
+		iq.RecordWithIntent(model, intentClass, quality)
+		seeded++
+	}
+
+	if seeded > 0 {
+		log.Info().Int("seeded", seeded).Msg("intent quality tracker: warm-started from exercise results")
 	}
 }
 

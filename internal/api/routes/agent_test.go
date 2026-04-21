@@ -86,6 +86,14 @@ func (c *captureRunner) Run(_ context.Context, _ pipeline.Config, input pipeline
 	}, nil
 }
 
+type errorRunner struct {
+	err error
+}
+
+func (e *errorRunner) Run(_ context.Context, _ pipeline.Config, _ pipeline.Input) (*pipeline.Outcome, error) {
+	return nil, e.err
+}
+
 func TestAgentMessage_PreservesNoEscalate(t *testing.T) {
 	runner := &captureRunner{}
 	handler := AgentMessage(runner, "Duncan")
@@ -111,5 +119,25 @@ func TestAgentMessage_PreservesNoEscalate(t *testing.T) {
 	}
 	if !runner.input.NoEscalate {
 		t.Fatal("expected NoEscalate to reach pipeline input")
+	}
+}
+
+func TestAgentMessage_Returns404ForMissingSession(t *testing.T) {
+	handler := AgentMessage(&errorRunner{err: core.NewError(core.ErrNotFound, "session not found")}, "Duncan")
+
+	body, err := json.Marshal(map[string]any{
+		"content":    "test",
+		"session_id": "missing-session",
+	})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	req := httptest.NewRequest("POST", "/api/agent/message", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
 	}
 }

@@ -802,7 +802,10 @@ func (iq *IntentQualityTracker) SeedIntentBaselines(baselines []IntentBaseline) 
 	seeded := 0
 	for _, b := range baselines {
 		// Check if this (model, intentClass) cell already has observations.
-		key := IntentClassKey{Model: b.Model, IntentClass: b.IntentClass}
+		key := canonicalIntentClassKey(b.Model, b.IntentClass)
+		if key.Model == "" || key.IntentClass == "" {
+			continue
+		}
 		iq.mu.RLock()
 		rb, exists := iq.intents[key]
 		hasData := exists && rb.count > 0
@@ -811,7 +814,16 @@ func (iq *IntentQualityTracker) SeedIntentBaselines(baselines []IntentBaseline) 
 		if hasData {
 			continue
 		}
-		iq.RecordWithIntent(b.Model, b.IntentClass, b.Quality)
+		quality := b.Quality
+		if quality < 0 {
+			quality = 0
+		}
+		if quality > 1 {
+			quality = 1
+		}
+		iq.mu.Lock()
+		iq.priors[key] = quality
+		iq.mu.Unlock()
 		seeded++
 	}
 	return seeded

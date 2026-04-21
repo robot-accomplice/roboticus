@@ -121,7 +121,7 @@ func retryWithGuards(
 	guards *GuardChain,
 	policy RetryPolicy,
 ) (string, int, error) {
-	result, err := retryWithGuardsDetailed(ctx, executor, session, guards, policy, nil)
+	result, err := retryWithGuardsDetailed(ctx, executor, session, guards, policy, nil, nil)
 	if err != nil {
 		return "", result.Turns, err
 	}
@@ -133,11 +133,13 @@ func retryWithGuards(
 // caller can annotate traces and persist the applied outcome without re-running
 // the guard chain out of band.
 type GuardRetryRun struct {
-	Content            string
-	Turns              int
-	GuardRetried       bool
-	InitialGuardResult ApplyResult
-	FinalGuardResult   ApplyResult
+	Content             string
+	Turns               int
+	GuardRetried        bool
+	RetrySuppressed     bool
+	RetrySuppressReason string
+	InitialGuardResult  ApplyResult
+	FinalGuardResult    ApplyResult
 }
 
 // retryWithGuardsDetailed is the authoritative guard-triggered retry
@@ -149,6 +151,7 @@ func retryWithGuardsDetailed(
 	guards *GuardChain,
 	policy RetryPolicy,
 	buildGuardContext func() *GuardContext,
+	decideRetry func(ApplyResult, *GuardContext) RetryDisposition,
 ) (GuardRetryRun, error) {
 	run := GuardRetryRun{}
 	var lastReason string
@@ -169,7 +172,11 @@ func retryWithGuardsDetailed(
 			return run, err
 		}
 
-		guardResult := applyGuardChainWithOptionalContext(guards, content, buildGuardContext)
+		var guardCtx *GuardContext
+		if buildGuardContext != nil {
+			guardCtx = buildGuardContext()
+		}
+		guardResult := applyGuardChainWithOptionalContext(guards, content, guardCtx)
 		if attempt == 0 {
 			run.InitialGuardResult = guardResult
 		}
@@ -178,6 +185,14 @@ func retryWithGuardsDetailed(
 
 		if guards == nil || guards.Len() == 0 || !guardResult.RetryRequested {
 			return run, nil
+		}
+		if decideRetry != nil {
+			disposition := decideRetry(guardResult, guardCtx)
+			if !disposition.Allow {
+				run.RetrySuppressed = true
+				run.RetrySuppressReason = disposition.Reason
+				return run, nil
+			}
 		}
 
 		run.GuardRetried = true
@@ -192,12 +207,12 @@ func retryWithGuardsDetailed(
 		core.ErrGuardExhausted, policy.MaxRetries+1, lastReason)
 }
 
-func applyGuardChainWithOptionalContext(guards *GuardChain, content string, buildGuardContext func() *GuardContext) ApplyResult {
+func applyGuardChainWithOptionalContext(guards *GuardChain, content string, guardCtx *GuardContext) ApplyResult {
 	if guards == nil || guards.Len() == 0 {
 		return ApplyResult{Content: content}
 	}
-	if buildGuardContext != nil {
-		return guards.ApplyFullWithContext(content, buildGuardContext())
+	if guardCtx != nil {
+		return guards.ApplyFullWithContext(content, guardCtx)
 	}
 	return guards.ApplyFull(content)
 }

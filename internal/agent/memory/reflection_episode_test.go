@@ -85,6 +85,41 @@ func TestAnalyzeEpisode_CapturesErrorMessages(t *testing.T) {
 	}
 }
 
+func TestAnalyzeEpisode_CapturesOutcomePatterns(t *testing.T) {
+	input := EpisodeInput{
+		UserContent:     "Update the deployment note",
+		AssistantAnswer: "Correction: the first path was wrong.",
+		ToolEvents: []ToolEvent{
+			{ToolName: "shell", Success: false},
+			{ToolName: "shell", Success: true},
+		},
+		ErrorMessages: []string{
+			"permission denied",
+			"permission denied",
+		},
+		VerifierPassed: false,
+	}
+	summary := AnalyzeEpisode(input)
+	if summary == nil {
+		t.Fatal("expected summary, got nil")
+	}
+	if len(summary.OutcomePatterns) == 0 {
+		t.Fatal("expected reusable outcome patterns")
+	}
+	var sawFix, sawError bool
+	for _, pat := range summary.OutcomePatterns {
+		if pat.Kind == "fix_pattern" && pat.Outcome == "success" {
+			sawFix = true
+		}
+		if pat.Kind == "error_mode" && pat.Outcome == "partial" && strings.Contains(strings.ToLower(pat.Value), "permission denied") {
+			sawError = true
+		}
+	}
+	if !sawFix || !sawError {
+		t.Fatalf("expected both success and partial outcome patterns, got %+v", summary.OutcomePatterns)
+	}
+}
+
 func TestAnalyzeEpisode_LowQualityWhenVerifierFailsWithNoEvidence(t *testing.T) {
 	input := EpisodeInput{
 		UserContent:    "Is this compliant?",
@@ -169,6 +204,7 @@ func TestEpisodeSummary_JSONRoundTrip(t *testing.T) {
 		Goal:                "deploy",
 		Outcome:             "success",
 		Learnings:           []string{"guard-triggered revision required before final answer"},
+		OutcomePatterns:     []EpisodeOutcomePattern{{Outcome: "success", Kind: "learning", Value: "guard-triggered revision required before final answer"}},
 		ModelUsed:           "openai/gpt-5.4",
 		ReactTurns:          3,
 		VerifiedRecorded:    1,
@@ -192,5 +228,8 @@ func TestEpisodeSummary_JSONRoundTrip(t *testing.T) {
 	}
 	if len(decoded.Learnings) != 1 || decoded.Learnings[0] != original.Learnings[0] {
 		t.Fatalf("decoded learnings = %+v", decoded.Learnings)
+	}
+	if len(decoded.OutcomePatterns) != 1 || decoded.OutcomePatterns[0] != original.OutcomePatterns[0] {
+		t.Fatalf("decoded outcome patterns = %+v", decoded.OutcomePatterns)
 	}
 }

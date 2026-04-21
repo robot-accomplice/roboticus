@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -231,9 +233,33 @@ func TestGetThemeCatalog(t *testing.T) {
 
 	body := jsonBody(t, rec)
 	themes := body["themes"].([]any)
-	if len(themes) != 14 {
-		t.Errorf("got %d themes, want 14 (4 builtin + 10 catalog)", len(themes))
+	if len(themes) != 15 {
+		t.Errorf("got %d themes, want 15 (4 builtin + 11 catalog)", len(themes))
 	}
+}
+
+func TestGetThemeCatalog_ResolvesBundledTexturePreview(t *testing.T) {
+	store := testutil.TempStore(t)
+	handler := GetThemeCatalog(store)
+	req := httptest.NewRequest("GET", "/api/themes/catalog", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	body := jsonBody(t, rec)
+	themes := body["themes"].([]any)
+	for _, raw := range themes {
+		theme := raw.(map[string]any)
+		if theme["id"] != "psychedelic-freakout-marble" {
+			continue
+		}
+		textures := theme["textures"].(map[string]any)
+		bodyTexture := textures["body"].(map[string]any)
+		if got := bodyTexture["value"]; got != "url(/api/themes/psychedelic-freakout-marble/textures/body.jpg)" {
+			t.Fatalf("bundled preview texture = %v", got)
+		}
+		return
+	}
+	t.Fatal("psychedelic-freakout-marble not found in theme catalog")
 }
 
 func TestInstallCatalogThemeAndActivate(t *testing.T) {
@@ -259,6 +285,32 @@ func TestInstallCatalogThemeAndActivate(t *testing.T) {
 	body := jsonBody(t, getRec)
 	if body["id"] != "dracula" {
 		t.Errorf("active theme = %v, want dracula", body["id"])
+	}
+}
+
+func TestInstallCatalogTheme_MaterializesBundledTexture(t *testing.T) {
+	store := testutil.TempStore(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	installReq := httptest.NewRequest("POST", "/api/themes/catalog/install", strings.NewReader(`{"id":"psychedelic-freakout-marble"}`))
+	installRec := httptest.NewRecorder()
+	InstallCatalogTheme(store).ServeHTTP(installRec, installReq)
+	if installRec.Code != http.StatusOK {
+		t.Fatalf("install status = %d", installRec.Code)
+	}
+
+	manifestPath := filepath.Join(home, ".roboticus", "themes", "psychedelic-freakout-marble", "manifest.json")
+	if _, err := os.Stat(manifestPath); err != nil {
+		t.Fatalf("manifest not written: %v", err)
+	}
+	texturePath := filepath.Join(home, ".roboticus", "themes", "psychedelic-freakout-marble", "textures", "body.jpg")
+	info, err := os.Stat(texturePath)
+	if err != nil {
+		t.Fatalf("bundled texture not materialized: %v", err)
+	}
+	if info.Size() == 0 {
+		t.Fatal("bundled texture was written but empty")
 	}
 }
 

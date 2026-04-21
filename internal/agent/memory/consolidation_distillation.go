@@ -80,6 +80,8 @@ func (p *ConsolidationPipeline) phaseEpisodeDistillation(ctx context.Context, st
 	fixPatternCount := make(map[string]int)
 	evidenceCount := make(map[string]int)
 	learningCount := make(map[string]int)
+	outcomePatternCount := make(map[string]int)
+	outcomePatternExemplar := make(map[string]EpisodeOutcomePattern)
 	// relationCount keys on the lowercased canonical signature
 	// "subject|relation|object" so two episodes that mention the same
 	// triple in different cases or whitespace count as one observation.
@@ -95,60 +97,76 @@ func (p *ConsolidationPipeline) phaseEpisodeDistillation(ctx context.Context, st
 			continue
 		}
 		fields := parseEpisodeSummaryStructured(content, contentJSON)
-		if !fields.HighQuality {
-			continue
-		}
 		episodes = append(episodes, fields)
-		for _, learning := range fields.Learnings {
-			key := strings.ToLower(strings.TrimSpace(learning))
-			if key == "" {
-				continue
+		if fields.HighQuality {
+			for _, learning := range fields.Learnings {
+				key := strings.ToLower(strings.TrimSpace(learning))
+				if key == "" {
+					continue
+				}
+				learningCount[key]++
 			}
-			learningCount[key]++
+			for _, pattern := range fields.FixPatterns {
+				key := strings.ToLower(strings.TrimSpace(pattern))
+				if key == "" {
+					continue
+				}
+				fixPatternCount[key]++
+			}
+			for _, evidence := range fields.EvidenceRefs {
+				key := strings.ToLower(strings.TrimSpace(evidence))
+				if key == "" {
+					continue
+				}
+				evidenceCount[key]++
+			}
+			// Tally relations once per episode; a single chatty episode that
+			// mentions the same triple twice still counts as one observation
+			// of that relation.
+			seenInEpisode := make(map[string]struct{})
+			for _, rel := range fields.Relations {
+				subj := strings.TrimSpace(rel.Subject)
+				relType := strings.TrimSpace(rel.Relation)
+				obj := strings.TrimSpace(rel.Object)
+				if subj == "" || relType == "" || obj == "" {
+					continue
+				}
+				if !db.IsCanonicalGraphRelation(relType) {
+					// Relation didn't pass the canonical gate (the per-document
+					// extractor enforces this too, but defending in depth here
+					// means a malformed episode_summary can't sneak a non-
+					// canonical relation past the write step).
+					continue
+				}
+				signature := strings.ToLower(subj) + "|" + relType + "|" + strings.ToLower(obj)
+				if _, dup := seenInEpisode[signature]; dup {
+					continue
+				}
+				seenInEpisode[signature] = struct{}{}
+				relationCount[signature]++
+				if _, ok := relationExemplar[signature]; !ok {
+					relationExemplar[signature] = EpisodeRelation{
+						Subject:  subj,
+						Relation: relType,
+						Object:   obj,
+					}
+				}
+			}
 		}
-		for _, pattern := range fields.FixPatterns {
-			key := strings.ToLower(strings.TrimSpace(pattern))
-			if key == "" {
+		for _, pat := range fields.OutcomePatterns {
+			outcome := strings.ToLower(strings.TrimSpace(pat.Outcome))
+			kind := strings.ToLower(strings.TrimSpace(pat.Kind))
+			value := strings.ToLower(strings.TrimSpace(pat.Value))
+			if outcome == "" || kind == "" || value == "" {
 				continue
 			}
-			fixPatternCount[key]++
-		}
-		for _, evidence := range fields.EvidenceRefs {
-			key := strings.ToLower(strings.TrimSpace(evidence))
-			if key == "" {
-				continue
-			}
-			evidenceCount[key]++
-		}
-		// Tally relations once per episode; a single chatty episode that
-		// mentions the same triple twice still counts as one observation
-		// of that relation.
-		seenInEpisode := make(map[string]struct{})
-		for _, rel := range fields.Relations {
-			subj := strings.TrimSpace(rel.Subject)
-			relType := strings.TrimSpace(rel.Relation)
-			obj := strings.TrimSpace(rel.Object)
-			if subj == "" || relType == "" || obj == "" {
-				continue
-			}
-			if !db.IsCanonicalGraphRelation(relType) {
-				// Relation didn't pass the canonical gate (the per-document
-				// extractor enforces this too, but defending in depth here
-				// means a malformed episode_summary can't sneak a non-
-				// canonical relation past the write step).
-				continue
-			}
-			signature := strings.ToLower(subj) + "|" + relType + "|" + strings.ToLower(obj)
-			if _, dup := seenInEpisode[signature]; dup {
-				continue
-			}
-			seenInEpisode[signature] = struct{}{}
-			relationCount[signature]++
-			if _, ok := relationExemplar[signature]; !ok {
-				relationExemplar[signature] = EpisodeRelation{
-					Subject:  subj,
-					Relation: relType,
-					Object:   obj,
+			signature := outcome + "|" + kind + "|" + value
+			outcomePatternCount[signature]++
+			if _, ok := outcomePatternExemplar[signature]; !ok {
+				outcomePatternExemplar[signature] = EpisodeOutcomePattern{
+					Outcome: strings.TrimSpace(pat.Outcome),
+					Kind:    strings.TrimSpace(pat.Kind),
+					Value:   strings.TrimSpace(pat.Value),
 				}
 			}
 		}
@@ -204,6 +222,27 @@ func (p *ConsolidationPipeline) phaseEpisodeDistillation(ctx context.Context, st
 			continue
 		}
 		if p.upsertDistilledFact(ctx, store, "learned_fact", key, value, count) {
+			promoted++
+		}
+	}
+
+	// Promote recurring procedural outcome patterns from structured episode
+	// summaries. This is the reuse-oriented surface for both positive and
+	// negative experience: repeated successes, failures, and mixed outcomes
+	// become queryable procedural knowledge instead of being flattened into
+	// only positive learnings or discarded as anecdotal failures.
+	for signature, count := range outcomePatternCount {
+		if count < MinDistillSupport {
+			continue
+		}
+		exemplar, ok := outcomePatternExemplar[signature]
+		if !ok {
+			continue
+		}
+		key := "procedural_outcome:" + strings.ToLower(strings.TrimSpace(exemplar.Outcome)) + ":" +
+			strings.ToLower(strings.TrimSpace(exemplar.Kind)) + ":" + shortHash(signature)
+		value := formatProceduralOutcomePattern(exemplar)
+		if p.upsertDistilledFact(ctx, store, "procedural_outcome", key, value, count) {
 			promoted++
 		}
 	}
@@ -311,12 +350,13 @@ func (p *ConsolidationPipeline) upsertDistilledFact(ctx context.Context, store *
 // output. Keep the field list minimal — only what the distillation phase
 // uses — so the parser can remain a plain string splitter.
 type episodeFields struct {
-	Outcome      string
-	Learnings    []string
-	FixPatterns  []string
-	EvidenceRefs []string
-	QualityLabel string
-	HighQuality  bool
+	Outcome         string
+	Learnings       []string
+	FixPatterns     []string
+	EvidenceRefs    []string
+	QualityLabel    string
+	HighQuality     bool
+	OutcomePatterns []EpisodeOutcomePattern
 
 	// Relations is the M8 surface: the (subject, relation, object) triples
 	// extracted from the episode at AnalyzeEpisode time, persisted via
@@ -352,6 +392,8 @@ func parseEpisodeSummary(content string) episodeFields {
 			fields.QualityLabel = strings.TrimSpace(strings.TrimPrefix(segment, "Quality: "))
 		case strings.HasPrefix(segment, "Relations: "):
 			fields.Relations = parseRelationsList(strings.TrimPrefix(segment, "Relations: "))
+		case strings.HasPrefix(segment, "OutcomePatterns: "):
+			fields.OutcomePatterns = parseOutcomePatternList(strings.TrimPrefix(segment, "OutcomePatterns: "))
 		}
 	}
 	// Only episodes we are confident about contribute to distillation so
@@ -373,11 +415,12 @@ func episodeFieldsFromSummary(summary *EpisodeSummary) episodeFields {
 		return episodeFields{}
 	}
 	fields := episodeFields{
-		Outcome:      strings.TrimSpace(summary.Outcome),
-		Learnings:    append([]string(nil), summary.Learnings...),
-		FixPatterns:  append([]string(nil), summary.FixPatterns...),
-		EvidenceRefs: append([]string(nil), summary.EvidenceRefs...),
-		Relations:    append([]EpisodeRelation(nil), summary.Relations...),
+		Outcome:         strings.TrimSpace(summary.Outcome),
+		Learnings:       append([]string(nil), summary.Learnings...),
+		FixPatterns:     append([]string(nil), summary.FixPatterns...),
+		EvidenceRefs:    append([]string(nil), summary.EvidenceRefs...),
+		Relations:       append([]EpisodeRelation(nil), summary.Relations...),
+		OutcomePatterns: append([]EpisodeOutcomePattern(nil), summary.OutcomePatterns...),
 	}
 	switch {
 	case summary.ResultQuality >= 0.85:
@@ -414,6 +457,32 @@ func parseRelationsList(s string) []EpisodeRelation {
 			continue
 		}
 		out = append(out, EpisodeRelation{Subject: subj, Relation: rel, Object: obj})
+	}
+	return out
+}
+
+func parseOutcomePatternList(s string) []EpisodeOutcomePattern {
+	var out []EpisodeOutcomePattern
+	for _, raw := range strings.Split(s, ";") {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" {
+			continue
+		}
+		parts := strings.Split(trimmed, "||")
+		if len(parts) != 3 {
+			continue
+		}
+		outcome := strings.TrimSpace(parts[0])
+		kind := strings.TrimSpace(parts[1])
+		value := strings.TrimSpace(parts[2])
+		if outcome == "" || kind == "" || value == "" {
+			continue
+		}
+		out = append(out, EpisodeOutcomePattern{
+			Outcome: outcome,
+			Kind:    kind,
+			Value:   value,
+		})
 	}
 	return out
 }
@@ -455,4 +524,14 @@ func firstMatchingPattern(episodes []episodeFields, target string, pick func(epi
 func shortHash(value string) string {
 	sum := sha1.Sum([]byte(strings.ToLower(strings.TrimSpace(value))))
 	return hex.EncodeToString(sum[:8])
+}
+
+func formatProceduralOutcomePattern(p EpisodeOutcomePattern) string {
+	outcome := strings.TrimSpace(p.Outcome)
+	kind := strings.TrimSpace(p.Kind)
+	value := strings.TrimSpace(p.Value)
+	if outcome == "" || kind == "" {
+		return value
+	}
+	return outcome + "/" + kind + ": " + value
 }

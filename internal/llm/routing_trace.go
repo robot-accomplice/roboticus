@@ -34,11 +34,12 @@ func routingTracerFromContext(ctx context.Context) RoutingTracer {
 	return tr
 }
 
-func annotateRoutingDecision(ctx context.Context, router *Router, req *Request, target RouteTarget) {
+func annotateRoutingDecision(ctx context.Context, svc *Service, req *Request, target RouteTarget) {
 	tr := routingTracerFromContext(ctx)
-	if tr == nil || router == nil || req == nil {
+	if tr == nil || svc == nil || svc.router == nil || req == nil {
 		return
 	}
+	router := svc.router
 
 	candidates := make([]string, 0, len(router.Targets()))
 	for _, rt := range router.Targets() {
@@ -60,11 +61,12 @@ func annotateRoutingDecision(ctx context.Context, router *Router, req *Request, 
 			roleCandidates = append(roleCandidates, model)
 		}
 	}
-
 	winner := ModelSpecForTarget(target)
 	if winner == "" {
 		winner = target.Model
 	}
+	_, features := svc.routingAssessment(req, winner)
+
 	mode := "heuristic"
 	if router.MetascoreSelector != nil {
 		mode = "metascore"
@@ -72,6 +74,18 @@ func annotateRoutingDecision(ctx context.Context, router *Router, req *Request, 
 
 	tr.Annotate("inference.routing.candidates", candidates)
 	tr.Annotate("inference.routing.role_eligible_candidates", roleCandidates)
+	if len(features.RequestEligibleCandidates) > 0 {
+		tr.Annotate("inference.routing.request_eligible_candidates", features.RequestEligibleCandidates)
+	}
+	if len(features.ExcludedCandidates) > 0 {
+		tr.Annotate("inference.routing.excluded_candidates", features.ExcludedCandidates)
+	}
+	if len(features.IgnoredForEvidenceModels) > 0 {
+		tr.Annotate("inference.routing.ignored_for_missing_capability_evidence", features.IgnoredForEvidenceModels)
+	}
+	if suggestion := strings.TrimSpace(features.IgnoredForEvidenceSuggestion); suggestion != "" {
+		tr.Annotate("inference.routing.capability_evidence_recommendation", suggestion)
+	}
 	tr.Annotate("inference.routing.winner", winner)
 	tr.Annotate("inference.routing.winner_score", 0.0)
 	tr.Annotate("inference.routing.mode", mode)

@@ -16,6 +16,8 @@ type TaskSynthesis struct {
 	PlannedAction   string   // "execute_directly", "delegate_to_specialist", "compose_subagent"
 	Confidence      float64  // Planner confidence 0–1
 	RetrievalNeeded bool     // Whether memory retrieval is beneficial
+	RetrievalReason string   // Why memory retrieval was selected
+	ProceduralUncertainty bool // Whether the framework is uncertain how to carry out the task
 	MissingSkills   []string // Capabilities not covered by registered skills
 	CapabilityFit   float64  // 0–1 ratio of available capability coverage
 }
@@ -50,16 +52,18 @@ func SynthesizeTaskState(content string, sessionTurns int, agentSkills []string)
 	// Retrieval decision: action turns only pull memory when there is an
 	// explicit continuity/context signal. Simple direct tasks should not widen
 	// into memory-bearing autonomous turns by intent label alone.
-	retrievalNeeded := shouldRetrieveForTurn(intent, content, sessionTurns)
+	retrievalNeeded, retrievalReason, proceduralUncertainty := shouldRetrieveForTurn(intent, content, sessionTurns, fit, missing, action, complexity)
 
 	result := TaskSynthesis{
-		Intent:          intent,
-		Complexity:      complexity,
-		PlannedAction:   action,
-		Confidence:      confidence,
-		RetrievalNeeded: retrievalNeeded,
-		MissingSkills:   missing,
-		CapabilityFit:   fit,
+		Intent:               intent,
+		Complexity:           complexity,
+		PlannedAction:        action,
+		Confidence:           confidence,
+		RetrievalNeeded:      retrievalNeeded,
+		RetrievalReason:      retrievalReason,
+		ProceduralUncertainty: proceduralUncertainty,
+		MissingSkills:        missing,
+		CapabilityFit:        fit,
 	}
 
 	log.Debug().
@@ -69,25 +73,65 @@ func SynthesizeTaskState(content string, sessionTurns int, agentSkills []string)
 		Float64("confidence", confidence).
 		Float64("capability_fit", fit).
 		Bool("retrieval", retrievalNeeded).
+		Bool("procedural_uncertainty", proceduralUncertainty).
+		Str("retrieval_reason", retrievalReason).
 		Msg("task state synthesized")
 
 	return result
 }
 
-func shouldRetrieveForTurn(intent, content string, sessionTurns int) bool {
+func shouldRetrieveForTurn(intent, content string, sessionTurns int, capabilityFit float64, missingSkills []string, plannedAction, complexity string) (bool, string, bool) {
 	lower := strings.ToLower(content)
+	proceduralUncertainty := appliedLearningHelpful(intent, lower, capabilityFit, missingSkills, plannedAction, complexity)
 
 	if intent == "question" {
-		return true
+		return true, "question_default", proceduralUncertainty
 	}
 
-	if intent == "task" {
+	if intent == "task" || intent == "code" {
 		if taskNeedsPriorContext(lower) || taskNeedsEvidence(lower) {
-			return true
+			return true, "continuity_or_evidence", proceduralUncertainty
+		}
+		if proceduralUncertainty {
+			return true, "applied_learning_uncertainty", true
 		}
 	}
 
-	return sessionTurns > 3 && turnCarriesContinuityCue(lower)
+	if sessionTurns > 3 && turnCarriesContinuityCue(lower) {
+		return true, "session_continuity", proceduralUncertainty
+	}
+
+	return false, "none", proceduralUncertainty
+}
+
+func appliedLearningHelpful(intent, lower string, capabilityFit float64, missingSkills []string, plannedAction, complexity string) bool {
+	if intent != "task" && intent != "code" {
+		return false
+	}
+	if looksLikeSingleStepAuthoringTask(lower, len(extractSubtasks(lower))) {
+		return false
+	}
+	if hasProceduralLearningCue(lower) {
+		return true
+	}
+	if plannedAction != "execute_directly" {
+		return false
+	}
+	if capabilityFit >= 0.45 {
+		return false
+	}
+	if complexity == "moderate" || complexity == "complex" || complexity == "specialist" {
+		return true
+	}
+	return len(missingSkills) >= 2
+}
+
+func hasProceduralLearningCue(lower string) bool {
+	proceduralMarkers := []string{
+		"how do i", "how to", "steps to", "procedure", "runbook",
+		"playbook", "workflow", "process for",
+	}
+	return containsAnyMarker(lower, proceduralMarkers)
 }
 
 func taskNeedsPriorContext(lower string) bool {
@@ -252,6 +296,7 @@ func containsIntentMarker(lower, marker string) bool {
 func classifyComplexity(content string, sessionTurns int) string {
 	words := len(strings.Fields(content))
 	subtasks := extractSubtasks(content)
+	lower := strings.ToLower(content)
 
 	// Multi-step tasks are inherently more complex.
 	if len(subtasks) >= 3 {
@@ -263,8 +308,14 @@ func classifyComplexity(content string, sessionTurns int) string {
 		return "complex"
 	}
 
+	// Single-step direct authoring/editing requests should not get upcast on
+	// word count alone just because the operator was explicit about output
+	// constraints.
+	if looksLikeSingleStepAuthoringTask(lower, len(subtasks)) {
+		return "simple"
+	}
+
 	// Medium-length requests with technical markers.
-	lower := strings.ToLower(content)
 	techMarkers := []string{"integrate", "migrate", "architecture", "system", "pipeline", "workflow"}
 	techCount := 0
 	for _, m := range techMarkers {
@@ -281,6 +332,38 @@ func classifyComplexity(content string, sessionTurns int) string {
 	}
 
 	return "simple"
+}
+
+func looksLikeSingleStepAuthoringTask(lower string, subtaskCount int) bool {
+	if subtaskCount > 0 {
+		return false
+	}
+
+	actionMarkers := []string{
+		"create", "write", "draft", "make", "add", "update", "edit",
+	}
+	artifactMarkers := []string{
+		"note", "document", "doc", "markdown", ".md", "file", "vault", "obsidian",
+	}
+	if !containsAnyMarker(lower, actionMarkers) || !containsAnyMarker(lower, artifactMarkers) {
+		return false
+	}
+
+	complexityEscalators := []string{
+		"analyze", "analysis", "investigate", "report", "summarize", "summary",
+		"root cause", "compare", "evaluate", "plan", "strategy", "workflow",
+		"system", "architecture", "pipeline", "debug", "fix bug", "implement",
+	}
+	return !containsAnyMarker(lower, complexityEscalators)
+}
+
+func containsAnyMarker(lower string, markers []string) bool {
+	for _, marker := range markers {
+		if containsIntentMarker(lower, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // capabilityTokens extracts capability-relevant tokens from user content.

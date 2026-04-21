@@ -96,6 +96,14 @@ func TestDashboard_ObservabilityNarrativeContract(t *testing.T) {
 		"Retried same route",
 		"Post-attempt guard",
 		"Attempt sequence",
+		"Routing passes",
+		"post-tool follow-up",
+		"Copy turn ID",
+		"Request-eligible",
+		"Ignored as unproven",
+		"Recommendation",
+		"Replay suppressions",
+		"Replay protection blocked",
 		"↻",
 		"The first attempt succeeded, but",
 		"health-poor",
@@ -105,6 +113,31 @@ func TestDashboard_ObservabilityNarrativeContract(t *testing.T) {
 	for _, needle := range required {
 		if !strings.Contains(content, needle) {
 			t.Errorf("dashboard_spa.html missing observability narrative contract string %q", needle)
+		}
+	}
+}
+
+func TestDashboard_TableLegibilityContract(t *testing.T) {
+	data, err := os.ReadFile("dashboard_spa.html")
+	if err != nil {
+		t.Skipf("dashboard_spa.html not found: %v", err)
+	}
+	content := string(data)
+
+	required := []string{
+		".table-wrap { overflow-x: auto; border-radius: var(--radius); border: 1px solid var(--border-ghost); background: var(--surface-2); }",
+		"tbody td { background: var(--surface-2); }",
+		"tbody tr:nth-child(even) td { background: var(--surface); }",
+		"tbody tr:hover td { background: var(--surface-3); }",
+		".table-wrap table { background: transparent; }",
+		`.card:not(.table-wrap):not(table):not(thead):not(tbody):not(tr):not(th):not(td), `,
+		`[data-theme="`,
+		`:not(.table-wrap):not(table):not(thead):not(tbody):not(tr):not(th):not(td)`,
+		`.table-wrap td { background-image: none; }`,
+	}
+	for _, needle := range required {
+		if !strings.Contains(content, needle) {
+			t.Errorf("dashboard_spa.html missing table legibility contract string %q", needle)
 		}
 	}
 }

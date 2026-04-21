@@ -115,6 +115,64 @@ func TestPipelineRun_PersistsTaskSynthesisDecisionFacts(t *testing.T) {
 	}
 }
 
+func TestPipelineRun_PersistsAppliedLearningRetrievalPlanEvent(t *testing.T) {
+	store := testutil.TempStore(t)
+	exec := &sequencedExecutor{responses: []string{
+		"Here is a concise response.",
+	}}
+
+	pipe := New(PipelineDeps{
+		Store:    store,
+		Executor: exec,
+		Guards:   DefaultGuardChain(),
+	})
+
+	cfg := PresetAPI()
+	cfg.DecompositionGate = false
+	cfg.DelegatedExecution = false
+	cfg.TaskOperatingState = "test"
+	cfg.GuardSet = GuardSetNone
+
+	outcome, err := pipe.Run(context.Background(), cfg, Input{
+		Content: "Set up a canary release workflow for the auth service with rollout and rollback gates.",
+		AgentID: "test-agent",
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	var turnID string
+	if err := store.QueryRowContext(context.Background(),
+		`SELECT id FROM turns WHERE session_id = ? ORDER BY created_at DESC LIMIT 1`, outcome.SessionID,
+	).Scan(&turnID); err != nil {
+		t.Fatalf("query turn id: %v", err)
+	}
+
+	var detailsJSON string
+	if err := store.QueryRowContext(context.Background(),
+		`SELECT details_json FROM turn_diagnostic_events WHERE turn_id = ? AND event_type = ?`,
+		turnID, "applied_learning_retrieval_planned",
+	).Scan(&detailsJSON); err != nil {
+		if err == sql.ErrNoRows {
+			t.Fatal("expected applied_learning_retrieval_planned event")
+		}
+		t.Fatalf("query applied learning event: %v", err)
+	}
+
+	if !strings.Contains(detailsJSON, `"retrieval_decision":"used"`) {
+		t.Fatalf("details_json = %q, want retrieval_decision=used", detailsJSON)
+	}
+	if !strings.Contains(detailsJSON, `"retrieval_reason":"applied_learning_uncertainty"`) {
+		t.Fatalf("details_json = %q, want applied_learning_uncertainty reason", detailsJSON)
+	}
+	if !strings.Contains(detailsJSON, `"procedural"`) || !strings.Contains(detailsJSON, `"episodic"`) {
+		t.Fatalf("details_json = %q, want procedural + episodic tiers", detailsJSON)
+	}
+	if !strings.Contains(detailsJSON, `"success"`) || !strings.Contains(detailsJSON, `"failure"`) || !strings.Contains(detailsJSON, `"partial"`) {
+		t.Fatalf("details_json = %q, want outcome scope across success/failure/partial", detailsJSON)
+	}
+}
+
 func TestStoreTurnDiagnostics_UpdatesSummaryAndAppendsEventsAcrossFlushes(t *testing.T) {
 	store := testutil.TempStore(t)
 	pipe := New(PipelineDeps{Store: store})
@@ -213,6 +271,121 @@ func TestStoreTurnDiagnostics_DerivesInterpretiveNarratives(t *testing.T) {
 	}
 	if !strings.Contains(operatorNarrative, "guard=non_repetition_v2") {
 		t.Fatalf("operator_narrative = %q, want guard attribution", operatorNarrative)
+	}
+}
+
+func TestStoreTurnDiagnostics_DerivesNoProgressTerminationNarrative(t *testing.T) {
+	store := testutil.TempStore(t)
+	pipe := New(PipelineDeps{Store: store})
+	dr := NewTurnDiagnosticsRecorder("sess-1", "turn-no-progress", "api")
+	dr.SetSummaryField("status", "degraded")
+	dr.SetSummaryField("final_provider", "moonshot")
+	dr.SetSummaryField("final_model", "kimi-k2-turbo-preview")
+	dr.SetSummaryField("user_narrative", "The system is collecting evidence about request size, retries, and model behavior for this turn.")
+	dr.SetSummaryField("operator_narrative", "Turn diagnostics active: request-shape, fallback, and provider-attempt facts are being recorded.")
+	dr.RecordEvent("model_attempt_started", "running", "", "", map[string]any{
+		"provider": "moonshot",
+		"model":    "kimi-k2-turbo-preview",
+	})
+	dr.RecordTimedEvent("model_attempt_finished", "ok", "", "", time.Now().Add(-10*time.Millisecond), "", map[string]any{
+		"provider": "moonshot",
+		"model":    "kimi-k2-turbo-preview",
+	})
+	dr.RecordEvent("model_attempt_started", "running", "", "", map[string]any{
+		"provider": "moonshot",
+		"model":    "kimi-k2-turbo-preview",
+	})
+	dr.RecordTimedEvent("model_attempt_finished", "ok", "", "", time.Now().Add(-5*time.Millisecond), "", map[string]any{
+		"provider": "moonshot",
+		"model":    "kimi-k2-turbo-preview",
+	})
+	dr.RecordEvent("loop_terminated", "error", "", "", map[string]any{
+		"reason_code": "same_route_no_progress",
+		"route":       "moonshot/kimi-k2-turbo-preview",
+	})
+	pipe.storeTurnDiagnostics(context.Background(), dr)
+
+	var userNarrative, operatorNarrative string
+	if err := store.QueryRowContext(context.Background(),
+		`SELECT user_narrative, operator_narrative FROM turn_diagnostics WHERE turn_id = ?`,
+		"turn-no-progress",
+	).Scan(&userNarrative, &operatorNarrative); err != nil {
+		t.Fatalf("query narratives: %v", err)
+	}
+	if !strings.Contains(strings.ToLower(userNarrative), "same-route attempts") {
+		t.Fatalf("user_narrative = %q, want no-progress interpretation", userNarrative)
+	}
+	if !strings.Contains(operatorNarrative, "termination_cause=same_route_no_progress") {
+		t.Fatalf("operator_narrative = %q, want termination cause", operatorNarrative)
+	}
+}
+
+func TestStoreTurnDiagnostics_DerivesReplaySuppressionNarrative(t *testing.T) {
+	store := testutil.TempStore(t)
+	pipe := New(PipelineDeps{Store: store})
+	dr := NewTurnDiagnosticsRecorder("sess-1", "turn-replay", "api")
+	dr.SetSummaryField("status", "ok")
+	dr.SetSummaryField("final_provider", "moonshot")
+	dr.SetSummaryField("final_model", "kimi-k2-turbo-preview")
+	dr.SetSummaryField("user_narrative", "The system is collecting evidence about request size, retries, and model behavior for this turn.")
+	dr.SetSummaryField("operator_narrative", "Turn diagnostics active: request-shape, fallback, and provider-attempt facts are being recorded.")
+	dr.IncrementSummaryCounter("replay_suppression_count", 1)
+	dr.RecordEvent("tool_call_replay_suppressed", "warning", "", "", map[string]any{
+		"tool_name": "obsidian_write",
+		"reason":    "a prior successful execution already created the note",
+	})
+	pipe.storeTurnDiagnostics(context.Background(), dr)
+
+	var replaySuppressions int
+	var userNarrative, operatorNarrative string
+	if err := store.QueryRowContext(context.Background(),
+		`SELECT replay_suppression_count, user_narrative, operator_narrative FROM turn_diagnostics WHERE turn_id = ?`,
+		"turn-replay",
+	).Scan(&replaySuppressions, &userNarrative, &operatorNarrative); err != nil {
+		t.Fatalf("query replay summary: %v", err)
+	}
+	if replaySuppressions != 1 {
+		t.Fatalf("replay_suppression_count = %d, want 1", replaySuppressions)
+	}
+	if !strings.Contains(strings.ToLower(userNarrative), "suppressed") || !strings.Contains(userNarrative, "obsidian_write") {
+		t.Fatalf("user_narrative = %q, want replay suppression explanation", userNarrative)
+	}
+	if !strings.Contains(operatorNarrative, "replay_suppressions=1") {
+		t.Fatalf("operator_narrative = %q, want replay_suppressions=1", operatorNarrative)
+	}
+}
+
+func TestStoreTurnDiagnostics_DerivesExploratoryToolChurnNarrative(t *testing.T) {
+	store := testutil.TempStore(t)
+	pipe := New(PipelineDeps{Store: store})
+	dr := NewTurnDiagnosticsRecorder("sess-1", "turn-exploration", "api")
+	dr.SetSummaryField("status", "degraded")
+	dr.SetSummaryField("final_provider", "moonshot")
+	dr.SetSummaryField("final_model", "kimi-k2-turbo-preview")
+	dr.SetSummaryField("user_narrative", "The system is collecting evidence about request size, retries, and model behavior for this turn.")
+	dr.SetSummaryField("operator_narrative", "Turn diagnostics active: request-shape, fallback, and provider-attempt facts are being recorded.")
+	dr.RecordEvent("loop_terminated", "error", "", "", map[string]any{
+		"reason_code":        "exploratory_tool_churn",
+		"tool_name":          "search_memories",
+		"exploration_streak": 4,
+	})
+	pipe.storeTurnDiagnostics(context.Background(), dr)
+
+	var userNarrative, operatorNarrative string
+	if err := store.QueryRowContext(context.Background(),
+		`SELECT user_narrative, operator_narrative FROM turn_diagnostics WHERE turn_id = ?`,
+		"turn-exploration",
+	).Scan(&userNarrative, &operatorNarrative); err != nil {
+		t.Fatalf("query narratives: %v", err)
+	}
+	if !strings.Contains(strings.ToLower(userNarrative), "gather context without taking action") {
+		t.Fatalf("user_narrative = %q, want exploratory churn interpretation", userNarrative)
+	}
+	if !strings.Contains(operatorNarrative, "termination_cause=exploratory_tool_churn") {
+		t.Fatalf("operator_narrative = %q, want exploratory churn cause", operatorNarrative)
+	}
+	if !strings.Contains(operatorNarrative, "blocked_tool=search_memories") {
+		t.Fatalf("operator_narrative = %q, want blocked tool", operatorNarrative)
 	}
 }
 

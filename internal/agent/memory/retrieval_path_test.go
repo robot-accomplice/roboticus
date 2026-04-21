@@ -166,6 +166,24 @@ func TestRetrievalPath_ProceduralHybridFirstAndAnnotation(t *testing.T) {
 	}
 }
 
+func TestRetrievalPath_ProceduralIncludesDistilledOutcomePatterns(t *testing.T) {
+	store := testutil.TempStore(t)
+	ctx := context.Background()
+
+	if _, err := store.ExecContext(ctx,
+		`INSERT INTO semantic_memory (id, category, key, value, confidence)
+		 VALUES (?, 'procedural_outcome', 'procedural_outcome:failure:error_mode:abc123', ?, 0.9)`,
+		db.NewID(), "failure/error_mode: permission denied writing outside workspace"); err != nil {
+		t.Fatalf("seed procedural_outcome: %v", err)
+	}
+
+	mr := NewRetriever(DefaultRetrievalConfig(), DefaultTierBudget(), store)
+	block := mr.retrieveProceduralMemory(ctx, "permission denied", nil, RetrievalHybrid, 300)
+	if !strings.Contains(block, "failure/error_mode: permission denied writing outside workspace") {
+		t.Fatalf("expected distilled procedural outcome in block, got %q", block)
+	}
+}
+
 func TestRetrievalPath_RelationshipHybridFirstAndAnnotation(t *testing.T) {
 	store := testutil.TempStore(t)
 	ctx := context.Background()

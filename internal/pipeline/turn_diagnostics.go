@@ -9,29 +9,30 @@ import (
 )
 
 type TurnDiagnosticSummary struct {
-	TurnID               string  `json:"turn_id"`
-	SessionID            string  `json:"session_id"`
-	Channel              string  `json:"channel"`
-	Status               string  `json:"status"`
-	FinalModel           string  `json:"final_model,omitempty"`
-	FinalProvider        string  `json:"final_provider,omitempty"`
-	TotalMs              int64   `json:"total_ms"`
-	InferenceAttempts    int     `json:"inference_attempts"`
-	FallbackCount        int     `json:"fallback_count"`
-	ToolCallCount        int     `json:"tool_call_count"`
-	GuardRetryCount      int     `json:"guard_retry_count"`
-	VerifierRetryCount   int     `json:"verifier_retry_count"`
-	RequestMessages      int     `json:"request_messages"`
-	RequestTools         int     `json:"request_tools"`
-	RequestApproxTokens  int     `json:"request_approx_tokens"`
-	ContextPressure      string  `json:"context_pressure,omitempty"`
-	ResourcePressure     string  `json:"resource_pressure,omitempty"`
-	ResourceSnapshotJSON string  `json:"resource_snapshot_json,omitempty"`
-	PrimaryDiagnosis     string  `json:"primary_diagnosis,omitempty"`
-	DiagnosisConfidence  float64 `json:"diagnosis_confidence,omitempty"`
-	UserNarrative        string  `json:"user_narrative,omitempty"`
-	OperatorNarrative    string  `json:"operator_narrative,omitempty"`
-	RecommendationsJSON  string  `json:"recommendations_json,omitempty"`
+	TurnID                 string  `json:"turn_id"`
+	SessionID              string  `json:"session_id"`
+	Channel                string  `json:"channel"`
+	Status                 string  `json:"status"`
+	FinalModel             string  `json:"final_model,omitempty"`
+	FinalProvider          string  `json:"final_provider,omitempty"`
+	TotalMs                int64   `json:"total_ms"`
+	InferenceAttempts      int     `json:"inference_attempts"`
+	FallbackCount          int     `json:"fallback_count"`
+	ToolCallCount          int     `json:"tool_call_count"`
+	GuardRetryCount        int     `json:"guard_retry_count"`
+	VerifierRetryCount     int     `json:"verifier_retry_count"`
+	ReplaySuppressionCount int     `json:"replay_suppression_count"`
+	RequestMessages        int     `json:"request_messages"`
+	RequestTools           int     `json:"request_tools"`
+	RequestApproxTokens    int     `json:"request_approx_tokens"`
+	ContextPressure        string  `json:"context_pressure,omitempty"`
+	ResourcePressure       string  `json:"resource_pressure,omitempty"`
+	ResourceSnapshotJSON   string  `json:"resource_snapshot_json,omitempty"`
+	PrimaryDiagnosis       string  `json:"primary_diagnosis,omitempty"`
+	DiagnosisConfidence    float64 `json:"diagnosis_confidence,omitempty"`
+	UserNarrative          string  `json:"user_narrative,omitempty"`
+	OperatorNarrative      string  `json:"operator_narrative,omitempty"`
+	RecommendationsJSON    string  `json:"recommendations_json,omitempty"`
 }
 
 type TurnDiagnosticEvent struct {
@@ -220,6 +221,8 @@ func (r *TurnDiagnosticsRecorder) IncrementSummaryCounter(key string, delta int)
 		r.summary.GuardRetryCount += delta
 	case "verifier_retry_count":
 		r.summary.VerifierRetryCount += delta
+	case "replay_suppression_count":
+		r.summary.ReplaySuppressionCount += delta
 	}
 	r.dirty = true
 }

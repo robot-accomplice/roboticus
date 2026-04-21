@@ -638,6 +638,7 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 			budgetCfg:       &cfg.ContextBudget,
 			cacheCfg:        &cfg.Cache,
 			maxTurnDuration: time.Duration(cfg.Agent.AutonomyMaxTurnDurationSecs) * time.Second,
+			toolRecorder:    &toolCallRecorderAdapter{store: store},
 		},
 		Ingestor: &ingestorAdapter{m: memMgr},
 		Refiner:  &nicknameAdapter{llm: llmSvc, store: store},

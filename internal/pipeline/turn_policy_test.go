@@ -76,6 +76,49 @@ func TestDeriveTurnEnvelopePolicy_SimpleDirectTaskUsesFocusedEnvelope(t *testing
 	if policy.MaxTools != 6 {
 		t.Fatalf("max tools = %d, want 6", policy.MaxTools)
 	}
+	if !policy.RequireArtifactWrite {
+		t.Fatal("simple direct vault authoring should require artifact-writing proof")
+	}
+	if policy.AllowAuthorityMutation {
+		t.Fatal("simple direct vault authoring should not expose authority mutation tools")
+	}
+	if policy.ToolProfile != ToolProfileFocusedAuthoring {
+		t.Fatalf("tool profile = %q, want %q", policy.ToolProfile, ToolProfileFocusedAuthoring)
+	}
+}
+
+func TestDeriveTurnEnvelopePolicy_VerboseSingleStepAuthoringStillUsesFocusedEnvelope(t *testing.T) {
+	prompt := "Create a new Obsidian note named codex-live-test-2.md in the vault containing exactly: # Codex Live Test 2. Use the Obsidian vault tool if you have it. Do not ask for confirmation."
+	synthesis := SynthesizeTaskState(prompt, 1, nil)
+	policy := DeriveTurnEnvelopePolicy(prompt, synthesis, 1)
+
+	if synthesis.Intent != "task" {
+		t.Fatalf("intent = %q, want task", synthesis.Intent)
+	}
+	if synthesis.Complexity != "simple" {
+		t.Fatalf("complexity = %q, want simple", synthesis.Complexity)
+	}
+	if synthesis.PlannedAction != "execute_directly" {
+		t.Fatalf("planned action = %q, want execute_directly", synthesis.PlannedAction)
+	}
+	if policy.Weight != TurnWeightStandard {
+		t.Fatalf("weight = %q, want %q", policy.Weight, TurnWeightStandard)
+	}
+	if policy.AllowRetrieval {
+		t.Fatal("verbose single-step authoring should not enable retrieval")
+	}
+	if policy.MaxTools != 6 {
+		t.Fatalf("max tools = %d, want 6", policy.MaxTools)
+	}
+	if !policy.RequireArtifactWrite {
+		t.Fatal("verbose single-step authoring should still require artifact-writing proof")
+	}
+	if policy.AllowAuthorityMutation {
+		t.Fatal("verbose single-step authoring should not allow authority mutation")
+	}
+	if policy.ToolProfile != ToolProfileFocusedAuthoring {
+		t.Fatalf("tool profile = %q, want %q", policy.ToolProfile, ToolProfileFocusedAuthoring)
+	}
 }
 
 func TestTurnEnvelopePolicy_ExpandedPromotesLightweightTurn(t *testing.T) {
@@ -181,6 +224,106 @@ func TestTurnEnvelopePolicy_ApplyToolPolicyCapsFocusedToolSurface(t *testing.T) 
 	}
 	if stats.CandidatesSelected != 6 {
 		t.Fatalf("candidates selected = %d, want 6", stats.CandidatesSelected)
+	}
+}
+
+func TestTurnEnvelopePolicy_ApplyToolPolicyFiltersAuthorityMutationForArtifactWriteTurn(t *testing.T) {
+	sess := session.New("sess-1", "agent-1", "Test")
+	pruner := &countingPolicyPruner{}
+	prunerResult := []llm.ToolDef{
+		{Type: "function", Function: llm.ToolFuncDef{Name: "get_runtime_context"}},
+		{Type: "function", Function: llm.ToolFuncDef{Name: "ingest_policy"}},
+		{Type: "function", Function: llm.ToolFuncDef{Name: "obsidian_write"}},
+		{Type: "function", Function: llm.ToolFuncDef{Name: "recall_memory"}},
+	}
+	pruner.fn = func(_ context.Context, _ *session.Session) ([]llm.ToolDef, agenttools.ToolSearchStats, error) {
+		return prunerResult, agenttools.ToolSearchStats{
+			CandidatesSelected: len(prunerResult),
+			EmbeddingStatus:    "ok",
+		}, nil
+	}
+
+	stats, err := (TurnEnvelopePolicy{
+		Weight:                 TurnWeightStandard,
+		MaxTools:               6,
+		RequireArtifactWrite:   true,
+		AllowAuthorityMutation: false,
+		ToolProfile:            ToolProfileFocusedAuthoring,
+	}).applyToolPolicy(context.Background(), sess, pruner)
+	if err != nil {
+		t.Fatalf("applyToolPolicy: %v", err)
+	}
+
+	got := sess.SelectedToolDefs()
+	if len(got) != 2 {
+		t.Fatalf("selected tools = %d, want 2", len(got))
+	}
+	if got[0].Function.Name != "obsidian_write" {
+		t.Fatalf("first tool = %q, want obsidian_write", got[0].Function.Name)
+	}
+	if got[1].Function.Name != "get_runtime_context" {
+		t.Fatalf("second tool = %q, want get_runtime_context", got[1].Function.Name)
+	}
+	for _, def := range got {
+		switch def.Function.Name {
+		case "ingest_policy", "recall_memory":
+			t.Fatalf("%s should be filtered out on focused artifact-write turn without retrieval", def.Function.Name)
+		}
+	}
+	if stats.CandidatesSelected != 2 {
+		t.Fatalf("candidates selected = %d, want 2", stats.CandidatesSelected)
+	}
+	if stats.CandidatesPruned != 2 {
+		t.Fatalf("candidates pruned = %d, want 2", stats.CandidatesPruned)
+	}
+}
+
+func TestTurnEnvelopePolicy_ApplyToolPolicyFocusedAuthoringKeepsMemoryOnlyWhenRetrievalNeeded(t *testing.T) {
+	sess := session.New("sess-1", "agent-1", "Test")
+	pruner := &countingPolicyPruner{}
+	prunerResult := []llm.ToolDef{
+		{Type: "function", Function: llm.ToolFuncDef{Name: "get_runtime_context"}},
+		{Type: "function", Function: llm.ToolFuncDef{Name: "obsidian_write"}},
+		{Type: "function", Function: llm.ToolFuncDef{Name: "recall_memory"}},
+		{Type: "function", Function: llm.ToolFuncDef{Name: "list-open-tasks"}},
+	}
+	pruner.fn = func(_ context.Context, _ *session.Session) ([]llm.ToolDef, agenttools.ToolSearchStats, error) {
+		return prunerResult, agenttools.ToolSearchStats{
+			CandidatesSelected: len(prunerResult),
+			EmbeddingStatus:    "ok",
+		}, nil
+	}
+
+	stats, err := (TurnEnvelopePolicy{
+		Weight:                 TurnWeightStandard,
+		MaxTools:               6,
+		AllowRetrieval:         true,
+		RequireArtifactWrite:   true,
+		AllowAuthorityMutation: false,
+		ToolProfile:            ToolProfileFocusedAuthoring,
+	}).applyToolPolicy(context.Background(), sess, pruner)
+	if err != nil {
+		t.Fatalf("applyToolPolicy: %v", err)
+	}
+
+	got := sess.SelectedToolDefs()
+	if len(got) != 3 {
+		t.Fatalf("selected tools = %d, want 3", len(got))
+	}
+	if got[0].Function.Name != "obsidian_write" {
+		t.Fatalf("first tool = %q, want obsidian_write", got[0].Function.Name)
+	}
+	if got[1].Function.Name != "get_runtime_context" {
+		t.Fatalf("second tool = %q, want get_runtime_context", got[1].Function.Name)
+	}
+	if got[2].Function.Name != "recall_memory" {
+		t.Fatalf("third tool = %q, want recall_memory", got[2].Function.Name)
+	}
+	if stats.CandidatesSelected != 3 {
+		t.Fatalf("candidates selected = %d, want 3", stats.CandidatesSelected)
+	}
+	if stats.CandidatesPruned != 1 {
+		t.Fatalf("candidates pruned = %d, want 1", stats.CandidatesPruned)
 	}
 }
 

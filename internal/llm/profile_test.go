@@ -60,3 +60,29 @@ func TestSelectByMetascore(t *testing.T) {
 		t.Errorf("got %s, want strong", best.Model)
 	}
 }
+
+func TestApplyIntentEvidence_CanonicalObservationOverridesPriorAndAvoidsUnexercised(t *testing.T) {
+	iq := NewIntentQualityTracker(16)
+	if seeded := iq.SeedIntentBaselines([]IntentBaseline{{
+		Model:       "openai/gpt-4o-mini",
+		IntentClass: "TOOL_USE",
+		Quality:     0.60,
+	}}); seeded != 1 {
+		t.Fatalf("seeded = %d, want 1", seeded)
+	}
+	iq.RecordWithIntent("openrouter/openai/gpt-4o-mini", IntentToolUse.String(), 0.82)
+
+	profile := ModelProfile{
+		Model:                  "openai/gpt-4o-mini",
+		GlobalObservationCount: 3,
+		Confidence:             1.0,
+	}
+	applyIntentEvidence(&profile, IntentToolUse.String(), iq)
+
+	if profile.IntentObservationCount != 1 {
+		t.Fatalf("IntentObservationCount = %d, want 1", profile.IntentObservationCount)
+	}
+	if profile.CapabilityEvidence != "observed_for_intent" {
+		t.Fatalf("CapabilityEvidence = %q, want observed_for_intent", profile.CapabilityEvidence)
+	}
+}

@@ -334,6 +334,24 @@ func TestResolveSession_SessionFromBody_ExistingSession(t *testing.T) {
 	}
 }
 
+func TestResolveSession_SessionFromBody_MissingSession(t *testing.T) {
+	store := testutil.TempStore(t)
+	pipe := New(PipelineDeps{Store: store})
+	ctx := context.Background()
+
+	_, err := pipe.resolveSession(ctx, Config{SessionResolution: SessionFromBody}, Input{
+		SessionID: "missing-session-id",
+		AgentID:   "a1",
+		Platform:  "test",
+	})
+	if err == nil {
+		t.Fatal("expected missing session to fail")
+	}
+	if !errors.Is(err, core.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
 func TestResolveSession_SessionDedicated(t *testing.T) {
 	store := testutil.TempStore(t)
 	pipe := New(PipelineDeps{Store: store})

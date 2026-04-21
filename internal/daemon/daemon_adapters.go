@@ -623,6 +623,7 @@ type executorAdapter struct {
 	budgetCfg       *core.ContextBudgetConfig
 	cacheCfg        *core.CacheConfig
 	maxTurnDuration time.Duration
+	toolRecorder    agent.ToolCallRecorder
 }
 
 func (a *executorAdapter) RunLoop(ctx context.Context, sess *session.Session) (string, int, error) {
@@ -635,6 +636,7 @@ func (a *executorAdapter) RunLoop(ctx context.Context, sess *session.Session) (s
 	loop := agent.NewLoop(loopCfg, agent.LoopDeps{
 		LLM:       a.llmSvc,
 		Tools:     a.tools,
+		Recorder:  a.toolRecorder,
 		Policy:    a.policy,
 		Injection: a.injection,
 		Memory:    a.memMgr,
@@ -643,6 +645,26 @@ func (a *executorAdapter) RunLoop(ctx context.Context, sess *session.Session) (s
 
 	content, err := loop.Run(ctx, sess)
 	return content, loop.TurnCount(), err
+}
+
+type toolCallRecorderAdapter struct {
+	store *db.Store
+}
+
+func (a *toolCallRecorderAdapter) RecordToolExecution(ctx context.Context, rec agent.ToolExecutionRecord) error {
+	if a == nil || a.store == nil || rec.TurnID == "" {
+		return nil
+	}
+	repo := db.NewToolsRepository(a.store)
+	return repo.Record(ctx, db.ToolCallRow{
+		ID:         rec.TurnID + ":" + rec.ToolCallID,
+		TurnID:     rec.TurnID,
+		ToolName:   rec.ToolName,
+		Input:      rec.Input,
+		Output:     rec.Output,
+		Status:     rec.Status,
+		DurationMs: rec.DurationMs,
+	})
 }
 
 // nicknameAdapter wraps *llm.Service + *db.Store → pipeline.NicknameRefiner.

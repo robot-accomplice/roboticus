@@ -85,6 +85,8 @@ func TestModelSpecForTarget(t *testing.T) {
 	}{
 		{RouteTarget{Provider: "openai", Model: "gpt-4"}, "openai/gpt-4"},
 		{RouteTarget{Provider: "openai", Model: "openai/gpt-4"}, "openai/gpt-4"}, // already has slash
+		{RouteTarget{Provider: "openrouter", Model: "openai/gpt-4o-mini"}, "openrouter/openai/gpt-4o-mini"},
+		{RouteTarget{Provider: "openrouter", Model: "openrouter/openai/gpt-4o-mini"}, "openrouter/openai/gpt-4o-mini"},
 		{RouteTarget{Provider: "", Model: "gpt-4"}, "gpt-4"},
 		{RouteTarget{Provider: "openai", Model: ""}, "openai"},
 		{RouteTarget{Provider: "", Model: ""}, ""},

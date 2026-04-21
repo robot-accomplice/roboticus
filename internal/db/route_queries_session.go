@@ -247,7 +247,7 @@ func (rq *RouteQueries) GetTurnDiagnostics(ctx context.Context, turnID string) *
 	return rq.q.QueryRowContext(ctx,
 		`SELECT id, turn_id, session_id, channel, status, COALESCE(final_model, ''),
 		        COALESCE(final_provider, ''), total_ms, inference_attempts, fallback_count,
-		        tool_call_count, guard_retry_count, verifier_retry_count, request_messages,
+		        tool_call_count, guard_retry_count, verifier_retry_count, replay_suppression_count, request_messages,
 		        request_tools, request_approx_tokens, COALESCE(context_pressure, ''),
 		        COALESCE(resource_pressure, ''), COALESCE(resource_snapshot_json, ''), COALESCE(primary_diagnosis, ''),
 		        diagnosis_confidence, COALESCE(user_narrative, ''), COALESCE(operator_narrative, ''),

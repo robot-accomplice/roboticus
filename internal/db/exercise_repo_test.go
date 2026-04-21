@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"roboticus/internal/hostresources"
+	"roboticus/internal/modelstate"
 )
 
 func TestBaselineRuns_PersistAndList(t *testing.T) {
@@ -25,6 +26,16 @@ func TestBaselineRuns_PersistAndList(t *testing.T) {
 			CPUPercent:           41.5,
 			MemoryAvailableBytes: 12_000_000_000,
 		},
+		StartModelStates: []modelstate.Snapshot{{
+			CollectedAt:        "2026-04-20T18:00:00Z",
+			Model:              "ollama/gemma4",
+			Provider:           "ollama",
+			ProviderConfigured: true,
+			ProviderReachable:  true,
+			ModelAvailable:     true,
+			ModelLoaded:        true,
+			StateClass:         "ready",
+		}},
 	}); err != nil {
 		t.Fatalf("InsertBaselineRun: %v", err)
 	}
@@ -32,7 +43,16 @@ func TestBaselineRuns_PersistAndList(t *testing.T) {
 		CollectedAt:          "2026-04-20T18:10:00Z",
 		CPUPercent:           88.1,
 		MemoryAvailableBytes: 4_000_000_000,
-	}); err != nil {
+	}, []modelstate.Snapshot{{
+		CollectedAt:        "2026-04-20T18:10:00Z",
+		Model:              "ollama/gemma4",
+		Provider:           "ollama",
+		ProviderConfigured: true,
+		ProviderReachable:  true,
+		ModelAvailable:     true,
+		ModelLoaded:        false,
+		StateClass:         "installed_not_loaded",
+	}}); err != nil {
 		t.Fatalf("CompleteBaselineRun: %v", err)
 	}
 
@@ -54,5 +74,11 @@ func TestBaselineRuns_PersistAndList(t *testing.T) {
 	}
 	if runs[0].StartResources.MemoryAvailableBytes != 12_000_000_000 {
 		t.Fatalf("start resources memory_available_bytes = %d", runs[0].StartResources.MemoryAvailableBytes)
+	}
+	if len(runs[0].StartModelStates) != 1 || len(runs[0].EndModelStates) != 1 {
+		t.Fatalf("expected model state snapshots to round-trip: %+v", runs[0])
+	}
+	if runs[0].EndModelStates[0].StateClass != "installed_not_loaded" {
+		t.Fatalf("end model state = %q, want installed_not_loaded", runs[0].EndModelStates[0].StateClass)
 	}
 }

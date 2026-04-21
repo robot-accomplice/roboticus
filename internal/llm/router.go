@@ -21,11 +21,13 @@ const (
 // heuristics. When MetascoreSelector is set, it overrides the heuristic
 // path with a runtime-feedback-driven selection.
 type Router struct {
-	modelsMu sync.RWMutex
-	models     []RouteTarget
-	costAware  bool
-	localFirst bool
-	roundRobin bool
+	modelsMu      sync.RWMutex
+	models        []RouteTarget
+	costAware     bool
+	localFirst    bool
+	roundRobin    bool
+	toolAllowlist []string
+	toolBlocklist []string
 
 	// roundRobinIdx is atomically incremented for round-robin selection.
 	roundRobinIdx uint64
@@ -82,6 +84,16 @@ func NewRouter(targets []RouteTarget, cfg RouterConfig) *Router {
 		localFirst: cfg.LocalFirst,
 		roundRobin: cfg.RoundRobin,
 	}
+}
+
+// SetToolSupportPolicy installs the allow/block lists used to exclude models
+// that cannot satisfy tool-bearing turns during routing rather than only at the
+// later execution seam.
+func (r *Router) SetToolSupportPolicy(allowlist, blocklist []string) {
+	r.modelsMu.Lock()
+	defer r.modelsMu.Unlock()
+	r.toolAllowlist = append([]string(nil), allowlist...)
+	r.toolBlocklist = append([]string(nil), blocklist...)
 }
 
 // Targets returns a copy of the configured routing targets.
@@ -152,9 +164,15 @@ func (r *Router) GetRoutingWeights() RoutingWeights {
 func (r *Router) EnableMetascoreRouting(quality *QualityTracker, latency *LatencyTracker, capacity *CapacityTracker, breakers *BreakerRegistry) {
 	r.MetascoreSelector = func(targets []RouteTarget, req *Request) *ModelProfile {
 		profiles := BuildModelProfiles(targets, quality, latency, capacity, breakers)
-		if intentClass := requestIntentClass(req); intentClass != "" && r.intentQuality != nil {
+		intentClass := requestIntentClass(req)
+		if intentClass != "" && r.intentQuality != nil {
 			for i := range profiles {
 				profiles[i].Quality = r.intentQuality.EstimatedQualityForIntent(profiles[i].Model, intentClass)
+				applyIntentEvidence(&profiles[i], intentClass, r.intentQuality)
+			}
+		} else {
+			for i := range profiles {
+				applyIntentEvidence(&profiles[i], intentClass, r.intentQuality)
 			}
 		}
 		w := r.GetRoutingWeights()
@@ -192,7 +210,10 @@ func (r *Router) Select(req *Request) RouteTarget {
 
 	// Round-robin: simple rotating selection across all models.
 	if r.roundRobin {
-		targets := filterTargetsForRole(models, req)
+		targets := filterTargetsForRequest(models, req, r.toolAllowlist, r.toolBlocklist)
+		if len(targets) == 0 {
+			targets = filterTargetsForRole(models, req)
+		}
 		if len(targets) == 0 {
 			targets = models
 		}
@@ -202,16 +223,27 @@ func (r *Router) Select(req *Request) RouteTarget {
 
 	// Metascore routing overrides heuristic selection when enabled.
 	if r.MetascoreSelector != nil {
-		targets := filterTargetsForRole(models, req)
+		targets := filterTargetsForRequest(models, req, r.toolAllowlist, r.toolBlocklist)
+		if len(targets) == 0 {
+			targets = filterTargetsForRole(models, req)
+		}
 		if len(targets) == 0 {
 			targets = models
 		}
 		if p := r.MetascoreSelector(targets, req); p != nil {
+			for _, target := range targets {
+				if target.Model == p.Model && target.Provider == p.Provider {
+					return target
+				}
+			}
 			return RouteTarget{Model: p.Model, Provider: p.Provider}
 		}
 	}
 
-	targets := filterTargetsForRole(models, req)
+	targets := filterTargetsForRequest(models, req, r.toolAllowlist, r.toolBlocklist)
+	if len(targets) == 0 {
+		targets = filterTargetsForRole(models, req)
+	}
 	if len(targets) == 0 {
 		targets = models
 	}
@@ -291,6 +323,91 @@ func filterTargetsForRole(targets []RouteTarget, req *Request) []RouteTarget {
 	for _, target := range targets {
 		if routeTargetEligibleForRole(target, role) {
 			filtered = append(filtered, target)
+		}
+	}
+	return filtered
+}
+
+type RouteTargetAssessment struct {
+	Target           RouteTarget
+	Model            string
+	RoleEligible     bool
+	ToolCapable      bool
+	RequestEligible  bool
+	ExclusionReasons []string
+}
+
+func assessTargetsForRequest(targets []RouteTarget, req *Request, allowlist, blocklist []string) []RouteTargetAssessment {
+	if len(targets) == 0 {
+		return nil
+	}
+	role := "orchestrator"
+	if req != nil {
+		role = normalizeAgentRole(req.AgentRole)
+	}
+	requireTools := req != nil && len(req.Tools) > 0
+	assessments := make([]RouteTargetAssessment, 0, len(targets))
+	roleEligibleToolCapableExists := false
+
+	for _, target := range targets {
+		model := ModelSpecForTarget(target)
+		if model == "" {
+			model = target.Model
+		}
+		roleEligible := routeTargetEligibleForRole(target, role)
+		toolCapable := true
+		if requireTools {
+			toolCapable = modelSupportsTools(target.Model, allowlist, blocklist)
+		}
+		reasons := make([]string, 0, 2)
+		if !roleEligible {
+			switch normalizeModelState(target.State) {
+			case ModelStateDisabled:
+				reasons = append(reasons, "policy_disabled")
+			case ModelStateBenchmarkOnly:
+				reasons = append(reasons, "benchmark_only")
+			default:
+				reasons = append(reasons, "role_ineligible")
+			}
+		}
+		if roleEligible && requireTools && !toolCapable {
+			reasons = append(reasons, "missing_tool_capability")
+		}
+		if roleEligible && (!requireTools || toolCapable) {
+			roleEligibleToolCapableExists = true
+		}
+		assessments = append(assessments, RouteTargetAssessment{
+			Target:           target,
+			Model:            model,
+			RoleEligible:     roleEligible,
+			ToolCapable:      toolCapable,
+			ExclusionReasons: reasons,
+		})
+	}
+
+	for i := range assessments {
+		requestEligible := assessments[i].RoleEligible
+		if requireTools && roleEligibleToolCapableExists {
+			requestEligible = requestEligible && assessments[i].ToolCapable
+		}
+		assessments[i].RequestEligible = requestEligible
+		if requireTools && roleEligibleToolCapableExists && assessments[i].RoleEligible && !assessments[i].ToolCapable {
+			assessments[i].ExclusionReasons = appendIfMissing(assessments[i].ExclusionReasons, "missing_tool_capability")
+		}
+	}
+
+	return assessments
+}
+
+func filterTargetsForRequest(targets []RouteTarget, req *Request, allowlist, blocklist []string) []RouteTarget {
+	assessments := assessTargetsForRequest(targets, req, allowlist, blocklist)
+	if len(assessments) == 0 {
+		return nil
+	}
+	filtered := make([]RouteTarget, 0, len(assessments))
+	for _, assessment := range assessments {
+		if assessment.RequestEligible {
+			filtered = append(filtered, assessment.Target)
 		}
 	}
 	return filtered
@@ -384,4 +501,17 @@ func tierForComplexity(c Complexity) ModelTier {
 	default:
 		return TierSmall
 	}
+}
+
+func appendIfMissing(items []string, value string) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return items
+	}
+	for _, existing := range items {
+		if strings.TrimSpace(existing) == value {
+			return items
+		}
+	}
+	return append(items, value)
 }

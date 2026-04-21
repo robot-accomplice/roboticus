@@ -143,13 +143,59 @@ func TestSynthesizeTaskState_InvestigativeTaskRequiresRetrieval(t *testing.T) {
 	}
 }
 
+func TestSynthesizeTaskState_ProceduralUncertaintyTriggersAppliedLearningRetrieval(t *testing.T) {
+	result := SynthesizeTaskState(
+		"Set up a canary release workflow for the auth service with rollout and rollback gates.",
+		1,
+		nil,
+	)
+	if !result.ProceduralUncertainty {
+		t.Fatal("expected procedural uncertainty for unfamiliar procedural task")
+	}
+	if !result.RetrievalNeeded {
+		t.Fatal("procedural uncertainty should trigger applied-learning retrieval")
+	}
+	if result.RetrievalReason != "applied_learning_uncertainty" {
+		t.Fatalf("retrieval reason = %q, want applied_learning_uncertainty", result.RetrievalReason)
+	}
+}
+
 func TestSynthesizeTaskState_NoteTitleWithTestDoesNotBecomeCode(t *testing.T) {
 	result := SynthesizeTaskState("Create a new Obsidian note named codex-live-test.md in the vault containing exactly: # Codex Live Test.", 1, nil)
 	if result.Intent != "task" {
 		t.Fatalf("intent = %q, want task", result.Intent)
 	}
+	if result.Complexity != "simple" {
+		t.Fatalf("complexity = %q, want simple", result.Complexity)
+	}
 	if result.RetrievalNeeded {
 		t.Fatal("simple vault note creation should not require retrieval")
+	}
+	if result.ProceduralUncertainty {
+		t.Fatal("simple vault note creation should not be treated as procedural uncertainty")
+	}
+	if result.RetrievalReason != "none" {
+		t.Fatalf("retrieval reason = %q, want none", result.RetrievalReason)
+	}
+}
+
+func TestSynthesizeTaskState_VerboseSingleStepAuthoringStaysSimple(t *testing.T) {
+	result := SynthesizeTaskState(
+		"Create a new Obsidian note named codex-live-test-2.md in the vault containing exactly: # Codex Live Test 2. Use the Obsidian vault tool if you have it. Do not ask for confirmation.",
+		1,
+		nil,
+	)
+	if result.Intent != "task" {
+		t.Fatalf("intent = %q, want task", result.Intent)
+	}
+	if result.Complexity != "simple" {
+		t.Fatalf("complexity = %q, want simple", result.Complexity)
+	}
+	if result.PlannedAction != "execute_directly" {
+		t.Fatalf("planned action = %q, want execute_directly", result.PlannedAction)
+	}
+	if result.RetrievalNeeded {
+		t.Fatal("verbose single-step authoring should not require retrieval")
 	}
 }
 

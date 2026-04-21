@@ -27,6 +27,10 @@
 > - **Episodic reflection is dual-surface by design.** `episodic_memory.content`
 >   remains the compact human-readable summary, while `episodic_memory.content_json`
 >   preserves structured turn-state for consolidation and future learning flows.
+> - **Procedural reuse is outcome-aware.** Episode summaries now preserve
+>   reusable outcome semantics for novel procedural experience — successes,
+>   failures, and mixed results — so applied-learning retrieval can reuse what
+>   worked and avoid what already failed without relying on free-text luck.
 > - **Continuity lifecycle is artifact-owned.** Checkpoint save/load/prune flows
 >   through `CheckpointRepository`, and post-turn reflection reads turn-owned
 >   artifacts (`tool_calls`, `pipeline_traces`, `model_selection_events`) rather
@@ -690,6 +694,10 @@ Query → Decompose (compound → subgoals)
 - **Shutdown**: persist all active entries with `persisted_at` timestamp
 - **Startup**: vet entries (discard stale >24h, low importance ≤3, turn_summaries)
 - **Consolidation**: entries surviving multiple cycles promote to episodic memory
+- **Outcome-aware distillation**: recurring reusable procedural outcomes from
+  `episode_summary` artifacts may promote into reusable procedural knowledge,
+  preserving whether the pattern represented a success, a failure, or a mixed
+  result instead of flattening everything into generic positive learnings
 - Not a retrieval tier — always injected directly into prompt as active state
 
 ---

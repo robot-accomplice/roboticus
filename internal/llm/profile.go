@@ -1,18 +1,25 @@
 package llm
 
+import "strings"
+
 // ModelProfile aggregates runtime signals about a model's fitness for routing.
 // All 6 dimensions correspond to the spider graph axes in the dashboard.
 type ModelProfile struct {
-	Model        string    `json:"model"`
-	Provider     string    `json:"provider"`
-	Tier         ModelTier `json:"tier"`
-	IsLocal      bool      `json:"is_local"`
-	Quality      float64   `json:"quality"`      // 0-1, from QualityTracker (= Efficacy axis)
-	Availability float64   `json:"availability"` // 0-1, from circuit breaker state
-	Cost         float64   `json:"cost"`         // 0-1 normalized cost (lower = cheaper)
-	Locality     float64   `json:"locality"`     // 1.0 = local, 0.0 = cloud
-	Confidence   float64   `json:"confidence"`   // observation-count penalty
-	Speed        float64   `json:"speed"`        // 0-1, from LatencyTracker
+	Model                  string    `json:"model"`
+	Provider               string    `json:"provider"`
+	Tier                   ModelTier `json:"tier"`
+	IsLocal                bool      `json:"is_local"`
+	State                  string    `json:"state,omitempty"`
+	ReasonCodes            []string  `json:"reason_codes,omitempty"`
+	GlobalObservationCount int       `json:"global_observation_count,omitempty"`
+	IntentObservationCount int       `json:"intent_observation_count,omitempty"`
+	CapabilityEvidence     string    `json:"capability_evidence,omitempty"`
+	Quality                float64   `json:"quality"`      // 0-1, from QualityTracker (= Efficacy axis)
+	Availability           float64   `json:"availability"` // 0-1, from circuit breaker state
+	Cost                   float64   `json:"cost"`         // 0-1 normalized cost (lower = cheaper)
+	Locality               float64   `json:"locality"`     // 1.0 = local, 0.0 = cloud
+	Confidence             float64   `json:"confidence"`   // observation-count penalty
+	Speed                  float64   `json:"speed"`        // 0-1, from LatencyTracker
 }
 
 // RoutingWeights holds the 6 user-configurable axis weights for metascore.
@@ -66,10 +73,12 @@ func BuildModelProfiles(
 	profiles := make([]ModelProfile, 0, len(targets))
 	for _, t := range targets {
 		p := ModelProfile{
-			Model:    t.Model,
-			Provider: t.Provider,
-			Tier:     t.Tier,
-			IsLocal:  t.IsLocal,
+			Model:       t.Model,
+			Provider:    t.Provider,
+			Tier:        t.Tier,
+			IsLocal:     t.IsLocal,
+			State:       t.State,
+			ReasonCodes: append([]string(nil), t.ReasonCodes...),
 		}
 
 		// Quality from tracker.
@@ -111,6 +120,7 @@ func BuildModelProfiles(
 		// Confidence: penalize cold-start models with few observations.
 		if quality != nil {
 			obs := quality.ObservationCount(t.Model)
+			p.GlobalObservationCount = obs
 			if obs >= confidenceThreshold {
 				p.Confidence = 1.0
 			} else {
@@ -120,6 +130,7 @@ func BuildModelProfiles(
 		} else {
 			p.Confidence = coldStartConfidenceFloor
 		}
+		p.CapabilityEvidence = "unexercised"
 
 		// Speed: from latency tracker (6th spider graph axis).
 		if latency != nil {
@@ -131,6 +142,61 @@ func BuildModelProfiles(
 		profiles = append(profiles, p)
 	}
 	return profiles
+}
+
+func applyIntentEvidence(profile *ModelProfile, intentClass string, iq *IntentQualityTracker) {
+	if profile == nil {
+		return
+	}
+	intentClass = strings.TrimSpace(intentClass)
+	if intentClass == "" {
+		profile.IntentObservationCount = 0
+		switch {
+		case profile.GlobalObservationCount > 0:
+			profile.CapabilityEvidence = "observed_generic"
+		default:
+			profile.CapabilityEvidence = "unexercised"
+		}
+		return
+	}
+	intentObs := 0
+	if iq != nil {
+		intentObs = iq.ObservationCountForIntent(profile.Model, intentClass)
+	}
+	profile.IntentObservationCount = intentObs
+	switch {
+	case intentObs > 0:
+		profile.CapabilityEvidence = "observed_for_intent"
+		progress := min64(float64(intentObs)/float64(confidenceThreshold), 1.0)
+		profile.Confidence *= 0.70 + (0.30 * progress)
+	case profile.GlobalObservationCount > 0:
+		profile.CapabilityEvidence = "unproven_for_intent"
+		progress := min64(float64(profile.GlobalObservationCount)/float64(confidenceThreshold), 1.0)
+		profile.Confidence *= 0.55 + (0.20 * progress)
+	default:
+		profile.CapabilityEvidence = "unexercised"
+		profile.Confidence *= 0.45
+	}
+}
+
+func capabilityEvidenceRecommendation(profile ModelProfile, intentClass string) string {
+	intentClass = strings.TrimSpace(intentClass)
+	switch profile.CapabilityEvidence {
+	case "observed_for_intent", "observed_generic":
+		return ""
+	case "unproven_for_intent":
+		if intentClass == "" {
+			return "Exercise this model on representative operator turns before expecting it to route confidently."
+		}
+		return "Exercise this model on " + intentClass + " turns before expecting it to route confidently for that capability."
+	case "unexercised":
+		if intentClass == "" {
+			return "This model has no runtime evidence yet. Exercise it before expecting it to participate in live routing."
+		}
+		return "This model has not been exercised for " + intentClass + ". Run a focused exercise before expecting it to participate in live routing for that capability."
+	default:
+		return ""
+	}
 }
 
 // MetascoreBreakdown holds the RAW per-axis dimension scores [0, 1] for a model,
@@ -417,9 +483,40 @@ func routingFitnessModifier(profile ModelProfile, req *Request, complexity float
 	modifier := 1.0
 	turnWeight := ""
 	taskIntent := ""
+	agentRole := "orchestrator"
 	if req != nil {
 		turnWeight = req.TurnWeight
 		taskIntent = normalizeTaskIntent(req.TaskIntent)
+		agentRole = normalizeAgentRole(req.AgentRole)
+	}
+
+	switch normalizeModelState(profile.State) {
+	case ModelStateNiche:
+		if agentRole == "orchestrator" && (turnWeight == "light" || turnWeight == "standard") {
+			modifier *= 0.65
+		}
+	}
+
+	if agentRole == "orchestrator" {
+		if modelHasReasonCode(profile, "under_scrutiny") {
+			modifier *= 0.75
+		}
+		if modelHasReasonCode(profile, "latency_heavy") || modelHasReasonCode(profile, "latency_nonviable") {
+			switch turnWeight {
+			case "light":
+				modifier *= 0.35
+			case "standard":
+				modifier *= 0.60
+			}
+		}
+		if modelHasReasonCode(profile, "provider_instability") || modelHasReasonCode(profile, "hardware_mismatch") {
+			switch turnWeight {
+			case "light":
+				modifier *= 0.30
+			case "standard":
+				modifier *= 0.55
+			}
+		}
 	}
 
 	if profile.IsLocal {
@@ -502,6 +599,19 @@ func routingFitnessModifier(profile ModelProfile, req *Request, complexity float
 	}
 
 	return modifier
+}
+
+func modelHasReasonCode(profile ModelProfile, code string) bool {
+	code = strings.TrimSpace(strings.ToLower(code))
+	if code == "" {
+		return false
+	}
+	for _, reason := range profile.ReasonCodes {
+		if strings.TrimSpace(strings.ToLower(reason)) == code {
+			return true
+		}
+	}
+	return false
 }
 
 // SelectByMetascoreWeighted picks the highest-scoring model using custom weights.

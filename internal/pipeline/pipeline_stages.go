@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"math"
 	"strings"
@@ -112,7 +113,7 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 		liveRetryPolicy.ErrorOnExhaust = false
 		guardRun, guardErr := retryWithGuardsDetailed(ctx, p.executor, session, activeGuards, liveRetryPolicy, func() *GuardContext {
 			return p.buildGuardContext(session)
-		})
+		}, decideGuardRetryAfterProgress)
 		if guardErr != nil {
 			return nil, core.WrapError(core.ErrLLM, "inference failed", guardErr)
 		}
@@ -129,6 +130,21 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 				map[string]any{
 					"violations":   guardRun.InitialGuardResult.Violations,
 					"retry_reason": guardRun.InitialGuardResult.RetryReason,
+				},
+			)
+			p.storeTurnDiagnostics(ctx, dr)
+		}
+		if dr != nil && guardRun.RetrySuppressed {
+			progress := executionProgressFromGuardContext(p.buildGuardContext(session))
+			dr.RecordEvent("guard_retry_suppressed", "ok",
+				"guard retry suppressed after substantive execution progress",
+				"The initial answer had already made real tool-backed progress, so the system recorded the guard concern without reusing the route again.",
+				map[string]any{
+					"violations":         guardRun.InitialGuardResult.Violations,
+					"retry_reason":       guardRun.InitialGuardResult.RetryReason,
+					"suppression_reason": guardRun.RetrySuppressReason,
+					"successful_tools":   progress.SuccessfulToolResults,
+					"artifact_writes":    progress.SuccessfulArtifactWrites,
 				},
 			)
 			p.storeTurnDiagnostics(ctx, dr)
@@ -180,7 +196,8 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 	verifyResult := VerifyResponse(result, verifyCtx)
 	AnnotateVerifierTrace(tr, verifyResult)
 	verifySummary := SummarizeVerification(verifyResult)
-	if !verifyResult.Passed {
+	verifyRetryDisposition := decideVerifierRetryAfterProgress(verifyResult, verifyCtx, executionProgressFromGuardContext(p.buildGuardContext(session)))
+	if !verifyResult.Passed && verifyRetryDisposition.Allow {
 		policy = p.maybeExpandTurnEnvelope(ctx, session, policy, verifyResult, dr)
 		if dr != nil {
 			dr.IncrementSummaryCounter("verifier_retry_count", 1)
@@ -215,6 +232,20 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 			}
 			result = retryContent
 		}
+	} else if !verifyResult.Passed && dr != nil {
+		progress := executionProgressFromGuardContext(p.buildGuardContext(session))
+		dr.RecordEvent("verifier_retry_suppressed", "ok",
+			"verifier retry suppressed after substantive execution progress",
+			"The answer already completed real tool-backed work, so the remaining verifier findings were recorded as concerns instead of triggering another model attempt.",
+			map[string]any{
+				"issues":             verifyResult.RetryMessage(),
+				"issue_codes":        verifySummary.IssueCodes,
+				"suppression_reason": verifyRetryDisposition.Reason,
+				"successful_tools":   progress.SuccessfulToolResults,
+				"artifact_writes":    progress.SuccessfulArtifactWrites,
+			},
+		)
+		p.storeTurnDiagnostics(ctx, dr)
 	}
 
 	// Store assistant response with topic tag (matching Rust: append_message_with_topic).
@@ -681,6 +712,20 @@ func (p *Pipeline) resolveSession(ctx context.Context, cfg Config, input Input) 
 func (p *Pipeline) loadSession(ctx context.Context, input Input) (*Session, error) {
 	sess := NewSession(input.SessionID, input.AgentID, input.AgentName)
 	p.applyRuntimeSessionContext(sess, input)
+
+	var existingID string
+	err := p.store.QueryRowContext(ctx,
+		`SELECT id FROM sessions WHERE id = ? LIMIT 1`,
+		input.SessionID,
+	).Scan(&existingID)
+	switch {
+	case err == nil:
+		// continue
+	case err == sql.ErrNoRows:
+		return nil, core.NewError(core.ErrNotFound, "session not found")
+	default:
+		return nil, core.WrapError(core.ErrDatabase, "failed to verify session", err)
+	}
 
 	rows, err := p.store.QueryContext(ctx,
 		`SELECT role, content FROM session_messages WHERE session_id = ? ORDER BY created_at ASC LIMIT 50`,

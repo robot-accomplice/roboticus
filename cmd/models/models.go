@@ -20,6 +20,7 @@ import (
 	"roboticus/cmd/internal/cmdutil"
 	"roboticus/internal/core"
 	"roboticus/internal/llm"
+	"roboticus/internal/modelstate"
 )
 
 func exerciseConfigFingerprint(config map[string]any) string {
@@ -67,25 +68,28 @@ func appendExerciseRunResult(runID string, o llm.PromptOutcome) error {
 		errMsg = o.Err.Error()
 	}
 	_, err := cmdutil.APIPost("/api/models/exercise/runs/"+runID+"/results", map[string]any{
-		"model":          o.Model,
-		"intent_class":   o.Prompt.Intent.String(),
-		"complexity":     o.Prompt.Complexity.String(),
-		"prompt":         o.Prompt.Prompt,
-		"content":        o.Content,
-		"quality":        o.Quality,
-		"latency_ms":     o.LatencyMs,
-		"passed":         o.Passed,
-		"error_msg":      errMsg,
-		"resource_start": o.ResourceStart,
-		"resource_end":   o.ResourceEnd,
+		"model":             o.Model,
+		"intent_class":      o.Prompt.Intent.String(),
+		"complexity":        o.Prompt.Complexity.String(),
+		"prompt":            o.Prompt.Prompt,
+		"content":           o.Content,
+		"quality":           o.Quality,
+		"latency_ms":        o.LatencyMs,
+		"passed":            o.Passed,
+		"error_msg":         errMsg,
+		"resource_start":    o.ResourceStart,
+		"resource_end":      o.ResourceEnd,
+		"model_state_start": o.ModelStateStart,
+		"model_state_end":   o.ModelStateEnd,
 	})
 	return err
 }
 
-func completeExerciseRun(runID, status, notes string) error {
+func completeExerciseRun(runID, status, notes string, models []string) error {
 	_, err := cmdutil.APIPost("/api/models/exercise/runs/"+runID+"/complete", map[string]any{
 		"status": status,
 		"notes":  notes,
+		"models": models,
 	})
 	return err
 }
@@ -563,7 +567,7 @@ scored latency averages. Cloud models skip warm-up.`,
 		runStatus := "completed"
 		runNotes := ""
 		defer func() {
-			if err := completeExerciseRun(runID, runStatus, runNotes); err != nil {
+			if err := completeExerciseRun(runID, runStatus, runNotes, models); err != nil {
 				fmt.Fprintf(os.Stderr, "  warning: failed to finalize exercise run %s: %v\n", runID, err)
 			}
 		}()
@@ -584,7 +588,14 @@ scored latency averages. Cloud models skip warm-up.`,
 					persistErr = err
 				}
 			},
-			Progress:     os.Stdout,
+			Progress: os.Stdout,
+			SampleModelState: func(ctx context.Context, model string) *modelstate.Snapshot {
+				snapshot := modelstate.Sample(ctx, exerciseCfg, model)
+				if snapshot.Empty() {
+					return nil
+				}
+				return &snapshot
+			},
 			IsLocal:      func(m string) bool { return llm.ExerciseModelIsLocal(exerciseCfg, m) },
 			ModelTimeout: func(m string) time.Duration { return llm.ExerciseModelTimeout(exerciseCfg, m) },
 		}
@@ -742,14 +753,38 @@ func renderPromptProgress(o llm.PromptOutcome) {
 	switch {
 	case o.Err != nil:
 		fmt.Printf("FAIL  %v\n", o.Err)
+	case !o.Passed && strings.TrimSpace(o.Content) == "":
+		fmt.Printf("FAIL  empty response  %.1fs%s\n", float64(o.LatencyMs)/1000.0, formatModelStateSummary(o.ModelStateEnd))
 	case !o.Passed:
-		fmt.Printf("FAIL  empty response  %.1fs\n", float64(o.LatencyMs)/1000.0)
+		preview := strings.TrimSpace(o.Content)
+		if len(preview) > 50 {
+			preview = preview[:50] + "..."
+		}
+		fmt.Printf("FAIL  quality gate  %.1fs: %s%s\n", float64(o.LatencyMs)/1000.0, preview, formatModelStateSummary(o.ModelStateEnd))
 	default:
 		preview := o.Content
 		if len(preview) > 50 {
 			preview = preview[:50] + "..."
 		}
 		fmt.Printf("PASS  Q=%.2f  %.1fs: %s\n", o.Quality, float64(o.LatencyMs)/1000.0, preview)
+	}
+}
+
+func formatModelStateSummary(snapshot *modelstate.Snapshot) string {
+	if snapshot == nil || snapshot.StateClass == "" {
+		return ""
+	}
+	switch snapshot.StateClass {
+	case "ready", "provider_managed":
+		return ""
+	case "installed_not_loaded":
+		return "  [state: installed, not loaded]"
+	case "model_missing":
+		return "  [state: model missing]"
+	case "provider_unreachable":
+		return "  [state: provider unreachable]"
+	default:
+		return "  [state: " + snapshot.StateClass + "]"
 	}
 }
 

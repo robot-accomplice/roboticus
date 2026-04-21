@@ -12,6 +12,7 @@ import (
 
 	"roboticus/internal/agent/memory"
 	"roboticus/internal/agent/policy"
+	agenttools "roboticus/internal/agent/tools"
 	"roboticus/internal/core"
 	"roboticus/internal/llm"
 )
@@ -64,19 +65,23 @@ const (
 
 // LoopConfig controls the ReAct loop behavior.
 type LoopConfig struct {
-	MaxTurns        int           // Maximum thinking iterations before forced stop
-	IdleThreshold   int           // Consecutive NoOps before entering Idle state
-	LoopWindow      int           // Sliding window size for loop detection
-	MaxLoopDuration time.Duration // Wall-clock deadline for entire ReAct loop
+	MaxTurns               int           // Maximum thinking iterations before forced stop
+	IdleThreshold          int           // Consecutive NoOps before entering Idle state
+	LoopWindow             int           // Sliding window size for loop detection
+	MaxSameRouteNoProgress int           // Same-route repeated no-progress completions before termination
+	MaxReadOnlyExploration int           // Successful read-only exploration steps on execute_directly turns before termination
+	MaxLoopDuration        time.Duration // Wall-clock deadline for entire ReAct loop
 }
 
 // DefaultLoopConfig returns sensible defaults.
 func DefaultLoopConfig() LoopConfig {
 	return LoopConfig{
-		MaxTurns:        25,
-		MaxLoopDuration: 300 * time.Second, // 5 min — local models need 60-80s per call
-		IdleThreshold:   3,
-		LoopWindow:      3,
+		MaxTurns:               25,
+		MaxLoopDuration:        300 * time.Second, // 5 min — local models need 60-80s per call
+		IdleThreshold:          3,
+		LoopWindow:             3,
+		MaxSameRouteNoProgress: 2,
+		MaxReadOnlyExploration: 4,
 	}
 }
 
@@ -84,6 +89,14 @@ func DefaultLoopConfig() LoopConfig {
 type recentCall struct {
 	tool   string
 	params string
+}
+
+type recentInferenceOutcome struct {
+	route           string
+	skeleton        string
+	placeholderOnly bool
+	toolResultsSeen int
+	streak          int
 }
 
 // lastRoleSnippet returns a truncated content snippet from the most
@@ -126,16 +139,20 @@ type Loop struct {
 	config LoopConfig
 	state  LoopState
 
-	turnCount    int
-	noOpCount    int
-	recentCalls  []recentCall
-	failedCalls  map[string]int    // tool+params → failure count (error dedup)
-	traceEntries []ReactTraceEntry // flight recorder
-	doneReason   string
+	turnCount                 int
+	noOpCount                 int
+	recentCalls               []recentCall
+	lastNoProgress            recentInferenceOutcome
+	readOnlyExplorationStreak int
+	failedCalls               map[string]int    // tool+params → failure count (error dedup)
+	successfulCalls           map[string]int    // tool+params → prior successful executions in this turn
+	traceEntries              []ReactTraceEntry // flight recorder
+	doneReason                string
 
 	// Dependencies injected at construction.
 	llm       llm.Completer
 	tools     *ToolRegistry
+	recorder  ToolCallRecorder
 	policy    *policy.Engine
 	injection *InjectionDetector
 	memory    *memory.Manager
@@ -146,24 +163,41 @@ type Loop struct {
 type LoopDeps struct {
 	LLM       llm.Completer
 	Tools     *ToolRegistry
+	Recorder  ToolCallRecorder
 	Policy    *policy.Engine
 	Injection *InjectionDetector
 	Memory    *memory.Manager
 	Context   *ContextBuilder
 }
 
+type ToolExecutionRecord struct {
+	TurnID     string
+	ToolCallID string
+	ToolName   string
+	Input      string
+	Output     string
+	Status     string
+	DurationMs int64
+}
+
+type ToolCallRecorder interface {
+	RecordToolExecution(ctx context.Context, rec ToolExecutionRecord) error
+}
+
 // NewLoop creates a ReAct loop with the given config and dependencies.
 func NewLoop(cfg LoopConfig, deps LoopDeps) *Loop {
 	return &Loop{
-		config:      cfg,
-		state:       StateThinking,
-		failedCalls: make(map[string]int),
-		llm:         deps.LLM,
-		tools:       deps.Tools,
-		policy:      deps.Policy,
-		injection:   deps.Injection,
-		memory:      deps.Memory,
-		context:     deps.Context,
+		config:          cfg,
+		state:           StateThinking,
+		failedCalls:     make(map[string]int),
+		successfulCalls: make(map[string]int),
+		llm:             deps.LLM,
+		tools:           deps.Tools,
+		recorder:        deps.Recorder,
+		policy:          deps.Policy,
+		injection:       deps.Injection,
+		memory:          deps.Memory,
+		context:         deps.Context,
 	}
 }
 
@@ -391,6 +425,35 @@ func (l *Loop) think(ctx context.Context, session *Session) (Action, error) {
 		Msg("agent loop: LLM response received")
 
 	placeholderOnly := isPlaceholderAssistantContent(resp.Content)
+	route := routeForInferenceOutcome(req.Model, resp.Provider, resp.Model)
+	toolResultsSeen := toolResultCount(session)
+	if l.detectSameRouteNoProgress(route, resp, placeholderOnly, toolResultsSeen) {
+		if obs := llm.InferenceObserverFromContext(ctx); obs != nil {
+			obs.RecordEvent("loop_terminated", "error",
+				"terminated same-route no-progress churn",
+				"The framework stopped repeated same-route responses because they were not making progress.",
+				map[string]any{
+					"reason_code":       "same_route_no_progress",
+					"route":             route,
+					"response_skeleton": responseSkeleton(resp.Content, placeholderOnly),
+					"tool_results_seen": toolResultsSeen,
+					"repeat_threshold":  max(1, l.config.MaxSameRouteNoProgress),
+				},
+			)
+			obs.SetSummaryField("termination_cause", "same_route_no_progress")
+			obs.SetSummaryField("primary_diagnosis", "same_route_no_progress_churn")
+		}
+		l.terminate("loop terminated: same-route no-progress churn")
+		if placeholderOnly {
+			content := session.LastAssistantContent()
+			if content == "" {
+				content = "I stopped because repeated attempts on the same route were not making progress."
+			}
+			return ActionFinish, nil
+		}
+		session.AddAssistantMessage(resp.Content, nil)
+		return ActionFinish, nil
+	}
 	if placeholderOnly {
 		log.Warn().
 			Str("session", session.ID).
@@ -437,16 +500,80 @@ func (l *Loop) act(ctx context.Context, session *Session) (Action, error) {
 			l.terminate("loop detected: repeated tool calls")
 			return ActionFinish, nil
 		}
+		if l.shouldTerminateReadOnlyExploration(session, tc.Function.Name) {
+			streak := l.currentReadOnlyExplorationStreak()
+			if obs := llm.InferenceObserverFromContext(ctx); obs != nil {
+				obs.RecordEvent("loop_terminated", "error",
+					"terminated exploratory read-only tool churn",
+					"The framework stopped repeated read-only exploration because the turn was not making execution progress.",
+					map[string]any{
+						"reason_code":         "exploratory_tool_churn",
+						"tool_name":           tc.Function.Name,
+						"operation_class":     string(agenttools.OperationClassForName(tc.Function.Name)),
+						"exploration_streak":  streak,
+						"repeat_threshold":    max(1, l.config.MaxReadOnlyExploration),
+						"task_intent":         session.TaskIntent(),
+						"task_planned_action": session.TaskPlannedAction(),
+					},
+				)
+				obs.SetSummaryField("termination_cause", "exploratory_tool_churn")
+				obs.SetSummaryField("primary_diagnosis", "exploratory_tool_churn")
+			}
+			l.terminate("loop terminated: exploratory read-only tool churn")
+			session.AddAssistantMessage(
+				"I stopped because this direct execution turn kept gathering context without taking action. The framework treated that as exploratory churn instead of continuing to spend tool calls.",
+				nil,
+			)
+			return ActionFinish, nil
+		}
 
 		// Error dedup: suppress duplicate failed tool calls (Rust: should_suppress_duplicate).
 		callKey := tc.Function.Name + ":" + tc.Function.Arguments
 		l.mu.Lock()
 		failCount := l.failedCalls[callKey]
+		successCount := l.successfulCalls[callKey]
 		l.mu.Unlock()
 		if failCount >= 2 {
-			session.AddToolResult(tc.ID, tc.Function.Name,
-				fmt.Sprintf("[Tool %s suppressed]: This call was already attempted and failed %d times", tc.Function.Name, failCount), true)
+			l.resetReadOnlyExploration()
+			output := fmt.Sprintf("[Tool %s suppressed]: This call was already attempted and failed %d times", tc.Function.Name, failCount)
+			session.AddToolResult(tc.ID, tc.Function.Name, output, true)
+			l.recordToolExecution(ctx, ToolExecutionRecord{
+				TurnID:     core.TurnIDFromCtx(ctx),
+				ToolCallID: tc.ID,
+				ToolName:   tc.Function.Name,
+				Input:      tc.Function.Arguments,
+				Output:     output,
+				Status:     "suppressed",
+			})
 			log.Warn().Str("tool", tc.Function.Name).Int("failures", failCount).Msg("suppressing duplicate failed tool call")
+			continue
+		}
+		if successCount > 0 && agenttools.RequiresReplayProtection(tc.Function.Name) {
+			output := fmt.Sprintf("[Tool %s suppressed]: duplicate replay of a successful side-effecting call was blocked to avoid repeating non-idempotent work", tc.Function.Name)
+			session.AddToolResult(tc.ID, tc.Function.Name, output, false)
+			if obs := llm.InferenceObserverFromContext(ctx); obs != nil {
+				obs.IncrementSummaryCounter("replay_suppression_count", 1)
+				obs.RecordEvent("tool_call_replay_suppressed", "warning",
+					"duplicate side-effecting tool replay suppressed",
+					"The framework blocked a repeated side-effecting tool call after an earlier success to avoid replaying non-idempotent work.",
+					map[string]any{
+						"tool_call_id":         tc.ID,
+						"tool_name":            tc.Function.Name,
+						"prior_success_count":  successCount,
+						"requires_protection":  true,
+						"replay_policy_source": "tool_semantics",
+					},
+				)
+			}
+			l.recordToolExecution(ctx, ToolExecutionRecord{
+				TurnID:     core.TurnIDFromCtx(ctx),
+				ToolCallID: tc.ID,
+				ToolName:   tc.Function.Name,
+				Input:      tc.Function.Arguments,
+				Output:     output,
+				Status:     "suppressed_replay",
+			})
+			log.Warn().Str("tool", tc.Function.Name).Int("prior_successes", successCount).Msg("suppressing duplicate successful side-effecting tool call")
 			continue
 		}
 
@@ -458,8 +585,17 @@ func (l *Loop) act(ctx context.Context, session *Session) (Action, error) {
 				Authority: session.Authority,
 			}, l.tools)
 			if decision.Denied() {
+				l.resetReadOnlyExploration()
 				result := fmt.Sprintf("Policy denied: %s", decision.Reason)
 				session.AddToolResult(tc.ID, tc.Function.Name, result, true)
+				l.recordToolExecution(ctx, ToolExecutionRecord{
+					TurnID:     core.TurnIDFromCtx(ctx),
+					ToolCallID: tc.ID,
+					ToolName:   tc.Function.Name,
+					Input:      tc.Function.Arguments,
+					Output:     result,
+					Status:     "denied",
+				})
 				log.Warn().Str("tool", tc.Function.Name).Str("reason", decision.Reason).Str("session", session.ID).Msg("tool call denied by policy")
 				continue
 			}
@@ -468,7 +604,16 @@ func (l *Loop) act(ctx context.Context, session *Session) (Action, error) {
 		// Execute the tool.
 		tool := l.tools.Get(tc.Function.Name)
 		if tool == nil {
+			l.resetReadOnlyExploration()
 			session.AddToolResult(tc.ID, tc.Function.Name, "unknown tool", true)
+			l.recordToolExecution(ctx, ToolExecutionRecord{
+				TurnID:     core.TurnIDFromCtx(ctx),
+				ToolCallID: tc.ID,
+				ToolName:   tc.Function.Name,
+				Input:      tc.Function.Arguments,
+				Output:     "unknown tool",
+				Status:     "unknown_tool",
+			})
 			continue
 		}
 
@@ -486,6 +631,7 @@ func (l *Loop) act(ctx context.Context, session *Session) (Action, error) {
 		toolDuration := time.Since(toolStart).Milliseconds()
 
 		if err != nil {
+			l.resetReadOnlyExploration()
 			// Record failure for error dedup.
 			l.mu.Lock()
 			l.failedCalls[callKey]++
@@ -497,7 +643,17 @@ func (l *Loop) act(ctx context.Context, session *Session) (Action, error) {
 				Source:        "builtin",
 			})
 			l.mu.Unlock()
-			session.AddToolResult(tc.ID, tc.Function.Name, fmt.Sprintf("error: %v", err), true)
+			output := fmt.Sprintf("error: %v", err)
+			session.AddToolResult(tc.ID, tc.Function.Name, output, true)
+			l.recordToolExecution(ctx, ToolExecutionRecord{
+				TurnID:     core.TurnIDFromCtx(ctx),
+				ToolCallID: tc.ID,
+				ToolName:   tc.Function.Name,
+				Input:      tc.Function.Arguments,
+				Output:     output,
+				Status:     "error",
+				DurationMs: toolDuration,
+			})
 			continue
 		}
 
@@ -525,6 +681,21 @@ func (l *Loop) act(ctx context.Context, session *Session) (Action, error) {
 		l.mu.Unlock()
 
 		session.AddToolResult(tc.ID, tc.Function.Name, result.Output, false)
+		if agenttools.RequiresReplayProtection(tc.Function.Name) {
+			l.mu.Lock()
+			l.successfulCalls[callKey]++
+			l.mu.Unlock()
+		}
+		l.noteToolOutcome(tc.Function.Name)
+		l.recordToolExecution(ctx, ToolExecutionRecord{
+			TurnID:     core.TurnIDFromCtx(ctx),
+			ToolCallID: tc.ID,
+			ToolName:   tc.Function.Name,
+			Input:      tc.Function.Arguments,
+			Output:     result.Output,
+			Status:     "success",
+			DurationMs: toolDuration,
+		})
 	}
 
 	return ActionObserve, nil
@@ -602,6 +773,152 @@ func isPlaceholderAssistantContent(content string) bool {
 	}
 }
 
+func routeForInferenceOutcome(requestModel, provider, responseModel string) string {
+	model := strings.TrimSpace(responseModel)
+	if model == "" {
+		model = strings.TrimSpace(requestModel)
+	}
+	provider = strings.TrimSpace(provider)
+	switch {
+	case provider != "" && model != "":
+		return provider + "/" + model
+	case model != "":
+		return model
+	default:
+		return "unknown"
+	}
+}
+
+func toolResultCount(session *Session) int {
+	if session == nil {
+		return 0
+	}
+	count := 0
+	for _, msg := range session.Messages() {
+		if msg.Role == "tool" {
+			count++
+		}
+	}
+	return count
+}
+
+func responseSkeleton(content string, placeholderOnly bool) string {
+	if placeholderOnly {
+		return "placeholder"
+	}
+	trimmed := strings.ToLower(strings.TrimSpace(content))
+	if trimmed == "" {
+		return "empty"
+	}
+	var b strings.Builder
+	lastSpace := false
+	for _, r := range trimmed {
+		switch {
+		case (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'):
+			b.WriteRune(r)
+			lastSpace = false
+		case r == ' ' || r == '\n' || r == '\t' || r == '\r':
+			if !lastSpace {
+				b.WriteByte(' ')
+				lastSpace = true
+			}
+		}
+		if b.Len() >= 160 {
+			break
+		}
+	}
+	skeleton := strings.TrimSpace(b.String())
+	if skeleton == "" {
+		return "empty"
+	}
+	return skeleton
+}
+
+func (l *Loop) detectSameRouteNoProgress(route string, resp *llm.Response, placeholderOnly bool, toolResultsSeen int) bool {
+	threshold := l.config.MaxSameRouteNoProgress
+	if threshold <= 0 {
+		return false
+	}
+	if resp == nil || len(resp.ToolCalls) > 0 {
+		l.mu.Lock()
+		l.lastNoProgress = recentInferenceOutcome{}
+		l.mu.Unlock()
+		return false
+	}
+	current := recentInferenceOutcome{
+		route:           route,
+		skeleton:        responseSkeleton(resp.Content, placeholderOnly),
+		placeholderOnly: placeholderOnly,
+		toolResultsSeen: toolResultsSeen,
+		streak:          1,
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.lastNoProgress.route == current.route &&
+		l.lastNoProgress.skeleton == current.skeleton &&
+		l.lastNoProgress.toolResultsSeen == current.toolResultsSeen {
+		current.streak = l.lastNoProgress.streak + 1
+	}
+	l.lastNoProgress = current
+	return current.streak >= threshold
+}
+
+func (l *Loop) shouldTerminateReadOnlyExploration(session *Session, toolName string) bool {
+	if !isDirectExecutionTurn(session) {
+		return false
+	}
+	if !agenttools.IsReadOnlyExploration(toolName) {
+		return false
+	}
+	threshold := l.config.MaxReadOnlyExploration
+	if threshold <= 0 {
+		return false
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.readOnlyExplorationStreak >= threshold
+}
+
+func (l *Loop) noteToolOutcome(toolName string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	switch {
+	case agenttools.MakesExecutionProgress(toolName):
+		l.readOnlyExplorationStreak = 0
+	case agenttools.IsReadOnlyExploration(toolName):
+		l.readOnlyExplorationStreak++
+	default:
+		l.readOnlyExplorationStreak = 0
+	}
+}
+
+func (l *Loop) resetReadOnlyExploration() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.readOnlyExplorationStreak = 0
+}
+
+func (l *Loop) currentReadOnlyExplorationStreak() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.readOnlyExplorationStreak
+}
+
+func isDirectExecutionTurn(session *Session) bool {
+	if session == nil {
+		return false
+	}
+	if strings.TrimSpace(session.TaskPlannedAction()) != "execute_directly" {
+		return false
+	}
+	switch strings.TrimSpace(session.TaskIntent()) {
+	case "task", "code":
+		return true
+	default:
+		return false
+	}
+}
+
 // detectLoop checks if the same tool+params has been called repeatedly.
 func (l *Loop) detectLoop(toolName, params string) bool {
 	l.mu.Lock()
@@ -627,4 +944,29 @@ func (l *Loop) detectLoop(toolName, params string) bool {
 		}
 	}
 	return true
+}
+
+func (l *Loop) recordToolExecution(ctx context.Context, rec ToolExecutionRecord) {
+	if rec.ToolName == "" {
+		return
+	}
+	if obs := llm.InferenceObserverFromContext(ctx); obs != nil {
+		obs.IncrementSummaryCounter("tool_call_count", 1)
+		obs.RecordEvent("tool_call_finished", rec.Status,
+			"tool execution recorded",
+			"A tool call finished for this turn.",
+			map[string]any{
+				"tool_call_id": rec.ToolCallID,
+				"tool_name":    rec.ToolName,
+				"status":       rec.Status,
+				"duration_ms":  rec.DurationMs,
+			},
+		)
+	}
+	if l.recorder == nil {
+		return
+	}
+	if err := l.recorder.RecordToolExecution(ctx, rec); err != nil {
+		log.Warn().Err(err).Str("tool", rec.ToolName).Str("turn", rec.TurnID).Msg("failed to persist tool execution record")
+	}
 }

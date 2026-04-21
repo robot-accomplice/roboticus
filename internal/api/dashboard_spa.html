@@ -298,12 +298,15 @@
     }
     .skeleton { background: linear-gradient(90deg, var(--border) 25%, var(--surface) 50%, var(--border) 75%); background-size: 200% 100%; animation: skeleton 1.2s ease-in-out infinite; border-radius: 4px; }
     @keyframes skeleton { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
-    .table-wrap { overflow-x: auto; border-radius: var(--radius); border: 1px solid var(--border-ghost); }
+    .table-wrap { overflow-x: auto; border-radius: var(--radius); border: 1px solid var(--border-ghost); background: var(--surface-2); }
+    .table-wrap table { background: transparent; }
     table { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
     th, td { padding: 0.75rem 1rem; text-align: left; border-bottom: 1px solid var(--border-ghost); }
     th { background: var(--surface-2); color: var(--muted); font-family: var(--font-headline); font-weight: 500; font-size: 0.625rem; text-transform: uppercase; letter-spacing: 0.1em; position: sticky; top: 0; }
+    tbody td { background: var(--surface-2); }
+    tbody tr:nth-child(even) td { background: var(--surface); }
     tr:last-child td { border-bottom: none; }
-    tr:hover td { background: var(--surface-3); }
+    tbody tr:hover td { background: var(--surface-3); }
     .tabs { display: flex; gap: 0.25rem; margin-bottom: 1rem; flex-wrap: wrap; }
     .tabs button { padding: 0.5rem 1rem; background: transparent; border: 1px solid var(--border-ghost); border-radius: var(--radius-sm); color: var(--outline); font-size: 0.6875rem; cursor: pointer; transition: all 0.2s; font-family: var(--font-headline); font-weight: 500; text-transform: uppercase; letter-spacing: 0.1em; }
     .tabs button:hover { color: var(--text); }
@@ -1161,7 +1164,9 @@
     }
   }
   function uiBtnLabel(iconName, label) { return uiIcon(iconName) + '<span>' + label + '</span>'; }
-  function copyIdBtn(id) { return '<button class="copy-id-btn" data-copy-id="' + esc(id) + '" title="Copy session ID"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="5" y="5" width="8" height="8" rx="1" stroke="currentColor" stroke-width="1.3"/><path d="M3 11V3a1 1 0 011-1h8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></button>'; }
+  function copyIdBtn(id, title) {
+    return '<button class="copy-id-btn" data-copy-id="' + esc(id) + '" title="' + esc(title || 'Copy ID') + '"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="5" y="5" width="8" height="8" rx="1" stroke="currentColor" stroke-width="1.3"/><path d="M3 11V3a1 1 0 011-1h8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></button>';
+  }
   function truncate(s, n) { return (s && s.length > n) ? s.slice(0, n) + '\u2026' : (s || ''); }
   function clamp01(v) {
     var n = Number(v);
@@ -1607,7 +1612,7 @@
     if (errors.length) return errors.length + ' warn';
     return 'captured';
   }
-  function deriveRcaConclusion(summary, attempts, guardRetryEv, verifierRetryEv, fallbackEvents, distinctAttemptRoutes, resourceSnapshot) {
+  function deriveRcaConclusion(summary, attempts, guardRetryEv, verifierRetryEv, fallbackEvents, distinctAttemptRoutes, resourceSnapshot, routingEvidence) {
     var status = String(summary && summary.status || 'unknown').toLowerCase();
     var finalModel = summary && summary.final_model || '';
     var finalProvider = summary && summary.final_provider || '';
@@ -1615,6 +1620,7 @@
     var firstAttempt = attempts && attempts.length ? attempts[0] : null;
     var attemptCount = attempts ? attempts.length : 0;
     var fallbackCount = Array.isArray(fallbackEvents) ? fallbackEvents.length : 0;
+    var replaySuppressions = Number(summary && summary.replay_suppression_count || 0);
     var guardNames = [].concat(diagEventValue(guardRetryEv, 'violations', [])).filter(Boolean);
     var guardName = guardNames.length ? String(guardNames[0]) : '';
     var retryReason = guardRetryEv
@@ -1622,25 +1628,37 @@
       : (verifierRetryEv ? String(diagEventValue(verifierRetryEv, 'retry_reason', '') || '') : '');
     var sameRouteRetry = attemptCount > 1 && distinctAttemptRoutes === 1;
     var hostSignal = deriveResourceSignal(resourceSnapshot, summary);
+    var ignoredForEvidence = routingEvidence && routingEvidence.ignoredForEvidence || [];
+    var evidenceRecommendation = String(routingEvidence && routingEvidence.evidenceRecommendation || '').trim();
+    var evidenceClause = '';
+    if (Array.isArray(ignoredForEvidence) && ignoredForEvidence.length) {
+      evidenceClause = ' ' + (evidenceRecommendation || ('Ignored as unproven for this task class: ' + ignoredForEvidence.join(', ') + '.'));
+    }
+    if (replaySuppressions > 0) {
+      return 'The turn completed after replay protection blocked ' + replaySuppressions + ' duplicate side-effecting tool call(s). The framework protected the underlying resource from a second execution.' + evidenceClause;
+    }
     if (attemptCount > 1 && firstAttempt && firstAttempt.status === 'ok' && guardRetryEv) {
       var guardClause = guardName ? (guardName + ' forced a retry') : 'a post-response guard forced a retry';
       var routeClause = sameRouteRetry ? 'The same route was retried' : 'The route widened after the retry';
       var outcomeClause = status === 'ok'
         ? ('The turn recovered after ' + attemptCount + ' attempts on ' + finalRoute + '.')
         : ('The turn still finished ' + status + ' after ' + attemptCount + ' attempts on ' + finalRoute + '.');
-      return 'The first attempt succeeded, but ' + guardClause + (retryReason ? ' (' + retryReason + ')' : '') + '. ' + routeClause + '. ' + outcomeClause;
+      return 'The first attempt succeeded, but ' + guardClause + (retryReason ? ' (' + retryReason + ')' : '') + '. ' + routeClause + '. ' + outcomeClause + evidenceClause;
     }
     if (fallbackCount > 0) {
-      return 'The initial route was not enough, so the system widened to fallback' + (attemptCount > 1 ? (' after ' + attemptCount + ' attempts') : '') + '. Final route: ' + finalRoute + '.';
+      return 'The initial route was not enough, so the system widened to fallback' + (attemptCount > 1 ? (' after ' + attemptCount + ' attempts') : '') + '. Final route: ' + finalRoute + '.' + evidenceClause;
+    }
+    if (attemptCount > 1 && firstAttempt && firstAttempt.status === 'ok' && !guardRetryEv && !verifierRetryEv && fallbackCount <= 0) {
+      return 'The turn used an ordinary second inference pass on ' + finalRoute + ' after tool output changed the request state. This is follow-up execution, not retry churn.' + evidenceClause;
     }
     if (status === 'ok' && attemptCount <= 1) {
-      return 'The turn completed cleanly on ' + finalRoute + ' with no recovery path triggered.';
+      return 'The turn completed cleanly on ' + finalRoute + ' with no recovery path triggered.' + evidenceClause;
     }
     if (status !== 'ok') {
       var hostClause = hostSignal && hostSignal !== 'unavailable' && hostSignal !== 'captured' ? (' Host signal: ' + hostSignal + '.') : '';
-      return 'The turn finished ' + status + ' on ' + finalRoute + (attemptCount > 1 ? (' after ' + attemptCount + ' attempts.') : '.') + hostClause;
+      return 'The turn finished ' + status + ' on ' + finalRoute + (attemptCount > 1 ? (' after ' + attemptCount + ' attempts.') : '.') + hostClause + evidenceClause;
     }
-    return 'The turn completed on ' + finalRoute + ', and the recorded diagnostics did not show a fallback path.';
+    return 'The turn completed on ' + finalRoute + ', and the recorded diagnostics did not show a fallback path.' + evidenceClause;
   }
   function classifyLaneHealth(summary, options) {
     var opts = options || {};
@@ -1651,6 +1669,7 @@
       case 'envelope':
         return opts.contextPressure === 'high' || opts.contextPressure === 'critical' || opts.expanded ? 'fair' : 'good';
       case 'routing':
+        if (opts.normalPostToolFollowup) return 'good';
         return (opts.repeatCount || 0) > 1 ? 'fair' : 'good';
       case 'execution':
         if (opts.hasFailure || opts.hasLivenessWarning || status === 'degraded') return 'poor';
@@ -1757,6 +1776,15 @@
     if (!isFinite(num) || num < 0) return 'n/a';
     return num.toFixed(2);
   }
+  function formatRoutingExclusionSummary(value) {
+    if (!Array.isArray(value) || !value.length) return 'none';
+    return value.map(function(entry) {
+      if (!entry || typeof entry !== 'object') return diagStringValue(entry);
+      var model = String(entry.model || 'model');
+      var reasons = Array.isArray(entry.reasons) ? entry.reasons.join(', ') : diagStringValue(entry.reasons || 'excluded');
+      return model + ' (' + reasons + ')';
+    }).join('; ');
+  }
   function renderHostResourceSummaryRows(snapshot) {
     if (!snapshot || typeof snapshot !== 'object') return [];
     return [
@@ -1784,6 +1812,7 @@
   function renderTurnDiagnosticsMacro(diag, flowData) {
     var summary = diagSummary(diag);
     var events = diagEvents(diag);
+    var flowNodesList = flowNodes(flowData);
     var recommendations = Array.isArray(summary.recommendations) ? summary.recommendations : [];
     var taskFlow = flowNodeFor(flowData, ['task_synthesis', 'decomposition_gate']);
     var envelopeFlow = flowNodeFor(flowData, ['prepare_inference', 'tool_pruning', 'hippocampus_summary', 'authority_resolution']);
@@ -1804,6 +1833,7 @@
     var livenessEvents = diagEventsByType(events, 'stage_liveness_warning');
     var guardRetryEv = diagLatestEvent(events, 'guard_retry_scheduled');
     var verifierRetryEv = diagLatestEvent(events, 'verifier_retry_scheduled');
+    var replaySuppressedEv = diagLatestEvent(events, 'tool_call_replay_suppressed');
     var responseFinalizedEv = diagLatestEvent(events, 'response_finalized');
     var latestLiveness = livenessEvents.length ? livenessEvents[livenessEvents.length - 1] : null;
     var latestAttempt = attemptStarts.length ? attemptStarts[attemptStarts.length - 1] : null;
@@ -1816,6 +1846,14 @@
     var firstAttempt = attempts.length ? attempts[0] : null;
     var firstAttemptSucceeded = !!(firstAttempt && firstAttempt.status === 'ok');
     var retryUsedSameRoute = attempts.length > 1 && distinctAttemptRoutes === 1;
+    var routingRepeatCount = diagEventsByType(events, 'routing_chain_built').length;
+    var normalPostToolFollowup = routingRepeatCount > 1
+      && (summary.tool_call_count || 0) > 0
+      && attempts.length > 1
+      && firstAttemptSucceeded
+      && !guardRetryEv
+      && !verifierRetryEv
+      && fallbackEvents.length <= 0;
     var guardViolations = []
       .concat(diagEventValue(guardRetryEv, 'violations', []))
       .concat(diagEventValue(responseFinalizedEv, 'guard_violations', []));
@@ -1834,13 +1872,27 @@
     var resourceErrors = Array.isArray(resourceSnapshot && resourceSnapshot.errors) ? resourceSnapshot.errors : [];
     var resourceSignal = deriveResourceSignal(resourceSnapshot, summary);
     var routeLabel = summary.final_provider ? (summary.final_provider + '/' + (summary.final_model || '')) : (summary.final_model || 'router selected');
+    function routingDiagnosticValue(key, fallback, metaKey) {
+      var details = diagEventDetails(routingEv);
+      if (details[key] != null && details[key] !== '') return details[key];
+      var metaValue = flowFindMeta(flowNodesList, metaKey || ('inference.routing.' + key));
+      if (metaValue != null && metaValue !== '') return metaValue;
+      return fallback;
+    }
+    var ignoredForEvidence = routingDiagnosticValue('ignored_for_missing_capability_evidence', [], 'inference.routing.ignored_for_missing_capability_evidence');
+    var evidenceRecommendation = String(routingDiagnosticValue('capability_evidence_recommendation', '', 'inference.routing.capability_evidence_recommendation') || '').trim();
 
-    var conclusion = deriveRcaConclusion(summary, attempts, guardRetryEv, verifierRetryEv, fallbackEvents, distinctAttemptRoutes, resourceSnapshot);
+    var conclusion = deriveRcaConclusion(summary, attempts, guardRetryEv, verifierRetryEv, fallbackEvents, distinctAttemptRoutes, resourceSnapshot, {
+      ignoredForEvidence: ignoredForEvidence,
+      evidenceRecommendation: evidenceRecommendation
+    });
     var selectedModel = routeLabel;
     var resourceWarningCount = resourceErrors.length;
     var hostSignal = resourceSignal === 'captured' && resourceWarningCount ? (resourceSignal + ' · ' + resourceWarningCount + ' warn') : resourceSignal;
     var recoverySignal = guardRetryEv
       ? ((guardNames[0] || 'guard') + ' retry')
+      : (summary.replay_suppression_count || 0) > 0
+        ? 'replay blocked'
       : verifierRetryEv
         ? 'verifier retry'
         : fallbackEvents.length
@@ -1858,7 +1910,8 @@
     });
     var routingSeverity = classifyLaneHealth(summary, {
       kind: 'routing',
-      repeatCount: diagEventsByType(events, 'routing_chain_built').length
+      repeatCount: routingRepeatCount,
+      normalPostToolFollowup: normalPostToolFollowup
     });
     var executionSeverity = classifyLaneHealth(summary, {
       kind: 'execution',
@@ -1868,7 +1921,7 @@
     });
     var recoverySeverity = classifyLaneHealth(summary, {
       kind: 'recovery',
-      retryCount: (summary.guard_retry_count || 0) + (summary.verifier_retry_count || 0) + fallbackEvents.length
+      retryCount: (summary.guard_retry_count || 0) + (summary.verifier_retry_count || 0) + fallbackEvents.length + (summary.replay_suppression_count || 0)
     });
     var resourcesSeverity = classifyLaneHealth(summary, {
       kind: 'resources',
@@ -1952,23 +2005,33 @@
       envelopeSeverity
     );
 
-    var routingCandidates = diagEventValue(routingEv, 'candidates', 'n/a');
+    var routingRepeatMeaning = normalPostToolFollowup
+      ? 'Second routing pass happened after a tool result changed the request state. This is normal follow-up execution, not retry churn.'
+      : routingRepeatCount > 1
+        ? 'Routing was rebuilt more than once. Inspect detail mode to see whether this came from retry, fallback, or another repeated execution path.'
+        : 'Routing was assembled once for this turn.';
+    var routingCandidates = routingDiagnosticValue('candidates', 'n/a', 'inference.routing.candidates');
     var routingSection = renderRcaSection(
       'Routing',
       'Which routing chain was assembled and what inputs were used to choose it.',
       [
-        ['Requested model', diagEventValue(routingEv, 'requested_model', summary.final_model || 'router selected')],
-        ['Chain length', diagEventValue(routingEv, 'chain_len', 'n/a')],
+        ['Routing passes', routingRepeatCount + (normalPostToolFollowup ? ' (post-tool follow-up)' : '')],
+        ['Requested model', routingDiagnosticValue('requested_model', summary.final_model || 'router selected', 'inference.routing.winner')],
+        ['Chain length', routingDiagnosticValue('chain_len', 'n/a', 'inference.routing.chain_len')],
         ['Candidates', routingCandidates],
-        ['Intent class', diagEventValue(routingEv, 'intent_class', 'n/a')],
-        ['Routing complexity', diagEventValue(routingEv, 'routing_complexity', 'n/a')],
-        ['Complexity source', diagEventValue(routingEv, 'complexity_source', 'n/a')]
+        ['Request-eligible', routingDiagnosticValue('request_eligible_candidates', 'n/a', 'inference.routing.request_eligible_candidates')],
+        ['Excluded', formatRoutingExclusionSummary(routingDiagnosticValue('excluded_candidates', [], 'inference.routing.excluded_candidates'))],
+        ['Ignored as unproven', ignoredForEvidence && ignoredForEvidence.length ? ignoredForEvidence : 'none'],
+        ['Recommendation', evidenceRecommendation || 'none'],
+        ['Intent class', routingDiagnosticValue('intent_class', 'n/a', 'inference.routing.intent_class')],
+        ['Routing complexity', routingDiagnosticValue('routing_complexity', 'n/a', 'inference.routing.routing_complexity')],
+        ['Complexity source', routingDiagnosticValue('complexity_source', 'n/a', 'inference.routing.complexity_source')]
       ],
-      '',
+      routingRepeatMeaning,
       '',
       routingFlow,
       selectedModel,
-      diagEventsByType(events, 'routing_chain_built').length,
+      routingRepeatCount,
       routingSeverity
     );
 
@@ -2000,6 +2063,7 @@
     var recoveryNoteParts = [];
     if (guardRetryEv) recoveryNoteParts.push('guard retry scheduled');
     if (verifierRetryEv) recoveryNoteParts.push('verifier retry scheduled');
+    if ((summary.replay_suppression_count || 0) > 0) recoveryNoteParts.push('replay protection blocked a duplicate side-effecting tool call');
     if (summary.guard_retry_count || summary.verifier_retry_count) recoveryNoteParts.push('retry counters persisted into the turn summary');
     var recoverySection = renderRcaSection(
       'Recovery',
@@ -2007,8 +2071,10 @@
       [
         ['Guard retries', summary.guard_retry_count != null ? summary.guard_retry_count : 0],
         ['Verifier retries', summary.verifier_retry_count != null ? summary.verifier_retry_count : 0],
+        ['Replay suppressions', summary.replay_suppression_count != null ? summary.replay_suppression_count : 0],
         ['First attempt succeeded', firstAttemptSucceeded ? 'yes' : (firstAttempt ? 'no' : 'n/a')],
         ['Post-attempt guard', guardNames.length ? guardNames.join(', ') : 'none'],
+        ['Replay protection blocked', replaySuppressedEv ? (diagEventValue(replaySuppressedEv, 'tool_name', 'duplicate call') + ' · ' + diagEventValue(replaySuppressedEv, 'reason', 'prior success made replay risky')) : 'none'],
         ['Retry reason', guardRetryEv ? diagEventValue(guardRetryEv, 'retry_reason', 'n/a') : (verifierRetryEv ? diagEventValue(verifierRetryEv, 'retry_reason', 'n/a') : 'none')],
         ['Retried same route', attempts.length > 1 ? (retryUsedSameRoute ? 'yes' : 'no') : 'n/a'],
         ['Fallback used', (summary.fallback_count != null ? summary.fallback_count : fallbackEvents.length) > 0 ? 'yes' : 'no'],
@@ -4885,7 +4951,7 @@
           var rows = traces.map(function(t) {
             var hasDiagnostics = t.has_diagnostics ? '1' : '0';
             return '<tr class="traces-turn-row" data-turn-id="' + esc(t.turn_id || '') + '" data-has-diagnostics="' + hasDiagnostics + '" style="cursor:pointer">'
-              + '<td class="card-mono">' + esc(truncate(t.turn_id || '', 12)) + '</td>'
+              + '<td class="card-mono" title="' + esc(t.turn_id || '') + '"><span>' + esc(truncate(t.turn_id || '', 12)) + '</span>' + copyIdBtn(t.turn_id || '', 'Copy turn ID') + '</td>'
               + '<td>' + esc(t.channel || '') + '</td>'
               + '<td>' + (t.total_ms || 0) + 'ms</td>'
               + '<td>' + (t.stage_count || 0) + '</td>'
@@ -8675,7 +8741,15 @@
     if (ext.textures.surface && (ext.textures.surface.kind === 'css' || ext.textures.surface.type === 'css')) {
       var style = document.getElementById('theme-texture-css');
       if (!style) { style = document.createElement('style'); style.id = 'theme-texture-css'; document.head.appendChild(style); }
-      style.textContent = '[data-theme="' + themeId + '"] .card, [data-theme="' + themeId + '"] .surface { background-image: ' + ext.textures.surface.value + '; }';
+      style.textContent = '[data-theme="' + themeId + '"] .card:not(.table-wrap):not(table):not(thead):not(tbody):not(tr):not(th):not(td), '
+        + '[data-theme="' + themeId + '"] .surface:not(.table-wrap):not(table):not(thead):not(tbody):not(tr):not(th):not(td) { background-image: ' + ext.textures.surface.value + '; }'
+        + '[data-theme="' + themeId + '"] .table-wrap, '
+        + '[data-theme="' + themeId + '"] .table-wrap table, '
+        + '[data-theme="' + themeId + '"] .table-wrap thead, '
+        + '[data-theme="' + themeId + '"] .table-wrap tbody, '
+        + '[data-theme="' + themeId + '"] .table-wrap tr, '
+        + '[data-theme="' + themeId + '"] .table-wrap th, '
+        + '[data-theme="' + themeId + '"] .table-wrap td { background-image: none; }';
     } else {
       var existing = document.getElementById('theme-texture-css');
       if (existing) existing.textContent = '';

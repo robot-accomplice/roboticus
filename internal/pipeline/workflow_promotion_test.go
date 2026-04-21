@@ -101,6 +101,13 @@ func TestPromoteProcedureToWorkflow_PersistsRichMetadata(t *testing.T) {
 		[]string{"shell", "deploy", "verify"},
 		[]string{"", "Error: rollout blocked by legal review", ""},
 	)
+	if _, err := store.ExecContext(ctx,
+		`INSERT INTO turn_diagnostics (id, turn_id, session_id, channel, status)
+		 VALUES (?, ?, ?, 'api', 'ok')`,
+		"td-promote", "turn-promote", sess.ID,
+	); err != nil {
+		t.Fatalf("insert turn diagnostics: %v", err)
+	}
 
 	proc := struct {
 		Steps []string
@@ -109,7 +116,7 @@ func TestPromoteProcedureToWorkflow_PersistsRichMetadata(t *testing.T) {
 	// Convert anonymous struct to agent.Procedure via the exposed type.
 	// We invoke promoteProcedureToWorkflow directly to avoid running the
 	// full detector in this test.
-	p.promoteProcedureToWorkflow(ctx, sess, procedureFromSteps(proc.Steps, proc.Count))
+	p.promoteProcedureToWorkflow(ctx, "turn-promote", sess, procedureFromSteps(proc.Steps, proc.Count))
 
 	mm := agentmemory.NewManager(agentmemory.DefaultConfig(), store)
 	got, err := mm.GetWorkflow(ctx, "shell → deploy → verify")
@@ -137,5 +144,22 @@ func TestPromoteProcedureToWorkflow_PersistsRichMetadata(t *testing.T) {
 	}
 	if !sawIntent || !sawTag {
 		t.Fatalf("expected auto_promoted + intent:* context tags, got %+v", got.ContextTags)
+	}
+
+	var detailsJSON string
+	if err := store.QueryRowContext(ctx,
+		`SELECT details_json
+		   FROM turn_diagnostic_events
+		  WHERE turn_id = ? AND event_type = 'procedural_knowledge_promoted'
+		  ORDER BY seq DESC LIMIT 1`,
+		"turn-promote",
+	).Scan(&detailsJSON); err != nil {
+		t.Fatalf("query promotion RCA event: %v", err)
+	}
+	if !strings.Contains(detailsJSON, `"promotion_target":"procedural_memory.workflow"`) {
+		t.Fatalf("details_json = %q, want workflow promotion target", detailsJSON)
+	}
+	if !strings.Contains(detailsJSON, `"workflow_name":"shell → deploy → verify"`) {
+		t.Fatalf("details_json = %q, want workflow name", detailsJSON)
 	}
 }

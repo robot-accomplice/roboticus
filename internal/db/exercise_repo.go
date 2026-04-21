@@ -7,6 +7,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"roboticus/internal/hostresources"
+	"roboticus/internal/modelstate"
 )
 
 // BaselineRunRow is the durable metadata record for one exercise/baseline run.
@@ -25,24 +26,28 @@ type BaselineRunRow struct {
 	FinishedAt        string                  `json:"finished_at,omitempty"`
 	StartResources    *hostresources.Snapshot `json:"start_resources,omitempty"`
 	EndResources      *hostresources.Snapshot `json:"end_resources,omitempty"`
+	StartModelStates  []modelstate.Snapshot   `json:"start_model_states,omitempty"`
+	EndModelStates    []modelstate.Snapshot   `json:"end_model_states,omitempty"`
 }
 
 // ExerciseResultRow is a single persisted exercise prompt result.
 type ExerciseResultRow struct {
-	ID            string                  `json:"id"`
-	RunID         string                  `json:"run_id"`
-	Model         string                  `json:"model"`
-	IntentClass   string                  `json:"intent_class"`
-	Complexity    string                  `json:"complexity"`
-	Prompt        string                  `json:"prompt"`
-	Content       string                  `json:"content,omitempty"`
-	Quality       float64                 `json:"quality"`
-	LatencyMs     int64                   `json:"latency_ms"`
-	Passed        bool                    `json:"passed"`
-	ErrorMsg      string                  `json:"error_msg,omitempty"`
-	CreatedAt     string                  `json:"created_at"`
-	ResourceStart *hostresources.Snapshot `json:"resource_start,omitempty"`
-	ResourceEnd   *hostresources.Snapshot `json:"resource_end,omitempty"`
+	ID              string                  `json:"id"`
+	RunID           string                  `json:"run_id"`
+	Model           string                  `json:"model"`
+	IntentClass     string                  `json:"intent_class"`
+	Complexity      string                  `json:"complexity"`
+	Prompt          string                  `json:"prompt"`
+	Content         string                  `json:"content,omitempty"`
+	Quality         float64                 `json:"quality"`
+	LatencyMs       int64                   `json:"latency_ms"`
+	Passed          bool                    `json:"passed"`
+	ErrorMsg        string                  `json:"error_msg,omitempty"`
+	CreatedAt       string                  `json:"created_at"`
+	ResourceStart   *hostresources.Snapshot `json:"resource_start,omitempty"`
+	ResourceEnd     *hostresources.Snapshot `json:"resource_end,omitempty"`
+	ModelStateStart *modelstate.Snapshot    `json:"model_state_start,omitempty"`
+	ModelStateEnd   *modelstate.Snapshot    `json:"model_state_end,omitempty"`
 }
 
 // InsertBaselineRun persists or updates the metadata record for a baseline run.
@@ -53,12 +58,14 @@ func InsertBaselineRun(ctx context.Context, store *Store, row BaselineRunRow) er
 	}
 	startResourcesJSON := hostresources.Marshal(row.StartResources)
 	endResourcesJSON := hostresources.Marshal(row.EndResources)
+	startModelStatesJSON := modelstate.MarshalList(row.StartModelStates)
+	endModelStatesJSON := modelstate.MarshalList(row.EndModelStates)
 	_, err = store.ExecContext(ctx,
 		`INSERT INTO baseline_runs (
 			run_id, initiator, status, model_count, models_json, iterations,
 			config_fingerprint, git_revision, notes, started_at, finished_at,
-			start_resources_json, end_resources_json
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(NULLIF(?, ''), datetime('now')), NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''))
+			start_resources_json, end_resources_json, start_model_states_json, end_model_states_json
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(NULLIF(?, ''), datetime('now')), NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''))
 		ON CONFLICT(run_id) DO UPDATE SET
 			initiator = excluded.initiator,
 			status = excluded.status,
@@ -69,10 +76,12 @@ func InsertBaselineRun(ctx context.Context, store *Store, row BaselineRunRow) er
 			git_revision = excluded.git_revision,
 			notes = excluded.notes,
 			start_resources_json = COALESCE(excluded.start_resources_json, baseline_runs.start_resources_json),
-			end_resources_json = COALESCE(excluded.end_resources_json, baseline_runs.end_resources_json)`,
+			end_resources_json = COALESCE(excluded.end_resources_json, baseline_runs.end_resources_json),
+			start_model_states_json = COALESCE(excluded.start_model_states_json, baseline_runs.start_model_states_json),
+			end_model_states_json = COALESCE(excluded.end_model_states_json, baseline_runs.end_model_states_json)`,
 		row.RunID, row.Initiator, row.Status, row.ModelCount, string(modelsJSON), row.Iterations,
 		row.ConfigFingerprint, row.GitRevision, row.Notes, row.StartedAt, row.FinishedAt,
-		startResourcesJSON, endResourcesJSON,
+		startResourcesJSON, endResourcesJSON, startModelStatesJSON, endModelStatesJSON,
 	)
 	if err != nil {
 		log.Warn().Err(err).Str("run_id", row.RunID).Msg("exercise: failed to persist baseline run metadata")
@@ -81,16 +90,18 @@ func InsertBaselineRun(ctx context.Context, store *Store, row BaselineRunRow) er
 }
 
 // CompleteBaselineRun marks a baseline run finished and records its terminal status.
-func CompleteBaselineRun(ctx context.Context, store *Store, runID, status, notes string, endResources *hostresources.Snapshot) error {
+func CompleteBaselineRun(ctx context.Context, store *Store, runID, status, notes string, endResources *hostresources.Snapshot, endModelStates []modelstate.Snapshot) error {
 	endResourcesJSON := hostresources.Marshal(endResources)
+	endModelStatesJSON := modelstate.MarshalList(endModelStates)
 	_, err := store.ExecContext(ctx,
 		`UPDATE baseline_runs
 		    SET status = ?,
 		        notes = CASE WHEN ? = '' THEN notes ELSE ? END,
 		        finished_at = datetime('now'),
-		        end_resources_json = CASE WHEN ? = '' THEN end_resources_json ELSE ? END
+		        end_resources_json = CASE WHEN ? = '' THEN end_resources_json ELSE ? END,
+		        end_model_states_json = CASE WHEN ? = '' THEN end_model_states_json ELSE ? END
 		  WHERE run_id = ?`,
-		status, notes, notes, endResourcesJSON, endResourcesJSON, runID,
+		status, notes, notes, endResourcesJSON, endResourcesJSON, endModelStatesJSON, endModelStatesJSON, runID,
 	)
 	if err != nil {
 		log.Warn().Err(err).Str("run_id", runID).Msg("exercise: failed to finalize baseline run")
@@ -107,7 +118,8 @@ func ListBaselineRuns(ctx context.Context, store *Store, limit int) []BaselineRu
 		`SELECT run_id, initiator, status, model_count, COALESCE(models_json, '[]'),
 		        iterations, COALESCE(config_fingerprint, ''), COALESCE(git_revision, ''),
 		        COALESCE(notes, ''), started_at, COALESCE(finished_at, ''),
-		        COALESCE(start_resources_json, ''), COALESCE(end_resources_json, '')
+		        COALESCE(start_resources_json, ''), COALESCE(end_resources_json, ''),
+		        COALESCE(start_model_states_json, ''), COALESCE(end_model_states_json, '')
 		   FROM baseline_runs
 		  ORDER BY started_at DESC
 		  LIMIT ?`, limit)
@@ -120,21 +132,26 @@ func ListBaselineRuns(ctx context.Context, store *Store, limit int) []BaselineRu
 	var out []BaselineRunRow
 	for rows.Next() {
 		var (
-			entry             BaselineRunRow
-			modelsRaw         string
-			startResourcesRaw string
-			endResourcesRaw   string
+			entry               BaselineRunRow
+			modelsRaw           string
+			startResourcesRaw   string
+			endResourcesRaw     string
+			startModelStatesRaw string
+			endModelStatesRaw   string
 		)
 		if err := rows.Scan(
 			&entry.RunID, &entry.Initiator, &entry.Status, &entry.ModelCount, &modelsRaw,
 			&entry.Iterations, &entry.ConfigFingerprint, &entry.GitRevision,
 			&entry.Notes, &entry.StartedAt, &entry.FinishedAt, &startResourcesRaw, &endResourcesRaw,
+			&startModelStatesRaw, &endModelStatesRaw,
 		); err != nil {
 			continue
 		}
 		_ = json.Unmarshal([]byte(modelsRaw), &entry.Models)
 		entry.StartResources = hostresources.FromJSON(startResourcesRaw)
 		entry.EndResources = hostresources.FromJSON(endResourcesRaw)
+		entry.StartModelStates = modelstate.ListFromJSON(startModelStatesRaw)
+		entry.EndModelStates = modelstate.ListFromJSON(endModelStatesRaw)
 		out = append(out, entry)
 	}
 	return out
@@ -148,11 +165,13 @@ func InsertExerciseResult(ctx context.Context, store *Store, row ExerciseResultR
 	}
 	resourceStartJSON := hostresources.Marshal(row.ResourceStart)
 	resourceEndJSON := hostresources.Marshal(row.ResourceEnd)
+	modelStateStartJSON := modelstate.Marshal(row.ModelStateStart)
+	modelStateEndJSON := modelstate.Marshal(row.ModelStateEnd)
 	_, err := store.ExecContext(ctx,
-		`INSERT INTO exercise_results (id, run_id, model, intent_class, complexity, prompt, content, quality, latency_ms, passed, error_msg, resource_start_json, resource_end_json)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, ''))`,
+		`INSERT INTO exercise_results (id, run_id, model, intent_class, complexity, prompt, content, quality, latency_ms, passed, error_msg, resource_start_json, resource_end_json, model_state_start_json, model_state_end_json)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''))`,
 		row.ID, row.RunID, row.Model, row.IntentClass, row.Complexity,
-		row.Prompt, row.Content, row.Quality, row.LatencyMs, passed, row.ErrorMsg, resourceStartJSON, resourceEndJSON,
+		row.Prompt, row.Content, row.Quality, row.LatencyMs, passed, row.ErrorMsg, resourceStartJSON, resourceEndJSON, modelStateStartJSON, modelStateEndJSON,
 	)
 	if err != nil {
 		log.Warn().Err(err).Str("model", row.Model).Msg("exercise: failed to persist result")
@@ -252,7 +271,8 @@ func LatestExerciseResults(ctx context.Context, store *Store, model string) []Ex
 
 	rows, err := store.QueryContext(ctx,
 		`SELECT id, run_id, model, intent_class, complexity, prompt, content, quality, latency_ms, passed, COALESCE(error_msg, ''), created_at,
-		        COALESCE(resource_start_json, ''), COALESCE(resource_end_json, '')
+		        COALESCE(resource_start_json, ''), COALESCE(resource_end_json, ''),
+		        COALESCE(model_state_start_json, ''), COALESCE(model_state_end_json, '')
 		 FROM exercise_results WHERE run_id = ? ORDER BY rowid`, runID)
 	if err != nil {
 		return nil
@@ -264,12 +284,15 @@ func LatestExerciseResults(ctx context.Context, store *Store, model string) []Ex
 		var r ExerciseResultRow
 		var passed int
 		var resourceStartRaw, resourceEndRaw string
+		var modelStateStartRaw, modelStateEndRaw string
 		if err := rows.Scan(&r.ID, &r.RunID, &r.Model, &r.IntentClass, &r.Complexity,
 			&r.Prompt, &r.Content, &r.Quality, &r.LatencyMs, &passed, &r.ErrorMsg, &r.CreatedAt,
-			&resourceStartRaw, &resourceEndRaw); err == nil {
+			&resourceStartRaw, &resourceEndRaw, &modelStateStartRaw, &modelStateEndRaw); err == nil {
 			r.Passed = passed == 1
 			r.ResourceStart = hostresources.FromJSON(resourceStartRaw)
 			r.ResourceEnd = hostresources.FromJSON(resourceEndRaw)
+			r.ModelStateStart = modelstate.FromJSON(modelStateStartRaw)
+			r.ModelStateEnd = modelstate.FromJSON(modelStateEndRaw)
 			results = append(results, r)
 		}
 	}

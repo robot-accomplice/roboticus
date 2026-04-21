@@ -13,6 +13,7 @@ import (
 	"roboticus/internal/db"
 	"roboticus/internal/hostresources"
 	"roboticus/internal/llm"
+	"roboticus/internal/modelstate"
 	"roboticus/internal/pipeline"
 	"roboticus/testutil"
 )
@@ -26,6 +27,24 @@ func stubResourceSamplerForTest(t *testing.T) {
 			MemoryAvailableBytes: 9_000_000_000,
 			OllamaRSSBytes:       3_000_000_000,
 			RoboticusRSSBytes:    200_000_000,
+		}
+	})
+	t.Cleanup(restore)
+}
+
+func stubModelStateSamplerForTest(t *testing.T) {
+	t.Helper()
+	restore := modelstate.SetSamplerForTests(func(_ context.Context, _ *core.Config, model string) modelstate.Snapshot {
+		return modelstate.Snapshot{
+			CollectedAt:        "2026-04-20T18:20:00Z",
+			Model:              model,
+			Provider:           "ollama",
+			IsLocal:            true,
+			ProviderConfigured: true,
+			ProviderReachable:  true,
+			ModelAvailable:     true,
+			ModelLoaded:        true,
+			StateClass:         "ready",
 		}
 	})
 	t.Cleanup(restore)
@@ -51,6 +70,7 @@ func (s *stubExerciseRunner) Run(_ context.Context, _ pipeline.Config, input pip
 
 func TestExerciseModel_UsesPipelineOwnedPath(t *testing.T) {
 	stubResourceSamplerForTest(t)
+	stubModelStateSamplerForTest(t)
 	store := testutil.TempStore(t)
 	runner := &stubExerciseRunner{}
 	cfg := &core.Config{
@@ -111,24 +131,28 @@ func TestExerciseModel_UsesPipelineOwnedPath(t *testing.T) {
 		t.Fatalf("baseline run status = %q, want completed", runStatus)
 	}
 	var (
-		startResources string
-		endResources   string
-		resultStart    string
-		resultEnd      string
+		startResources   string
+		endResources     string
+		startModelStates string
+		endModelStates   string
+		resultStart      string
+		resultEnd        string
+		resultStateStart string
+		resultStateEnd   string
 	)
-	row = store.QueryRowContext(context.Background(), `SELECT COALESCE(start_resources_json, ''), COALESCE(end_resources_json, '') FROM baseline_runs WHERE run_id = ?`, body["run_id"].(string))
-	if err := row.Scan(&startResources, &endResources); err != nil {
+	row = store.QueryRowContext(context.Background(), `SELECT COALESCE(start_resources_json, ''), COALESCE(end_resources_json, ''), COALESCE(start_model_states_json, ''), COALESCE(end_model_states_json, '') FROM baseline_runs WHERE run_id = ?`, body["run_id"].(string))
+	if err := row.Scan(&startResources, &endResources, &startModelStates, &endModelStates); err != nil {
 		t.Fatalf("scan baseline resource snapshots: %v", err)
 	}
-	if startResources == "" || endResources == "" {
-		t.Fatalf("expected baseline run to persist start/end resource snapshots")
+	if startResources == "" || endResources == "" || startModelStates == "" || endModelStates == "" {
+		t.Fatalf("expected baseline run to persist start/end resource and model-state snapshots")
 	}
-	row = store.QueryRowContext(context.Background(), `SELECT COALESCE(resource_start_json, ''), COALESCE(resource_end_json, '') FROM exercise_results WHERE model = ? LIMIT 1`, "ollama/test-model")
-	if err := row.Scan(&resultStart, &resultEnd); err != nil {
-		t.Fatalf("scan exercise resource snapshots: %v", err)
+	row = store.QueryRowContext(context.Background(), `SELECT COALESCE(resource_start_json, ''), COALESCE(resource_end_json, ''), COALESCE(model_state_start_json, ''), COALESCE(model_state_end_json, '') FROM exercise_results WHERE model = ? LIMIT 1`, "ollama/test-model")
+	if err := row.Scan(&resultStart, &resultEnd, &resultStateStart, &resultStateEnd); err != nil {
+		t.Fatalf("scan exercise snapshots: %v", err)
 	}
-	if resultStart == "" || resultEnd == "" {
-		t.Fatalf("expected exercise results to persist prompt-level resource snapshots")
+	if resultStart == "" || resultEnd == "" || resultStateStart == "" || resultStateEnd == "" {
+		t.Fatalf("expected exercise results to persist prompt-level resource and model-state snapshots")
 	}
 }
 
@@ -222,6 +246,7 @@ func TestExerciseModel_RejectsUnknownIntent(t *testing.T) {
 
 func TestExerciseRunLifecycleRoutes_PersistHistory(t *testing.T) {
 	stubResourceSamplerForTest(t)
+	stubModelStateSamplerForTest(t)
 	store := testutil.TempStore(t)
 
 	start := StartExerciseRun(store, &core.Config{Models: core.ModelsConfig{Policy: map[string]core.ModelPolicyConfig{}}})
@@ -250,8 +275,10 @@ func TestExerciseRunLifecycleRoutes_PersistHistory(t *testing.T) {
 		t.Fatalf("append status = %d, want 200", rec.Code)
 	}
 
-	complete := CompleteExerciseRun(store)
-	req = httptest.NewRequest(http.MethodPost, "/api/models/exercise/runs/"+runID+"/complete", strings.NewReader(`{"status":"completed"}`))
+	complete := CompleteExerciseRun(store, &core.Config{Providers: map[string]core.ProviderConfig{
+		"ollama": {URL: "http://localhost:11434", Format: "ollama", IsLocal: true},
+	}})
+	req = httptest.NewRequest(http.MethodPost, "/api/models/exercise/runs/"+runID+"/complete", strings.NewReader(`{"status":"completed","models":["ollama/gemma4","ollama/phi4-mini:latest"]}`))
 	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, func() *chi.Context {
 		routeCtx := chi.NewRouteContext()
 		routeCtx.URLParams.Add("runID", runID)
@@ -264,19 +291,21 @@ func TestExerciseRunLifecycleRoutes_PersistHistory(t *testing.T) {
 	}
 
 	var (
-		status         string
-		results        int
-		startResources string
-		endResources   string
+		status           string
+		results          int
+		startResources   string
+		endResources     string
+		startModelStates string
+		endModelStates   string
 	)
-	if err := store.QueryRowContext(context.Background(), `SELECT status, COALESCE(start_resources_json, ''), COALESCE(end_resources_json, '') FROM baseline_runs WHERE run_id = ?`, runID).Scan(&status, &startResources, &endResources); err != nil {
+	if err := store.QueryRowContext(context.Background(), `SELECT status, COALESCE(start_resources_json, ''), COALESCE(end_resources_json, ''), COALESCE(start_model_states_json, ''), COALESCE(end_model_states_json, '') FROM baseline_runs WHERE run_id = ?`, runID).Scan(&status, &startResources, &endResources, &startModelStates, &endModelStates); err != nil {
 		t.Fatalf("query baseline_runs: %v", err)
 	}
 	if status != "completed" {
 		t.Fatalf("status = %q, want completed", status)
 	}
-	if startResources == "" || endResources == "" {
-		t.Fatalf("expected baseline run lifecycle routes to persist start/end resource snapshots")
+	if startResources == "" || endResources == "" || startModelStates == "" || endModelStates == "" {
+		t.Fatalf("expected baseline run lifecycle routes to persist start/end resource and model-state snapshots")
 	}
 	if err := store.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM exercise_results WHERE run_id = ?`, runID).Scan(&results); err != nil {
 		t.Fatalf("query exercise_results: %v", err)

@@ -31,6 +31,7 @@ import (
 
 	"roboticus/internal/core"
 	"roboticus/internal/hostresources"
+	"roboticus/internal/modelstate"
 )
 
 // ModelSender is the pluggable transport for dispatching a single
@@ -63,6 +64,8 @@ type PromptOutcome struct {
 	Err             error   // transport error, nil on success
 	ResourceStart   *hostresources.Snapshot
 	ResourceEnd     *hostresources.Snapshot
+	ModelStateStart *modelstate.Snapshot
+	ModelStateEnd   *modelstate.Snapshot
 }
 
 // OnPromptFn is invoked once per scored prompt AFTER the call
@@ -111,6 +114,12 @@ type ExerciseRequest struct {
 	// Nil is treated as io.Discard. Independent from OnPrompt
 	// because warm-up is a pre-scoring phase, not a scored prompt.
 	Progress io.Writer
+
+	// SampleModelState captures provider/model runtime state for the exact model
+	// under test. It is optional but strongly recommended for benchmarks so
+	// empty/failed rows can be attributed to real model readiness instead of
+	// guessed after the fact.
+	SampleModelState func(ctx context.Context, model string) *modelstate.Snapshot
 
 	// IsLocal reports whether a model is local-hosted (and thus
 	// should go through warm-up). Required — implementations read
@@ -254,16 +263,24 @@ func ExerciseModels(ctx context.Context, req ExerciseRequest) (ExerciseReport, e
 				// logged output stays clean.
 				prefix := fmt.Sprintf("    [%d/%d] %s:C%d ... ", promptNum, totalPrompts, ep.Intent.String(), ep.Complexity)
 				var (
-					content   string
-					latencyMs int64
-					err       error
+					content         string
+					latencyMs       int64
+					err             error
+					modelStateStart *modelstate.Snapshot
+					modelStateEnd   *modelstate.Snapshot
 				)
+				if req.SampleModelState != nil {
+					modelStateStart = req.SampleModelState(ctx, model)
+				}
 				resourceStart := hostresources.Sample(ctx)
 				start := time.Now()
 				core.RunWithSpinner(req.Progress, prefix, func() {
 					content, latencyMs, err = req.SendPrompt(ctx, model, ep.Prompt, modelTimeout)
 				})
 				resourceEnd := hostresources.Sample(ctx)
+				if req.SampleModelState != nil {
+					modelStateEnd = req.SampleModelState(ctx, model)
+				}
 				// SendPrompt is allowed to return latencyMs==0 if it
 				// doesn't track its own timing; fall back to our
 				// start-based measurement so callers always see a
@@ -285,6 +302,8 @@ func ExerciseModels(ctx context.Context, req ExerciseRequest) (ExerciseReport, e
 					LatencyMs:       latencyMs,
 					ResourceStart:   &resourceStart,
 					ResourceEnd:     &resourceEnd,
+					ModelStateStart: modelStateStart,
+					ModelStateEnd:   modelStateEnd,
 				}
 
 				switch {

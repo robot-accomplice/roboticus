@@ -151,6 +151,7 @@ func NewService(cfg ServiceConfig, store *db.Store) (*Service, error) {
 		toolBlocklist:     cfg.ToolBlocklist,
 		toolAllowlist:     cfg.ToolAllowlist,
 	}
+	svc.router.SetToolSupportPolicy(cfg.ToolAllowlist, cfg.ToolBlocklist)
 
 	// Metascore routing is always enabled when the service has quality/latency
 	// tracking (which it always does). This ensures every code path that creates
@@ -294,7 +295,7 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 	// Route: select model if not explicitly set.
 	if req.Model == "" {
 		target := s.router.Select(req)
-		annotateRoutingDecision(ctx, s.router, req, target)
+		annotateRoutingDecision(ctx, s, req, target)
 		req.Model = ModelSpecForTarget(target)
 		s.recordModelSelectionFromRequest(ctx, req, req.Model, "routed")
 	}
@@ -393,19 +394,7 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 		obs.RecordEvent("routing_chain_built", "ok",
 			"inference chain built",
 			"The system assembled a model/provider fallback chain for this turn.",
-			map[string]any{
-				"requested_model":    req.Model,
-				"tool_count":         len(req.Tools),
-				"chain_len":          len(chain),
-				"candidates":         candidates,
-				"agent_role":         normalizeAgentRole(req.AgentRole),
-				"turn_weight":        req.TurnWeight,
-				"task_intent":        req.TaskIntent,
-				"task_complexity":    req.TaskComplexity,
-				"intent_class":       requestIntentClass(req),
-				"routing_complexity": requestRoutingComplexity(req),
-				"complexity_source":  requestRoutingComplexitySource(req),
-			},
+			s.routingChainEventDetails(req, candidates),
 		)
 	}
 
@@ -610,7 +599,7 @@ func (s *Service) Stream(ctx context.Context, req *Request) (<-chan StreamChunk,
 	// Route if needed.
 	if req.Model == "" {
 		target := s.router.Select(req)
-		annotateRoutingDecision(ctx, s.router, req, target)
+		annotateRoutingDecision(ctx, s, req, target)
 		req.Model = ModelSpecForTarget(target)
 		s.recordModelSelectionFromRequest(ctx, req, req.Model, "routed")
 	}
@@ -732,6 +721,9 @@ func (s *Service) SeedStartup(ctx context.Context, store *db.Store) {
 	}
 	if s.quality != nil {
 		s.quality.SeedFromHistory(ctx, store)
+	}
+	if s.intentQuality != nil {
+		s.intentQuality.SeedFromExerciseResults(ctx, store)
 	}
 	if s.latency != nil {
 		s.latency.SeedFromHistory(ctx, store)
@@ -910,13 +902,7 @@ func contains(slice []string, s string) bool {
 
 // ModelSpecForTarget formats a RouteTarget as a "provider/model" spec string.
 func ModelSpecForTarget(target RouteTarget) string {
-	if target.Provider != "" && target.Model != "" && !strings.Contains(target.Model, "/") {
-		return target.Provider + "/" + target.Model
-	}
-	if target.Model != "" {
-		return target.Model
-	}
-	return target.Provider
+	return executionModelSpec(target.Provider, target.Model)
 }
 
 // RecordModelSelection persists a model selection event to the database.
@@ -975,83 +961,16 @@ func (s *Service) recordModelSelectionFromRequest(ctx context.Context, req *Requ
 			}
 		}
 	}
-	metascoreJSON, featuresJSON := s.routingEvidence(req)
+	metascoreJSON, featuresJSON := s.routingEvidence(req, selectedModel)
 	s.RecordModelSelection(ctx, turnID, sessionID, "", channel, selectedModel, strategy, lastUserExcerpt(req), candidates, metascoreJSON, featuresJSON)
 }
 
-func (s *Service) routingEvidence(req *Request) (string, string) {
+func (s *Service) routingEvidence(req *Request, selectedModel string) (string, string) {
 	if s == nil || s.router == nil || req == nil {
 		return "", ""
 	}
-	profiles := BuildModelProfiles(s.router.Targets(), s.quality, s.latency, nil, s.breakers)
-	weights := s.router.GetRoutingWeights()
-	type scoreRow struct {
-		State                string             `json:"state,omitempty"`
-		PrimaryReasonCode    string             `json:"primary_reason_code,omitempty"`
-		ReasonCodes          []string           `json:"reason_codes,omitempty"`
-		HumanReason          string             `json:"human_reason,omitempty"`
-		EvidenceRefs         []string           `json:"evidence_refs,omitempty"`
-		PolicySource         string             `json:"policy_source,omitempty"`
-		Model                string             `json:"model"`
-		Provider             string             `json:"provider"`
-		Tier                 ModelTier          `json:"tier"`
-		OrchestratorEligible bool               `json:"orchestrator_eligible"`
-		SubagentEligible     bool               `json:"subagent_eligible"`
-		EligibilityReason    string             `json:"eligibility_reason,omitempty"`
-		RoleEligible         bool               `json:"role_eligible"`
-		Breakdown            MetascoreBreakdown `json:"breakdown"`
-	}
-	rows := make([]scoreRow, 0, len(profiles))
-	complexity := requestRoutingComplexity(req)
-	requestWeights := weights
-	if req.TurnWeight != "" {
-		requestWeights = routingWeightsForRequest(weights, req.TurnWeight, req.TaskIntent, req.TaskComplexity)
-	}
-	intentClass := requestIntentClass(req)
-	for _, p := range profiles {
-		if intentClass != "" && s.intentQuality != nil {
-			p.Quality = s.intentQuality.EstimatedQualityForIntent(p.Model, intentClass)
-		}
-		target := routeTargetForProfile(s.router.Targets(), p)
-		rows = append(rows, scoreRow{
-			State:                target.State,
-			PrimaryReasonCode:    target.PrimaryReasonCode,
-			ReasonCodes:          append([]string(nil), target.ReasonCodes...),
-			HumanReason:          target.HumanReason,
-			EvidenceRefs:         append([]string(nil), target.EvidenceRefs...),
-			PolicySource:         target.PolicySource,
-			Model:                p.Model,
-			Provider:             p.Provider,
-			Tier:                 p.Tier,
-			OrchestratorEligible: target.OrchestratorEligible,
-			SubagentEligible:     target.SubagentEligible,
-			EligibilityReason:    target.EligibilityReason,
-			RoleEligible:         routeTargetEligibleForRole(target, req.AgentRole),
-			Breakdown:            p.BreakdownWithComplexity(complexity, false, requestWeights),
-		})
-	}
-	type featureSet struct {
-		AgentRole      string         `json:"agent_role,omitempty"`
-		TurnWeight     string         `json:"turn_weight,omitempty"`
-		TaskIntent     string         `json:"task_intent,omitempty"`
-		TaskComplexity string         `json:"task_complexity,omitempty"`
-		IntentClass    string         `json:"intent_class,omitempty"`
-		MessageCount   int            `json:"message_count"`
-		ToolCount      int            `json:"tool_count"`
-		Complexity     float64        `json:"complexity"`
-		Weights        RoutingWeights `json:"weights"`
-	}
-	return mustJSON(rows), mustJSON(featureSet{
-		AgentRole:      normalizeAgentRole(req.AgentRole),
-		TurnWeight:     req.TurnWeight,
-		TaskIntent:     req.TaskIntent,
-		TaskComplexity: req.TaskComplexity,
-		IntentClass:    intentClass,
-		MessageCount:   len(req.Messages),
-		ToolCount:      len(req.Tools),
-		Complexity:     complexity,
-		Weights:        requestWeights,
-	})
+	rows, features := s.routingAssessment(req, selectedModel)
+	return mustJSON(rows), mustJSON(features)
 }
 
 func routeTargetForProfile(targets []RouteTarget, profile ModelProfile) RouteTarget {
@@ -1061,6 +980,24 @@ func routeTargetForProfile(targets []RouteTarget, profile ModelProfile) RouteTar
 		}
 	}
 	return RouteTarget{Model: profile.Model, Provider: profile.Provider}
+}
+
+func routeTargetAssessmentForProfile(byModel map[string]RouteTargetAssessment, target RouteTarget, profile ModelProfile) RouteTargetAssessment {
+	keys := []string{
+		canonicalModelKey(ModelSpecForTarget(target)),
+		canonicalModelKey(target.Model),
+		canonicalModelKey(profile.Provider + "/" + profile.Model),
+		canonicalModelKey(profile.Model),
+	}
+	for _, key := range keys {
+		if key == "" {
+			continue
+		}
+		if assessment, ok := byModel[key]; ok {
+			return assessment
+		}
+	}
+	return RouteTargetAssessment{Target: target, Model: profile.Model, RoleEligible: routeTargetEligibleForRole(target, "orchestrator"), RequestEligible: routeTargetEligibleForRole(target, "orchestrator"), ToolCapable: true}
 }
 
 func mustJSON(v any) string {

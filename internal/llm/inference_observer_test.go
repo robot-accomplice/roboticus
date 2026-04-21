@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 )
@@ -126,5 +127,103 @@ func TestServiceComplete_ObserverCapturesFallbackDiagnostics(t *testing.T) {
 		if !seen {
 			t.Fatalf("expected event %q to be recorded", eventType)
 		}
+	}
+}
+
+func TestServiceComplete_RoutingChainEventCarriesCapabilityEvidence(t *testing.T) {
+	moonshotClient, _ := NewClientWithHTTP(&Provider{
+		Name: "moonshot", URL: "http://moonshot", Format: FormatOpenAI,
+	}, &mockHTTP{
+		statusCode: 200,
+		body:       `{"id":"ok","model":"kimi-k2","choices":[{"message":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":32,"completion_tokens":7}}`,
+	})
+	ollamaClient, _ := NewClientWithHTTP(&Provider{
+		Name: "ollama", URL: "http://ollama", Format: FormatOpenAI, IsLocal: true,
+	}, &mockHTTP{
+		statusCode: 200,
+		body:       `{"id":"ok","model":"phi4-mini","choices":[{"message":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":32,"completion_tokens":7}}`,
+	})
+	openrouterClient, _ := NewClientWithHTTP(&Provider{
+		Name: "openrouter", URL: "http://openrouter", Format: FormatOpenAI,
+	}, &mockHTTP{
+		statusCode: 200,
+		body:       `{"id":"ok","model":"new-hotness","choices":[{"message":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":32,"completion_tokens":7}}`,
+	})
+
+	svc, err := NewService(ServiceConfig{
+		Providers: []Provider{
+			{Name: "moonshot", URL: "http://moonshot", Format: FormatOpenAI},
+			{Name: "ollama", URL: "http://ollama", Format: FormatOpenAI, IsLocal: true},
+			{Name: "openrouter", URL: "http://openrouter", Format: FormatOpenAI},
+		},
+		Primary:       "moonshot/kimi-k2",
+		Fallbacks:     []string{"ollama/phi4-mini", "openrouter/new-hotness"},
+		ToolBlocklist: []string{"phi4-mini"},
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	svc.providers["moonshot"] = moonshotClient
+	svc.providers["ollama"] = ollamaClient
+	svc.providers["openrouter"] = openrouterClient
+
+	obs := newRecordingObserver()
+	ctx := WithInferenceObserver(context.Background(), obs)
+	resp, err := svc.Complete(ctx, &Request{
+		Messages:       []Message{{Role: "user", Content: "Use a tool to inspect the vault and report back."}},
+		Tools:          []ToolDef{{Type: "function", Function: ToolFuncDef{Name: "obsidian_write"}}},
+		TurnWeight:     "standard",
+		TaskIntent:     "task",
+		TaskComplexity: "moderate",
+		IntentClass:    IntentToolUse.String(),
+	})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if resp == nil {
+		t.Fatal("expected response")
+	}
+
+	var routingEvent *observerEvent
+	for i := range obs.events {
+		if obs.events[i].eventType == "routing_chain_built" {
+			routingEvent = &obs.events[i]
+			break
+		}
+	}
+	if routingEvent == nil {
+		t.Fatal("expected routing_chain_built event")
+	}
+	if got := routingEvent.details["request_eligible_candidates"]; got == nil {
+		t.Fatal("expected request_eligible_candidates in routing_chain_built details")
+	}
+	var firstExcluded map[string]any
+	switch raw := routingEvent.details["excluded_candidates"].(type) {
+	case []map[string]any:
+		if len(raw) == 0 {
+			t.Fatalf("excluded_candidates = %v, want at least one item", routingEvent.details["excluded_candidates"])
+		}
+		firstExcluded = raw[0]
+	case []any:
+		if len(raw) == 0 {
+			t.Fatalf("excluded_candidates = %v, want at least one item", routingEvent.details["excluded_candidates"])
+		}
+		var ok bool
+		firstExcluded, ok = raw[0].(map[string]any)
+		if !ok {
+			t.Fatalf("first excluded candidate = %T, want map[string]any", raw[0])
+		}
+	default:
+		t.Fatalf("excluded_candidates = %T, want slice", routingEvent.details["excluded_candidates"])
+	}
+	if firstExcluded["model"] != "ollama/phi4-mini" {
+		t.Fatalf("excluded model = %v, want ollama/phi4-mini", firstExcluded["model"])
+	}
+	if got := routingEvent.details["ignored_for_missing_capability_evidence"]; got == nil {
+		t.Fatal("expected ignored_for_missing_capability_evidence in routing_chain_built details")
+	}
+	suggestion, _ := routingEvent.details["capability_evidence_recommendation"].(string)
+	if !strings.Contains(suggestion, "have no runtime evidence yet for "+IntentToolUse.String()) {
+		t.Fatalf("capability_evidence_recommendation = %q", suggestion)
 	}
 }

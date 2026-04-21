@@ -144,6 +144,79 @@ older architecture docs had left too generic:
   swap, and relevant process RSS snapshots must be captured on the same
   central seams that already own benchmark persistence and inference RCA,
   otherwise the system cannot distinguish a weak model from a saturated host.
+- **Benchmark validity also requires model/runtime-state evidence.**
+  Benchmark persistence is not allowed to record a zero-content or failed
+  exercise row without also recording the execution preconditions for the
+  specific model under test. At minimum, the persisted benchmark artifact must
+  capture provider/model runtime state on the same start/end seams that already
+  own host-resource snapshots, so operators can distinguish "the model
+  responded badly" from "the model was missing, unloaded, unreachable, or
+  otherwise not actually ready to serve the request."
+- **Explicit session IDs must resolve to durable session truth or fail cleanly.**
+  Session resolution is not allowed to fabricate an in-memory session shell
+  for an explicit `session_id` that does not exist in `sessions` and then let
+  message persistence trip a foreign-key constraint later. When a caller
+  supplies a body-scoped session id, the pipeline must either prove that the
+  session exists or reject the request as not found before any turn/message
+  writes occur. A storage-time `500` here is a session-authority defect, not a
+  valid runtime outcome.
+- **Provider identity must survive routing target formatting.**
+  Routing is not allowed to select a target on one provider and then erase that
+  provider identity when the chosen target is formatted into a request model
+  spec. Provider-qualified downstream namespaces such as
+  `openrouter/openai/gpt-4o-mini` must preserve the outer execution provider
+  (`openrouter`) instead of being reinterpreted later as a direct `openai`
+  request. Otherwise the request path silently blames the wrong provider and
+  turns configuration truth into spurious auth failures.
+- **Successful side-effecting tool calls must be replay-protected inside a
+  turn.**
+  Once a tool that mutates the world has succeeded, the framework is not
+  allowed to execute the same side-effecting call again in the same turn
+  unless that tool explicitly declares replay safety. For note authoring,
+  shell execution, authority mutation, delegation, or any other persistent
+  effect, duplicate execution is a correctness risk rather than a mere latency
+  concern. Replay protection must be decided from the same authoritative tool
+  semantics map used by turn shaping, not from ad hoc name checks in the loop.
+  That protection is not allowed to remain an invisible loop detail: canonical
+  diagnostics and operator RCA must expose replay suppression count, the
+  protected tool/resource, and the suppression reason from the same persisted
+  execution fact.
+- **Procedural uncertainty should be allowed to pull applied memory before the
+  model starts exploring.**
+  Retrieval gating is not allowed to consider only continuity, evidence, and
+  risk while ignoring “we may already know how to do this.” When the framework
+  is procedurally uncertain about task execution, it should be able to consult
+  learned workflows and prior outcome evidence — including known failures —
+  before the model begins exploratory thrashing. That decision belongs on the
+  same task-synthesis / perception seam that already owns intent,
+  decomposition, source-of-truth, and retrieval policy so RCA can explain why
+  applied-learning retrieval was or was not used. That explanation is not
+  allowed to live only in trace annotations: canonical diagnostics must record
+  a chronological event describing whether the framework looked for prior
+  successes, prior failures, or both before the first inference call.
+- **Direct execution turns must not degrade into successful read-only research
+  loops.**
+  Once task synthesis says the turn should `execute_directly`, the loop is not
+  allowed to keep spending successful runtime-context, workspace-inspection,
+  capability-inventory, task-inspection, or memory-read calls forever while no
+  artifact write, execution step, delegation step, or other real progress ever
+  occurs. A small amount of exploration is legitimate; repeated successful
+  read-only exploration without execution progress is framework-owned churn and
+  must terminate on a central semantics-driven rule rather than a tool-name
+  blacklist. Canonical diagnostics must expose the blocked tool, the
+  exploration streak count, and the `exploratory_tool_churn` termination cause
+  so operators can see that the framework stopped itself instead of blaming the
+  model for an infinite research loop.
+- **Novel procedural experience must be captured with future reuse in mind.**
+  Once the framework learns that a workflow succeeded, failed, or only
+  partially worked, that outcome is not allowed to remain buried in one-off
+  conversational text. Distillation/promotion must preserve reusable
+  procedural semantics, outcome polarity, and enough task-shape context for
+  later applied-learning retrieval to ask not only “have we done this before”
+  but also “did it work.” RCA must be able to show when a novel experience was
+  judged reusable, which outcome polarity was captured, and whether the system
+  merely stored an episodic lesson or promoted reusable procedural knowledge
+  for future turns.
 - **Agent roster surfaces must share one authoritative subagent projection.**
   The roster view and the editable subagent list are not allowed to drift by
   querying different route-local shapes over the same `sub_agents` corpus. The
@@ -201,13 +274,108 @@ older architecture docs had left too generic:
   `test` inside filenames, titles, or note bodies as sufficient evidence for a
   coding turn. Simple document/note authoring requests must stay on the direct
   execution path unless stronger coding evidence exists.
+- **Complexity classification must not upcast single-step direct authoring on word count alone.**
+  A verbose but still single-step authoring/editing request is not allowed to
+  become `moderate` or `complex` merely because the operator specified output
+  constraints in full sentences. For direct note/document/file authoring, the
+  classifier must weight structural step count and artifact count ahead of raw
+  length, or the focused execution envelope can never activate on realistic
+  operator requests.
+- **Focused authoring turns must use a capability-scoped tool profile.**
+  Once a turn is classified as simple direct note/document/file authoring, the
+  focused envelope is not allowed to inherit the generic operational
+  always-include set. The selected tool surface must be shaped by the tool's
+  operation class: artifact-writing tools first, minimal runtime/workspace
+  context second, retrieval only when continuity evidence exists, and no
+  delegation, authority mutation, or unrelated operational inventory by
+  default. Otherwise the framework remains formally "focused" while still
+  shipping broad ambient capability baggage into the request.
+- **Post-success retries must be adjudicated by execution progress, not style alone.**
+  Once a turn has already made substantive execution progress — for example a
+  successful artifact write or other successful tool-backed action — the guard
+  and verifier layers are not allowed to trigger another full inference attempt
+  for purely narrative-quality defects such as repetition or unsupported
+  certainty. Those concerns still belong in RCA, but retry authority after
+  progress must be reserved for execution-critical failures: false execution
+  claims, materially incomplete work, broken output contracts, unmet stopping
+  criteria, or other defects that make the claimed result untrustworthy.
+- **Lifecycle policy must influence routing, not just candidate admission.**
+  `niche` and `under_scrutiny` are not allowed to exist as operator-visible
+  metadata while metascore still treats those models as normal winners for
+  operator-facing light/standard turns. Once a model is admitted only
+  narrowly, that policy has to bias selection away from it on ordinary
+  orchestrator work unless the request shape actually justifies the niche.
+- **Routing RCA must distinguish exclusion from insufficient evidence.**
+  The operator surface is not allowed to collapse all “model not chosen”
+  outcomes into one opaque candidate list. Routing truth must preserve:
+  hard exclusion (for example no tool capability, disabled policy, role
+  mismatch), soft demotion (for example `niche`, `under_scrutiny`,
+  `hardware_mismatch`), and evidence gaps (for example a model has never been
+  exercised for the current intent class). That distinction is what makes
+  recommendation-grade guidance possible: “this model was ignored because it
+  has not been exercised for TOOL_USE yet” is fundamentally different from
+  “this model was blocked because it cannot satisfy tool-bearing requests.”
+  That distinction must live in the canonical `routing_chain_built` artifact
+  itself, not only in lower-level trace annotations, so operator RCA, persisted
+  recommendations, and future automated recovery all consume the same routing
+  explanation surface.
+- **Capability evidence must use one canonical model identity.**
+  Baseline seeding, imported exercise rows, live intent observations, routing
+  evidence, and operator recommendations are not allowed to maintain separate
+  model-key spaces. If one seam uses `openrouter/openai/gpt-4o-mini`, another
+  uses `openai/gpt-4o-mini`, and a third uses bare `gpt-4o-mini`, the system
+  can store true evidence while still claiming the model is “unexercised.”
+  That is architectural drift, not acceptable uncertainty. Intent-capability
+  evidence must be normalized through the same canonical model key that routing
+  policy and diagnostics already use, and routing recommendations must only say
+  “not exercised for TOOL_USE” when the canonical evidence store truly has no
+  matching intent observations.
+- **Intent-scoped exercise must remain matrix-owned, not connector-owned.**
+  Exercising only `TOOL_USE`, `MEMORY_RECALL`, or any other intent class is
+  allowed only as a filtered projection of the canonical exercise matrix owned
+  by the shared exercise orchestrator. CLI flags, HTTP request bodies, and any
+  future admin surfaces are not allowed to define their own prompt subsets,
+  duplicate intent enumerations, or reinterpret what a capability slice means.
+  The exercise factory must validate requested intent classes against the same
+  canonical intent taxonomy used by routing evidence and persist the resulting
+  rows with the same intent labels. Otherwise baseline evidence becomes
+  connector-specific drift instead of one coherent capability truth surface.
+- **Further operator-directed model-selection modes are intentionally deferred.**
+  Curated or hand-selected routing modes may become worthwhile later, but
+  `v1.0.7` intentionally keeps using the existing routing-policy seam plus RCA
+  evidence to show where selection behavior actually needs to be hardened
+  before introducing more routing modes.
+- **Turn identity must remain operator-usable on observability surfaces.**
+  A trace row is not allowed to hide the authoritative turn identity behind a
+  twelve-character truncation with no copy affordance. Operators must be able
+  to inspect and copy the full turn id directly from the observability table,
+  and any tooltip or expanded detail view must preserve the same exact id
+  without requiring screenshots or database spelunking.
+- **Repeated routing-chain builds must preserve causal meaning.**
+  The UI is not allowed to treat every repeated `routing_chain_built` event as
+  if it were retry churn. A second routing pass after a tool result is normal
+  for a tool-bearing ReAct turn; retry, fallback, and post-success guard churn
+  are different failure modes. The canonical diagnostics projection must make
+  that distinction explicit so operators can tell “follow-up pass after tool
+  output” from “same-route retry” or “route widened under failure.”
 - **Placeholder assistant scaffolding must be suppressed at the loop boundary.**
   Strings like `[assistant message]` or `[agent message]` are not legitimate
   assistant outputs and must not enter session history, guard comparison, RCA,
   or user-visible results. The loop owner must normalize or drop these
   placeholders before they can trigger repetition churn or contaminate
   diagnostics.
-
+- **Behavior hardening is now an RCA-driven program, not an ad hoc bug queue.**
+  Repeated firsthand failures and operator reports with canonical diagnostics
+  are the authoritative intake for framework-owned behavior work. Each unique
+  failure class must have its own roadmap entry, RCA visibility contract, and
+  regression proof. `v1.0.7` is expected to fix the obvious repeated failures
+  we can demonstrate, not to claim universal agent perfection.
+- **Tool execution truth must be captured at the execution seam.**
+  If the loop executed a tool call, the `tool_calls` audit table and the
+  canonical RCA summary are not allowed to infer that fact later from partial
+  history reconstruction. They must be updated from the same execution-owned
+  event so a real tool-bearing turn cannot complete with `tool_call_count = 0`
+  or an empty tool audit trail.
 - **Personality setup interviewing must be owned by one shared contract.**
   The onboarding interview is not allowed to drift between API route wording,
   CLI/degraded fallback copy, and prompt-level LLM behavior. Pre-interview
@@ -215,7 +383,19 @@ older architecture docs had left too generic:
   interview contract: prime the operator to imagine a concrete archetype
   first, ask for the agent name as the first explicit question, then use
   repeated and differently-phrased behavioral probes to triangulate intended
-  operating style instead of treating one shallow answer as sufficient.
+  operating style instead of treating one shallow answer as sufficient. When
+  the operator supplies a reference identity, the interview may use the known
+  or inferred traits of that identity only as provisional seed assumptions
+  that must be surfaced and confirmed, not as silent canonical truth.
+- **Persistent-artifact authorship and authority-layer mutation must stay distinct.**
+  A turn that is trying to create or update an enduring operator-visible
+  artifact (for example a vault note, document, or workspace file) is not
+  allowed to treat semantic-memory or authority-layer mutation as equivalent
+  proof of success. Tool selection must privilege artifact-writing operations
+  and suppress authority-write tools when the turn does not actually call for
+  policy/spec ingestion. Success claims such as “created”, “wrote”, “saved”, or
+  “stored” are only valid when the turn has matching artifact-writing evidence,
+  not merely inspection output or semantic-ingestion output.
 
 For v1.0.7, the active parity backlog is no longer inferred from the historical
 gap sections below. The authoritative remaining scope is:
@@ -275,10 +455,6 @@ they are not the release-driving backlog anymore.
 | Roadmap ID | Title | Primary architecture seam |
 |------------|-------|---------------------------|
 | `PAR-008` | Cross-vendor SSE MCP proof | SSE transport confidence must flow through one authoritative named-target validation harness and evidence artifact, with central MCP config conversion plus endpoint-discovery/auth-capable SSE transport semantics, then be backed by more than one real blessed target |
-
-### Exercise Matrix Ownership
-
-- Intent-scoped exercise must remain matrix-owned, not connector-owned. CLI flags, HTTP request bodies, and future admin surfaces may choose a canonical intent filter, but they are not allowed to define ad hoc prompt subsets or reinterpret what a capability slice means. The shared exercise factory must validate requested intent classes against the canonical matrix taxonomy and persist the same intent labels the router and evidence surfaces consume.
 
 ---
 

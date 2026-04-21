@@ -12,6 +12,65 @@ import (
 	"roboticus/internal/db"
 )
 
+func (p *Pipeline) appendTurnDiagnosticEvent(ctx context.Context, turnID, eventType, status, operatorSummary, userSummary string, details map[string]any) {
+	if p.store == nil || strings.TrimSpace(turnID) == "" {
+		return
+	}
+
+	var atMs int64
+	err := p.store.QueryRowContext(ctx,
+		`SELECT COALESCE(total_ms, 0)
+		   FROM turn_diagnostics
+		  WHERE turn_id = ?
+		  LIMIT 1`,
+		turnID,
+	).Scan(&atMs)
+	if err != nil {
+		if err != sql.ErrNoRows {
+			log.Debug().Err(err).Str("turn", turnID).Str("event_type", eventType).Msg("failed to load turn diagnostics summary for append")
+		}
+		return
+	}
+
+	var nextSeq int
+	if err := p.store.QueryRowContext(ctx,
+		`SELECT COALESCE(MAX(seq), 0) + 1
+		   FROM turn_diagnostic_events
+		  WHERE turn_id = ?`,
+		turnID,
+	).Scan(&nextSeq); err != nil {
+		log.Debug().Err(err).Str("turn", turnID).Str("event_type", eventType).Msg("failed to compute next diagnostic sequence")
+		return
+	}
+
+	var lastAtMs sql.NullInt64
+	if err := p.store.QueryRowContext(ctx,
+		`SELECT MAX(at_ms)
+		   FROM turn_diagnostic_events
+		  WHERE turn_id = ?`,
+		turnID,
+	).Scan(&lastAtMs); err == nil && lastAtMs.Valid && lastAtMs.Int64 >= atMs {
+		atMs = lastAtMs.Int64 + 1
+	}
+
+	detailsJSON := ""
+	if len(details) > 0 {
+		if buf, err := json.Marshal(details); err == nil {
+			detailsJSON = string(buf)
+		}
+	}
+
+	if _, err := p.store.ExecContext(ctx,
+		`INSERT INTO turn_diagnostic_events (
+			id, turn_id, seq, event_type, at_ms, duration_ms, parent_event_id, status,
+			operator_summary, user_summary, details_json
+		) VALUES (?, ?, ?, ?, ?, 0, '', ?, ?, ?, ?)`,
+		db.NewID(), turnID, nextSeq, eventType, atMs, status, operatorSummary, userSummary, detailsJSON,
+	); err != nil {
+		log.Debug().Err(err).Str("turn", turnID).Str("event_type", eventType).Msg("failed to append turn diagnostic event")
+	}
+}
+
 func (p *Pipeline) storeTurnDiagnostics(ctx context.Context, dr *TurnDiagnosticsRecorder) {
 	if p.store == nil || dr == nil {
 		return
@@ -39,12 +98,12 @@ func (p *Pipeline) storeTurnDiagnostics(ctx context.Context, dr *TurnDiagnostics
 		_, err = p.store.ExecContext(ctx,
 			`UPDATE turn_diagnostics SET
 				session_id = ?, channel = ?, status = ?, final_model = ?, final_provider = ?, total_ms = ?,
-				inference_attempts = ?, fallback_count = ?, tool_call_count = ?, guard_retry_count = ?, verifier_retry_count = ?,
+				inference_attempts = ?, fallback_count = ?, tool_call_count = ?, guard_retry_count = ?, verifier_retry_count = ?, replay_suppression_count = ?,
 				request_messages = ?, request_tools = ?, request_approx_tokens = ?, context_pressure = ?, resource_pressure = ?,
 				resource_snapshot_json = ?, primary_diagnosis = ?, diagnosis_confidence = ?, user_narrative = ?, operator_narrative = ?, recommendations_json = ?
 			WHERE turn_id = ?`,
 			summary.SessionID, summary.Channel, summary.Status, summary.FinalModel, summary.FinalProvider, summary.TotalMs,
-			summary.InferenceAttempts, summary.FallbackCount, summary.ToolCallCount, summary.GuardRetryCount, summary.VerifierRetryCount,
+			summary.InferenceAttempts, summary.FallbackCount, summary.ToolCallCount, summary.GuardRetryCount, summary.VerifierRetryCount, summary.ReplaySuppressionCount,
 			summary.RequestMessages, summary.RequestTools, summary.RequestApproxTokens, summary.ContextPressure, summary.ResourcePressure,
 			summary.ResourceSnapshotJSON, summary.PrimaryDiagnosis, summary.DiagnosisConfidence, summary.UserNarrative, summary.OperatorNarrative, summary.RecommendationsJSON,
 			summary.TurnID,
@@ -53,13 +112,13 @@ func (p *Pipeline) storeTurnDiagnostics(ctx context.Context, dr *TurnDiagnostics
 		_, err = p.store.ExecContext(ctx,
 			`INSERT INTO turn_diagnostics (
 				id, turn_id, session_id, channel, status, final_model, final_provider, total_ms,
-				inference_attempts, fallback_count, tool_call_count, guard_retry_count, verifier_retry_count,
+				inference_attempts, fallback_count, tool_call_count, guard_retry_count, verifier_retry_count, replay_suppression_count,
 				request_messages, request_tools, request_approx_tokens, context_pressure, resource_pressure,
 				resource_snapshot_json, primary_diagnosis, diagnosis_confidence, user_narrative, operator_narrative, recommendations_json
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			db.NewID(), summary.TurnID, summary.SessionID, summary.Channel, summary.Status,
 			summary.FinalModel, summary.FinalProvider, summary.TotalMs, summary.InferenceAttempts,
-			summary.FallbackCount, summary.ToolCallCount, summary.GuardRetryCount, summary.VerifierRetryCount,
+			summary.FallbackCount, summary.ToolCallCount, summary.GuardRetryCount, summary.VerifierRetryCount, summary.ReplaySuppressionCount,
 			summary.RequestMessages, summary.RequestTools, summary.RequestApproxTokens, summary.ContextPressure,
 			summary.ResourcePressure, summary.ResourceSnapshotJSON, summary.PrimaryDiagnosis, summary.DiagnosisConfidence,
 			summary.UserNarrative, summary.OperatorNarrative, summary.RecommendationsJSON,
@@ -103,6 +162,8 @@ func DeriveInterpretiveDiagnosticsSummary(summary TurnDiagnosticSummary, events 
 	distinctRoutes := diagnosticDistinctRoutes(attempts)
 	guardRetry := latestDiagnosticEvent(events, "guard_retry_scheduled")
 	verifierRetry := latestDiagnosticEvent(events, "verifier_retry_scheduled")
+	loopTermination := latestDiagnosticEvent(events, "loop_terminated")
+	replaySuppressed := latestDiagnosticEvent(events, "tool_call_replay_suppressed")
 	guardName := firstViolationName(guardRetry, latestDiagnosticEvent(events, "response_finalized"))
 	retryReason := diagnosticDetailString(guardRetry, "retry_reason")
 	if retryReason == "" {
@@ -117,6 +178,28 @@ func DeriveInterpretiveDiagnosticsSummary(summary TurnDiagnosticSummary, events 
 	userNarrative := summary.UserNarrative
 	if needsDerivedNarrative(userNarrative) {
 		switch {
+		case replaySuppressed != nil || summary.ReplaySuppressionCount > 0:
+			toolName := diagnosticDetailString(replaySuppressed, "tool_name")
+			if toolName == "" {
+				toolName = "the side-effecting tool"
+			}
+			replayReason := diagnosticDetailString(replaySuppressed, "reason")
+			if replayReason == "" {
+				replayReason = "a prior successful execution made the duplicate call replay-risky"
+			}
+			userNarrative = fmt.Sprintf("The turn completed after the framework suppressed %d duplicate replay-risky tool call(s). %s was not executed again because %s.%s",
+				maxDiagnosticInt(summary.ReplaySuppressionCount, boolToInt(replaySuppressed != nil)),
+				toolName,
+				replayReason,
+				hostClause)
+		case loopTermination != nil && diagnosticDetailString(loopTermination, "reason_code") == "same_route_no_progress":
+			userNarrative = fmt.Sprintf("The framework stopped repeated same-route attempts on %s because they were not making progress.%s", finalRoute, hostClause)
+		case loopTermination != nil && diagnosticDetailString(loopTermination, "reason_code") == "exploratory_tool_churn":
+			toolName := diagnosticDetailString(loopTermination, "tool_name")
+			if toolName == "" {
+				toolName = "a read-only tool"
+			}
+			userNarrative = fmt.Sprintf("The framework stopped this direct execution turn because it kept using %s to gather context without taking action.%s", toolName, hostClause)
 		case len(attempts) > 1 && firstAttemptSucceeded && guardRetry != nil:
 			guardClause := "a post-response guard forced another attempt"
 			if guardName != "" {
@@ -154,6 +237,17 @@ func DeriveInterpretiveDiagnosticsSummary(summary TurnDiagnosticSummary, events 
 		if guardName != "" {
 			parts = append(parts, "guard="+guardName)
 		}
+		if loopTermination != nil {
+			if reason := diagnosticDetailString(loopTermination, "reason_code"); reason != "" {
+				parts = append(parts, "termination_cause="+reason)
+			}
+			if streak := diagnosticDetailInt(loopTermination, "exploration_streak"); streak > 0 {
+				parts = append(parts, fmt.Sprintf("exploration_streak=%d", streak))
+			}
+			if toolName := diagnosticDetailString(loopTermination, "tool_name"); toolName != "" {
+				parts = append(parts, "blocked_tool="+toolName)
+			}
+		}
 		if retryReason != "" {
 			parts = append(parts, "retry_reason="+retryReason)
 		}
@@ -165,6 +259,9 @@ func DeriveInterpretiveDiagnosticsSummary(summary TurnDiagnosticSummary, events 
 		}
 		if summary.VerifierRetryCount > 0 || verifierRetry != nil {
 			parts = append(parts, fmt.Sprintf("verifier_retries=%d", maxDiagnosticInt(summary.VerifierRetryCount, boolToInt(verifierRetry != nil))))
+		}
+		if summary.ReplaySuppressionCount > 0 || replaySuppressed != nil {
+			parts = append(parts, fmt.Sprintf("replay_suppressions=%d", maxDiagnosticInt(summary.ReplaySuppressionCount, boolToInt(replaySuppressed != nil))))
 		}
 		if summary.GuardRetryCount > 0 || guardRetry != nil {
 			parts = append(parts, fmt.Sprintf("guard_retries=%d", maxDiagnosticInt(summary.GuardRetryCount, boolToInt(guardRetry != nil))))
@@ -294,6 +391,17 @@ func diagnosticDetailString(ev *TurnDiagnosticEvent, key string) string {
 		return ""
 	}
 	return strings.TrimSpace(fmt.Sprint(value))
+}
+
+func diagnosticDetailInt(ev *TurnDiagnosticEvent, key string) int {
+	if ev == nil || ev.Details == nil {
+		return 0
+	}
+	value, ok := ev.Details[key]
+	if !ok || value == nil {
+		return 0
+	}
+	return diagnosticToInt(value)
 }
 
 func firstStringFromAny(value any) string {

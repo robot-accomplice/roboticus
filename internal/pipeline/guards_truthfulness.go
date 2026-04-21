@@ -3,6 +3,8 @@ package pipeline
 import (
 	"fmt"
 	"strings"
+
+	agenttools "roboticus/internal/agent/tools"
 )
 
 // --- ModelIdentityTruthGuard ---
@@ -185,6 +187,19 @@ func (g *ExecutionTruthGuard) CheckWithContext(content string, ctx *GuardContext
 		}
 	}
 
+	// Check 2b: Persistent-artifact creation/update claims require matching
+	// artifact-writing evidence. Inspection or semantic-memory mutation is not
+	// acceptable proof that a note/file/document was actually created.
+	if persistentArtifactProofRequired(ctx.UserPrompt) {
+		if responseClaimsPersistentArtifactMutation(content) && !hasSuccessfulArtifactWriteEvidence(ctx.ToolResults) {
+			return GuardResult{
+				Passed: false,
+				Retry:  true,
+				Reason: "claimed persistent artifact creation without artifact-writing tool evidence",
+			}
+		}
+	}
+
 	// Check 3: Delegation claim without delegation tool.
 	if ctx.HasIntent("delegation") {
 		hasDelegationTool := false
@@ -206,6 +221,34 @@ func (g *ExecutionTruthGuard) CheckWithContext(content string, ctx *GuardContext
 	}
 
 	return GuardResult{Passed: true}
+}
+
+func persistentArtifactProofRequired(prompt string) bool {
+	return looksLikeSingleStepAuthoringTask(strings.ToLower(prompt), 0)
+}
+
+func responseClaimsPersistentArtifactMutation(content string) bool {
+	lower := strings.ToLower(content)
+	claimMarkers := []string{
+		"created", "wrote", "written", "saved", "stored", "updated", "added",
+	}
+	artifactMarkers := []string{
+		"note", "document", "doc", "markdown", ".md", "file", "vault", "obsidian",
+	}
+	return containsAnyMarker(lower, claimMarkers) && containsAnyMarker(lower, artifactMarkers)
+}
+
+func hasSuccessfulArtifactWriteEvidence(results []ToolResultEntry) bool {
+	for _, tr := range results {
+		if !agenttools.WritesPersistentArtifact(tr.ToolName) {
+			continue
+		}
+		if toolResultSignalsFailure(tr) {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 // --- PersonalityIntegrityGuard ---

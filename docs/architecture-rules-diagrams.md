@@ -33,6 +33,12 @@ This file follows the same C4 conventions used elsewhere in the repo:
   than downgrading the live path to mimic an older baseline
 - benchmark validity and RCA require host resource snapshots on the same
   canonical seams that own benchmark persistence and turn diagnostics
+- benchmark validity also requires provider/model runtime-state snapshots on
+  the same benchmark seams, so empty or failed exercise rows can be attributed
+  to capability weakness vs missing/unloaded/unreachable model state
+- session resolution must not continue on a phantom explicit `session_id`;
+  body-scoped session ids either resolve to a durable `sessions` row or fail
+  cleanly as not found before message persistence begins
 - operator RCA views must remain legible and honest when canonical diagnostics
   are missing: macro/detail controls stay visible, diagnostics bind by turn id,
   and the UI falls back explicitly to trace-only narrative instead of quietly
@@ -56,6 +62,72 @@ This file follows the same C4 conventions used elsewhere in the repo:
   self-repetition and force a pointless retry
 - lexical noise such as `test` inside a filename or note title is not allowed
   to upcast a simple authoring turn into a coding envelope
+- a single-step direct authoring request is not allowed to become
+  `moderate`/`complex` on raw word count alone; structural step count and
+  artifact count must dominate for note/document/file authoring so the focused
+  execution envelope can still activate on realistic operator phrasing
+- once the focused authoring envelope activates, it is not allowed to inherit
+  the generic operational always-include tool set; the request must use a
+  capability-scoped tool profile built around artifact-writing tools first,
+  minimal runtime/workspace context second, and retrieval only when continuity
+  evidence actually exists
+- once a turn has already made substantive execution progress, guard and
+  verifier policy are not allowed to trigger another full inference attempt
+  for purely narrative-quality defects; post-success retries must be reserved
+  for execution-critical failures that make the claimed work untrustworthy or
+  materially incomplete
+- once a side-effecting tool call has succeeded, the loop is not allowed to
+  execute the same call again in the same turn unless that tool explicitly
+  declares replay safety; replay protection must come from the central tool
+  semantics map, not one-off loop heuristics, and replay suppression must be
+  surfaced unchanged through canonical diagnostics and operator RCA rather
+  than inferred later from side effects that did not happen
+- procedural uncertainty is not allowed to stop at “retrieve or don’t
+  retrieve”; when a turn produces a novel procedural success, failure, or
+  mixed outcome, distillation has to preserve that result with reusable
+  outcome semantics so later applied-learning retrieval can reuse what worked
+  and avoid what already failed. Those facts are not allowed to stay buried
+  in trace metadata or memory rows alone: canonical RCA must record both the
+  pre-inference applied-learning decision and the post-turn reuse-capture
+  outcome in chronological order
+- direct execution turns are not allowed to drift into a successful read-only
+  research loop. After a small amount of legitimate exploration, repeated
+  successful runtime-context, workspace, capability, task-inspection, or
+  memory-read calls with no artifact write, execution step, delegation, or
+  other real progress must terminate on one central semantics-driven rule, and
+  canonical RCA must show the blocked tool, the exploration streak, and
+  `exploratory_tool_churn` instead of forcing operators to infer the loop from
+  repeated tool rows
+- lifecycle policy is not allowed to stop at admission filters; `niche` and
+  `under_scrutiny` models must be actively demoted on ordinary operator-facing
+  light/standard turns unless the request shape actually matches the niche
+- routing explanation is not allowed to stop at “winner” plus raw candidate
+  set; the persisted routing artifact must distinguish hard exclusions,
+  soft-demotion reasons, and missing capability evidence so the UI can say
+  “this newly installed model was ignored because it has not been exercised
+  for this task class yet” instead of leaving operators to guess. That
+  distinction must be durable in the canonical `routing_chain_built` artifact
+  itself, not only in lower-level trace annotations that the UI has to
+  reconstruct later
+- capability evidence is not allowed to use a different model-identity space
+  from routing and policy. Baselines, imported exercise rows, live intent
+  observations, and recommendation callouts must all normalize onto the same
+  canonical model key so the system cannot record TOOL_USE evidence under one
+  name and tell operators the model is “unexercised” under another
+- execution provider truth is not allowed to diverge from routing truth.
+  RouteTarget provider/model identity must survive request formatting through
+  one authoritative execution-spec seam, including nested provider-qualified
+  downstream model namespaces such as `openrouter/openai/gpt-4o-mini`.
+  The system is not allowed to select `openrouter` and later reinterpret the
+  same target as direct `openai` because one code path joined the spec
+  differently
+- trace listings must preserve operator-usable turn identity: full turn ids
+  remain directly copyable from the observability table, and truncation is
+  allowed only as a presentation choice layered on top of the authoritative id
+- repeated `routing_chain_built` events are not all the same phenomenon. The
+  RCA projection must distinguish a normal post-tool routing follow-up from
+  same-route retry churn, verifier/guard retries, or fallback widening so the
+  operator does not mistake ordinary tool finalization for a broken turn
 - placeholder assistant scaffolding such as `[assistant message]` or
   `[agent message]` must be dropped at the loop boundary so it cannot enter
   history, retries, RCA, or operator-visible output
@@ -92,12 +164,29 @@ This file follows the same C4 conventions used elsewhere in the repo:
   hover/focus explanation of what the value means so operators are not forced
   to understand internal shorthand like `degraded` or `swap 78.8%` by tribal
   knowledge.
+- behavior hardening uses canonical RCA as the intake and closure substrate:
+  repeated firsthand failures and operator reports become one-entry-per-failure
+  roadmap items, and fixes are not complete until RCA, regressions, and
+  operator-facing explanation all agree on the corrected behavior
+- tool execution truth is execution-owned: when the loop runs a tool, the tool
+  audit trail and RCA counters must be written from that same execution event,
+  not reconstructed later from session history
 - onboarding/personality interview behavior must be defined once and reused:
   prompt, opening copy, and fallback path must all preserve the same contract
   of archetype priming before the interview, agent name as the first explicit
   question, and repeated differently-phrased probes to resolve ambiguous
   behavior preferences; referenced identities may seed provisional trait
   assumptions, but those assumptions must be made explicit and confirmed
+- persistent-artifact creation/update turns must privilege artifact-writing
+  tools and keep authority-write tools off the surface unless the turn is
+  explicitly about policy/spec ingestion; success claims like “created note”
+  or “saved file” are only valid when matching artifact-writing evidence
+  exists
+- textured themes are allowed to decorate shell and card surfaces, but
+  text-bearing operational surfaces such as tables, inspectors, and dense
+  lists must terminate onto opaque surface tokens before text is rendered.
+  The UI is not allowed to place readable text directly over body/surface
+  textures and call that “theme styling”; legibility beats decoration
 
 ## 1. C4 Level 1: Architecture Context
 

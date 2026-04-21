@@ -191,7 +191,7 @@ func TestExerciseRunLifecycleHelpers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("appendExerciseRunResult: %v", err)
 	}
-	err = completeExerciseRun("run-123", "completed", "")
+	err = completeExerciseRun("run-123", "completed", "", []string{"ollama/gemma4"})
 	if err != nil {
 		t.Fatalf("completeExerciseRun: %v", err)
 	}

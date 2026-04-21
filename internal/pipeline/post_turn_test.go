@@ -212,6 +212,59 @@ func TestReflectOnTurn_UsesPersistedTurnArtifacts(t *testing.T) {
 	}
 }
 
+func TestReflectOnTurn_AppendsProceduralLearningCapturedEvent(t *testing.T) {
+	store := testutil.TempStore(t)
+	p := &Pipeline{store: store}
+	ctx := context.Background()
+
+	sess, err := store.FindOrCreateSession(ctx, "agent-reflect-event", "scope:reflect")
+	if err != nil {
+		t.Fatalf("FindOrCreateSession: %v", err)
+	}
+	if _, err := store.ExecContext(ctx,
+		`INSERT INTO turns (id, session_id) VALUES (?, ?)`,
+		"turn-reflect-event", sess.ID,
+	); err != nil {
+		t.Fatalf("insert turn: %v", err)
+	}
+	if _, err := store.ExecContext(ctx,
+		`INSERT INTO turn_diagnostics (id, turn_id, session_id, channel, status)
+		 VALUES (?, ?, ?, 'api', 'ok')`,
+		"td-reflect-event", "turn-reflect-event", sess.ID,
+	); err != nil {
+		t.Fatalf("insert turn diagnostics: %v", err)
+	}
+	if _, err := store.ExecContext(ctx,
+		`INSERT INTO tool_calls (id, turn_id, tool_name, input, output, status, duration_ms)
+		 VALUES ('tc-r-1', 'turn-reflect-event', 'obsidian_write', '{}', 'ok', 'success', 50)`,
+	); err != nil {
+		t.Fatalf("insert tool call: %v", err)
+	}
+
+	live := session.New(sess.ID, sess.AgentID, "TestBot")
+	live.AddUserMessage("Create a reusable runbook note and capture what worked.")
+	live.AddAssistantMessage("Created the runbook note successfully.", nil)
+
+	p.reflectOnTurn(ctx, "turn-reflect-event", "Create a reusable runbook note and capture what worked.", live, ExecutiveGrowthResult{})
+
+	var detailsJSON string
+	if err := store.QueryRowContext(ctx,
+		`SELECT details_json
+		   FROM turn_diagnostic_events
+		  WHERE turn_id = ? AND event_type = 'procedural_learning_captured'
+		  ORDER BY seq DESC LIMIT 1`,
+		"turn-reflect-event",
+	).Scan(&detailsJSON); err != nil {
+		t.Fatalf("query procedural learning event: %v", err)
+	}
+	if !strings.Contains(detailsJSON, `"promotion_state":"captured_only"`) {
+		t.Fatalf("details_json = %q, want captured_only promotion state", detailsJSON)
+	}
+	if !strings.Contains(detailsJSON, `"outcome":"success"`) {
+		t.Fatalf("details_json = %q, want success outcome", detailsJSON)
+	}
+}
+
 func containsAll(haystack string, needles ...string) bool {
 	for _, needle := range needles {
 		if !strings.Contains(haystack, needle) {

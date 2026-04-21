@@ -215,3 +215,83 @@ func TestRouterSelect_BenchmarkOnlyModelExcludedFromLiveRouting(t *testing.T) {
 		t.Fatalf("selected model = %q, want enabled model", got.Model)
 	}
 }
+
+func TestRouterSelect_OperatorFacingStandardTaskDemotesNicheUnderScrutinyLocalModel(t *testing.T) {
+	svc, err := NewService(ServiceConfig{
+		Primary: "moonshot/kimi-k2-turbo-preview",
+		Fallbacks: []string{
+			"ollama/phi4-mini:latest",
+		},
+		Providers: []Provider{
+			{Name: "moonshot", URL: "http://test", Format: FormatOpenAIResponses},
+			{Name: "ollama", URL: "http://test", Format: FormatOllama, IsLocal: true},
+		},
+		Policies: map[string]ModelPolicy{
+			"phi4-mini:latest": {
+				State:             ModelStateNiche,
+				PrimaryReasonCode: "under_scrutiny",
+				ReasonCodes:       []string{"under_scrutiny", "latency_heavy", "hardware_mismatch"},
+				HumanReason:       "Keep only as a narrow local candidate under scrutiny.",
+				Source:            "configured_policy",
+			},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+
+	svc.intentQuality.RecordWithIntent("phi4-mini:latest", IntentToolUse.String(), 0.95)
+	svc.intentQuality.RecordWithIntent("kimi-k2-turbo-preview", IntentToolUse.String(), 0.72)
+
+	got := svc.router.Select(&Request{
+		AgentRole:      "orchestrator",
+		TurnWeight:     "standard",
+		TaskIntent:     "task",
+		TaskComplexity: "simple",
+		Tools: []ToolDef{
+			{Type: "function", Function: ToolFuncDef{Name: "obsidian_write"}},
+		},
+		Messages: []Message{{
+			Role:    "user",
+			Content: "Create a new Obsidian note in the vault containing exactly one heading.",
+		}},
+	})
+
+	if got.Model != "kimi-k2-turbo-preview" {
+		t.Fatalf("selected model = %q, want cloud primary after niche/under-scrutiny demotion", got.Model)
+	}
+}
+
+func TestRouterSelect_ToolBearingTurnExcludesNonToolCapableModelsAtSelectionTime(t *testing.T) {
+	svc, err := NewService(ServiceConfig{
+		Primary: "ollama/phi4-reasoning:14b",
+		Fallbacks: []string{
+			"moonshot/kimi-k2-turbo-preview",
+		},
+		Providers: []Provider{
+			{Name: "ollama", URL: "http://test", Format: FormatOllama, IsLocal: true},
+			{Name: "moonshot", URL: "http://test", Format: FormatOpenAIResponses},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+
+	got := svc.router.Select(&Request{
+		AgentRole:      "orchestrator",
+		TurnWeight:     "standard",
+		TaskIntent:     "task",
+		TaskComplexity: "simple",
+		Tools: []ToolDef{
+			{Type: "function", Function: ToolFuncDef{Name: "obsidian_write"}},
+		},
+		Messages: []Message{{
+			Role:    "user",
+			Content: "Create the note in the vault.",
+		}},
+	})
+
+	if got.Model != "kimi-k2-turbo-preview" {
+		t.Fatalf("selected model = %q, want tool-capable fallback instead of non-tool-capable primary", got.Model)
+	}
+}

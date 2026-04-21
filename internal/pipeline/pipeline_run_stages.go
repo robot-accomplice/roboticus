@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -124,6 +125,10 @@ func (p *Pipeline) stageSessionResolution(ctx context.Context, pc *pipelineConte
 	session, err := p.resolveSession(ctx, pc.cfg, pc.input)
 	if err != nil {
 		pc.tr.EndSpan("error")
+		var ge *core.GobError
+		if errors.As(err, &ge) {
+			return nil, err
+		}
 		return nil, core.WrapError(core.ErrDatabase, "session resolution failed", err)
 	}
 	pc.session = session
@@ -267,6 +272,7 @@ func (p *Pipeline) stageDecomposition(ctx context.Context, pc *pipelineContext) 
 	if len(verificationSubgoalsHint) == 0 {
 		verificationSubgoalsHint = verificationSubgoals(pc.content)
 	}
+	perception := BuildPerception(pc.content, pc.synthesis)
 	if pc.session != nil {
 		pc.session.SetTaskVerificationHints(
 			pc.synthesis.Intent,
@@ -277,30 +283,55 @@ func (p *Pipeline) stageDecomposition(ctx context.Context, pc *pipelineContext) 
 
 		// Build and stash the unified perception artifact (Milestone 2)
 		// so downstream stages consume a single classifier output.
-		perception := BuildPerception(pc.content, pc.synthesis)
 		pc.session.SetPerception(
 			string(perception.Risk),
 			string(perception.SourceOfTruth),
 			perception.RequiredMemoryTiers,
 			perception.FreshnessRequired,
 		)
-		AnnotatePerceptionTrace(pc.tr, perception)
 	}
+	AnnotatePerceptionTrace(pc.tr, perception)
 	if pc.dr != nil && pc.session != nil {
 		pc.dr.RecordEvent("task_synthesis_completed", "ok",
 			"task synthesis classified the turn before routing",
 			"The system classified the task and selected an initial turn envelope.",
 			map[string]any{
-				"intent":             pc.synthesis.Intent,
-				"complexity":         pc.synthesis.Complexity,
-				"planned_action":     pc.synthesis.PlannedAction,
-				"retrieval_needed":   pc.synthesis.RetrievalNeeded,
-				"capability_fit":     pc.synthesis.CapabilityFit,
-				"missing_skills":     append([]string(nil), pc.synthesis.MissingSkills...),
-				"turn_weight":        string(pc.policy.Weight),
-				"turn_policy_reason": pc.policy.Reason,
+				"intent":                 pc.synthesis.Intent,
+				"complexity":             pc.synthesis.Complexity,
+				"planned_action":         pc.synthesis.PlannedAction,
+				"retrieval_needed":       pc.synthesis.RetrievalNeeded,
+				"retrieval_reason":       pc.synthesis.RetrievalReason,
+				"procedural_uncertainty": pc.synthesis.ProceduralUncertainty,
+				"capability_fit":         pc.synthesis.CapabilityFit,
+				"missing_skills":         append([]string(nil), pc.synthesis.MissingSkills...),
+				"turn_weight":            string(pc.policy.Weight),
+				"turn_policy_reason":     pc.policy.Reason,
 			},
 		)
+		if pc.synthesis.ProceduralUncertainty {
+			retrievalDecision := "used"
+			status := "ok"
+			userSummary := "The framework looked for prior experience before trying this task."
+			operatorSummary := "applied-learning retrieval planned before inference"
+			if !pc.synthesis.RetrievalNeeded {
+				retrievalDecision = "skipped"
+				status = "warning"
+				userSummary = "The framework detected procedural uncertainty but skipped prior-experience retrieval."
+				operatorSummary = "applied-learning retrieval skipped despite procedural uncertainty"
+			}
+			pc.dr.RecordEvent("applied_learning_retrieval_planned", status,
+				operatorSummary,
+				userSummary,
+				map[string]any{
+					"retrieval_decision":     retrievalDecision,
+					"retrieval_reason":       pc.synthesis.RetrievalReason,
+					"source_of_truth":        string(perception.SourceOfTruth),
+					"required_memory_tiers":  append([]string(nil), perception.RequiredMemoryTiers...),
+					"outcome_scope":          []string{"success", "failure", "partial"},
+					"procedural_uncertainty": true,
+				},
+			)
+		}
 	}
 
 	// Persist the synthesis as a plan entry in working memory so later turns

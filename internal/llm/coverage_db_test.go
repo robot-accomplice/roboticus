@@ -179,6 +179,32 @@ func TestQualityTracker_SeedFromHistory_WithStore(t *testing.T) {
 	}
 }
 
+func TestIntentQualityTracker_SeedFromExerciseResults_WithStore(t *testing.T) {
+	store := tempStore(t)
+	ctx := context.Background()
+
+	for i := 0; i < 3; i++ {
+		_, err := store.ExecContext(ctx,
+			`INSERT INTO exercise_results (id, run_id, model, intent_class, complexity, prompt, content, quality, latency_ms, passed, error_msg, created_at)
+			 VALUES (?, 'run-tool', 'openrouter/openai/gpt-4o-mini', 'TOOL_USE', 'simple', 'prompt', 'content', ?, 900, 1, NULL, datetime('now'))`,
+			fmt.Sprintf("exercise-%d", i), 0.7+float64(i)*0.05)
+		if err != nil {
+			t.Fatalf("insert exercise_result %d: %v", i, err)
+		}
+	}
+
+	iq := NewIntentQualityTracker(50)
+	iq.SeedFromExerciseResults(ctx, store)
+
+	if got := iq.ObservationCountForIntent("openai/gpt-4o-mini", "TOOL_USE"); got != 3 {
+		t.Fatalf("canonical tool-use observations = %d, want 3", got)
+	}
+	quality := iq.EstimatedQualityForIntent("openai/gpt-4o-mini", "TOOL_USE")
+	if quality < 0.74 || quality > 0.81 {
+		t.Fatalf("quality = %f, want around 0.75", quality)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Service.Complete full pipeline with store (covers recordCost async path)
 // ---------------------------------------------------------------------------

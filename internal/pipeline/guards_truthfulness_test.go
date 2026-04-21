@@ -131,6 +131,40 @@ func TestExecutionTruthGuard_HonestExecution(t *testing.T) {
 	}
 }
 
+func TestExecutionTruthGuard_RejectsArtifactClaimWithoutArtifactWriteEvidence(t *testing.T) {
+	g := &ExecutionTruthGuard{}
+	ctx := &GuardContext{
+		UserPrompt: "Create a new Obsidian note named codex-live-test.md in the vault containing exactly: # Codex Live Test.",
+		Intents:    []string{"task"},
+		ToolResults: []ToolResultEntry{
+			{ToolName: "get_runtime_context", Output: "Workspace: /tmp/workspace"},
+			{ToolName: "ingest_policy", Output: `{"ok":true,"summary":"ingested obsidian-note/codex-live-test.md v0"}`},
+		},
+	}
+	result := g.CheckWithContext("I've successfully created the Obsidian note codex-live-test.md and stored it in the vault.", ctx)
+	if result.Passed {
+		t.Fatal("expected artifact claim without artifact-writing evidence to be rejected")
+	}
+	if !result.Retry {
+		t.Fatal("expected retry for false artifact-creation claim")
+	}
+}
+
+func TestExecutionTruthGuard_AllowsArtifactClaimWithArtifactWriteEvidence(t *testing.T) {
+	g := &ExecutionTruthGuard{}
+	ctx := &GuardContext{
+		UserPrompt: "Create a new Obsidian note named codex-live-test.md in the vault containing exactly: # Codex Live Test.",
+		Intents:    []string{"task"},
+		ToolResults: []ToolResultEntry{
+			{ToolName: "obsidian_write", Output: "wrote 18 bytes to Obsidian note codex-live-test.md"},
+		},
+	}
+	result := g.CheckWithContext("I've successfully created the Obsidian note codex-live-test.md.", ctx)
+	if !result.Passed {
+		t.Fatalf("artifact write evidence should pass, got reason: %s", result.Reason)
+	}
+}
+
 func TestPersonalityIntegrityGuard_ForeignIdentity(t *testing.T) {
 	g := &PersonalityIntegrityGuard{}
 	result := g.Check("As an AI developed by OpenAI, I'm here to help. The answer is 42.")

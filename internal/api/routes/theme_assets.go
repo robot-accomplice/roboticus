@@ -2,7 +2,9 @@ package routes
 
 import (
 	"fmt"
+	"mime"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -21,7 +23,7 @@ func WriteThemeManifest(themeID string, manifest ThemeManifest) error {
 	return core.WriteThemeManifest(themeID, data)
 }
 
-// DownloadThemeTextures downloads texture files for a theme.
+// DownloadThemeTextures materializes texture files for a theme.
 // Delegates to core.DownloadThemeTextures for filesystem operations.
 func DownloadThemeTextures(themeID string, manifest *ThemeManifest) error {
 	// Convert routes.ThemeTexture → core.ThemeTextureEntry.
@@ -55,8 +57,25 @@ func ServeThemeTexture() http.HandlerFunc {
 		}
 
 		path := filepath.Join(core.ThemeAssetDir(themeID), "textures", filename)
+		if _, err := os.Stat(path); err == nil {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+			http.ServeFile(w, r, path)
+			return
+		}
+
+		data, err := core.ReadBundledThemeAsset(filepath.ToSlash(filepath.Join(themeID, filename)))
+		if err == nil {
+			if ctype := mime.TypeByExtension(strings.ToLower(filepath.Ext(filename))); ctype != "" {
+				w.Header().Set("Content-Type", ctype)
+			}
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(data)
+			return
+		}
+
 		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-		http.ServeFile(w, r, path)
+		http.NotFound(w, r)
 	}
 }
 
@@ -70,6 +89,12 @@ func ResolveTextureURLs(themeID string, textures map[string]ThemeTexture) map[st
 			resolved[name] = ThemeTexture{
 				Kind:  "css",
 				Value: fmt.Sprintf("url(/api/themes/%s/textures/%s)", themeID, tex.Value),
+				Tile:  tex.Tile,
+			}
+		case "bundled":
+			resolved[name] = ThemeTexture{
+				Kind:  "css",
+				Value: fmt.Sprintf("url(/api/themes/%s/textures/%s)", themeID, filepath.Base(tex.Value)),
 				Tile:  tex.Tile,
 			}
 		case "url":

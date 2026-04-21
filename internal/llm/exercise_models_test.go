@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"roboticus/internal/modelstate"
 )
 
 // fakeSender returns the same canned response every time. Records all
@@ -289,6 +291,52 @@ func TestExerciseModels_CapturesTransportErrors(t *testing.T) {
 	}
 	if seenErrs != len(ExerciseMatrix) {
 		t.Fatalf("OnPrompt saw %d errors; want %d", seenErrs, len(ExerciseMatrix))
+	}
+}
+
+func TestExerciseModels_CapturesModelStateSnapshots(t *testing.T) {
+	promptSender := func(ctx context.Context, model, content string, timeout time.Duration) (string, int64, error) {
+		return "ok", 1, nil
+	}
+	warmupSender := func(ctx context.Context, model string, timeout time.Duration) WarmupResult {
+		return WarmupResult{LatencyMs: 1}
+	}
+
+	var seen PromptOutcome
+	req := ExerciseRequest{
+		Models:       []string{"ollama/test-model"},
+		IntentFilter: func() *IntentClass { v := IntentToolUse; return &v }(),
+		Iterations:   1,
+		SendPrompt:   promptSender,
+		SendWarmup:   warmupSender,
+		OnPrompt: func(o PromptOutcome) {
+			seen = o
+		},
+		SampleModelState: func(ctx context.Context, model string) *modelstate.Snapshot {
+			state := modelstate.Snapshot{
+				CollectedAt:        "2026-04-21T12:00:00Z",
+				Model:              model,
+				Provider:           "ollama",
+				ProviderConfigured: true,
+				ProviderReachable:  true,
+				ModelAvailable:     true,
+				ModelLoaded:        true,
+				StateClass:         "ready",
+			}
+			return &state
+		},
+		IsLocal:      func(string) bool { return true },
+		ModelTimeout: func(string) time.Duration { return time.Second },
+	}
+
+	if _, err := ExerciseModels(context.Background(), req); err != nil {
+		t.Fatalf("ExerciseModels: %v", err)
+	}
+	if seen.ModelStateStart == nil || seen.ModelStateEnd == nil {
+		t.Fatalf("expected prompt outcomes to carry model-state snapshots: %+v", seen)
+	}
+	if seen.ModelStateEnd.StateClass != "ready" {
+		t.Fatalf("end state = %q, want ready", seen.ModelStateEnd.StateClass)
 	}
 }
 
