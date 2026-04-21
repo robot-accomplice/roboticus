@@ -35,6 +35,40 @@ Roboticus historically treated the release ceremony as a multi-repo workflow:
 
 Roboticus must preserve that operational maturity.
 
+## Release Control Plane Invariant
+
+The release path is a single control plane, not a loose collection of steps:
+
+1. git tag
+2. release gate passes on that exact tag
+3. GitHub Release object is published for that tag
+4. release assets and `SHA256SUMS.txt` are attached to that Release object
+5. `releases/latest` resolves to that published release
+6. `roboticus.ai` syncs from the same release truth
+7. public installer scripts, install page, changelog, and operator upgrade flows
+   all resolve the same version
+
+A tag without a successful GitHub Release object is not a release. A GitHub
+Release without site sync is not a complete release. Site installer scripts may
+not evolve independently from the source repo's canonical installer scripts.
+
+## v1.0.6 Failure Class
+
+The `v1.0.6` release attempt on 2026-04-19 demonstrated the exact failure mode
+this ceremony must prevent:
+
+- the tag existed, but the release workflow failed before publication
+- `releases/latest` therefore remained on `v1.0.5`
+- the public site installer scripts had drifted from the source repo's
+  canonical scripts (`checksums.txt` vs `SHA256SUMS.txt`)
+- site release sync was not actually wired from the source repo's release
+  event, so no automatic correction happened
+- the site sync workflow also assumed source-tree registry files that the
+  source repo did not publish on that tag
+
+Future releases must treat this as a release-blocking architecture seam, not as
+an operational footnote.
+
 ## Required Public Compatibility Contract
 
 For the Rust-to-Go transition release, the public operator contract remains:
@@ -80,6 +114,8 @@ The release candidate must pass:
 - any required soak and regression batteries
 - release-specific install/update smoke
 - release-specific `roboticus.ai` sync dry run
+- live verification that the tagged release can become GitHub `latest` with the
+  expected asset set
 
 No tag may be considered releasable if any of these fail.
 
@@ -91,6 +127,14 @@ Release automation must produce:
 - a canonical checksum file (`SHA256SUMS.txt`)
 - release notes
 - a changelog-aligned GitHub release body
+
+Release automation must also verify, on the live published release object:
+
+- `releases/tags/<tag>` resolves
+- `releases/latest` resolves to the new tag unless intentionally suppressed
+- canonical installer assets are attached with the expected filenames
+- canonical checksum filename is `SHA256SUMS.txt`
+- raw update-in-place binaries and archive installer assets are both present
 
 For the transition release, the artifact set must support both:
 
@@ -119,15 +163,25 @@ Required synchronized surfaces:
 - docs links and architecture references
 - home page/version messaging
 
+The site synchronization path must additionally guarantee:
+
+- public `/install.sh` is copied from `scripts/install.sh` in the tagged source
+- public `/install.ps1` is copied from `scripts/install.ps1` in the tagged source
+- the install page does not advertise a broken fallback path
+- the site sync workflow only depends on source artifacts/directories that
+  actually exist in the tagged source repo
+
 ## 5. Announcement Readiness
 
 Before announcing a release:
 
 1. Verify the public site is serving the new version metadata.
 2. Verify install snippets point to the correct binary/update path.
-3. Verify release downloads and checksums are reachable.
-4. Verify the changelog page contains the new release.
-5. Verify the roadmap/docs do not overclaim unfinished features.
+3. Verify `releases/latest` and `releases/tags/<tag>` both resolve.
+4. Verify release downloads and checksums are reachable.
+5. Verify the public installer scripts match the tagged source scripts.
+6. Verify the changelog page contains the new release.
+7. Verify the roadmap/docs do not overclaim unfinished features.
 
 ## 6. Post-Release Validation
 
@@ -140,6 +194,9 @@ Immediately after release:
 5. Run `roboticus upgrade all --yes`.
 6. Verify daemon restart and health after update.
 7. Verify registry/provider/skill content remains intact.
+8. Verify the site release-sync run and production deploy both succeeded.
+9. Verify the live public installer scripts still fetch the same checksum
+   filename and asset naming the source release published.
 
 ## 7. Rollback Rule
 
@@ -151,6 +208,8 @@ If any of the following are broken, the release is not healthy:
 - site deploy
 - release notes/changelog mismatch
 - broken or missing platform artifact
+- `releases/latest` not advancing to the published tag
+- source installer scripts and public installer scripts drifting
 
 In that case:
 

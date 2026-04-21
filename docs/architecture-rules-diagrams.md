@@ -212,7 +212,42 @@ flowchart LR
     %% fabricate canned execution summaries in their place.
 ```
 
-## 7. Supplementary Rule View — Streaming Is Not A Separate Product
+## 7. Supplementary Rule View — Release Control Plane
+
+This view captures the release-distribution seam that `v1.0.6` exposed. The
+operator-facing release is not the git tag by itself; it is the full published
+control plane from tag through public site.
+
+```mermaid
+flowchart LR
+    tag["Git tag"]
+    gate["Tag-gated release checks"]
+    ghrel["GitHub Release object\nassets + SHA256SUMS.txt"]
+    latest["GitHub releases/latest"]
+    dispatch["Site sync trigger"]
+    sitesync["roboticus.ai release-sync"]
+    deploy["Production deploy"]
+    installers["/install.sh + /install.ps1"]
+    upgrade["roboticus update/upgrade"]
+    operator["Operator install / upgrade"]
+
+    tag --> gate --> ghrel --> latest
+    ghrel --> dispatch --> sitesync --> deploy
+    sitesync --> installers
+    latest --> installers
+    latest --> upgrade
+    installers --> operator
+    upgrade --> operator
+
+    %% Rule notes:
+    %% - A tag without ghrel is not a release.
+    %% - Public installers must be copied from the tagged source repo,
+    %%   not maintained as a divergent site-local fork.
+    %% - Site sync may not depend on source-tree paths that are not part
+    %%   of the tagged release contract.
+```
+
+## 8. Supplementary Rule View — Streaming Is Not A Separate Product
 
 This is a supporting diagram rather than a C4 view because it expresses a
 behavioral equivalence rule.
