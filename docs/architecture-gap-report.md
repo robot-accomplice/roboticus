@@ -46,6 +46,11 @@ older architecture docs had left too generic:
   live `/api/cron/{id}/run` path no longer bypasses lease/run-history/retry
   ownership; it delegates through `CronWorker.RunJobNow(...)` and preserves the
   same execution contract as scheduled runs.
+- **Release publication and site distribution are now an explicit ownership
+  seam.** A git tag is not operator-facing truth. The GitHub Release object,
+  attached assets, `releases/latest`, site sync, and public installer scripts
+  together define the live distribution contract. The `v1.0.6` failure showed
+  that this seam must be treated as architecture, not release clerical work.
 
 | Category | Compliant | Gaps |
 |----------|-----------|------|
@@ -68,6 +73,7 @@ older architecture docs had left too generic:
 | **Working Memory Persistence (v1.0.5)** | **Shutdown/startup** | **0** |
 | **Post-Turn Reflection (v1.0.5)** | **Episode summaries** | **0** |
 | **Verifier/Critic (v1.0.6)** | **Claim-level verifier with proof obligations** | **Partial** |
+| **Release Control Plane (v1.0.7 hardening)** | **Now treated as architecture** | **was drifting in v1.0.6** |
 
 ### v1.0.6 Agentic Architecture Layers
 
@@ -92,6 +98,40 @@ older architecture docs had left too generic:
 | 11 | LLM-based Reranking | Score-based only in v1.0.6 |
 | 14 | Verifier/Critic depth | Stronger claim-level checks exist, but there is still no full contradiction-resolution or proof-style evidence audit |
 | 3 | Semantic read-path cleanup | Residual `LIKE` safety nets remain until telemetry-backed dormancy justifies removal |
+| — | Release control plane hardening | `v1.0.6` proved tag, release object, site sync, and public installers were not one enforced pipeline yet |
+
+---
+
+## Release Control Plane Drift (Discovered After v1.0.6 Tagging)
+
+**Severity**: HIGH
+**Architectural principle violated**: operator-facing truth must have one
+authoritative control plane
+
+**What happened on 2026-04-19**:
+
+- `v1.0.6` was tagged
+- the tag-triggered release workflow failed before publishing a GitHub Release
+- `releases/latest` therefore stayed at `v1.0.5`
+- the site still served stale installer scripts with different checksum
+  expectations than the source repo
+- site sync was not triggered from the source release path and also expected
+  source-tree registry files that were not present in the tagged tree
+
+**Why this matters**: operators do not install "a tag." They install from the
+GitHub Release object, `releases/latest`, `roboticus.ai/install.sh`,
+`roboticus.ai/install.ps1`, and `roboticus upgrade all`. If those surfaces do
+not agree, the release is structurally incomplete regardless of how clean the
+source tag looks.
+
+**Required fix direction**:
+
+1. release workflow must validate the live published release object, not just
+   local build artifacts
+2. source repo must trigger site sync on publication
+3. site sync must copy canonical installer scripts from the tagged source repo
+4. site sync must not assume absent release-tree directories are mandatory
+5. public site content must not advertise unsupported fallback installs
 
 ---
 
