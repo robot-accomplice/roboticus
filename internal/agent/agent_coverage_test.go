@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"roboticus/internal/llm"
@@ -156,6 +157,12 @@ func TestBuildInterviewPrompt(t *testing.T) {
 	}
 	if len(prompt) < 100 {
 		t.Errorf("interview prompt suspiciously short: %d chars", len(prompt))
+	}
+	if !strings.Contains(prompt, "first explicit interview question must always be the agent's name") {
+		t.Error("interview prompt should require asking for the agent name first")
+	}
+	if !strings.Contains(prompt, "infer the likely behavioral traits associated with it") {
+		t.Error("interview prompt should seed the interview from a reference identity")
 	}
 }
 

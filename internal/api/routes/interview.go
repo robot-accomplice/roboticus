@@ -96,10 +96,7 @@ func InterviewStart(mgr *InterviewManager) http.HandlerFunc {
 		var openingMessage string
 		if mgr.llmSvc != nil {
 			sysPrompt := core.InterviewSystemPrompt()
-			userMsg := "Begin the personality interview. Introduce yourself and ask the first 2-3 questions."
-			if body.AgentName != "" {
-				userMsg = "Begin the personality interview for an agent named " + body.AgentName + ". Introduce yourself and ask the first 2-3 questions."
-			}
+			userMsg := core.InterviewOpeningInstruction(body.AgentName)
 
 			resp, err := mgr.llmSvc.Complete(r.Context(), &llm.Request{
 				Messages: []llm.Message{
@@ -110,12 +107,12 @@ func InterviewStart(mgr *InterviewManager) http.HandlerFunc {
 			})
 			if err != nil {
 				log.Warn().Err(err).Msg("interview: LLM failed to generate opening")
-				openingMessage = "Let's get started with your personality interview. What would you like to name your AI agent?"
+				openingMessage = core.InterviewOpeningFallback(body.AgentName)
 			} else {
 				openingMessage = resp.Content
 			}
 		} else {
-			openingMessage = "Let's get started with your personality interview. What would you like to name your AI agent?"
+			openingMessage = core.InterviewOpeningFallback(body.AgentName)
 		}
 
 		sess.History = append(sess.History, interviewMessage{Role: "assistant", Content: openingMessage})

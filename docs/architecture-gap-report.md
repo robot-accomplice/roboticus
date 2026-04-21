@@ -208,6 +208,15 @@ older architecture docs had left too generic:
   placeholders before they can trigger repetition churn or contaminate
   diagnostics.
 
+- **Personality setup interviewing must be owned by one shared contract.**
+  The onboarding interview is not allowed to drift between API route wording,
+  CLI/degraded fallback copy, and prompt-level LLM behavior. Pre-interview
+  framing, question ordering, and convergence strategy belong to one shared
+  interview contract: prime the operator to imagine a concrete archetype
+  first, ask for the agent name as the first explicit question, then use
+  repeated and differently-phrased behavioral probes to triangulate intended
+  operating style instead of treating one shallow answer as sufficient.
+
 For v1.0.7, the active parity backlog is no longer inferred from the historical
 gap sections below. The authoritative remaining scope is:
 

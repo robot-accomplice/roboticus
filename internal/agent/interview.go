@@ -5,6 +5,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"roboticus/internal/core"
 )
 
 // InterviewCategory represents one of the 8 personality interview domains.
@@ -82,36 +84,8 @@ func (s *InterviewState) CanGenerate() bool {
 
 // BuildInterviewPrompt returns the system prompt for the personality interview.
 func BuildInterviewPrompt() string {
-	return interviewSystemPrompt
+	return core.InterviewSystemPrompt()
 }
-
-const interviewSystemPrompt = `You are conducting a personality interview to configure an AI agent's identity, voice, and operating parameters.
-
-Your goal is to learn about the operator and generate configuration files that define the agent's personality.
-
-## Interview Categories (cover at least 5 of 8)
-
-1. **Identity & Voice** — What should the agent be named? How formal or casual? What personality archetypes?
-2. **Communication Style** — How verbose? How should uncertainty be handled? Preferred response format?
-3. **Proactiveness & Autonomy** — Should the agent initiate actions? What approval gates are needed?
-4. **Domain & Expertise** — What is the primary domain? Specialized knowledge areas? Preferred tools?
-5. **Boundaries & Guardrails** — Off-limits topics? Spending thresholds? Safety constraints?
-6. **Operator Profile** — Who is the operator? Role, responsibilities, decision-making style?
-7. **Goals & Directives** — Monthly/yearly goals? Automation targets? Success metrics?
-8. **Integrations & Workflow** — Which platforms? Data flow? Preferred model providers?
-
-## Interview Rules
-- Ask 2-3 questions per turn, conversationally
-- Mark each question with its category
-- Track which categories have been covered
-- After 5+ categories are covered, offer to generate the configuration
-- Be conversational, not interrogative
-
-## Output Files (generated at the end)
-1. **OS.toml** — Agent identity, voice settings, prompt_text
-2. **FIRMWARE.toml** — Guardrails, approval rules, spending limits
-3. **OPERATOR.toml** — User profile, preferences, context
-4. **DIRECTIVES.toml** — Goals, missions, priorities`
 
 // GeneratePersonalityTOML produces the 4 TOML configuration files from interview answers.
 func GeneratePersonalityTOML(state *InterviewState) map[string]string {

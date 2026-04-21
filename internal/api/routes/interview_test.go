@@ -22,6 +22,13 @@ func TestInterviewStart(t *testing.T) {
 	if body["session_id"] == nil {
 		t.Error("should return session_id")
 	}
+	msg, _ := body["message"].(string)
+	if !strings.Contains(msg, "picture the kind of assistant you actually want") {
+		t.Error("opening should include archetype priming guidance")
+	}
+	if !strings.Contains(msg, "1. Should the agent be called") {
+		t.Error("opening should ask the name as the first explicit question")
+	}
 }
 
 func TestInterviewTurn(t *testing.T) {

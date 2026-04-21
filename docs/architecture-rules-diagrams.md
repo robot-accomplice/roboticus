@@ -92,6 +92,12 @@ This file follows the same C4 conventions used elsewhere in the repo:
   hover/focus explanation of what the value means so operators are not forced
   to understand internal shorthand like `degraded` or `swap 78.8%` by tribal
   knowledge.
+- onboarding/personality interview behavior must be defined once and reused:
+  prompt, opening copy, and fallback path must all preserve the same contract
+  of archetype priming before the interview, agent name as the first explicit
+  question, and repeated differently-phrased probes to resolve ambiguous
+  behavior preferences; referenced identities may seed provisional trait
+  assumptions, but those assumptions must be made explicit and confirmed
 
 ## 1. C4 Level 1: Architecture Context
 
