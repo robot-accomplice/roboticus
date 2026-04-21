@@ -4,8 +4,8 @@
 
 - Owner: parity-forensics program
 - Audit status: `validated`
-- Last updated: 2026-04-19
-- Related release: v1.0.6
+- Last updated: 2026-04-20
+- Related release: v1.0.7
 
 ## Why This System Matters
 
@@ -97,11 +97,21 @@ surprise behavior and deserve a first-class artifact boundary.
 
 ## Final Disposition
 
-System 14 is closed for v1.0.6.
+System 14 is validated for v1.0.7.
 
 - Cache replay semantics now follow the live TTL and shaped-request contract.
-- Prompt compression is not an open question anymore. It failed the release
-  gate and is explicitly deferred.
+- Prompt compression is not an open question anymore. It failed the
+  history-bearing release gate and now has an explicit benchmark-only
+  disposition rather than a vague carry-forward deferral.
+
+## v1.0.7 Closure
+
+System 14 no longer has active reopened parity work.
+
+- `PAR-009` is closed with an explicit benchmark-only disposition:
+  prompt compression remains out of the live cache/replay contract and is
+  retained only for controlled benchmark comparison, not as a release-ready
+  feature.
 
 ## Progress Log
 
@@ -149,3 +159,7 @@ System 14 is closed for v1.0.6.
   failed all three, including a lost-history recall response and latency
   inflation to ~975s / ~1540s / ~1520s. Prompt compression is therefore
   rejected for v1.0.6 release readiness.
+- 2026-04-20: Closed `PAR-009` with a final v1.0.7 disposition instead of
+  leaving the v1.0.6 rejection as a soft deferral. Prompt compression stays
+  disabled by default, is not recommended for live use on the current runtime,
+  and is retained only as a benchmark/comparison harness.

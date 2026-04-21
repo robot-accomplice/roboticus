@@ -242,6 +242,32 @@ func (rq *RouteQueries) GetTurnModelSelection(ctx context.Context, turnID string
 		 FROM model_selection_events WHERE turn_id = ? LIMIT 1`, turnID)
 }
 
+// GetTurnDiagnostics returns the canonical diagnostics summary for a turn.
+func (rq *RouteQueries) GetTurnDiagnostics(ctx context.Context, turnID string) *sql.Row {
+	return rq.q.QueryRowContext(ctx,
+		`SELECT id, turn_id, session_id, channel, status, COALESCE(final_model, ''),
+		        COALESCE(final_provider, ''), total_ms, inference_attempts, fallback_count,
+		        tool_call_count, guard_retry_count, verifier_retry_count, request_messages,
+		        request_tools, request_approx_tokens, COALESCE(context_pressure, ''),
+		        COALESCE(resource_pressure, ''), COALESCE(resource_snapshot_json, ''), COALESCE(primary_diagnosis, ''),
+		        diagnosis_confidence, COALESCE(user_narrative, ''), COALESCE(operator_narrative, ''),
+		        COALESCE(recommendations_json, ''), created_at
+		   FROM turn_diagnostics
+		  WHERE turn_id = ?
+		  LIMIT 1`, turnID)
+}
+
+// ListTurnDiagnosticEvents returns the ordered event stream for a turn.
+func (rq *RouteQueries) ListTurnDiagnosticEvents(ctx context.Context, turnID string) (*sql.Rows, error) {
+	return rq.q.QueryContext(ctx,
+		`SELECT id, turn_id, seq, event_type, at_ms, duration_ms, COALESCE(parent_event_id, ''),
+		        status, COALESCE(operator_summary, ''), COALESCE(user_summary, ''),
+		        COALESCE(details_json, ''), created_at
+		   FROM turn_diagnostic_events
+		  WHERE turn_id = ?
+		  ORDER BY seq ASC`, turnID)
+}
+
 // TurnCachedFlag returns the cached flag for a turn.
 func (rq *RouteQueries) TurnCachedFlag(ctx context.Context, turnID string) *sql.Row {
 	return rq.q.QueryRowContext(ctx,

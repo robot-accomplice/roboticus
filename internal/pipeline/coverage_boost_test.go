@@ -628,7 +628,25 @@ func TestStoreTrace_WithStore(t *testing.T) {
 	tr.BeginSpan("test")
 	tr.EndSpan("ok")
 	// Best-effort, should not panic even if pipeline_traces table exists.
-	pipe.storeTrace(context.Background(), tr, "s1", "m1", "api")
+	pipe.storeTrace(context.Background(), tr, "s1", "turn-1", "api")
+}
+
+func TestStoreTrace_PersistsAuthoritativeTurnID(t *testing.T) {
+	store := testutil.TempStore(t)
+	pipe := &Pipeline{store: store}
+	tr := NewTraceRecorder()
+	tr.BeginSpan("test")
+	tr.EndSpan("ok")
+
+	pipe.storeTrace(context.Background(), tr, "s1", "turn-123", "api")
+
+	var got string
+	if err := store.QueryRowContext(context.Background(), `SELECT turn_id FROM pipeline_traces ORDER BY created_at DESC LIMIT 1`).Scan(&got); err != nil {
+		t.Fatalf("select pipeline trace turn_id: %v", err)
+	}
+	if got != "turn-123" {
+		t.Fatalf("pipeline_traces.turn_id = %q, want %q", got, "turn-123")
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -731,6 +749,17 @@ func (s *stubExec) RunLoop(_ context.Context, sess *Session) (string, int, error
 	return s.response, 1, nil
 }
 
+type countingExec struct {
+	response string
+	calls    int
+}
+
+func (c *countingExec) RunLoop(_ context.Context, sess *Session) (string, int, error) {
+	c.calls++
+	sess.AddAssistantMessage(c.response, nil)
+	return c.response, 1, nil
+}
+
 type errorExec struct{}
 
 func (e *errorExec) RunLoop(_ context.Context, _ *Session) (string, int, error) {
@@ -749,6 +778,35 @@ func TestRunStandardInference_ExecutorError(t *testing.T) {
 	_, err := pipe.runStandardInference(context.Background(), Config{}, sess, "m1", "t1")
 	if err == nil {
 		t.Error("should propagate executor error")
+	}
+}
+
+func TestRunStandardInference_NoEscalateSkipsGuardRetries(t *testing.T) {
+	store := testutil.TempStore(t)
+	bgw := core.NewBackgroundWorker(4)
+	exec := &countingExec{response: "Ready."}
+	pipe := &Pipeline{
+		store:    store,
+		executor: exec,
+		guards:   DefaultGuardChain(),
+		bgWorker: bgw,
+	}
+	sess := NewSession("s1", "a1", "Bot")
+	sess.AddAssistantMessage("Ready.", nil)
+	sess.AddUserMessage("Reply with just: ready")
+
+	outcome, err := pipe.runStandardInference(context.Background(), Config{
+		GuardSet:   GuardSetFull,
+		NoEscalate: true,
+	}, sess, "m1", "t1")
+	if err != nil {
+		t.Fatalf("runStandardInference: %v", err)
+	}
+	if exec.calls != 1 {
+		t.Fatalf("executor calls = %d, want 1 when no-escalate disables guard retries", exec.calls)
+	}
+	if outcome.Content != "Ready." {
+		t.Fatalf("content = %q, want raw response", outcome.Content)
 	}
 }
 

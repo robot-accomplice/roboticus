@@ -40,6 +40,7 @@ type PromptConfig struct {
 // sections so that downstream verification can detect tampered or forged
 // trust boundaries.
 func BuildSystemPrompt(cfg PromptConfig) string {
+	isSubagent := cfg.IsSubagent
 	// Collect sections in order; each section is the full text of that block.
 	var sections []string
 
@@ -56,17 +57,17 @@ func BuildSystemPrompt(cfg PromptConfig) string {
 
 	// 3. Personality/identity.
 	// Rust parity: prompt.rs lines 25-27 — personality is section 3 ("## Identity").
-	if cfg.Personality != "" {
+	if !isSubagent && cfg.Personality != "" {
 		sections = append(sections, "## Identity\n"+cfg.Personality+"\n")
 	}
 
 	// 3a. Operator context (OPERATOR.toml).
-	if cfg.Operator != "" {
+	if !isSubagent && cfg.Operator != "" {
 		sections = append(sections, "## Operator Context\n"+cfg.Operator+"\n")
 	}
 
 	// 3b. Active directives (DIRECTIVES.toml).
-	if cfg.Directives != "" {
+	if !isSubagent && cfg.Directives != "" {
 		sections = append(sections, "## Active Directives\n"+cfg.Directives+"\n")
 	}
 
@@ -120,12 +121,16 @@ func BuildSystemPrompt(cfg PromptConfig) string {
 	}
 
 	// 8. Orchestration block (subagents only).
-	if cfg.IsSubagent {
+	if isSubagent {
 		sections = append(sections,
 			"## Orchestration\n"+
 				"You are operating as a specialist subagent. "+
 				"Focus on your assigned subtask and return results concisely. "+
-				"Do not attempt to manage the overall workflow.\n")
+				"Report upward to the orchestrator layer, never directly to the operator. "+
+				"This reporting boundary still applies to scheduled or cron-triggered subagent work. "+
+				"Your work must be provable: only claim completion when backed by concrete tool output, artifacts, or observations from this run. "+
+				"Separate completed work, evidence, and remaining gaps or uncertainty. "+
+				"Do not narrate intended work as finished, and do not attempt to manage the overall workflow.\n")
 	}
 
 	// 9. Operational introspection — tiered (Rust parity).
@@ -356,7 +361,8 @@ func buildObsidianDirective(cfg PromptConfig) string {
 	}
 	return fmt.Sprintf("## Obsidian Integration\n"+
 		"An Obsidian vault is configured at: %s\n"+
-		"When saving notes, research, or knowledge artifacts, prefer writing "+
-		"to this vault using Markdown format compatible with Obsidian.\n",
+		"Use the explicit `obsidian_write` tool to create or update notes in this vault. "+
+		"When saving notes, research, or knowledge artifacts, prefer that tool over generic "+
+		"workspace file tools so vault documents stay rooted in the configured Obsidian path.\n",
 		cfg.Obsidian.VaultPath)
 }

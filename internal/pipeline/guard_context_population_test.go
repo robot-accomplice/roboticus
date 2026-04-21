@@ -55,6 +55,38 @@ func TestBuildGuardContext_PopulatesPipelineHintsAndStoreBackedFields(t *testing
 	}
 }
 
+func TestBuildGuardContext_UsesPriorTurnAssistantHistoryOnly(t *testing.T) {
+	store := testutil.TempStore(t)
+	pipe := New(PipelineDeps{
+		Store:    store,
+		BGWorker: testutil.BGWorker(t, 2),
+	})
+
+	sess := session.New("sess-2", "agent-1", "TestBot")
+	sess.AddUserMessage("old request")
+	sess.AddAssistantMessage("prior turn answer", nil)
+	sess.AddUserMessage("create the note now")
+	sess.AddToolResult("call-1", "obsidian_write", `{"path":"codex-live-test.md","status":"ok"}`, false)
+	sess.AddAssistantMessage("The note was created successfully.", nil)
+
+	ctx := pipe.buildGuardContext(sess)
+	if ctx == nil {
+		t.Fatal("buildGuardContext returned nil")
+	}
+	if ctx.UserPrompt != "create the note now" {
+		t.Fatalf("UserPrompt = %q, want latest user prompt", ctx.UserPrompt)
+	}
+	if ctx.PreviousAssistant != "prior turn answer" {
+		t.Fatalf("PreviousAssistant = %q, want prior-turn assistant only", ctx.PreviousAssistant)
+	}
+	if len(ctx.PriorAssistantMessages) != 1 || ctx.PriorAssistantMessages[0] != "prior turn answer" {
+		t.Fatalf("PriorAssistantMessages = %v, want only prior-turn assistant history", ctx.PriorAssistantMessages)
+	}
+	if len(ctx.ToolResults) != 1 || ctx.ToolResults[0].ToolName != "obsidian_write" {
+		t.Fatalf("ToolResults = %+v, want current-turn tool results preserved", ctx.ToolResults)
+	}
+}
+
 func TestApplyFullWithContext_PrecomputesGuardScoresAndIntent(t *testing.T) {
 	chain := NewGuardChain(&TaskDeferralGuard{}, &InternalJargonGuard{})
 	ctx := &GuardContext{

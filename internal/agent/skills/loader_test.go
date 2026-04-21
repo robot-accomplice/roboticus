@@ -169,6 +169,23 @@ func TestLoader_HashChangesOnContent(t *testing.T) {
 	}
 }
 
+func TestLoader_LoadFromPaths(t *testing.T) {
+	dir := t.TempDir()
+	good := filepath.Join(dir, "good.md")
+	bad := filepath.Join(dir, "bad.txt")
+	_ = os.WriteFile(good, []byte("---\nname: loaded-from-path\n---\nBody"), 0644)
+	_ = os.WriteFile(bad, []byte("not a skill"), 0644)
+
+	sl := NewLoader()
+	skills := sl.LoadFromPaths([]string{good, bad, good})
+	if len(skills) != 1 {
+		t.Fatalf("expected 1 loaded skill, got %d", len(skills))
+	}
+	if skills[0].Name() != "loaded-from-path" {
+		t.Fatalf("name = %q, want loaded-from-path", skills[0].Name())
+	}
+}
+
 func TestHashSkillContent(t *testing.T) {
 	hash1 := HashSkillContent([]byte("hello world"))
 	hash2 := HashSkillContent([]byte("hello world"))

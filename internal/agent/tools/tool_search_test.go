@@ -224,19 +224,25 @@ func TestSearchAndPrune_PreservesDescriptorOrderOnEqualScores(t *testing.T) {
 // test fixture, not the runtime pin list. Rust's runtime owner
 // (crates/roboticus-pipeline/src/core/tool_prune.rs) overrides it with
 // `always_include_operational_tools()` — a 12-item list of subagent,
-// task-lifecycle, skill-management, and memory-write tools. Of those 12,
-// only two (`get_memory_stats`, `get_runtime_context`) have matching
-// names in Go's registry; the rest are a separate tool-surface parity
-// gap tracked in System 02 and deferred to a later remediation.
+// task-lifecycle, skill-management, and memory-write tools. Go now restores
+// seven more of those operational inventory surfaces directly:
+// `list-subagent-roster`, `list-available-skills`, `compose-skill`,
+// `compose-subagent`, `orchestrate-subagents`, `task-status`, and
+// `list-open-tasks`, and the first-class `obsidian_write` vault authoring
+// tool. The remaining missing families stay
+// tracked separately under the other System 02 roadmap items.
 //
 // Go's AlwaysInclude is the functional analogue: memory-recall
 // primitives that Go refined beyond the Rust baseline (per System 03
 // SYS-03-005 — `recall_memory` with richer lookup and `search_memories`
 // are recorded as Go improvements), plus the two Rust-parity
-// introspection tools, plus `get_subagent_status` (the closest Go
-// analogue to Rust's `list-subagent-roster`). The list pins only names
-// that are actually registered, so every pin is guaranteed to survive
-// ranking — there are no silent no-op pins.
+// introspection tools, plus `get_subagent_status`, `list-subagent-roster`,
+// `list-available-skills`, `compose-skill`, `compose-subagent`,
+// `orchestrate-subagents`, `task-status`, `list-open-tasks`, and
+// `obsidian_write`. The list
+// pins only names that are
+// actually registered, so
+// every pin is guaranteed to survive ranking — there are no silent no-op pins.
 func TestDefaultToolSearchConfig_MatchesRustParity(t *testing.T) {
 	cfg := DefaultToolSearchConfig()
 	if cfg.TopK != 15 {
@@ -249,11 +255,19 @@ func TestDefaultToolSearchConfig_MatchesRustParity(t *testing.T) {
 		t.Fatalf("MCPLatencyPenalty = %v; want 0.05 (Rust parity)", cfg.MCPLatencyPenalty)
 	}
 	wantIncludes := map[string]bool{
-		"recall_memory":       true, // Go improvement (SYS-03-005)
-		"search_memories":     true, // Go improvement (SYS-03-005)
-		"get_memory_stats":    true, // Rust parity
-		"get_runtime_context": true, // Rust parity
-		"get_subagent_status": true, // functional analogue of Rust `list-subagent-roster`
+		"recall_memory":         true, // Go improvement (SYS-03-005)
+		"search_memories":       true, // Go improvement (SYS-03-005)
+		"get_memory_stats":      true, // Rust parity
+		"get_runtime_context":   true, // Rust parity
+		"get_subagent_status":   true, // broader Go-native status surface
+		"list-subagent-roster":  true, // restored runtime inventory surface
+		"list-available-skills": true, // restored runtime inventory surface
+		"compose-skill":         true, // restored runtime skill composition surface
+		"compose-subagent":      true, // restored runtime composition surface
+		"orchestrate-subagents": true, // restored runtime orchestration surface
+		"task-status":           true, // restored delegated task inspection surface
+		"list-open-tasks":       true, // restored delegated task inventory surface
+		"obsidian_write":        true, // explicit configured-vault authoring surface
 	}
 	if len(cfg.AlwaysInclude) != len(wantIncludes) {
 		t.Fatalf("AlwaysInclude = %v; want %d entries: %v", cfg.AlwaysInclude, len(wantIncludes), wantIncludes)

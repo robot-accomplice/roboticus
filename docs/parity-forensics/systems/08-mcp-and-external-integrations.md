@@ -3,9 +3,9 @@
 ## Status
 
 - Owner: parity-forensics program
-- Audit status: `validated`
-- Last updated: 2026-04-19
-- Related release: v1.0.6
+- Audit status: `reopened`
+- Last updated: 2026-04-20
+- Related release: v1.0.7
 
 ## Why This System Matters
 
@@ -174,6 +174,26 @@ System 08 is closed for v1.0.6.
 - Cross-vendor SSE validation remains deliberately deferred and explicitly
   disclosed rather than buried under vague “improved but open” language.
 
+## v1.0.7 Reopening
+
+System 08 is reopened for one remaining validation seam:
+
+- `PAR-008` — cross-vendor SSE MCP proof
+
+v1.0.7 execution stance:
+
+- fixture-only SSE evidence is no longer sufficient as the only positive proof
+- one authoritative named-target SSE validation harness and evidence artifact
+  must own this claim instead of ad hoc checklist prose
+- MCP config-to-runtime conversion must be centralized so daemon startup, route
+  tests, and validation harnesses cannot drift on auth/header/allowlist
+  semantics
+- the transport contract should be explicit about what is actually supported:
+  endpoint-discovery events, auth-bearing GET/POST, standard SSE framing, and
+  tool-call proof on the live path
+- the item stays open until that harness has validated more than one real
+  vendor target, or the operator explicitly narrows the supported contract
+
 - Which remaining MCP transport behaviors still differ materially from the
   desired operator contract?
 - Is closing the whole connection on per-call timeout an accepted simplification
@@ -218,3 +238,16 @@ System 08 is closed for v1.0.6.
   keeps failed connections visible for diagnostics but marks them
   `connected=false` with an error string and zero live `tool_count`, while
   aggregated tool surfaces exclude those dead transports entirely.
+- 2026-04-20: Reopened the remaining SSE validation seam as `PAR-008` for
+  active v1.0.7 work. The next closure step is a central named-target SSE
+  validation harness plus evidence artifact, not more fixture-only prose.
+- 2026-04-20: Tightened the active remediation contract for `PAR-008`:
+  central runtime config conversion, endpoint-discovery/auth-capable SSE
+  transport, and a named-target `validate-sse` harness are now part of the
+  required closure proof.
+- 2026-04-20: Landed the central runtime pieces for `PAR-008`: daemon startup
+  and route tests now share one MCP config-conversion seam, the SSE transport
+  now supports endpoint-discovery events plus auth-bearing GET/POST requests,
+  and the runtime exposes a named-target `validate-sse` harness that returns a
+  structured evidence artifact. The remaining blocker is real multi-target
+  third-party validation, not additional internal transport work.

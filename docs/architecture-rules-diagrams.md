@@ -28,6 +28,70 @@ This file follows the same C4 conventions used elsewhere in the repo:
   admin install UX and route handlers
 - pipeline shown as the central factory
 - supporting non-C4 diagrams clearly labeled as such
+- parity preserves what is best: if a heuristic fallback exists only because an
+  indexed corpus is incomplete, fix the corpus and retire the heuristic rather
+  than downgrading the live path to mimic an older baseline
+- benchmark validity and RCA require host resource snapshots on the same
+  canonical seams that own benchmark persistence and turn diagnostics
+- operator RCA views must remain legible and honest when canonical diagnostics
+  are missing: macro/detail controls stay visible, diagnostics bind by turn id,
+  and the UI falls back explicitly to trace-only narrative instead of quietly
+  reverting to an unlabeled stage dump
+- pipeline traces and canonical diagnostics must share the same authoritative
+  turn id on live turns; the UI is not allowed to reconstruct that join by
+  session/time proximity
+- simple direct tasks are not allowed to widen into heavy autonomous turns by
+  intent label alone; when synthesis says `simple` + `execute_directly`, the
+  first-pass envelope must stay focused with bounded tools and only
+  evidence-driven retrieval
+- workspace-local vault authoring must exist as an explicit runtime capability
+  when Obsidian is configured; a prompt hint or indirect skill reference is
+  not an acceptable substitute for a real tool surface
+- capability truth must converge before inference; DB skill inventory, runtime
+  skill loading, tool registration, prompt guidance, and UI are not allowed to
+  disagree about whether a capability is actually live
+- cross-turn guards must preserve temporal atomicity; `PreviousAssistant` and
+  prior assistant history must exclude assistant content already emitted in the
+  current turn, or a successful tool-backed completion can be misclassified as
+  self-repetition and force a pointless retry
+- lexical noise such as `test` inside a filename or note title is not allowed
+  to upcast a simple authoring turn into a coding envelope
+- placeholder assistant scaffolding such as `[assistant message]` or
+  `[agent message]` must be dropped at the loop boundary so it cannot enter
+  history, retries, RCA, or operator-visible output
+- operator RCA on desktop is expected to read left-to-right as one bounded
+  decision flow: macro mode uses compact blocks plus one dense top status
+  banner, while turn conclusion and health may move to a separate bottom
+  banner when the header would otherwise become crowded. Verbose text belongs
+  in a true floating tooltip layer or explicit detail mode. Macro nodes should
+  expose only one concise signal each, with duration as the default visible
+  value and routing as the deliberate exception where the selected model is
+  the more useful signal. The surface must size against the real usable
+  main-pane width rather than raw viewport width so persistent chrome like the
+  sidebar is accounted for. If it still outgrows that space, it must expose an
+  intentional horizontal scroll container inside that pane rather than
+  overflowing invisibly. Detail mode must remain chronological rather than
+  grouped-by-type so RCA preserves causal order; category labels may annotate
+  the timeline, but they must not force operators to reconstruct event
+  sequence manually. Repeat execution must be visible on the flow itself:
+  any section that executes more than once carries a repeat marker, and detail
+  mode preserves per-attempt sequence plus the causal bridge between success,
+  guard or verifier intervention, retry, same-route reuse or fallback, and
+  final outcome. The conclusion banner must be a real interpretation of those
+  facts, not a statement that telemetry was collected. The UI is not allowed to
+  make operators reconstruct those facts from logs or database rows, and stale
+  trace-only fallback overlays must be torn down when the active session or
+  expanded turn changes. Flow blocks should also carry immediate severity
+  coloring from the same RCA evidence: green for clean, yellow for concern, red
+  for broken. The dense top banner uses that same severity language and its
+  thresholds are not ad hoc: degraded status is concern/yellow, latency above
+  one second is concern/yellow, latency above one minute is broken/red, and
+  `high` or `critical` pressure is broken/red. Its `Health` value is the
+  aggregate of the category outcomes shown in the flow, not a separate
+  invisible calculation. Every chip in that banner must also provide a
+  hover/focus explanation of what the value means so operators are not forced
+  to understand internal shorthand like `degraded` or `swap 78.8%` by tribal
+  knowledge.
 
 ## 1. C4 Level 1: Architecture Context
 
@@ -179,7 +243,81 @@ C4Component
     Rel(appstate, runtime, "Owns")
 ```
 
-## 6. Supplementary Rule View — Security Claim And Sandbox Ownership
+## 6. Supplementary Rule View — Operational Inventory Tools
+
+Delegation-critical inventory such as subagent roster and skill availability
+must be available on the live runtime tool surface. They are not allowed to
+exist only as admin routes, dashboard summaries, or prompt-side snapshots.
+
+```mermaid
+flowchart LR
+    store["Authoritative Store\n(sub_agents, skills)"]
+    runtime["Runtime Tool Registry"]
+    prune["Tool Pruning / Request Assembly"]
+    orchestrator["Orchestrator"]
+    admin["Admin / Dashboard"]
+
+    store --> runtime
+    store --> admin
+    runtime --> prune --> orchestrator
+```
+
+## 6.5 Supplementary Rule View — Capability Truth Ownership
+
+Capability truth must be singular. The system is not allowed to show an
+enabled skill in the UI, miss it in capability fit, omit it from the live
+runtime matcher, and still tell the model it might exist. One authoritative
+inventory must drive every downstream seam, and any config-gated capability
+must degrade visibly and consistently when its runtime precondition is absent.
+
+```mermaid
+flowchart LR
+    store["Authoritative Skill Inventory\n(DB rows + source paths + enabled state)"]
+    loader["Runtime Skill Loader\n(live matcher + prompt inventory)"]
+    cfg["Runtime Config Preconditions\n(vault path, allowed paths, feature flags)"]
+    tools["Live Tool Registry"]
+    synthesis["Task Synthesis / Capability Fit"]
+    prompt["Prompt Guidance"]
+    ui["Operator UI / Skills Surface"]
+
+    store --> loader
+    store --> synthesis
+    store --> ui
+    cfg --> loader
+    cfg --> tools
+    loader --> prompt
+    loader --> tools
+    tools --> synthesis
+    tools --> prompt
+    tools --> ui
+```
+
+## 7. Supplementary Rule View — Delegation And Orchestration Ownership
+
+Delegation is not allowed to devolve into a prompt-only trick. The orchestrator
+may ask the runtime to orchestrate subagents, but the orchestration contract
+must write the same durable lifecycle artifacts the runtime already exposes for
+task inspection and retry. Subagent work still returns upward to the
+orchestrator; the orchestration surface never reports directly to the operator.
+
+```mermaid
+flowchart LR
+    orchestrator["Orchestrator"]
+    tool["orchestrate-subagents\nruntime tool"]
+    control["Orchestration control plane\n(authoritative owner)"]
+    tasks["tasks / task_events /\nagent_delegation_outcomes"]
+    workers["Subagents"]
+    report["Orchestrator evidence review\nand operator-facing synthesis"]
+
+    orchestrator --> tool --> control
+    control --> tasks
+    control --> workers
+    workers --> tasks
+    tasks --> report
+    report --> orchestrator
+```
+
+## 8. Supplementary Rule View — Security Claim And Sandbox Ownership
 
 This view captures a runtime seam that was easy to misunderstand during parity
 work: claim resolution is pipeline-owned, while sandbox enforcement is shared
@@ -212,7 +350,50 @@ flowchart LR
     %% fabricate canned execution summaries in their place.
 ```
 
-## 7. Supplementary Rule View — Streaming Is Not A Separate Product
+## 9. Supplementary Rule View — Host Resource Snapshot Ownership
+
+Host resource state is not allowed to live as an ad hoc side metric or a
+manual operator guess. Benchmark validity and turn RCA both depend on one
+shared resource-sampling seam that feeds durable benchmark artifacts and the
+canonical turn diagnostics artifact.
+
+```mermaid
+flowchart LR
+    sampler["Host Resource Sampler\nCPU / memory / swap / process RSS"]
+    benchmark["Benchmark Persistence\nbaseline_runs + exercise_results"]
+    rca["Canonical Turn Diagnostics\nturn_diagnostics + event details"]
+    ui["Operator RCA / benchmark UI"]
+
+    sampler --> benchmark
+    sampler --> rca
+    benchmark --> ui
+    rca --> ui
+```
+
+## 9. Supplementary Rule View — MCP SSE Validation Ownership
+
+This view captures the rule behind `PAR-008`: SSE readiness claims must come
+from one central validation harness and evidence artifact, not from scattered
+fixture tests, checklist prose, or connector folklore. The same rule requires
+one shared config-to-runtime conversion seam so auth/header semantics cannot
+drift between daemon startup, route tests, and validation tooling.
+
+```mermaid
+flowchart LR
+    target["Named SSE Validation Target\n(url, optional headers,\nexpected server/tool assertions)"]
+    config["Shared MCP Config Conversion\n(core config -> runtime config)"]
+    harness["Central SSE Validation Harness"]
+    transport["MCP SSE Transport\n(GET stream + endpoint discovery\n+ auth-bearing POST JSON-RPC)"]
+    evidence["Validation Evidence Artifact\n(server identity, tool count,\ncall result, failure details)"]
+    checklist["Release Checklist / System 08"]
+    operator["Operator Confidence Claim"]
+
+    target --> config --> harness --> transport
+    transport --> evidence
+    evidence --> checklist --> operator
+```
+
+## 10. Supplementary Rule View — Streaming Is Not A Separate Product
 
 This is a supporting diagram rather than a C4 view because it expresses a
 behavioral equivalence rule.
@@ -235,7 +416,7 @@ flowchart LR
     t1 --> shared --> t2
 ```
 
-## 8. Supplementary Rule View — Channel Ingress Ownership
+## 11. Supplementary Rule View — Channel Ingress Ownership
 
 Webhook-capable channels follow the same thin-connector rule more strictly than
 before: the route owns HTTP framing and pipeline dispatch, while the adapter
@@ -254,7 +435,7 @@ flowchart LR
     http --> verify --> normalize --> bridge --> pipeline
 ```
 
-## 8.5 Supplementary Rule View — Extension Runtime Ownership
+## 11.5 Supplementary Rule View — Extension Runtime Ownership
 
 Plugin administration and plugin runtime are not the same thing. Install/search
 surfaces may write plugin files or inspect catalogs, but the live runtime must
@@ -281,7 +462,7 @@ flowchart LR
     registry --> runtime
 ```
 
-## 9. Supplementary Rule View — Request Construction Ownership
+## 11. Supplementary Rule View — Request Construction Ownership
 
 This view captures the validated v1.0.6 ownership rule for the inference
 artifact. Tool selection, memory preparation, checkpoint restore, and prompt
@@ -305,7 +486,7 @@ flowchart LR
     note1["Latest user message survives verbatim"]
     note2["Prompt-layer tool roster matches structured tool defs"]
     note3["Empty compacted history messages are dropped before inference"]
-    note4["Prompt compression is disabled for v1.0.6\nafter failed history-bearing soak"]
+    note4["Prompt compression is benchmark-only in v1.0.7\nafter failed history-bearing soak"]
 
     builder -.-> note1
     builder -.-> note2
@@ -320,7 +501,129 @@ must be written from turn-owned evidence first, then promoted through explicit
 consolidation seams. Reflection is not allowed to invent durable state from
 weak proxies when structured turn artifacts already exist.
 
-## 11. Supplementary Rule View — Observability Route Ownership
+## 11. Supplementary Rule View — Model Policy And Routing Ownership
+
+This view captures the v1.0.7 routing rule: policy filters come before ranking.
+Model lifecycle state and role eligibility are architecture controls, not
+tuning hints. Policy is resolved centrally from configured defaults plus
+persisted operator overrides before any live or benchmark path can proceed.
+
+```mermaid
+flowchart LR
+    operator["Operator Preferences\n(locality, cost, privacy, explicit policy)"]
+    benchmarks["Benchmark Evidence\n(latency, quality, pass rate, incidents)"]
+    config["Configured Policy Defaults\nstate + reasons + evidence\nrole eligibility"]
+    persisted["Persisted Policy Overrides\noperator-managed model state"]
+    resolver["Central Policy Resolver\nnormalize model identity\nmerge defaults + overrides"]
+    targets["Configured Model Targets"]
+    filter["Eligibility Filter\nstate + role"]
+    benchfilter["Benchmark Eligibility Filter"]
+    metascore["Metascore / Task-Fit Ranking"]
+    selected["Selected Live Candidate"]
+    manual["Manual / Benchmark Use"]
+
+    operator --> persisted
+    benchmarks --> persisted
+    config --> resolver
+    persisted --> resolver
+    targets --> filter
+    resolver --> filter
+    resolver --> benchfilter
+    filter --> metascore
+    metascore --> selected
+    benchfilter --> manual
+
+    note1["disabled / benchmark_only never enter live routing"]
+    note2["orchestrator vs subagent eligibility is decided before ranking"]
+    note3["ranking chooses among viable candidates; it does not override policy"]
+    note4["benchmark selection shares the same policy seam"]
+
+    filter -.-> note1
+    filter -.-> note2
+    metascore -.-> note3
+    benchfilter -.-> note4
+```
+
+## 12. Supplementary Rule View — Orchestrator / Subagent Control Hierarchy
+
+This view captures the v1.0.7 control-flow rule: operators never talk directly
+to subagents, and subagents never report directly to operators.
+
+```mermaid
+flowchart LR
+    operator["Operator"]
+    orchestrator["Orchestrator"]
+    subagent["Subagent / Cron Worker"]
+    evidence["Bounded Work Result\ncompleted work + evidence + gaps"]
+    presentation["Operator-Facing Synthesis\nanalysis + repackaging"]
+
+    operator --> orchestrator
+    orchestrator --> subagent
+    subagent --> evidence --> orchestrator
+    orchestrator --> presentation --> operator
+```
+
+## 13. Supplementary Rule View — Delegated Task Lifecycle Ownership
+
+This view captures the v1.0.7 rule for delegated work: task lifecycle state is
+owned by one runtime repository and surfaced through orchestrator-facing tools,
+not reconstructed from connector routes or subagent status sidecars.
+
+```mermaid
+flowchart LR
+    orchestrator["Orchestrator"]
+    tools["Runtime Tools\nlist-open-tasks\ntask-status\nretry-task"]
+    repo["Delegated Task Repository\n(tasks + task_events + outcomes)"]
+    subagent["Subagent"]
+    operator["Operator"]
+
+    orchestrator --> tools --> repo
+    subagent --> repo
+    repo --> tools --> orchestrator
+    orchestrator --> operator
+```
+
+## 14. Supplementary Rule View — Subagent Composition Ownership
+
+This view captures the v1.0.7 rule for worker creation: subagent composition is
+owned by one runtime repository and may be invoked only by the orchestrator.
+
+```mermaid
+flowchart LR
+    orchestrator["Orchestrator"]
+    compose["Runtime Tool\ncompose-subagent"]
+    repo["Subagent Composition Repository\n(sub_agents)"]
+    subagent["Subagent"]
+    operator["Operator"]
+
+    orchestrator --> compose --> repo
+    subagent -. denied .-> compose
+    repo --> compose --> orchestrator --> operator
+```
+
+## 15. Supplementary Rule View — Skill Composition Ownership
+
+This view captures the v1.0.7 rule for skill creation and update: skill
+composition is owned by one runtime repository that writes both the durable
+skill artifact and the authoritative `skills` row, and only the orchestrator
+may invoke it directly.
+
+```mermaid
+flowchart LR
+    orchestrator["Orchestrator"]
+    compose["Runtime Tool\ncompose-skill"]
+    repo["Skill Composition Repository\n(filesystem artifact + skills row)"]
+    route["Catalog / Admin Install Route"]
+    subagent["Subagent"]
+    operator["Operator"]
+
+    orchestrator --> compose --> repo
+    route --> repo
+    subagent -. denied .-> compose
+    repo --> compose --> orchestrator --> operator
+```
+
+## 13. Supplementary Rule View — Observability Route Ownership
 
 This view captures the final v1.0.6 route-family contract for trace surfaces.
 
@@ -336,6 +639,94 @@ flowchart LR
     observability --> handlers
     ws --> handlers
     release --> handlers
+```
+
+## 14. Supplementary Rule View — Operator RCA Flow Ownership
+
+The operator-facing flow view is not allowed to degrade into a thin wrapper
+around raw trace rows. The canonical `turn_diagnostics` artifact is the
+authoritative RCA surface, and the UI must present it as a decision narrative:
+
+- macro by default
+- detailed only on explicit operator demand
+- grouped by decision seam instead of raw event order
+- desktop-first left-to-right comprehension rather than a disguised vertical log
+- persisted summary narratives must already be interpretive conclusions derived
+  from the turn facts, not placeholders that merely say diagnostics exist
+
+```mermaid
+flowchart LR
+    diag["Canonical turn_diagnostics\nsummary + events + recommendations"]
+    flow["/api/traces/{turn}/flow\nstage timing / structural flow"]
+    ui["Operator Flow View\nmacro RCA narrative + detailed drilldown"]
+    macro["Macro View\nTask · Envelope · Routing · Execution · Recovery · Outcome"]
+    detail["Detailed View\ncategorized event stream + raw evidence"]
+    operator["Operator"]
+
+    diag --> ui
+    flow --> ui
+    ui --> macro
+    ui --> detail
+    macro --> operator
+    detail --> operator
+```
+
+## 15. Supplementary Rule View — Verifier Evidence Ownership
+
+This view captures the active v1.0.7 verifier-depth rule: contradiction and
+proof evaluation must consume the same typed evidence artifact produced by
+retrieval/context assembly. The verifier is not allowed to reconstruct that
+state later from lossy rendered text or a boolean-only contradiction flag.
+
+```mermaid
+flowchart LR
+    retrieval["Stage 8.5 Retrieval / Context Assembly"]
+    typed["Typed Verification Evidence\nEvidenceItems\nContradictions\nExecutive State"]
+    session["Session Artifact Boundary"]
+    verifier["Verifier / Claim Audits"]
+    issues["Verification Issues\nmissing proof / contradiction handling"]
+    trace["Turn Diagnostics / Trace"]
+
+    retrieval --> typed --> session --> verifier
+    verifier --> issues
+    verifier --> trace
+
+    note1["Contradictions are structured artifacts,\nnot only a boolean summary"]
+    note2["Proof obligations are evaluated per claim"]
+    note3["RCA and future ML use the same verifier artifact"]
+
+    typed -.-> note1
+    verifier -.-> note2
+    trace -.-> note3
+```
+
+## 16. Supplementary Rule View — Retrieval Fusion Ownership
+
+Fusion is now an explicit retrieval-stage concern, not a side effect spread
+across router weights and reranker adjustments. The rule is:
+
+- tier retrieval produces raw candidates with provenance
+- fusion combines route weight, provenance, freshness, authority, and
+  corroboration into the first unified retrieval-quality score
+- optional LLM reranking may run after fusion as a bounded semantic scorer
+- deterministic reranking still owns the final narrowing / collapse protection
+  and remains the fallback path when LLM reranking does not run cleanly
+
+```mermaid
+flowchart LR
+    decompose["Query Decomposition"]
+    route["Retrieval Router"]
+    tiers["Tier Retrieval\nsemantic / episodic / procedural / relationship"]
+    fusion["Fusion Stage\nroute weight + provenance + freshness + authority + corroboration"]
+    llmrerank["Optional LLM Rerank\nbounded semantic scoring"]
+    rerank["Deterministic Reranker\nthresholding / narrowing / collapse protection"]
+    assemble["Context Assembly"]
+    trace["RCA / ML Surfaces"]
+
+    decompose --> route --> tiers --> fusion --> llmrerank --> rerank --> assemble
+    fusion --> trace
+    llmrerank --> trace
+    rerank --> trace
 ```
 
 ```mermaid

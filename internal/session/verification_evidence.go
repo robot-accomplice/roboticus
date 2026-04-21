@@ -48,6 +48,12 @@ type VerificationEvidence struct {
 	HasContradictions    bool
 	HasCanonicalEvidence bool
 
+	// Contradictions carries structured contradiction signals derived from the
+	// retrieval assembly. This is the authoritative verifier input for
+	// contradiction-aware checks; HasContradictions remains as a cheap summary
+	// flag for callers that only need to know whether any contradiction existed.
+	Contradictions []ContradictionEvidence
+
 	// EvidenceItems is the flat list of individual evidence bullet
 	// points extracted from the [Retrieved Evidence] section. Bullets
 	// preserve source/tier tags inline so the verifier can reason
@@ -60,6 +66,18 @@ type VerificationEvidence struct {
 	UnresolvedQuestions []string
 	VerifiedConclusions []string
 	StoppingCriteria    []string
+}
+
+// ContradictionEvidence describes one contested topic or contradiction signal
+// surfaced by retrieval assembly. It remains intentionally compact so the same
+// artifact can travel through session, verifier, traces, and persistence
+// without dragging full retrieval state into the verifier.
+type ContradictionEvidence struct {
+	Kind           string   `json:"kind,omitempty"`
+	Topic          string   `json:"topic,omitempty"`
+	Summary        string   `json:"summary,omitempty"`
+	SharedKeywords []string `json:"shared_keywords,omitempty"`
+	EvidenceItems  []string `json:"evidence_items,omitempty"`
 }
 
 // SetVerificationEvidence attaches a typed evidence artifact to the
@@ -100,6 +118,7 @@ func deriveVerificationEvidenceFromMemoryContext(memoryContext string) *Verifica
 		HasFreshnessRisks:    strings.Contains(memoryContext, "[Freshness Risks]"),
 		HasContradictions:    strings.Contains(memoryContext, "[Contradictions]"),
 		HasCanonicalEvidence: canonicalQualifierRegex.MatchString(memoryContext),
+		Contradictions:       deriveContradictionsFromMemoryContext(memoryContext),
 		EvidenceItems:        verificationSectionItems(memoryContext, "[Retrieved Evidence]"),
 		UnresolvedQuestions:  verificationExecutiveSection(memoryContext, "Unresolved questions"),
 		VerifiedConclusions:  verificationExecutiveSection(memoryContext, "Verified conclusions"),
@@ -190,6 +209,24 @@ func verificationSectionItems(memoryContext, header string) []string {
 		}
 	}
 	return items
+}
+
+func deriveContradictionsFromMemoryContext(memoryContext string) []ContradictionEvidence {
+	items := verificationSectionItems(memoryContext, "[Contradictions]")
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]ContradictionEvidence, 0, len(items))
+	for _, item := range items {
+		trimmed := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(item), "- "))
+		if trimmed != "" {
+			out = append(out, ContradictionEvidence{
+				Kind:    "rendered_marker",
+				Summary: trimmed,
+			})
+		}
+	}
+	return out
 }
 
 func trimTrailingParenthetical(s string) string {

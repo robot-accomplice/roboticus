@@ -75,6 +75,40 @@ func TestDashboard_PageCount(t *testing.T) {
 	}
 }
 
+func TestDashboard_ObservabilityNarrativeContract(t *testing.T) {
+	data, err := os.ReadFile("dashboard_spa.html")
+	if err != nil {
+		t.Skipf("dashboard_spa.html not found: %v", err)
+	}
+	content := string(data)
+
+	required := []string{
+		"Macro View",
+		"Show Detail",
+		"trace-only fallback",
+		"Canonical diagnostics were not persisted for turn",
+		"Conclusion",
+		"Health",
+		"Host Resources",
+		"Decision Flow",
+		"Hover a flow block for quick evidence",
+		"Chronological Timeline",
+		"Retried same route",
+		"Post-attempt guard",
+		"Attempt sequence",
+		"↻",
+		"The first attempt succeeded, but",
+		"health-poor",
+		"fair aggregate",
+		"Aggregate of task, envelope, routing, execution, recovery, host resources, and outcome.",
+	}
+	for _, needle := range required {
+		if !strings.Contains(content, needle) {
+			t.Errorf("dashboard_spa.html missing observability narrative contract string %q", needle)
+		}
+	}
+}
+
 func extractQuotedStrings(s string) []string {
 	var result []string
 	for {

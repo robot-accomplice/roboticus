@@ -2,11 +2,15 @@ package models
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"sort"
 	"strings"
 	"time"
@@ -17,6 +21,70 @@ import (
 	"roboticus/internal/core"
 	"roboticus/internal/llm"
 )
+
+func exerciseConfigFingerprint(config map[string]any) string {
+	b, err := json.Marshal(config)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}
+
+func currentGitRevision() string {
+	out, err := exec.Command("git", "rev-parse", "HEAD").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func startExerciseRun(models []string, iterations int, config map[string]any) (string, error) {
+	resp, err := cmdutil.APIPost("/api/models/exercise/runs", map[string]any{
+		"initiator":          "cli",
+		"models":             models,
+		"iterations":         iterations,
+		"config_fingerprint": exerciseConfigFingerprint(config),
+		"git_revision":       currentGitRevision(),
+	})
+	if err != nil {
+		return "", err
+	}
+	runID, _ := resp["run_id"].(string)
+	if runID == "" {
+		return "", fmt.Errorf("exercise run start did not return run_id")
+	}
+	return runID, nil
+}
+
+func appendExerciseRunResult(runID string, o llm.PromptOutcome) error {
+	errMsg := ""
+	if o.Err != nil {
+		errMsg = o.Err.Error()
+	}
+	_, err := cmdutil.APIPost("/api/models/exercise/runs/"+runID+"/results", map[string]any{
+		"model":          o.Model,
+		"intent_class":   o.Prompt.Intent.String(),
+		"complexity":     o.Prompt.Complexity.String(),
+		"prompt":         o.Prompt.Prompt,
+		"content":        o.Content,
+		"quality":        o.Quality,
+		"latency_ms":     o.LatencyMs,
+		"passed":         o.Passed,
+		"error_msg":      errMsg,
+		"resource_start": o.ResourceStart,
+		"resource_end":   o.ResourceEnd,
+	})
+	return err
+}
+
+func completeExerciseRun(runID, status, notes string) error {
+	_, err := cmdutil.APIPost("/api/models/exercise/runs/"+runID+"/complete", map[string]any{
+		"status": status,
+		"notes":  notes,
+	})
+	return err
+}
 
 var modelsCmd = &cobra.Command{
 	Use:   "models",
@@ -459,19 +527,51 @@ scored latency averages. Cloud models skip warm-up.`,
 		}
 
 		// Dispatch to the business-logic orchestrator.
+		runID, err := startExerciseRun(models, iterations, config)
+		if err != nil {
+			return fmt.Errorf("start exercise run: %w", err)
+		}
+		runStatus := "completed"
+		runNotes := ""
+		defer func() {
+			if err := completeExerciseRun(runID, runStatus, runNotes); err != nil {
+				fmt.Fprintf(os.Stderr, "  warning: failed to finalize exercise run %s: %v\n", runID, err)
+			}
+		}()
+
+		var persistErr error
 		req := llm.ExerciseRequest{
-			Models:       models,
-			Iterations:   iterations,
-			SendPrompt:   cliPromptSender,
-			SendWarmup:   cliWarmupSender(config),
-			OnPrompt:     renderPromptProgress,
+			Models:     models,
+			Iterations: iterations,
+			SendPrompt: cliPromptSender,
+			SendWarmup: cliWarmupSender(config),
+			OnPrompt: func(o llm.PromptOutcome) {
+				renderPromptProgress(o)
+				if persistErr != nil {
+					return
+				}
+				if err := appendExerciseRunResult(runID, o); err != nil {
+					persistErr = err
+				}
+			},
 			Progress:     os.Stdout,
 			IsLocal:      func(m string) bool { return llm.ExerciseModelIsLocal(exerciseCfg, m) },
 			ModelTimeout: func(m string) time.Duration { return llm.ExerciseModelTimeout(exerciseCfg, m) },
 		}
 		report, err := llm.ExerciseModels(cmd.Context(), req)
 		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				runStatus = "canceled"
+			} else {
+				runStatus = "failed"
+			}
+			runNotes = err.Error()
 			return fmt.Errorf("exercise: %w", err)
+		}
+		if persistErr != nil {
+			runStatus = "failed"
+			runNotes = persistErr.Error()
+			return fmt.Errorf("persist exercise results: %w", persistErr)
 		}
 
 		// Always render the cross-model comparison — a single model's
@@ -553,7 +653,7 @@ func hasExistingData(existing map[string]any, model string) bool {
 // cliPromptSender is the CLI-side llm.ModelSender: dispatches one
 // scored prompt through the pipeline via /api/agent/message.
 func cliPromptSender(ctx context.Context, model, content string, timeout time.Duration) (string, int64, error) {
-	body := map[string]any{"content": content, "no_cache": true}
+	body := map[string]any{"content": content, "no_cache": true, "no_escalate": true}
 	if model != "" {
 		body["model"] = model
 	}
@@ -576,9 +676,10 @@ func cliPromptSender(ctx context.Context, model, content string, timeout time.Du
 func cliWarmupSender(config map[string]any) llm.WarmupSender {
 	return func(ctx context.Context, model string, timeout time.Duration) llm.WarmupResult {
 		body := map[string]any{
-			"content":  llm.WarmupPrompt,
-			"model":    model,
-			"no_cache": true,
+			"content":     llm.WarmupPrompt,
+			"model":       model,
+			"no_cache":    true,
+			"no_escalate": true,
 		}
 		start := time.Now()
 		_, err := cmdutil.APIPostSlow("/api/agent/message", body, timeout)

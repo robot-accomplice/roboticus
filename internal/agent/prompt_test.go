@@ -42,6 +42,38 @@ func TestBuildSystemPrompt_ContainsPersonality(t *testing.T) {
 	}
 }
 
+func TestBuildSystemPrompt_SubagentOmitsPersonalityOperatorAndDirectives(t *testing.T) {
+	cfg := PromptConfig{
+		AgentName:   "Bot",
+		Personality: "Friendly and helpful.",
+		Operator:    "Operator prefers dry humor.",
+		Directives:  "Optimize for operator rapport.",
+		IsSubagent:  true,
+	}
+	prompt := BuildSystemPrompt(cfg)
+	if strings.Contains(prompt, "## Identity") {
+		t.Fatal("subagent prompt should not contain identity block")
+	}
+	if strings.Contains(prompt, "## Operator Context") {
+		t.Fatal("subagent prompt should not contain operator context block")
+	}
+	if strings.Contains(prompt, "## Active Directives") {
+		t.Fatal("subagent prompt should not contain active directives block")
+	}
+	if !strings.Contains(prompt, "specialist subagent") {
+		t.Fatal("subagent prompt should contain orchestration block")
+	}
+	if !strings.Contains(prompt, "Report upward to the orchestrator layer, never directly to the operator") {
+		t.Fatal("subagent prompt should enforce orchestrator-only reporting")
+	}
+	if !strings.Contains(prompt, "only claim completion when backed by concrete tool output") {
+		t.Fatal("subagent prompt should require proof-backed completion claims")
+	}
+	if !strings.Contains(prompt, "Separate completed work, evidence, and remaining gaps or uncertainty") {
+		t.Fatal("subagent prompt should require explicit evidence and gap reporting")
+	}
+}
+
 func TestBuildSystemPrompt_Empty(t *testing.T) {
 	cfg := PromptConfig{}
 	prompt := BuildSystemPrompt(cfg)
@@ -145,6 +177,9 @@ func TestBuildSystemPrompt_ObsidianDirective_Enabled(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "/home/user/vault") {
 		t.Error("should contain vault path")
+	}
+	if !strings.Contains(prompt, "obsidian_write") {
+		t.Error("should mention the explicit obsidian_write tool")
 	}
 }
 

@@ -72,6 +72,8 @@ var fieldDescriptions = map[string]string{
 	"server.cron_max_concurrency":                 "Max concurrent cron jobs.",
 	"server.log_max_days":                         "Days to retain log files before rotation.",
 	"models.primary":                              "Primary LLM model (e.g. openai/gpt-4o).",
+	"models.policy":                               "Per-model lifecycle policy map controlling whether each model is enabled, niche-only, disabled, or benchmark-only, together with operator-visible reasons and evidence.",
+	"models.role_eligibility":                     "Per-model role eligibility map controlling whether each model may be used by the orchestrator, subagents, or both.",
 	"models.stream_by_default":                    "Stream LLM responses by default.",
 	"models.routing.mode":                         "Routing strategy: primary, fallback, auto, metascore, etc.",
 	"models.routing.confidence_threshold":         "Minimum confidence to accept a model's response.",
@@ -166,8 +168,22 @@ func walkStruct(defaultVal, currentVal reflect.Value, prefix, section string) []
 			fieldType = fieldType.Elem()
 		}
 
-		// Skip maps (providers is a map — handled separately by existing UI).
+		// Skip most maps (providers is a map — handled separately by existing UI).
+		// models.policy and models.role_eligibility are intentionally surfaced
+		// because routing lifecycle and role policy need to be operator-visible
+		// and tuneable.
 		if fieldType.Kind() == reflect.Map {
+			if dottedPath == "models.policy" || dottedPath == "models.role_eligibility" {
+				sf := SchemaField{
+					Name:        dottedPath,
+					Type:        "object",
+					Default:     valueToInterface(defField),
+					Current:     valueToInterface(curField),
+					Section:     fieldSection,
+					Description: fieldDescriptions[dottedPath],
+				}
+				fields = append(fields, sf)
+			}
 			continue
 		}
 

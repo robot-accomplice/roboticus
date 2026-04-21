@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"roboticus/internal/llm"
+	sessionpkg "roboticus/internal/session"
 )
 
 // VerificationIssue captures one reason a response should be revised.
@@ -24,16 +25,42 @@ type VerificationResult struct {
 	ClaimAudits []ClaimAudit
 }
 
+func (vr VerificationResult) HasIssue(code string) bool {
+	for _, issue := range vr.Issues {
+		if issue.Code == code {
+			return true
+		}
+	}
+	return false
+}
+
+func (vr VerificationResult) HasAnyIssue(codes ...string) bool {
+	set := make(map[string]struct{}, len(codes))
+	for _, code := range codes {
+		set[code] = struct{}{}
+	}
+	for _, issue := range vr.Issues {
+		if _, ok := set[issue.Code]; ok {
+			return true
+		}
+	}
+	return false
+}
+
 // ClaimAudit is a structured record of a verifier decision on a single claim.
 type ClaimAudit struct {
-	Sentence          string `json:"sentence"`
-	Certainty         string `json:"certainty"`
-	CertaintyUpgraded bool   `json:"certainty_upgraded,omitempty"`
-	Supported         bool   `json:"supported"`
-	Anchored          bool   `json:"anchored"`
-	Reconciled        bool   `json:"reconciled"`
-	IssueCode         string `json:"issue_code,omitempty"`
-	KeywordHits       int    `json:"keyword_hits"`
+	Sentence          string   `json:"sentence"`
+	Certainty         string   `json:"certainty"`
+	CertaintyUpgraded bool     `json:"certainty_upgraded,omitempty"`
+	Supported         bool     `json:"supported"`
+	Anchored          bool     `json:"anchored"`
+	Reconciled        bool     `json:"reconciled"`
+	Contested         bool     `json:"contested,omitempty"`
+	ProofSatisfied    bool     `json:"proof_satisfied,omitempty"`
+	IssueCode         string   `json:"issue_code,omitempty"`
+	KeywordHits       int      `json:"keyword_hits"`
+	ProofRequired     []string `json:"proof_required,omitempty"`
+	MissingProof      []string `json:"missing_proof,omitempty"`
 }
 
 // VerificationContext carries the minimum state needed to sanity-check
@@ -55,6 +82,7 @@ type VerificationContext struct {
 	RequiresActionPlan   bool
 	Subgoals             []string
 	EvidenceItems        []string
+	Contradictions       []sessionpkg.ContradictionEvidence
 
 	// Executive state surfaces the current plan, assumptions, unresolved
 	// questions, verified conclusions, decision checkpoints, and stopping
@@ -105,6 +133,7 @@ func BuildVerificationContext(session *Session) VerificationContext {
 		ctx.HasFreshnessRisk = ve.HasFreshnessRisks
 		ctx.HasContradictions = ve.HasContradictions
 		ctx.HasCanonicalEvidence = ve.HasCanonicalEvidence
+		ctx.Contradictions = append([]sessionpkg.ContradictionEvidence(nil), ve.Contradictions...)
 		ctx.EvidenceItems = append([]string(nil), ve.EvidenceItems...)
 		ctx.UnresolvedQuestions = append([]string(nil), ve.UnresolvedQuestions...)
 		ctx.VerifiedConclusions = append([]string(nil), ve.VerifiedConclusions...)
@@ -157,6 +186,14 @@ func verificationSubgoals(prompt string) []string {
 func VerifyResponse(content string, ctx VerificationContext) VerificationResult {
 	result := VerificationResult{Passed: true}
 	lowerContent := strings.ToLower(content)
+
+	if verificationIsSocialTurn(ctx.UserPrompt, ctx.Intent) && verificationLooksOperationalStatus(lowerContent) {
+		result.Passed = false
+		result.Issues = append(result.Issues, VerificationIssue{
+			Code:   "off_topic_social_turn",
+			Detail: "the user made a lightweight social or colloquial greeting, but the response pivoted into operational status instead of acknowledging the greeting",
+		})
+	}
 
 	if ctx.HasGaps && !containsAny(lowerContent,
 		"don't know", "do not know", "unclear", "not enough", "insufficient",
@@ -569,13 +606,46 @@ func verificationMentionsCanonical(response string) bool {
 	)
 }
 
+func verificationIsSocialTurn(prompt, intent string) bool {
+	if intent == "conversational" && isSocialConversationalTurn(strings.ToLower(prompt)) {
+		return true
+	}
+	return false
+}
+
+func verificationLooksOperationalStatus(response string) bool {
+	return containsAny(response,
+		"sandbox", "sandboxed", "allow-list", "allow list",
+		"workspace", "vault", "runtime status", "still locked",
+		"tool access", "access yet", "memory that tells me",
+	)
+}
+
 func (vr VerificationResult) RetryMessage() string {
 	if vr.Passed || len(vr.Issues) == 0 {
 		return ""
 	}
 	var parts []string
+	summary := SummarizeVerification(vr)
 	for _, issue := range vr.Issues {
 		parts = append(parts, issue.Detail)
+	}
+	if vr.HasIssue("off_topic_social_turn") {
+		return "Your previous response failed verification: " + strings.Join(parts, "; ") +
+			". Revise the answer so it directly answers the user's greeting in a brief, natural way. Do not mention sandbox state, workspace paths, vault access, memory state, or runtime status unless the user explicitly asked about them."
+	}
+	if vr.HasAnyIssue("proof_obligation_unmet", "unresolved_contradicted_claim", "unsupported_absolute_claim") {
+		var requirements []string
+		if summary.ContestedCount > 0 {
+			requirements = append(requirements, "explicitly reconcile contested evidence before making definite claims")
+		}
+		if summary.ProofGapCount > 0 {
+			requirements = append(requirements, "anchor each high-risk claim to retrieved or canonical evidence, or clearly lower certainty")
+		}
+		if len(requirements) > 0 {
+			return "Your previous response failed verification: " + strings.Join(parts, "; ") +
+				". Revise the answer so it matches the available evidence, covers each requested part, and " + strings.Join(requirements, "; ") + "."
+		}
 	}
 	return "Your previous response failed verification: " + strings.Join(parts, "; ") +
 		". Revise the answer so it matches the available evidence, covers each requested part, and acknowledges uncertainty where needed."

@@ -33,6 +33,41 @@ func TestSummarizeVerification_CountsAbsoluteSupport(t *testing.T) {
 	}
 }
 
+func TestSummarizeVerification_CountsContestedAndProofGapClaims(t *testing.T) {
+	result := VerificationResult{
+		Passed: false,
+		ClaimAudits: []ClaimAudit{
+			{
+				Sentence:       "Sources disagree on the refund window.",
+				Certainty:      CertaintyAbsolute.String(),
+				Supported:      true,
+				Contested:      true,
+				Reconciled:     true,
+				ProofSatisfied: true,
+			},
+			{
+				Sentence:     "The refund flow definitely complies.",
+				Certainty:    CertaintyAbsolute.String(),
+				Supported:    false,
+				Contested:    false,
+				MissingProof: []string{"evidence_support", "canonical_anchor"},
+				IssueCode:    "proof_obligation_unmet",
+			},
+		},
+	}
+
+	summary := SummarizeVerification(result)
+	if summary.ContestedCount != 1 {
+		t.Fatalf("expected contested count 1, got %+v", summary)
+	}
+	if summary.ProofGapCount != 1 {
+		t.Fatalf("expected proof gap count 1, got %+v", summary)
+	}
+	if summary.ReconciledCount != 1 {
+		t.Fatalf("expected reconciled count 1, got %+v", summary)
+	}
+}
+
 func TestClaimAudit_MarksUnsupportedAbsoluteClaim(t *testing.T) {
 	ctx := VerificationContext{
 		UserPrompt:      "Is the refund flow compliant?",
@@ -80,6 +115,12 @@ func TestAnnotateVerifierTrace_EmitsClaimMap(t *testing.T) {
 	}
 	if _, ok := meta["verifier.claim_count"]; !ok {
 		t.Fatalf("expected verifier.claim_count annotation")
+	}
+	if _, ok := meta["verifier.contested_count"]; !ok {
+		t.Fatalf("expected verifier.contested_count annotation")
+	}
+	if _, ok := meta["verifier.proof_gap_count"]; !ok {
+		t.Fatalf("expected verifier.proof_gap_count annotation")
 	}
 
 	raw, ok := meta["verifier.claim_map_json"].(string)

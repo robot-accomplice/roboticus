@@ -684,6 +684,30 @@ func TestBuildAgentContext_PromptToolRosterClearsWhenSelectedDefsEmpty(t *testin
 	}
 }
 
+func TestBuildAgentContext_PropagatesTurnWeight(t *testing.T) {
+	sess := session.New("s1", "a1", "TestBot")
+	sess.AddUserMessage("hello")
+	sess.SetTaskVerificationHints("code", "complex", "execute_directly", nil)
+	sess.SetTurnEnvelopePolicy("light", "simple conversational turn should stay minimal")
+
+	ctx := buildAgentContext(context.Background(), sess, nil, nil, nil, tools.DefaultToolSearchConfig(), agent.PromptConfig{
+		AgentName: "TestBot",
+	}, nil, nil)
+	req := ctx.BuildRequest(sess)
+	if req.TurnWeight != "light" {
+		t.Fatalf("TurnWeight = %q, want light", req.TurnWeight)
+	}
+	if req.TaskIntent != "code" {
+		t.Fatalf("TaskIntent = %q, want code", req.TaskIntent)
+	}
+	if req.TaskComplexity != "complex" {
+		t.Fatalf("TaskComplexity = %q, want complex", req.TaskComplexity)
+	}
+	if req.IntentClass != llm.IntentCoding.String() {
+		t.Fatalf("IntentClass = %q, want %q", req.IntentClass, llm.IntentCoding.String())
+	}
+}
+
 func TestBuildAgentContext_ReusesSelectedToolSurfaceAcrossLoopTurns(t *testing.T) {
 	sess := session.New("s1", "a1", "TestBot")
 	sess.AddUserMessage("use a tool if needed")
@@ -989,7 +1013,7 @@ func TestBuildAgentContext_PrefersPipelineMemoryIndex(t *testing.T) {
 	}
 }
 
-func TestBuildAgentContext_AppendsCheckpointDigestFromRepository(t *testing.T) {
+func TestBuildAgentContext_AppendsCheckpointRestoreFromRepository(t *testing.T) {
 	store := testutil.TempStore(t)
 	sess := session.New("s1", "a1", "TestBot")
 	if _, err := store.FindOrCreateSession(context.Background(), sess.AgentID, "scope:checkpoint-note"); err != nil {
@@ -1006,6 +1030,7 @@ func TestBuildAgentContext_AppendsCheckpointDigestFromRepository(t *testing.T) {
 	repo := db.NewCheckpointRepository(store)
 	if err := repo.SaveRecord(context.Background(), db.CheckpointRecord{
 		SessionID:          sess.ID,
+		MemorySummary:      "checkpoint memory summary that should be restored in full",
 		ConversationDigest: "assistant checkpoint digest that should be restored",
 		ActiveTasks:        `["task-a"]`,
 		TurnCount:          10,
@@ -1018,24 +1043,30 @@ func TestBuildAgentContext_AppendsCheckpointDigestFromRepository(t *testing.T) {
 	}, nil, nil)
 	req := ctx.BuildRequest(sess)
 
-	var sawDigest, sawTasks bool
+	var sawRestore, sawTasks, sawDigest bool
 	for _, msg := range req.Messages {
 		if msg.Role != "system" {
 			continue
 		}
-		if strings.Contains(msg.Content, "[Checkpoint Digest]") &&
-			strings.Contains(msg.Content, "assistant checkpoint digest that should be restored") {
-			sawDigest = true
+		if strings.Contains(msg.Content, "[Checkpoint Restore]") &&
+			strings.Contains(msg.Content, "Session checkpoint restore (turn_count=10): checkpoint memory summary that should be restored in full") {
+			sawRestore = true
 		}
 		if strings.Contains(msg.Content, `Active tasks: ["task-a"]`) {
 			sawTasks = true
 		}
+		if strings.Contains(msg.Content, "Conversation digest: assistant checkpoint digest that should be restored") {
+			sawDigest = true
+		}
 	}
-	if !sawDigest {
-		t.Fatal("expected checkpoint digest system note in request")
+	if !sawRestore {
+		t.Fatal("expected checkpoint restore system note in request")
 	}
 	if !sawTasks {
 		t.Fatal("expected active tasks in checkpoint system note")
+	}
+	if !sawDigest {
+		t.Fatal("expected conversation digest in checkpoint restore note")
 	}
 }
 
@@ -1051,6 +1082,44 @@ func TestBuildAgentContext_SetsAgentName(t *testing.T) {
 	}
 	// The agent name should come from session, overriding the prompt config's default.
 	// We can verify indirectly that it was set without panicking.
+}
+
+func TestBuildAgentContext_UsesMinimalPromptProfileForSubagent(t *testing.T) {
+	store := testutil.TempStore(t)
+	if _, err := store.ExecContext(context.Background(),
+		`INSERT INTO sub_agents (id, name, model, role, enabled) VALUES ('sa-1', 'automation_scripting', 'auto', 'subagent', 1)`); err != nil {
+		t.Fatalf("seed sub_agents: %v", err)
+	}
+
+	sess := session.New("s1", "automation_scripting", "automation_scripting")
+	sess.AddUserMessage("do the task")
+
+	ctx := buildAgentContext(context.Background(), sess, store, nil, nil, tools.DefaultToolSearchConfig(), agent.PromptConfig{
+		AgentName:   "Duncan",
+		Personality: "Friendly and helpful.",
+		Operator:    "Operator prefers dry humor.",
+		Directives:  "Optimize for operator rapport.",
+	}, nil, nil)
+	req := ctx.BuildRequest(sess)
+	if len(req.Messages) == 0 || req.Messages[0].Role != "system" {
+		t.Fatal("expected system prompt message")
+	}
+	if req.AgentRole != "subagent" {
+		t.Fatalf("request agent role = %q, want subagent", req.AgentRole)
+	}
+	prompt := req.Messages[0].Content
+	if strings.Contains(prompt, "## Identity") {
+		t.Fatal("subagent context should not include identity block")
+	}
+	if strings.Contains(prompt, "## Operator Context") {
+		t.Fatal("subagent context should not include operator context block")
+	}
+	if strings.Contains(prompt, "## Active Directives") {
+		t.Fatal("subagent context should not include active directives block")
+	}
+	if !strings.Contains(prompt, "specialist subagent") {
+		t.Fatal("subagent context should include orchestration block")
+	}
 }
 
 // ---------------------------------------------------------------------------

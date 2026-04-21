@@ -56,11 +56,11 @@ type ContextConfig struct {
 	// compresses every other message over ~200 chars through
 	// llm.SmartCompress at CompressionTargetRatio.
 	//
-	// False (the default) is a no-op; the request is returned with
-	// the full content of every message. Operators flip this on when
-	// model context ceilings force aggressive reduction; the trade
-	// is information density (less verbose history) vs fidelity
-	// (keyword-only compressed content).
+	// False (the default) is the intended live-path setting. v1.0.7
+	// keeps this feature only for controlled benchmark/comparison work
+	// because the history-bearing soak stayed decisively negative on the
+	// current runtime. It is not recommended as a live operator-facing
+	// optimization.
 	//
 	// Rust gate anchor: context_builder.rs:436-445.
 	PromptCompression bool
@@ -69,8 +69,8 @@ type ContextConfig struct {
 	// PromptCompression is true. Clamped to [0.1, 1.0] by
 	// llm.SmartCompress. Rust default is 0.6; zero or unset values
 	// here are treated as 0.6 by BuildRequest to give operators a
-	// sensible behavior when they flip on PromptCompression but
-	// haven't thought about the ratio yet.
+	// sensible behavior when they explicitly enable the experimental
+	// benchmark-only gate but have not tuned the ratio yet.
 	CompressionTargetRatio float64
 }
 
@@ -105,7 +105,7 @@ type ContextBuilder struct {
 	memoryIndex  string // lightweight memory index for recall_memory
 
 	// systemNotes are additional ambient system messages produced by
-	// pipeline stages (e.g. hippocampus summary, checkpoint digest)
+	// pipeline stages (e.g. hippocampus summary, checkpoint restore note)
 	// and injected after the memory index. Order matches insertion
 	// order; each note becomes its own system message so the model
 	// sees them as distinct ambient context rather than one
@@ -141,7 +141,7 @@ func (cb *ContextBuilder) SetMemoryIndex(index string) {
 // AppendSystemNote queues an additional ambient system message to be
 // injected after the memory index and before conversation history.
 // Intended for pipeline-owned ambient context (hippocampus summary,
-// checkpoint digest, runtime diagnostics) that does not belong inside
+// checkpoint restore note, runtime diagnostics) that does not belong inside
 // the main system prompt but should reach the model on every turn.
 //
 // Empty notes are silently ignored — upstream stages emit "" when the
@@ -227,7 +227,7 @@ func (cb *ContextBuilder) BuildRequest(session *Session) *llm.Request {
 	}
 
 	// Inject ambient system notes queued by pipeline stages
-	// (hippocampus summary, checkpoint digest, diagnostics). Each note
+	// (hippocampus summary, checkpoint restore, diagnostics). Each note
 	// goes in as its own system message — matches Rust's
 	// context_builder.rs:356-369 which emits the hippocampus summary
 	// as a separate UnifiedMessage rather than concatenating it to the
@@ -454,8 +454,31 @@ func (cb *ContextBuilder) BuildRequest(session *Session) *llm.Request {
 	}
 
 	return &llm.Request{
-		Messages: result,
-		Tools:    cb.toolDefs,
+		Messages:       result,
+		Tools:          cb.toolDefs,
+		IntentClass:    llmIntentClassForSession(session),
+		AgentRole:      session.AgentRole(),
+		TurnWeight:     session.TurnWeight(),
+		TaskIntent:     session.TaskIntent(),
+		TaskComplexity: session.TaskComplexity(),
+	}
+}
+
+func llmIntentClassForSession(session *Session) string {
+	if session == nil {
+		return ""
+	}
+	switch strings.TrimSpace(strings.ToLower(session.TaskIntent())) {
+	case "conversational", "creative":
+		return llm.IntentConversation.String()
+	case "code":
+		return llm.IntentCoding.String()
+	case "task":
+		return llm.IntentToolUse.String()
+	case "question":
+		return llm.IntentExecution.String()
+	default:
+		return ""
 	}
 }
 

@@ -386,7 +386,7 @@ func TestQualityFromResponse_Extended(t *testing.T) {
 	// Test content-length fallback with large content.
 	resp := &Response{Content: strings.Repeat("x", 400), Usage: Usage{OutputTokens: 0}}
 	got := qualityFromResponse(resp)
-	if got < 0.9 || got > 1.1 {
+	if got < 0.55 || got > 0.65 {
 		t.Errorf("qualityFromResponse (content fallback) = %f", got)
 	}
 }

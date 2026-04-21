@@ -18,6 +18,11 @@ func TestArchitecture_ManagerHasEmbedClient(t *testing.T) {
 	mgr.SetVectorIndex(nil)     // Must compile — proves the field exists.
 }
 
+func TestArchitecture_RetrieverHasCompleter(t *testing.T) {
+	retriever := NewRetriever(DefaultRetrievalConfig(), DefaultTierBudget(), nil)
+	retriever.SetCompleter(nil) // Must compile — proves the field exists.
+}
+
 func TestArchitecture_ConsolidationHasEmbedClient(t *testing.T) {
 	// Ensures the ConsolidationPipeline retains embedding backfill capability.
 	pipe := NewConsolidationPipeline()

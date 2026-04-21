@@ -82,8 +82,8 @@ func TestRecordModelSelection_IsIdempotentPerTurn(t *testing.T) {
 	ctx = core.WithTurnID(ctx, "turn-1")
 	ctx = core.WithChannelLabel(ctx, "chat")
 
-	svc.RecordModelSelection(ctx, "turn-1", "sess-1", "", "chat", "ollama/qwen2.5:32b", "routed", "first excerpt")
-	svc.RecordModelSelection(ctx, "turn-1", "sess-1", "", "chat", "moonshot/kimi-k2-turbo-preview", "fallback", "second excerpt")
+	svc.RecordModelSelection(ctx, "turn-1", "sess-1", "", "chat", "ollama/qwen2.5:32b", "routed", "first excerpt", []string{"ollama/qwen2.5:32b"}, "", "")
+	svc.RecordModelSelection(ctx, "turn-1", "sess-1", "", "chat", "moonshot/kimi-k2-turbo-preview", "fallback", "second excerpt", []string{"moonshot/kimi-k2-turbo-preview"}, "", "")
 
 	var (
 		count         int

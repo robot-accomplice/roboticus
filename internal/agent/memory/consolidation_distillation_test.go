@@ -218,3 +218,79 @@ func TestPhaseEpisodeDistillation_IgnoresLowQualityEpisodes(t *testing.T) {
 		t.Fatalf("expected failure-outcome episodes to be skipped, got %d rows", count)
 	}
 }
+
+func TestPhaseEpisodeDistillation_PinsAcceptedPromotionBreadth(t *testing.T) {
+	store := testutil.TempStore(t)
+	ctx := context.Background()
+
+	// Three high-quality episodes repeating the learning/evidence/relation
+	// signals, and two repeating the fix pattern. This should promote exactly
+	// the accepted breadth:
+	//   - episode_learning (support >= 3)
+	//   - learned_fact     (support >= 3)
+	//   - fix_pattern      (support >= 2)
+	//   - one canonical knowledge_fact relation (support >= 3)
+	for i := 0; i < 3; i++ {
+		summary := &EpisodeSummary{
+			Goal:         "release orchestration",
+			Outcome:      "success",
+			Learnings:    []string{"verify rollout state before summarizing deployment health"},
+			EvidenceRefs: []string{"deployment health came from rollout controller status"},
+			Relations: []EpisodeRelation{
+				{Subject: "rollout controller", Relation: "depends_on", Object: "deployment health"},
+			},
+			ResultQuality: 0.92,
+		}
+		if i < 2 {
+			summary.FixPatterns = []string{"retry rollout-status read after controller warmup"}
+		}
+		writeEpisodeSummary(t, store, summary)
+	}
+
+	// Noise episodes that repeat some strings but are low quality must not widen
+	// the promotion surface or create extra promoted rows.
+	for i := 0; i < 3; i++ {
+		writeEpisodeSummary(t, store, &EpisodeSummary{
+			Goal:         "bad release run",
+			Outcome:      "failure",
+			Learnings:    []string{"verify rollout state before summarizing deployment health"},
+			EvidenceRefs: []string{"deployment health came from rollout controller status"},
+			FixPatterns:  []string{"retry rollout-status read after controller warmup"},
+			Relations: []EpisodeRelation{
+				{Subject: "rollout controller", Relation: "depends_on", Object: "deployment health"},
+			},
+			ResultQuality: 0.25,
+		})
+	}
+
+	pipeline := &ConsolidationPipeline{}
+	promoted := pipeline.phaseEpisodeDistillation(ctx, store)
+	if promoted != 4 {
+		t.Fatalf("expected exactly 4 promoted artifacts, got %d", promoted)
+	}
+
+	var episodeLearning, learnedFact, fixPattern int
+	if err := store.QueryRowContext(ctx,
+		`SELECT
+			SUM(CASE WHEN category = 'episode_learning' THEN 1 ELSE 0 END),
+			SUM(CASE WHEN category = 'learned_fact' THEN 1 ELSE 0 END),
+			SUM(CASE WHEN category = 'fix_pattern' THEN 1 ELSE 0 END)
+		   FROM semantic_memory`,
+	).Scan(&episodeLearning, &learnedFact, &fixPattern); err != nil {
+		t.Fatalf("query semantic_memory breadth: %v", err)
+	}
+	if episodeLearning != 1 || learnedFact != 1 || fixPattern != 1 {
+		t.Fatalf("unexpected semantic breadth: episode_learning=%d learned_fact=%d fix_pattern=%d",
+			episodeLearning, learnedFact, fixPattern)
+	}
+
+	var facts int
+	if err := store.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM knowledge_facts WHERE relation = 'depends_on'`,
+	).Scan(&facts); err != nil {
+		t.Fatalf("query distilled relations: %v", err)
+	}
+	if facts != 1 {
+		t.Fatalf("expected exactly 1 distilled canonical relation, got %d", facts)
+	}
+}

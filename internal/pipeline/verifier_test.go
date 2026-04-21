@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"strings"
 	"testing"
 
 	"roboticus/internal/session"
@@ -263,6 +264,33 @@ func TestVerifyResponse_FailsWhenStoppingCriteriaUnmet(t *testing.T) {
 	}
 }
 
+func TestVerificationRetryMessage_IncludesProofAndContradictionGuidance(t *testing.T) {
+	result := VerificationResult{
+		Passed: false,
+		Issues: []VerificationIssue{
+			{Code: "unresolved_contradicted_claim", Detail: "conflicting evidence was not reconciled"},
+			{Code: "proof_obligation_unmet", Detail: "high-risk claims were not anchored"},
+		},
+		ClaimAudits: []ClaimAudit{
+			{
+				Sentence:     "The refund window is always 30 days.",
+				Certainty:    CertaintyAbsolute.String(),
+				Contested:    true,
+				MissingProof: []string{"canonical_anchor", "contradiction_resolution"},
+				IssueCode:    "proof_obligation_unmet",
+			},
+		},
+	}
+
+	msg := result.RetryMessage()
+	if !strings.Contains(msg, "reconcile contested evidence") {
+		t.Fatalf("expected contradiction guidance in retry message, got %q", msg)
+	}
+	if !strings.Contains(msg, "anchor each high-risk claim") {
+		t.Fatalf("expected proof guidance in retry message, got %q", msg)
+	}
+}
+
 func TestVerifyResponse_PassesWhenStoppingCriteriaAddressed(t *testing.T) {
 	ctx := VerificationContext{
 		UserPrompt:       "Are we ready to ship?",
@@ -290,5 +318,47 @@ func TestVerifyResponse_PassesWhenAnsweredSubgoalsAreEvidenceSupported(t *testin
 	result := VerifyResponse("The root cause was a stale billing cache, and the affected systems were billing and ledger.", ctx)
 	if !result.Passed {
 		t.Fatalf("expected evidence-supported response to pass, got %+v", result.Issues)
+	}
+}
+
+func TestVerifyResponse_FailsOperationalStatusLeakageOnSocialTurn(t *testing.T) {
+	ctx := VerificationContext{
+		UserPrompt: "What's the good word?",
+		Intent:     "conversational",
+	}
+	result := VerifyResponse("The good word is that the vault is still locked and the workspace remains sandboxed.", ctx)
+	if result.Passed {
+		t.Fatal("expected off-topic social-turn verification failure")
+	}
+	if !hasIssue(result, "off_topic_social_turn") {
+		t.Fatalf("expected off_topic_social_turn issue, got %+v", result.Issues)
+	}
+}
+
+func TestVerifyResponse_AllowsNormalGreetingOnSocialTurn(t *testing.T) {
+	ctx := VerificationContext{
+		UserPrompt: "What's the good word?",
+		Intent:     "conversational",
+	}
+	result := VerifyResponse("Not much, just saying hello back. What can I help you with?", ctx)
+	if !result.Passed {
+		t.Fatalf("expected normal social reply to pass, got %+v", result.Issues)
+	}
+}
+
+func TestVerificationResult_RetryMessageForOffTopicSocialTurnIsSpecific(t *testing.T) {
+	result := VerificationResult{
+		Passed: false,
+		Issues: []VerificationIssue{{
+			Code:   "off_topic_social_turn",
+			Detail: "the user made a lightweight social or colloquial greeting, but the response pivoted into operational status instead of acknowledging the greeting",
+		}},
+	}
+	msg := result.RetryMessage()
+	if !strings.Contains(msg, "brief, natural way") {
+		t.Fatalf("retry message missing social-turn guidance: %q", msg)
+	}
+	if !strings.Contains(msg, "Do not mention sandbox state") {
+		t.Fatalf("retry message missing operational-status prohibition: %q", msg)
 	}
 }

@@ -337,6 +337,30 @@ func promptToolSurface(defs []llm.ToolDef) ([]string, [][2]string) {
 	return names, descs
 }
 
+func applyPromptProfileForSession(ctx context.Context, store *db.Store, sess *session.Session, cfg agent.PromptConfig) (agent.PromptConfig, string) {
+	if sess == nil {
+		return cfg, "orchestrator"
+	}
+	sess.SetAgentRole("orchestrator")
+	if sess.AgentName != "" && sess.AgentName != "default" {
+		cfg.AgentName = sess.AgentName
+	}
+	isSubagent, err := db.IsSubagentName(ctx, store, sess.AgentID)
+	if err != nil {
+		log.Warn().Err(err).Str("agent_id", sess.AgentID).Msg("subagent role lookup failed, falling back to orchestrator prompt profile")
+		return cfg, "orchestrator"
+	}
+	if !isSubagent {
+		return cfg, "orchestrator"
+	}
+	sess.SetAgentRole("subagent")
+	cfg.IsSubagent = true
+	cfg.Personality = ""
+	cfg.Operator = ""
+	cfg.Directives = ""
+	return cfg, "subagent_minimal"
+}
+
 // buildAgentContext assembles a ContextBuilder with system prompt, PRUNED
 // tool defs, and pipeline-prepared memory. Shared by executorAdapter and
 // streamAdapter.
@@ -364,12 +388,11 @@ func buildAgentContext(ctx context.Context, sess *session.Session, store *db.Sto
 	if budgetCfg != nil {
 		ccfg.BudgetConfig = budgetCfg
 	}
-	// Prompt compression gate (SYS-01-005). When operators enable
-	// compression in [cache] the ContextBuilder's BuildRequest runs
-	// CompressContextMessages on the final assembled slice; zero or
-	// unset CompressionTargetRatio is fine — BuildRequest falls back
-	// to 0.6, matching Rust's cfg.cache.compression_target_ratio
-	// default.
+	// Prompt compression gate (SYS-01-005). This remains benchmark-only
+	// on the current runtime: the config wire still exists so controlled
+	// comparison soaks can exercise the live request path, but the
+	// feature is disabled by default and is not recommended for normal
+	// operator-facing use.
 	if cacheCfg != nil {
 		ccfg.PromptCompression = cacheCfg.PromptCompression
 		ccfg.CompressionTargetRatio = cacheCfg.CompressionTargetRatio
@@ -414,12 +437,7 @@ func buildAgentContext(ctx context.Context, sess *session.Session, store *db.Sto
 		ctxBuilder.SetTools(selectedDefs)
 	}
 
-	cfg := promptCfg
-	// Use session's agent name only if explicitly set (not "default").
-	// Otherwise keep the configured agent name (e.g., "Duncan").
-	if sess.AgentName != "" && sess.AgentName != "default" {
-		cfg.AgentName = sess.AgentName
-	}
+	cfg, promptProfile := applyPromptProfileForSession(ctx, store, sess, promptCfg)
 	// Keep the prompt-layer roster aligned with the structured tool surface
 	// sent in llm.Request.Tools. Pre-v1.0.6 this block kept the daemon boot's
 	// full registry roster in PromptConfig while the request carried a pruned
@@ -450,6 +468,7 @@ func buildAgentContext(ctx context.Context, sess *session.Session, store *db.Sto
 
 	log.Info().
 		Str("agent_name", cfg.AgentName).
+		Str("prompt_profile", promptProfile).
 		Int("personality_len", len(cfg.Personality)).
 		Int("firmware_len", len(cfg.Firmware)).
 		Int("prompt_len", len(systemPrompt)).
@@ -519,12 +538,12 @@ func buildAgentContext(ctx context.Context, sess *session.Session, store *db.Sto
 	if hippo := sess.HippocampusSummary(); hippo != "" {
 		ctxBuilder.AppendSystemNote(hippo)
 	}
-	appendCheckpointDigest(ctx, ctxBuilder, store, sess)
+	appendCheckpointRestoreNote(ctx, ctxBuilder, store, sess)
 
 	return ctxBuilder
 }
 
-func appendCheckpointDigest(ctx context.Context, ctxBuilder *agent.ContextBuilder, store *db.Store, sess *session.Session) {
+func appendCheckpointRestoreNote(ctx context.Context, ctxBuilder *agent.ContextBuilder, store *db.Store, sess *session.Session) {
 	if store == nil || sess == nil || strings.TrimSpace(sess.ID) == "" {
 		return
 	}
@@ -532,32 +551,42 @@ func appendCheckpointDigest(ctx context.Context, ctxBuilder *agent.ContextBuilde
 	if err != nil || rec == nil {
 		return
 	}
-	note := formatCheckpointDigest(*rec)
+	note := formatCheckpointRestoreNote(*rec)
 	if note == "" {
 		return
 	}
 	ctxBuilder.AppendSystemNote(note)
 }
 
-func formatCheckpointDigest(rec db.CheckpointRecord) string {
-	const digestCap = 240
-	const tasksCap = 160
+func formatCheckpointRestoreNote(rec db.CheckpointRecord) string {
+	const summaryCap = 1200
+	const tasksCap = 400
+	const digestCap = 400
+
+	summary := strings.TrimSpace(rec.MemorySummary)
+	digest := strings.TrimSpace(rec.ConversationDigest)
+	tasks := strings.TrimSpace(rec.ActiveTasks)
+	if summary == "" && digest == "" && tasks == "" {
+		return ""
+	}
 
 	var parts []string
-	if digest := strings.TrimSpace(rec.ConversationDigest); digest != "" {
-		parts = append(parts, "Recent checkpoint digest: "+truncateForNote(digest, digestCap))
+	if summary != "" {
+		header := "Session checkpoint restore"
+		if rec.TurnCount > 0 {
+			header = fmt.Sprintf("Session checkpoint restore (turn_count=%d)", rec.TurnCount)
+		}
+		parts = append(parts, header+": "+truncateForNote(summary, summaryCap))
+	} else if rec.TurnCount > 0 {
+		parts = append(parts, fmt.Sprintf("Session checkpoint restore (turn_count=%d)", rec.TurnCount))
 	}
-	if tasks := strings.TrimSpace(rec.ActiveTasks); tasks != "" {
+	if tasks != "" {
 		parts = append(parts, "Active tasks: "+truncateForNote(tasks, tasksCap))
 	}
-	if len(parts) == 0 {
-		summary := strings.TrimSpace(rec.MemorySummary)
-		if summary == "" {
-			return ""
-		}
-		parts = append(parts, "Recent checkpoint summary: "+truncateForNote(summary, digestCap))
+	if digest != "" {
+		parts = append(parts, "Conversation digest: "+truncateForNote(digest, digestCap))
 	}
-	return "[Checkpoint Digest]\n" + strings.Join(parts, "\n")
+	return "[Checkpoint Restore]\n" + strings.Join(parts, "\n")
 }
 
 func truncateForNote(s string, max int) string {

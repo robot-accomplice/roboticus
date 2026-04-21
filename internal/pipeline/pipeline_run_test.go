@@ -259,7 +259,7 @@ func TestPipeline_Run_VerifierRequestsRevisionForUnsupportedSubgoalEvidence(t *t
 	cfg.DelegatedExecution = false
 	cfg.TaskOperatingState = "test"
 	input := Input{
-		Content: "What was the root cause, and which systems were affected?",
+		Content: "Create a report that explains the root cause and identifies which systems were affected.",
 		AgentID: "test-agent",
 	}
 

@@ -22,6 +22,8 @@ package pipeline
 import (
 	"fmt"
 	"strings"
+
+	"roboticus/internal/session"
 )
 
 // ClaimCertainty classifies how strongly a claim is asserted.
@@ -331,15 +333,23 @@ func isHighRiskQuery(ctx VerificationContext) bool {
 	return false
 }
 
-// claimEchoesContestedEvidence returns true when a claim repeats content that
-// the evidence itself flags as conflicting (multiple evidence items share
-// keywords with the claim but also differ in their specifics).
-func claimEchoesContestedEvidence(claim VerifiedClaim, evidenceItems []string) bool {
-	if len(claim.Keywords) == 0 || len(evidenceItems) < 2 {
+func contradictionMatchesClaim(claim VerifiedClaim, contradiction session.ContradictionEvidence) bool {
+	if len(claim.Keywords) == 0 {
 		return false
 	}
-	overlap := 0
-	for _, item := range evidenceItems {
+	for _, kw := range contradiction.SharedKeywords {
+		if containsKeyword(claim.Keywords, kw) {
+			return true
+		}
+	}
+	if strings.TrimSpace(contradiction.Topic) != "" {
+		for _, kw := range claim.Keywords {
+			if strings.Contains(strings.ToLower(contradiction.Topic), kw) {
+				return true
+			}
+		}
+	}
+	for _, item := range contradiction.EvidenceItems {
 		lower := strings.ToLower(item)
 		matches := 0
 		for _, kw := range claim.Keywords {
@@ -348,10 +358,83 @@ func claimEchoesContestedEvidence(claim VerifiedClaim, evidenceItems []string) b
 			}
 		}
 		if matches >= 1 {
-			overlap++
+			return true
 		}
 	}
-	return overlap >= 2
+	return false
+}
+
+func claimContradictions(claim VerifiedClaim, contradictions []session.ContradictionEvidence) []session.ContradictionEvidence {
+	var matches []session.ContradictionEvidence
+	for _, contradiction := range contradictions {
+		if contradictionMatchesClaim(claim, contradiction) {
+			matches = append(matches, contradiction)
+		}
+	}
+	return matches
+}
+
+func containsKeyword(keywords []string, want string) bool {
+	for _, kw := range keywords {
+		if kw == want {
+			return true
+		}
+	}
+	return false
+}
+
+func claimProofRequirements(claim VerifiedClaim, ctx VerificationContext, contradictions []session.ContradictionEvidence) []string {
+	if claim.Certainty != CertaintyAbsolute {
+		return nil
+	}
+	if len(contradictions) == 0 && ctx.HasContradictions && ClaimAcknowledgesConflict(claim) {
+		contradictions = ctx.Contradictions
+	}
+	var required []string
+	if isHighRiskQuery(ctx) {
+		required = append(required, "evidence_support")
+	}
+	if requiresPerClaimAnchoring(ctx) {
+		required = append(required, "canonical_anchor")
+	}
+	if len(contradictions) > 0 {
+		required = append(required, "contradiction_resolution")
+	}
+	return required
+}
+
+func claimMissingProof(claim VerifiedClaim, ctx VerificationContext, contradictions []session.ContradictionEvidence) []string {
+	required := claimProofRequirements(claim, ctx, contradictions)
+	if len(required) == 0 {
+		return nil
+	}
+	var missing []string
+	for _, obligation := range required {
+		switch obligation {
+		case "evidence_support":
+			if ctx.HasContradictions && ClaimAcknowledgesConflict(claim) {
+				continue
+			}
+			if claim.HasCanonicalAnchor || claimEvidenceIsCanonical(claim, ctx.EvidenceItems) {
+				continue
+			}
+			if !ClaimSupportedByEvidence(claim, ctx.EvidenceItems) {
+				missing = append(missing, obligation)
+			}
+		case "canonical_anchor":
+			if ctx.HasContradictions && ClaimAcknowledgesConflict(claim) {
+				continue
+			}
+			if !claim.HasCanonicalAnchor && !claimEvidenceIsCanonical(claim, ctx.EvidenceItems) {
+				missing = append(missing, obligation)
+			}
+		case "contradiction_resolution":
+			if !ClaimAcknowledgesConflict(claim) {
+				missing = append(missing, obligation)
+			}
+		}
+	}
+	return missing
 }
 
 // verifyClaimLevel runs the claim-oriented checks and appends issues to result.
@@ -369,14 +452,23 @@ func verifyClaimLevel(content string, ctx VerificationContext, claims []Verified
 	auditIndex := make(map[string]int, len(claims))
 	for _, claim := range claims {
 		hits := claimEvidenceSupport(claim, ctx.EvidenceItems)
+		matchedContradictions := claimContradictions(claim, ctx.Contradictions)
+		contested := len(matchedContradictions) > 0 || (ctx.HasContradictions && ClaimAcknowledgesConflict(claim))
+		requiredProof := claimProofRequirements(claim, ctx, matchedContradictions)
+		missingProof := claimMissingProof(claim, ctx, matchedContradictions)
+		anchored := claim.HasCanonicalAnchor || claimEvidenceIsCanonical(claim, ctx.EvidenceItems)
 		audit := ClaimAudit{
 			Sentence:          truncate(claim.Sentence, 200),
 			Certainty:         claim.Certainty.String(),
 			CertaintyUpgraded: claim.CertaintyUpgraded,
 			Supported:         ClaimSupportedByEvidence(claim, ctx.EvidenceItems),
-			Anchored:          claim.HasCanonicalAnchor,
+			Anchored:          anchored,
 			Reconciled:        ClaimAcknowledgesConflict(claim),
+			Contested:         contested,
+			ProofSatisfied:    len(missingProof) == 0,
 			KeywordHits:       hits,
+			ProofRequired:     requiredProof,
+			MissingProof:      missingProof,
 		}
 		result.ClaimAudits = append(result.ClaimAudits, audit)
 		auditIndex[claim.Sentence] = len(result.ClaimAudits) - 1
@@ -385,7 +477,7 @@ func verifyClaimLevel(content string, ctx VerificationContext, claims []Verified
 	highRisk := isHighRiskQuery(ctx)
 
 	// (1) Claim-level contradiction reconciliation.
-	if ctx.HasContradictions && len(ctx.EvidenceItems) > 0 {
+	if ctx.HasContradictions && len(ctx.Contradictions) > 0 {
 		var unresolved []string
 		responseAcknowledgesConflict := containsAny(strings.ToLower(content),
 			"conflict", "contradict", "inconsistent", "mixed evidence",
@@ -401,7 +493,7 @@ func verifyClaimLevel(content string, ctx VerificationContext, claims []Verified
 			if ClaimAcknowledgesConflict(claim) {
 				continue
 			}
-			if !claimEchoesContestedEvidence(claim, ctx.EvidenceItems) {
+			if len(claimContradictions(claim, ctx.Contradictions)) == 0 {
 				continue
 			}
 			if responseAcknowledgesConflict {
@@ -510,10 +602,7 @@ func verifyClaimLevel(content string, ctx VerificationContext, claims []Verified
 // to a canonical source — either via explicit in-response attribution or
 // via evidence that itself carries a canonical marker.
 func verifyProofObligations(ctx VerificationContext, claims []VerifiedClaim, auditIndex map[string]int, result *VerificationResult) {
-	if !requiresPerClaimAnchoring(ctx) {
-		return
-	}
-	if len(ctx.EvidenceItems) == 0 {
+	if len(claims) == 0 || len(result.ClaimAudits) == 0 {
 		return
 	}
 	var unmet []string
@@ -521,19 +610,19 @@ func verifyProofObligations(ctx VerificationContext, claims []VerifiedClaim, aud
 		if claim.Certainty != CertaintyAbsolute {
 			continue
 		}
-		if claim.HasCanonicalAnchor {
+		idx, ok := auditIndex[claim.Sentence]
+		if !ok {
 			continue
 		}
-		if ClaimAcknowledgesConflict(claim) {
-			// A claim that names the disagreement is already hedged-by-
-			// reconciliation and does not need a canonical anchor.
+		if len(result.ClaimAudits[idx].MissingProof) == 0 {
 			continue
 		}
-		if claimEvidenceIsCanonical(claim, ctx.EvidenceItems) {
-			continue
-		}
-		unmet = append(unmet, truncate(claim.Sentence, 120))
-		if idx, ok := auditIndex[claim.Sentence]; ok && result.ClaimAudits[idx].IssueCode == "" {
+		unmet = append(unmet, fmt.Sprintf(
+			"%s (missing: %s)",
+			truncate(claim.Sentence, 120),
+			strings.Join(result.ClaimAudits[idx].MissingProof, ", "),
+		))
+		if result.ClaimAudits[idx].IssueCode == "" {
 			result.ClaimAudits[idx].IssueCode = "proof_obligation_unmet"
 		}
 	}
@@ -541,7 +630,7 @@ func verifyProofObligations(ctx VerificationContext, claims []VerifiedClaim, aud
 		result.Passed = false
 		result.Issues = append(result.Issues, VerificationIssue{
 			Code:   "proof_obligation_unmet",
-			Detail: "financial/compliance/security claims must anchor each absolute assertion to a canonical source: " + strings.Join(unmet, " || "),
+			Detail: "high-risk absolute claims are missing required proof obligations: " + strings.Join(unmet, " || "),
 		})
 	}
 }
@@ -549,15 +638,18 @@ func verifyProofObligations(ctx VerificationContext, claims []VerifiedClaim, aud
 // VerifierSummary distills a VerificationResult into compact counters suitable
 // for trace annotations. It is the backbone of AnnotateVerifierTrace.
 type VerifierSummary struct {
-	Passed         bool     `json:"passed"`
-	IssueCodes     []string `json:"issue_codes,omitempty"`
-	ClaimCount     int      `json:"claim_count"`
-	AbsoluteCount  int      `json:"absolute_count"`
-	SupportedCount int      `json:"supported_count"`
-	AnchoredCount  int      `json:"anchored_count"`
-	UnsupportedAbs int      `json:"unsupported_absolute_count"`
-	CoverageRatio  float64  `json:"coverage_ratio"`
-	FlaggedClaims  int      `json:"flagged_claims"`
+	Passed          bool     `json:"passed"`
+	IssueCodes      []string `json:"issue_codes,omitempty"`
+	ClaimCount      int      `json:"claim_count"`
+	AbsoluteCount   int      `json:"absolute_count"`
+	SupportedCount  int      `json:"supported_count"`
+	AnchoredCount   int      `json:"anchored_count"`
+	UnsupportedAbs  int      `json:"unsupported_absolute_count"`
+	CoverageRatio   float64  `json:"coverage_ratio"`
+	FlaggedClaims   int      `json:"flagged_claims"`
+	ContestedCount  int      `json:"contested_count"`
+	ProofGapCount   int      `json:"proof_gap_count"`
+	ReconciledCount int      `json:"reconciled_count"`
 }
 
 // SummarizeVerification computes a compact summary from a VerificationResult.
@@ -578,6 +670,15 @@ func SummarizeVerification(result VerificationResult) VerifierSummary {
 		}
 		if audit.Anchored {
 			summary.AnchoredCount++
+		}
+		if audit.Contested {
+			summary.ContestedCount++
+		}
+		if audit.Reconciled {
+			summary.ReconciledCount++
+		}
+		if len(audit.MissingProof) > 0 {
+			summary.ProofGapCount++
 		}
 		if audit.IssueCode != "" {
 			summary.FlaggedClaims++

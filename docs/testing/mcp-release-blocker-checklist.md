@@ -4,6 +4,15 @@ Use this checklist before any release claims MCP readiness.
 
 This document is intentionally strict. MCP is not "ready" because the generic plumbing exists or because unit tests pass. A release may only claim MCP readiness when real configured servers have been validated end to end in the release environment.
 
+v1.0.7 note:
+
+- The authoritative runtime harness is now `roboticus mcp validate-sse <NAME>`
+  against a configured named target. It uses the same runtime config
+  conversion and SSE transport path as daemon startup and route tests.
+- The fixture evidence in this checklist remains useful as a transport
+  regression, but it is no longer sufficient by itself to claim cross-vendor
+  SSE readiness.
+
 ## Validation Targets
 
 Define these before running the checklist:

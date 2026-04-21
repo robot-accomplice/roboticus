@@ -320,15 +320,34 @@ func GetModelSelections(store *db.Store) http.HandlerFunc {
 }
 
 // GetRoutingDiagnostics returns routing config for the efficiency page.
-func GetRoutingDiagnostics(cfg *core.Config) http.HandlerFunc {
+func GetRoutingDiagnostics(store *db.Store, cfg *core.Config, llmSvc *llm.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		specs := make([]string, 0, 1+len(cfg.Models.Fallback))
+		if strings.TrimSpace(cfg.Models.Primary) != "" {
+			specs = append(specs, cfg.Models.Primary)
+		}
+		specs = append(specs, cfg.Models.Fallback...)
+		policies := effectiveModelPolicies(r.Context(), store, cfg)
+		overrides := make(map[string]llm.RoleEligibility, len(cfg.Models.RoleEligibility))
+		for model, eligibility := range cfg.Models.RoleEligibility {
+			overrides[model] = llm.RoleEligibility{
+				Orchestrator: eligibility.Orchestrator,
+				Subagent:     eligibility.Subagent,
+				Reason:       eligibility.Reason,
+			}
+		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"config": map[string]any{
-				"routing_mode": cfg.Models.Routing.Mode,
-				"primary":      cfg.Models.Primary,
-				"fallbacks":    cfg.Models.Fallback,
-				"cost_aware":   cfg.Models.Routing.CostAware,
-				"cost_weight":  cfg.Models.Routing.CostWeight,
+				"routing_mode":      cfg.Models.Routing.Mode,
+				"primary":           cfg.Models.Primary,
+				"fallbacks":         cfg.Models.Fallback,
+				"policy":            cfg.Models.Policy,
+				"persisted_policy":  db.ListModelPolicies(r.Context(), store),
+				"cost_aware":        cfg.Models.Routing.CostAware,
+				"cost_weight":       cfg.Models.Routing.CostWeight,
+				"role_eligibility":  cfg.Models.RoleEligibility,
+				"effective_policy":  llm.EffectiveModelPolicy(specs, policies),
+				"effective_targets": llm.EffectiveRoleEligibility(specs, overrides),
 			},
 		})
 	}

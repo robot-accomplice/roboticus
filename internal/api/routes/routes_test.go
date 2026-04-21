@@ -3,6 +3,7 @@ package routes
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -728,6 +729,104 @@ func TestGetMCPServerAndTestEndpoint(t *testing.T) {
 	testBody := jsonBody(t, testRec)
 	if testBody["ok"] != false {
 		t.Fatalf("ok = %v, want false for broken stdio server", testBody["ok"])
+	}
+}
+
+func TestValidateSSEMCPServer(t *testing.T) {
+	const tokenEnv = "ROBOTICUS_TEST_ROUTE_SSE_TOKEN"
+	t.Setenv(tokenEnv, "route-token")
+
+	var responseCh = make(chan json.RawMessage, 8)
+	router := chi.NewRouter()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			flusher := w.(http.Flusher)
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("event: endpoint\ndata: /messages\n\n"))
+			flusher.Flush()
+			for {
+				select {
+				case msg := <-responseCh:
+					_, _ = w.Write([]byte("data: "))
+					_, _ = w.Write(msg)
+					_, _ = w.Write([]byte("\n\n"))
+					flusher.Flush()
+				case <-r.Context().Done():
+					return
+				}
+			}
+		case http.MethodPost:
+			body, _ := io.ReadAll(r.Body)
+			var req map[string]any
+			_ = json.Unmarshal(body, &req)
+			method, _ := req["method"].(string)
+			id := req["id"]
+			var result any
+			switch method {
+			case "initialize":
+				result = map[string]any{
+					"protocolVersion": "2024-11-05",
+					"serverInfo": map[string]string{
+						"name":    "route-fixture",
+						"version": "v1.0.7",
+					},
+				}
+			case "tools/list":
+				result = map[string]any{
+					"tools": []map[string]any{{
+						"name":        "echo",
+						"description": "Echo fixture",
+						"inputSchema": map[string]any{"type": "object"},
+					}},
+				}
+			case "tools/call":
+				result = map[string]any{
+					"content": []map[string]any{{"type": "text", "text": "route-ok"}},
+					"isError": false,
+				}
+			default:
+				result = map[string]any{}
+			}
+			respBytes, _ := json.Marshal(map[string]any{
+				"jsonrpc": "2.0",
+				"id":      id,
+				"result":  result,
+			})
+			responseCh <- json.RawMessage(respBytes)
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer srv.Close()
+
+	cfg := testConfig()
+	cfg.MCP.Servers = []core.MCPServerEntry{{
+		Name:         "vendor-sse",
+		Transport:    "sse",
+		URL:          srv.URL,
+		Enabled:      true,
+		AuthTokenEnv: tokenEnv,
+	}}
+
+	router.Post("/api/mcp/servers/{name}/validate-sse", ValidateSSEMCPServer(cfg))
+	req := httptest.NewRequest(http.MethodPost, "/api/mcp/servers/vendor-sse/validate-sse", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("validate-sse status = %d, want 200", rec.Code)
+	}
+	body := jsonBody(t, rec)
+	if body["ok"] != true {
+		t.Fatalf("ok = %v, want true", body["ok"])
+	}
+	evidence := body["evidence"].(map[string]any)
+	if evidence["server_name"] != "route-fixture" {
+		t.Fatalf("server_name = %v", evidence["server_name"])
+	}
+	if evidence["resolved_post_url"] != srv.URL+"/messages" {
+		t.Fatalf("resolved_post_url = %v", evidence["resolved_post_url"])
 	}
 }
 

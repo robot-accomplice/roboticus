@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"roboticus/internal/core"
 )
 
 // --- Echo Tool ---
@@ -122,6 +124,81 @@ func (t *WriteFileTool) Execute(_ context.Context, params string, tctx *Context)
 	}
 
 	return &Result{Output: fmt.Sprintf("wrote %d bytes to %s", len(args.Content), args.Path)}, nil
+}
+
+// --- Obsidian Write Tool ---
+
+// ObsidianWriteTool writes Markdown notes into the configured Obsidian vault.
+// It is a first-class vault-authoring capability, not a prompt hint layered on
+// top of generic file tools.
+type ObsidianWriteTool struct {
+	VaultPath string
+}
+
+func (t *ObsidianWriteTool) Name() string { return "obsidian_write" }
+func (t *ObsidianWriteTool) Description() string {
+	return "Create or update a Markdown note in the configured Obsidian vault using a vault-relative path."
+}
+func (t *ObsidianWriteTool) Risk() RiskLevel { return RiskCaution }
+func (t *ObsidianWriteTool) ParameterSchema() json.RawMessage {
+	return json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Vault-relative note path or note title"},"content":{"type":"string","description":"Markdown content to write"},"append":{"type":"boolean","description":"Append instead of overwrite","default":false}},"required":["path","content"]}`)
+}
+func (t *ObsidianWriteTool) Execute(_ context.Context, params string, tctx *Context) (*Result, error) {
+	if strings.TrimSpace(t.VaultPath) == "" {
+		return nil, fmt.Errorf("obsidian vault is not configured")
+	}
+
+	var args struct {
+		Path    string `json:"path"`
+		Content string `json:"content"`
+		Append  bool   `json:"append"`
+	}
+	if err := json.Unmarshal([]byte(params), &args); err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	if strings.TrimSpace(args.Path) == "" {
+		return nil, fmt.Errorf("path is required")
+	}
+
+	relPath := strings.TrimSpace(args.Path)
+	relPath = strings.TrimPrefix(relPath, "/")
+	if filepath.Ext(relPath) == "" {
+		relPath += ".md"
+	}
+
+	resolved, err := resolvePath(t.VaultPath, filepath.Join(t.VaultPath, relPath), tctx.AllowedPaths)
+	if err != nil {
+		return nil, err
+	}
+
+	if int64(len(args.Content)) > core.MaxObsidianNoteBytes {
+		return nil, fmt.Errorf("note exceeds maximum size of %d bytes", core.MaxObsidianNoteBytes)
+	}
+
+	if err := tctx.GetFS().MkdirAll(filepath.Dir(resolved), 0o755); err != nil {
+		return nil, fmt.Errorf("failed to create directories: %w", err)
+	}
+
+	flag := os.O_WRONLY | os.O_CREATE
+	if args.Append {
+		flag |= os.O_APPEND
+	} else {
+		flag |= os.O_TRUNC
+	}
+
+	f, err := tctx.GetFS().OpenFile(resolved, flag, 0o644)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open note: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	if _, err := f.WriteString(args.Content); err != nil {
+		return nil, fmt.Errorf("failed to write note: %w", err)
+	}
+
+	return &Result{
+		Output: fmt.Sprintf("wrote %d bytes to Obsidian note %s", len(args.Content), relPath),
+	}, nil
 }
 
 // --- Edit File Tool ---

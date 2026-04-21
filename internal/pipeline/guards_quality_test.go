@@ -50,6 +50,35 @@ func TestNonRepetitionGuardV2_Unique(t *testing.T) {
 	}
 }
 
+func TestNonRepetitionGuardV2_AllowsLightweightSocialVariation(t *testing.T) {
+	g := &NonRepetitionGuardV2{}
+	ctx := &GuardContext{
+		UserPrompt:         "What's going on, Duncan?",
+		Intents:            []string{"conversational"},
+		PreviousAssistant:  "Not much—just here, ready when you need me.",
+		PriorAssistantMessages: []string{
+			"Not much—just here, ready when you need me.",
+		},
+	}
+	result := g.CheckWithContext("All quiet on my end—what do you need?", ctx)
+	if !result.Passed {
+		t.Fatalf("lightweight social variation should pass, got reason %q", result.Reason)
+	}
+}
+
+func TestNonRepetitionGuardV2_DoesNotAllowOperationalStatusOnSocialTurn(t *testing.T) {
+	g := &NonRepetitionGuardV2{}
+	ctx := &GuardContext{
+		UserPrompt:        "What's going on, Duncan?",
+		Intents:           []string{"conversational"},
+		PreviousAssistant: "Same sandbox, same wait for the path refresh.",
+	}
+	result := g.CheckWithContext("Same sandbox, same wait for the path refresh.", ctx)
+	if result.Passed {
+		t.Fatal("operational-status social reply should still be subject to repetition guard")
+	}
+}
+
 func TestOutputContractGuard_CorrectCount(t *testing.T) {
 	g := &OutputContractGuard{}
 	ctx := &GuardContext{UserPrompt: "Give me 3 bullet points about Go"}

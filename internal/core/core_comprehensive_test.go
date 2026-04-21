@@ -546,6 +546,35 @@ func TestNormalizePaths_MergesScriptAllowedIntoAllowed(t *testing.T) {
 	}
 }
 
+func TestNormalizePaths_AutoDetectsWorkspaceObsidianVault(t *testing.T) {
+	workspace := t.TempDir()
+	vault := filepath.Join(workspace, "Vault")
+	if err := os.MkdirAll(filepath.Join(vault, ".obsidian"), 0755); err != nil {
+		t.Fatalf("mkdir vault: %v", err)
+	}
+
+	cfg := DefaultConfig()
+	cfg.Agent.Workspace = workspace
+	cfg.Obsidian.Enabled = true
+	cfg.Obsidian.VaultPath = ""
+
+	cfg.NormalizePaths()
+
+	if cfg.Obsidian.VaultPath != vault {
+		t.Fatalf("vault path = %q, want %q", cfg.Obsidian.VaultPath, vault)
+	}
+	found := false
+	for _, path := range cfg.Security.AllowedPaths {
+		if path == vault {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("detected workspace vault should be added to allowed paths")
+	}
+}
+
 func TestNormalizePaths_NoTildeNoChange(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Database.Path = "/absolute/path/test.db"

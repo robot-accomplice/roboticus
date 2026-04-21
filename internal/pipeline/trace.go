@@ -179,6 +179,9 @@ func AnnotateVerifierTrace(tr *TraceRecorder, result VerificationResult) {
 	tr.Annotate(TraceNSVerifier+".unsupported_absolute_count", summary.UnsupportedAbs)
 	tr.Annotate(TraceNSVerifier+".coverage_ratio", summary.CoverageRatio)
 	tr.Annotate(TraceNSVerifier+".flagged_claims", summary.FlaggedClaims)
+	tr.Annotate(TraceNSVerifier+".contested_count", summary.ContestedCount)
+	tr.Annotate(TraceNSVerifier+".proof_gap_count", summary.ProofGapCount)
+	tr.Annotate(TraceNSVerifier+".reconciled_count", summary.ReconciledCount)
 	if len(result.ClaimAudits) > 0 {
 		if buf, err := json.Marshal(result.ClaimAudits); err == nil {
 			tr.Annotate(TraceNSVerifier+".claim_map_json", string(buf))

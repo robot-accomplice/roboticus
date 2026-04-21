@@ -147,6 +147,35 @@ func TestAssembleContext_ContradictionDetection(t *testing.T) {
 	if ac.Contradictions == "" {
 		t.Error("should detect contradiction signal from high score spread")
 	}
+	if ac.EvidenceArtifact == nil || len(ac.EvidenceArtifact.Contradictions) == 0 {
+		t.Fatal("expected typed contradiction artifact for verifier consumption")
+	}
+	if ac.EvidenceArtifact.Contradictions[0].Kind != "score_spread" {
+		t.Fatalf("expected score_spread contradiction kind, got %+v", ac.EvidenceArtifact.Contradictions[0])
+	}
+}
+
+func TestAssembleContext_DetectsStructuredValueConflict(t *testing.T) {
+	evidence := []Evidence{
+		{Content: "Refund policy v1 specified a 30 day refund window", SourceTier: TierSemantic, Score: 0.92},
+		{Content: "Refund policy v2 specified a 60 day refund window", SourceTier: TierSemantic, Score: 0.91},
+	}
+
+	ac := AssembleContext(context.TODO(), nil, "", evidence, "", "")
+
+	if ac.EvidenceArtifact == nil || len(ac.EvidenceArtifact.Contradictions) == 0 {
+		t.Fatal("expected structured contradiction evidence")
+	}
+	contradiction := ac.EvidenceArtifact.Contradictions[0]
+	if contradiction.Kind != "value_conflict" {
+		t.Fatalf("expected value_conflict contradiction, got %+v", contradiction)
+	}
+	if len(contradiction.EvidenceItems) != 2 {
+		t.Fatalf("expected paired evidence items, got %+v", contradiction)
+	}
+	if !strings.Contains(strings.ToLower(ac.Contradictions), "refund") {
+		t.Fatalf("expected rendered contradiction summary to mention refund topic, got %q", ac.Contradictions)
+	}
 }
 
 func TestAssembleContext_NoContradictionHealthySpread(t *testing.T) {

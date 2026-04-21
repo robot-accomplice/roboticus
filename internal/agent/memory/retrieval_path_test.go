@@ -2,13 +2,13 @@
 // HybridSearch-covered tiers (semantic, procedural, relationship, workflow)
 // classify their retrieval path correctly across three end-to-end scenarios:
 //
-//   1. The query lexically matches the stored row → path == "fts" (vector
+//   1. The query lexically matches the stored value → path == "fts" (vector
 //      leg is skipped because the test corpus has no embeddings).
-//   2. The query does NOT lexically match anything → both FTS and vector
-//      legs return zero rows, the LIKE safety net kicks in OR the result
-//      stays empty → path is "like_fallback" (when LIKE substring matches)
-//      or "empty" (when nothing matches at all).
-//   3. The query is empty / mode is non-search → no annotation is emitted
+//   2. A key-driven semantic lookup still resolves through the semantic FTS
+//      corpus instead of needing a semantic-tier LIKE rescue.
+//   3. The query does NOT lexically match anything → both FTS and vector
+//      legs return zero rows and the result stays empty.
+//   4. The query is empty / mode is non-search → no annotation is emitted
 //      (browse paths don't pollute the LIKE-vs-FTS measurement that M3.3
 //      relies on).
 //
@@ -59,7 +59,7 @@ func (f *fixtureTracer) get(key string) (any, bool) {
 	return nil, false
 }
 
-func TestRetrievalPath_SemanticHybridFirstAndLikeFallback(t *testing.T) {
+func TestRetrievalPath_SemanticHybridFirstAndFTSFallback(t *testing.T) {
 	store := testutil.TempStore(t)
 	ctx := context.Background()
 
@@ -89,7 +89,26 @@ func TestRetrievalPath_SemanticHybridFirstAndLikeFallback(t *testing.T) {
 		}
 	})
 
-	t.Run("query that matches nothing falls through to like_fallback or empty", func(t *testing.T) {
+	t.Run("semantic key lookup stays on the clean FTS path", func(t *testing.T) {
+		tracer := &fixtureTracer{}
+		ctx := WithRetrievalTracer(ctx, tracer)
+
+		mr := NewRetriever(DefaultRetrievalConfig(), DefaultTierBudget(), store)
+		results := mr.retrieveSemanticEvidence(ctx, "deployment-window", nil, RetrievalHybrid, 200)
+		if len(results) == 0 {
+			t.Fatalf("expected semantic evidence row for key lookup 'deployment-window'")
+		}
+
+		got, ok := tracer.get(retrievalPathKey(RetrievalTierSemantic))
+		if !ok {
+			t.Fatalf("expected retrieval.path.semantic annotation; tracer entries: %+v", tracer.entries)
+		}
+		if got != RetrievalPathFTS {
+			t.Fatalf("expected semantic key lookup to stay on %q; got %q", RetrievalPathFTS, got)
+		}
+	})
+
+	t.Run("query that matches nothing stays empty", func(t *testing.T) {
 		tracer := &fixtureTracer{}
 		ctx := WithRetrievalTracer(ctx, tracer)
 

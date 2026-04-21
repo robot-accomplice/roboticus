@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"strings"
 	"sync"
 
 	"github.com/rs/zerolog/log"
@@ -61,6 +62,10 @@ func NewQualityTracker(windowSize int) *QualityTracker {
 
 // Record adds a quality observation for a model. Quality is clamped to [0.0, 1.0].
 func (qt *QualityTracker) Record(model string, quality float64) {
+	model = canonicalModelKey(model)
+	if model == "" {
+		return
+	}
 	if quality < 0 {
 		quality = 0
 	}
@@ -82,6 +87,10 @@ func (qt *QualityTracker) Record(model string, quality float64) {
 // EstimatedQuality returns the windowed average quality for a model.
 // Returns 0.5 (neutral) if no observations exist.
 func (qt *QualityTracker) EstimatedQuality(model string) float64 {
+	model = canonicalModelKey(model)
+	if model == "" {
+		return 0.5
+	}
 	qt.mu.RLock()
 	defer qt.mu.RUnlock()
 
@@ -94,6 +103,10 @@ func (qt *QualityTracker) EstimatedQuality(model string) float64 {
 
 // ObservationCount returns the number of recorded observations for a model.
 func (qt *QualityTracker) ObservationCount(model string) int {
+	model = canonicalModelKey(model)
+	if model == "" {
+		return 0
+	}
 	qt.mu.RLock()
 	defer qt.mu.RUnlock()
 
@@ -111,6 +124,10 @@ func (qt *QualityTracker) HasObservations(model string) bool {
 
 // ClearModel removes all observations for a single model and returns the number removed.
 func (qt *QualityTracker) ClearModel(model string) int {
+	model = canonicalModelKey(model)
+	if model == "" {
+		return 0
+	}
 	qt.mu.Lock()
 	defer qt.mu.Unlock()
 
@@ -136,16 +153,17 @@ func (qt *QualityTracker) ClearAll() int {
 	return total
 }
 
-// SeedFromHistory warms the tracker from recent turns stored in the database.
-// Quality heuristic: min(1.0, tokens_out / 100.0) for turns with tokens_out > 0.
+// SeedFromHistory warms the tracker from recent inference observations in the database.
+// Only stored quality scores are used here. The router should not infer
+// efficacy from response length during warm start.
 func (qt *QualityTracker) SeedFromHistory(ctx context.Context, store *db.Store) {
 	if store == nil {
 		return
 	}
 
 	rows, err := store.QueryContext(ctx,
-		`SELECT model, tokens_out FROM turns
-		 WHERE model != '' AND tokens_out > 0
+		`SELECT provider, model, quality_score FROM inference_costs
+		 WHERE model != '' AND quality_score IS NOT NULL
 		 ORDER BY created_at DESC
 		 LIMIT 500`)
 	if err != nil {
@@ -156,16 +174,13 @@ func (qt *QualityTracker) SeedFromHistory(ctx context.Context, store *db.Store) 
 
 	seeded := 0
 	for rows.Next() {
+		var provider string
 		var model string
-		var tokensOut int
-		if err := rows.Scan(&model, &tokensOut); err != nil {
+		var quality float64
+		if err := rows.Scan(&provider, &model, &quality); err != nil {
 			continue
 		}
-		quality := float64(tokensOut) / 100.0
-		if quality > 1.0 {
-			quality = 1.0
-		}
-		qt.Record(model, quality)
+		qt.Record(historyModelKey(provider, model), quality)
 		seeded++
 	}
 
@@ -262,24 +277,43 @@ func (iq *IntentQualityTracker) SeedFromBaselines(baselines map[string]float64) 
 	}
 }
 
-// qualityFromResponse computes a quality score from a response using
-// output length as a crude proxy. Longer, more substantive responses
-// score higher.
+// qualityFromResponse computes a weak online efficacy prior. This score must
+// stay near-neutral because it is not grounded in user or verifier feedback.
+// Structural failures are penalized, but concise valid responses are not.
 func qualityFromResponse(resp *Response) float64 {
 	if resp == nil {
 		return 0
 	}
+	score := 0.55
 	tokens := resp.Usage.OutputTokens
 	if tokens <= 0 {
-		// Fall back to content length estimate (rough 4 chars per token).
-		tokens = EstimateTokens(resp.Content)
+		content := strings.TrimSpace(resp.Content)
+		if content == "" {
+			return 0.15
+		}
+		tokens = EstimateTokens(content)
 	}
-	q := float64(tokens) / 100.0
-	if q > 1.0 {
-		q = 1.0
+
+	switch {
+	case tokens < 4:
+		score -= 0.20
+	case tokens < 12:
+		score -= 0.08
+	case tokens <= 256:
+		score += 0.05
+	case tokens > 1024:
+		score -= 0.05
 	}
-	if q < 0 {
-		q = 0
+
+	if resp.FinishReason == "length" {
+		score -= 0.20
 	}
-	return q
+
+	if score < 0 {
+		return 0
+	}
+	if score > 1 {
+		return 1
+	}
+	return score
 }

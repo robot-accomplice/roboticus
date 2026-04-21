@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"strings"
+	"unicode"
 
 	"github.com/rs/zerolog/log"
 )
@@ -46,8 +47,10 @@ func SynthesizeTaskState(content string, sessionTurns int, agentSkills []string)
 		}
 	}
 
-	// Retrieval decision: retrieve for questions, task context, and longer conversations.
-	retrievalNeeded := intent == "question" || intent == "task" || sessionTurns > 3
+	// Retrieval decision: action turns only pull memory when there is an
+	// explicit continuity/context signal. Simple direct tasks should not widen
+	// into memory-bearing autonomous turns by intent label alone.
+	retrievalNeeded := shouldRetrieveForTurn(intent, content, sessionTurns)
 
 	result := TaskSynthesis{
 		Intent:          intent,
@@ -71,10 +74,75 @@ func SynthesizeTaskState(content string, sessionTurns int, agentSkills []string)
 	return result
 }
 
+func shouldRetrieveForTurn(intent, content string, sessionTurns int) bool {
+	lower := strings.ToLower(content)
+
+	if intent == "question" {
+		return true
+	}
+
+	if intent == "task" {
+		if taskNeedsPriorContext(lower) || taskNeedsEvidence(lower) {
+			return true
+		}
+	}
+
+	return sessionTurns > 3 && turnCarriesContinuityCue(lower)
+}
+
+func taskNeedsPriorContext(lower string) bool {
+	contextMarkers := []string{
+		"previous", "earlier", "existing", "current", "continue", "follow up", "follow-up",
+		"we discussed", "as before", "same as", "based on", "from the session", "in the session",
+		"remember", "context", "history", "prior", "last time", "again",
+		"update", "revise", "modify", "edit", "append", "resume",
+	}
+	for _, marker := range contextMarkers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func taskNeedsEvidence(lower string) bool {
+	evidenceMarkers := []string{
+		"report", "analysis", "analyze", "explain", "identify",
+		"root cause", "affected", "which systems", "what happened",
+		"why this happened", "summarize", "summary", "investigate",
+	}
+	for _, marker := range evidenceMarkers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func turnCarriesContinuityCue(lower string) bool {
+	cues := []string{
+		"previous", "earlier", "we discussed", "as before", "same as",
+		"continue", "follow up", "follow-up", "remember", "history",
+		"context", "last time", "resume",
+	}
+	for _, cue := range cues {
+		if strings.Contains(lower, cue) {
+			return true
+		}
+	}
+	return false
+}
+
 // classifyIntent determines the user's intent from message content.
 // Matches Rust's semantic classifier categories.
 func classifyIntent(content string) string {
 	lower := strings.ToLower(content)
+
+	// Short phatic / social turns are not information-seeking even when they
+	// contain question words like "what's" or "how's".
+	if isSocialConversationalTurn(lower) {
+		return "conversational"
+	}
 
 	// Question patterns.
 	questionMarkers := []string{"what", "how", "why", "when", "where", "who", "which", "can you explain", "tell me"}
@@ -85,9 +153,13 @@ func classifyIntent(content string) string {
 	}
 
 	// Code/technical patterns.
-	codeMarkers := []string{"write code", "implement", "function", "class", "api", "debug", "fix bug", "refactor", "test"}
+	codeMarkers := []string{
+		"write code", "implement", "function", "class", "api",
+		"debug", "fix bug", "refactor", "unit test", "test suite",
+		"write tests", "failing test", "run the tests",
+	}
 	for _, m := range codeMarkers {
-		if strings.Contains(lower, m) {
+		if containsIntentMarker(lower, m) {
 			return "code"
 		}
 	}
@@ -95,7 +167,7 @@ func classifyIntent(content string) string {
 	// Task/action patterns.
 	taskMarkers := []string{"create", "build", "make", "set up", "configure", "install", "deploy", "update", "delete", "remove", "send", "schedule"}
 	for _, m := range taskMarkers {
-		if strings.Contains(lower, m) {
+		if containsIntentMarker(lower, m) {
 			return "task"
 		}
 	}
@@ -103,7 +175,7 @@ func classifyIntent(content string) string {
 	// Creative patterns.
 	creativeMarkers := []string{"write", "compose", "draft", "generate", "brainstorm", "design", "story", "poem"}
 	for _, m := range creativeMarkers {
-		if strings.Contains(lower, m) {
+		if containsIntentMarker(lower, m) {
 			return "creative"
 		}
 	}
@@ -114,6 +186,65 @@ func classifyIntent(content string) string {
 	}
 
 	return "general"
+}
+
+func isSocialConversationalTurn(lower string) bool {
+	lower = strings.TrimSpace(lower)
+	if lower == "" {
+		return false
+	}
+
+	normalized := normalizeIntentLexicon(lower)
+	padded := " " + normalized + " "
+	socialMarkers := []string{
+		"hello", "hi", "hey", "thanks", "thank you",
+		"good morning", "good afternoon", "good evening",
+		"how are you", "how's it going", "hows it going",
+		"what's new", "whats new", "what is new",
+		"anything new", "anything new with you",
+		"what's up", "whats up", "what is up",
+		"what's going on", "whats going on",
+		"what's shakin", "whats shakin",
+		"what's shaking", "whats shaking",
+		"what's the good word", "whats the good word",
+	}
+	for _, marker := range socialMarkers {
+		if strings.Contains(padded, " "+normalizeIntentLexicon(marker)+" ") {
+			return true
+		}
+	}
+
+	// Very short, clearly phatic turns should stay conversational even when
+	// phrased informally as a question.
+	words := len(strings.Fields(lower))
+	return words <= 6 && (strings.HasPrefix(lower, "yo") || strings.HasPrefix(lower, "sup"))
+}
+
+func normalizeIntentLexicon(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	lastSpace := false
+	for _, r := range strings.ToLower(s) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+			lastSpace = false
+			continue
+		}
+		if !lastSpace {
+			b.WriteByte(' ')
+			lastSpace = true
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func containsIntentMarker(lower, marker string) bool {
+	if strings.TrimSpace(lower) == "" || strings.TrimSpace(marker) == "" {
+		return false
+	}
+	padded := " " + normalizeIntentLexicon(lower) + " "
+	needle := " " + normalizeIntentLexicon(marker) + " "
+	return strings.Contains(padded, needle)
 }
 
 // classifyComplexity estimates task complexity from content and session context.
@@ -155,14 +286,29 @@ func classifyComplexity(content string, sessionTurns int) string {
 // capabilityTokens extracts capability-relevant tokens from user content.
 // Matches Rust's capability_tokens: non-alphanumeric split, min 4 chars.
 func capabilityTokens(content string) []string {
+	words := lexiconTokens(content)
+	seen := make(map[string]struct{}, len(words))
+	var tokens []string
+	for _, w := range words {
+		if _, dup := seen[w]; dup {
+			continue
+		}
+		seen[w] = struct{}{}
+		tokens = append(tokens, w)
+	}
+	return tokens
+}
+
+func lexiconTokens(content string) []string {
 	words := strings.FieldsFunc(strings.ToLower(content), func(r rune) bool {
-		return (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '-' && r != '_'
+		return !unicode.IsLetter(r) && !unicode.IsNumber(r)
 	})
 	var tokens []string
 	for _, w := range words {
-		if len(w) >= 4 {
-			tokens = append(tokens, w)
+		if len(w) < 4 {
+			continue
 		}
+		tokens = append(tokens, w)
 	}
 	return tokens
 }
@@ -309,10 +455,8 @@ func matchCapabilities(capTokens, skills []string) (float64, []string) {
 
 	skillSet := make(map[string]bool, len(skills))
 	for _, s := range skills {
-		for _, word := range strings.Fields(strings.ToLower(s)) {
-			if len(word) >= 4 {
-				skillSet[word] = true
-			}
+		for _, word := range lexiconTokens(s) {
+			skillSet[word] = true
 		}
 	}
 

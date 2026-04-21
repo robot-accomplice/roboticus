@@ -390,13 +390,35 @@ func (l *Loop) think(ctx context.Context, session *Session) (Action, error) {
 		Str("content_preview", respSnippet).
 		Msg("agent loop: LLM response received")
 
-	// Add assistant response to session history.
-	session.AddAssistantMessage(resp.Content, resp.ToolCalls)
+	placeholderOnly := isPlaceholderAssistantContent(resp.Content)
+	if placeholderOnly {
+		log.Warn().
+			Str("session", session.ID).
+			Int("turn", turn).
+			Int("tool_calls", len(resp.ToolCalls)).
+			Str("finish_reason", resp.FinishReason).
+			Msg("suppressing placeholder assistant content")
+	}
 
-	// If tool calls present, move to acting.
+	// Tool-call turns still need an assistant message in history for call
+	// correlation, but placeholder scaffolding must not leak into the session.
 	if len(resp.ToolCalls) > 0 {
+		content := resp.Content
+		if placeholderOnly {
+			content = ""
+		}
+		session.AddAssistantMessage(content, resp.ToolCalls)
 		return ActionAct, nil
 	}
+
+	// Final placeholder-only content is malformed model output; retry instead of
+	// committing it to history or returning it to the user.
+	if placeholderOnly {
+		return ActionNoOp, nil
+	}
+
+	// Add assistant response to session history.
+	session.AddAssistantMessage(resp.Content, nil)
 
 	// No tool calls — this is a final response.
 	return ActionFinish, nil
@@ -567,6 +589,17 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+func isPlaceholderAssistantContent(content string) bool {
+	trimmed := strings.ToLower(strings.TrimSpace(content))
+	switch trimmed {
+	case "[assistant message]", "assistant message", "[assistant]", "assistant",
+		"[agent message]", "agent message", "[agent]", "agent":
+		return true
+	default:
+		return false
+	}
 }
 
 // detectLoop checks if the same tool+params has been called repeatedly.

@@ -16,6 +16,7 @@ type pipelineContext struct {
 
 	// Trace recorder — spans are opened and closed by each stage.
 	tr *TraceRecorder
+	dr *TurnDiagnosticsRecorder
 
 	// State accumulated across stages.
 	session          *Session
@@ -29,6 +30,7 @@ type pipelineContext struct {
 	correctionTurn   bool
 	decomp           *DecompositionResult
 	synthesis        TaskSynthesis
+	policy           TurnEnvelopePolicy
 	memoryBlock      string
 	delegationResult string
 	cacheFingerprint string

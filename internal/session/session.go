@@ -36,6 +36,9 @@ type Session struct {
 	taskSourceOfTruth string
 	taskRequiredTiers []string
 	taskFreshness     bool
+	agentRole         string
+	turnWeight        string
+	turnPolicyReason  string
 
 	// v1.0.6 typed evidence artifact (see verification_evidence.go).
 	// Populated by the pipeline after retrieval; consumed by the
@@ -177,6 +180,26 @@ func (s *Session) TaskRequiredTiers() []string {
 
 // TaskFreshness returns whether the answer depends on current state.
 func (s *Session) TaskFreshness() bool { return s.taskFreshness }
+
+// SetAgentRole records whether this session is operating as the operator-facing
+// orchestrator or as a bounded subagent worker.
+func (s *Session) SetAgentRole(role string) { s.agentRole = role }
+
+// AgentRole returns the role assigned to the active session.
+func (s *Session) AgentRole() string { return s.agentRole }
+
+// SetTurnEnvelopePolicy records the pipeline-selected turn weight and reason
+// so downstream request assembly and routing consume the same classification.
+func (s *Session) SetTurnEnvelopePolicy(weight, reason string) {
+	s.turnWeight = weight
+	s.turnPolicyReason = reason
+}
+
+// TurnWeight returns the pipeline-selected turn weight for the active turn.
+func (s *Session) TurnWeight() string { return s.turnWeight }
+
+// TurnPolicyReason returns the rationale for the current turn weight.
+func (s *Session) TurnPolicyReason() string { return s.turnPolicyReason }
 
 // SetSelectedToolDefs records the tool set the pipeline selected for this
 // turn (after query-time semantic ranking + token-budget enforcement).

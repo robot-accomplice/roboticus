@@ -182,3 +182,116 @@ func TestLoop_ContextCancellation(t *testing.T) {
 		t.Error("expected context cancellation error")
 	}
 }
+
+func TestLoop_SuppressesPlaceholderContentForToolCalls(t *testing.T) {
+	mock := &mockCompleter{
+		responses: []*llm.Response{
+			{
+				Content: "[assistant message]",
+				ToolCalls: []llm.ToolCall{{
+					ID:   "call-1",
+					Type: "function",
+					Function: llm.ToolCallFunc{
+						Name:      "echo",
+						Arguments: `{"message":"test"}`,
+					},
+				}},
+			},
+			{Content: "Done."},
+		},
+	}
+
+	deps := LoopDeps{
+		LLM:     mock,
+		Tools:   NewToolRegistry(),
+		Context: NewContextBuilder(DefaultContextConfig()),
+	}
+	loop := NewLoop(DefaultLoopConfig(), deps)
+
+	session := NewSession("sess-1", "agent-1", "TestBot")
+	session.AddUserMessage("check something")
+
+	result, err := loop.Run(context.Background(), session)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "Done." {
+		t.Fatalf("result = %q, want %q", result, "Done.")
+	}
+
+	msgs := session.Messages()
+	if len(msgs) < 3 {
+		t.Fatalf("expected at least 3 messages, got %d", len(msgs))
+	}
+	if msgs[1].Role != "assistant" {
+		t.Fatalf("message[1].Role = %q, want assistant", msgs[1].Role)
+	}
+	if msgs[1].Content != "" {
+		t.Fatalf("placeholder assistant content leaked into history: %q", msgs[1].Content)
+	}
+	if len(msgs[1].ToolCalls) != 1 {
+		t.Fatalf("assistant tool call count = %d, want 1", len(msgs[1].ToolCalls))
+	}
+}
+
+func TestLoop_RetriesPlaceholderOnlyFinalResponse(t *testing.T) {
+	mock := &mockCompleter{
+		responses: []*llm.Response{
+			{Content: "[assistant message]"},
+			{Content: "Actual answer."},
+		},
+	}
+
+	deps := LoopDeps{
+		LLM:     mock,
+		Tools:   NewToolRegistry(),
+		Context: NewContextBuilder(DefaultContextConfig()),
+	}
+	loop := NewLoop(DefaultLoopConfig(), deps)
+
+	session := NewSession("sess-1", "agent-1", "TestBot")
+	session.AddUserMessage("what's new?")
+
+	result, err := loop.Run(context.Background(), session)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "Actual answer." {
+		t.Fatalf("result = %q, want %q", result, "Actual answer.")
+	}
+
+	msgs := session.Messages()
+	if len(msgs) != 2 {
+		t.Fatalf("message count = %d, want 2", len(msgs))
+	}
+	if msgs[1].Content != "Actual answer." {
+		t.Fatalf("assistant content = %q, want %q", msgs[1].Content, "Actual answer.")
+	}
+}
+
+func TestLoop_RetriesAgentMessagePlaceholderOnlyFinalResponse(t *testing.T) {
+	mock := &mockCompleter{
+		responses: []*llm.Response{
+			{Content: "[agent message]"},
+			{Content: "Actual answer."},
+		},
+	}
+
+	deps := LoopDeps{
+		LLM:     mock,
+		Tools:   NewToolRegistry(),
+		Context: NewContextBuilder(DefaultContextConfig()),
+	}
+	loop := NewLoop(DefaultLoopConfig(), deps)
+
+	session := NewSession("sess-1", "agent-1", "TestBot")
+	session.AddUserMessage("create the note")
+
+	result, err := loop.Run(context.Background(), session)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "Actual answer." {
+		t.Fatalf("result = %q, want %q", result, "Actual answer.")
+	}
+}

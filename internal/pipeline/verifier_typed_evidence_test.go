@@ -39,10 +39,13 @@ func TestBuildVerificationContext_PrefersTypedEvidence(t *testing.T) {
 		HasFreshnessRisks:    true,
 		HasContradictions:    true,
 		HasCanonicalEvidence: true,
-		EvidenceItems:        []string{"[semantic, 0.91] canonical rule X", "[procedural, 0.80] routine Y"},
-		UnresolvedQuestions:  []string{"Will X apply to Y?"},
-		VerifiedConclusions:  []string{"X is canonical per the spec."},
-		StoppingCriteria:     []string{"All subgoals checked off."},
+		Contradictions: []session.ContradictionEvidence{
+			{Kind: "value_conflict", Topic: "refund window", Summary: "refund window evidence disagrees"},
+		},
+		EvidenceItems:       []string{"[semantic, 0.91] canonical rule X", "[procedural, 0.80] routine Y"},
+		UnresolvedQuestions: []string{"Will X apply to Y?"},
+		VerifiedConclusions: []string{"X is canonical per the spec."},
+		StoppingCriteria:    []string{"All subgoals checked off."},
 	})
 
 	vctx := BuildVerificationContext(sess)
@@ -53,6 +56,9 @@ func TestBuildVerificationContext_PrefersTypedEvidence(t *testing.T) {
 	}
 	if len(vctx.EvidenceItems) != 2 {
 		t.Fatalf("EvidenceItems len = %d; want 2", len(vctx.EvidenceItems))
+	}
+	if len(vctx.Contradictions) != 1 || vctx.Contradictions[0].Topic != "refund window" {
+		t.Fatalf("typed contradiction artifact not preserved: %+v", vctx.Contradictions)
 	}
 	if len(vctx.UnresolvedQuestions) != 1 || len(vctx.VerifiedConclusions) != 1 || len(vctx.StoppingCriteria) != 1 {
 		t.Fatalf("exec-state slices wrong lengths: %+v", vctx)

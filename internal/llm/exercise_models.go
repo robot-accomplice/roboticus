@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"roboticus/internal/core"
+	"roboticus/internal/hostresources"
 )
 
 // ModelSender is the pluggable transport for dispatching a single
@@ -60,6 +61,8 @@ type PromptOutcome struct {
 	Quality         float64 // 0 when Passed=false
 	Passed          bool    // true iff response non-empty AND no error
 	Err             error   // transport error, nil on success
+	ResourceStart   *hostresources.Snapshot
+	ResourceEnd     *hostresources.Snapshot
 }
 
 // OnPromptFn is invoked once per scored prompt AFTER the call
@@ -240,10 +243,12 @@ func ExerciseModels(ctx context.Context, req ExerciseRequest) (ExerciseReport, e
 					latencyMs int64
 					err       error
 				)
+				resourceStart := hostresources.Sample(ctx)
 				start := time.Now()
 				core.RunWithSpinner(req.Progress, prefix, func() {
 					content, latencyMs, err = req.SendPrompt(ctx, model, ep.Prompt, modelTimeout)
 				})
+				resourceEnd := hostresources.Sample(ctx)
 				// SendPrompt is allowed to return latencyMs==0 if it
 				// doesn't track its own timing; fall back to our
 				// start-based measurement so callers always see a
@@ -263,6 +268,8 @@ func ExerciseModels(ctx context.Context, req ExerciseRequest) (ExerciseReport, e
 					Iteration:       iter,
 					TotalIterations: req.Iterations,
 					LatencyMs:       latencyMs,
+					ResourceStart:   &resourceStart,
+					ResourceEnd:     &resourceEnd,
 				}
 
 				switch {

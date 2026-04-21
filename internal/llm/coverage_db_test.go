@@ -147,28 +147,22 @@ func TestService_RecordCost_WithStore(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// QualityTracker.SeedFromHistory with SQLite (quality.go:109 — 0%)
+// QualityTracker.SeedFromHistory with SQLite.
 // ---------------------------------------------------------------------------
 
 func TestQualityTracker_SeedFromHistory_WithStore(t *testing.T) {
 	store := tempStore(t)
 	ctx := context.Background()
 
-	// Insert a session first (turns references sessions).
-	_, err := store.ExecContext(ctx,
-		`INSERT INTO sessions (id, agent_id, scope_key, created_at) VALUES ('s1', 'test-agent', 'agent', datetime('now'))`)
-	if err != nil {
-		t.Fatalf("insert session: %v", err)
-	}
-
-	// Insert some turns.
+	// Insert scored inference history. The tracker should use persisted
+	// quality scores and canonical model keys.
 	for i := 0; i < 5; i++ {
 		_, err := store.ExecContext(ctx,
-			`INSERT INTO turns (id, session_id, model, tokens_in, tokens_out, created_at)
-			 VALUES (?, 's1', 'gpt-4', 10, ?, datetime('now'))`,
-			fmt.Sprintf("turn-%d", i), (i+1)*20)
+			`INSERT INTO inference_costs (id, provider, model, tokens_in, tokens_out, cost, latency_ms, quality_score, escalation, turn_id, cached, created_at)
+			 VALUES (?, 'openrouter', 'openrouter/gpt-4', 10, 20, 0.01, 900, ?, 0, ?, 0, datetime('now'))`,
+			fmt.Sprintf("cost-%d", i), 0.4+float64(i)*0.1, fmt.Sprintf("turn-%d", i))
 		if err != nil {
-			t.Fatalf("insert turn %d: %v", i, err)
+			t.Fatalf("insert inference_cost %d: %v", i, err)
 		}
 	}
 
@@ -179,10 +173,9 @@ func TestQualityTracker_SeedFromHistory_WithStore(t *testing.T) {
 		t.Errorf("expected 5 observations, got %d", qt.ObservationCount("gpt-4"))
 	}
 
-	// Quality should be based on tokens_out / 100.
 	quality := qt.EstimatedQuality("gpt-4")
-	if quality <= 0 || quality > 1 {
-		t.Errorf("quality = %f, want (0, 1]", quality)
+	if quality < 0.55 || quality > 0.65 {
+		t.Errorf("quality = %f, want around 0.6", quality)
 	}
 }
 

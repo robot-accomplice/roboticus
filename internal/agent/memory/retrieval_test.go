@@ -81,6 +81,34 @@ func TestRetrieve_SemanticMemory(t *testing.T) {
 	}
 }
 
+func TestRetrieveWithMetrics_AnnotatesFusionStage(t *testing.T) {
+	store := testutil.TempStore(t)
+	baseCtx := context.Background()
+	tracer := &fixtureTracer{}
+	ctx := WithRetrievalTracer(baseCtx, tracer)
+
+	testutil.SeedSemanticMemory(t, store, "billing", "ledger dependency", "Billing service depends on ledger service")
+	testutil.SeedEpisodicMemory(t, store, []string{
+		"Recent incident confirmed billing service depends on ledger service",
+	})
+
+	mr := NewRetriever(DefaultRetrievalConfig(), DefaultTierBudget(), store)
+	result, _ := mr.RetrieveWithMetrics(ctx, "", "what depends on ledger service?", 2000)
+
+	if !strings.Contains(result, "Retrieved Evidence") {
+		t.Fatalf("expected retrieved evidence in result, got %q", result)
+	}
+	for _, key := range []string{
+		"retrieval.fusion.input",
+		"retrieval.fusion.corroborated",
+		"retrieval.fusion.top_score",
+	} {
+		if _, ok := tracer.get(key); !ok {
+			t.Fatalf("expected %s annotation, got %+v", key, tracer.entries)
+		}
+	}
+}
+
 func TestRetrieve_ProceduralMemory(t *testing.T) {
 	store := testutil.TempStore(t)
 	ctx := context.Background()

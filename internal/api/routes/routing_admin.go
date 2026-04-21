@@ -10,15 +10,294 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
 
 	"roboticus/internal/core"
 	"roboticus/internal/db"
+	"roboticus/internal/hostresources"
 	"roboticus/internal/llm"
 	"roboticus/internal/pipeline"
 )
 
 const maxRoutingDatasetLimit = 50000
+
+type baselineRunStartRequest struct {
+	RunID             string   `json:"run_id,omitempty"`
+	Initiator         string   `json:"initiator,omitempty"`
+	Models            []string `json:"models"`
+	Iterations        int      `json:"iterations,omitempty"`
+	ConfigFingerprint string   `json:"config_fingerprint,omitempty"`
+	GitRevision       string   `json:"git_revision,omitempty"`
+	Notes             string   `json:"notes,omitempty"`
+	Force             bool     `json:"force,omitempty"`
+}
+
+type baselineRunResultRequest struct {
+	Model         string          `json:"model"`
+	IntentClass   string          `json:"intent_class"`
+	Complexity    string          `json:"complexity"`
+	Prompt        string          `json:"prompt"`
+	Content       string          `json:"content,omitempty"`
+	Quality       float64         `json:"quality"`
+	LatencyMs     int64           `json:"latency_ms"`
+	Passed        bool            `json:"passed"`
+	ErrorMsg      string          `json:"error_msg,omitempty"`
+	ResourceStart json.RawMessage `json:"resource_start,omitempty"`
+	ResourceEnd   json.RawMessage `json:"resource_end,omitempty"`
+}
+
+type baselineRunCompleteRequest struct {
+	Status string `json:"status,omitempty"`
+	Notes  string `json:"notes,omitempty"`
+}
+
+type modelPolicyUpsertRequest struct {
+	Model             string   `json:"model"`
+	State             string   `json:"state"`
+	PrimaryReasonCode string   `json:"primary_reason_code,omitempty"`
+	ReasonCodes       []string `json:"reason_codes,omitempty"`
+	HumanReason       string   `json:"human_reason,omitempty"`
+	EvidenceRefs      []string `json:"evidence_refs,omitempty"`
+	Source            string   `json:"source,omitempty"`
+}
+
+func snapshotPtr(s hostresources.Snapshot) *hostresources.Snapshot {
+	if s.Empty() {
+		return nil
+	}
+	out := s
+	return &out
+}
+
+func effectiveModelPolicies(ctx context.Context, store *db.Store, cfg *core.Config) map[string]llm.ModelPolicy {
+	if cfg == nil {
+		return nil
+	}
+	return llm.EffectiveModelPolicies(ctx, store, cfg.Models.Policy)
+}
+
+func benchmarkBlockedModels(models []string, policies map[string]llm.ModelPolicy) []string {
+	blocked := make([]string, 0)
+	for _, model := range models {
+		policy := llm.EffectiveModelPolicy([]string{model}, policies)
+		if len(policy) == 0 {
+			continue
+		}
+		if !policy[0].BenchmarkEligible {
+			blocked = append(blocked, model)
+		}
+	}
+	return blocked
+}
+
+// ListModelPolicies returns persisted and effective model lifecycle policy.
+func ListModelPolicies(store *db.Store, cfg *core.Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		persisted := db.ListModelPolicies(r.Context(), store)
+		effective := effectiveModelPolicies(r.Context(), store, cfg)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"persisted": persisted,
+			"effective": effective,
+		})
+	}
+}
+
+// UpsertModelPolicy persists a model lifecycle policy and returns the merged effective map.
+func UpsertModelPolicy(store *db.Store, cfg *core.Config, llmSvc *llm.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req modelPolicyUpsertRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		if strings.TrimSpace(req.Model) == "" {
+			writeError(w, http.StatusBadRequest, "model is required")
+			return
+		}
+		state := strings.TrimSpace(req.State)
+		switch state {
+		case llm.ModelStateEnabled, llm.ModelStateNiche, llm.ModelStateDisabled, llm.ModelStateBenchmarkOnly:
+		default:
+			writeError(w, http.StatusBadRequest, "state must be enabled, niche, disabled, or benchmark_only")
+			return
+		}
+		if err := db.UpsertModelPolicy(r.Context(), store, db.ModelPolicyRow{
+			Model:             req.Model,
+			State:             state,
+			PrimaryReasonCode: req.PrimaryReasonCode,
+			ReasonCodes:       append([]string(nil), req.ReasonCodes...),
+			HumanReason:       req.HumanReason,
+			EvidenceRefs:      append([]string(nil), req.EvidenceRefs...),
+			Source:            req.Source,
+		}); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to persist model policy")
+			return
+		}
+		effective := effectiveModelPolicies(r.Context(), store, cfg)
+		if llmSvc != nil {
+			llmSvc.ApplyModelPolicies(effective)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":        true,
+			"effective": effective,
+		})
+	}
+}
+
+// DeleteModelPolicy removes a persisted model lifecycle policy override.
+func DeleteModelPolicy(store *db.Store, cfg *core.Config, llmSvc *llm.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		model := strings.TrimSpace(r.URL.Query().Get("model"))
+		if model == "" {
+			writeError(w, http.StatusBadRequest, "model is required")
+			return
+		}
+		if err := db.DeleteModelPolicy(r.Context(), store, model); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to delete model policy")
+			return
+		}
+		effective := effectiveModelPolicies(r.Context(), store, cfg)
+		if llmSvc != nil {
+			llmSvc.ApplyModelPolicies(effective)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":        true,
+			"effective": effective,
+		})
+	}
+}
+
+// StartExerciseRun records metadata for a new baseline/exercise run.
+func StartExerciseRun(store *db.Store, cfg *core.Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req baselineRunStartRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		if len(req.Models) == 0 {
+			writeError(w, http.StatusBadRequest, "models are required")
+			return
+		}
+		if req.RunID == "" {
+			req.RunID = db.NewID()
+		}
+		if req.Initiator == "" {
+			req.Initiator = "api"
+		}
+		if req.Iterations < 1 {
+			req.Iterations = 1
+		}
+		if !req.Force {
+			blocked := benchmarkBlockedModels(req.Models, effectiveModelPolicies(r.Context(), store, cfg))
+			if len(blocked) > 0 {
+				writeError(w, http.StatusConflict, "benchmark blocked by model policy: "+strings.Join(blocked, ", "))
+				return
+			}
+		}
+		if err := db.InsertBaselineRun(r.Context(), store, db.BaselineRunRow{
+			RunID:             req.RunID,
+			Initiator:         req.Initiator,
+			Status:            "running",
+			ModelCount:        len(req.Models),
+			Models:            req.Models,
+			Iterations:        req.Iterations,
+			ConfigFingerprint: req.ConfigFingerprint,
+			GitRevision:       req.GitRevision,
+			Notes:             req.Notes,
+			StartResources:    snapshotPtr(hostresources.Sample(r.Context())),
+		}); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to start exercise run")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"run_id": req.RunID})
+	}
+}
+
+// AppendExerciseRunResult persists one prompt-level outcome under a baseline run.
+func AppendExerciseRunResult(store *db.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		runID := chi.URLParam(r, "runID")
+		if runID == "" {
+			writeError(w, http.StatusBadRequest, "run_id is required")
+			return
+		}
+		var req baselineRunResultRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		if req.Model == "" || req.IntentClass == "" || req.Complexity == "" || req.Prompt == "" {
+			writeError(w, http.StatusBadRequest, "model, intent_class, complexity, and prompt are required")
+			return
+		}
+		if err := db.InsertExerciseResult(r.Context(), store, db.ExerciseResultRow{
+			ID:            db.NewID(),
+			RunID:         runID,
+			Model:         req.Model,
+			IntentClass:   req.IntentClass,
+			Complexity:    req.Complexity,
+			Prompt:        req.Prompt,
+			Content:       req.Content,
+			Quality:       req.Quality,
+			LatencyMs:     req.LatencyMs,
+			Passed:        req.Passed,
+			ErrorMsg:      req.ErrorMsg,
+			ResourceStart: hostresources.FromJSON(string(req.ResourceStart)),
+			ResourceEnd:   hostresources.FromJSON(string(req.ResourceEnd)),
+		}); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to persist exercise result")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	}
+}
+
+// CompleteExerciseRun marks a baseline run completed, failed, or canceled.
+func CompleteExerciseRun(store *db.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		runID := chi.URLParam(r, "runID")
+		if runID == "" {
+			writeError(w, http.StatusBadRequest, "run_id is required")
+			return
+		}
+		var req baselineRunCompleteRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		if req.Status == "" {
+			req.Status = "completed"
+		}
+		switch req.Status {
+		case "completed", "failed", "canceled":
+		default:
+			writeError(w, http.StatusBadRequest, "status must be completed, failed, or canceled")
+			return
+		}
+		if err := db.CompleteBaselineRun(r.Context(), store, runID, req.Status, req.Notes, snapshotPtr(hostresources.Sample(r.Context()))); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to finalize exercise run")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	}
+}
+
+// ListExerciseRuns returns recent baseline/exercise runs.
+func ListExerciseRuns(store *db.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		limit := 20
+		if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+			if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
+				limit = parsed
+			}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"runs": db.ListBaselineRuns(r.Context(), store, limit),
+		})
+	}
+}
 
 // GetRoutingDataset exports joined routing decisions and inference outcomes.
 func GetRoutingDataset(store *db.Store) http.HandlerFunc {
@@ -75,6 +354,7 @@ func ExerciseModel(p pipeline.Runner, store *db.Store, cfg *core.Config, agentNa
 			Model      string `json:"model"`
 			RunID      string `json:"run_id,omitempty"`     // Caller-provided run ID for grouping results.
 			Iterations int    `json:"iterations,omitempty"` // Optional parity with CLI exercise.
+			Force      bool   `json:"force,omitempty"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid JSON body")
@@ -91,6 +371,36 @@ func ExerciseModel(p pipeline.Runner, store *db.Store, cfg *core.Config, agentNa
 		if req.Iterations < 1 {
 			req.Iterations = 1
 		}
+		if !req.Force {
+			blocked := benchmarkBlockedModels([]string{req.Model}, effectiveModelPolicies(r.Context(), store, cfg))
+			if len(blocked) > 0 {
+				writeError(w, http.StatusConflict, "benchmark blocked by model policy: "+strings.Join(blocked, ", "))
+				return
+			}
+		}
+		if err := db.InsertBaselineRun(r.Context(), store, db.BaselineRunRow{
+			RunID:          runID,
+			Initiator:      "api",
+			Status:         "running",
+			ModelCount:     1,
+			Models:         []string{req.Model},
+			Iterations:     req.Iterations,
+			StartResources: snapshotPtr(hostresources.Sample(r.Context())),
+		}); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to start exercise run")
+			return
+		}
+		defer func() {
+			status := "completed"
+			notes := ""
+			if r.Context().Err() != nil {
+				status = "canceled"
+				notes = r.Context().Err().Error()
+			}
+			if err := db.CompleteBaselineRun(context.Background(), store, runID, status, notes, snapshotPtr(hostresources.Sample(context.Background()))); err != nil {
+				log.Warn().Err(err).Str("run_id", runID).Msg("exercise: failed to finalize API exercise run")
+			}
+		}()
 
 		type promptResult struct {
 			Intent     string  `json:"intent"`
@@ -126,17 +436,19 @@ func ExerciseModel(p pipeline.Runner, store *db.Store, cfg *core.Config, agentNa
 				errMsg = o.Err.Error()
 			}
 			_ = db.InsertExerciseResult(context.Background(), store, db.ExerciseResultRow{
-				ID:          db.NewID(),
-				RunID:       runID,
-				Model:       req.Model,
-				IntentClass: o.Prompt.Intent.String(),
-				Complexity:  o.Prompt.Complexity.String(),
-				Prompt:      o.Prompt.Prompt,
-				Content:     o.Content,
-				Quality:     o.Quality,
-				LatencyMs:   o.LatencyMs,
-				Passed:      o.Passed,
-				ErrorMsg:    errMsg,
+				ID:            db.NewID(),
+				RunID:         runID,
+				Model:         req.Model,
+				IntentClass:   o.Prompt.Intent.String(),
+				Complexity:    o.Prompt.Complexity.String(),
+				Prompt:        o.Prompt.Prompt,
+				Content:       o.Content,
+				Quality:       o.Quality,
+				LatencyMs:     o.LatencyMs,
+				Passed:        o.Passed,
+				ErrorMsg:      errMsg,
+				ResourceStart: o.ResourceStart,
+				ResourceEnd:   o.ResourceEnd,
 			})
 		}
 

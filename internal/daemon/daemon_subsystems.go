@@ -30,18 +30,7 @@ func (d *Daemon) run() {
 	// Non-fatal: individual server failures are logged, not fatal.
 	if len(d.cfg.MCP.Servers) > 0 {
 		mcpCtx, mcpCancel := context.WithTimeout(ctx, 30*time.Second)
-		mcpServers := make([]mcp.McpServerConfig, 0, len(d.cfg.MCP.Servers))
-		for _, s := range d.cfg.MCP.Servers {
-			mcpServers = append(mcpServers, mcp.McpServerConfig{
-				Name:      s.Name,
-				Transport: s.Transport,
-				Command:   s.Command,
-				Args:      s.Args,
-				URL:       s.URL,
-				Env:       s.Env,
-				Enabled:   s.Enabled,
-			})
-		}
+		mcpServers := mcp.ConfigsFromCoreEntries(d.cfg.MCP.Servers)
 		connected := d.appState.MCP.ConnectAll(mcpCtx, mcpServers)
 		mcpCancel()
 		log.Info().Int("connected", connected).Int("configured", len(d.cfg.MCP.Servers)).Msg("MCP server connections established")

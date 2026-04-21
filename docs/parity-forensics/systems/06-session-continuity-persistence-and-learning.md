@@ -132,7 +132,7 @@ ownership and promotion rules.
 |----|----------|---------|---------------|-------------|----------------|--------|----------|
 | SYS-06-001 | P1 | Working-memory persistence/vetting must remain treated as a core success, not an open gap | Rust baseline preserves active task-relevant state across continuity boundaries | Go has a real persisted/vetted working-memory path and should preserve it as an invariant | Improvement | Closed / retain as evidence | `internal/agent/memory/working_persistence.go:1-184` |
 | SYS-06-002 | P1 | Reflection had been heuristic and under-captured turn quality/timing | Rust continuity/learning path includes richer session/governor/checkpoint context | Go reflection now uses turn-owned artifacts, persists structured episode payloads, and distillation consumes them preferentially over reparsing strings. v1.0.6 accepts the remaining richness gap as future architecture evolution rather than release-grade parity debt | Accepted improvement | Closed | `internal/pipeline/post_turn.go:171-244`, `internal/pipeline/post_turn_test.go`, `internal/agent/memory/consolidation_distillation.go` |
-| SYS-06-003 | P1 | Consolidation behavior must be classified, not assumed parity | Rust has an explicit consolidation pipeline | Go distillation now promotes recurring learnings, fix patterns, evidence refs, and canonical relations into longer-lived stores. This is stronger than the earlier Go path, but the exact parity target for promotion breadth still needs explicit classification | Improvement candidate | Open, narrower seam | `internal/agent/memory/consolidation_distillation.go:1-320`, Rust `consolidation.rs` |
+| SYS-06-003 | P1 | Consolidation behavior must be classified, not assumed parity | Rust has a narrower consolidation pipeline centered on index hygiene, dedup, decay/prune, and simpler recurring-episodic promotion | Go distillation now promotes recurring learnings, fix patterns, evidence refs, and canonical relations into longer-lived stores. v1.0.7 accepts this as a deliberate synthesis because the broader surface is thresholded, quality-gated, canonical-vocabulary constrained, and idempotent | Accepted improvement / synthesis | Closed | `internal/agent/memory/consolidation_distillation.go`, `internal/agent/memory/consolidation_distillation_test.go`, Rust `consolidation.rs` |
 | SYS-06-004 | P1 | Checkpoint ownership had been split between a lightweight live save path and a separate repository abstraction | Rust has explicit checkpoint persistence and pruning APIs with clearer lifecycle ownership | Go now routes save, prune, and restore through repository-owned lifecycle seams and pipeline-owned policy. The compact restore shape is accepted as a deliberate synthesis with the newer continuity model rather than a missing lifecycle owner | Accepted synthesis | Closed | `internal/pipeline/pipeline_gaps.go`, `internal/db/checkpoint_repo.go`, `internal/pipeline/checkpoint_lifecycle_test.go`, `internal/daemon/daemon_adapters.go`, `internal/pipeline/pipeline.go` |
 | SYS-06-005 | P2 | Executive-state growth is stronger than earlier versions, but needs classification against Rust task-state ownership | Rust threads task state through planning/inference/guards | Go's post-turn executive-state growth is accepted as a beyond-parity improvement and should be protected rather than flattened away | Accepted improvement | Closed | `internal/pipeline/post_turn.go:246+` |
 | SYS-06-006 | P1 | Reflection remains under-specified relative to the richer memory architecture now in place | Rust continuity/learning path ties more directly into checkpoint/session lifecycle | Go now preserves structured turn-state and uses it through reflection and consolidation. Further expansion of that structured model is a future architecture choice, not an unresolved v1.0.6 parity gap | Accepted | Closed | `internal/pipeline/post_turn.go:171-244`, `internal/pipeline/post_turn_test.go`, `internal/agent/memory/reflection_episode_test.go`, `internal/agent/memory/consolidation_distillation.go` |
@@ -183,13 +183,45 @@ Protected invariants for this system:
 
 ## Final Disposition
 
-System 06 is closed for v1.0.6.
+System 06 is closed for v1.0.7.
 
 - Working-memory continuity, checkpoint lifecycle, reflection, executive-state
   growth, and consolidation now have one coherent artifact-driven ownership
   story.
 - The remaining differences from Rust are accepted syntheses or improvements,
   not unresolved live-path ambiguities.
+
+## v1.0.7 Reopening
+
+System 06 is reopened only for the one continuity/learning seam that still
+lacks a final parity classification:
+
+- `PAR-007` — consolidation breadth parity (now closed)
+
+Architecture position for v1.0.7:
+
+- Rust's consolidation pipeline is narrower and mostly concerned with index
+  hygiene, dedup, decay, pruning, and simpler recurring-episodic promotion.
+- Go's consolidation/distillation path is intentionally broader: it promotes
+  repeated high-quality learnings, fix patterns, evidence references, and
+  canonical relations from structured `episode_summary` artifacts.
+- That broader surface is acceptable only if it remains bounded and
+  explainable: support thresholds differ by artifact type, low-quality
+  episodes are gated out, relation promotion is vocabulary-constrained, and
+  writes are idempotent.
+- `PAR-007` is therefore not "reduce Go until it looks like Rust." It is
+  "prove the broader Go promotion surface is disciplined enough to keep."
+
+v1.0.7 closure:
+
+- the broader Go consolidation surface is now explicitly accepted
+- accepted promoted artifacts are:
+  - `semantic_memory:episode_learning`
+  - `semantic_memory:fix_pattern`
+  - `semantic_memory:learned_fact`
+  - canonical `knowledge_facts` distilled from recurring relations
+- acceptance depends on support thresholds, high-quality episode gating,
+  canonical-relation enforcement, and idempotent writes
 
 - Where exactly is the full Go checkpoint save/load/prune lifecycle, and how
   close is the compact restore shape to Rust's fuller checkpoint injection?
@@ -199,7 +231,8 @@ System 06 is closed for v1.0.6.
   turn-owned artifact layer, or should the new structured `EpisodeSummary`
   payload expand further beyond the current JSON mirror?
 - Which consolidation behaviors are intentionally beyond parity and which are
-  silent semantic changes?
+  silent semantic changes? This is now resolved for the current promotion
+  surface.
 - Should the lightweight `maybeCheckpoint(...)` path be considered a temporary
   compatibility save path, or is it intended to remain the authoritative live
   checkpoint implementation?
@@ -274,3 +307,9 @@ System 06 is closed for v1.0.6.
   prefers the structured payload over reparsing the summary string, which
   materially reduces artifact loss in the reflection/distillation path without
   giving up the human-readable summary surface.
+- 2026-04-20: Closed `PAR-007`. The Rust consolidation baseline was confirmed
+  to be narrower than Go's structured distillation path, and the broader Go
+  promotion surface is now explicitly accepted because it is bounded by
+  support thresholds, high-quality gating, canonical relation vocabulary, and
+  idempotent writes. Regression coverage now pins the accepted breadth instead
+  of leaving it as implicit behavior.

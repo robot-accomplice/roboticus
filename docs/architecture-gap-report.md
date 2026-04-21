@@ -11,7 +11,7 @@
 
 The Go implementation achieves **full structural compliance** with the connector-factory pattern. The pipeline is the single source of truth for business logic, all 8 entry points use `RunPipeline()`, and architecture tests enforce connector thinness. **All 7 original systemic gaps are now CLOSED** (v1.0.1 + v1.0.2 + v1.0.4), and the broader parity-forensics program has now been distilled into final validated or explicitly deferred dispositions rather than exploratory runtime-classification seams.
 
-v1.0.5 introduced the **agentic retrieval architecture** scaffold — decomposer, router, reranker, context assembly, reflection, and working-memory persistence. v1.0.6 has now carried that scaffold much farther into runtime reality: router-selected retrieval modes influence actual tier retrieval, semantic / procedural / relationship / workflow reads are HybridSearch-first with per-tier `retrieval.path.*` trace attribution, semantic and relationship evidence preserve stronger provenance/freshness signals, the verifier consumes pipeline-computed task hints and claim-level proof obligations, a persisted graph-fact store now exists in production with reusable traversal APIs, and enriched episode distillation now promotes recurring canonical triples into `knowledge_facts`. The main remaining retrieval cleanup is operator-observed retirement of residual `LIKE` safety nets by tier, not missing architecture plumbing.
+v1.0.5 introduced the **agentic retrieval architecture** scaffold — decomposer, router, reranker, context assembly, reflection, and working-memory persistence. v1.0.6 has now carried that scaffold much farther into runtime reality: router-selected retrieval modes influence actual tier retrieval, semantic / procedural / relationship / workflow reads are HybridSearch-first with per-tier `retrieval.path.*` trace attribution, semantic and relationship evidence preserve stronger provenance/freshness signals, the verifier consumes pipeline-computed task hints and claim-level proof obligations, a persisted graph-fact store now exists in production with reusable traversal APIs, and enriched episode distillation now promotes recurring canonical triples into `knowledge_facts`. v1.0.7 then closed the remaining architecture-led retrieval seams with explicit fusion, optional LLM reranking, and semantic FTS cleanup instead of residual heuristic SQL.
 
 The parity-driven remediation effort also clarified several ownership seams that
 older architecture docs had left too generic:
@@ -46,6 +46,176 @@ older architecture docs had left too generic:
   live `/api/cron/{id}/run` path no longer bypasses lease/run-history/retry
   ownership; it delegates through `CronWorker.RunJobNow(...)` and preserves the
   same execution contract as scheduled runs.
+- **Model lifecycle policy is now a first-class routing seam.** Live routing is
+  no longer allowed to rely purely on metascore and fallback order to avoid bad
+  candidates by accident. Per-model lifecycle state (`enabled`, `niche`,
+  `disabled`, `benchmark_only`) and role eligibility (`orchestrator`,
+  `subagent`) are now explicit, operator-visible, reasoned, and evidenced
+  before ranking starts.
+- **Operational delegation inventory belongs on the runtime tool surface.**
+  Subagent roster and skill inventory are no longer allowed to exist only as
+  admin/UI introspection or prompt-side capability snapshots. The live
+  tool-pruning/request path must own explicit roster/inventory tools so
+  orchestrators can inspect delegation capacity through the same authoritative
+  surface they use for other operational decisions.
+- **Subagent composition now belongs on the same runtime control plane.**
+  Creating or updating subagents is no longer allowed to remain an admin-only
+  route concern. The live tool surface now owns first-class subagent
+  composition through one authoritative repository, with explicit
+  orchestrator-only enforcement.
+- **Delegated task lifecycle now belongs on the same runtime control plane.**
+  Open delegated work, retry requests, and task-level status inspection are no
+  longer allowed to remain embedded in connector-local routes, status sidecars,
+  or orchestration-only in-memory structures. The runtime tool surface now owns
+  first-class task lifecycle tools backed by one authoritative repository over
+  delegated task state and events.
+- **Multi-subagent orchestration now uses that same delegated-work control plane.**
+  The system no longer treats orchestration as a prompt-only delegation trick
+  layered over the loop. Workflow creation, assignment, and lifecycle evidence
+  now flow through one authoritative orchestration control surface that writes
+  the same `tasks`, `task_events`, and `agent_delegation_outcomes` artifacts
+  the runtime already exposes for task inspection and retry.
+- **Operator RCA flow is now a canonical diagnostics surface, not a trace dump.**
+  The WebUI observability surface is expected to consume `turn_diagnostics`
+  summary + events as the authoritative RCA artifact and render them as one
+  canonical decision flow. The operator contract is macro-by-default,
+  detailed-on-demand, and grouped by task / envelope / routing / execution /
+  recovery / outcome seams instead of raw event order. That contract is not
+  allowed to disappear when a turn predates canonical diagnostics or the
+  diagnostics artifact is missing: the flow surface must keep visible
+  macro/detail controls and fall back explicitly to a trace-only narrative
+  keyed by the turn id instead of silently collapsing back into the old stage
+  dump. The desktop presentation contract is left-to-right and bounded, but
+  more importantly it is singular: there is one decision flow, not a stage
+  strip beside a second RCA rail. Macro mode uses compact flow blocks only,
+  with dense status state consolidated into one narrow top banner instead of a
+  row of large tiles. Turn conclusion and health rating should not compete
+  with that strip; they may live in a separate bottom banner when space is
+  tight. That top banner must use the same severity model as the flow itself:
+  degraded status is yellow, latency above one second is yellow, latency above
+  one minute is red, and `high` / `critical` pressure is red. The top-line
+  `Health` value is not allowed to read like an unrelated hidden score; it
+  must be explicitly derived from the aggregate of the category outcomes shown
+  in the flow. Those banner chips are also not allowed to rely on insider
+  shorthand alone: each top-line metric must expose an explanatory hover/focus
+  tooltip so values such as `degraded`, `high`, or `swap 78.8%` can be
+  interpreted by an operator without leaving the flow or querying logs. Visible
+  node copy must stay utility-first: macro nodes show only the
+  single most decision-relevant signal for that node, with duration as the
+  default and routing as the explicit exception because the selected model is
+  more important than repeating stage identity. Verbose explanation belongs in
+  a true floating tooltip layer anchored to pointer/focus position or in
+  explicit detail mode rather than permanently expanded text panels. Detail
+  mode must preserve ordinality first: operators should read one chronological
+  event timeline, with task / envelope / routing / execution / recovery /
+  outcome shown as annotations, not as separate buckets that force manual
+  reconstruction of sequence. The flow
+  container itself must remain
+  width-bounded to the usable main-pane area, accounting for persistent chrome
+  such as the sidebar, and that bound must come from the real content pane
+  rather than raw viewport math. If the decision rail outgrows that space, the
+  surface must expose intentional horizontal scrolling contained inside that
+  pane. The flow must also preserve causal atomicity for repeat execution:
+  when any step runs more than once, the affected block must carry an explicit
+  repeat marker and the operator must be able to infer, from the UI alone,
+  whether an earlier attempt succeeded, which guard or verifier intervened
+  afterward, the exact retry reason, whether the retry reused the same
+  model/provider or widened to fallback, and the final outcome. Stale
+  trace-only fallback overlays are not allowed to survive session changes,
+  expanded-row changes, or collapse/expand transitions once canonical
+  diagnostics are available. The conclusion banner is not allowed to merely
+  acknowledge that diagnostics exist; it must synthesize what the evidence
+  implies about the turn. For degraded or retried turns, that means naming the
+  causal event that changed the path (for example a post-success guard retry),
+  whether the route widened or stayed the same, and what that implies about the
+  likely fault boundary. Flow nodes themselves should also encode outcome
+  quality visually: green for clean execution, yellow for concerns or partial
+  degradation, and red for broken or clearly failed paths. Those colors must be
+  derived from the same persisted RCA evidence rather than ad hoc UI guesses.
+- **Trace and diagnostics artifacts must share the same turn identity.**
+  Observability is not allowed to infer RCA presence by heuristic timestamp or
+  session adjacency. `pipeline_traces.turn_id` and `turn_diagnostics.turn_id`
+  must be written from the same authoritative turn record ID on live turns, or
+  the operator flow will misclassify fresh canonical-diagnostics turns as
+  trace-only fallback.
+- **Host resource state is now part of benchmark validity and RCA truth.**
+  Baseline runs, prompt-level exercise rows, and live turn diagnostics are not
+  allowed to omit the machine state they were executed under. CPU, memory,
+  swap, and relevant process RSS snapshots must be captured on the same
+  central seams that already own benchmark persistence and inference RCA,
+  otherwise the system cannot distinguish a weak model from a saturated host.
+- **Agent roster surfaces must share one authoritative subagent projection.**
+  The roster view and the editable subagent list are not allowed to drift by
+  querying different route-local shapes over the same `sub_agents` corpus. The
+  enriched roster projection is now the shared read model, with the roster page
+  layering the orchestrator card on top only where that page actually needs it.
+- **Skill composition now has to use one shared runtime control plane as well.**
+  Creating or updating skills is not allowed to remain a route-only file-write
+  helper. The live runtime tool surface, admin/catalog install flow, and skill
+  inventory must converge on one authoritative repository that owns both the
+  on-disk skill artifact and the `skills` table row.
+- **Simple direct tasks must not be widened into heavy autonomous turns by intent alone.**
+  The envelope owner is no longer allowed to treat every `task` intent as
+  `heavy` regardless of complexity and planned action. When task synthesis says
+  `simple` + `execute_directly`, the first-pass request must stay on a focused
+  execution envelope with bounded context, bounded tool surface, and
+  retrieval only when concrete continuity or evidence signals require it.
+  “Task” is too broad a bucket to justify full autonomous tool-bearing ReAct
+  behavior by itself.
+- **Retrieval for action turns must be evidence-based, not intent-defaulted.**
+  Task synthesis and retrieval policy are not allowed to infer
+  `retrieval_needed = true` merely because a turn is imperative. Direct
+  authoring or file-manipulation requests that do not depend on prior state,
+  historical context, or canonically retrieved evidence must be able to stay
+  local to the workspace/tool surface. Otherwise the system manufactures
+  pressure and autonomy for no gain.
+- **Workspace-local vault authoring must be a first-class runtime capability.**
+  Obsidian integration is not allowed to remain a prompt hint or an indirectly
+  referenced skill. If a vault is configured and sits within the runtime's
+  writable workspace/allowlist, the live tool surface must expose an explicit
+  vault-authoring capability with semantics aligned to note creation/update.
+  Operators should not have to rely on the model inferring that a generic file
+  tool plus a prose hint imply safe vault authoring.
+- **Capability truth must converge before inference.**
+  Task synthesis, skill inventory, runtime skill loading, tool registration,
+  prompt guidance, and operator UI are not allowed to maintain separate partial
+  truths about what the agent can do. If an enabled skill exists in the
+  authoritative inventory, the runtime must either load it into the live
+  matcher/tool surface or mark it unavailable for a concrete reason that every
+  other layer can see. DB-backed skill catalogs, filesystem-backed runtime
+  matchers, and config-gated tool registration must not drift independently.
+- **Guard-context temporal atomicity must hold.**
+  Cross-turn guards are not allowed to compare a completion against assistant
+  content already emitted inside the same turn. `PreviousAssistant` and
+  `PriorAssistantMessages` must exclude the in-flight turn's assistant output
+  while still preserving current-turn tool results for truth/execution guards.
+  Otherwise successful tool-backed confirmations are misclassified as
+  repetition and the framework manufactures pointless retry churn.
+- **Skill/capability matching must be semantic enough to preserve operator intent.**
+  Capability fit is not allowed to be derived from whitespace-splitting raw
+  skill names while ignoring enabled skill descriptions, triggers, aliases, or
+  punctuation boundaries. Otherwise the system will conclude that `obsidian`
+  and `vault` are missing even when `obsidian-vault` is installed and enabled.
+- **Intent classification must not widen simple authoring turns on lexical noise.**
+  The first-pass task classifier is not allowed to treat generic words like
+  `test` inside filenames, titles, or note bodies as sufficient evidence for a
+  coding turn. Simple document/note authoring requests must stay on the direct
+  execution path unless stronger coding evidence exists.
+- **Placeholder assistant scaffolding must be suppressed at the loop boundary.**
+  Strings like `[assistant message]` or `[agent message]` are not legitimate
+  assistant outputs and must not enter session history, guard comparison, RCA,
+  or user-visible results. The loop owner must normalize or drop these
+  placeholders before they can trigger repetition churn or contaminate
+  diagnostics.
+
+For v1.0.7, the active parity backlog is no longer inferred from the historical
+gap sections below. The authoritative remaining scope is:
+
+- [docs/parity-forensics/parity-ledger.md](./parity-forensics/parity-ledger.md)
+- [docs/parity-forensics/v1.0.7-roadmap.md](./parity-forensics/v1.0.7-roadmap.md)
+
+The older gap sections remain valuable as closure history and evidence, but
+they are not the release-driving backlog anymore.
 
 | Category | Compliant | Gaps |
 |----------|-----------|------|
@@ -64,10 +234,11 @@ older architecture docs had left too generic:
 | Config Schema Derivation (v1.0.3) | Struct-driven | 0 |
 | Pipeline Cache Guards (v1.0.4) | Reject unparsed tool calls | 0 |
 | Session-Aware Routing (v1.0.4) | Escalation tracker | 0 |
+| Model Lifecycle Policy (v1.0.7) | State + reasoned eligibility filter ahead of metascore | 0 |
 | **Agentic Retrieval Architecture (v1.0.5/v1.0.6)** | **Core runtime architecture materially wired** | **cleanup + follow-on gaps remain** |
 | **Working Memory Persistence (v1.0.5)** | **Shutdown/startup** | **0** |
 | **Post-Turn Reflection (v1.0.5)** | **Episode summaries** | **0** |
-| **Verifier/Critic (v1.0.6)** | **Claim-level verifier with proof obligations** | **Partial** |
+| **Verifier/Critic (v1.0.7)** | **Claim-level verifier with structured contradiction + proof diagnostics** | **0** |
 
 ### v1.0.6 Agentic Architecture Layers
 
@@ -87,11 +258,14 @@ older architecture docs had left too generic:
 
 | Layer | Component | Status |
 |-------|-----------|--------|
-| 4 | Parallel Retrieval | Tiers are still queried sequentially |
-| 10 | Fusion Layer | Provenance and freshness survive farther now, but fusion signals are still thin |
-| 11 | LLM-based Reranking | Score-based only in v1.0.6 |
-| 14 | Verifier/Critic depth | Stronger claim-level checks exist, but there is still no full contradiction-resolution or proof-style evidence audit |
-| 3 | Semantic read-path cleanup | Residual `LIKE` safety nets remain until telemetry-backed dormancy justifies removal |
+| 4 | Parallel Retrieval | Closed in the v1.0.7 worktree; routed tiers now fan out concurrently inside the retriever and merge deterministically in router order |
+| 3 | Semantic read-path cleanup | Closed in the v1.0.7 worktree; semantic retrieval now uses an enriched category/key/value FTS corpus and a tier-scoped FTS fallback instead of heuristic SQL |
+
+### v1.0.7 Active Architecture-Led Parity Items
+
+| Roadmap ID | Title | Primary architecture seam |
+|------------|-------|---------------------------|
+| `PAR-008` | Cross-vendor SSE MCP proof | SSE transport confidence must flow through one authoritative named-target validation harness and evidence artifact, with central MCP config conversion plus endpoint-discovery/auth-capable SSE transport semantics, then be backed by more than one real blessed target |
 
 ---
 
@@ -202,6 +376,64 @@ older architecture docs had left too generic:
 
 ---
 
+## Model Lifecycle Policy And Routing Eligibility (v1.0.7)
+
+**Severity**: CLOSED
+**Architecture principle extended**: eligibility is decided before ranking.
+
+**Current state**: Closed in v1.0.7. The Go implementation now treats model
+policy as an explicit architecture seam instead of an accidental byproduct of
+metascore tuning. The policy is no longer only an in-memory/config concern; it
+has a persistent operator-managed lifecycle store with merge semantics against
+configured defaults.
+
+- per-model lifecycle state is configurable and inspectable:
+  - `enabled`
+  - `niche`
+  - `disabled`
+  - `benchmark_only`
+- per-model role eligibility is configurable and inspectable:
+  - orchestrator
+  - subagent
+- every lifecycle decision may carry:
+  - primary reason code
+  - secondary reason codes
+  - operator-readable reason text
+  - evidence references
+  - source
+- policy is resolved centrally from:
+  - configured defaults
+  - persisted operator overrides
+  - canonical normalization of provider-qualified model specs
+- live routing now filters candidates by lifecycle state and role eligibility
+  before metascore or heuristic ranking runs
+- benchmark/exercise selection uses the same lifecycle policy seam instead of
+  a second ad hoc allowlist
+
+**Architectural rule**: metascore is not allowed to stand in for hard policy.
+A model that is disabled or benchmark-only must never enter the live routing
+pool. A model that is subagent-only must never be considered for
+operator-facing orchestration. Ranking happens only inside the surviving
+eligible set.
+
+**Why this matters**: the benchmark program has already shown that “installed”
+and “live-routable on this hardware” are not the same thing. Without explicit
+model policy states, the runtime keeps overloading ranking heuristics to solve
+a lifecycle-management problem they were never meant to own.
+
+**Architectural rule**: policy resolution happens once, centrally, and is then
+reused by live routing, benchmark selection, diagnostics, and operator/admin
+surfaces. State transitions must remain reasoned and evidenced; hidden
+blocklists are not an acceptable substitute.
+
+**Documentation follow-through**: the primary C4 document
+(`docs/diagrams.md`) now reflects this seam directly. Model lifecycle policy,
+benchmark history, canonical turn diagnostics, and the operator-facing
+WebSocket/webchannel observability surface are shown as first-class containers
+instead of being implied only by code or supplementary rules diagrams.
+
+---
+
 ## WebSocket-First Dashboard Architecture (v1.0.3)
 
 **Severity**: N/A (new capability, not a gap)
@@ -260,8 +492,9 @@ The parity program for v1.0.6 is now **decision-complete**.
 - The codebase was materially strengthened in ways that are now backed by both
   runtime tests and durable architecture documentation.
 - Prompt compression is **not** part of that strengthening story for this
-  release. It failed the corrected history-bearing soak gate and remains
-  disabled/deferred.
+  release. It failed the corrected history-bearing soak gate and now has an
+  explicit benchmark-only disposition: disabled by default, not recommended for
+  live use, and retained only for controlled comparison work.
 
 The explicit release-readiness answer for v1.0.6 is:
 
@@ -288,8 +521,8 @@ explicitly rather than hidden behind vague unresolved language.
 - Channel, scheduler, MCP, cache, and guard behavior now match their documented
   operator contracts closely enough to treat remaining differences as accepted
   deviations or explicit deferrals.
-- Prompt compression is clearly disabled/deferred and is not being presented as
-  a release-ready feature.
+- Prompt compression is clearly benchmark-only and is not being presented as a
+  release-ready feature or live optimization.
 
 #### Fitness Audit
 

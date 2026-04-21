@@ -3,7 +3,9 @@ package memory
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -14,9 +16,11 @@ import (
 
 // RetrievalConfig controls hybrid RAG behavior.
 type RetrievalConfig struct {
-	HybridWeight     float64        // FTS vs embedding blend (0=FTS only, 1=embedding only, 0.5=balanced)
-	EpisodicHalfLife float64        // Days for episodic decay (default 7)
-	DecayFloor       float64        // Minimum decay factor (default 0.05)
+	HybridWeight     float64      // FTS vs embedding blend (0=FTS only, 1=embedding only, 0.5=balanced)
+	EpisodicHalfLife float64      // Days for episodic decay (default 7)
+	DecayFloor       float64      // Minimum decay factor (default 0.05)
+	Fusion           FusionConfig // explicit fusion stage between retrieval and reranking
+	LLMReranker      LLMRerankerConfig
 	Reranker         RerankerConfig // reranker tuning parameters
 }
 
@@ -26,6 +30,8 @@ func DefaultRetrievalConfig() RetrievalConfig {
 		HybridWeight:     0.5,
 		EpisodicHalfLife: 7.0,
 		DecayFloor:       0.05,
+		Fusion:           DefaultFusionConfig(),
+		LLMReranker:      DefaultLLMRerankerConfig(),
 		Reranker:         DefaultRerankerConfig(),
 	}
 }
@@ -46,6 +52,7 @@ type Retriever struct {
 	store         *db.Store
 	budgets       TierBudget
 	embedClient   *llm.EmbeddingClient
+	completer     llm.Completer
 	vectorIndex   db.VectorIndex
 	charsPerToken int
 }
@@ -63,6 +70,13 @@ func NewRetriever(cfg RetrievalConfig, budgets TierBudget, store *db.Store) *Ret
 // SetEmbeddingClient attaches an embedding client for hybrid search.
 func (mr *Retriever) SetEmbeddingClient(ec *llm.EmbeddingClient) {
 	mr.embedClient = ec
+}
+
+// SetCompleter attaches an LLM completer for optional post-fusion reranking.
+// The retriever remains fully functional without one; deterministic scoring is
+// still the hard fallback path.
+func (mr *Retriever) SetCompleter(c llm.Completer) {
+	mr.completer = c
 }
 
 // SetVectorIndex attaches a vector index for ANN-based retrieval.
@@ -234,47 +248,26 @@ func (mr *Retriever) RetrieveWithMetrics(ctx context.Context, sessionID, query s
 
 	// 2. Route each subgoal to the appropriate memory tiers.
 	router := NewRouter(corpusSize)
-	var allEvidence []Evidence
+	allEvidence := mr.retrievePlannedEvidence(ctx, subgoals, router, intentsFromContext(ctx), totalTokens, queryEmbed, corpusSize)
 
-	// Intents are per-call ambient state from the request's intent classifier.
-	// See memory.WithIntents for the context-value contract.
-	intents := intentsFromContext(ctx)
-	for _, sg := range subgoals {
-		plan := router.Plan(sg.Question, intents)
+	// 3.5. Fusion: centralize route weight, provenance, freshness, authority,
+	// and corroboration into one retrieval-quality score before reranking.
+	fuser := NewFuser(mr.config.Fusion)
+	fused, fusionSummary := fuser.Fuse(allEvidence)
+	annotateFusionSummary(ctx, fusionSummary)
 
-		// 3. Retrieve from each targeted tier.
-		for _, target := range plan.Targets {
-			tierBudget := int(float64(totalTokens) * target.Budget)
-			if tierBudget <= 0 {
-				continue
-			}
-			tierResults := mr.retrieveTier(ctx, target.Tier, target.Mode, sg.Question, queryEmbed, tierBudget/mr.charsPerToken, corpusSize)
-			for i, ev := range tierResults {
-				if ev.Score == 0 {
-					ev.Score = target.Weight
-				}
-				// Position decay as tiebreaker for entries without explicit ranking metadata.
-				positionDecay := 1.0 - (float64(i) * 0.02)
-				if positionDecay < 0.1 {
-					positionDecay = 0.1
-				}
-				ev.Score *= positionDecay
-				ev.SourceTier = target.Tier
-				if ev.RetrievalMode == "" {
-					ev.RetrievalMode = target.Mode.String()
-				}
-				allEvidence = append(allEvidence, ev)
-			}
-		}
+	// 4. Rerank: discard weak evidence and protect against collapse.
+	llmReranker := NewLLMReranker(mr.config.LLMReranker, mr.completer)
+	rerankCandidates := fused
+	if reranked, ok := llmReranker.Rerank(ctx, query, fused); ok {
+		rerankCandidates = reranked
 	}
-
-	// 4. Rerank: discard weak evidence, boost authority, penalize stale.
 	reranker := NewReranker(mr.config.Reranker)
 	maxEvidence := totalCharsAllowed / (mr.charsPerToken * 50) // rough estimate: ~50 tokens per evidence item
 	if maxEvidence < 5 {
 		maxEvidence = 5
 	}
-	filtered := reranker.Filter(allEvidence, maxEvidence)
+	filtered := reranker.Filter(rerankCandidates, maxEvidence)
 
 	// 5. Structured context assembly: evidence + gaps + contradictions.
 	assembled := AssembleContext(ctx, mr.store, sessionID, filtered, workingText, ambientText)
@@ -311,6 +304,96 @@ func (mr *Retriever) RetrieveWithMetrics(ctx context.Context, sessionID, query s
 	}
 
 	return result, metrics
+}
+
+type tierRetrievalJob struct {
+	SubgoalIndex int
+	TargetIndex  int
+	Question     string
+	Target       RetrievalTarget
+	BudgetTokens int
+}
+
+type tierRetrievalResult struct {
+	SubgoalIndex int
+	TargetIndex  int
+	Question     string
+	Target       RetrievalTarget
+	Evidence     []Evidence
+}
+
+func runTierRetrievalJobs(ctx context.Context, jobs []tierRetrievalJob, retrieve func(context.Context, tierRetrievalJob) []Evidence) []tierRetrievalResult {
+	if len(jobs) == 0 {
+		return nil
+	}
+	results := make([]tierRetrievalResult, len(jobs))
+	var wg sync.WaitGroup
+	for idx, job := range jobs {
+		wg.Add(1)
+		go func(slot int, j tierRetrievalJob) {
+			defer wg.Done()
+			results[slot] = tierRetrievalResult{
+				SubgoalIndex: j.SubgoalIndex,
+				TargetIndex:  j.TargetIndex,
+				Question:     j.Question,
+				Target:       j.Target,
+				Evidence:     retrieve(ctx, j),
+			}
+		}(idx, job)
+	}
+	wg.Wait()
+	sort.Slice(results, func(i, j int) bool {
+		if results[i].SubgoalIndex != results[j].SubgoalIndex {
+			return results[i].SubgoalIndex < results[j].SubgoalIndex
+		}
+		return results[i].TargetIndex < results[j].TargetIndex
+	})
+	return results
+}
+
+func (mr *Retriever) retrievePlannedEvidence(ctx context.Context, subgoals []Subgoal, router *Router, intents []IntentSignal, totalTokens int, queryEmbed []float32, corpusSize int) []Evidence {
+	var jobs []tierRetrievalJob
+	for subgoalIndex, sg := range subgoals {
+		plan := router.Plan(sg.Question, intents)
+		for targetIndex, target := range plan.Targets {
+			tierBudget := int(float64(totalTokens) * target.Budget)
+			if tierBudget <= 0 {
+				continue
+			}
+			jobs = append(jobs, tierRetrievalJob{
+				SubgoalIndex: subgoalIndex,
+				TargetIndex:  targetIndex,
+				Question:     sg.Question,
+				Target:       target,
+				BudgetTokens: tierBudget / mr.charsPerToken,
+			})
+		}
+	}
+	if tracer := retrievalTracerFromContext(ctx); tracer != nil {
+		tracer.Annotate("retrieval.parallel.enabled", true)
+		tracer.Annotate("retrieval.parallel.subgoals", len(subgoals))
+		tracer.Annotate("retrieval.parallel.targets", len(jobs))
+	}
+	results := runTierRetrievalJobs(ctx, jobs, func(ctx context.Context, job tierRetrievalJob) []Evidence {
+		return mr.retrieveTier(ctx, job.Target.Tier, job.Target.Mode, job.Question, queryEmbed, job.BudgetTokens, corpusSize)
+	})
+	var allEvidence []Evidence
+	for _, result := range results {
+		for i, ev := range result.Evidence {
+			positionDecay := 1.0 - (float64(i) * 0.02)
+			if positionDecay < 0.1 {
+				positionDecay = 0.1
+			}
+			ev.RouteWeight = result.Target.Weight
+			ev.PositionDecay = positionDecay
+			ev.SourceTier = result.Target.Tier
+			if ev.RetrievalMode == "" {
+				ev.RetrievalMode = result.Target.Mode.String()
+			}
+			allEvidence = append(allEvidence, ev)
+		}
+	}
+	return allEvidence
 }
 
 // retrieveAmbientRecent fetches episodic memories from the last N hours,

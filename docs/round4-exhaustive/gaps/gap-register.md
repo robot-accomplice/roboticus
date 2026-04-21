@@ -1,5 +1,29 @@
 # Gap Register — Round 4 Exhaustive Audit
 
+## v1.0.7 Supersession Note
+
+This register is historical evidence, not the authoritative v1.0.7 backlog.
+
+The active parity scope now lives in:
+
+- [docs/parity-forensics/parity-ledger.md](../../parity-forensics/parity-ledger.md)
+- [docs/parity-forensics/v1.0.7-roadmap.md](../../parity-forensics/v1.0.7-roadmap.md)
+
+Only the following Round 4 findings are still materially represented in the
+v1.0.7 roadmap:
+
+| Round 4 ID | Current disposition |
+|------------|---------------------|
+| `G006` | Reopened through `PAR-009` (prompt compression final disposition) |
+| `G013` | Reopened through `PAR-013` / `PAR-014` as part of retrieval/reranking/read-path closure |
+| `G038` | Reopened through `PAR-005` (delegated task lifecycle parity) |
+| `G064` | Split and reopened through `PAR-002` through `PAR-006` |
+| `G065`-`G070` | Reopened through `PAR-010` (verifier contradiction resolution) |
+
+Everything else in this register is either already closed elsewhere, obsolete,
+or superseded by the later parity-forensics system audits. Do not treat this
+file as the execution checklist for the release.
+
 ## Wave 1 Findings
 
 ### CRITICAL (blocks correct behavior)

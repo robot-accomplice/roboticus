@@ -43,7 +43,7 @@ func (m *ConnectionManager) Connect(ctx context.Context, cfg McpServerConfig) er
 		if cfg.URL == "" {
 			return fmt.Errorf("mcp: SSE transport requires a URL")
 		}
-		conn, err = ConnectSSE(ctx, cfg.Name, cfg.URL)
+		conn, err = ConnectSSEWithConfig(ctx, cfg)
 	default:
 		return fmt.Errorf("mcp: unsupported transport %q (supported: stdio, sse)", cfg.Transport)
 	}

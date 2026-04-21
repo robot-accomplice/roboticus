@@ -13,6 +13,7 @@ type agentMessageRequest struct {
 	GroupID   string `json:"group_id,omitempty"`
 	IsGroup   bool   `json:"is_group,omitempty"`
 	NoCache   bool   `json:"no_cache,omitempty"`
+	NoEscalate bool  `json:"no_escalate,omitempty"`
 }
 
 // agentMessageResponse wraps the pipeline Outcome with Rust-parity response fields.

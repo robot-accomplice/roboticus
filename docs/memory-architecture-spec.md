@@ -1,7 +1,7 @@
 # Memory Architecture Specification
 
 > Authoritative reference for the Roboticus memory system.
-> Updated for **v1.0.6** (semantic FTS+vector closure, relational distillation, typed verification evidence).
+> Updated for **v1.0.7** (explicit fusion stage, parity-led retrieval closures, typed verification evidence).
 > Derived from exhaustive analysis of the Rust reference implementation (v0.11.4)
 > and extended with the 13-layer agentic AI reference architecture.
 >
@@ -35,6 +35,14 @@
 >   Older callers that still set only rendered `MemoryContext` derive a typed
 >   `VerificationEvidence` artifact at the session boundary; downstream
 >   verifier/guard consumers stay on typed artifacts only.
+> - **Fusion is now explicit.** Route weight, provenance, freshness,
+>   authority, and corroboration are combined once in a dedicated fusion stage
+>   before reranking. This keeps the retrieval-quality decision boundary
+>   inspectable for RCA and future ML work.
+> - **LLM reranking is now an explicit optional stage, not an implicit
+>   heuristic hope.** When enabled, it runs after fusion and before context
+>   assembly, uses the shared LLM service, and degrades cleanly to
+>   deterministic score-based reranking.
 
 ---
 
@@ -764,6 +772,19 @@ per tier. `AggregateRetrievalPaths()` is the operator-facing gate.
 | FTS trigger completeness + backfill (M3.1) | FIXED | `internal/db/migrations/048_fts_trigger_completeness.sql`, `internal/db/fts_trigger_completeness_test.go` |
 | HybridSearch-first retrieval + per-tier path telemetry (M3.2) | FIXED | `internal/agent/memory/retrieval_tiers.go`, `internal/agent/memory/retrieval_path.go`, `internal/agent/memory/workflow.go` |
 | Relational distillation into `knowledge_facts` (M8) | FIXED | `internal/agent/memory/reflection.go`, `internal/agent/memory/consolidation_distillation.go` |
+
+v1.0.7 clarification: the broader structured distillation surface is now
+explicitly part of the memory architecture, not accidental drift. Recurring
+high-quality `episode_summary` artifacts may promote:
+
+- `semantic_memory:episode_learning`
+- `semantic_memory:fix_pattern`
+- `semantic_memory:learned_fact`
+- canonical `knowledge_facts` relations
+
+Each promotion path remains bounded by distinct support thresholds, quality
+gating, canonical-vocabulary enforcement where applicable, and idempotent
+writes.
 | Telemetry-backed dormancy aggregator for LIKE retirement (M3.3) | FIXED | `internal/agent/memory/retrieval_path_telemetry.go` |
 
 ### 8.2 Remaining Gaps

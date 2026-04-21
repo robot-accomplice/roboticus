@@ -116,6 +116,30 @@ func TestWriteFileTool_Execute(t *testing.T) {
 	}
 }
 
+func TestObsidianWriteTool_Execute(t *testing.T) {
+	vault := t.TempDir()
+	tool := &ObsidianWriteTool{VaultPath: vault}
+	tctx := &Context{
+		Workspace:    t.TempDir(),
+		AllowedPaths: []string{vault},
+	}
+
+	result, err := tool.Execute(context.Background(), `{"path":"Projects/Daily Note","content":"# Notes"}`, tctx)
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if result == nil {
+		t.Fatal("result should not be nil")
+	}
+	data, err := os.ReadFile(filepath.Join(vault, "Projects", "Daily Note.md"))
+	if err != nil {
+		t.Fatalf("read written note: %v", err)
+	}
+	if string(data) != "# Notes" {
+		t.Fatalf("written note = %q, want %q", string(data), "# Notes")
+	}
+}
+
 func TestEditFileTool_Execute(t *testing.T) {
 	ws := t.TempDir()
 	// Seed a file to edit.
