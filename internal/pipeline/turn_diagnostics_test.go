@@ -553,6 +553,20 @@ func TestTurnDiagnosticsRecorder_LivenessSnapshotDistinguishesRetryChurn(t *test
 	}
 }
 
+func TestDiagnosticsStatusFromEvents_IgnoresAdvisoryStageLivenessWarning(t *testing.T) {
+	events := []TurnDiagnosticEvent{
+		{Type: "model_attempt_started", Status: "running"},
+		{Type: "stage_liveness_warning", Status: "error"},
+		{Type: "model_attempt_finished", Status: "ok"},
+		{Type: "response_finalized", Status: "ok"},
+	}
+
+	status := diagnosticsStatusFromEvents(events)
+	if status != "ok" {
+		t.Fatalf("status = %q, want ok", status)
+	}
+}
+
 func TestPipelineRun_PersistsVerifierDiagnosticsAgainstTurnRecord(t *testing.T) {
 	store := testutil.TempStore(t)
 	exec := &sequencedExecutor{responses: []string{

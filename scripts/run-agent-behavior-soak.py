@@ -14,7 +14,7 @@ Usage:
   SOAK_SERVER_MODE=fresh python3 scripts/run-agent-behavior-soak.py
 
 Environment:
-  BASE_URL                      Server URL (default: http://127.0.0.1:18790)
+  BASE_URL                      Server URL (default: http://localhost:18790)
   SOAK_TIMEOUT_SECONDS          HTTP request timeout (default: 1800)
   SOAK_MAX_LATENCY_SECONDS      Max acceptable latency per scenario (default: 900)
   SOAK_SCENARIO_PAUSE_SECONDS   Pause between scenarios (default: 1.5)
@@ -62,7 +62,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-BASE_URL = os.environ.get("BASE_URL", "http://127.0.0.1:18790").rstrip("/")
+BASE_URL = os.environ.get("BASE_URL", "http://localhost:18790").rstrip("/")
 # Soak tests are long-running by design — timeouts must be extraordinarily high.
 # The HTTP timeout is the maximum wall-clock time for a single API call.
 # The latency threshold is the default max acceptable time per scenario.
@@ -181,6 +181,7 @@ class ManagedServer:
     before_hashes: Dict[str, Optional[str]]
     process: Optional[subprocess.Popen] = None
     server_log: Optional[Path] = None
+    log_handle: Optional[object] = None
     restored_paths: Optional[List[str]] = None
 
 
@@ -245,7 +246,7 @@ def copy_if_exists(src: Path, dst: Path) -> None:
 
 def parse_base_url() -> Tuple[str, int]:
     parsed = urllib.parse.urlparse(BASE_URL)
-    host = parsed.hostname or "127.0.0.1"
+    host = parsed.hostname or "localhost"
     port = parsed.port
     if port is None:
         port = 443 if parsed.scheme == "https" else 80
@@ -613,20 +614,33 @@ def stop_managed_server(managed: ManagedServer) -> None:
         return
     if managed.process.poll() is not None:
         return
-    managed.process.send_signal(signal.SIGINT)
+    pid = managed.process.pid
+    try:
+        os.killpg(pid, signal.SIGINT)
+    except ProcessLookupError:
+        return
     try:
         managed.process.wait(timeout=20)
     except subprocess.TimeoutExpired:
-        managed.process.terminate()
+        try:
+            os.killpg(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            return
         try:
             managed.process.wait(timeout=10)
         except subprocess.TimeoutExpired:
-            managed.process.kill()
+            try:
+                os.killpg(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                return
             managed.process.wait(timeout=5)
 
 
 def cleanup_managed_server(managed: ManagedServer) -> None:
     stop_managed_server(managed)
+    if managed.log_handle is not None:
+        managed.log_handle.close()
+        managed.log_handle = None
     managed.restored_paths = verify_or_restore(managed)
     if not KEEP_ISOLATED_ROOT:
         shutil.rmtree(managed.isolated_root.parent if managed.mode == "clone" else managed.isolated_root.parent, ignore_errors=True)
@@ -667,6 +681,7 @@ def prepare_managed_server() -> Optional[ManagedServer]:
 
     assert managed.server_log is not None
     log_fh = managed.server_log.open("w", encoding="utf-8")
+    managed.log_handle = log_fh
     managed.process = subprocess.Popen(
         [
             "go",
@@ -684,6 +699,7 @@ def prepare_managed_server() -> Optional[ManagedServer]:
         stdout=log_fh,
         stderr=subprocess.STDOUT,
         text=True,
+        start_new_session=True,
     )
     atexit.register(cleanup_managed_server, managed)
     wait_for_health(BASE_URL, SERVER_START_TIMEOUT)

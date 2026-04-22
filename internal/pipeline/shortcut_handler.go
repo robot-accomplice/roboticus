@@ -60,6 +60,8 @@ type ShortcutHandler interface {
 
 type AcknowledgementShortcut struct{}
 
+type DirectedAcknowledgementShortcut struct{}
+
 var acknowledgements = []string{
 	"ok", "okay", "thanks", "thank you", "got it", "understood", "k", "ty",
 	"cool", "alright", "sure", "yep", "yes", "no problem", "np",
@@ -86,6 +88,21 @@ func (a *AcknowledgementShortcut) TryMatch(content string, ctx *ShortcutContext)
 
 func (a *AcknowledgementShortcut) Respond(_ string, _ *ShortcutContext) string {
 	return "Acknowledged. Let me know if you need anything else."
+}
+
+func (a *DirectedAcknowledgementShortcut) TryMatch(content string, ctx *ShortcutContext) *ShortcutMatch {
+	if ctx != nil && (ctx.CorrectionTurn || ctx.DelegationProvenance) {
+		return nil
+	}
+	lower := strings.TrimSpace(strings.ToLower(content))
+	if strings.Contains(lower, "acknowledge this request") {
+		return &ShortcutMatch{Confidence: 0.98, Handler: "directed_acknowledgement"}
+	}
+	return nil
+}
+
+func (a *DirectedAcknowledgementShortcut) Respond(_ string, _ *ShortcutContext) string {
+	return "Acknowledged; awaiting your next instruction."
 }
 
 // ── IdentityShortcut ──────────────────────────────────────────────────────
@@ -170,6 +187,7 @@ func (i *IntrospectionShortcut) Respond(_ string, ctx *ShortcutContext) string {
 func DefaultShortcutHandlers() []ShortcutHandler {
 	return []ShortcutHandler{
 		&IntrospectionShortcut{},
+		&DirectedAcknowledgementShortcut{},
 		&IdentityShortcut{},
 		&HelpShortcut{},
 		&AcknowledgementShortcut{},

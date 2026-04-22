@@ -81,7 +81,7 @@ func (s *Service) routingAssessment(req *Request, selectedModel string) ([]Routi
 	complexity := requestRoutingComplexity(req)
 	requestWeights := weights
 	if req.TurnWeight != "" {
-		requestWeights = routingWeightsForRequest(weights, req.TurnWeight, req.TaskIntent, req.TaskComplexity)
+		requestWeights = routingWeightsForRequest(weights, req.TurnWeight, requestRoutingIntent(req), req.TaskComplexity)
 	}
 
 	for _, p := range profiles {

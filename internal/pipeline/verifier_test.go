@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	agenttools "roboticus/internal/agent/tools"
+	"roboticus/internal/llm"
 	"roboticus/internal/session"
 )
 
@@ -29,6 +30,18 @@ func TestVerifyResponse_AllowsUncertainLanguageOnGaps(t *testing.T) {
 	result := VerifyResponse("Based on the available evidence, I'm not certain yet. We need more data from the deployment logs.", ctx)
 	if !result.Passed {
 		t.Fatalf("expected uncertain response to pass verification, got %+v", result.Issues)
+	}
+}
+
+func TestVerifyResponse_AllowsGeopoliticalUncertaintyLanguageOnGaps(t *testing.T) {
+	ctx := VerificationContext{
+		UserPrompt: "What's the geopolitical situation?",
+		HasGaps:    true,
+	}
+
+	result := VerifyResponse("I don't have up-to-date information on the current geopolitical situation. For accurate insights, it's best to refer to reliable current reporting.", ctx)
+	if !result.Passed {
+		t.Fatalf("expected uncertainty-forward geopolitical response to pass, got %+v", result.Issues)
 	}
 }
 
@@ -107,6 +120,128 @@ func TestVerifyResponse_FailsWhenActionPlanMissing(t *testing.T) {
 	}
 }
 
+func TestVerificationSubgoals_DoesNotDoubleCountWholePromptAndConjunctionParts(t *testing.T) {
+	goals := verificationSubgoals("Explain the root cause and propose a remediation plan")
+	if len(goals) != 2 {
+		t.Fatalf("expected 2 canonical subgoals, got %+v", goals)
+	}
+	if goals[0] != "Explain the root cause" || goals[1] != "propose a remediation plan" {
+		t.Fatalf("unexpected canonical subgoals: %+v", goals)
+	}
+}
+
+func TestVerificationSubgoals_StripsOutputShapeDirective(t *testing.T) {
+	goals := verificationSubgoals("Count markdown files recursively in the target docs dir and return only the number.")
+	if len(goals) != 1 {
+		t.Fatalf("expected 1 semantic subgoal, got %+v", goals)
+	}
+	if goals[0] != "Count markdown files recursively in the target docs dir" {
+		t.Fatalf("unexpected semantic subgoal: %+v", goals)
+	}
+}
+
+func TestNormalizeSemanticSubgoals_DropsFormattingOnlyGoals(t *testing.T) {
+	goals := normalizeSemanticSubgoals([]string{
+		"Reply with only the number 1.",
+		"Count markdown files recursively in the target docs dir and return only the number.",
+	})
+	if len(goals) != 1 {
+		t.Fatalf("expected 1 semantic subgoal, got %+v", goals)
+	}
+	if goals[0] != "Count markdown files recursively in the target docs dir" {
+		t.Fatalf("unexpected semantic subgoal: %+v", goals)
+	}
+}
+
+func TestBuildVerificationContext_UsesSessionHistoryAsContinuityEvidence(t *testing.T) {
+	sess := session.New("s-history", "a1", "Bot")
+	sess.AddUserMessage("Remember this exact project codename for later: basalt-orchid. Also remember these output rules for later replies: answer in lowercase, use semicolons, and mention the codename. Reply only with noted.")
+	sess.AddAssistantMessage("noted.", nil)
+	sess.AddUserMessage("What codename and output rules did I tell you to remember? Reply on one line.")
+
+	ctx := BuildVerificationContext(sess)
+	if !ctx.HasCanonicalEvidence {
+		t.Fatal("expected continuity question to promote session history to canonical evidence")
+	}
+	if len(ctx.EvidenceItems) == 0 {
+		t.Fatal("expected continuity evidence items")
+	}
+}
+
+func TestBuildVerificationContext_StripsFormattingOnlySessionSubgoals(t *testing.T) {
+	sess := session.New("s-format", "a1", "Bot")
+	sess.AddUserMessage("Reply with only the number 1.")
+	sess.SetTaskVerificationHints("task", "simple", "execute_directly", []string{"Reply with only the number 1."})
+
+	ctx := BuildVerificationContext(sess)
+	if len(ctx.Subgoals) != 0 {
+		t.Fatalf("subgoals = %+v, want none after formatting normalization", ctx.Subgoals)
+	}
+}
+
+func TestBuildVerificationContext_ContinuityEvidenceOverridesGenericGaps(t *testing.T) {
+	sess := session.New("s-history-gap", "a1", "Bot")
+	sess.AddUserMessage("Remember this exact project codename for later: basalt-orchid. Reply only with noted.")
+	sess.AddAssistantMessage("noted.", nil)
+	sess.AddUserMessage("What codename did I tell you to remember? Reply on one line.")
+	sess.SetMemoryContext("[Active Memory]\n\n[Retrieved Evidence]\n1. [semantic, 0.8] unrelated fact\n[Gaps]\n- No relevant procedures\n")
+
+	ctx := BuildVerificationContext(sess)
+	if !ctx.HasCanonicalEvidence {
+		t.Fatal("expected canonical continuity evidence")
+	}
+	if ctx.HasGaps {
+		t.Fatal("continuity evidence should override generic retrieval gaps")
+	}
+}
+
+func TestVerifyResponse_PassesWhenActionPlanGoalUsesEquivalentRemediationLanguage(t *testing.T) {
+	ctx := VerificationContext{
+		UserPrompt:         "Explain the root cause and propose a remediation plan",
+		RequiresActionPlan: true,
+		Subgoals:           []string{"Explain the root cause", "propose a remediation plan"},
+	}
+
+	result := VerifyResponse("The root cause was a stale cache entry in billing. Recommended fix: invalidate the cache on deploy and add a consistency check before invoice generation.", ctx)
+	if !result.Passed {
+		t.Fatalf("expected equivalent remediation language to satisfy plan coverage, got %+v", result.Issues)
+	}
+}
+
+func TestVerifyResponse_PassesWhenAffectedSystemsAnswerIsCautiousAndPartiallySupported(t *testing.T) {
+	ctx := VerificationContext{
+		UserPrompt: "Create a report that explains the root cause and identifies which systems were affected.",
+		Subgoals: []string{
+			"Create a report that explains the root cause",
+			"identifies which systems were affected.",
+		},
+		EvidenceItems: []string{
+			"Billing service cache invalidation failed after deploy",
+		},
+		HasGaps: true,
+	}
+
+	result := VerifyResponse("The root cause was a stale billing cache. The available evidence confirms impact to billing, but ledger still needs verification.", ctx)
+	if !result.Passed {
+		t.Fatalf("expected cautious partial-entity answer to pass, got %+v", result.Issues)
+	}
+}
+
+func TestVerifyResponse_PassesWhenScheduledOutputSatisfiesScheduleGoal(t *testing.T) {
+	ctx := VerificationContext{
+		UserPrompt: "schedule a cron job that runs every 5 minutes and tell me exactly what was scheduled",
+		Subgoals: []string{
+			"schedule a cron job that runs every 5 minutes",
+			"tell me exactly what was scheduled",
+		},
+	}
+
+	result := VerifyResponse("Created cron job 'periodic-check' with schedule */5 * * * * — runs every 5 minutes. ID: cron-abc123.", ctx)
+	if !result.Passed {
+		t.Fatalf("expected scheduled output to satisfy cron coverage, got %+v", result.Issues)
+	}
+}
+
 func TestVerifyResponse_FailsPolicySensitiveAbsoluteAnswerWithoutCanonicalAnchor(t *testing.T) {
 	ctx := VerificationContext{
 		UserPrompt:           "What is the refund policy?",
@@ -177,6 +312,59 @@ func TestBuildVerificationContext_PromotesArtifactProofIntoEvidence(t *testing.T
 	}
 }
 
+func TestBuildVerificationContext_PromotesSourceArtifactReadProofIntoEvidence(t *testing.T) {
+	sess := session.New("s-read", "a1", "Bot")
+	sess.AddUserMessage("Read tmp/in.txt and then create tmp/out.txt containing exactly hello")
+	proof := agenttools.NewArtifactReadProof("workspace_file", "tmp/in.txt", "source-data")
+	sess.AddToolResultWithMetadata("call-1", "read_file", "source-data", proof.Metadata(), false)
+
+	ctx := BuildVerificationContext(sess)
+	if len(ctx.SourceArtifactProofs) != 1 {
+		t.Fatalf("source artifact proofs = %d, want 1", len(ctx.SourceArtifactProofs))
+	}
+	if !ctx.HasCanonicalEvidence {
+		t.Fatal("source read proof should count as canonical evidence")
+	}
+	if len(ctx.EvidenceItems) == 0 {
+		t.Fatal("expected source read proof evidence item")
+	}
+}
+
+func TestBuildVerifierRetryPlan_SourceArtifactUnreadPrefersSourceReadTools(t *testing.T) {
+	result := VerificationResult{
+		Passed: false,
+		Issues: []VerificationIssue{{
+			Code:   "source_artifact_unread",
+			Detail: "the response depends on source artifacts that were referenced in the prompt but not read through authoritative tool-backed evidence: tmp/in.txt",
+		}},
+	}
+	ctx := VerificationContext{
+		SourceArtifacts: []string{"tmp/in.txt"},
+	}
+	selected := []llm.ToolDef{
+		{Type: "function", Function: llm.ToolFuncDef{Name: "write_file"}},
+		{Type: "function", Function: llm.ToolFuncDef{Name: "recall_memory"}},
+		{Type: "function", Function: llm.ToolFuncDef{Name: "read_file"}},
+		{Type: "function", Function: llm.ToolFuncDef{Name: "get_runtime_context"}},
+	}
+
+	plan := buildVerifierRetryPlan(result, ctx, selected)
+	if !strings.Contains(plan.Message, "reading the prompt-named source artifact") {
+		t.Fatalf("retry message = %q, want source-read corrective guidance", plan.Message)
+	}
+	if plan.CorrectionReason == "" {
+		t.Fatal("expected correction reason")
+	}
+	if len(plan.ToolDefs) != 3 {
+		t.Fatalf("tool defs = %d, want 3", len(plan.ToolDefs))
+	}
+	for _, def := range plan.ToolDefs {
+		if def.Function.Name == "recall_memory" {
+			t.Fatal("recall_memory should be removed from source-read corrective retry surface")
+		}
+	}
+}
+
 func TestVerifyResponse_AllowsDirectArtifactClaimWhenExactProofOverridesStaleGaps(t *testing.T) {
 	ctx := VerificationContext{
 		UserPrompt:        "Create tmp/out.txt containing exactly hello",
@@ -226,7 +414,9 @@ func TestVerifyResponse_AllowsDirectArtifactClaimWhenWithContentPromptExactProof
 		},
 		ArtifactProofs: []agenttools.ArtifactProof{configProof, runbookProof},
 	}
-	ctx.ExpectedArtifacts = ParseExpectedArtifactSpecs(prompt)
+	contract := ParseArtifactPromptContract(prompt)
+	ctx.ExpectedArtifacts = contract.ExpectedOutputs
+	ctx.SourceArtifacts = contract.SourceInputs
 	ctx.ArtifactConformance = CompareArtifactConformance(ctx.ExpectedArtifacts, ctx.ArtifactProofs)
 	if len(ctx.ExpectedArtifacts) != 2 || !ctx.ArtifactConformance.AllExactSatisfied() {
 		t.Fatalf("expected exact artifact specs and conformance, got specs=%+v conformance=%+v", ctx.ExpectedArtifacts, ctx.ArtifactConformance)
@@ -266,6 +456,134 @@ func TestVerifyResponse_FailsWhenExactArtifactContentMismatches(t *testing.T) {
 	}
 	if !result.HasIssue("artifact_content_mismatch") {
 		t.Fatalf("issues = %+v, want artifact_content_mismatch", result.Issues)
+	}
+}
+
+func TestVerifyResponse_FailsWhenResponseInventsExtraArtifact(t *testing.T) {
+	prompt := "Create two files in tmp/check/ exactly as follows. File 1: alpha.txt with content:\nALPHA\nFile 2: beta.txt with content:\nBETA"
+	alpha := agenttools.NewArtifactProof("workspace_file", "tmp/check/alpha.txt", "ALPHA", false)
+	beta := agenttools.NewArtifactProof("workspace_file", "tmp/check/beta.txt", "BETA", false)
+	ctx := VerificationContext{
+		UserPrompt:     prompt,
+		ToolResults:    []ToolResultEntry{{ToolName: "write_file", Output: alpha.Output(), ArtifactProof: &alpha}, {ToolName: "write_file", Output: beta.Output(), ArtifactProof: &beta}},
+		ArtifactProofs: []agenttools.ArtifactProof{alpha, beta},
+	}
+	contract := ParseArtifactPromptContract(prompt)
+	ctx.ExpectedArtifacts = contract.ExpectedOutputs
+	ctx.SourceArtifacts = contract.SourceInputs
+	ctx.ArtifactConformance = CompareArtifactConformance(ctx.ExpectedArtifacts, ctx.ArtifactProofs)
+	if !ctx.ArtifactConformance.AllExactSatisfied() {
+		t.Fatalf("expected exact artifact conformance, got %+v", ctx.ArtifactConformance)
+	}
+
+	result := VerifyResponse("I created alpha.txt, beta.txt, and gamma.txt.", ctx)
+	if result.Passed {
+		t.Fatal("expected verification failure on invented extra artifact")
+	}
+	if !result.HasIssue("artifact_set_overclaim") {
+		t.Fatalf("issues = %+v, want artifact_set_overclaim", result.Issues)
+	}
+}
+
+func TestVerifyResponse_FailsWhenUnexpectedArtifactWasWritten(t *testing.T) {
+	prompt := "Create two files in tmp/check/ exactly as follows. File 1: alpha.txt with content:\nALPHA\nFile 2: beta.txt with content:\nBETA"
+	alpha := agenttools.NewArtifactProof("workspace_file", "tmp/check/alpha.txt", "ALPHA", false)
+	beta := agenttools.NewArtifactProof("workspace_file", "tmp/check/beta.txt", "BETA", false)
+	gamma := agenttools.NewArtifactProof("workspace_file", "tmp/check/gamma.txt", "GAMMA", false)
+	ctx := VerificationContext{
+		UserPrompt:     prompt,
+		ToolResults:    []ToolResultEntry{{ToolName: "write_file", Output: alpha.Output(), ArtifactProof: &alpha}, {ToolName: "write_file", Output: beta.Output(), ArtifactProof: &beta}, {ToolName: "write_file", Output: gamma.Output(), ArtifactProof: &gamma}},
+		ArtifactProofs: []agenttools.ArtifactProof{alpha, beta, gamma},
+	}
+	contract := ParseArtifactPromptContract(prompt)
+	ctx.ExpectedArtifacts = contract.ExpectedOutputs
+	ctx.SourceArtifacts = contract.SourceInputs
+	ctx.ArtifactConformance = CompareArtifactConformance(ctx.ExpectedArtifacts, ctx.ArtifactProofs)
+	if len(ctx.ArtifactConformance.Unexpected) != 1 {
+		t.Fatalf("expected one unexpected proof, got %+v", ctx.ArtifactConformance)
+	}
+
+	result := VerifyResponse("I created alpha.txt, beta.txt, and gamma.txt.", ctx)
+	if result.Passed {
+		t.Fatal("expected verification failure on unexpected artifact write")
+	}
+	if !result.HasIssue("artifact_unexpected_write") {
+		t.Fatalf("issues = %+v, want artifact_unexpected_write", result.Issues)
+	}
+}
+
+func TestVerifyResponse_AllowsInspectionListingWithoutArtifactContract(t *testing.T) {
+	ctx := VerificationContext{
+		UserPrompt:    "What's in your vault right now?",
+		Intent:        "task",
+		PlannedAction: "execute_directly",
+		ToolResults: []ToolResultEntry{
+			{
+				ToolName: "list_directory",
+				Output:   "alpha.txt\nbeta.txt\ngamma.txt",
+			},
+		},
+	}
+	result := VerifyResponse("The vault currently contains alpha.txt, beta.txt, and gamma.txt.", ctx)
+	if result.HasIssue("artifact_set_overclaim") {
+		t.Fatalf("issues = %+v, did not expect artifact_set_overclaim", result.Issues)
+	}
+}
+
+func TestVerifyResponse_AllowsCodeFolderInspectionListingWithInspectionEvidence(t *testing.T) {
+	ctx := VerificationContext{
+		UserPrompt:        "What are the ten most recently updated projects in my code folder?",
+		Intent:            "task",
+		PlannedAction:     "execute_directly",
+		InspectionProofs:  []agenttools.InspectionProof{agenttools.NewInspectionProof("directory_listing", "list_directory", "/Users/jmachen/code", 10)},
+		ToolResults:       []ToolResultEntry{{ToolName: "list_directory", Output: "claude/\nroboticus/\nroboticus-site/\n", Inspection: func() *agenttools.InspectionProof { p := agenttools.NewInspectionProof("directory_listing", "list_directory", "/Users/jmachen/code", 3); return &p }()}},
+	}
+	result := VerifyResponse("The ten most recently updated projects include `claude/`, `roboticus/`, and `roboticus-site/`.", ctx)
+	if result.HasIssue("artifact_set_overclaim") {
+		t.Fatalf("issues = %+v, did not expect artifact_set_overclaim", result.Issues)
+	}
+}
+
+func TestVerifyResponse_AllowsTruthfulSourceArtifactReference(t *testing.T) {
+	prompt := "Read tmp/procedural-workflow-1/requirements.txt, then create exactly two files in tmp/procedural-workflow-1/: deploy-config.json with content:\n{}\nFile 2: rollout-runbook.md with content:\n# Runbook"
+	config := agenttools.NewArtifactProof("workspace_file", "tmp/procedural-workflow-1/deploy-config.json", "{}", false)
+	runbook := agenttools.NewArtifactProof("workspace_file", "tmp/procedural-workflow-1/rollout-runbook.md", "# Runbook", false)
+	contract := ParseArtifactPromptContract(prompt)
+	ctx := VerificationContext{
+		UserPrompt:        prompt,
+		ToolResults:       []ToolResultEntry{{ToolName: "write_file", Output: config.Output(), ArtifactProof: &config}, {ToolName: "write_file", Output: runbook.Output(), ArtifactProof: &runbook}},
+		ArtifactProofs:    []agenttools.ArtifactProof{config, runbook},
+		ExpectedArtifacts: contract.ExpectedOutputs,
+		SourceArtifacts:   contract.SourceInputs,
+	}
+	ctx.ArtifactConformance = CompareArtifactConformance(ctx.ExpectedArtifacts, ctx.ArtifactProofs)
+	result := VerifyResponse("I read requirements.txt and created deploy-config.json and rollout-runbook.md.", ctx)
+	if result.HasIssue("artifact_set_overclaim") {
+		t.Fatalf("issues = %+v, did not expect artifact_set_overclaim", result.Issues)
+	}
+}
+
+func TestVerifyResponse_FailsWhenSourceArtifactWasNotRead(t *testing.T) {
+	prompt := "Read tmp/procedural-workflow-1/requirements.txt, then create exactly two files in tmp/procedural-workflow-1/: deploy-config.json with content:\n{}\nFile 2: rollout-runbook.md with content:\n# Runbook"
+	config := agenttools.NewArtifactProof("workspace_file", "tmp/procedural-workflow-1/deploy-config.json", "{}", false)
+	runbook := agenttools.NewArtifactProof("workspace_file", "tmp/procedural-workflow-1/rollout-runbook.md", "# Runbook", false)
+	contract := ParseArtifactPromptContract(prompt)
+	ctx := VerificationContext{
+		UserPrompt:        prompt,
+		ToolResults:       []ToolResultEntry{{ToolName: "write_file", Output: config.Output(), ArtifactProof: &config}, {ToolName: "write_file", Output: runbook.Output(), ArtifactProof: &runbook}},
+		ArtifactProofs:    []agenttools.ArtifactProof{config, runbook},
+		ExpectedArtifacts: contract.ExpectedOutputs,
+		SourceArtifacts:   contract.SourceInputs,
+	}
+	ctx.ArtifactConformance = CompareArtifactConformance(ctx.ExpectedArtifacts, ctx.ArtifactProofs)
+	ctx.SourceConformance = CompareSourceArtifactConformance(ctx.SourceArtifacts, nil)
+
+	result := VerifyResponse("I created deploy-config.json and rollout-runbook.md based on requirements.txt.", ctx)
+	if result.Passed {
+		t.Fatal("expected verification failure when source artifact was not read")
+	}
+	if !result.HasIssue("source_artifact_unread") {
+		t.Fatalf("issues = %+v, want source_artifact_unread", result.Issues)
 	}
 }
 
@@ -429,6 +747,77 @@ func TestVerifyResponse_PassesWhenAnsweredSubgoalsAreEvidenceSupported(t *testin
 	result := VerifyResponse("The root cause was a stale billing cache, and the affected systems were billing and ledger.", ctx)
 	if !result.Passed {
 		t.Fatalf("expected evidence-supported response to pass, got %+v", result.Issues)
+	}
+}
+
+func TestVerifyResponse_PassesConciseArtifactBackedReportCompletion(t *testing.T) {
+	ctx := VerificationContext{
+		UserPrompt: "Generate a report on all development projects in my code directory including project path, project name, project languages, project first edit date, project last edit date, and whether the project is out of date with the remote origin repo and in which direction. Order it by last edit date descending and write the report as a new document to my obsidian vault on my desktop.",
+		PlannedAction: "execute_directly",
+		Subgoals: []string{
+			"project path",
+			"project name",
+			"project language(s)",
+			"project first edit date",
+			"project last edit date",
+			"whether the project is out of date with the remote origin repo and in which direction",
+		},
+		ArtifactProofs: []agenttools.ArtifactProof{{
+			ProofType:            "artifact_write",
+			ArtifactKind:         "file",
+			Path:                 "/Users/jmachen/Desktop/My Vault/development_projects_report.md",
+			Bytes:                2048,
+			ContentSHA256:        "abc123",
+			ExactContentIncluded: false,
+		}},
+		EvidenceItems: []string{
+			"project inventory gathered from /Users/jmachen/code",
+			"written report saved to /Users/jmachen/Desktop/My Vault/development_projects_report.md",
+		},
+	}
+
+	result := VerifyResponse("The report has been generated and saved to your Desktop vault as development_projects_report.md.", ctx)
+	if !result.Passed {
+		t.Fatalf("expected concise artifact-backed completion to pass, got %+v", result.Issues)
+	}
+	if result.HasIssue("subgoal_coverage") {
+		t.Fatalf("did not expect subgoal_coverage, got %+v", result.Issues)
+	}
+}
+
+func TestVerifyResponse_MixedOutputTurnStillRequiresChatCoverage(t *testing.T) {
+	ctx := VerificationContext{
+		UserPrompt: "Generate a report on all development projects in my code directory, write it to my desktop vault, and also summarize the top three most recently updated projects here in chat.",
+		PlannedAction: "execute_directly",
+		Subgoals: []string{
+			"project path",
+			"project name",
+			"project language(s)",
+			"project first edit date",
+			"project last edit date",
+			"whether the project is out of date with the remote origin repo and in which direction",
+			"summarize the top three most recently updated projects here in chat",
+		},
+		ArtifactProofs: []agenttools.ArtifactProof{{
+			ProofType:            "artifact_write",
+			ArtifactKind:         "file",
+			Path:                 "/Users/jmachen/Desktop/My Vault/development_projects_report.md",
+			Bytes:                2048,
+			ContentSHA256:        "abc123",
+			ExactContentIncluded: false,
+		}},
+		EvidenceItems: []string{
+			"project inventory gathered from /Users/jmachen/code",
+			"written report saved to /Users/jmachen/Desktop/My Vault/development_projects_report.md",
+		},
+	}
+
+	result := VerifyResponse("The report has been generated and saved to your Desktop vault as development_projects_report.md.", ctx)
+	if result.Passed {
+		t.Fatalf("expected mixed-output turn to fail coverage, got pass")
+	}
+	if !result.HasIssue("subgoal_coverage") {
+		t.Fatalf("expected subgoal_coverage, got %+v", result.Issues)
 	}
 }
 

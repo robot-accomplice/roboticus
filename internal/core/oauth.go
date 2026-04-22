@@ -86,7 +86,7 @@ func RunOAuthPKCEFlow(ctx context.Context, cfg OAuthPKCEConfig) (*OAuthToken, er
 	if port == 0 {
 		port = 18788
 	}
-	redirectURI := fmt.Sprintf("http://127.0.0.1:%d/callback", port)
+	redirectURI := fmt.Sprintf("http://localhost:%d/callback", port)
 
 	// Build authorization URL.
 	params := url.Values{
@@ -138,7 +138,7 @@ func RunOAuthPKCEFlow(ctx context.Context, cfg OAuthPKCEConfig) (*OAuthToken, er
 		codeCh <- code
 	})
 
-	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	listener, err := net.Listen("tcp", fmt.Sprintf("localhost:%d", port))
 	if err != nil {
 		return nil, fmt.Errorf("start callback server: %w", err)
 	}

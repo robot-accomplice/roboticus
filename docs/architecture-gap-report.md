@@ -22,6 +22,11 @@ older architecture docs had left too generic:
   user message, align prompt-layer tool guidance with the structured tool list,
   and drop empty compacted history before inference. Baseline/exercise now uses
   that same runtime request path rather than a direct-LLM bypass.
+- **Low-level utility ownership is sharper.** Storage-layer repositories are not
+  allowed to depend on `internal/agent/*` helpers for generic concerns like
+  content hashing. Shared primitives such as hashing, normalization, and ID
+  formatting must live at or below `internal/core`, or low-level dependency
+  direction starts drifting upward.
 - **Continuity and learning are now explicitly artifact-driven.** Reflection,
   executive growth, checkpoints, and consolidation are expected to consume
   structured turn artifacts (`tool_calls`, `pipeline_traces`,
@@ -35,6 +40,230 @@ older architecture docs had left too generic:
   longer own transport JSON parsing; adapters own normalization and WhatsApp
   verification/signature checks, while routes only bridge normalized inbound
   messages into the pipeline.
+- **Route-admin connectors must stay thin even when they expose many surfaces.**
+  Admin policy, benchmark/exercise, and dataset export endpoints are not
+  allowed to accrete into one giant route file that becomes a de facto service
+  layer. Shared helpers may exist in `routes`, but the connector surface must
+  remain split into bounded files so ownership still reads as connector logic
+  instead of leaked business flow. Architecture enforcement must follow that
+  connector surface rather than pinning the unified pipeline-path requirement
+  to one historical filename after the split.
+- **Verification coverage must derive one canonical subgoal set.** The verifier
+  and executive-plan seam is not allowed to count both the unsplit whole prompt
+  and the later conjunction-split parts as separate requested subgoals. Coverage,
+  action-plan checks, unresolved-question growth, and retry guidance must all
+  consume one canonical set or the system creates fake `2/3` failures from its
+  own parser instead of the model response.
+- **Verification must distinguish task content from output-shape directives.**
+  Clauses such as `return only the number`, `reply on one line`, or other
+  response-shape instructions are not independent semantic subgoals. The prompt
+  contract must parse those once and feed the same normalized directive set into
+  verifier coverage, direct-response shaping, and retry guidance so the system
+  does not manufacture false subgoal failures from formatting instructions.
+- **Formatting-only directives must not become durable executive state.**
+  Output-shape setup prompts such as `reply only with noted` or `return only
+  the number` are not unresolved business obligations. The same canonical
+  formatting-directive normalization seam must feed executive growth so those
+  directives never open unresolved questions that later poison continuity
+  verification.
+- **Continuity turns must treat session history as first-class evidence.**
+  Questions like `what codename did I tell you to remember` or alias-driven
+  follow-ups such as `create the quiet ticker` are not supposed to depend on
+  generic memory search artifacts or `no evidence found` gaps when the required
+  facts already exist in durable session history. Verification and retrieval
+  policy must share one continuity contract for that seam.
+- **Continuity evidence outranks generic retrieval gaps.**
+  When the verifier has canonical continuity evidence from the current session,
+  stale `[Gaps]` markers from unrelated retrieval are not allowed to force
+  degraded uncertainty language on otherwise well-supported recall answers.
+- **Filesystem allowlists must compare canonical path identity, not raw string
+  case.** Absolute-path authorization is not allowed to reject a real allowed
+  path just because one layer sees a symlinked alias such as `/var/...` while
+  another sees the resolved root such as `/private/var/...`. That rule also
+  applies to future descendants beneath an allowed/workspace root; non-existent
+  child write targets must inherit the canonical identity of their nearest
+  existing ancestor so write authorization and read authorization cannot drift.
+  path simply because one layer used `/Users/...` and another stored
+  `/users/...`. Sandbox truth must canonicalize path identity once and reuse it
+  across tool resolution, policy checks, and proof-of-work.
+- **Tool-bearing routing must use tool-use evidence as the primary capability
+  authority.** When a request carries tools, routing is not allowed to keep
+  selecting merely generic or under-evidenced candidates while observed
+  `TOOL_USE` candidates exist. Recommendation language and live selection must
+  agree on which models are actually being ignored.
+- **Rebuildable derived storage must repair centrally or fail loudly.**
+  Corruption confined to non-authoritative observability tables
+  (`pipeline_traces`, `turn_diagnostic_events`, dependent trace indexes) or
+  rebuildable FTS internals is not allowed to poison the authoritative
+  conversational state or force caller-local hacks. The database seam must own
+  corruption detection, scoped repair, FTS backfill, and one retry of the
+  original operation. If corruption extends beyond rebuildable derived
+  structures, boot or write paths must fail loudly instead of pretending the
+  store is trustworthy.
+- **Filesystem inspection turns are their own focused execution class.**
+  Imperative count/list/find/scan turns over files or directories are not
+  allowed to rely on semantically lucky default pruning or arrive with only
+  memory/introspection tools. The turn envelope and tool-pruning seams must
+  share one focused inspection profile that pins the minimal authoritative
+  filesystem inspection surface (`glob_files`, `list_directory`, `read_file`,
+  runtime context) for direct inspection work. That same authority must also
+  resolve common operator path aliases such as `~`, “home folder”, and other
+  allowed-root shorthands instead of silently downgrading them into
+  conversational turns.
+- **Focused inspection turns require structured evidence, not text-only output.**
+  `glob_files`, `list_directory`, and other bounded inspection tools are not
+  allowed to leave the loop, verifier, and RCA guessing from free-form text
+  about whether a read-only call actually narrowed the task. Inspection tools
+  must emit one shared typed evidence artifact (scope, count, emptiness) so
+  direct-execution inspection turns can distinguish useful progress from
+  dead-end exploration on one central seam.
+- **Focused scheduling turns must separate known procedure from continuity.**
+  Creating or listing cron jobs is not inherently “procedurally uncertain”
+  once the focused scheduling surface exists. Explicit scheduling requests must
+  stay on the focused scheduling envelope without widening into
+  applied-learning retrieval, while session-defined aliases such as “quiet
+  ticker” must be treated as continuity retrieval problems so shorthand can be
+  resolved from prior session context instead of being guessed or ignored.
+- **Inspection-shaped questions must share the same focused-inspection
+  authority as imperative inspection turns.** Questions like `what's in the
+  vault`, `show me the files`, or `what about the vault in your workspace`
+  cannot be allowed to fall back to generic `question` handling while `count`
+  / `list` / `find` variants get the focused inspection envelope. Task
+  synthesis, retrieval gating, and turn-envelope selection must reuse one
+  inspection-turn detector so phrasing does not create divergent execution
+  policy. That shared detector must also cover path-shaped inspection requests
+  such as `brief summary of the contents of /path/...` or `list the projects in
+  /path/...`, not just imperative verbs.
+- **Focused inspection turns must resolve targets through one shared runtime
+  seam.** Inspection turns are not allowed to leave path resolution entirely to
+  prompt-time model reasoning when runtime policy already exposes enough truth
+  to resolve the target. The pipeline/session seam must resolve explicit paths
+  and obvious allowlisted aliases (for example a single Desktop vault) once and
+  pass that result into the prompt/runtime context. If the target is still
+  ambiguous after that resolution pass, the model must ask a precise
+  clarification question instead of claiming incapacity or inventing a denial.
+  Path-clarification follow-ups such as `the vault in question is at /path/...`
+  are part of that same seam; they are not allowed to fall back to generic
+  question handling once the operator has supplied the concrete target.
+  Alias-driven inventory questions such as `what are the most recently updated
+  projects in my code folder` are also part of that seam; folder aliases like
+  `code folder` must resolve onto the same focused inspection path instead of
+  widening into generic question/retrieval behavior.
+- **Filesystem destination resolution must use that same authority for authoring
+  turns.** If the operator asks to write into an allowlisted non-workspace
+  destination such as the Desktop Obsidian vault, the runtime is not allowed to
+  leave destination resolution to prompt-side guesswork or claim that the path
+  is unwritable while inspection of the same target is already permitted. The
+  pipeline/session seam must resolve explicit destination paths and obvious
+  authoring aliases (for example `my obsidian vault on my desktop`) once, pass
+  that resolved destination into the prompt/runtime context, and preserve the
+  distinction between the configured default vault (`obsidian_write`) and other
+  allowlisted vaults or folders (`write_file` with an absolute allowed path).
+- **Inspection-backed report authoring is task execution, not creative writing.**
+  If the operator asks for a report or inventory derived from a concrete
+  filesystem target and also asks that report to be written as an artifact, the
+  turn is not allowed to classify as generic `creative` work or widen onto the
+  default broad tool surface. Task synthesis, retrieval gating, and
+  turn-envelope policy must recognize this class once, keep it on a bounded
+  analysis+authoring path, and preserve the authoritative inspection target and
+  destination target through the same shared seams. Within that bounded path,
+  directory-wide metadata reports must prefer structured inventory / shell
+  evidence over extension-sampling heuristics, and they are not allowed to
+  write placeholder-heavy partial artifacts before the requested fields have
+  been gathered or explicitly proven unavailable.
+- **Filesystem write tool contracts must describe the real write surface.**
+  `write_file` and `edit_file` are not allowed to describe themselves as
+  workspace-only when the runtime can legally write to absolute allowlisted
+  destinations. Prompt/tool metadata must expose the real confinement rule or
+  the model will manufacture false access denials on valid authoring requests.
+- **Release-shaped binaries must derive version truth from one build seam.**
+  CI, release packaging, and local release-helper builds are not allowed to
+  stamp different or nonexistent CLI version symbols. `roboticus version` must
+  read from the same injected `cmd/internal/cmdutil.Version` symbol that the
+  release workflow stamps, while the daemon banner continues to read from
+  `internal/daemon.version`. A release-shaped binary that still reports `dev`
+  is a deployment-truth defect, not harmless metadata drift.
+- **Focused profiles must derive from one complete tool-semantics map.** A
+  bounded turn policy is not allowed to silently drop a legitimate inspection or
+  read tool because that tool was never classified in the central semantics map.
+  Tool-profile policy, replay rules, and RCA interpretation must all consume
+  one authoritative classification table that includes the real inspection
+  surface (`glob_files`, `list_directory`, `search_files`, `read_file`, and any
+  other first-class inspection tools).
+- **Large project-root inventory is a first-class inspection capability.**
+  When the operator asks for a report over a code/projects root with fields like
+  project name, language, timestamps, or git direction, the system is not
+  allowed to rely solely on fragile multi-step `bash` choreography or
+  extension-globbing heuristics. The tool layer must own one authoritative
+  project-inventory capability that can inspect an allowed root, enumerate
+  candidate project directories, derive bounded metadata, and feed that result
+  into the same focused analysis+authoring path as other inspection evidence.
+- **Tool-call exchanges are atomic under request compaction.** When budget
+  pressure forces history trimming, the context builder must treat an assistant
+  tool-call message and its corresponding tool-result message(s) as one atomic
+  exchange. It is not allowed to keep the tool-call while dropping the tool
+  response, because that corrupts provider requests and turns successful
+  tool-backed work into fallback noise. The same rule applies to the
+  pipeline-owned pre-inference compactor that mutates live session history
+  before inference begins; it is not allowed to orphan a historical
+  `tool_call_id` and poison a later verifier retry or follow-up inference.
+- **Tool execution context must carry the live runtime dependencies that the
+  selected tools actually require.** Database-backed tools are not allowed to
+  pass in isolated unit tests and then fail in the live loop with `database
+  store not available` because the loop forgot to thread the authoritative
+  store into `ToolContext`.
+- **Artifact-backed completion may satisfy response coverage for authoring
+  turns.** When the operator asked for a report/document/file to be written and
+  the system has authoritative proof that the artifact was created in the
+  requested destination, the final assistant reply may be a concise completion
+  confirmation. The verifier is not allowed to degrade that turn merely because
+  the reply does not restate every internal field that belongs inside the
+  authored artifact itself. Chat-level subgoal coverage is not allowed to
+  override authoritative write-boundary truth on a successful artifact-backed
+  authoring turn. This exemption applies only to artifact-internal requested
+  parts; mixed-output turns that also ask for an in-chat summary, explanation,
+  recommendation, or other operator-facing output must still satisfy chat-level
+  coverage for those non-artifact parts.
+- **Advisory liveness warnings are not terminal degradation.** A transient
+  watchdog event such as `stage_liveness_warning` may remain RCA-visible, but it
+  is not allowed to mark an otherwise successful turn as `degraded`. Terminal
+  turn status must come from failure, retry, or contradiction seams that still
+  matter at finalization, not from advisory timing probes that ultimately
+  resolved.
+- **Artifact overclaim verification applies to authored outputs, not inspection
+  evidence reporting.** A read-only inspection turn is allowed to mention file
+  and directory names discovered through authoritative inspection/read tools
+  without being treated as if it claimed to create those artifacts. The
+  verifier must gate `artifact_set_overclaim` on output-contract / artifact-
+  mutation turns, not on any response that happens to contain filenames.
+- **Direct execution turns must not terminate on promissory filler.**
+  Responses such as `let me check`, `I'll inspect that`, or equivalent
+  future-action scaffolding are not completed work on an `execute_directly`
+  turn. The same direct-execution boundary that rejects placeholder-only output
+  must also reject promissory no-tool replies unless the turn already carries
+  authoritative evidence that the requested action has been completed.
+- **Filesystem tool contracts must describe the real sandbox, not a narrower
+  fiction.** If read/list/glob tools can operate on workspace-relative paths
+  and absolute paths inside `allowed_paths`, their schema and descriptions must
+  say that explicitly. A workspace-only description biases the model into the
+  wrong path form and turns an allowed folder into a false execution failure.
+- **Runtime-context reporting must match effective sandbox truth.**
+  If prompts tell the agent to consult `get_runtime_context` for path/security
+  policy, that tool must return the effective confinement rules the tools
+  actually enforce: workspace anchoring for relative paths, absolute-path
+  constraints, and any protected read-only inputs for the turn. The runtime
+  tool is not allowed to claim “security policy” while only exposing a partial
+  path list.
+- **Scheduling turns are their own focused execution class.** A direct request
+  to create or inspect a cron/scheduled job is not supposed to widen into a
+  general-purpose 15-tool exploratory surface. Scheduling turns must pin the
+  authoritative scheduling tool and only the minimum supporting tools needed for
+  execution proof.
+- **Explicit acknowledgement directives belong on the shortcut seam.** When the
+  user asks for a one-sentence acknowledgement and wait state, the system is not
+  supposed to improvise a broader conversational reply. The shortcut layer must
+  own that bounded response class instead of treating it as open-ended model
+  prose.
 - **Plugin runtime ownership is sharper.** Daemon startup now owns plugin
   registry construction, directory scan, manifest parsing, init, and
   `AppState.Plugins` wiring. Install-time plugin writes now hot-load into that
@@ -217,6 +446,52 @@ older architecture docs had left too generic:
   execution surface with artifact-proof requirements instead of classifying it
   as `complex` specialist work and dragging a heavy generic tool surface back
   into the request.
+- **Source-backed authoring needs first-class source-read semantics.**
+  When a turn asks the system to produce artifacts from an existing source file
+  or other prompt-named input artifact, the focused authoring envelope is not
+  allowed to treat authoritative source reads as an unknown or optional
+  side-path. `read_file`-style source reads must live in the same central tool
+  semantics map and focused-authoring tool policy as artifact writes, because
+  the framework cannot close `source_artifact_unread` gaps honestly if the
+  corrective path does not preserve source-read capability on the turn surface.
+- **Source-backed exact artifact authoring must stay on the authoring path.**
+  A turn that says “read this source artifact, then create these exact output
+  artifacts” is not allowed to be upcast into the generic `code` / heavy /
+  delegation path merely because it mentions JSON, runbooks, or workflow-like
+  nouns. If the prompt already defines a bounded expected-artifact contract,
+  task synthesis must keep the turn in the direct authoring family so the
+  focused authoring tool surface and retry policy can do their job.
+- **Verifier retries must translate source-proof gaps into corrective action.**
+  A verifier finding such as `source_artifact_unread` is not allowed to remain
+  a generic “revise your answer” prompt. The retry seam must own a structured
+  corrective plan that tells the model what evidence to gather next, and when
+  the missing proof is a prompt-named source artifact the corrective path must
+  prefer authoritative source reads over memory-search churn. Otherwise the
+  system knows what is wrong without changing the control path that caused it.
+- **The selected tool surface is the only authority for prompt and execution.**
+  Once the pipeline selects the bounded tool surface for a turn, both the
+  prompt-layer tool guidance and the execution loop must obey that same set. A
+  tool that is not on the selected surface is not allowed to stay named in
+  generic prompt instructions, and an out-of-surface tool call is not allowed
+  to execute merely because the global registry knows the tool name.
+- **Artifact names are not authority-layer mutation directives.**
+  A request to create or update a file/note named `runbook`, `policy`, `spec`,
+  or similar is not allowed to flip the turn into authority-mutation mode by
+  itself. Authority-layer mutation must be triggered by explicit persistence or
+  registry semantics, not by generic file-authoring verbs plus artifact names.
+- **Prompt-declared source artifacts are read-only turn resources.**
+  If the prompt names an input artifact to read from, that source path is not
+  allowed to remain a soft verifier hint only. The execution seam must carry it
+  as a protected read-only resource for the current turn, and artifact-writing
+  tools must reject attempts to overwrite that source path while satisfying the
+  same request.
+- **Source-backed authoring must pin an authoritative source-read tool.**
+  If the prompt declares source artifacts and also asks for direct artifact
+  creation or update, the focused tool surface must include an authoritative
+  file-read tool rather than relying on semantic ranking to maybe discover one.
+  `source_artifact_unread` is execution-critical, not a narrative-only
+  afterthought, so the selection seam and retry policy must both preserve that
+  fact.
 - **Direct execution turns must not degrade into successful read-only research
   loops.**
   Once task synthesis says the turn should `execute_directly`, the loop is not
@@ -262,6 +537,20 @@ older architecture docs had left too generic:
   Exact-content mismatch is an execution-critical failure, not a narrative
   concern, and must remain retry-blocking even after successful tool-backed
   progress.
+- **Artifact verification must be symmetric across required, written, and
+  claimed file sets.**
+  The same authority that proves required artifacts were written is not allowed
+  to ignore invented file claims in the answer or unexpected extra writes at
+  the tool boundary. If the response names `gamma.txt`, or the runtime writes
+  `gamma.txt`, but the exact requested artifact set only contains `alpha.txt`
+  and `beta.txt`, verification must fail as an artifact-set violation instead
+  of passing because the required files happened to conform.
+- **Prompt-boundary artifact parsing must classify source/input artifacts
+  separately from expected outputs.**
+  If a turn says “read `requirements.txt`, then create `deploy-config.json` and
+  `rollout-runbook.md`”, verifier claim checks are allowed to treat
+  `requirements.txt` as evidence provenance, but they are not allowed to flag a
+  truthful reference to that source file as an invented output artifact claim.
 - **Novel procedural experience must be captured with future reuse in mind.**
   Once the framework learns that a workflow succeeded, failed, or only
   partially worked, that outcome is not allowed to remain buried in one-off
@@ -568,7 +857,7 @@ they are not the release-driving backlog anymore.
 
 | Roadmap ID | Title | Primary architecture seam |
 |------------|-------|---------------------------|
-| `PAR-008` | Cross-vendor SSE MCP proof | SSE transport confidence must flow through one authoritative named-target validation harness and evidence artifact, with central MCP config conversion plus endpoint-discovery/auth-capable SSE transport semantics, then be backed by more than one real blessed target |
+| `PAR-008` | SSE MCP release-claim narrowing | SSE transport confidence must flow through one authoritative named-target validation harness and evidence artifact, with central MCP config conversion plus endpoint-discovery/auth-capable SSE transport semantics. v1.0.7 ships the harness and runtime seam, but the release claim is explicitly narrowed away from proven cross-vendor third-party SSE interoperability. |
 
 ---
 

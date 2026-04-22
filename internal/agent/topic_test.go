@@ -2,6 +2,8 @@ package agent
 
 import (
 	"testing"
+
+	"roboticus/internal/llm"
 )
 
 func TestDetectTopic_Technical(t *testing.T) {
@@ -68,5 +70,43 @@ func TestDetectTopic_Support(t *testing.T) {
 	result := DetectTopic(msgs)
 	if result.Primary != TopicSupport {
 		t.Errorf("expected TopicSupport, got %s", result.Primary)
+	}
+}
+
+func TestPartitionByTopic_KeepsToolExchangeAtomicWhenAssistantIsOffTopic(t *testing.T) {
+	msgs := []llm.Message{
+		{Role: "user", Content: "current request", TopicTag: "current"},
+		{
+			Role:     "assistant",
+			Content:  "",
+			TopicTag: "older",
+			ToolCalls: []llm.ToolCall{{
+				ID:   "call-1",
+				Type: "function",
+				Function: llm.ToolCallFunc{
+					Name:      "create_cron_job",
+					Arguments: `{"name":"quiet ticker"}`,
+				},
+			}},
+		},
+		{Role: "tool", ToolCallID: "call-1", Name: "create_cron_job", Content: `{"status":"ok"}`},
+		{Role: "assistant", Content: "done", TopicTag: "current"},
+	}
+
+	current, offTopic := PartitionByTopic(msgs, "current")
+
+	for _, m := range current {
+		if m.Role == "tool" && m.ToolCallID == "call-1" {
+			t.Fatal("tool reply from off-topic exchange leaked into current-topic messages without its assistant tool-call")
+		}
+	}
+	if len(offTopic) != 1 {
+		t.Fatalf("off-topic blocks = %d, want 1", len(offTopic))
+	}
+	if len(offTopic[0].Messages) != 2 {
+		t.Fatalf("off-topic tool exchange size = %d, want 2", len(offTopic[0].Messages))
+	}
+	if offTopic[0].Messages[0].Role != "assistant" || offTopic[0].Messages[1].Role != "tool" {
+		t.Fatalf("off-topic exchange not preserved atomically: %#v", offTopic[0].Messages)
 	}
 }

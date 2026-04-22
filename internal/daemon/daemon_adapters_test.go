@@ -73,6 +73,66 @@ func TestRetrieverAdapter_Retrieve(t *testing.T) {
 	}
 }
 
+func TestToolPruningQuery_AppendsSourceArtifactHints(t *testing.T) {
+	sess := session.New("s1", "agent1", "Bot")
+	sess.AddUserMessage("Read the source file and create the outputs.")
+	sess.SetSourceArtifacts([]string{"tmp/input.txt"})
+
+	got := toolPruningQuery(sess)
+	if !strings.Contains(got, "Read the source file and create the outputs.") {
+		t.Fatalf("query = %q, want original user prompt", got)
+	}
+	if !strings.Contains(got, "Authoritative source artifacts to read before answering: tmp/input.txt") {
+		t.Fatalf("query = %q, want appended source artifact hint", got)
+	}
+}
+
+func TestAppendAlwaysInclude_DeduplicatesNames(t *testing.T) {
+	got := appendAlwaysInclude([]string{"get_runtime_context", "read_file"}, "read_file", "write_file")
+	want := []string{"get_runtime_context", "read_file", "write_file"}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("appendAlwaysInclude = %v, want %v", got, want)
+	}
+}
+
+func TestToolPruningQuery_FocusedInspectionPinsFilesystemAlwaysInclude(t *testing.T) {
+	sess := session.New("s1", "agent1", "Bot")
+	sess.AddUserMessage("Count markdown files recursively in the target docs dir and return only the number.")
+	sess.SetTaskVerificationHints("task", "simple", "execute_directly", nil)
+	sess.SetTurnEnvelopePolicy("standard", "focused_inspection", "direct filesystem inspection should stay on a focused inspection envelope")
+
+	cfg := resolveToolSearchConfig(core.ToolSearchConfig{})
+	if sess.TurnToolProfile() == "focused_inspection" {
+		cfg.AlwaysInclude = appendAlwaysInclude(cfg.AlwaysInclude, "glob_files", "list_directory", "read_file")
+	}
+	if !strings.Contains(fmt.Sprint(cfg.AlwaysInclude), "glob_files") {
+		t.Fatalf("always_include = %v, want glob_files pinned", cfg.AlwaysInclude)
+	}
+	if !strings.Contains(fmt.Sprint(cfg.AlwaysInclude), "list_directory") {
+		t.Fatalf("always_include = %v, want list_directory pinned", cfg.AlwaysInclude)
+	}
+}
+
+func TestToolPruningQuery_FocusedAnalysisAuthoringPinsAnalysisAndWriteTools(t *testing.T) {
+	sess := session.New("s1", "agent1", "Bot")
+	sess.AddUserMessage("Generate a report on all development projects in my code directory and write it to my Desktop vault.")
+	sess.SetTaskVerificationHints("task", "moderate", "execute_directly", nil)
+	sess.SetTurnEnvelopePolicy("standard", "focused_analysis_authoring", "inspection-backed report authoring should stay on a focused analysis+authoring envelope")
+
+	cfg := resolveToolSearchConfig(core.ToolSearchConfig{})
+	if sess.TurnToolProfile() == "focused_analysis_authoring" {
+		cfg.AlwaysInclude = appendAlwaysInclude(cfg.AlwaysInclude,
+			"inventory_projects", "search_files", "glob_files", "list_directory", "read_file",
+			"bash", "write_file", "edit_file", "get_runtime_context",
+		)
+	}
+	for _, want := range []string{"inventory_projects", "search_files", "bash", "write_file", "get_runtime_context"} {
+		if !strings.Contains(fmt.Sprint(cfg.AlwaysInclude), want) {
+			t.Fatalf("always_include = %v, want %s pinned", cfg.AlwaysInclude, want)
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // ingestorAdapter
 // ---------------------------------------------------------------------------
@@ -688,7 +748,7 @@ func TestBuildAgentContext_PropagatesTurnWeight(t *testing.T) {
 	sess := session.New("s1", "a1", "TestBot")
 	sess.AddUserMessage("hello")
 	sess.SetTaskVerificationHints("code", "complex", "execute_directly", nil)
-	sess.SetTurnEnvelopePolicy("light", "simple conversational turn should stay minimal")
+	sess.SetTurnEnvelopePolicy("light", "", "simple conversational turn should stay minimal")
 
 	ctx := buildAgentContext(context.Background(), sess, nil, nil, nil, tools.DefaultToolSearchConfig(), agent.PromptConfig{
 		AgentName: "TestBot",

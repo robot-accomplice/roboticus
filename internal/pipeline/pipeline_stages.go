@@ -194,7 +194,11 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 	verifyCtx, verifyResult, verifySummary := p.verifyAssistantResult(session, result, tr)
 	verifyRetryDisposition := decideVerifierRetryAfterProgress(verifyResult, verifyCtx, executionProgressFromGuardContext(p.buildGuardContext(session)))
 	if !verifyResult.Passed && verifyRetryDisposition.Allow {
+		retryPlan := buildVerifierRetryPlan(verifyResult, verifyCtx, session.SelectedToolDefs())
 		policy = p.maybeExpandTurnEnvelope(ctx, session, policy, verifyResult, dr)
+		if len(retryPlan.ToolDefs) > 0 && len(retryPlan.ToolDefs) != len(session.SelectedToolDefs()) {
+			session.SetSelectedToolDefs(retryPlan.ToolDefs)
+		}
 		if dr != nil {
 			dr.IncrementSummaryCounter("verifier_retry_count", 1)
 			dr.RecordEvent("verifier_retry_scheduled", "error",
@@ -207,6 +211,7 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 					"contested_claims":  verifySummary.ContestedCount,
 					"proof_gap_claims":  verifySummary.ProofGapCount,
 					"reconciled_claims": verifySummary.ReconciledCount,
+					"correction_plan":   formatVerifierRetryCorrectionSummary(retryPlan),
 				},
 			)
 			p.storeTurnDiagnostics(ctx, dr)
@@ -215,7 +220,7 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 			Str("session", session.ID).
 			Str("issues", verifyResult.RetryMessage()).
 			Msg("verifier requested retry")
-		session.AddSystemMessage(verifyResult.RetryMessage())
+		session.AddSystemMessage(retryPlan.Message)
 		retryContent, retryTurns, retryErr := p.executor.RunLoop(ctx, session)
 		if retryErr != nil {
 			log.Debug().Err(retryErr).Msg("verifier retry inference failed, using pre-verifier result")

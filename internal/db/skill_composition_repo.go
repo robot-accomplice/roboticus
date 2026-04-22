@@ -11,7 +11,6 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	agentskills "roboticus/internal/agent/skills"
 	"roboticus/internal/core"
 )
 
@@ -101,7 +100,7 @@ func (r *SkillCompositionRepository) Upsert(ctx context.Context, spec SkillCompo
 	}
 
 	spec.SourcePath = path
-	spec.ContentHash = agentskills.HashSkillContent(rendered)
+	spec.ContentHash = core.HashSHA256(rendered)
 
 	triggersJSON, _ := json.Marshal(spec.Triggers)
 	toolNames := make([]string, 0, len(spec.ToolChain))

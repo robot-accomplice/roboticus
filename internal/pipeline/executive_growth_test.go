@@ -81,6 +81,26 @@ func TestGrowExecutiveState_OpensUnresolvedQuestion(t *testing.T) {
 	}
 }
 
+func TestGrowExecutiveState_DoesNotOpenFormattingOnlyUnresolvedQuestion(t *testing.T) {
+	p := newGrowthTestPipeline(t)
+	seedPlan(t, p.store, "s1", "t1", []string{"Reply with only the number 1."})
+
+	sess := session.New("s1", "a1", "Bot")
+	sess.AddUserMessage("Reply with only the number 1.")
+	sess.SetTaskVerificationHints("task", "simple", "execute_directly", []string{"Reply with only the number 1."})
+
+	p.growExecutiveState(context.Background(), sess, "1")
+
+	mm := agentmemory.NewManager(agentmemory.DefaultConfig(), p.store)
+	state, err := mm.LoadExecutiveState(context.Background(), "s1", "t1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.UnresolvedQuestions) != 0 {
+		t.Fatalf("expected no unresolved questions for formatting-only directive, got %+v", state.UnresolvedQuestions)
+	}
+}
+
 func TestGrowExecutiveState_ResolvesPriorOpenQuestion(t *testing.T) {
 	p := newGrowthTestPipeline(t)
 	ctx := context.Background()

@@ -31,6 +31,20 @@ This file follows the same C4 conventions used elsewhere in the repo:
 - parity preserves what is best: if a heuristic fallback exists only because an
   indexed corpus is incomplete, fix the corpus and retire the heuristic rather
   than downgrading the live path to mimic an older baseline
+- shared low-level primitives such as hashing and ID/content normalization live
+  at or below `internal/core`; `internal/db` is not allowed to depend upward on
+  `internal/agent/*` for generic helpers
+- release-shaped binaries get version truth from one authoritative build seam:
+  CLI version is stamped into `cmd/internal/cmdutil.Version`, daemon banner
+  version into `internal/daemon.version`, and CI/release/local helper build
+  paths are not allowed to drift from that contract
+- route handlers may share connector-local helpers, but policy/exercise/export
+  admin surfaces are not allowed to collapse into one monolithic route file
+- unified pipeline-path enforcement follows the whole connector surface for a
+  route family, not one legacy filename after a bounded split
+- verification coverage, executive-plan growth, and retry guidance must all
+  consume one canonical subgoal set; the framework is not allowed to count the
+  whole prompt and its conjunction-split parts as separate requested goals
 - benchmark validity and RCA require host resource snapshots on the same
   canonical seams that own benchmark persistence and turn diagnostics
 - benchmark validity also requires provider/model runtime-state snapshots on
@@ -50,6 +64,10 @@ This file follows the same C4 conventions used elsewhere in the repo:
   intent label alone; when synthesis says `simple` + `execute_directly`, the
   first-pass envelope must stay focused with bounded tools and only
   evidence-driven retrieval
+- tool-bearing turns route on `TOOL_USE` evidence first; if any
+  request-eligible candidates have observed `TOOL_USE` evidence, under-evidenced
+  candidates are ignored for live selection rather than merely narrated as
+  “ignored” in RCA
 - workspace-local vault authoring must exist as an explicit runtime capability
   when Obsidian is configured; a prompt hint or indirect skill reference is
   not an acceptable substitute for a real tool surface
@@ -106,6 +124,117 @@ This file follows the same C4 conventions used elsewhere in the repo:
   linking is not allowed to become `complex` specialist work just because it is
   no longer a literal single-file turn; task synthesis and envelope policy must
   preserve direct execution plus artifact-proof requirements for that class
+- source-backed focused authoring must preserve authoritative source-read
+  capability on the same central semantics map as artifact writes. A
+  prompt-named input artifact such as `requirements.txt` is not allowed to
+  degrade into “unknown tool semantics” or memory-only correction paths; the
+  focused authoring surface must recognize `read_file`-style source reads as a
+  first-class bounded authoring tool
+- source-backed exact-content authoring is still authoring, not generic code
+  work. If the prompt already names a bounded set of expected output artifacts,
+  task synthesis is not allowed to upcast the turn into the heavy/delegated
+  code path just because the artifacts are JSON/Markdown or the user mentions
+  a source file and workflow language
+- focused inspection turns must emit one structured inspection-evidence
+  artifact shared by the loop, verifier, and RCA; text-only file listings or
+  glob output are not sufficient architecture truth for deciding whether a
+  read-only call actually narrowed the task
+- inspection-shaped questions and imperative inspection requests must reuse one
+  shared detector and one focused-inspection envelope; the phrasing difference
+  is not allowed to create divergent retrieval or tool-surface policy, and
+  path-shaped summary/list/project questions must be covered by the same
+  authority rather than falling back to generic question handling
+- focused inspection turns must also reuse one target-resolution seam:
+  explicit paths and resolvable allowlisted aliases become authoritative
+  inspection hints before inference; unresolved targets become precise
+  clarification requirements instead of soft refusal or guessed policy denial
+- explicit path-clarification follow-ups (`the vault in question is at /path`)
+  stay on that same focused-inspection seam once the target noun + path are
+  present; they do not drop back into generic question routing
+- alias-driven inventory questions (`projects in my code folder`, `files in my
+  workspace folder`) stay on that same seam once the alias resolves to an
+  allowlisted inspection target
+- authoring turns reuse the same target-resolution authority for destination
+  folders and vaults: a configured default vault stays on `obsidian_write`,
+  while other allowlisted destinations are surfaced as resolved absolute write
+  targets for `write_file`/`edit_file`
+- inspection-backed report authoring is a bounded execution class: once a turn
+  combines a concrete inspection target with a requested written report or
+  inventory artifact, it stays on a focused analysis+authoring surface instead
+  of widening into generic creative/default routing
+- inside that focused analysis+authoring surface, project-directory reports
+  prefer structured inventory / shell evidence over repeated extension-globbing
+  heuristics, and they do not commit placeholder-heavy partial reports before
+  requested fields are gathered or explicitly proven unavailable
+- write-tool metadata must describe the real confinement contract: relative
+  paths resolve under the workspace, absolute paths are allowed when they fall
+  under an allowlisted destination
+- focused tool profiles are only as good as the central semantics table they
+  consume; first-class inspection tools like `search_files` are not allowed to
+  fall out of bounded policy because they were left semantically unclassified
+- large code-root reporting uses a first-class project-inventory inspection
+  tool when available, rather than depending on brittle shell loops to derive
+  project roots, languages, timestamps, and git direction
+- request compaction must preserve assistant tool-call messages and their
+  matching tool-result messages as one atomic exchange; a compacted request is
+  not allowed to retain a `tool_call_id` without the corresponding tool reply,
+  and the same atomicity rule applies to the pipeline-owned pre-inference
+  compactor that mutates session history before retries or later inference
+- loop-owned tool execution context must thread the same authoritative runtime
+  dependencies that live tools require (store, workspace, allowlist, channel);
+  DB-backed tools are not allowed to fail only because the live loop omitted
+  the store while direct tool tests passed
+- artifact-authoring turns may finalize with a concise completion confirmation
+  when authoritative write evidence exists; the verifier is not allowed to
+  demand that the assistant restate the artifact's internal schema in chat, and
+  chat-level subgoal coverage is not allowed to outweigh proven artifact
+  creation on that turn class when the requested parts are internal to the
+  artifact itself; mixed-output turns still owe chat-level coverage for any
+  non-artifact deliverables
+- advisory watchdog events like `stage_liveness_warning` remain RCA-visible but
+  do not by themselves downgrade a turn that ultimately completed successfully
+- read-only inspection turns may report discovered filenames and paths from
+  authoritative inspection evidence without triggering authored-artifact claim
+  checks; `artifact_set_overclaim` belongs to output-contract / mutation turns
+- direct `execute_directly` turns are not allowed to terminate on promissory
+  future-action scaffolding such as `let me check...` when no tool call or
+  authoritative evidence was produced; the direct-execution seam must treat
+  that class like placeholder output and continue or fail honestly instead of
+  presenting it as completion
+- `get_runtime_context` must expose the effective sandbox/path rules the tools
+  will actually enforce; prompt guidance is not allowed to advertise broader
+  “security policy” visibility than the runtime tool truly provides
+- the selected tool surface is one authority consumed twice: the prompt-layer
+  tool roster/instructions and the execution loop must both obey the same
+  bounded set. Out-of-surface tool calls are framework violations, not
+  permission to fall back to the global registry
+- artifact names like `runbook`, `policy`, or `spec` do not by themselves
+  imply authority-layer mutation. Canonical-memory / policy-store mutation must
+  be triggered by explicit persistence semantics, not generic file-authoring
+  requests
+- prompt-declared source artifacts become protected read-only resources on the
+  turn. Artifact-writing tools are not allowed to overwrite a source artifact
+  just because the model misused a write tool where a read tool was required
+- source-backed authoring turns must pin an authoritative artifact-read tool on
+  the focused tool surface. The system is not allowed to make source-read proof
+  optional by leaving `read_file`-style tools out of the selected roster
+- focused inspection authority must resolve allowed-root aliases such as `~`
+  and “home folder” through the same target-resolution seam used for absolute
+  paths and named folders. Those aliases are not allowed to degrade into
+  lightweight conversation turns that promise future inspection without
+  executing it
+- focused scheduling authority must distinguish explicit scheduling from
+  shorthand continuity. “Schedule a cron job every 5 minutes” is a known
+  direct scheduling procedure and must not widen into applied-learning
+  retrieval, while shorthand like “create the quiet ticker now” must pull the
+  previously defined alias from session continuity and still stay on the same
+  focused scheduling envelope
+- verifier retry is not allowed to be a generic rewrite request when the
+  verifier has already identified a concrete missing evidence seam. Findings
+  like `source_artifact_unread` must become structured corrective guidance,
+  and that corrective path must prefer authoritative source reads over
+  `recall_memory` / `search_memories` churn until the missing source proof is
+  satisfied
 - malformed or provider-skewed structured tool I/O is not allowed to leak
   straight into tool implementations or session history. One central
   normalization factory must own ordered tool-call argument normalization
@@ -120,6 +249,12 @@ This file follows the same C4 conventions used elsewhere in the repo:
   the normalization seam. The same central authority must also emit raw
   provider request/response envelopes into trace evidence so operators can
   compare what we sent and what we got back against vendor documentation
+- rebuildable derived SQLite storage is not allowed to become a caller-local
+  concern. If corruption is confined to observability tables or FTS internals,
+  one database-owned repair path must detect it, back up the damaged files,
+  rebuild the affected derived structures from authoritative state, and retry
+  the interrupted operation once. If corruption reaches authoritative tables,
+  the store must fail loudly instead of silently degrading trust
 - direct execution turns are not allowed to drift into a successful read-only
   research loop. After a small amount of legitimate exploration, repeated
   successful runtime-context, workspace, capability, task-inspection, or
@@ -148,6 +283,15 @@ This file follows the same C4 conventions used elsewhere in the repo:
   not subtasks, and trailing post-write/reporting directives are not part of
   the artifact body. Exact-content mismatch remains execution-critical after
   progress; it is not a narrative-only verifier concern that can be suppressed
+- artifact proof must also govern actual and claimed file sets. If the answer
+  claims an artifact path that neither appears in the expected set nor in
+  typed write proof, or if the runtime writes an extra artifact outside the
+  expected set, verification must fail as an artifact-set violation.
+  Required-file conformance is not sufficient if the response or tool path
+  invents extra files
+- prompt-boundary artifact parsing must also separate source/input artifacts
+  from expected outputs, so verifier claim checks do not punish truthful
+  references to files the operator explicitly said to read
 - verifier-triggered rewrites are still subject to verification. A revised
   answer produced after verifier retry must be re-verified before finalization,
   and an exhausted retry must degrade to an honest verification-grounded
@@ -234,6 +378,35 @@ This file follows the same C4 conventions used elsewhere in the repo:
   repeated firsthand failures and operator reports become one-entry-per-failure
   roadmap items, and fixes are not complete until RCA, regressions, and
   operator-facing explanation all agree on the corrected behavior
+- direct execution prompts must parse semantic work and output-shape directives
+  separately. `return only the number`, `reply on one line`, and similar clauses
+  are response-shape constraints, not extra semantic subgoals.
+- formatting-only directives must stop at the normalization seam. They are not
+  allowed to reappear later as durable unresolved executive questions that
+  poison continuity verification.
+- continuity and recall turns must treat durable session history as
+  first-class evidence. A prompt that asks what the user told the agent earlier
+  in the same session is not allowed to degrade into generic memory-search gaps
+  when the needed facts are already present in session history.
+- once continuity evidence exists in the current session, generic retrieval
+  gaps must not outrank it during verification.
+- scheduling is a focused execution seam. Requests to create or describe a cron
+  schedule must pin the authoritative scheduling tool plus only minimal support
+  tools; they are not allowed to widen into general exploratory tool surfaces.
+- sandbox allowlist checks must compare canonical path identity rather than raw
+  string case so the same real path is not alternately allowed and denied across
+  layers; that includes future child paths under symlinked roots, where the
+  nearest existing ancestor must own canonical identity for authorization.
+- direct filesystem inspection is a focused execution seam. Count/list/find/scan
+  turns over files or directories must pin the authoritative inspection tools
+  (`glob_files`, `list_directory`, `read_file`, runtime context) instead of
+  relying on default semantic pruning to surface them by chance.
+- filesystem tool schemas and descriptions must reflect the real sandbox
+  contract: workspace-relative paths and absolute allowed paths are both valid
+  when policy allows them.
+- explicit acknowledgement directives are shortcut-class work. A user request
+  to acknowledge in one sentence and wait should be satisfied by the shortcut
+  layer rather than left to open-ended model phrasing.
 - tool execution truth is execution-owned: when the loop runs a tool, the tool
   audit trail and RCA counters must be written from that same execution event,
   not reconstructed later from session history

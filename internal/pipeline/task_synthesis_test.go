@@ -129,6 +129,96 @@ func TestSynthesizeTaskState_SimpleDirectTaskDoesNotRequireRetrieval(t *testing.
 	}
 }
 
+func TestSynthesizeTaskState_CountPromptIsTaskNotConversation(t *testing.T) {
+	result := SynthesizeTaskState("Count markdown files recursively in /Users/jmachen/code and return only the number.", 1, nil)
+	if result.Intent != "task" {
+		t.Fatalf("intent = %q, want task", result.Intent)
+	}
+	if result.PlannedAction != "execute_directly" {
+		t.Fatalf("planned action = %q, want execute_directly", result.PlannedAction)
+	}
+}
+
+func TestSynthesizeTaskState_InspectionQuestionUsesFocusedTaskPath(t *testing.T) {
+	result := SynthesizeTaskState("What's in your vault right now?", 1, nil)
+	if result.Intent != "task" {
+		t.Fatalf("intent = %q, want task", result.Intent)
+	}
+	if result.PlannedAction != "execute_directly" {
+		t.Fatalf("planned action = %q, want execute_directly", result.PlannedAction)
+	}
+	if result.RetrievalNeeded {
+		t.Fatal("inspection-shaped question should not require retrieval by default")
+	}
+}
+
+func TestSynthesizeTaskState_WorkspaceVaultFollowupStaysInspectionTask(t *testing.T) {
+	result := SynthesizeTaskState("What about the vault in your workspace?", 2, nil)
+	if result.Intent != "task" {
+		t.Fatalf("intent = %q, want task", result.Intent)
+	}
+	if result.PlannedAction != "execute_directly" {
+		t.Fatalf("planned action = %q, want execute_directly", result.PlannedAction)
+	}
+	if result.RetrievalNeeded {
+		t.Fatal("workspace vault follow-up should not require retrieval by default")
+	}
+}
+
+func TestSynthesizeTaskState_DesktopVaultSummaryUsesInspectionTaskPath(t *testing.T) {
+	result := SynthesizeTaskState("Please give me the briefest summary you can of the contents of the vault on my Desktop.", 1, nil)
+	if result.Intent != "task" {
+		t.Fatalf("intent = %q, want task", result.Intent)
+	}
+	if result.PlannedAction != "execute_directly" {
+		t.Fatalf("planned action = %q, want execute_directly", result.PlannedAction)
+	}
+	if result.RetrievalNeeded {
+		t.Fatal("desktop vault summary should not require retrieval by default")
+	}
+}
+
+func TestSynthesizeTaskState_PathProjectListingUsesInspectionTaskPath(t *testing.T) {
+	result := SynthesizeTaskState("What about a list of the projects in /Users/jmachen/code?", 1, nil)
+	if result.Intent != "task" {
+		t.Fatalf("intent = %q, want task", result.Intent)
+	}
+	if result.PlannedAction != "execute_directly" {
+		t.Fatalf("planned action = %q, want execute_directly", result.PlannedAction)
+	}
+	if result.RetrievalNeeded {
+		t.Fatal("path-shaped project listing should not require retrieval by default")
+	}
+}
+
+func TestSynthesizeTaskState_TildeDistributionUsesInspectionTaskPath(t *testing.T) {
+	result := SynthesizeTaskState("give me the file distribution in the folder ~", 1, nil)
+	if result.Intent != "task" {
+		t.Fatalf("intent = %q, want task", result.Intent)
+	}
+	if result.PlannedAction != "execute_directly" {
+		t.Fatalf("planned action = %q, want execute_directly", result.PlannedAction)
+	}
+	if result.RetrievalNeeded {
+		t.Fatal("tilde-distribution inspection should not require retrieval by default")
+	}
+}
+
+func TestSynthesizeTaskState_InspectionBackedReportAuthoringIsTaskNotCreative(t *testing.T) {
+	prompt := "Generate a report on all development projects in my code directory, include project path, project name, project language(s), first edit date, last edit date, and whether the project is out of date with the remote origin repo, then write the report as a new document to my Obsidian vault on my Desktop."
+	result := SynthesizeTaskState(prompt, 1, nil)
+
+	if result.Intent != "task" {
+		t.Fatalf("intent = %q, want task", result.Intent)
+	}
+	if result.PlannedAction != "execute_directly" {
+		t.Fatalf("planned action = %q, want execute_directly", result.PlannedAction)
+	}
+	if result.RetrievalNeeded {
+		t.Fatal("inspection-backed report authoring should not widen into retrieval by default")
+	}
+}
+
 func TestSynthesizeTaskState_TaskWithContinuityCueRequiresRetrieval(t *testing.T) {
 	result := SynthesizeTaskState("Update the existing Obsidian note we discussed earlier with today's decisions.", 2, nil)
 	if !result.RetrievalNeeded {
@@ -140,6 +230,41 @@ func TestSynthesizeTaskState_InvestigativeTaskRequiresRetrieval(t *testing.T) {
 	result := SynthesizeTaskState("Create a report that explains the root cause and identifies which systems were affected.", 1, nil)
 	if !result.RetrievalNeeded {
 		t.Fatal("investigative reporting task should require retrieval")
+	}
+}
+
+func TestSynthesizeTaskState_ExplicitSchedulingStaysFocusedWithoutRetrieval(t *testing.T) {
+	result := SynthesizeTaskState("schedule a cron job that runs every 5 minutes and tell me exactly what was scheduled", 1, nil)
+	if result.Intent != "task" {
+		t.Fatalf("intent = %q, want task", result.Intent)
+	}
+	if result.PlannedAction != "execute_directly" {
+		t.Fatalf("planned action = %q, want execute_directly", result.PlannedAction)
+	}
+	if result.RetrievalNeeded {
+		t.Fatal("explicit scheduling should not require retrieval by default")
+	}
+	if result.ProceduralUncertainty {
+		t.Fatal("explicit scheduling should not be treated as procedurally uncertain")
+	}
+}
+
+func TestSynthesizeTaskState_SchedulingAliasFollowupUsesContinuityRetrieval(t *testing.T) {
+	result := SynthesizeTaskState("Create the quiet ticker now and tell me exactly what was scheduled.", 5, nil)
+	if result.Intent != "task" {
+		t.Fatalf("intent = %q, want task", result.Intent)
+	}
+	if result.PlannedAction != "execute_directly" {
+		t.Fatalf("planned action = %q, want execute_directly", result.PlannedAction)
+	}
+	if !result.RetrievalNeeded {
+		t.Fatal("scheduling alias follow-up should retrieve prior session continuity")
+	}
+	if result.RetrievalReason != "scheduling_alias_continuity" {
+		t.Fatalf("retrieval reason = %q, want scheduling_alias_continuity", result.RetrievalReason)
+	}
+	if result.ProceduralUncertainty {
+		t.Fatal("scheduling alias follow-up should not be marked procedurally uncertain")
 	}
 }
 
@@ -256,6 +381,26 @@ func TestSynthesizeTaskState_InlineExactMultiArtifactAuthoringStaysDirect(t *tes
 	}
 	if result.PlannedAction != "execute_directly" {
 		t.Fatalf("planned action = %q, want execute_directly", result.PlannedAction)
+	}
+}
+
+func TestSynthesizeTaskState_SourceBackedExactAuthoringStaysTask(t *testing.T) {
+	result := SynthesizeTaskState(
+		"Read tmp/procedural-workflow-4/requirements.txt and then create tmp/procedural-workflow-4/deploy-config.json with content {\"service\":\"payments-api\",\"environment\":\"staging\",\"strategy\":\"rolling\"} and create tmp/procedural-workflow-4/rollout-runbook.md with content # Rollout Runbook\n\n1. Deploy payments-api to staging.\n2. Use a rolling strategy.\n3. Verify health checks before promotion.\n",
+		1,
+		nil,
+	)
+	if result.Intent != "task" {
+		t.Fatalf("intent = %q, want task", result.Intent)
+	}
+	if result.Complexity != "moderate" {
+		t.Fatalf("complexity = %q, want moderate", result.Complexity)
+	}
+	if result.PlannedAction != "execute_directly" {
+		t.Fatalf("planned action = %q, want execute_directly", result.PlannedAction)
+	}
+	if result.RetrievalNeeded {
+		t.Fatal("source-backed exact authoring should not require retrieval")
 	}
 }
 

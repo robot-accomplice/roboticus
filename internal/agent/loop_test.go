@@ -11,6 +11,7 @@ import (
 	agenttools "roboticus/internal/agent/tools"
 	"roboticus/internal/core"
 	"roboticus/internal/llm"
+	"roboticus/testutil"
 )
 
 // mockCompleter returns predetermined responses.
@@ -123,6 +124,25 @@ func (t *readOnlySearchTool) Execute(_ context.Context, _ string, _ *agenttools.
 	return &agenttools.Result{Output: "found prior notes", Source: "builtin"}, nil
 }
 
+type inspectionEvidenceTool struct {
+	name   string
+	calls  int
+	count  int
+	output string
+}
+
+func (t *inspectionEvidenceTool) Name() string               { return t.name }
+func (t *inspectionEvidenceTool) Description() string        { return "inspection evidence tool" }
+func (t *inspectionEvidenceTool) Risk() agenttools.RiskLevel { return agenttools.RiskSafe }
+func (t *inspectionEvidenceTool) ParameterSchema() json.RawMessage {
+	return json.RawMessage(`{"type":"object"}`)
+}
+func (t *inspectionEvidenceTool) Execute(_ context.Context, _ string, _ *agenttools.Context) (*agenttools.Result, error) {
+	t.calls++
+	proof := agenttools.NewInspectionProof("file_glob", t.name, ".", t.count).WithPattern("*.md")
+	return &agenttools.Result{Output: t.output, Metadata: proof.Metadata(), Source: "builtin"}, nil
+}
+
 type structuredArgsTool struct {
 	calls    int
 	lastArgs string
@@ -144,6 +164,39 @@ func (t *structuredArgsTool) Execute(_ context.Context, params string, _ *agentt
 		return nil, err
 	}
 	return &agenttools.Result{Output: "queried " + payload.Table, Source: "builtin"}, nil
+}
+
+type storeAwareTool struct {
+	sawStore bool
+}
+
+func (t *storeAwareTool) Name() string               { return "cron" }
+func (t *storeAwareTool) Description() string        { return "store-aware cron test tool" }
+func (t *storeAwareTool) Risk() agenttools.RiskLevel { return agenttools.RiskCaution }
+func (t *storeAwareTool) ParameterSchema() json.RawMessage {
+	return json.RawMessage(`{"type":"object"}`)
+}
+func (t *storeAwareTool) Execute(_ context.Context, _ string, tctx *agenttools.Context) (*agenttools.Result, error) {
+	t.sawStore = tctx != nil && tctx.Store != nil
+	if !t.sawStore {
+		return nil, errors.New("database store not available")
+	}
+	return &agenttools.Result{Output: "Created cron job \"quiet ticker\" (schedule=*/5 * * * *)", Source: "builtin"}, nil
+}
+
+type bashTestTool struct {
+	calls int
+}
+
+func (t *bashTestTool) Name() string               { return "bash" }
+func (t *bashTestTool) Description() string        { return "bash test tool" }
+func (t *bashTestTool) Risk() agenttools.RiskLevel { return agenttools.RiskSafe }
+func (t *bashTestTool) ParameterSchema() json.RawMessage {
+	return json.RawMessage(`{"type":"object"}`)
+}
+func (t *bashTestTool) Execute(_ context.Context, _ string, _ *agenttools.Context) (*agenttools.Result, error) {
+	t.calls++
+	return &agenttools.Result{Output: "ran bash", Source: "builtin"}, nil
 }
 
 func TestLoop_SimpleResponse(t *testing.T) {
@@ -467,6 +520,48 @@ func TestLoop_PersistsToolExecutionAndIncrementsRCACounter(t *testing.T) {
 	}
 }
 
+func TestLoop_PassesDatabaseStoreIntoToolContext(t *testing.T) {
+	store := testutil.TempStore(t)
+	tool := &storeAwareTool{}
+	tools := NewToolRegistry()
+	tools.Register(tool)
+
+	completer := &mockCompleter{responses: []*llm.Response{
+		{
+			ToolCalls: []llm.ToolCall{{
+				ID:   "call-1",
+				Type: "function",
+				Function: llm.ToolCallFunc{
+					Name:      "cron",
+					Arguments: `{"action":"create","name":"quiet ticker","schedule":"*/5 * * * *","task":"heartbeat"}`,
+				},
+			}},
+			FinishReason: "tool_calls",
+		},
+		{
+			Content:      "Created cron job \"quiet ticker\" (schedule=*/5 * * * *)",
+			FinishReason: "stop",
+		},
+	}}
+
+	loop := NewLoop(DefaultLoopConfig(), LoopDeps{
+		LLM:     completer,
+		Tools:   tools,
+		Store:   store,
+		Context: NewContextBuilder(DefaultContextConfig()),
+	})
+
+	session := NewSession("sess", "agent", "Duncan")
+	session.AddUserMessage("schedule quiet ticker")
+
+	if _, err := loop.Run(context.Background(), session); err != nil {
+		t.Fatalf("loop run failed: %v", err)
+	}
+	if !tool.sawStore {
+		t.Fatal("tool context did not receive the authoritative database store")
+	}
+}
+
 func TestLoop_NormalizesMalformedStructuredToolArgumentsBeforeExecution(t *testing.T) {
 	toolCall := llm.ToolCall{
 		ID:   "call-1",
@@ -673,6 +768,72 @@ func TestLoop_SuppressesReplayOfSuccessfulSideEffectingToolCalls(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("expected tool_call_replay_suppressed event")
+	}
+}
+
+func TestLoop_RejectsToolCallOutsideSelectedToolSurface(t *testing.T) {
+	mock := &mockCompleter{
+		responses: []*llm.Response{
+			{
+				Model:    "kimi-k2-turbo-preview",
+				Provider: "moonshot",
+				ToolCalls: []llm.ToolCall{{
+					ID:   "call-bash",
+					Type: "function",
+					Function: llm.ToolCallFunc{
+						Name:      "bash",
+						Arguments: `{"command":"cat requirements.txt"}`,
+					},
+				}},
+			},
+			{Model: "kimi-k2-turbo-preview", Provider: "moonshot", Content: "Done."},
+		},
+	}
+	reg := NewToolRegistry()
+	bash := &bashTestTool{}
+	reg.Register(bash)
+	recorder := &recordingToolCallRecorder{}
+	deps := LoopDeps{
+		LLM:      mock,
+		Tools:    reg,
+		Recorder: recorder,
+		Context:  NewContextBuilder(DefaultContextConfig()),
+	}
+	loop := NewLoop(DefaultLoopConfig(), deps)
+
+	session := NewSession("sess-1", "agent-1", "TestBot")
+	session.SetSelectedToolDefs([]llm.ToolDef{
+		{Type: "function", Function: llm.ToolFuncDef{Name: "read_file"}},
+		{Type: "function", Function: llm.ToolFuncDef{Name: "write_file"}},
+	})
+	session.AddUserMessage("read the source file and write outputs")
+	obs := &recordingObserver{}
+	ctx := llm.WithInferenceObserver(core.WithTurnID(context.Background(), "turn-out-of-surface"), obs)
+
+	result, err := loop.Run(ctx, session)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "Done." {
+		t.Fatalf("result = %q, want Done.", result)
+	}
+	if bash.calls != 0 {
+		t.Fatalf("bash tool executed %d times, want 0", bash.calls)
+	}
+	if len(recorder.records) == 0 || recorder.records[0].Status != "out_of_surface" {
+		t.Fatalf("expected out_of_surface record, got %+v", recorder.records)
+	}
+	found := false
+	for _, ev := range obs.events {
+		if ev.eventType == "tool_call_blocked" {
+			found = true
+			if got := ev.details["reason_code"]; got != "tool_not_selected" {
+				t.Fatalf("reason_code = %v, want tool_not_selected", got)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected tool_call_blocked event")
 	}
 }
 
@@ -971,5 +1132,104 @@ func TestLoop_RetriesAgentMessagePlaceholderOnlyFinalResponse(t *testing.T) {
 	}
 	if result != "Actual answer." {
 		t.Fatalf("result = %q, want %q", result, "Actual answer.")
+	}
+}
+
+func TestLoop_RetriesPromissoryOnlyDirectExecutionResponse(t *testing.T) {
+	mock := &mockCompleter{
+		responses: []*llm.Response{
+			{Content: "Let me check what's inside the workspace right now."},
+			{Content: "42"},
+		},
+	}
+
+	deps := LoopDeps{
+		LLM:     mock,
+		Tools:   NewToolRegistry(),
+		Context: NewContextBuilder(DefaultContextConfig()),
+	}
+	loop := NewLoop(DefaultLoopConfig(), deps)
+
+	session := NewSession("sess-1", "agent-1", "TestBot")
+	session.AddUserMessage("Count markdown files recursively in the workspace and return only the number.")
+	session.SetTaskVerificationHints("task", "simple", "execute_directly", nil)
+	session.SetTurnEnvelopePolicy("standard", "focused_inspection", "test")
+
+	result, err := loop.Run(context.Background(), session)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "42" {
+		t.Fatalf("result = %q, want %q", result, "42")
+	}
+
+	msgs := session.Messages()
+	if len(msgs) != 2 {
+		t.Fatalf("message count = %d, want 2", len(msgs))
+	}
+	if strings.Contains(strings.ToLower(msgs[1].Content), "let me check") {
+		t.Fatalf("promissory filler leaked into history: %q", msgs[1].Content)
+	}
+}
+
+func TestLoop_FocusedInspectionEvidenceDoesNotCountAsExploratoryChurn(t *testing.T) {
+	mock := &mockCompleter{
+		responses: []*llm.Response{
+			{
+				Model:    "gpt-4o-mini",
+				Provider: "openai",
+				ToolCalls: []llm.ToolCall{{
+					ID:   "call-1",
+					Type: "function",
+					Function: llm.ToolCallFunc{
+						Name:      "glob_files",
+						Arguments: `{"path":".","pattern":"*.md"}`,
+					},
+				}},
+			},
+			{
+				Model:    "gpt-4o-mini",
+				Provider: "openai",
+				ToolCalls: []llm.ToolCall{{
+					ID:   "call-2",
+					Type: "function",
+					Function: llm.ToolCallFunc{
+						Name:      "glob_files",
+						Arguments: `{"path":".","pattern":"*.txt"}`,
+					},
+				}},
+			},
+			{Content: "2"},
+		},
+	}
+	reg := NewToolRegistry()
+	tool := &inspectionEvidenceTool{name: "glob_files", count: 2, output: "a.md\nb.md"}
+	reg.Register(tool)
+
+	cfg := DefaultLoopConfig()
+	cfg.MaxReadOnlyExploration = 1
+	loop := NewLoop(cfg, LoopDeps{
+		LLM:     mock,
+		Tools:   reg,
+		Context: NewContextBuilder(DefaultContextConfig()),
+	})
+
+	session := NewSession("sess-1", "agent-1", "TestBot")
+	session.AddUserMessage("Count markdown files recursively in the workspace and return only the number.")
+	session.SetTaskVerificationHints("task", "simple", "execute_directly", nil)
+	session.SetTurnEnvelopePolicy("standard", "focused_inspection", "test")
+
+	result, err := loop.Run(context.Background(), session)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "2" {
+		t.Fatalf("result = %q, want %q", result, "2")
+	}
+	if tool.calls != 2 {
+		t.Fatalf("tool calls = %d, want 2", tool.calls)
+	}
+	if got := loop.DoneReason(); got != "" {
+		t.Fatalf("done reason = %q, want empty", got)
 	}
 }

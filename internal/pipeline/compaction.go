@@ -6,6 +6,11 @@ import (
 	"roboticus/internal/llm"
 )
 
+type compactionChunk struct {
+	start    int
+	messages []llm.Message
+}
+
 // CompactContext implements 5-stage progressive compaction of conversation
 // history to fit within a token budget. Matches Rust's compact_text behavior.
 //
@@ -67,6 +72,7 @@ func EstimateMessageTokens(messages []llm.Message) int {
 // keeping only the most recent system message and the last N turns.
 func selectiveTrim(messages []llm.Message) []llm.Message {
 	var result []llm.Message
+	chunks := chunkCompactionMessages(messages)
 
 	// Find the last system message index.
 	lastSystemIdx := -1
@@ -77,20 +83,26 @@ func selectiveTrim(messages []llm.Message) []llm.Message {
 		}
 	}
 
-	for i, m := range messages {
-		switch m.Role {
-		case "system":
+	for _, chunk := range chunks {
+		if len(chunk.messages) == 0 {
+			continue
+		}
+		first := chunk.messages[0]
+		switch {
+		case first.Role == "system":
 			// Keep only the most recent system message.
-			if i == lastSystemIdx {
-				result = append(result, m)
+			if chunk.start == lastSystemIdx {
+				result = append(result, chunk.messages...)
 			}
-		case "tool":
-			// Drop tool results from the first half of conversation.
-			if i >= len(messages)/2 {
-				result = append(result, m)
+		case isToolCallChunk(chunk):
+			// Drop entire old tool exchanges together. Keeping the assistant
+			// tool_calls while dropping matching tool results corrupts provider
+			// history on later inference/retry paths.
+			if chunk.start >= len(messages)/2 {
+				result = append(result, chunk.messages...)
 			}
 		default:
-			result = append(result, m)
+			result = append(result, chunk.messages...)
 		}
 	}
 
@@ -100,26 +112,27 @@ func selectiveTrim(messages []llm.Message) []llm.Message {
 // semanticCompress summarizes older user/assistant turns into condensed
 // key-point messages while keeping the most recent turns verbatim.
 func semanticCompress(messages []llm.Message) []llm.Message {
-	if len(messages) <= 4 {
+	chunks := chunkCompactionMessages(messages)
+	if len(chunks) <= 4 {
 		return messages
 	}
 
-	// Keep the last 4 messages verbatim. Compress everything before.
-	boundary := len(messages) - 4
+	// Keep the last 4 chunks verbatim. Compress everything before.
+	boundary := len(chunks) - 4
 	var result []llm.Message
 
 	// Compress older messages into summaries.
 	var summaryParts []string
 	for i := 0; i < boundary; i++ {
-		m := messages[i]
-		if m.Role == "system" {
+		chunk := chunks[i]
+		if isSystemChunk(chunk) {
 			// Preserve system messages as-is.
-			result = append(result, m)
+			result = append(result, chunk.messages...)
 			continue
 		}
-		summary := extractKeyPoints(m.Content)
+		summary := summarizeCompactionChunk(chunk)
 		if summary != "" {
-			prefix := "[" + m.Role + "] "
+			prefix := "[" + chunk.messages[0].Role + "] "
 			summaryParts = append(summaryParts, prefix+summary)
 		}
 	}
@@ -133,51 +146,58 @@ func semanticCompress(messages []llm.Message) []llm.Message {
 	}
 
 	// Append recent messages verbatim.
-	result = append(result, messages[boundary:]...)
+	for _, chunk := range chunks[boundary:] {
+		result = append(result, chunk.messages...)
+	}
 	return result
 }
 
 // topicExtract reduces messages to topic sentences only, keeping structure
 // but dropping supporting detail.
 func topicExtract(messages []llm.Message) []llm.Message {
-	if len(messages) <= 2 {
+	chunks := chunkCompactionMessages(messages)
+	if len(chunks) <= 2 {
 		return messages
 	}
 
-	// Keep last 2 messages verbatim. Extract topics from the rest.
-	boundary := len(messages) - 2
+	// Keep last 2 chunks verbatim. Extract topics from the rest.
+	boundary := len(chunks) - 2
 	var result []llm.Message
 
 	for i := 0; i < boundary; i++ {
-		m := messages[i]
-		if m.Role == "system" {
+		chunk := chunks[i]
+		if isSystemChunk(chunk) {
 			// Truncate long system prompts.
-			if len(m.Content) > 500 {
+			content := chunk.messages[0].Content
+			if len(content) > 500 {
 				result = append(result, llm.Message{
-					Role:    m.Role,
-					Content: m.Content[:500] + "...",
+					Role:    chunk.messages[0].Role,
+					Content: content[:500] + "...",
 				})
 			} else {
-				result = append(result, m)
+				result = append(result, chunk.messages...)
 			}
 			continue
 		}
-		topic := extractTopicSentence(m.Content)
+		topic := summarizeCompactionChunk(chunk)
 		if topic != "" {
 			result = append(result, llm.Message{
-				Role:    m.Role,
+				Role:    chunk.messages[0].Role,
 				Content: topic,
 			})
 		}
 	}
 
-	result = append(result, messages[boundary:]...)
+	for _, chunk := range chunks[boundary:] {
+		result = append(result, chunk.messages...)
+	}
 	return result
 }
 
 // skeleton keeps only the system prompt and the last 2 user/assistant turns.
 func skeleton(messages []llm.Message) []llm.Message {
 	var result []llm.Message
+	chunks := chunkCompactionMessages(messages)
 
 	// Keep the first system message (the system prompt).
 	for _, m := range messages {
@@ -192,17 +212,86 @@ func skeleton(messages []llm.Message) []llm.Message {
 		}
 	}
 
-	// Keep the last 2 user/assistant message pairs.
-	var recentPairs []llm.Message
-	for i := len(messages) - 1; i >= 0 && len(recentPairs) < 4; i-- {
-		m := messages[i]
-		if m.Role == "user" || m.Role == "assistant" {
-			recentPairs = append([]llm.Message{m}, recentPairs...)
+	// Keep the last 2 non-system chunks verbatim. A tool-call exchange is one
+	// atomic chunk, not permission to keep only the assistant tool_calls.
+	var recentChunks [][]llm.Message
+	for i := len(chunks) - 1; i >= 0 && len(recentChunks) < 2; i-- {
+		chunk := chunks[i]
+		if isSystemChunk(chunk) {
+			continue
 		}
+		recentChunks = append([][]llm.Message{chunk.messages}, recentChunks...)
 	}
-	result = append(result, recentPairs...)
+	for _, chunk := range recentChunks {
+		result = append(result, chunk...)
+	}
 
 	return result
+}
+
+func chunkCompactionMessages(messages []llm.Message) []compactionChunk {
+	if len(messages) == 0 {
+		return nil
+	}
+	chunks := make([]compactionChunk, 0, len(messages))
+	for i := 0; i < len(messages); i++ {
+		msg := messages[i]
+		if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
+			callIDs := make(map[string]struct{}, len(msg.ToolCalls))
+			for _, tc := range msg.ToolCalls {
+				callIDs[tc.ID] = struct{}{}
+			}
+			chunk := compactionChunk{start: i, messages: []llm.Message{msg}}
+			for j := i + 1; j < len(messages); j++ {
+				next := messages[j]
+				if next.Role != "tool" {
+					break
+				}
+				if _, ok := callIDs[next.ToolCallID]; !ok {
+					break
+				}
+				chunk.messages = append(chunk.messages, next)
+				i = j
+			}
+			chunks = append(chunks, chunk)
+			continue
+		}
+		chunks = append(chunks, compactionChunk{start: i, messages: []llm.Message{msg}})
+	}
+	return chunks
+}
+
+func isToolCallChunk(chunk compactionChunk) bool {
+	return len(chunk.messages) > 0 && chunk.messages[0].Role == "assistant" && len(chunk.messages[0].ToolCalls) > 0
+}
+
+func isSystemChunk(chunk compactionChunk) bool {
+	return len(chunk.messages) == 1 && chunk.messages[0].Role == "system"
+}
+
+func summarizeCompactionChunk(chunk compactionChunk) string {
+	if len(chunk.messages) == 0 {
+		return ""
+	}
+	if isToolCallChunk(chunk) {
+		names := make([]string, 0, len(chunk.messages[0].ToolCalls))
+		for _, tc := range chunk.messages[0].ToolCalls {
+			if strings.TrimSpace(tc.Function.Name) == "" {
+				continue
+			}
+			names = append(names, tc.Function.Name)
+		}
+		if len(names) > 0 {
+			return "Tool exchange: " + strings.Join(names, ", ")
+		}
+	}
+	for _, msg := range chunk.messages {
+		if strings.TrimSpace(msg.Content) == "" {
+			continue
+		}
+		return extractTopicSentence(msg.Content)
+	}
+	return ""
 }
 
 // extractKeyPoints extracts the most salient points from a message,

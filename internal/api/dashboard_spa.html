@@ -6607,7 +6607,7 @@
         alerts.push('<div class="card" style="border-color:var(--border);margin-bottom:0.6rem"><div style="font-size:0.72rem;color:var(--muted);font-weight:600">Provider routing mode: in-process</div><div style="font-size:0.72rem;color:var(--muted);margin-top:0.2rem">Dashboard discovery is server-mediated. Providers are contacted only by Roboticus backend APIs.</div></div>');
       }
       if (proxy.legacy_loopback_support === 'removed_v0_8') {
-        alerts.push('<div class="card" style="border-color:var(--warning);margin-bottom:0.6rem"><div style="font-size:0.72rem;color:var(--warning);font-weight:600">Legacy loopback provider URLs are unsupported</div><div style="font-size:0.72rem;color:var(--muted);margin-top:0.2rem">127.0.0.1:8788 provider URLs are not supported in v0.8.0+. Update providers.*.url to direct upstream provider base URLs.</div></div>');
+        alerts.push('<div class="card" style="border-color:var(--warning);margin-bottom:0.6rem"><div style="font-size:0.72rem;color:var(--warning);font-weight:600">Legacy loopback provider URLs are unsupported</div><div style="font-size:0.72rem;color:var(--muted);margin-top:0.2rem">localhost:8788 provider URLs are not supported in v1.0.7+. Update providers.*.url to direct upstream provider base URLs.</div></div>');
       }
       Object.keys(reports).forEach(function(name) {
         var rep = reports[name] || {};
@@ -7504,7 +7504,7 @@
             'reset_schedule': 'Cron expression for automatic session resets (e.g. "0 0 * * *" for daily).',
             // --- Server ---
             'port': 'HTTP server port. Default: 18789. Requires restart.',
-            'bind': 'Network interface to bind. 127.0.0.1 = local only, 0.0.0.0 = all interfaces.',
+            'bind': 'Network interface to bind. localhost = local only, 0.0.0.0 = all interfaces.',
             'log_dir': 'Directory for server log files.',
             'cron_max_concurrency': 'Maximum number of cron jobs that can run simultaneously.',
             'api_key': 'API key for authenticating dashboard and API requests.',

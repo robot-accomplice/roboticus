@@ -92,6 +92,12 @@ The install / upgrade procedure must be audited on these exact axes:
    - non-login shells may not expose that path
    - install verification should check both binary existence and command discovery
 
+5. **Release-build version stamping must target the real runtime symbols**
+   - release-shaped builds must stamp the CLI version into `roboticus/cmd/internal/cmdutil.Version`
+   - startup banners must stamp the daemon version into `roboticus/internal/daemon.version`
+   - CI, release packaging, and local release-helper build paths must all use the same symbols
+   - a binary that still prints `dev` after a release-shaped build is a release blocker, not cosmetic drift
+
 ## Required Install / Upgrade Audit Checklist
 
 Before calling install/upgrade healthy, verify:
@@ -103,6 +109,7 @@ Before calling install/upgrade healthy, verify:
 5. default `upgrade all` tolerates stale provider/skills registry content with warnings only
 6. explicit `--refresh-config` still fails on checksum mismatch
 7. release publication validates GitHub release assets and registry manifest coherence independently
+8. release-shaped binaries report the expected non-`dev` version from both `roboticus version` and startup surfaces
 
 ## Follow-On Procedure Audit Work
 

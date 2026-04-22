@@ -316,6 +316,7 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 	tools.Register(&agenttools.ListDirectoryTool{})
 	tools.Register(&agenttools.SearchFilesTool{})
 	tools.Register(&agenttools.GlobFilesTool{})
+	tools.Register(&agenttools.ProjectInventoryTool{})
 
 	// Scheduling.
 	tools.Register(&agenttools.CronTool{})
@@ -815,7 +816,7 @@ func buildPluginRegistry(cfg *core.Config) (*plugin.Registry, error) {
 func (d *Daemon) Start(s service.Service) error {
 	// Final boot step: HTTP server starting (Rust parity: serve.rs step 12).
 	bootStep(12, 12, "HTTP server starting")
-	bindAddr := fmt.Sprintf("127.0.0.1:%d", d.cfg.Server.Port)
+	bindAddr := fmt.Sprintf("localhost:%d", d.cfg.Server.Port)
 	bootDetail("bind", bindAddr)
 	bootDetail("dashboard", fmt.Sprintf("http://localhost:%d", d.cfg.Server.Port))
 

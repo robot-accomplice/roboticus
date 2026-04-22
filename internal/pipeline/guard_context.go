@@ -50,6 +50,8 @@ type ToolResultEntry struct {
 	Output        string
 	Metadata      json.RawMessage
 	ArtifactProof *agenttools.ArtifactProof
+	ReadProof     *agenttools.ArtifactReadProof
+	Inspection    *agenttools.InspectionProof
 }
 
 func toolOutputContainsAny(output string, markers []string) bool {

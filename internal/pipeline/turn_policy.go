@@ -20,8 +20,11 @@ const (
 type ToolProfile string
 
 const (
-	ToolProfileDefault          ToolProfile = "default"
-	ToolProfileFocusedAuthoring ToolProfile = "focused_authoring"
+	ToolProfileDefault                  ToolProfile = "default"
+	ToolProfileFocusedAuthoring         ToolProfile = "focused_authoring"
+	ToolProfileFocusedAnalysisAuthoring ToolProfile = "focused_analysis_authoring"
+	ToolProfileFocusedInspection        ToolProfile = "focused_inspection"
+	ToolProfileFocusedScheduling        ToolProfile = "focused_scheduling"
 )
 
 type TurnEnvelopePolicy struct {
@@ -39,8 +42,12 @@ type TurnEnvelopePolicy struct {
 
 func DeriveTurnEnvelopePolicy(content string, synthesis TaskSynthesis, sessionTurns int) TurnEnvelopePolicy {
 	words := len(strings.Fields(strings.TrimSpace(content)))
-	requiresArtifactWrite := len(ParseExpectedArtifactSpecs(content)) > 0 || looksLikeBoundedAuthoringTask(strings.ToLower(content))
+	lower := strings.ToLower(content)
+	requiresArtifactWrite := len(ParseExpectedArtifactSpecs(content)) > 0 || looksLikeBoundedAuthoringTask(lower) || looksLikeFilesystemAuthoringTurn(lower)
 	allowAuthorityMutation := requiresExplicitAuthorityMutation(content)
+	requiresScheduling := looksLikeSchedulingTask(lower)
+	requiresInspection := looksLikeFocusedInspectionTurn(content)
+	requiresAnalysisAuthoring := looksLikeInspectionBackedArtifactAuthoring(content)
 
 	switch {
 	case synthesis.Complexity == "complex" || synthesis.Intent == "code":
@@ -53,17 +60,38 @@ func DeriveTurnEnvelopePolicy(content string, synthesis TaskSynthesis, sessionTu
 		}
 	case synthesis.Intent == "task" &&
 		synthesis.PlannedAction == "execute_directly" &&
+		requiresScheduling:
+		return TurnEnvelopePolicy{
+			Weight:                 TurnWeightStandard,
+			ContextBudget:          2048,
+			AllowRetrieval:         false,
+			MaxTools:               4,
+			AllowRetryExpansion:    true,
+			AllowAuthorityMutation: false,
+			ToolProfile:            ToolProfileFocusedScheduling,
+			Reason:                 "direct scheduling should stay on a focused scheduling envelope",
+		}
+	case synthesis.Intent == "task" &&
+		synthesis.PlannedAction == "execute_directly" &&
 		(synthesis.Complexity == "simple" || requiresArtifactWrite):
+		profile := toolProfileForTurn(requiresArtifactWrite, allowAuthorityMutation)
+		maxTools := 6
+		if requiresAnalysisAuthoring {
+			profile = ToolProfileFocusedAnalysisAuthoring
+			maxTools = 8
+		} else if !requiresArtifactWrite && requiresInspection {
+			profile = ToolProfileFocusedInspection
+		}
 		return TurnEnvelopePolicy{
 			Weight:                 TurnWeightStandard,
 			ContextBudget:          2048,
 			AllowRetrieval:         synthesis.RetrievalNeeded,
-			MaxTools:               6,
+			MaxTools:               maxTools,
 			AllowRetryExpansion:    true,
 			RequireArtifactWrite:   requiresArtifactWrite,
 			AllowAuthorityMutation: allowAuthorityMutation,
-			ToolProfile:            toolProfileForTurn(requiresArtifactWrite, allowAuthorityMutation),
-			Reason:                 "direct artifact authoring should stay on a focused execution envelope",
+			ToolProfile:            profile,
+			Reason:                 directExecutionPolicyReason(requiresArtifactWrite, requiresInspection, requiresAnalysisAuthoring),
 		}
 	case synthesis.Intent == "task":
 		return TurnEnvelopePolicy{
@@ -175,7 +203,7 @@ func filterToolDefsForPolicy(defs []llm.ToolDef, policy TurnEnvelopePolicy) ([]l
 		filtered = append(filtered, def)
 	}
 
-	if !policy.RequireArtifactWrite {
+	if !policy.RequireArtifactWrite && policy.ToolProfile == ToolProfileDefault {
 		return filtered, removed
 	}
 
@@ -190,24 +218,80 @@ func toolPriorityForPolicy(name string, policy TurnEnvelopePolicy) int {
 		switch agenttools.OperationClassForName(name) {
 		case agenttools.OperationArtifactWrite:
 			return 0
+		case agenttools.OperationArtifactRead:
+			return 1
+		case agenttools.OperationRuntimeContextRead:
+			return 2
+		case agenttools.OperationMemoryRead:
+			return 3
+		case agenttools.OperationWorkspaceInspect:
+			return 4
+		case agenttools.OperationExecution:
+			return 5
+		case agenttools.OperationTaskInspection:
+			return 6
+		case agenttools.OperationCapabilityInventory:
+			return 7
+		case agenttools.OperationDelegation:
+			return 8
+		case agenttools.OperationAuthorityWrite:
+			return 9
+		default:
+			return 10
+		}
+	}
+	if policy.ToolProfile == ToolProfileFocusedAnalysisAuthoring {
+		switch strings.TrimSpace(strings.ToLower(name)) {
+		case "inventory_projects":
+			return 0
+		case "list_directory":
+			return 1
+		case "bash":
+			return 2
+		case "search_files", "glob_files":
+			return 3
+		}
+		switch agenttools.OperationClassForName(name) {
+		case agenttools.OperationArtifactRead:
+			return 4
+		case agenttools.OperationArtifactWrite:
+			return 5
+		case agenttools.OperationRuntimeContextRead:
+			return 6
+		case agenttools.OperationMemoryRead:
+			return 7
+		default:
+			return 8
+		}
+	}
+	if policy.ToolProfile == ToolProfileFocusedScheduling {
+		switch agenttools.OperationClassForName(name) {
+		case agenttools.OperationScheduling:
+			return 0
 		case agenttools.OperationRuntimeContextRead:
 			return 1
-		case agenttools.OperationMemoryRead:
-			return 2
-		case agenttools.OperationWorkspaceInspect:
-			return 3
-		case agenttools.OperationExecution:
-			return 4
 		case agenttools.OperationTaskInspection:
-			return 5
+			return 2
 		case agenttools.OperationCapabilityInventory:
-			return 6
-		case agenttools.OperationDelegation:
-			return 7
-		case agenttools.OperationAuthorityWrite:
-			return 8
+			return 3
+		case agenttools.OperationMemoryRead:
+			return 4
 		default:
-			return 9
+			return 5
+		}
+	}
+	if policy.ToolProfile == ToolProfileFocusedInspection {
+		switch agenttools.OperationClassForName(name) {
+		case agenttools.OperationWorkspaceInspect:
+			return 0
+		case agenttools.OperationArtifactRead:
+			return 1
+		case agenttools.OperationRuntimeContextRead:
+			return 2
+		case agenttools.OperationMemoryRead:
+			return 3
+		default:
+			return 4
 		}
 	}
 	if policy.RequireArtifactWrite {
@@ -242,12 +326,41 @@ func toolProfileForTurn(requireArtifactWrite, allowAuthorityMutation bool) ToolP
 
 func toolAllowedForPolicy(name string, policy TurnEnvelopePolicy) bool {
 	switch policy.ToolProfile {
-	case ToolProfileFocusedAuthoring:
+	case ToolProfileFocusedAnalysisAuthoring:
 		switch agenttools.OperationClassForName(name) {
-		case agenttools.OperationArtifactWrite, agenttools.OperationRuntimeContextRead:
+		case agenttools.OperationWorkspaceInspect, agenttools.OperationArtifactRead,
+			agenttools.OperationArtifactWrite, agenttools.OperationRuntimeContextRead,
+			agenttools.OperationExecution:
 			return true
 		case agenttools.OperationMemoryRead:
 			return policy.AllowRetrieval
+		default:
+			return false
+		}
+	case ToolProfileFocusedAuthoring:
+		switch agenttools.OperationClassForName(name) {
+		case agenttools.OperationArtifactWrite, agenttools.OperationArtifactRead, agenttools.OperationRuntimeContextRead:
+			return true
+		case agenttools.OperationMemoryRead:
+			return policy.AllowRetrieval
+		default:
+			return false
+		}
+	case ToolProfileFocusedInspection:
+		switch agenttools.OperationClassForName(name) {
+		case agenttools.OperationWorkspaceInspect, agenttools.OperationArtifactRead, agenttools.OperationRuntimeContextRead:
+			return true
+		case agenttools.OperationMemoryRead:
+			return policy.AllowRetrieval
+		default:
+			return false
+		}
+	case ToolProfileFocusedScheduling:
+		switch agenttools.OperationClassForName(name) {
+		case agenttools.OperationScheduling, agenttools.OperationRuntimeContextRead:
+			return true
+		case agenttools.OperationTaskInspection:
+			return true
 		default:
 			return false
 		}
@@ -256,15 +369,40 @@ func toolAllowedForPolicy(name string, policy TurnEnvelopePolicy) bool {
 	}
 }
 
+func looksLikeSchedulingTask(lower string) bool {
+	markers := []string{
+		"schedule ", "scheduled", "cron", "every ", "reminder",
+		"quiet ticker", "ticker", "runs every",
+	}
+	return containsAnyMarker(lower, markers)
+}
+
+func directExecutionPolicyReason(requireArtifactWrite, requiresInspection, requiresAnalysisAuthoring bool) string {
+	switch {
+	case requiresAnalysisAuthoring:
+		return "inspection-backed report authoring should stay on a focused analysis+authoring envelope"
+	case requireArtifactWrite:
+		return "direct artifact authoring should stay on a focused execution envelope"
+	case requiresInspection:
+		return "direct filesystem inspection should stay on a focused inspection envelope"
+	default:
+		return "simple direct task should stay on a focused execution envelope"
+	}
+}
+
 func requiresExplicitAuthorityMutation(content string) bool {
 	lower := strings.ToLower(content)
-	actionMarkers := []string{
-		"ingest", "record", "store", "save", "capture", "persist", "promote",
-		"register", "add", "create", "update", "revise",
+	persistenceMarkers := []string{
+		"ingest", "record", "store", "save", "capture", "persist", "promote", "register",
 	}
-	authorityMarkers := []string{
-		"policy", "spec", "specification", "runbook", "procedure", "rule",
-		"playbook", "guideline", "canonical memory", "semantic memory",
+	authorityTargetMarkers := []string{
+		"canonical memory",
+		"semantic memory",
+		"policy store",
+		"instruction registry",
+		"skill registry",
+		"authority layer",
+		"knowledge base",
 	}
-	return containsAnyMarker(lower, actionMarkers) && containsAnyMarker(lower, authorityMarkers)
+	return containsAnyMarker(lower, persistenceMarkers) && containsAnyMarker(lower, authorityTargetMarkers)
 }

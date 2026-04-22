@@ -29,6 +29,9 @@ func requestIntentClass(req *Request) string {
 	if req == nil {
 		return ""
 	}
+	if len(req.Tools) > 0 {
+		return IntentToolUse.String()
+	}
 	if intentClass := strings.TrimSpace(strings.ToUpper(req.IntentClass)); intentClass != "" {
 		return intentClass
 	}
@@ -38,6 +41,9 @@ func requestIntentClass(req *Request) string {
 func requestRoutingIntent(req *Request) string {
 	if req == nil {
 		return ""
+	}
+	if len(req.Tools) > 0 {
+		return "task"
 	}
 	return normalizeTaskIntent(req.TaskIntent)
 }

@@ -890,6 +890,34 @@ func TestRoutingFitness_HighQualityCloudBeatsLowQualityLocal(t *testing.T) {
 	}
 }
 
+func TestRoutingFitness_ToolBearingIgnoresUnderEvidencedCandidatesWhenObservedExist(t *testing.T) {
+	targets := []RouteTarget{
+		{Model: "apertus", Provider: "ollama", Tier: TierMedium, IsLocal: true, Cost: 0.00001},
+		{Model: "gemma4", Provider: "ollama", Tier: TierMedium, IsLocal: true, Cost: 0.00002},
+	}
+	qt := NewQualityTracker(32)
+	qt.Record("ollama/apertus", 0.95)
+	qt.Record("ollama/apertus", 0.95)
+	qt.Record("ollama/gemma4", 0.70)
+	qt.Record("ollama/gemma4", 0.70)
+
+	iq := NewIntentQualityTracker(32)
+	iq.RecordWithIntent("ollama/gemma4", IntentToolUse.String(), 0.71)
+
+	router := NewRouter(targets, RouterConfig{CostAware: true})
+	router.SetIntentQualityTracker(iq)
+	router.EnableMetascoreRouting(qt, nil, nil, nil)
+
+	req := &Request{
+		TaskIntent: "question",
+		Tools:      []ToolDef{{Function: ToolFuncDef{Name: "list_tools"}}},
+	}
+	got := router.Select(req)
+	if got.Model != "gemma4" {
+		t.Fatalf("tool-bearing request selected %q, want observed TOOL_USE model gemma4", got.Model)
+	}
+}
+
 func TestRoutingFitness_RealisticTrafficMix(t *testing.T) {
 	targets := []RouteTarget{
 		{Model: "local-fast", Provider: "local-fast", Tier: TierSmall, IsLocal: true, Cost: 0.00001},

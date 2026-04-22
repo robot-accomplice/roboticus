@@ -189,9 +189,13 @@ v1.0.7 execution stance:
   `initialize`, `tools/list`, `tools/call`, returned server metadata, and the
   closure verdict for each target
 - the active real-target prospect list is currently:
-  - Zapier MCP
+  - FeedOracle MCP
+  - Channel3 MCP
   - Atlassian Rovo MCP
   - OnceHub MCP
+- Zapier is explicitly removed from the SSE prospect list because their current
+  MCP docs have moved away from SSE support; using Zapier as an SSE proof
+  target would create a false closure
 - closure requires more than one real third-party target to validate through
   the same harness; one success plus one vendor-side transport deprecation does
   not count as cross-vendor proof
@@ -201,8 +205,10 @@ v1.0.7 execution stance:
 - the transport contract should be explicit about what is actually supported:
   endpoint-discovery events, auth-bearing GET/POST, standard SSE framing, and
   tool-call proof on the live path
-- the item stays open until that harness has validated more than one real
-  vendor target, or the operator explicitly narrows the supported contract
+- v1.0.7 explicitly narrows the supported contract: the harness and transport
+  are release-grade, but cross-vendor third-party SSE proof is deferred until
+  more than one real vendor target validates through the same named-target
+  evidence path
 
 - Which remaining MCP transport behaviors still differ materially from the
   desired operator contract?

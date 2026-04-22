@@ -28,6 +28,9 @@ type PromptConfig struct {
 	ToolNames         []string             // registered tool names for introspection block
 	ToolDescs         [][2]string          // (name, description) pairs for tool roster in prompt
 	CapabilitySummary string               // compact runtime-owned capability snapshot for introspection-shaped turns
+	InspectionTarget  string               // authoritative inspection-target hint for focused inspection turns
+	DestinationTarget string               // authoritative destination hint for focused filesystem authoring turns
+	ToolProfile       string               // pipeline-selected focused tool profile for the active turn
 	BudgetTier        int                  // 0=L0, 1=L1, 2=L2, 3=L3 — controls prompt compaction
 	Obsidian          *core.ObsidianConfig // optional Obsidian config for vault directive
 }
@@ -97,6 +100,17 @@ func BuildSystemPrompt(cfg PromptConfig) string {
 	// 6a. Runtime-owned capability snapshot for introspection-shaped turns.
 	if cfg.CapabilitySummary != "" {
 		sections = append(sections, "## Capability Snapshot\n"+cfg.CapabilitySummary+"\n")
+	}
+
+	// 6b. Inspection-target hint for focused filesystem inspection turns.
+	if strings.TrimSpace(cfg.InspectionTarget) != "" {
+		sections = append(sections, "## Inspection Target\n"+cfg.InspectionTarget+"\n")
+	}
+	if strings.TrimSpace(cfg.DestinationTarget) != "" {
+		sections = append(sections, "## Destination Target\n"+cfg.DestinationTarget+"\n")
+	}
+	if strings.TrimSpace(cfg.ToolProfile) == "focused_analysis_authoring" {
+		sections = append(sections, buildAnalysisAuthoringBlock(cfg))
 	}
 
 	// 7. Safety (integrated into behavioral contract for L2+, explicit for L0/L1).
@@ -189,6 +203,7 @@ func buildToolUseBlock(cfg PromptConfig) string {
 	if len(cfg.ToolDescs) == 0 && len(cfg.ToolNames) == 0 {
 		return ""
 	}
+	hasBash := promptHasTool(cfg.ToolNames, "bash")
 
 	var sb strings.Builder
 	sb.WriteString("---\n## Tool Use\n")
@@ -200,9 +215,13 @@ func buildToolUseBlock(cfg PromptConfig) string {
 	sb.WriteString("**Important**: You are an autonomous agent with real tool execution capabilities. ")
 	sb.WriteString("When a user asks you to do something that can be accomplished with your tools, ")
 	sb.WriteString("USE THEM. Do not say \"I cannot\" or \"I don't have the ability to\" — if a tool ")
-	sb.WriteString("exists that can accomplish the task, invoke it. You have a real workspace, real ")
-	sb.WriteString("shell access, and real integrations. Act on requests; do not merely describe ")
-	sb.WriteString("what the user could do themselves.\n\n")
+	sb.WriteString("exists that can accomplish the task, invoke it. You have a real workspace")
+	if hasBash {
+		sb.WriteString(", real shell access,")
+	} else {
+		sb.WriteString(",")
+	}
+	sb.WriteString(" and real integrations. Act on requests; do not merely describe what the user could do themselves.\n\n")
 	sb.WriteString("### Available Tools\n")
 
 	if len(cfg.ToolDescs) > 0 {
@@ -273,7 +292,7 @@ func buildOperationalIntrospection(cfg PromptConfig) string {
 		// Compact (~60 tokens).
 		return "---\n## Introspection\n" +
 			"For tasks (not conversation): inspect runtime/memory/tools before acting. " +
-			"Use `get_runtime_context` for paths and policy. Prefer inspection over speculation.\n" +
+			"Use `get_runtime_context` for workspace paths and effective path constraints. Prefer inspection over speculation.\n" +
 			"---\n"
 	}
 	// Full (~200 tokens).
@@ -284,7 +303,7 @@ func buildOperationalIntrospection(cfg PromptConfig) string {
 	sb.WriteString("2. Check data: if the user asks about stored data, query the database before saying it doesn't exist.\n")
 	sb.WriteString("3. Check filesystem: for file/repo tasks, use `list_directory` or `search_files` before guessing paths.\n")
 	sb.WriteString("4. Check tools: inspect your tool roster before claiming a capability is unavailable.\n")
-	sb.WriteString("5. Check runtime: use `get_runtime_context` for workspace paths, allowed paths, and security policy.\n")
+	sb.WriteString("5. Check runtime: use `get_runtime_context` for workspace paths, allowed paths, protected read-only inputs, and effective path constraints.\n")
 	if len(cfg.ToolNames) > 0 {
 		fmt.Fprintf(&sb, "\nYou have %d tools: %s.\n", len(cfg.ToolNames), strings.Join(cfg.ToolNames, ", "))
 	}
@@ -300,6 +319,7 @@ func buildOperationalIntrospection(cfg PromptConfig) string {
 // Includes operational guidance for tool use, workspace policy, and attribution.
 func buildRuntimeMetadataBlock(cfg PromptConfig) string {
 	var sb strings.Builder
+	hasBash := promptHasTool(cfg.ToolNames, "bash")
 	sb.WriteString("## Runtime Context\n")
 	fmt.Fprintf(&sb, "- Local time: %s\n", time.Now().Format(time.RFC3339))
 	if cfg.Model != "" {
@@ -312,9 +332,16 @@ func buildRuntimeMetadataBlock(cfg PromptConfig) string {
 		fmt.Fprintf(&sb, "- Agent version: %s\n", cfg.Version)
 	}
 	sb.WriteString("\n### Tool Operations\n")
-	sb.WriteString("- File tools default to the workspace root. Use relative paths unless the user specifies absolute.\n")
-	sb.WriteString("- `bash` executes in the workspace root. Check `get_runtime_context` for allowed paths.\n")
-	sb.WriteString("- When reporting tool output, attribute it: 'The bash command returned...' not 'I found...'\n")
+	sb.WriteString("- File tools default to the workspace root. Use relative paths unless the user specifies an absolute destination that falls under an allowed path.\n")
+	if promptHasTool(cfg.ToolNames, "write_file") || promptHasTool(cfg.ToolNames, "edit_file") {
+		sb.WriteString("- `write_file` and `edit_file` may target either workspace-relative paths or absolute paths that fall under an allowed destination from `get_runtime_context` or the destination-target hint.\n")
+	}
+	if hasBash {
+		sb.WriteString("- `bash` executes in the workspace root. Check `get_runtime_context` for effective path constraints before using absolute paths.\n")
+		sb.WriteString("- When reporting tool output, attribute it: 'The bash command returned...' not 'I found...'\n")
+	} else {
+		sb.WriteString("- When reporting tool output, attribute it to the tool that produced it instead of implying direct inspection.\n")
+	}
 	sb.WriteString("- If a tool returns an error, report the error clearly — don't hide failures.\n")
 	// v1.0.6: attempt-then-report directive. The behavioral soak found
 	// the agent preemptively refusing to operate on paths outside its
@@ -349,6 +376,38 @@ func buildRuntimeMetadataBlock(cfg PromptConfig) string {
 	// etc.).
 	sb.WriteString("- EXECUTE IMMEDIATELY for imperative requests. When the user asks you to perform a discrete action (count X, list Y, find Z, run W, fetch V), do it in this turn — call the tool, observe the result, and return the result in this same response. Do NOT acknowledge intent (\"Got it, I'll do that\") and stop — that strands the user waiting for an execution that never comes.\n")
 	return sb.String()
+}
+
+func buildAnalysisAuthoringBlock(cfg PromptConfig) string {
+	var sb strings.Builder
+	sb.WriteString("## Analysis + Authoring Contract\n")
+	sb.WriteString("- This turn requires you to inspect a concrete filesystem target, derive facts, and then write a report artifact.\n")
+	sb.WriteString("- Gather every requested field before writing. Do not fill required columns with `--`, `Unknown`, or placeholders unless a tool call has already established that the value cannot be determined.\n")
+	sb.WriteString("- If the inspection target is a container directory, work across its child projects instead of collapsing the report to the current repository.\n")
+	if promptHasTool(cfg.ToolNames, "inventory_projects") {
+		sb.WriteString("- Prefer `inventory_projects` for project-root reports when it is available; use ad hoc shell commands only to fill metadata that the dedicated inventory tool did not provide.\n")
+	}
+	if promptHasTool(cfg.ToolNames, "bash") {
+		sb.WriteString("- Use `bash` when filesystem or git metadata is most naturally derived from shell commands.\n")
+		sb.WriteString("- For project-directory reports, prefer one structured `bash` inventory pass over repeated extension-specific globbing. Use shell commands to derive project roots, edit timestamps, and remote git direction when those fields are requested.\n")
+		sb.WriteString("- For `projects in <directory>` requests, treat the immediate child directories of the inspection target as candidate project roots unless the user explicitly asks for recursive nested projects. Do not recurse every nested directory looking for repositories.\n")
+	}
+	sb.WriteString("- Do not commit the report until the requested metadata has been gathered or specific gaps have been proven by tool results.\n")
+	sb.WriteString("- Do not ask for permission to proceed when the task and destination are already fully specified.\n")
+	return sb.String()
+}
+
+func promptHasTool(toolNames []string, want string) bool {
+	want = strings.TrimSpace(strings.ToLower(want))
+	if want == "" {
+		return false
+	}
+	for _, name := range toolNames {
+		if strings.TrimSpace(strings.ToLower(name)) == want {
+			return true
+		}
+	}
+	return false
 }
 
 // buildObsidianDirective conditionally injects an Obsidian preferred-destination

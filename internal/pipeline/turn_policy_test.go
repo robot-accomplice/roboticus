@@ -155,6 +155,144 @@ func TestDeriveTurnEnvelopePolicy_BoundedMultiArtifactAuthoringUsesFocusedEnvelo
 	}
 }
 
+func TestDeriveTurnEnvelopePolicy_SchedulingTurnUsesFocusedSchedulingEnvelope(t *testing.T) {
+	policy := DeriveTurnEnvelopePolicy("schedule a cron job that runs every 5 minutes and tell me exactly what was scheduled", TaskSynthesis{
+		Intent:          "task",
+		Complexity:      "simple",
+		PlannedAction:   "execute_directly",
+		RetrievalNeeded: false,
+	}, 2)
+	if policy.Weight != TurnWeightStandard {
+		t.Fatalf("weight = %q, want %q", policy.Weight, TurnWeightStandard)
+	}
+	if policy.ToolProfile != ToolProfileFocusedScheduling {
+		t.Fatalf("tool profile = %q, want %q", policy.ToolProfile, ToolProfileFocusedScheduling)
+	}
+	if policy.MaxTools != 4 {
+		t.Fatalf("max tools = %d, want 4", policy.MaxTools)
+	}
+	if policy.AllowRetrieval {
+		t.Fatal("focused scheduling turns should not enable retrieval by default")
+	}
+}
+
+func TestDeriveTurnEnvelopePolicy_SchedulingAliasFollowupStaysFocusedSchedulingEnvelope(t *testing.T) {
+	prompt := "Create the quiet ticker now and tell me exactly what was scheduled."
+	synthesis := SynthesizeTaskState(prompt, 5, nil)
+	policy := DeriveTurnEnvelopePolicy(prompt, synthesis, 5)
+	if synthesis.Intent != "task" {
+		t.Fatalf("intent = %q, want task", synthesis.Intent)
+	}
+	if policy.ToolProfile != ToolProfileFocusedScheduling {
+		t.Fatalf("tool profile = %q, want %q", policy.ToolProfile, ToolProfileFocusedScheduling)
+	}
+}
+
+func TestDeriveTurnEnvelopePolicy_FilesystemInspectionUsesFocusedInspectionEnvelope(t *testing.T) {
+	policy := DeriveTurnEnvelopePolicy("Count markdown files recursively in the target docs dir and return only the number.", TaskSynthesis{
+		Intent:          "task",
+		Complexity:      "simple",
+		PlannedAction:   "execute_directly",
+		RetrievalNeeded: false,
+	}, 2)
+	if policy.Weight != TurnWeightStandard {
+		t.Fatalf("weight = %q, want %q", policy.Weight, TurnWeightStandard)
+	}
+	if policy.ToolProfile != ToolProfileFocusedInspection {
+		t.Fatalf("tool profile = %q, want %q", policy.ToolProfile, ToolProfileFocusedInspection)
+	}
+	if policy.AllowRetrieval {
+		t.Fatal("focused inspection turns should not enable retrieval by default")
+	}
+}
+
+func TestDeriveTurnEnvelopePolicy_InspectionQuestionUsesFocusedInspectionEnvelope(t *testing.T) {
+	prompt := "What's in your vault right now?"
+	synthesis := SynthesizeTaskState(prompt, 1, nil)
+	policy := DeriveTurnEnvelopePolicy(prompt, synthesis, 1)
+
+	if synthesis.Intent != "task" {
+		t.Fatalf("intent = %q, want task", synthesis.Intent)
+	}
+	if policy.ToolProfile != ToolProfileFocusedInspection {
+		t.Fatalf("tool profile = %q, want %q", policy.ToolProfile, ToolProfileFocusedInspection)
+	}
+	if policy.AllowRetrieval {
+		t.Fatal("inspection-shaped questions should not enable retrieval by default")
+	}
+}
+
+func TestDeriveTurnEnvelopePolicy_PathProjectListingUsesFocusedInspectionEnvelope(t *testing.T) {
+	prompt := "What about a list of the projects in /Users/jmachen/code?"
+	synthesis := SynthesizeTaskState(prompt, 1, nil)
+	policy := DeriveTurnEnvelopePolicy(prompt, synthesis, 1)
+
+	if synthesis.Intent != "task" {
+		t.Fatalf("intent = %q, want task", synthesis.Intent)
+	}
+	if policy.ToolProfile != ToolProfileFocusedInspection {
+		t.Fatalf("tool profile = %q, want %q", policy.ToolProfile, ToolProfileFocusedInspection)
+	}
+	if policy.AllowRetrieval {
+		t.Fatal("path-shaped project listing should not enable retrieval by default")
+	}
+}
+
+func TestDeriveTurnEnvelopePolicy_TildeDistributionUsesFocusedInspectionEnvelope(t *testing.T) {
+	prompt := "give me the file distribution in the folder ~"
+	synthesis := SynthesizeTaskState(prompt, 1, nil)
+	policy := DeriveTurnEnvelopePolicy(prompt, synthesis, 1)
+
+	if synthesis.Intent != "task" {
+		t.Fatalf("intent = %q, want task", synthesis.Intent)
+	}
+	if policy.ToolProfile != ToolProfileFocusedInspection {
+		t.Fatalf("tool profile = %q, want %q", policy.ToolProfile, ToolProfileFocusedInspection)
+	}
+	if policy.AllowRetrieval {
+		t.Fatal("tilde-distribution inspection should not enable retrieval by default")
+	}
+}
+
+func TestDeriveTurnEnvelopePolicy_InspectionBackedReportAuthoringUsesFocusedAnalysisAuthoringEnvelope(t *testing.T) {
+	prompt := "Generate a report on all development projects in my code directory, include project path, project name, project language(s), first edit date, last edit date, and whether the project is out of date with the remote origin repo, then write the report as a new document to my Obsidian vault on my Desktop."
+	synthesis := SynthesizeTaskState(prompt, 1, nil)
+	policy := DeriveTurnEnvelopePolicy(prompt, synthesis, 1)
+
+	if synthesis.Intent != "task" {
+		t.Fatalf("intent = %q, want task", synthesis.Intent)
+	}
+	if policy.ToolProfile != ToolProfileFocusedAnalysisAuthoring {
+		t.Fatalf("tool profile = %q, want %q", policy.ToolProfile, ToolProfileFocusedAnalysisAuthoring)
+	}
+	if policy.AllowRetrieval {
+		t.Fatal("inspection-backed report authoring should not enable retrieval by default")
+	}
+	if policy.MaxTools != 8 {
+		t.Fatalf("max tools = %d, want 8", policy.MaxTools)
+	}
+}
+
+func TestDeriveTurnEnvelopePolicy_SourceBackedRunbookArtifactDoesNotTriggerAuthorityMutation(t *testing.T) {
+	prompt := "Read tmp/procedural-workflow-4/requirements.txt and then create tmp/procedural-workflow-4/deploy-config.json with content {\"service\":\"payments-api\",\"environment\":\"staging\",\"strategy\":\"rolling\"} and create tmp/procedural-workflow-4/rollout-runbook.md with content # Rollout Runbook\n\n1. Deploy payments-api to staging.\n2. Use a rolling strategy.\n3. Verify health checks before promotion.\n"
+	synthesis := SynthesizeTaskState(prompt, 1, nil)
+	policy := DeriveTurnEnvelopePolicy(prompt, synthesis, 1)
+
+	if policy.AllowAuthorityMutation {
+		t.Fatal("artifact file named runbook should not trigger authority mutation mode")
+	}
+	if policy.ToolProfile != ToolProfileFocusedAuthoring {
+		t.Fatalf("tool profile = %q, want %q", policy.ToolProfile, ToolProfileFocusedAuthoring)
+	}
+}
+
+func TestRequiresExplicitAuthorityMutation_ExplicitCanonicalMemoryPersistence(t *testing.T) {
+	prompt := "Capture this deployment policy into canonical memory and store the rule in the policy store for future turns."
+	if !requiresExplicitAuthorityMutation(prompt) {
+		t.Fatal("explicit canonical-memory persistence should allow authority mutation")
+	}
+}
+
 func TestTurnEnvelopePolicy_ExpandedPromotesLightweightTurn(t *testing.T) {
 	expanded := (TurnEnvelopePolicy{
 		Weight:                 TurnWeightLight,
@@ -189,6 +327,137 @@ func TestTurnEnvelopePolicy_ApplyToolPolicyLightweightSuppressesTools(t *testing
 	}
 	if stats.EmbeddingStatus != "policy_lightweight" {
 		t.Fatalf("embedding status = %q, want policy_lightweight", stats.EmbeddingStatus)
+	}
+}
+
+func TestTurnEnvelopePolicy_ApplyToolPolicyFocusedSchedulingPinsSchedulingTools(t *testing.T) {
+	sess := session.New("sess-schedule", "agent-1", "Test")
+	pruner := &countingPolicyPruner{}
+	prunerResult := []llm.ToolDef{
+		{Type: "function", Function: llm.ToolFuncDef{Name: "search_memories"}},
+		{Type: "function", Function: llm.ToolFuncDef{Name: "cron"}},
+		{Type: "function", Function: llm.ToolFuncDef{Name: "get_runtime_context"}},
+		{Type: "function", Function: llm.ToolFuncDef{Name: "write_file"}},
+	}
+	pruner.fn = func(_ context.Context, _ *session.Session) ([]llm.ToolDef, agenttools.ToolSearchStats, error) {
+		return prunerResult, agenttools.ToolSearchStats{
+			CandidatesSelected: len(prunerResult),
+			EmbeddingStatus:    "ok",
+		}, nil
+	}
+
+	stats, err := (TurnEnvelopePolicy{
+		Weight:              TurnWeightStandard,
+		MaxTools:            4,
+		ToolProfile:         ToolProfileFocusedScheduling,
+		AllowRetryExpansion: true,
+	}).applyToolPolicy(context.Background(), sess, pruner)
+	if err != nil {
+		t.Fatalf("applyToolPolicy: %v", err)
+	}
+	got := sess.SelectedToolDefs()
+	if len(got) != 2 {
+		t.Fatalf("selected tools = %d, want 2", len(got))
+	}
+	if got[0].Function.Name != "cron" || got[1].Function.Name != "get_runtime_context" {
+		t.Fatalf("unexpected focused scheduling tool order: %+v", got)
+	}
+	if stats.CandidatesSelected != 2 {
+		t.Fatalf("candidates selected = %d, want 2", stats.CandidatesSelected)
+	}
+}
+
+func TestTurnEnvelopePolicy_ApplyToolPolicyFocusedInspectionPinsFilesystemTools(t *testing.T) {
+	sess := session.New("sess-inspect", "agent-1", "Test")
+	pruner := &countingPolicyPruner{}
+	prunerResult := []llm.ToolDef{
+		{Type: "function", Function: llm.ToolFuncDef{Name: "search_memories"}},
+		{Type: "function", Function: llm.ToolFuncDef{Name: "glob_files"}},
+		{Type: "function", Function: llm.ToolFuncDef{Name: "list_directory"}},
+		{Type: "function", Function: llm.ToolFuncDef{Name: "read_file"}},
+		{Type: "function", Function: llm.ToolFuncDef{Name: "get_runtime_context"}},
+		{Type: "function", Function: llm.ToolFuncDef{Name: "write_file"}},
+	}
+	pruner.fn = func(_ context.Context, _ *session.Session) ([]llm.ToolDef, agenttools.ToolSearchStats, error) {
+		return prunerResult, agenttools.ToolSearchStats{
+			CandidatesSelected: len(prunerResult),
+			EmbeddingStatus:    "ok",
+		}, nil
+	}
+
+	stats, err := (TurnEnvelopePolicy{
+		Weight:              TurnWeightStandard,
+		MaxTools:            4,
+		ToolProfile:         ToolProfileFocusedInspection,
+		AllowRetryExpansion: true,
+	}).applyToolPolicy(context.Background(), sess, pruner)
+	if err != nil {
+		t.Fatalf("applyToolPolicy: %v", err)
+	}
+	got := sess.SelectedToolDefs()
+	if len(got) != 4 {
+		t.Fatalf("selected tools = %d, want 4", len(got))
+	}
+	if got[0].Function.Name != "glob_files" {
+		t.Fatalf("first tool = %q, want glob_files", got[0].Function.Name)
+	}
+	if got[1].Function.Name != "list_directory" {
+		t.Fatalf("second tool = %q, want list_directory", got[1].Function.Name)
+	}
+	if got[2].Function.Name != "read_file" {
+		t.Fatalf("third tool = %q, want read_file", got[2].Function.Name)
+	}
+	if got[3].Function.Name != "get_runtime_context" {
+		t.Fatalf("fourth tool = %q, want get_runtime_context", got[3].Function.Name)
+	}
+	if stats.CandidatesSelected != 4 {
+		t.Fatalf("selected count = %d, want 4", stats.CandidatesSelected)
+	}
+}
+
+func TestTurnEnvelopePolicy_ApplyToolPolicyFocusedAnalysisAuthoringPinsInspectionAndWriteTools(t *testing.T) {
+	sess := session.New("sess-report", "agent-1", "Test")
+	pruner := &countingPolicyPruner{}
+	prunerResult := []llm.ToolDef{
+		{Type: "function", Function: llm.ToolFuncDef{Name: "search_memories"}},
+		{Type: "function", Function: llm.ToolFuncDef{Name: "inventory_projects"}},
+		{Type: "function", Function: llm.ToolFuncDef{Name: "search_files"}},
+		{Type: "function", Function: llm.ToolFuncDef{Name: "glob_files"}},
+		{Type: "function", Function: llm.ToolFuncDef{Name: "list_directory"}},
+		{Type: "function", Function: llm.ToolFuncDef{Name: "bash"}},
+		{Type: "function", Function: llm.ToolFuncDef{Name: "read_file"}},
+		{Type: "function", Function: llm.ToolFuncDef{Name: "write_file"}},
+		{Type: "function", Function: llm.ToolFuncDef{Name: "get_runtime_context"}},
+		{Type: "function", Function: llm.ToolFuncDef{Name: "compose-subagent"}},
+	}
+	pruner.fn = func(_ context.Context, _ *session.Session) ([]llm.ToolDef, agenttools.ToolSearchStats, error) {
+		return prunerResult, agenttools.ToolSearchStats{
+			CandidatesSelected: len(prunerResult),
+			EmbeddingStatus:    "ok",
+		}, nil
+	}
+
+	stats, err := (TurnEnvelopePolicy{
+		Weight:              TurnWeightStandard,
+		MaxTools:            8,
+		ToolProfile:         ToolProfileFocusedAnalysisAuthoring,
+		AllowRetryExpansion: true,
+	}).applyToolPolicy(context.Background(), sess, pruner)
+	if err != nil {
+		t.Fatalf("applyToolPolicy: %v", err)
+	}
+	got := sess.SelectedToolDefs()
+	if len(got) != 8 {
+		t.Fatalf("selected tools = %d, want 8", len(got))
+	}
+	wantOrder := []string{"inventory_projects", "list_directory", "bash", "search_files", "glob_files", "read_file", "write_file", "get_runtime_context"}
+	for i, want := range wantOrder {
+		if got[i].Function.Name != want {
+			t.Fatalf("tool[%d] = %q, want %q", i, got[i].Function.Name, want)
+		}
+	}
+	if stats.CandidatesSelected != 8 {
+		t.Fatalf("selected count = %d, want 8", stats.CandidatesSelected)
 	}
 }
 
@@ -355,6 +624,52 @@ func TestTurnEnvelopePolicy_ApplyToolPolicyFocusedAuthoringKeepsMemoryOnlyWhenRe
 	}
 	if stats.CandidatesSelected != 3 {
 		t.Fatalf("candidates selected = %d, want 3", stats.CandidatesSelected)
+	}
+	if stats.CandidatesPruned != 1 {
+		t.Fatalf("candidates pruned = %d, want 1", stats.CandidatesPruned)
+	}
+}
+
+func TestTurnEnvelopePolicy_ApplyToolPolicyFocusedAuthoringKeepsArtifactReadForSourceBackedTurn(t *testing.T) {
+	sess := session.New("sess-1", "agent-1", "Test")
+	pruner := &countingPolicyPruner{}
+	prunerResult := []llm.ToolDef{
+		{Type: "function", Function: llm.ToolFuncDef{Name: "get_runtime_context"}},
+		{Type: "function", Function: llm.ToolFuncDef{Name: "write_file"}},
+		{Type: "function", Function: llm.ToolFuncDef{Name: "read_file"}},
+		{Type: "function", Function: llm.ToolFuncDef{Name: "recall_memory"}},
+	}
+	pruner.fn = func(_ context.Context, _ *session.Session) ([]llm.ToolDef, agenttools.ToolSearchStats, error) {
+		return prunerResult, agenttools.ToolSearchStats{
+			CandidatesSelected: len(prunerResult),
+			EmbeddingStatus:    "ok",
+		}, nil
+	}
+
+	stats, err := (TurnEnvelopePolicy{
+		Weight:                 TurnWeightStandard,
+		MaxTools:               6,
+		AllowRetrieval:         false,
+		RequireArtifactWrite:   true,
+		AllowAuthorityMutation: false,
+		ToolProfile:            ToolProfileFocusedAuthoring,
+	}).applyToolPolicy(context.Background(), sess, pruner)
+	if err != nil {
+		t.Fatalf("applyToolPolicy: %v", err)
+	}
+
+	got := sess.SelectedToolDefs()
+	if len(got) != 3 {
+		t.Fatalf("selected tools = %d, want 3", len(got))
+	}
+	if got[0].Function.Name != "write_file" {
+		t.Fatalf("first tool = %q, want write_file", got[0].Function.Name)
+	}
+	if got[1].Function.Name != "read_file" {
+		t.Fatalf("second tool = %q, want read_file", got[1].Function.Name)
+	}
+	if got[2].Function.Name != "get_runtime_context" {
+		t.Fatalf("third tool = %q, want get_runtime_context", got[2].Function.Name)
 	}
 	if stats.CandidatesPruned != 1 {
 		t.Fatalf("candidates pruned = %d, want 1", stats.CandidatesPruned)

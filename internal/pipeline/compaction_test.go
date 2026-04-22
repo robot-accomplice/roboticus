@@ -58,6 +58,84 @@ func TestCompactContext_Stage2_SelectiveTrim(t *testing.T) {
 	}
 }
 
+func TestSelectiveTrim_DropsOldToolExchangeAtomically(t *testing.T) {
+	msgs := []llm.Message{
+		{Role: "system", Content: "old system"},
+		{Role: "assistant", Content: "", ToolCalls: []llm.ToolCall{{
+			ID:   "call_old",
+			Type: "function",
+			Function: llm.ToolCallFunc{
+				Name:      "schedule_cron",
+				Arguments: `{"name":"quiet ticker"}`,
+			},
+		}}},
+		{Role: "tool", ToolCallID: "call_old", Name: "schedule_cron", Content: `{"status":"ok"}`},
+		{Role: "system", Content: "new system"},
+		{Role: "user", Content: "latest question"},
+		{Role: "assistant", Content: "latest answer"},
+	}
+
+	result := selectiveTrim(msgs)
+	assertNoOrphanedToolCallHistory(t, result)
+	for _, m := range result {
+		if m.Role == "assistant" && len(m.ToolCalls) > 0 && m.ToolCalls[0].ID == "call_old" {
+			t.Fatal("old tool-call exchange should have been dropped together")
+		}
+	}
+}
+
+func TestSkeleton_DoesNotOrphanRecentToolExchange(t *testing.T) {
+	msgs := []llm.Message{
+		{Role: "system", Content: "prompt"},
+		{Role: "user", Content: "older user"},
+		{Role: "assistant", Content: "older assistant"},
+		{Role: "assistant", Content: "", ToolCalls: []llm.ToolCall{{
+			ID:   "call_recent",
+			Type: "function",
+			Function: llm.ToolCallFunc{
+				Name:      "create_cron_job",
+				Arguments: `{"name":"quiet ticker"}`,
+			},
+		}}},
+		{Role: "tool", ToolCallID: "call_recent", Name: "create_cron_job", Content: `{"status":"ok"}`},
+		{Role: "user", Content: "new user"},
+		{Role: "assistant", Content: "new assistant"},
+	}
+
+	result := skeleton(msgs)
+	assertNoOrphanedToolCallHistory(t, result)
+}
+
+func TestCompactContext_SemanticCompressPreservesToolExchangeAtomicity(t *testing.T) {
+	msgs := []llm.Message{
+		{Role: "system", Content: strings.Repeat("system prompt ", 20)},
+		{Role: "user", Content: strings.Repeat("older user message ", 80)},
+		{Role: "assistant", Content: strings.Repeat("older assistant response ", 80)},
+		{Role: "assistant", Content: "", ToolCalls: []llm.ToolCall{{
+			ID:   "call_mid",
+			Type: "function",
+			Function: llm.ToolCallFunc{
+				Name:      "create_cron_job",
+				Arguments: `{"name":"quiet ticker"}`,
+			},
+		}}},
+		{Role: "tool", ToolCallID: "call_mid", Name: "create_cron_job", Content: strings.Repeat(`{"status":"ok"} `, 20)},
+		{Role: "user", Content: strings.Repeat("recent user message ", 30)},
+		{Role: "assistant", Content: strings.Repeat("recent assistant response ", 30)},
+		{Role: "user", Content: "final user"},
+		{Role: "assistant", Content: "final assistant"},
+	}
+
+	verbatimTokens := estimateTokens(msgs)
+	trimmedTokens := estimateTokens(selectiveTrim(msgs))
+	if !(trimmedTokens < verbatimTokens) {
+		t.Fatalf("expected selective trim to reduce tokens: verbatim=%d trimmed=%d", verbatimTokens, trimmedTokens)
+	}
+	// Force stage 3: below selective trim, above semantic compress.
+	result := CompactContext(msgs, trimmedTokens-1)
+	assertNoOrphanedToolCallHistory(t, result)
+}
+
 func TestCompactContext_Stage5_Skeleton(t *testing.T) {
 	// Build a very long history.
 	var msgs []llm.Message
@@ -194,5 +272,33 @@ func TestSemanticCompress_ShortHistory(t *testing.T) {
 	result := semanticCompress(msgs)
 	if len(result) != len(msgs) {
 		t.Errorf("short history should pass through, got %d want %d", len(result), len(msgs))
+	}
+}
+
+func assertNoOrphanedToolCallHistory(t *testing.T, msgs []llm.Message) {
+	t.Helper()
+	for i, m := range msgs {
+		if m.Role != "assistant" || len(m.ToolCalls) == 0 {
+			continue
+		}
+		callIDs := make(map[string]struct{}, len(m.ToolCalls))
+		for _, tc := range m.ToolCalls {
+			callIDs[tc.ID] = struct{}{}
+		}
+		seen := map[string]struct{}{}
+		for j := i + 1; j < len(msgs); j++ {
+			next := msgs[j]
+			if next.Role != "tool" {
+				break
+			}
+			if _, ok := callIDs[next.ToolCallID]; ok {
+				seen[next.ToolCallID] = struct{}{}
+			}
+		}
+		for _, tc := range m.ToolCalls {
+			if _, ok := seen[tc.ID]; !ok {
+				t.Fatalf("assistant tool_call %q missing matching tool result in compacted history", tc.ID)
+			}
+		}
 	}
 }

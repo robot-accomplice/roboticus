@@ -385,7 +385,7 @@ func selectByMetascoreForRequest(profiles []ModelProfile, weights RoutingWeights
 	var best *ModelProfile
 	var bestScore float64
 	complexity := requestRoutingComplexity(req)
-	requestWeights := routingWeightsForRequest(weights, req.TurnWeight, req.TaskIntent, req.TaskComplexity)
+	requestWeights := routingWeightsForRequest(weights, req.TurnWeight, requestRoutingIntent(req), req.TaskComplexity)
 
 	for i := range profiles {
 		p := &profiles[i]

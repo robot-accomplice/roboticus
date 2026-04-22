@@ -36,6 +36,20 @@ func TestAcknowledgementShortcut_SkipsOnDelegation(t *testing.T) {
 	}
 }
 
+func TestDirectedAcknowledgementShortcut_MatchesExplicitAcknowledgementRequest(t *testing.T) {
+	handler := &DirectedAcknowledgementShortcut{}
+	ctx := &ShortcutContext{}
+
+	m := handler.TryMatch("Good evening Duncan. Acknowledge this request in one sentence, then wait.", ctx)
+	if m == nil {
+		t.Fatal("expected match for explicit acknowledgement directive")
+	}
+	resp := handler.Respond("", ctx)
+	if resp != "Acknowledged; awaiting your next instruction." {
+		t.Fatalf("unexpected response: %q", resp)
+	}
+}
+
 func TestIdentityShortcut_Matches(t *testing.T) {
 	handler := &IdentityShortcut{}
 	ctx := &ShortcutContext{AgentName: "TestBot"}

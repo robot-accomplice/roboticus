@@ -48,11 +48,22 @@ If a target cannot produce this record, it does not count toward closure.
 
 The current candidate set for real third-party SSE proof is:
 
-- Zapier MCP
-  - docs: [Use Zapier MCP with your client](https://help.zapier.com/hc/en-us/articles/36265392843917-Use-Zapier-MCP-with-your-client)
-  - current signal: Zapier documents a generated MCP endpoint and current
-    client guidance. This is the strongest prospect for a live proof target.
-  - expected blocker: per-account endpoint generation and scoped auth.
+- FeedOracle MCP
+  - docs: [FeedOracle API Docs](https://feedoracle.io/docs.html),
+    [MCP Authentication](https://feedoracle.io/docs/mcp-auth.html)
+  - current signal: FeedOracle documents a legacy SSE endpoint at
+    `https://feedoracle.io/mcp/sse` and explicitly states anonymous free-tier
+    MCP access.
+  - expected blocker: the free tier may restrict tool inventory or tool-call
+    volume, so the evidence record must capture whether validation stopped at
+    auth/quota versus transport.
+- Channel3 MCP
+  - docs: [Channel3 MCP Overview](https://docs.trychannel3.com/mcp-overview)
+  - current signal: Channel3 documents a free tier, Codex/Claude client setup,
+    and a legacy SSE endpoint at `https://mcp.trychannel3.com/sse`.
+  - expected blocker: some clients prefer the streamable HTTP root URL, so the
+    evidence record must capture whether the SSE endpoint still honors standard
+    `text/event-stream` negotiation.
 - Atlassian Rovo MCP
   - docs: [HTTP+SSE Deprecation Notice for Atlassian Rovo MCP server](https://community.atlassian.com/forums/Atlassian-Remote-MCP-Server/HTTP-SSE-Deprecation-Notice/ba-p/3205484)
   - current signal: Atlassian still documents an SSE endpoint for backward
@@ -63,6 +74,10 @@ The current candidate set for real third-party SSE proof is:
   - docs: [Feb 12 2026: MCP Server for AI Agents and Expanded Zapier Integration](https://help.oncehub.com/help/feb-12-2026-mcp-server-expanded-zapier-integration)
   - current signal: OnceHub documents a public MCP SSE endpoint.
   - expected blocker: account-specific auth and server-side allowlisting.
+
+Zapier is no longer a valid SSE proof target for this release. Their current
+MCP docs now state that they no longer support SSE MCP servers, so counting
+Zapier toward cross-vendor SSE proof would be inaccurate.
 
 These are prospects, not proof. They only count once the evidence record above
 is completed from `roboticus mcp validate-sse <NAME>`.
@@ -294,6 +309,10 @@ either:
 - or narrow the release claim explicitly so cross-vendor SSE proof is no
   longer asserted
 
+For v1.0.7, the honest closure is the second option. Named-target evidence now
+exists, but more than one real third-party SSE target did not validate end to
+end in the release environment.
+
 Fail if any of the following are true:
 
 - only unit or mock tests passed
@@ -317,6 +336,10 @@ Attach the following to the release record:
 
 Use this only if every blocker passed:
 
-> MCP readiness validated for this release against one blessed stdio target and one blessed SSE target. Validation covered connect, initialize, tools/list, and one tool call per target in the release environment. The validated targets and evidence bundle are attached to the release record.
+> MCP readiness validated for this release against one blessed stdio target and
+> the in-tree/runtime SSE path. Named third-party SSE targets were probed
+> through the same validation harness, but cross-vendor interoperability is not
+> claimed for v1.0.7 because more than one real external target did not validate
+> end to end in the release environment.
 
 If any blocker failed, do not use MCP-ready release language.

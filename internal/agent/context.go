@@ -312,84 +312,77 @@ func (cb *ContextBuilder) BuildRequest(session *Session) *llm.Request {
 	//       that's the message the user is actively waiting for a
 	//       response to; older history is context that helps but is
 	//       not the request.
-	var historyMessages []llm.Message
+	chunks := chunkConversationMessages(currentTopicMsgs)
+	var selectedChunks [][]llm.Message
 	usedTokens := 0
 
-	latestUserIdx := -1
-	for i := len(currentTopicMsgs) - 1; i >= 0; i-- {
-		if currentTopicMsgs[i].Role == "user" {
-			latestUserIdx = i
+	latestUserChunkIdx := -1
+	for i := len(chunks) - 1; i >= 0; i-- {
+		if chunkContainsLatestUser(chunks[i]) {
+			latestUserChunkIdx = i
 			break
 		}
 	}
 
-	for i := len(currentTopicMsgs) - 1; i >= 0; i-- {
-		m := currentTopicMsgs[i]
-		content := cb.compact(m, stage)
-		tokens := cb.estimateTokens(content)
+	for i := len(chunks) - 1; i >= 0; i-- {
+		chunk := chunks[i]
+		chunkMessages := make([]llm.Message, 0, len(chunk.Messages))
+		chunkTokens := 0
 
-		// Latest user message: include unconditionally AND verbatim.
-		// Two distinct invariants here:
-		//   (1) The message survives even if the budget is exhausted
-		//       (older history gets dropped instead of the request
-		//       the user is actively waiting for).
-		//   (2) The message content is NOT compacted, regardless of
-		//       compaction stage. Pre-v1.0.6 this was the layered
-		//       bug behind the empty-prompt failure: even when the
-		//       user message survived the budget loop, `compact()`
-		//       at StageSkeleton replaced its content with the
-		//       literal string "[user message]" — so the LLM saw
-		//       "[user message]" instead of the actual prompt and
-		//       responded "the user has not provided instructions."
-		//       The user's prompt is the smallest, most important
-		//       payload in the whole request; compacting it makes
-		//       no sense regardless of pressure.
-		if i == latestUserIdx {
-			verbatim := m.Content
-			tokens = cb.estimateTokens(verbatim)
-			if usedTokens+tokens > remaining {
+		for _, m := range chunk.Messages {
+			content := cb.compact(m, stage)
+			if i == latestUserChunkIdx && m.Role == "user" {
+				content = m.Content
+			}
+			if strings.TrimSpace(content) == "" && len(m.ToolCalls) == 0 && m.ToolCallID == "" {
+				continue
+			}
+			chunkMessages = append(chunkMessages, llm.Message{
+				Role:       m.Role,
+				Content:    content,
+				ToolCalls:  m.ToolCalls,
+				ToolCallID: m.ToolCallID,
+				Name:       m.Name,
+				Metadata:   m.Metadata,
+			})
+			chunkTokens += cb.estimateTokens(content)
+		}
+		if len(chunkMessages) == 0 {
+			continue
+		}
+
+		if i == latestUserChunkIdx {
+			if usedTokens+chunkTokens > remaining {
 				log.Warn().
 					Int("budget", remaining).
 					Int("used", usedTokens).
-					Int("user_msg_tokens", tokens).
+					Int("user_msg_tokens", chunkTokens).
 					Int("system_prompt_tokens", sysTokCount).
 					Int("memory_tokens", memTokCount).
 					Int("tool_def_tokens", toolTokCount).
 					Msg("context budget exhausted by system prompt + memory + tool defs; including latest user message anyway (the alternative — dropping it — produces 'no user instructions' replies). Consider reducing system prompt, memory cap, or tool count.")
 			}
-			historyMessages = append(historyMessages, llm.Message{
-				Role:       m.Role,
-				Content:    verbatim,
-				ToolCalls:  m.ToolCalls,
-				ToolCallID: m.ToolCallID,
-				Name:       m.Name,
-			})
-			usedTokens += tokens
+			selectedChunks = append(selectedChunks, chunkMessages)
+			usedTokens += chunkTokens
 			continue
 		}
 
-		// Non-latest-user message: subject to budget. Older history
-		// gets dropped first when the budget is tight.
-		if strings.TrimSpace(content) == "" && len(m.ToolCalls) == 0 && m.ToolCallID == "" {
-			continue
-		}
-		if usedTokens+tokens > remaining {
+		if usedTokens+chunkTokens > remaining {
 			continue
 		}
 
-		historyMessages = append(historyMessages, llm.Message{
-			Role:       m.Role,
-			Content:    content,
-			ToolCalls:  m.ToolCalls,
-			ToolCallID: m.ToolCallID,
-			Name:       m.Name,
-		})
-		usedTokens += tokens
+		selectedChunks = append(selectedChunks, chunkMessages)
+		usedTokens += chunkTokens
 	}
 
-	// Reverse to chronological order.
-	for i, j := 0, len(historyMessages)-1; i < j; i, j = i+1, j-1 {
-		historyMessages[i], historyMessages[j] = historyMessages[j], historyMessages[i]
+	// Reverse chunk order to chronological order while preserving message order
+	// inside each atomic chunk.
+	for i, j := 0, len(selectedChunks)-1; i < j; i, j = i+1, j-1 {
+		selectedChunks[i], selectedChunks[j] = selectedChunks[j], selectedChunks[i]
+	}
+	var historyMessages []llm.Message
+	for _, chunk := range selectedChunks {
+		historyMessages = append(historyMessages, chunk...)
 	}
 
 	// Inject anti-fade reminder if conversation is long.
@@ -568,6 +561,15 @@ func countNonSystem(msgs []llm.Message) int {
 		}
 	}
 	return count
+}
+
+func chunkContainsLatestUser(chunk conversationChunk) bool {
+	for _, msg := range chunk.Messages {
+		if msg.Role == "user" {
+			return true
+		}
+	}
+	return false
 }
 
 // semanticCompress preserves the most informative sentences while reducing content length.

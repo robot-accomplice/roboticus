@@ -608,9 +608,21 @@ func boolToInt(v bool) int {
 
 func diagnosticsStatusFromEvents(events []TurnDiagnosticEvent) string {
 	for _, ev := range events {
-		if ev.Status == "error" {
+		if diagnosticEventMarksTurnDegraded(ev) {
 			return "degraded"
 		}
 	}
 	return "ok"
+}
+
+func diagnosticEventMarksTurnDegraded(ev TurnDiagnosticEvent) bool {
+	if ev.Status != "error" {
+		return false
+	}
+	switch ev.Type {
+	case "stage_liveness_warning":
+		return false
+	default:
+		return true
+	}
 }

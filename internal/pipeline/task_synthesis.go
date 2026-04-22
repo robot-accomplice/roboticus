@@ -12,15 +12,15 @@ import (
 // synthesize_task_state output. Used by the pipeline to make routing and
 // delegation decisions.
 type TaskSynthesis struct {
-	Intent          string   // Classified intent (e.g., "question", "task", "creative", "code")
-	Complexity      string   // "simple", "moderate", "complex", "specialist"
-	PlannedAction   string   // "execute_directly", "delegate_to_specialist", "compose_subagent"
-	Confidence      float64  // Planner confidence 0–1
-	RetrievalNeeded bool     // Whether memory retrieval is beneficial
-	RetrievalReason string   // Why memory retrieval was selected
-	ProceduralUncertainty bool // Whether the framework is uncertain how to carry out the task
-	MissingSkills   []string // Capabilities not covered by registered skills
-	CapabilityFit   float64  // 0–1 ratio of available capability coverage
+	Intent                string   // Classified intent (e.g., "question", "task", "creative", "code")
+	Complexity            string   // "simple", "moderate", "complex", "specialist"
+	PlannedAction         string   // "execute_directly", "delegate_to_specialist", "compose_subagent"
+	Confidence            float64  // Planner confidence 0–1
+	RetrievalNeeded       bool     // Whether memory retrieval is beneficial
+	RetrievalReason       string   // Why memory retrieval was selected
+	ProceduralUncertainty bool     // Whether the framework is uncertain how to carry out the task
+	MissingSkills         []string // Capabilities not covered by registered skills
+	CapabilityFit         float64  // 0–1 ratio of available capability coverage
 }
 
 // SynthesizeTaskState performs intent classification, complexity analysis, and
@@ -56,15 +56,15 @@ func SynthesizeTaskState(content string, sessionTurns int, agentSkills []string)
 	retrievalNeeded, retrievalReason, proceduralUncertainty := shouldRetrieveForTurn(intent, content, sessionTurns, fit, missing, action, complexity)
 
 	result := TaskSynthesis{
-		Intent:               intent,
-		Complexity:           complexity,
-		PlannedAction:        action,
-		Confidence:           confidence,
-		RetrievalNeeded:      retrievalNeeded,
-		RetrievalReason:      retrievalReason,
+		Intent:                intent,
+		Complexity:            complexity,
+		PlannedAction:         action,
+		Confidence:            confidence,
+		RetrievalNeeded:       retrievalNeeded,
+		RetrievalReason:       retrievalReason,
 		ProceduralUncertainty: proceduralUncertainty,
-		MissingSkills:        missing,
-		CapabilityFit:        fit,
+		MissingSkills:         missing,
+		CapabilityFit:         fit,
 	}
 
 	log.Debug().
@@ -85,11 +85,22 @@ func shouldRetrieveForTurn(intent, content string, sessionTurns int, capabilityF
 	lower := strings.ToLower(content)
 	proceduralUncertainty := appliedLearningHelpful(intent, content, lower, capabilityFit, missingSkills, plannedAction, complexity)
 
+	if looksLikeInspectionBackedArtifactAuthoring(content) {
+		return false, "none", proceduralUncertainty
+	}
+
+	if looksLikeFocusedInspectionTurn(content) {
+		return false, "none", proceduralUncertainty
+	}
+
 	if intent == "question" {
 		return true, "question_default", proceduralUncertainty
 	}
 
 	if intent == "task" || intent == "code" {
+		if schedulingAliasNeedsContinuity(lower, sessionTurns) {
+			return true, "scheduling_alias_continuity", false
+		}
 		if taskNeedsPriorContext(lower) || taskNeedsEvidence(lower) {
 			return true, "continuity_or_evidence", proceduralUncertainty
 		}
@@ -107,6 +118,9 @@ func shouldRetrieveForTurn(intent, content string, sessionTurns int, capabilityF
 
 func appliedLearningHelpful(intent, content, lower string, capabilityFit float64, missingSkills []string, plannedAction, complexity string) bool {
 	if intent != "task" && intent != "code" {
+		return false
+	}
+	if looksLikeSchedulingTask(lower) {
 		return false
 	}
 	if len(ParseExpectedArtifactSpecs(content)) > 0 {
@@ -128,6 +142,23 @@ func appliedLearningHelpful(intent, content, lower string, capabilityFit float64
 		return true
 	}
 	return len(missingSkills) >= 2
+}
+
+func schedulingAliasNeedsContinuity(lower string, sessionTurns int) bool {
+	if sessionTurns <= 1 || !looksLikeSchedulingTask(lower) {
+		return false
+	}
+	explicitScheduleMarkers := []string{
+		"cron", "every ", "minute", "minutes", "hour", "hours",
+		"daily", "weekly", "monthly", "*/", "0 ",
+	}
+	if containsAnyMarker(lower, explicitScheduleMarkers) {
+		return false
+	}
+	aliasMarkers := []string{
+		"quiet ticker", "ticker", "the reminder", "that reminder", "that job",
+	}
+	return containsAnyMarker(lower, aliasMarkers)
 }
 
 func hasProceduralLearningCue(lower string) bool {
@@ -185,11 +216,27 @@ func turnCarriesContinuityCue(lower string) bool {
 // Matches Rust's semantic classifier categories.
 func classifyIntent(content string) string {
 	lower := strings.ToLower(content)
+	artifactContract := ParseArtifactPromptContract(content)
 
 	// Short phatic / social turns are not information-seeking even when they
 	// contain question words like "what's" or "how's".
 	if isSocialConversationalTurn(lower) {
 		return "conversational"
+	}
+
+	// A bounded expected-artifact contract is authoritative. Source-backed exact
+	// authoring should stay on the direct authoring path rather than being
+	// reclassified as generic code work because of JSON/Markdown/workflow nouns.
+	if len(artifactContract.ExpectedOutputs) > 0 {
+		return "task"
+	}
+
+	if looksLikeFocusedInspectionTurn(content) {
+		return "task"
+	}
+
+	if looksLikeInspectionBackedArtifactAuthoring(content) {
+		return "task"
 	}
 
 	// Question patterns.
@@ -213,7 +260,11 @@ func classifyIntent(content string) string {
 	}
 
 	// Task/action patterns.
-	taskMarkers := []string{"create", "build", "make", "set up", "configure", "install", "deploy", "update", "delete", "remove", "send", "schedule"}
+	taskMarkers := []string{
+		"create", "build", "make", "set up", "configure", "install", "deploy",
+		"update", "delete", "remove", "send", "schedule", "count", "list",
+		"find", "scan", "look in", "look at",
+	}
 	for _, m := range taskMarkers {
 		if containsIntentMarker(lower, m) {
 			return "task"

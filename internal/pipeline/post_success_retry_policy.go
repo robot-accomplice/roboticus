@@ -111,7 +111,10 @@ func verifierRetryRemainsBlockingAfterProgress(code string) bool {
 		"missing_action_plan",
 		"abandoned_unresolved_question",
 		"stopping_criteria_unmet",
-		"artifact_content_mismatch":
+		"source_artifact_unread",
+		"artifact_content_mismatch",
+		"artifact_set_overclaim",
+		"artifact_unexpected_write":
 		return true
 	default:
 		return false

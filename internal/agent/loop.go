@@ -14,6 +14,7 @@ import (
 	"roboticus/internal/agent/policy"
 	agenttools "roboticus/internal/agent/tools"
 	"roboticus/internal/core"
+	"roboticus/internal/db"
 	"roboticus/internal/llm"
 )
 
@@ -158,6 +159,7 @@ type Loop struct {
 	memory     *memory.Manager
 	context    *ContextBuilder
 	normalizer *agenttools.NormalizationFactory
+	store      *db.Store
 }
 
 // LoopDeps bundles the dependencies for a Loop.
@@ -170,6 +172,7 @@ type LoopDeps struct {
 	Memory      *memory.Manager
 	Context     *ContextBuilder
 	Normalizers *agenttools.NormalizationFactory
+	Store       *db.Store
 }
 
 type ToolExecutionRecord struct {
@@ -201,6 +204,7 @@ func NewLoop(cfg LoopConfig, deps LoopDeps) *Loop {
 		memory:          deps.Memory,
 		context:         deps.Context,
 		normalizer:      deps.Normalizers,
+		store:           deps.Store,
 	}
 }
 
@@ -428,9 +432,11 @@ func (l *Loop) think(ctx context.Context, session *Session) (Action, error) {
 		Msg("agent loop: LLM response received")
 
 	placeholderOnly := isPlaceholderAssistantContent(resp.Content)
+	promissoryOnly := isPromissoryAssistantContent(resp.Content)
+	nonTerminalFiller := placeholderOnly || (promissoryOnly && isDirectExecutionTurn(session))
 	route := routeForInferenceOutcome(req.Model, resp.Provider, resp.Model)
 	toolResultsSeen := toolResultCount(session)
-	if l.detectSameRouteNoProgress(route, resp, placeholderOnly, toolResultsSeen) {
+	if l.detectSameRouteNoProgress(route, resp, nonTerminalFiller, toolResultsSeen) {
 		if obs := llm.InferenceObserverFromContext(ctx); obs != nil {
 			obs.RecordEvent("loop_terminated", "error",
 				"terminated same-route no-progress churn",
@@ -447,7 +453,7 @@ func (l *Loop) think(ctx context.Context, session *Session) (Action, error) {
 			obs.SetSummaryField("primary_diagnosis", "same_route_no_progress_churn")
 		}
 		l.terminate("loop terminated: same-route no-progress churn")
-		if placeholderOnly {
+		if nonTerminalFiller {
 			content := session.LastAssistantContent()
 			if content == "" {
 				content = "I stopped because repeated attempts on the same route were not making progress."
@@ -457,20 +463,20 @@ func (l *Loop) think(ctx context.Context, session *Session) (Action, error) {
 		session.AddAssistantMessage(resp.Content, nil)
 		return ActionFinish, nil
 	}
-	if placeholderOnly {
+	if nonTerminalFiller {
 		log.Warn().
 			Str("session", session.ID).
 			Int("turn", turn).
 			Int("tool_calls", len(resp.ToolCalls)).
 			Str("finish_reason", resp.FinishReason).
-			Msg("suppressing placeholder assistant content")
+			Msg("suppressing non-terminal filler assistant content")
 	}
 
 	// Tool-call turns still need an assistant message in history for call
 	// correlation, but placeholder scaffolding must not leak into the session.
 	if len(resp.ToolCalls) > 0 {
 		content := resp.Content
-		if placeholderOnly {
+		if nonTerminalFiller {
 			content = ""
 		}
 		session.AddAssistantMessage(content, resp.ToolCalls)
@@ -479,7 +485,7 @@ func (l *Loop) think(ctx context.Context, session *Session) (Action, error) {
 
 	// Final placeholder-only content is malformed model output; retry instead of
 	// committing it to history or returning it to the user.
-	if placeholderOnly {
+	if nonTerminalFiller {
 		return ActionNoOp, nil
 	}
 
@@ -550,6 +556,31 @@ func (l *Loop) act(ctx context.Context, session *Session) (Action, error) {
 			log.Warn().Str("tool", tc.Function.Name).Int("failures", failCount).Msg("suppressing duplicate failed tool call")
 			continue
 		}
+		if !toolAllowedForTurnSurface(session, tc.Function.Name) {
+			l.resetReadOnlyExploration()
+			output := fmt.Sprintf("[Tool %s rejected]: this tool was not on the selected tool surface for the current turn", tc.Function.Name)
+			session.AddToolResult(tc.ID, tc.Function.Name, output, true)
+			if obs := llm.InferenceObserverFromContext(ctx); obs != nil {
+				obs.RecordEvent("tool_call_blocked", "error",
+					"tool call blocked outside the selected tool surface",
+					"The framework rejected a tool call because the model asked for a tool that was not on the selected tool surface for this turn.",
+					map[string]any{
+						"tool_call_id": tc.ID,
+						"tool_name":    tc.Function.Name,
+						"reason_code":  "tool_not_selected",
+					},
+				)
+			}
+			l.recordToolExecution(ctx, ToolExecutionRecord{
+				TurnID:     core.TurnIDFromCtx(ctx),
+				ToolCallID: tc.ID,
+				ToolName:   tc.Function.Name,
+				Input:      tc.Function.Arguments,
+				Output:     output,
+				Status:     "out_of_surface",
+			})
+			continue
+		}
 		// Execute the tool.
 		tool := l.tools.Get(tc.Function.Name)
 		if tool == nil {
@@ -567,12 +598,14 @@ func (l *Loop) act(ctx context.Context, session *Session) (Action, error) {
 		}
 
 		tctx := &ToolContext{
-			SessionID:    session.ID,
-			AgentID:      session.AgentID,
-			AgentName:    session.AgentName,
-			Workspace:    session.Workspace,
-			AllowedPaths: session.AllowedPaths,
-			Channel:      session.Channel,
+			SessionID:              session.ID,
+			AgentID:                session.AgentID,
+			AgentName:              session.AgentName,
+			Workspace:              session.Workspace,
+			AllowedPaths:           session.AllowedPaths,
+			ProtectedReadOnlyPaths: session.SourceArtifacts(),
+			Channel:                session.Channel,
+			Store:                  l.store,
 		}
 
 		normFactory := l.normalizer
@@ -798,7 +831,7 @@ func (l *Loop) act(ctx context.Context, session *Session) (Action, error) {
 			l.successfulCalls[key]++
 			l.mu.Unlock()
 		}
-		l.noteToolOutcome(tc.Function.Name)
+		l.noteToolOutcome(session, tc.Function.Name, result)
 		l.recordToolExecution(ctx, ToolExecutionRecord{
 			TurnID:     core.TurnIDFromCtx(ctx),
 			ToolCallID: tc.ID,
@@ -811,6 +844,26 @@ func (l *Loop) act(ctx context.Context, session *Session) (Action, error) {
 	}
 
 	return ActionObserve, nil
+}
+
+func toolAllowedForTurnSurface(session *Session, toolName string) bool {
+	if session == nil {
+		return true
+	}
+	selected := session.SelectedToolDefs()
+	if selected == nil {
+		return true
+	}
+	normalized := strings.TrimSpace(toolName)
+	if normalized == "" {
+		return false
+	}
+	for _, def := range selected {
+		if strings.EqualFold(strings.TrimSpace(def.Function.Name), normalized) {
+			return true
+		}
+	}
+	return false
 }
 
 // persist saves state after an observation cycle.
@@ -898,6 +951,29 @@ func isPlaceholderAssistantContent(content string) bool {
 	switch trimmed {
 	case "[assistant message]", "assistant message", "[assistant]", "assistant",
 		"[agent message]", "agent message", "[agent]", "agent":
+		return true
+	default:
+		return false
+	}
+}
+
+func isPromissoryAssistantContent(content string) bool {
+	trimmed := strings.ToLower(strings.TrimSpace(content))
+	switch {
+	case trimmed == "":
+		return false
+	case strings.HasPrefix(trimmed, "let me check"),
+		strings.HasPrefix(trimmed, "let me inspect"),
+		strings.HasPrefix(trimmed, "let me look"),
+		strings.HasPrefix(trimmed, "let me take a look"),
+		strings.HasPrefix(trimmed, "i'll check"),
+		strings.HasPrefix(trimmed, "i will check"),
+		strings.HasPrefix(trimmed, "i'll inspect"),
+		strings.HasPrefix(trimmed, "i will inspect"),
+		strings.HasPrefix(trimmed, "i'll look"),
+		strings.HasPrefix(trimmed, "i will look"),
+		strings.HasPrefix(trimmed, "i'll take a look"),
+		strings.HasPrefix(trimmed, "i will take a look"):
 		return true
 	default:
 		return false
@@ -1010,17 +1086,39 @@ func (l *Loop) shouldTerminateReadOnlyExploration(session *Session, toolName str
 	return l.readOnlyExplorationStreak >= threshold
 }
 
-func (l *Loop) noteToolOutcome(toolName string) {
+func (l *Loop) noteToolOutcome(session *Session, toolName string, result *agenttools.Result) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	switch {
 	case agenttools.MakesExecutionProgress(toolName):
+		l.readOnlyExplorationStreak = 0
+	case inspectionEvidenceCountsAsProgress(session, toolName, result):
 		l.readOnlyExplorationStreak = 0
 	case agenttools.IsReadOnlyExploration(toolName):
 		l.readOnlyExplorationStreak++
 	default:
 		l.readOnlyExplorationStreak = 0
 	}
+}
+
+func inspectionEvidenceCountsAsProgress(session *Session, toolName string, result *agenttools.Result) bool {
+	if session == nil || result == nil {
+		return false
+	}
+	if strings.TrimSpace(session.TurnToolProfile()) != "focused_inspection" {
+		return false
+	}
+	switch agenttools.OperationClassForName(toolName) {
+	case agenttools.OperationWorkspaceInspect:
+		if proof, ok := agenttools.ParseInspectionProof(result.Metadata); ok {
+			return proof.Count > 0 && !proof.Empty
+		}
+	case agenttools.OperationArtifactRead:
+		if proof, ok := agenttools.ParseArtifactReadProof(result.Metadata); ok {
+			return strings.TrimSpace(proof.Content) != ""
+		}
+	}
+	return false
 }
 
 func (l *Loop) resetReadOnlyExploration() {

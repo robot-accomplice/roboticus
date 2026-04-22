@@ -175,9 +175,26 @@ func (r *Router) EnableMetascoreRouting(quality *QualityTracker, latency *Latenc
 				applyIntentEvidence(&profiles[i], intentClass, r.intentQuality)
 			}
 		}
+		profiles = filterProfilesForCapabilityEvidence(profiles, req)
 		w := r.GetRoutingWeights()
 		return selectByMetascoreForRequest(profiles, w, breakers, req)
 	}
+}
+
+func filterProfilesForCapabilityEvidence(profiles []ModelProfile, req *Request) []ModelProfile {
+	if len(profiles) == 0 || req == nil || len(req.Tools) == 0 {
+		return profiles
+	}
+	observed := make([]ModelProfile, 0, len(profiles))
+	for _, profile := range profiles {
+		if profile.CapabilityEvidence == "observed_for_intent" {
+			observed = append(observed, profile)
+		}
+	}
+	if len(observed) > 0 {
+		return observed
+	}
+	return profiles
 }
 
 // SetIntentQualityTracker installs the per-intent quality tracker used by

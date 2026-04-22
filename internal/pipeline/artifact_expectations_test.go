@@ -93,3 +93,109 @@ func TestCompareArtifactConformance_LiveProceduralCanaryMatches(t *testing.T) {
 		t.Fatalf("conformance = %+v", conformance)
 	}
 }
+
+func TestCompareArtifactClaims_FlagsInventedExtraFile(t *testing.T) {
+	expected := []ExpectedArtifactSpec{
+		{ArtifactKind: "workspace_file", Path: "tmp/check/alpha.txt", ExactContent: "ALPHA"},
+		{ArtifactKind: "workspace_file", Path: "tmp/check/beta.txt", ExactContent: "BETA"},
+	}
+	proofs := []agenttools.ArtifactProof{
+		agenttools.NewArtifactProof("workspace_file", "tmp/check/alpha.txt", "ALPHA", false),
+		agenttools.NewArtifactProof("workspace_file", "tmp/check/beta.txt", "BETA", false),
+	}
+
+	conformance := CompareArtifactClaims("I created alpha.txt, beta.txt, and gamma.txt.", expected, nil, proofs, nil, "Create exactly two files")
+	if !conformance.HasUnsupported() {
+		t.Fatalf("expected unsupported claimed artifact, got %+v", conformance)
+	}
+	if len(conformance.UnsupportedClaim) != 1 || conformance.UnsupportedClaim[0] != "gamma.txt" {
+		t.Fatalf("unsupported claims = %+v", conformance.UnsupportedClaim)
+	}
+}
+
+func TestCompareArtifactClaims_IgnoresInspectionListingWithoutArtifactContract(t *testing.T) {
+	conformance := CompareArtifactClaims("The vault contains alpha.txt, beta.txt, and gamma.txt.", nil, nil, nil, nil, "What's in the vault right now?")
+	if conformance.HasUnsupported() {
+		t.Fatalf("unexpected unsupported claims = %+v", conformance.UnsupportedClaim)
+	}
+	if len(conformance.Claimed) != 0 {
+		t.Fatalf("claimed paths = %+v, want none without authoring contract", conformance.Claimed)
+	}
+}
+
+func TestParseArtifactPromptContract_ClassifiesSourceInputsSeparately(t *testing.T) {
+	prompt := "Read tmp/procedural-workflow-1/requirements.txt, then create exactly two files in tmp/procedural-workflow-1/: deploy-config.json with content:\n{}\nFile 2: rollout-runbook.md with content:\n# Runbook"
+	contract := ParseArtifactPromptContract(prompt)
+	if len(contract.ExpectedOutputs) != 2 {
+		t.Fatalf("expected outputs = %d, want 2", len(contract.ExpectedOutputs))
+	}
+	if len(contract.SourceInputs) != 1 || contract.SourceInputs[0] != "tmp/procedural-workflow-1/requirements.txt" {
+		t.Fatalf("source inputs = %+v", contract.SourceInputs)
+	}
+}
+
+func TestParseArtifactPromptContract_ClassifiesSourceInputsWithNoColonContentDirectives(t *testing.T) {
+	prompt := "Read tmp/procedural-workflow-4/requirements.txt and then create tmp/procedural-workflow-4/deploy-config.json with content {\"service\":\"payments-api\",\"environment\":\"staging\",\"strategy\":\"rolling\"} and create tmp/procedural-workflow-4/rollout-runbook.md with content # Rollout Runbook\n\n1. Deploy payments-api to staging.\n2. Use a rolling strategy.\n3. Verify health checks before promotion.\n"
+	contract := ParseArtifactPromptContract(prompt)
+	if len(contract.ExpectedOutputs) != 2 {
+		t.Fatalf("expected outputs = %d, want 2", len(contract.ExpectedOutputs))
+	}
+	if contract.ExpectedOutputs[0].Path != "tmp/procedural-workflow-4/deploy-config.json" || contract.ExpectedOutputs[1].Path != "tmp/procedural-workflow-4/rollout-runbook.md" {
+		t.Fatalf("paths = %#v", contract.ExpectedOutputs)
+	}
+	if contract.ExpectedOutputs[0].ExactContent != "{\"service\":\"payments-api\",\"environment\":\"staging\",\"strategy\":\"rolling\"}" {
+		t.Fatalf("first content = %q", contract.ExpectedOutputs[0].ExactContent)
+	}
+	if contract.ExpectedOutputs[1].ExactContent != "# Rollout Runbook\n\n1. Deploy payments-api to staging.\n2. Use a rolling strategy.\n3. Verify health checks before promotion." {
+		t.Fatalf("second content = %q", contract.ExpectedOutputs[1].ExactContent)
+	}
+	if len(contract.SourceInputs) != 1 || contract.SourceInputs[0] != "tmp/procedural-workflow-4/requirements.txt" {
+		t.Fatalf("source inputs = %+v", contract.SourceInputs)
+	}
+}
+
+func TestCompareArtifactClaims_AllowsSourceArtifactReference(t *testing.T) {
+	expected := []ExpectedArtifactSpec{
+		{ArtifactKind: "workspace_file", Path: "tmp/procedural-workflow-1/deploy-config.json", ExactContent: "{}"},
+		{ArtifactKind: "workspace_file", Path: "tmp/procedural-workflow-1/rollout-runbook.md", ExactContent: "# Runbook"},
+	}
+	proofs := []agenttools.ArtifactProof{
+		agenttools.NewArtifactProof("workspace_file", "tmp/procedural-workflow-1/deploy-config.json", "{}", false),
+		agenttools.NewArtifactProof("workspace_file", "tmp/procedural-workflow-1/rollout-runbook.md", "# Runbook", false),
+	}
+
+	conformance := CompareArtifactClaims("I read requirements.txt and created deploy-config.json and rollout-runbook.md.", expected, []string{"tmp/procedural-workflow-1/requirements.txt"}, proofs, nil, "Read tmp/procedural-workflow-1/requirements.txt, then create files")
+	if conformance.HasUnsupported() {
+		t.Fatalf("unexpected unsupported claims: %+v", conformance.UnsupportedClaim)
+	}
+}
+
+func TestCompareArtifactClaims_IgnoresInspectionListingWithInspectionEvidence(t *testing.T) {
+	inspection := []agenttools.InspectionProof{
+		agenttools.NewInspectionProof("directory_listing", "list_directory", "/Users/jmachen/code", 10),
+	}
+	conformance := CompareArtifactClaims("The most recently updated projects include claude/settings.local.json and code/aegis-blockchain/EXPERTGUIDE.md.", nil, nil, nil, inspection, "What are the ten most recently updated projects in my code folder?")
+	if conformance.HasUnsupported() {
+		t.Fatalf("unexpected unsupported claims = %+v", conformance.UnsupportedClaim)
+	}
+}
+
+func TestCompareArtifactConformance_FlagsUnexpectedExtraWrite(t *testing.T) {
+	expected := []ExpectedArtifactSpec{
+		{ArtifactKind: "workspace_file", Path: "tmp/check/alpha.txt", ExactContent: "ALPHA"},
+		{ArtifactKind: "workspace_file", Path: "tmp/check/beta.txt", ExactContent: "BETA"},
+	}
+	proofs := []agenttools.ArtifactProof{
+		agenttools.NewArtifactProof("workspace_file", "tmp/check/alpha.txt", "ALPHA", false),
+		agenttools.NewArtifactProof("workspace_file", "tmp/check/beta.txt", "BETA", false),
+		agenttools.NewArtifactProof("workspace_file", "tmp/check/gamma.txt", "GAMMA", false),
+	}
+
+	conformance := CompareArtifactConformance(expected, proofs)
+	if !conformance.HasUnsatisfied() {
+		t.Fatalf("expected unsatisfied conformance, got %+v", conformance)
+	}
+	if len(conformance.Unexpected) != 1 || conformance.Unexpected[0] != "tmp/check/gamma.txt" {
+		t.Fatalf("unexpected = %+v", conformance.Unexpected)
+	}
+}

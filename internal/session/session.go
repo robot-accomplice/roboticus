@@ -40,7 +40,11 @@ type Session struct {
 	taskFreshness     bool
 	agentRole         string
 	turnWeight        string
+	turnToolProfile   string
 	turnPolicyReason  string
+	sourceArtifacts   []string
+	inspectionTarget  string
+	destinationTarget string
 
 	// v1.0.6 typed evidence artifact (see verification_evidence.go).
 	// Populated by the pipeline after retrieval; consumed by the
@@ -190,18 +194,51 @@ func (s *Session) SetAgentRole(role string) { s.agentRole = role }
 // AgentRole returns the role assigned to the active session.
 func (s *Session) AgentRole() string { return s.agentRole }
 
-// SetTurnEnvelopePolicy records the pipeline-selected turn weight and reason
-// so downstream request assembly and routing consume the same classification.
-func (s *Session) SetTurnEnvelopePolicy(weight, reason string) {
+// SetTurnEnvelopePolicy records the pipeline-selected turn weight, focused tool
+// profile, and reason so downstream request assembly and routing consume the
+// same classification.
+func (s *Session) SetTurnEnvelopePolicy(weight, toolProfile, reason string) {
 	s.turnWeight = weight
+	s.turnToolProfile = toolProfile
 	s.turnPolicyReason = reason
 }
 
 // TurnWeight returns the pipeline-selected turn weight for the active turn.
 func (s *Session) TurnWeight() string { return s.turnWeight }
 
+// TurnToolProfile returns the pipeline-selected tool profile for the active
+// turn.
+func (s *Session) TurnToolProfile() string { return s.turnToolProfile }
+
 // TurnPolicyReason returns the rationale for the current turn weight.
 func (s *Session) TurnPolicyReason() string { return s.turnPolicyReason }
+
+// SetSourceArtifacts records prompt-declared source artifacts that the current
+// turn is expected to read from rather than mutate.
+func (s *Session) SetSourceArtifacts(paths []string) {
+	s.sourceArtifacts = append([]string(nil), paths...)
+}
+
+// SourceArtifacts returns the prompt-declared source artifacts for the current
+// turn. Callers must treat the result as immutable.
+func (s *Session) SourceArtifacts() []string { return append([]string(nil), s.sourceArtifacts...) }
+
+// SetInspectionTargetSummary records the authoritative inspection-target hint
+// for the current turn. Empty string means no focused inspection target could
+// be resolved.
+func (s *Session) SetInspectionTargetSummary(summary string) { s.inspectionTarget = summary }
+
+// InspectionTargetSummary returns the authoritative inspection-target hint for
+// the current turn, if any.
+func (s *Session) InspectionTargetSummary() string { return s.inspectionTarget }
+
+// SetDestinationTargetSummary records the authoritative destination hint for
+// the current turn's filesystem authoring, if any.
+func (s *Session) SetDestinationTargetSummary(summary string) { s.destinationTarget = summary }
+
+// DestinationTargetSummary returns the authoritative destination hint for the
+// current turn's filesystem authoring, if any.
+func (s *Session) DestinationTargetSummary() string { return s.destinationTarget }
 
 // SetSelectedToolDefs records the tool set the pipeline selected for this
 // turn (after query-time semantic ranking + token-budget enforcement).

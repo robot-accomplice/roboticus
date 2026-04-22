@@ -2,6 +2,42 @@ package tools
 
 import "testing"
 
+func TestOperationClassForName_ReadFileIsArtifactRead(t *testing.T) {
+	if got := OperationClassForName("read_file"); got != OperationArtifactRead {
+		t.Fatalf("operation class = %q, want %q", got, OperationArtifactRead)
+	}
+	if !IsReadOnlyExploration("read_file") {
+		t.Fatal("read_file should be treated as read-only exploration")
+	}
+}
+
+func TestOperationClassForName_GlobFilesIsWorkspaceInspect(t *testing.T) {
+	if got := OperationClassForName("glob_files"); got != OperationWorkspaceInspect {
+		t.Fatalf("operation class = %q, want %q", got, OperationWorkspaceInspect)
+	}
+	if !IsReadOnlyExploration("glob_files") {
+		t.Fatal("glob_files should be treated as read-only exploration")
+	}
+}
+
+func TestOperationClassForName_SearchFilesIsWorkspaceInspect(t *testing.T) {
+	if got := OperationClassForName("search_files"); got != OperationWorkspaceInspect {
+		t.Fatalf("operation class = %q, want %q", got, OperationWorkspaceInspect)
+	}
+	if !IsReadOnlyExploration("search_files") {
+		t.Fatal("search_files should be treated as read-only exploration")
+	}
+}
+
+func TestOperationClassForName_InventoryProjectsIsWorkspaceInspect(t *testing.T) {
+	if got := OperationClassForName("inventory_projects"); got != OperationWorkspaceInspect {
+		t.Fatalf("operation class = %q, want %q", got, OperationWorkspaceInspect)
+	}
+	if !IsReadOnlyExploration("inventory_projects") {
+		t.Fatal("inventory_projects should be treated as read-only exploration")
+	}
+}
+
 func TestReplayFingerprintForCall_ArtifactWriteUsesPathIdentity(t *testing.T) {
 	first := ReplayFingerprintForCall("obsidian_write", `{"path":"Note.md","content":"# first"}`)
 	second := ReplayFingerprintForCall("obsidian_write", `{"path":"note.md","content":"# second"}`)

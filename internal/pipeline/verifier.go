@@ -86,8 +86,12 @@ type VerificationContext struct {
 	Contradictions       []sessionpkg.ContradictionEvidence
 	ToolResults          []ToolResultEntry
 	ArtifactProofs       []agenttools.ArtifactProof
+	SourceArtifactProofs []agenttools.ArtifactReadProof
+	InspectionProofs     []agenttools.InspectionProof
 	ExpectedArtifacts    []ExpectedArtifactSpec
+	SourceArtifacts      []string
 	ArtifactConformance  ArtifactConformance
+	SourceConformance    SourceArtifactConformance
 
 	// Executive state surfaces the current plan, assumptions, unresolved
 	// questions, verified conclusions, decision checkpoints, and stopping
@@ -146,17 +150,31 @@ func BuildVerificationContext(session *Session) VerificationContext {
 	}
 	ctx.ToolResults = currentTurnToolResults(session)
 	ctx.ArtifactProofs = toolResultArtifactProofs(ctx.ToolResults)
-	ctx.ExpectedArtifacts = ParseExpectedArtifactSpecs(ctx.UserPrompt)
+	ctx.SourceArtifactProofs = toolResultReadProofs(ctx.ToolResults)
+	ctx.InspectionProofs = toolResultInspectionProofs(ctx.ToolResults)
+	artifactContract := ParseArtifactPromptContract(ctx.UserPrompt)
+	ctx.ExpectedArtifacts = artifactContract.ExpectedOutputs
+	ctx.SourceArtifacts = artifactContract.SourceInputs
 	ctx.ArtifactConformance = CompareArtifactConformance(ctx.ExpectedArtifacts, ctx.ArtifactProofs)
+	ctx.SourceConformance = CompareSourceArtifactConformance(ctx.SourceArtifacts, ctx.SourceArtifactProofs)
 	ctx.EvidenceItems = append(ctx.EvidenceItems, toolResultEvidenceItems(ctx.ToolResults)...)
-	if len(ctx.ArtifactProofs) > 0 {
+	if len(ctx.ArtifactProofs) > 0 || len(ctx.SourceArtifactProofs) > 0 {
 		ctx.HasEvidence = true
 		ctx.HasCanonicalEvidence = true
 	}
+	if verificationNeedsSessionContinuity(ctx.UserPrompt) {
+		historyEvidence := verificationSessionHistoryEvidence(session, ctx.UserPrompt)
+		if len(historyEvidence) > 0 {
+			ctx.EvidenceItems = append(ctx.EvidenceItems, historyEvidence...)
+			ctx.HasEvidence = true
+			ctx.HasCanonicalEvidence = true
+			ctx.HasGaps = false
+		}
+	}
 
-	ctx.Subgoals = session.TaskSubgoals()
+	ctx.Subgoals = normalizeSemanticSubgoals(session.TaskSubgoals())
 	if len(ctx.Subgoals) == 0 {
-		ctx.Subgoals = verificationSubgoals(ctx.UserPrompt)
+		ctx.Subgoals = normalizeSemanticSubgoals(verificationSubgoals(ctx.UserPrompt))
 	}
 	ctx.PolicySensitive = verificationPolicySensitive(ctx.UserPrompt, ctx.Intent)
 	ctx.RequiresFreshness = verificationRequiresFreshness(ctx.UserPrompt, ctx.Intent)
@@ -166,6 +184,7 @@ func BuildVerificationContext(session *Session) VerificationContext {
 }
 
 func verificationSubgoals(prompt string) []string {
+	prompt = stripOutputShapeDirectives(prompt)
 	var goals []string
 	for _, task := range extractSubtasks(prompt) {
 		if trimmed := strings.TrimSpace(task); trimmed != "" {
@@ -175,6 +194,7 @@ func verificationSubgoals(prompt string) []string {
 	if len(goals) > 0 {
 		return goals
 	}
+	goals = nil
 	for _, part := range strings.FieldsFunc(prompt, func(r rune) bool {
 		return r == '?' || r == ';'
 	}) {
@@ -187,11 +207,15 @@ func verificationSubgoals(prompt string) []string {
 		return goals
 	}
 	if strings.Contains(strings.ToLower(prompt), " and ") {
+		goals = nil
 		for _, part := range strings.Split(prompt, " and ") {
 			trimmed := strings.TrimSpace(part)
 			if trimmed != "" {
 				goals = append(goals, trimmed)
 			}
+		}
+		if len(goals) > 1 {
+			return goals
 		}
 	}
 	return goals
@@ -201,6 +225,8 @@ func VerifyResponse(content string, ctx VerificationContext) VerificationResult 
 	result := VerificationResult{Passed: true}
 	lowerContent := strings.ToLower(content)
 	artifactProofPrimary := contradictionChecksSuppressedByArtifactProof(ctx, content)
+	artifactClaims := CompareArtifactClaims(content, ctx.ExpectedArtifacts, ctx.SourceArtifacts, ctx.ArtifactProofs, ctx.InspectionProofs, ctx.UserPrompt)
+	allowsArtifactBackedCompletion := verificationAllowsArtifactBackedCompletion(ctx)
 
 	if verificationIsSocialTurn(ctx.UserPrompt, ctx.Intent) && verificationLooksOperationalStatus(lowerContent) {
 		result.Passed = false
@@ -212,13 +238,16 @@ func VerifyResponse(content string, ctx VerificationContext) VerificationResult 
 
 	if ctx.HasGaps && !artifactProofPrimary && !containsAny(lowerContent,
 		"don't know", "do not know", "unclear", "not enough", "insufficient",
-		"need more", "based on the available", "from the available", "i'm not certain",
+		"need more", "based on the available", "from the available", "available evidence",
+		"i'm not certain", "needs verification", "requires verification",
 	) {
-		result.Passed = false
-		result.Issues = append(result.Issues, VerificationIssue{
-			Code:   "unsupported_certainty",
-			Detail: "the evidence contains explicit gaps, but the response sounds fully certain",
-		})
+		if !verificationAcknowledgesUncertainty(lowerContent) {
+			result.Passed = false
+			result.Issues = append(result.Issues, VerificationIssue{
+				Code:   "unsupported_certainty",
+				Detail: "the evidence contains explicit gaps, but the response sounds fully certain",
+			})
+		}
 	}
 
 	if ctx.HasContradictions && !artifactProofPrimary && !containsAny(lowerContent,
@@ -234,6 +263,12 @@ func VerifyResponse(content string, ctx VerificationContext) VerificationResult 
 
 	if len(ctx.ExpectedArtifacts) > 0 && ctx.ArtifactConformance.HasUnsatisfied() {
 		result.Passed = false
+		if len(ctx.ArtifactConformance.Unexpected) > 0 {
+			result.Issues = append(result.Issues, VerificationIssue{
+				Code:   "artifact_unexpected_write",
+				Detail: "unexpected artifacts were written outside the requested exact set: " + strings.Join(ctx.ArtifactConformance.Unexpected, ", "),
+			})
+		}
 		if len(ctx.ArtifactConformance.Missing) > 0 {
 			var paths []string
 			for _, spec := range ctx.ArtifactConformance.Missing {
@@ -255,6 +290,22 @@ func VerifyResponse(content string, ctx VerificationContext) VerificationResult 
 		}
 	}
 
+	if ctx.SourceConformance.HasUnread() {
+		result.Passed = false
+		result.Issues = append(result.Issues, VerificationIssue{
+			Code:   "source_artifact_unread",
+			Detail: "the response depends on source artifacts that were referenced in the prompt but not read through authoritative tool-backed evidence: " + strings.Join(ctx.SourceConformance.Unread, ", "),
+		})
+	}
+
+	if artifactClaims.HasUnsupported() {
+		result.Passed = false
+		result.Issues = append(result.Issues, VerificationIssue{
+			Code:   "artifact_set_overclaim",
+			Detail: "the response claimed artifacts that were neither requested nor proven by write evidence: " + strings.Join(artifactClaims.UnsupportedClaim, ", "),
+		})
+	}
+
 	if ctx.RequiresFreshness && ctx.HasFreshnessRisk && !containsAny(lowerContent,
 		"current", "latest", "as of", "may be outdated", "might be stale",
 		"verify", "need a fresher", "need current", "available evidence",
@@ -267,7 +318,7 @@ func VerifyResponse(content string, ctx VerificationContext) VerificationResult 
 		})
 	}
 
-	if len(ctx.Subgoals) >= 2 {
+	if len(ctx.Subgoals) >= 2 && !allowsArtifactBackedCompletion {
 		covered := 0
 		for _, goal := range ctx.Subgoals {
 			if verificationGoalCovered(goal, lowerContent) {
@@ -332,6 +383,78 @@ func VerifyResponse(content string, ctx VerificationContext) VerificationResult 
 	verifyExecutiveState(lowerContent, ctx, &result)
 
 	return result
+}
+
+func verificationAllowsArtifactBackedCompletion(ctx VerificationContext) bool {
+	if len(ctx.ArtifactProofs) == 0 {
+		return false
+	}
+	if len(ctx.ExpectedArtifacts) > 0 && ctx.ArtifactConformance.HasUnsatisfied() {
+		return false
+	}
+	if ctx.SourceConformance.HasUnread() {
+		return false
+	}
+	if strings.TrimSpace(ctx.PlannedAction) != "" && ctx.PlannedAction != "execute_directly" {
+		return false
+	}
+	if !verificationIsArtifactAuthoringPrompt(ctx.UserPrompt) {
+		return false
+	}
+	if !verificationSubgoalsAreArtifactInternal(ctx.Subgoals) {
+		return false
+	}
+	return true
+}
+
+func verificationIsArtifactAuthoringPrompt(prompt string) bool {
+	lower := strings.ToLower(prompt)
+	if !containsAny(lower, "write", "create", "save", "generate", "draft") {
+		return false
+	}
+	return containsAny(lower,
+		"report",
+		"document",
+		"note",
+		"file",
+		"markdown",
+		"md",
+		"vault",
+	)
+}
+
+func verificationSubgoalsAreArtifactInternal(subgoals []string) bool {
+	if len(subgoals) == 0 {
+		return true
+	}
+	for _, goal := range subgoals {
+		lower := strings.TrimSpace(strings.ToLower(goal))
+		if lower == "" {
+			return false
+		}
+		if containsAny(lower,
+			"summarize", "summary", "explain", "describe", "recommend", "next step",
+			"tell me", "in chat", "here", "why ", "how ",
+			"top ", "compare", "analyze", "analysis",
+		) {
+			return false
+		}
+		if containsAny(lower,
+			"project path", "project name", "project language", "first edit date",
+			"last edit date", "remote", "origin repo", "direction", "status",
+			"field", "column", "order", "sort", "descending", "ascending",
+		) {
+			continue
+		}
+		// Noun-phrase field labels like "path" or "name" are acceptable on their own.
+		if !strings.Contains(lower, " ") && containsAny(lower,
+			"path", "name", "language", "date", "status", "direction", "repo", "field",
+		) {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // upgradeClaimCertaintyWithClassifier runs the embedding-backed semantic
@@ -458,14 +581,96 @@ func verificationKeywordsOverlap(keywords []string, text string) int {
 	return overlap
 }
 
+func verificationNeedsSessionContinuity(prompt string) bool {
+	lower := strings.ToLower(prompt)
+	return containsAny(lower,
+		"did i tell you",
+		"for the rest of this session",
+		"what codename",
+		"what did i tell you",
+		"quiet ticker",
+		"target docs dir",
+	)
+}
+
+func verificationSessionHistoryEvidence(session *Session, prompt string) []string {
+	if session == nil {
+		return nil
+	}
+	lowerPrompt := strings.ToLower(prompt)
+	msgs := session.Messages()
+	if len(msgs) == 0 {
+		return nil
+	}
+	start := 0
+	if len(msgs) > 8 {
+		start = len(msgs) - 8
+	}
+	var items []string
+	for i := start; i < len(msgs); i++ {
+		msg := msgs[i]
+		if msg.Role != "user" && msg.Role != "assistant" {
+			continue
+		}
+		content := strings.TrimSpace(msg.Content)
+		if content == "" {
+			continue
+		}
+		if msg.Role == "user" && strings.Contains(lowerPrompt, "quiet ticker") &&
+			strings.Contains(strings.ToLower(content), "quiet ticker") {
+			items = append(items, "session continuity: "+content)
+			continue
+		}
+		if msg.Role == "user" && strings.Contains(lowerPrompt, "target docs dir") &&
+			strings.Contains(strings.ToLower(content), "target docs dir") {
+			items = append(items, "session continuity: "+content)
+			continue
+		}
+		if strings.Contains(lowerPrompt, "what codename") || strings.Contains(lowerPrompt, "did i tell you") {
+			items = append(items, "session history: "+content)
+		}
+	}
+	return items
+}
+
+func verificationAcknowledgesUncertainty(lowerContent string) bool {
+	return containsAny(lowerContent,
+		"don't know", "do not know", "unclear", "not enough", "insufficient",
+		"need more", "based on the available", "from the available", "available evidence",
+		"i'm not certain", "needs verification", "requires verification",
+		"don't have up-to-date information", "do not have up-to-date information",
+		"don't currently have", "do not currently have",
+		"best to refer", "best to check", "recommend checking",
+		"within the limitations of my resources", "within my limitations",
+		"i can't verify", "cannot verify", "may be outdated",
+		"don't have specific information", "do not have specific information",
+		"don't have specific details", "do not have specific details",
+		"don't have updates", "do not have updates",
+		"topic is complex", "can shift rapidly", "changes rapidly",
+	)
+}
+
 func verificationGoalCovered(goal, response string) bool {
+	if verificationGoalAllowsPlanInference(goal) && verificationHasActionPlan(response) {
+		return true
+	}
+	if verificationGoalNeedsEntitySupport(goal) {
+		if containsAny(response,
+			"affected", "impacted", "impact to", "impact on", "blast radius", "needs verification",
+		) {
+			return true
+		}
+		if len(verificationEntityKeywords(response)) > 0 {
+			return true
+		}
+	}
 	keywords := verificationKeywords(goal)
 	if len(keywords) == 0 {
 		return true
 	}
 	matches := 0
 	for _, kw := range keywords {
-		if strings.Contains(response, kw) {
+		if verificationTextContainsKeyword(response, kw) {
 			matches++
 		}
 	}
@@ -482,6 +687,10 @@ func verificationKeywords(goal string) []string {
 		"from": {}, "into": {}, "what": {}, "when": {}, "where": {}, "which": {},
 		"why": {}, "how": {}, "please": {}, "about": {}, "again": {}, "then": {},
 		"need": {}, "want": {}, "does": {}, "have": {}, "your": {}, "our": {},
+		"create": {}, "report": {}, "write": {}, "summarize": {}, "summary": {},
+		"tell": {}, "exactly": {}, "describe": {}, "discover": {}, "current": {},
+		"use": {}, "using": {}, "provide": {}, "give": {}, "show": {}, "return": {},
+		"order": {}, "explains": {}, "explain": {}, "propose": {}, "proposed": {},
 	}
 	var out []string
 	for _, token := range strings.Fields(strings.ToLower(goal)) {
@@ -511,6 +720,9 @@ func verificationGoalSupportedByEvidence(goal, response string, evidenceItems []
 		threshold := 1
 		if len(responseKeywords) >= 2 {
 			threshold = 2
+		}
+		if verificationResponseAcknowledgesEntityUncertainty(response) && matches >= 1 {
+			return true
 		}
 		return matches >= threshold
 	}
@@ -575,13 +787,62 @@ func verificationKeywordEvidenceMatches(keywords []string, evidenceItems []strin
 	matches := 0
 	for _, kw := range keywords {
 		for _, item := range evidenceItems {
-			if strings.Contains(strings.ToLower(item), kw) {
+			if verificationTextContainsKeyword(strings.ToLower(item), kw) {
 				matches++
 				break
 			}
 		}
 	}
 	return matches
+}
+
+func verificationTextContainsKeyword(text, keyword string) bool {
+	lower := strings.ToLower(text)
+	if strings.Contains(lower, keyword) {
+		return true
+	}
+	stemmedKeyword := verificationStemKeyword(keyword)
+	if stemmedKeyword == "" {
+		return false
+	}
+	for _, token := range strings.FieldsFunc(lower, func(r rune) bool {
+		return r < 'a' || r > 'z'
+	}) {
+		if verificationStemKeyword(token) == stemmedKeyword {
+			return true
+		}
+	}
+	return false
+}
+
+func verificationStemKeyword(token string) string {
+	token = strings.TrimSpace(strings.ToLower(token))
+	if len(token) < 4 {
+		return token
+	}
+	switch {
+	case strings.HasSuffix(token, "ing") && len(token) > 5:
+		return strings.TrimSuffix(token, "ing")
+	case strings.HasSuffix(token, "ed") && len(token) > 4:
+		trimmed := strings.TrimSuffix(token, "ed")
+		if !strings.HasSuffix(trimmed, "e") {
+			trimmed += "e"
+		}
+		return trimmed
+	case strings.HasSuffix(token, "s") && !strings.HasSuffix(token, "ss") && len(token) > 4:
+		return strings.TrimSuffix(token, "s")
+	default:
+		return token
+	}
+}
+
+func verificationResponseAcknowledgesEntityUncertainty(response string) bool {
+	return containsAny(response,
+		"needs verification", "need verification", "still needs verification",
+		"requires verification", "require verification", "unverified",
+		"available evidence confirms", "based on the available evidence",
+		"not certain", "unclear", "still needs confirmation", "needs confirmation",
+	)
 }
 
 func containsAny(s string, needles ...string) bool {

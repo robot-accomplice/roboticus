@@ -83,3 +83,45 @@ func TestDecideVerifierRetryAfterProgress_AllowsArtifactContentMismatchAfterProg
 		t.Fatal("Allow = false, want true")
 	}
 }
+
+func TestDecideVerifierRetryAfterProgress_AllowsSourceArtifactUnreadAfterProgress(t *testing.T) {
+	progress := ExecutionProgress{SuccessfulToolResults: 1, SuccessfulArtifactWrites: 1}
+	ctx := VerificationContext{PlannedAction: "execute_directly", SourceArtifacts: []string{"tmp/input.txt"}}
+	result := VerificationResult{
+		Passed: false,
+		Issues: []VerificationIssue{{Code: "source_artifact_unread"}},
+	}
+
+	disposition := decideVerifierRetryAfterProgress(result, ctx, progress)
+	if !disposition.Allow {
+		t.Fatal("Allow = false, want true")
+	}
+}
+
+func TestDecideVerifierRetryAfterProgress_AllowsArtifactSetOverclaimAfterProgress(t *testing.T) {
+	progress := ExecutionProgress{SuccessfulToolResults: 1, SuccessfulArtifactWrites: 1}
+	ctx := VerificationContext{PlannedAction: "execute_directly"}
+	result := VerificationResult{
+		Passed: false,
+		Issues: []VerificationIssue{{Code: "artifact_set_overclaim"}},
+	}
+
+	disposition := decideVerifierRetryAfterProgress(result, ctx, progress)
+	if !disposition.Allow {
+		t.Fatal("Allow = false, want true")
+	}
+}
+
+func TestDecideVerifierRetryAfterProgress_AllowsUnexpectedArtifactWriteAfterProgress(t *testing.T) {
+	progress := ExecutionProgress{SuccessfulToolResults: 1, SuccessfulArtifactWrites: 1}
+	ctx := VerificationContext{PlannedAction: "execute_directly"}
+	result := VerificationResult{
+		Passed: false,
+		Issues: []VerificationIssue{{Code: "artifact_unexpected_write"}},
+	}
+
+	disposition := decideVerifierRetryAfterProgress(result, ctx, progress)
+	if !disposition.Allow {
+		t.Fatal("Allow = false, want true")
+	}
+}

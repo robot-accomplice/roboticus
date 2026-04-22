@@ -17,11 +17,13 @@ const (
 	OperationUnknown             OperationClass = "unknown"
 	OperationInspection          OperationClass = "inspection"
 	OperationRuntimeContextRead  OperationClass = "runtime_context_read"
+	OperationArtifactRead        OperationClass = "artifact_read"
 	OperationWorkspaceInspect    OperationClass = "workspace_inspect"
 	OperationCapabilityInventory OperationClass = "capability_inventory"
 	OperationTaskInspection      OperationClass = "task_inspection"
 	OperationArtifactWrite       OperationClass = "artifact_write"
 	OperationAuthorityWrite      OperationClass = "authority_write"
+	OperationScheduling          OperationClass = "scheduling"
 	OperationExecution           OperationClass = "execution"
 	OperationMemoryRead          OperationClass = "memory_read"
 	OperationDelegation          OperationClass = "delegation"
@@ -38,11 +40,15 @@ func OperationClassForName(name string) OperationClass {
 	switch strings.TrimSpace(strings.ToLower(name)) {
 	case "obsidian_write", "write_file", "edit_file":
 		return OperationArtifactWrite
+	case "read_file":
+		return OperationArtifactRead
 	case "ingest_policy":
 		return OperationAuthorityWrite
+	case "cron":
+		return OperationScheduling
 	case "get_runtime_context":
 		return OperationRuntimeContextRead
-	case "list_directory":
+	case "glob_files", "list_directory", "search_files", "inventory_projects":
 		return OperationWorkspaceInspect
 	case "task-status", "list-open-tasks", "get_subagent_status":
 		return OperationTaskInspection
@@ -66,6 +72,7 @@ func ReplayClassForName(name string) ReplayClass {
 	switch OperationClassForName(name) {
 	case OperationInspection,
 		OperationRuntimeContextRead,
+		OperationArtifactRead,
 		OperationWorkspaceInspect,
 		OperationCapabilityInventory,
 		OperationTaskInspection,
@@ -73,6 +80,7 @@ func ReplayClassForName(name string) ReplayClass {
 		return ReplaySafe
 	case OperationArtifactWrite,
 		OperationAuthorityWrite,
+		OperationScheduling,
 		OperationExecution,
 		OperationDelegation:
 		return ReplayProtected
@@ -132,6 +140,7 @@ func IsReadOnlyExploration(name string) bool {
 	switch OperationClassForName(name) {
 	case OperationInspection,
 		OperationRuntimeContextRead,
+		OperationArtifactRead,
 		OperationWorkspaceInspect,
 		OperationCapabilityInventory,
 		OperationTaskInspection,
@@ -146,6 +155,7 @@ func MakesExecutionProgress(name string) bool {
 	switch OperationClassForName(name) {
 	case OperationArtifactWrite,
 		OperationAuthorityWrite,
+		OperationScheduling,
 		OperationExecution,
 		OperationDelegation:
 		return true

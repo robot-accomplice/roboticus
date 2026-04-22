@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -248,7 +249,7 @@ func (p *Pipeline) stageDecomposition(ctx context.Context, pc *pipelineContext) 
 		}
 		pc.synthesis = SynthesizeTaskState(pc.content, pc.session.TurnCount(), agentSkills)
 		pc.policy = DeriveTurnEnvelopePolicy(pc.content, pc.synthesis, pc.session.TurnCount())
-		pc.session.SetTurnEnvelopePolicy(string(pc.policy.Weight), pc.policy.Reason)
+		pc.session.SetTurnEnvelopePolicy(string(pc.policy.Weight), string(pc.policy.ToolProfile), pc.policy.Reason)
 		AnnotateTaskStateTrace(pc.tr, pc.synthesis)
 		pc.tr.Annotate("turn_weight", string(pc.policy.Weight))
 		pc.tr.Annotate("turn_policy_reason", pc.policy.Reason)
@@ -274,12 +275,19 @@ func (p *Pipeline) stageDecomposition(ctx context.Context, pc *pipelineContext) 
 	}
 	perception := BuildPerception(pc.content, pc.synthesis)
 	if pc.session != nil {
+		artifactContract := ParseArtifactPromptContract(pc.content)
+		inspectionTarget := ResolveInspectionTarget(pc.content, p.workspace, p.allowedPaths)
+		destinationTarget := ResolveFilesystemDestination(pc.content, p.workspace, p.allowedPaths, filepath.Join(p.workspace, "Vault"))
+		verificationSubgoalsHint = normalizeSemanticSubgoals(verificationSubgoalsHint)
 		pc.session.SetTaskVerificationHints(
 			pc.synthesis.Intent,
 			pc.synthesis.Complexity,
 			pc.synthesis.PlannedAction,
 			verificationSubgoalsHint,
 		)
+		pc.session.SetSourceArtifacts(artifactContract.SourceInputs)
+		pc.session.SetInspectionTargetSummary(inspectionTarget.PromptSummary)
+		pc.session.SetDestinationTargetSummary(destinationTarget.PromptSummary)
 
 		// Build and stash the unified perception artifact (Milestone 2)
 		// so downstream stages consume a single classifier output.

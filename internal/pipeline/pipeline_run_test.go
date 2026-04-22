@@ -67,6 +67,48 @@ func (e *mismatchedArtifactRetryExecutor) RunLoop(_ context.Context, session *Se
 	}
 }
 
+type extraArtifactRetryExecutor struct {
+	calls int
+}
+
+func (e *extraArtifactRetryExecutor) RunLoop(_ context.Context, session *Session) (string, int, error) {
+	e.calls++
+	switch e.calls {
+	case 1:
+		alpha := agenttools.NewArtifactProof("workspace_file", "tmp/check/alpha.txt", "ALPHA", false)
+		beta := agenttools.NewArtifactProof("workspace_file", "tmp/check/beta.txt", "BETA", false)
+		session.AddToolResultWithMetadata("call-1", "write_file", alpha.Output(), alpha.Metadata(), false)
+		session.AddToolResultWithMetadata("call-2", "write_file", beta.Output(), beta.Metadata(), false)
+		session.AddAssistantMessage("I created alpha.txt, beta.txt, and gamma.txt.", nil)
+		return "I created alpha.txt, beta.txt, and gamma.txt.", 1, nil
+	default:
+		session.AddAssistantMessage("I created alpha.txt, beta.txt, and gamma.txt.", nil)
+		return "I created alpha.txt, beta.txt, and gamma.txt.", 1, nil
+	}
+}
+
+type unexpectedArtifactWriteRetryExecutor struct {
+	calls int
+}
+
+func (e *unexpectedArtifactWriteRetryExecutor) RunLoop(_ context.Context, session *Session) (string, int, error) {
+	e.calls++
+	switch e.calls {
+	case 1:
+		alpha := agenttools.NewArtifactProof("workspace_file", "tmp/check/alpha.txt", "ALPHA", false)
+		beta := agenttools.NewArtifactProof("workspace_file", "tmp/check/beta.txt", "BETA", false)
+		gamma := agenttools.NewArtifactProof("workspace_file", "tmp/check/gamma.txt", "GAMMA", false)
+		session.AddToolResultWithMetadata("call-1", "write_file", alpha.Output(), alpha.Metadata(), false)
+		session.AddToolResultWithMetadata("call-2", "write_file", beta.Output(), beta.Metadata(), false)
+		session.AddToolResultWithMetadata("call-3", "write_file", gamma.Output(), gamma.Metadata(), false)
+		session.AddAssistantMessage("I created alpha.txt, beta.txt, and gamma.txt.", nil)
+		return "I created alpha.txt, beta.txt, and gamma.txt.", 1, nil
+	default:
+		session.AddAssistantMessage("I created alpha.txt, beta.txt, and gamma.txt.", nil)
+		return "I created alpha.txt, beta.txt, and gamma.txt.", 1, nil
+	}
+}
+
 // stubRetriever is a minimal MemoryRetriever for pipeline tests.
 type stubRetriever struct {
 	result string
@@ -362,6 +404,111 @@ func TestPipeline_Run_VerifierRetryRechecksFinalArtifactClaims(t *testing.T) {
 	}
 	if !strings.Contains(details.String, "artifact_content_mismatch") {
 		t.Fatalf("verifier recheck details = %q, want artifact_content_mismatch", details.String)
+	}
+}
+
+func TestPipeline_Run_VerifierRetryRechecksExtraArtifactClaims(t *testing.T) {
+	store := testutil.TempStore(t)
+	exec := &extraArtifactRetryExecutor{}
+
+	pipe := New(PipelineDeps{
+		Store:    store,
+		Executor: exec,
+		Guards:   DefaultGuardChain(),
+	})
+
+	cfg := PresetAPI()
+	cfg.GuardSet = GuardSetNone
+	cfg.DecompositionGate = false
+	cfg.DelegatedExecution = false
+	cfg.PostTurnIngest = false
+	cfg.NicknameRefinement = false
+	cfg.TaskOperatingState = "test"
+
+	outcome, err := pipe.Run(context.Background(), cfg, Input{
+		Content: "Create two files in tmp/check/ exactly as follows. File 1: alpha.txt with content:\nALPHA\nFile 2: beta.txt with content:\nBETA\nAfter writing them, tell me that you created three files including gamma.txt.",
+		AgentID: "test-agent",
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if exec.calls != 2 {
+		t.Fatalf("expected verifier to trigger exactly one retry, got %d calls", exec.calls)
+	}
+	if strings.Contains(strings.ToLower(outcome.Content), "gamma.txt") && !strings.Contains(strings.ToLower(outcome.Content), "final verification still failed") {
+		t.Fatalf("final content preserved invented extra artifact claim: %q", outcome.Content)
+	}
+	if !strings.Contains(strings.ToLower(outcome.Content), "final verification still failed") {
+		t.Fatalf("expected verification-grounded fallback response, got %q", outcome.Content)
+	}
+
+	var turnID string
+	if err := store.QueryRowContext(context.Background(),
+		`SELECT id FROM turns WHERE session_id = ? ORDER BY created_at DESC LIMIT 1`, outcome.SessionID,
+	).Scan(&turnID); err != nil {
+		t.Fatalf("query turn id: %v", err)
+	}
+
+	var details sql.NullString
+	if err := store.QueryRowContext(context.Background(),
+		`SELECT details_json FROM turn_diagnostic_events WHERE turn_id = ? AND event_type = ?`,
+		turnID, "verifier_retry_rechecked",
+	).Scan(&details); err != nil {
+		t.Fatalf("query verifier recheck details: %v", err)
+	}
+	if !strings.Contains(details.String, "artifact_set_overclaim") {
+		t.Fatalf("verifier recheck details = %q, want artifact_set_overclaim", details.String)
+	}
+}
+
+func TestPipeline_Run_VerifierRetryRechecksUnexpectedArtifactWrites(t *testing.T) {
+	store := testutil.TempStore(t)
+	exec := &unexpectedArtifactWriteRetryExecutor{}
+
+	pipe := New(PipelineDeps{
+		Store:    store,
+		Executor: exec,
+		Guards:   DefaultGuardChain(),
+	})
+
+	cfg := PresetAPI()
+	cfg.GuardSet = GuardSetNone
+	cfg.DecompositionGate = false
+	cfg.DelegatedExecution = false
+	cfg.PostTurnIngest = false
+	cfg.NicknameRefinement = false
+	cfg.TaskOperatingState = "test"
+
+	outcome, err := pipe.Run(context.Background(), cfg, Input{
+		Content: "Create two files in tmp/check/ exactly as follows. File 1: alpha.txt with content:\nALPHA\nFile 2: beta.txt with content:\nBETA\nAfter writing them, tell me you created alpha.txt, beta.txt, and gamma.txt.",
+		AgentID: "test-agent",
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if exec.calls != 2 {
+		t.Fatalf("expected verifier to trigger exactly one retry, got %d calls", exec.calls)
+	}
+	if !strings.Contains(strings.ToLower(outcome.Content), "final verification still failed") {
+		t.Fatalf("expected verification-grounded fallback response, got %q", outcome.Content)
+	}
+
+	var turnID string
+	if err := store.QueryRowContext(context.Background(),
+		`SELECT id FROM turns WHERE session_id = ? ORDER BY created_at DESC LIMIT 1`, outcome.SessionID,
+	).Scan(&turnID); err != nil {
+		t.Fatalf("query turn id: %v", err)
+	}
+
+	var details sql.NullString
+	if err := store.QueryRowContext(context.Background(),
+		`SELECT details_json FROM turn_diagnostic_events WHERE turn_id = ? AND event_type = ?`,
+		turnID, "verifier_retry_rechecked",
+	).Scan(&details); err != nil {
+		t.Fatalf("query verifier recheck details: %v", err)
+	}
+	if !strings.Contains(details.String, "artifact_unexpected_write") {
+		t.Fatalf("verifier recheck details = %q, want artifact_unexpected_write", details.String)
 	}
 }
 

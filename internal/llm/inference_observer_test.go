@@ -133,8 +133,8 @@ func TestServiceComplete_ObserverCapturesFallbackDiagnostics(t *testing.T) {
 			if got := ev.details["task_complexity"]; got != "complex" {
 				t.Fatalf("routing task_complexity = %v, want complex", got)
 			}
-			if got := ev.details["intent_class"]; got != IntentCoding.String() {
-				t.Fatalf("routing intent_class = %v, want %q", got, IntentCoding.String())
+			if got := ev.details["intent_class"]; got != IntentToolUse.String() {
+				t.Fatalf("routing intent_class = %v, want %q", got, IntentToolUse.String())
 			}
 			if got := ev.details["complexity_source"]; got != "pipeline_task_complexity" {
 				t.Fatalf("complexity_source = %v, want pipeline_task_complexity", got)

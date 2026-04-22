@@ -34,6 +34,12 @@ func currentTurnToolResults(sess *Session) []ToolResultEntry {
 		if proof, ok := agenttools.ParseArtifactProof(msgs[i].Metadata); ok {
 			entry.ArtifactProof = proof
 		}
+		if proof, ok := agenttools.ParseArtifactReadProof(msgs[i].Metadata); ok {
+			entry.ReadProof = proof
+		}
+		if proof, ok := agenttools.ParseInspectionProof(msgs[i].Metadata); ok {
+			entry.Inspection = proof
+		}
 		results = append(results, entry)
 	}
 	return results
@@ -43,6 +49,18 @@ func toolResultEvidenceItems(results []ToolResultEntry) []string {
 	var items []string
 	for _, tr := range results {
 		if tr.ArtifactProof == nil {
+			if tr.ReadProof == nil {
+				continue
+			}
+			proof := tr.ReadProof
+			item := "[tool_read, canonical] " + proof.ArtifactKind + " " + proof.Path +
+				" sha256=" + proof.ContentSHA256
+			if proof.ExactContentIncluded && strings.TrimSpace(proof.Content) != "" {
+				item += " content=" + proof.Content
+			} else if strings.TrimSpace(proof.ContentPreview) != "" {
+				item += " preview=" + proof.ContentPreview
+			}
+			items = append(items, item)
 			continue
 		}
 		proof := tr.ArtifactProof
@@ -65,6 +83,28 @@ func toolResultArtifactProofs(results []ToolResultEntry) []agenttools.ArtifactPr
 			continue
 		}
 		proofs = append(proofs, *tr.ArtifactProof)
+	}
+	return proofs
+}
+
+func toolResultReadProofs(results []ToolResultEntry) []agenttools.ArtifactReadProof {
+	var proofs []agenttools.ArtifactReadProof
+	for _, tr := range results {
+		if tr.ReadProof == nil {
+			continue
+		}
+		proofs = append(proofs, *tr.ReadProof)
+	}
+	return proofs
+}
+
+func toolResultInspectionProofs(results []ToolResultEntry) []agenttools.InspectionProof {
+	var proofs []agenttools.InspectionProof
+	for _, tr := range results {
+		if tr.Inspection == nil {
+			continue
+		}
+		proofs = append(proofs, *tr.Inspection)
 	}
 	return proofs
 }

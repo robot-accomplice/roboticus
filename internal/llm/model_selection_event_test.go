@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"testing"
+	"time"
 
 	"roboticus/internal/core"
 )
@@ -25,6 +26,7 @@ func TestServiceComplete_RecordsModelSelectionFromActualRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
+	t.Cleanup(func() { svc.Drain(2 * time.Second) })
 	svc.providers["route-p"] = client
 
 	ctx := context.Background()
@@ -76,6 +78,7 @@ func TestRecordModelSelection_IsIdempotentPerTurn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
+	t.Cleanup(func() { svc.Drain(2 * time.Second) })
 
 	ctx := context.Background()
 	ctx = core.WithSessionID(ctx, "sess-1")

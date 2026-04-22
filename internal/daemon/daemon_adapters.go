@@ -157,8 +157,21 @@ func (a *capabilitySummaryAdapter) Summarize(ctx context.Context, sess *session.
 // can be written against the final shape once we surface embedding
 // errors upward (planned for the CEIL remediation pass).
 func (a *prunerAdapter) PruneTools(ctx context.Context, sess *session.Session) ([]llm.ToolDef, agenttools.ToolSearchStats, error) {
-	query := latestUserMessageContent(sess)
-	defs, stats := agenttools.SelectToolDefs(ctx, a.tools, a.embedClient, query, a.toolSearchCfg)
+	query := toolPruningQuery(sess)
+	cfg := a.toolSearchCfg
+	if sess != nil && len(sess.SourceArtifacts()) > 0 {
+		cfg.AlwaysInclude = appendAlwaysInclude(cfg.AlwaysInclude, "read_file")
+	}
+	if sess != nil && sess.TurnToolProfile() == "focused_inspection" {
+		cfg.AlwaysInclude = appendAlwaysInclude(cfg.AlwaysInclude, "glob_files", "list_directory", "read_file")
+	}
+	if sess != nil && sess.TurnToolProfile() == "focused_analysis_authoring" {
+		cfg.AlwaysInclude = appendAlwaysInclude(cfg.AlwaysInclude,
+			"inventory_projects", "list_directory", "bash", "search_files", "glob_files", "read_file",
+			"write_file", "edit_file", "get_runtime_context",
+		)
+	}
+	defs, stats := agenttools.SelectToolDefs(ctx, a.tools, a.embedClient, query, cfg)
 	return defs, stats, nil
 }
 
@@ -175,6 +188,41 @@ func latestUserMessageContent(sess *session.Session) string {
 		}
 	}
 	return ""
+}
+
+func toolPruningQuery(sess *session.Session) string {
+	base := latestUserMessageContent(sess)
+	if sess == nil {
+		return base
+	}
+	sources := sess.SourceArtifacts()
+	if len(sources) == 0 {
+		return base
+	}
+	return base + "\n\nAuthoritative source artifacts to read before answering: " + strings.Join(sources, ", ")
+}
+
+func appendAlwaysInclude(existing []string, names ...string) []string {
+	if len(names) == 0 {
+		return append([]string(nil), existing...)
+	}
+	seen := make(map[string]struct{}, len(existing)+len(names))
+	merged := make([]string, 0, len(existing)+len(names))
+	for _, name := range existing {
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		merged = append(merged, name)
+	}
+	for _, name := range names {
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		merged = append(merged, name)
+	}
+	return merged
 }
 
 func isIntrospectionQuery(query string) bool {
@@ -430,8 +478,12 @@ func buildAgentContext(ctx context.Context, sess *session.Session, store *db.Sto
 		selectedSet = true
 		ctxBuilder.SetTools(selectedDefs)
 	} else if tools != nil {
-		query := latestUserMessageContent(sess)
-		selectedDefs, searchStats = agenttools.SelectToolDefs(ctx, tools, embedClient, query, toolSearchCfg)
+		query := toolPruningQuery(sess)
+		cfg := toolSearchCfg
+		if len(sess.SourceArtifacts()) > 0 {
+			cfg.AlwaysInclude = appendAlwaysInclude(cfg.AlwaysInclude, "read_file")
+		}
+		selectedDefs, searchStats = agenttools.SelectToolDefs(ctx, tools, embedClient, query, cfg)
 		searchSource = "fallback"
 		selectedSet = true
 		ctxBuilder.SetTools(selectedDefs)
@@ -452,6 +504,9 @@ func buildAgentContext(ctx context.Context, sess *session.Session, store *db.Sto
 		selectedDefs,
 		latestUserMessageContent(sess),
 	)
+	cfg.InspectionTarget = sess.InspectionTargetSummary()
+	cfg.DestinationTarget = sess.DestinationTargetSummary()
+	cfg.ToolProfile = sess.TurnToolProfile()
 	systemPrompt := agent.BuildSystemPrompt(cfg)
 
 	// HMAC trust boundary: wrap system prompt so model output verification
@@ -641,6 +696,7 @@ func (a *executorAdapter) RunLoop(ctx context.Context, sess *session.Session) (s
 		Injection: a.injection,
 		Memory:    a.memMgr,
 		Context:   ctxBuilder,
+		Store:     a.store,
 	})
 
 	content, err := loop.Run(ctx, sess)
