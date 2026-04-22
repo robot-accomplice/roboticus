@@ -370,6 +370,7 @@ Blocking commands for feature-complete releases:
 | R-REL-05 | `roboticus.ai` sync succeeds from the Go release source and publishes matching metadata | site-sync dry run + deploy gate | L4 |
 | R-REL-06 | Public installer scripts install the Go-based runtime without changing the operator contract unexpectedly | installer smoke on Unix + Windows | L3/L4 |
 | R-REL-07 | Release-shaped CI/release/local helper builds stamp the CLI version into `cmd/internal/cmdutil.Version` and the daemon banner into `internal/daemon.version`, so built binaries do not report `dev` after release packaging | static build-contract tests + release gate | L2/L4 |
+| R-REL-08 | CI/release workflows use Node 24-capable GitHub Action majors, so release-branch jobs do not carry known Node 20 deprecation warnings | workflow review gate | L4 |
 
 ### R-AGENT: Agentic Retrieval Architecture (v1.0.5)
 
