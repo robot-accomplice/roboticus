@@ -188,6 +188,12 @@ older architecture docs had left too generic:
   are not allowed to accumulate on the release branch. Lint cleanup at this
   stage must remove unused or misleading code without inventing new control
   flow or changing the authoritative runtime behavior.
+- **Release workflows must not depend on deprecated GitHub Action runtimes.**
+  Active CI and release workflows are not allowed to keep Node 20-based action
+  majors or composite actions that vendor stale Node 20 dependencies into the
+  release gate. Workflow hygiene is part of release truth; noisy deprecation
+  warnings must be removed by upgrading or inlining those action paths before
+  the ceremony is considered clean.
 - **Focused profiles must derive from one complete tool-semantics map.** A
   bounded turn policy is not allowed to silently drop a legitimate inspection or
   read tool because that tool was never classified in the central semantics map.
