@@ -1,6 +1,9 @@
 package pipeline
 
-import "testing"
+import (
+	"os"
+	"testing"
+)
 
 func TestResolveInspectionTarget_DesktopVaultAlias(t *testing.T) {
 	resolution := ResolveInspectionTarget(
@@ -102,6 +105,10 @@ func TestResolveInspectionTarget_CodeFolderAlias(t *testing.T) {
 }
 
 func TestResolveInspectionTarget_TildeHomeAlias(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		t.Fatalf("UserHomeDir() failed: %v", err)
+	}
 	content := "give me the file distribution in the folder ~"
 	if !looksLikeFocusedInspectionTurn(content) {
 		t.Fatal("tilde home inspection should stay on focused inspection path")
@@ -112,14 +119,14 @@ func TestResolveInspectionTarget_TildeHomeAlias(t *testing.T) {
 		[]string{
 			"/Users/jmachen/Desktop/My Vault",
 			"/Users/jmachen/code",
-			"/Users/jmachen",
+			home,
 		},
 	)
 	if resolution.ClarificationRequired {
 		t.Fatal("tilde home alias should resolve without clarification")
 	}
-	if len(resolution.ResolvedPaths) != 1 || resolution.ResolvedPaths[0] != "/Users/jmachen" {
-		t.Fatalf("resolved paths = %v, want /Users/jmachen", resolution.ResolvedPaths)
+	if len(resolution.ResolvedPaths) != 1 || resolution.ResolvedPaths[0] != home {
+		t.Fatalf("resolved paths = %v, want %q", resolution.ResolvedPaths, home)
 	}
 }
 

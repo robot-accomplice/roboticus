@@ -29,6 +29,7 @@ func TestExecuteDelegation_UsesOrchestrationControlPlane(t *testing.T) {
 	pipe := New(PipelineDeps{
 		Store:    store,
 		Executor: &stubExecutor{response: "Found the evidence and wrote the final summary in a structured report."},
+		BGWorker: testutil.BGWorker(t, 1),
 	})
 	sess := session.New("sess-1", "duncan", "Duncan")
 
@@ -79,6 +80,7 @@ func TestExecuteDelegation_ThreadsIncompleteWorkflowBackToInference(t *testing.T
 	pipe := New(PipelineDeps{
 		Store:    store,
 		Executor: &stubExecutor{response: "Too short"},
+		BGWorker: testutil.BGWorker(t, 1),
 	})
 	sess := session.New("sess-1", "duncan", "Duncan")
 
