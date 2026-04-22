@@ -183,6 +183,11 @@ older architecture docs had left too generic:
   release workflow stamps, while the daemon banner continues to read from
   `internal/daemon.version`. A release-shaped binary that still reports `dev`
   is a deployment-truth defect, not harmless metadata drift.
+- **Release-gate hygiene must stay behavior-neutral.**
+  Dead helper seams, unused parser remnants, and mechanical staticcheck drift
+  are not allowed to accumulate on the release branch. Lint cleanup at this
+  stage must remove unused or misleading code without inventing new control
+  flow or changing the authoritative runtime behavior.
 - **Focused profiles must derive from one complete tool-semantics map.** A
   bounded turn policy is not allowed to silently drop a legitimate inspection or
   read tool because that tool was never classified in the central semantics map.

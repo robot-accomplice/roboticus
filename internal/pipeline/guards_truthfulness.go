@@ -258,21 +258,6 @@ func hasSuccessfulArtifactWriteEvidence(results []ToolResultEntry) bool {
 	return false
 }
 
-func hasExactArtifactWriteEvidence(results []ToolResultEntry) bool {
-	for _, tr := range results {
-		if !agenttools.WritesPersistentArtifact(tr.ToolName) {
-			continue
-		}
-		if toolResultSignalsFailure(tr) || tr.ArtifactProof == nil {
-			continue
-		}
-		if tr.ArtifactProof.ExactContentIncluded {
-			return true
-		}
-	}
-	return false
-}
-
 // --- PersonalityIntegrityGuard ---
 
 // PersonalityIntegrityGuard strips foreign AI identity boilerplate from

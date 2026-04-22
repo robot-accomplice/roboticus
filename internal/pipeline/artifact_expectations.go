@@ -72,7 +72,6 @@ var sourceArtifactRefPattern = regexp.MustCompile(`(?i)\b(?:read|inspect|open|pa
 
 const artifactContentDirectivePattern = `(?:with\s+content|(?:should\s+)?contain(?:ing)?\s+exactly)`
 
-var exactContentMarkerPattern = regexp.MustCompile(`(?i)` + artifactContentDirectivePattern + `\s*:?\s*`)
 var inlineExactArtifactPattern = regexp.MustCompile(`(?is)(?:\bfile\s+\d+\s*:\s*)?\b((?:[a-z0-9_][a-z0-9_.-]*/)*[a-z0-9_][a-z0-9_.-]*\.(?:md|markdown|txt|json|yaml|yml|toml))\b\s+(?:that\s+)?` + artifactContentDirectivePattern + `\s*:?\s*`)
 var ordinalExactContentPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?is)\b(?:the\s+)?first\b.{0,120}?\b` + artifactContentDirectivePattern + `\s*:?\s*`),

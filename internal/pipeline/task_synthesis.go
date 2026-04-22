@@ -401,10 +401,6 @@ func classifyComplexity(content string, sessionTurns int) string {
 	return "simple"
 }
 
-func looksLikeSingleStepAuthoringTask(lower string, subtaskCount int) bool {
-	return looksLikeBoundedAuthoringTask(lower) && boundedAuthoringArtifactCount(lower) <= 1
-}
-
 func looksLikeBoundedAuthoringTask(lower string) bool {
 	actionMarkers := []string{
 		"create", "write", "draft", "make", "add", "update", "edit",

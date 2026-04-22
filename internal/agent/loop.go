@@ -454,10 +454,6 @@ func (l *Loop) think(ctx context.Context, session *Session) (Action, error) {
 		}
 		l.terminate("loop terminated: same-route no-progress churn")
 		if nonTerminalFiller {
-			content := session.LastAssistantContent()
-			if content == "" {
-				content = "I stopped because repeated attempts on the same route were not making progress."
-			}
 			return ActionFinish, nil
 		}
 		session.AddAssistantMessage(resp.Content, nil)

@@ -106,9 +106,7 @@ func (t *SSETransport) listenSSE(ctx context.Context) {
 			eventName = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
 		case strings.HasPrefix(line, "data:"):
 			data := strings.TrimPrefix(line, "data:")
-			if strings.HasPrefix(data, " ") {
-				data = data[1:]
-			}
+			data = strings.TrimPrefix(data, " ")
 			trimmed := strings.TrimSpace(data)
 			if trimmed == "" || trimmed == "[DONE]" {
 				continue

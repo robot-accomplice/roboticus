@@ -93,8 +93,8 @@ func (p *Pipeline) storeTurnDiagnostics(ctx context.Context, dr *TurnDiagnostics
 		`SELECT id FROM turn_diagnostics WHERE turn_id = ? LIMIT 1`,
 		summary.TurnID,
 	).Scan(&existingID)
-	switch {
-	case err == nil:
+	switch err {
+	case nil:
 		_, err = p.store.ExecContext(ctx,
 			`UPDATE turn_diagnostics SET
 				session_id = ?, channel = ?, status = ?, final_model = ?, final_provider = ?, total_ms = ?,
@@ -108,7 +108,7 @@ func (p *Pipeline) storeTurnDiagnostics(ctx context.Context, dr *TurnDiagnostics
 			summary.ResourceSnapshotJSON, summary.PrimaryDiagnosis, summary.DiagnosisConfidence, summary.UserNarrative, summary.OperatorNarrative, summary.RecommendationsJSON,
 			summary.TurnID,
 		)
-	case err == sql.ErrNoRows:
+	case sql.ErrNoRows:
 		_, err = p.store.ExecContext(ctx,
 			`INSERT INTO turn_diagnostics (
 				id, turn_id, session_id, channel, status, final_model, final_provider, total_ms,

@@ -768,10 +768,10 @@ func (p *Pipeline) loadSession(ctx context.Context, input Input) (*Session, erro
 		`SELECT id FROM sessions WHERE id = ? LIMIT 1`,
 		input.SessionID,
 	).Scan(&existingID)
-	switch {
-	case err == nil:
+	switch err {
+	case nil:
 		// continue
-	case err == sql.ErrNoRows:
+	case sql.ErrNoRows:
 		return nil, core.NewError(core.ErrNotFound, "session not found")
 	default:
 		return nil, core.WrapError(core.ErrDatabase, "failed to verify session", err)

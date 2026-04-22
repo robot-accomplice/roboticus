@@ -128,7 +128,7 @@ func TestCompactContext_SemanticCompressPreservesToolExchangeAtomicity(t *testin
 
 	verbatimTokens := estimateTokens(msgs)
 	trimmedTokens := estimateTokens(selectiveTrim(msgs))
-	if !(trimmedTokens < verbatimTokens) {
+	if trimmedTokens >= verbatimTokens {
 		t.Fatalf("expected selective trim to reduce tokens: verbatim=%d trimmed=%d", verbatimTokens, trimmedTokens)
 	}
 	// Force stage 3: below selective trim, above semantic compress.
