@@ -114,6 +114,19 @@ func TestWriteFileTool_Execute(t *testing.T) {
 	if string(data) != "data" {
 		t.Errorf("written = %q", string(data))
 	}
+	proof, ok := ParseArtifactProof(result.Metadata)
+	if !ok {
+		t.Fatal("expected artifact proof metadata")
+	}
+	if proof.Path != "out.txt" || proof.ArtifactKind != "workspace_file" {
+		t.Fatalf("proof = %+v", proof)
+	}
+	if !proof.ExactContentIncluded || proof.Content != "data" {
+		t.Fatalf("proof exact content = %+v", proof)
+	}
+	if !strings.Contains(result.Output, `"proof_type":"artifact_write"`) {
+		t.Fatalf("result output should carry structured proof, got %q", result.Output)
+	}
 }
 
 func TestObsidianWriteTool_Execute(t *testing.T) {
@@ -137,6 +150,16 @@ func TestObsidianWriteTool_Execute(t *testing.T) {
 	}
 	if string(data) != "# Notes" {
 		t.Fatalf("written note = %q, want %q", string(data), "# Notes")
+	}
+	proof, ok := ParseArtifactProof(result.Metadata)
+	if !ok {
+		t.Fatal("expected artifact proof metadata")
+	}
+	if proof.Path != "Projects/Daily Note.md" || proof.ArtifactKind != "obsidian_note" {
+		t.Fatalf("proof = %+v", proof)
+	}
+	if !proof.ExactContentIncluded || proof.Content != "# Notes" {
+		t.Fatalf("proof exact content = %+v", proof)
 	}
 }
 

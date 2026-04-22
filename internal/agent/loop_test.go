@@ -676,6 +676,143 @@ func TestLoop_SuppressesReplayOfSuccessfulSideEffectingToolCalls(t *testing.T) {
 	}
 }
 
+func TestLoop_SuppressesReplayOfSuccessfulSideEffectingToolCallsByProtectedResource(t *testing.T) {
+	mock := &mockCompleter{
+		responses: []*llm.Response{
+			{
+				Model:    "kimi-k2-turbo-preview",
+				Provider: "moonshot",
+				ToolCalls: []llm.ToolCall{{
+					ID:   "call-1",
+					Type: "function",
+					Function: llm.ToolCallFunc{
+						Name:      "obsidian_write",
+						Arguments: `{"path":"note.md","content":"# first"}`,
+					},
+				}},
+			},
+			{
+				Model:    "kimi-k2-turbo-preview",
+				Provider: "moonshot",
+				ToolCalls: []llm.ToolCall{{
+					ID:   "call-2",
+					Type: "function",
+					Function: llm.ToolCallFunc{
+						Name:      "obsidian_write",
+						Arguments: `{"path":"note.md","content":"# second"}`,
+					},
+				}},
+			},
+			{Model: "kimi-k2-turbo-preview", Provider: "moonshot", Content: "Done."},
+		},
+	}
+	reg := NewToolRegistry()
+	tool := &replayProtectedTestTool{}
+	reg.Register(tool)
+	recorder := &recordingToolCallRecorder{}
+	deps := LoopDeps{
+		LLM:      mock,
+		Tools:    reg,
+		Recorder: recorder,
+		Context:  NewContextBuilder(DefaultContextConfig()),
+	}
+	loop := NewLoop(DefaultLoopConfig(), deps)
+
+	session := NewSession("sess-1", "agent-1", "TestBot")
+	session.AddUserMessage("write and then rewrite the note")
+	obs := &recordingObserver{}
+	ctx := llm.WithInferenceObserver(core.WithTurnID(context.Background(), "turn-replay-resource"), obs)
+
+	result, err := loop.Run(ctx, session)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "Done." {
+		t.Fatalf("result = %q, want Done.", result)
+	}
+	if tool.calls != 1 {
+		t.Fatalf("tool Execute called %d times, want 1", tool.calls)
+	}
+	if len(recorder.records) != 2 {
+		t.Fatalf("records = %d, want 2", len(recorder.records))
+	}
+	if recorder.records[1].Status != "suppressed_replay" {
+		t.Fatalf("second record status = %q, want suppressed_replay", recorder.records[1].Status)
+	}
+	found := false
+	for _, ev := range obs.events {
+		if ev.eventType == "tool_call_replay_suppressed" {
+			found = true
+			if got := ev.details["protected_resource"]; got != "note.md" {
+				t.Fatalf("protected_resource = %v, want note.md", got)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected tool_call_replay_suppressed event")
+	}
+}
+
+func TestLoop_SuppressesReplayFromSessionHistoryAcrossFreshLoop(t *testing.T) {
+	mock := &mockCompleter{
+		responses: []*llm.Response{
+			{
+				Model:    "kimi-k2-turbo-preview",
+				Provider: "moonshot",
+				ToolCalls: []llm.ToolCall{{
+					ID:   "call-2",
+					Type: "function",
+					Function: llm.ToolCallFunc{
+						Name:      "obsidian_write",
+						Arguments: `{"path":"note.md","content":"# second"}`,
+					},
+				}},
+			},
+			{Model: "kimi-k2-turbo-preview", Provider: "moonshot", Content: "Done."},
+		},
+	}
+	reg := NewToolRegistry()
+	tool := &replayProtectedTestTool{}
+	reg.Register(tool)
+	recorder := &recordingToolCallRecorder{}
+	deps := LoopDeps{
+		LLM:      mock,
+		Tools:    reg,
+		Recorder: recorder,
+		Context:  NewContextBuilder(DefaultContextConfig()),
+	}
+	loop := NewLoop(DefaultLoopConfig(), deps)
+
+	session := NewSession("sess-1", "agent-1", "TestBot")
+	session.AddUserMessage("write the note")
+	session.AddAssistantMessage("", []llm.ToolCall{{
+		ID:   "call-1",
+		Type: "function",
+		Function: llm.ToolCallFunc{
+			Name:      "obsidian_write",
+			Arguments: `{"path":"note.md","content":"# first"}`,
+		},
+	}})
+	proof := agenttools.NewArtifactProof("obsidian_note", "note.md", "# first", false)
+	session.AddToolResultWithMetadata("call-1", "obsidian_write", proof.Output(), proof.Metadata(), false)
+	obs := &recordingObserver{}
+	ctx := llm.WithInferenceObserver(core.WithTurnID(context.Background(), "turn-replay-history"), obs)
+
+	result, err := loop.Run(ctx, session)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "Done." {
+		t.Fatalf("result = %q, want Done.", result)
+	}
+	if tool.calls != 0 {
+		t.Fatalf("tool Execute called %d times, want 0 because replay should be suppressed from history", tool.calls)
+	}
+	if len(recorder.records) == 0 || recorder.records[0].Status != "suppressed_replay" {
+		t.Fatalf("expected suppressed_replay record, got %+v", recorder.records)
+	}
+}
+
 func TestLoop_TerminatesExploratoryToolChurnOnDirectExecutionTurns(t *testing.T) {
 	mock := &mockCompleter{
 		responses: []*llm.Response{

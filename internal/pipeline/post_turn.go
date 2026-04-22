@@ -188,6 +188,7 @@ func (p *Pipeline) reflectOnTurn(ctx context.Context, turnID, userContent string
 
 	turnDuration := p.loadReflectionTurnDuration(ctx, turnID, toolEvents)
 	selectedModel, params := p.loadReflectionInferenceArtifacts(ctx, turnID)
+	turnStatus := p.loadReflectionTurnStatus(ctx, turnID)
 
 	// Enriched reflection: pass evidence items and verifier outcome so the
 	// summary captures evidence refs, fix patterns, failed hypotheses, and
@@ -200,6 +201,7 @@ func (p *Pipeline) reflectOnTurn(ctx context.Context, turnID, userContent string
 		AssistantAnswer:     session.LastAssistantContent(),
 		ToolEvents:          toolEvents,
 		EvidenceItems:       verifyCtx.EvidenceItems,
+		TurnStatus:          turnStatus,
 		VerifierPassed:      verifyResult.Passed,
 		ErrorMessages:       errorMessages,
 		Duration:            turnDuration,
@@ -243,6 +245,24 @@ func (p *Pipeline) reflectOnTurn(ctx context.Context, turnID, userContent string
 			},
 		)
 	}
+}
+
+func (p *Pipeline) loadReflectionTurnStatus(ctx context.Context, turnID string) string {
+	if p.store == nil || strings.TrimSpace(turnID) == "" {
+		return ""
+	}
+	var status string
+	if err := p.store.QueryRowContext(ctx,
+		`SELECT COALESCE(status, '')
+		   FROM turn_diagnostics
+		  WHERE turn_id = ?
+		  ORDER BY created_at DESC, rowid DESC
+		  LIMIT 1`,
+		turnID,
+	).Scan(&status); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(status)
 }
 
 func (p *Pipeline) loadReflectionToolEvents(ctx context.Context, turnID string) ([]agentmemory.ToolEvent, []string) {

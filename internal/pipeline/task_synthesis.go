@@ -83,7 +83,7 @@ func SynthesizeTaskState(content string, sessionTurns int, agentSkills []string)
 
 func shouldRetrieveForTurn(intent, content string, sessionTurns int, capabilityFit float64, missingSkills []string, plannedAction, complexity string) (bool, string, bool) {
 	lower := strings.ToLower(content)
-	proceduralUncertainty := appliedLearningHelpful(intent, lower, capabilityFit, missingSkills, plannedAction, complexity)
+	proceduralUncertainty := appliedLearningHelpful(intent, content, lower, capabilityFit, missingSkills, plannedAction, complexity)
 
 	if intent == "question" {
 		return true, "question_default", proceduralUncertainty
@@ -105,8 +105,11 @@ func shouldRetrieveForTurn(intent, content string, sessionTurns int, capabilityF
 	return false, "none", proceduralUncertainty
 }
 
-func appliedLearningHelpful(intent, lower string, capabilityFit float64, missingSkills []string, plannedAction, complexity string) bool {
+func appliedLearningHelpful(intent, content, lower string, capabilityFit float64, missingSkills []string, plannedAction, complexity string) bool {
 	if intent != "task" && intent != "code" {
+		return false
+	}
+	if len(ParseExpectedArtifactSpecs(content)) > 0 {
 		return false
 	}
 	if looksLikeBoundedAuthoringTask(lower) {
@@ -297,6 +300,13 @@ func containsIntentMarker(lower, marker string) bool {
 func classifyComplexity(content string, sessionTurns int) string {
 	words := len(strings.Fields(content))
 	lower := strings.ToLower(content)
+	expectedArtifacts := ParseExpectedArtifactSpecs(content)
+	if len(expectedArtifacts) > 0 {
+		if len(expectedArtifacts) > 1 {
+			return "moderate"
+		}
+		return "simple"
+	}
 	artifactCount := boundedAuthoringArtifactCount(lower)
 
 	// Direct artifact authoring/editing requests should not get upcast on word
@@ -351,10 +361,11 @@ func looksLikeBoundedAuthoringTask(lower string) bool {
 	artifactMarkers := []string{
 		"note", "document", "doc", "markdown", ".md", "file", "vault", "obsidian",
 	}
-	if !containsAnyMarker(lower, actionMarkers) || !containsAnyMarker(lower, artifactMarkers) {
+	artifactCount := boundedAuthoringArtifactCount(lower)
+	hasArtifactSignal := containsAnyMarker(lower, artifactMarkers) || artifactCount > 0
+	if !containsAnyMarker(lower, actionMarkers) || !hasArtifactSignal {
 		return false
 	}
-	artifactCount := boundedAuthoringArtifactCount(lower)
 	if artifactCount == 0 || artifactCount > 3 {
 		return false
 	}
@@ -367,7 +378,7 @@ func looksLikeBoundedAuthoringTask(lower string) bool {
 	return !containsAnyMarker(lower, complexityEscalators)
 }
 
-var authoringFilePattern = regexp.MustCompile(`\b[a-z0-9][a-z0-9._-]*\.(md|markdown|txt|json|yaml|yml|toml)\b`)
+var authoringFilePattern = regexp.MustCompile(`\b(?:[a-z0-9_][a-z0-9_.-]*/)*[a-z0-9_][a-z0-9_.-]*\.(md|markdown|txt|json|yaml|yml|toml)\b`)
 
 func boundedAuthoringArtifactCount(lower string) int {
 	matches := authoringFilePattern.FindAllString(lower, -1)

@@ -4,6 +4,8 @@
 package session
 
 import (
+	"encoding/json"
+
 	"roboticus/internal/core"
 	"roboticus/internal/llm"
 )
@@ -236,12 +238,18 @@ func (s *Session) AddAssistantMessage(content string, toolCalls []llm.ToolCall) 
 
 // AddToolResult appends a tool result message.
 func (s *Session) AddToolResult(callID, toolName, output string, isError bool) {
+	s.AddToolResultWithMetadata(callID, toolName, output, nil, isError)
+}
+
+// AddToolResultWithMetadata appends a tool result message with optional typed
+// metadata preserved for later verification/RCA consumers.
+func (s *Session) AddToolResultWithMetadata(callID, toolName, output string, metadata json.RawMessage, isError bool) {
 	content := output
 	if isError {
 		content = "Error: " + output
 	}
 	s.messages = append(s.messages, llm.Message{
-		Role: "tool", Content: content, ToolCallID: callID, Name: toolName,
+		Role: "tool", Content: content, ToolCallID: callID, Name: toolName, Metadata: metadata,
 	})
 	remaining := s.pendingCalls[:0]
 	for _, tc := range s.pendingCalls {

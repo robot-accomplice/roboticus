@@ -123,7 +123,11 @@ func (t *WriteFileTool) Execute(_ context.Context, params string, tctx *Context)
 		return nil, fmt.Errorf("failed to write file: %w", err)
 	}
 
-	return &Result{Output: fmt.Sprintf("wrote %d bytes to %s", len(args.Content), args.Path)}, nil
+	proof := NewArtifactProof("workspace_file", args.Path, args.Content, args.Append)
+	return &Result{
+		Output:   proof.Output(),
+		Metadata: proof.Metadata(),
+	}, nil
 }
 
 // --- Obsidian Write Tool ---
@@ -196,8 +200,10 @@ func (t *ObsidianWriteTool) Execute(_ context.Context, params string, tctx *Cont
 		return nil, fmt.Errorf("failed to write note: %w", err)
 	}
 
+	proof := NewArtifactProof("obsidian_note", relPath, args.Content, args.Append)
 	return &Result{
-		Output: fmt.Sprintf("wrote %d bytes to Obsidian note %s", len(args.Content), relPath),
+		Output:   proof.Output(),
+		Metadata: proof.Metadata(),
 	}, nil
 }
 

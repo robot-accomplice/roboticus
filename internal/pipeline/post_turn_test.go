@@ -244,6 +244,13 @@ func TestReflectOnTurn_AppendsProceduralLearningCapturedEvent(t *testing.T) {
 	live := session.New(sess.ID, sess.AgentID, "TestBot")
 	live.AddUserMessage("Create a reusable runbook note and capture what worked.")
 	live.AddAssistantMessage("Created the runbook note successfully.", nil)
+	live.SetVerificationEvidence(&session.VerificationEvidence{
+		HasEvidence: true,
+		HasGaps:     false,
+		EvidenceItems: []string{
+			"[tool_artifact, canonical] obsidian_note Vault/runbook.md sha256=abc",
+		},
+	})
 
 	p.reflectOnTurn(ctx, "turn-reflect-event", "Create a reusable runbook note and capture what worked.", live, ExecutiveGrowthResult{})
 
@@ -260,8 +267,65 @@ func TestReflectOnTurn_AppendsProceduralLearningCapturedEvent(t *testing.T) {
 	if !strings.Contains(detailsJSON, `"promotion_state":"captured_only"`) {
 		t.Fatalf("details_json = %q, want captured_only promotion state", detailsJSON)
 	}
-	if !strings.Contains(detailsJSON, `"outcome":"success"`) {
-		t.Fatalf("details_json = %q, want success outcome", detailsJSON)
+	if !strings.Contains(detailsJSON, `"outcome":"partial"`) {
+		t.Fatalf("details_json = %q, want partial outcome when reusable evidence is captured without exact proof authority", detailsJSON)
+	}
+}
+
+func TestReflectOnTurn_UsesTurnDiagnosticsStatusForOutcomePolarity(t *testing.T) {
+	store := testutil.TempStore(t)
+	p := &Pipeline{store: store}
+	ctx := context.Background()
+
+	sess, err := store.FindOrCreateSession(ctx, "agent-reflect-degraded", "scope:reflect")
+	if err != nil {
+		t.Fatalf("FindOrCreateSession: %v", err)
+	}
+	if _, err := store.ExecContext(ctx,
+		`INSERT INTO turns (id, session_id) VALUES (?, ?)`,
+		"turn-reflect-degraded", sess.ID,
+	); err != nil {
+		t.Fatalf("insert turn: %v", err)
+	}
+	if _, err := store.ExecContext(ctx,
+		`INSERT INTO turn_diagnostics (id, turn_id, session_id, channel, status)
+		 VALUES (?, ?, ?, 'api', 'degraded')`,
+		"td-reflect-degraded", "turn-reflect-degraded", sess.ID,
+	); err != nil {
+		t.Fatalf("insert turn diagnostics: %v", err)
+	}
+	if _, err := store.ExecContext(ctx,
+		`INSERT INTO tool_calls (id, turn_id, tool_name, input, output, status, duration_ms)
+		 VALUES ('tc-rd-1', 'turn-reflect-degraded', 'write_file', '{}', 'ok', 'success', 50)`,
+	); err != nil {
+		t.Fatalf("insert tool call: %v", err)
+	}
+
+	live := session.New(sess.ID, sess.AgentID, "TestBot")
+	live.AddUserMessage("Create the rollout note exactly.")
+	live.AddAssistantMessage("Created the rollout note successfully.", nil)
+	live.SetVerificationEvidence(&session.VerificationEvidence{
+		HasEvidence: true,
+		HasGaps:     true,
+		EvidenceItems: []string{
+			"[tool_artifact, canonical] workspace_file tmp/out.txt sha256=abc",
+		},
+	})
+
+	p.reflectOnTurn(ctx, "turn-reflect-degraded", "Create the rollout note exactly.", live, ExecutiveGrowthResult{})
+
+	var detailsJSON string
+	if err := store.QueryRowContext(ctx,
+		`SELECT details_json
+		   FROM turn_diagnostic_events
+		  WHERE turn_id = ? AND event_type = 'procedural_learning_captured'
+		  ORDER BY seq DESC LIMIT 1`,
+		"turn-reflect-degraded",
+	).Scan(&detailsJSON); err != nil {
+		t.Fatalf("query procedural learning event: %v", err)
+	}
+	if !strings.Contains(detailsJSON, `"outcome":"partial"`) {
+		t.Fatalf("details_json = %q, want partial outcome", detailsJSON)
 	}
 }
 

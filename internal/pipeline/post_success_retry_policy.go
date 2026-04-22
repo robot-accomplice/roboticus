@@ -110,7 +110,8 @@ func verifierRetryRemainsBlockingAfterProgress(code string) bool {
 	case "unsupported_subgoal",
 		"missing_action_plan",
 		"abandoned_unresolved_question",
-		"stopping_criteria_unmet":
+		"stopping_criteria_unmet",
+		"artifact_content_mismatch":
 		return true
 	default:
 		return false

@@ -39,7 +39,7 @@ type TurnEnvelopePolicy struct {
 
 func DeriveTurnEnvelopePolicy(content string, synthesis TaskSynthesis, sessionTurns int) TurnEnvelopePolicy {
 	words := len(strings.Fields(strings.TrimSpace(content)))
-	requiresArtifactWrite := looksLikeBoundedAuthoringTask(strings.ToLower(content))
+	requiresArtifactWrite := len(ParseExpectedArtifactSpecs(content)) > 0 || looksLikeBoundedAuthoringTask(strings.ToLower(content))
 	allowAuthorityMutation := requiresExplicitAuthorityMutation(content)
 
 	switch {

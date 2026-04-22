@@ -79,9 +79,11 @@ This file follows the same C4 conventions used elsewhere in the repo:
 - once a side-effecting tool call has succeeded, the loop is not allowed to
   execute the same call again in the same turn unless that tool explicitly
   declares replay safety; replay protection must come from the central tool
-  semantics map, not one-off loop heuristics, and replay suppression must be
-  surfaced unchanged through canonical diagnostics and operator RCA rather
-  than inferred later from side effects that did not happen
+  semantics map, not one-off loop heuristics. Replay identity must resolve a
+  semantics-derived protected resource/effect fingerprint rather than relying
+  on raw argument equality alone, and replay suppression must be surfaced
+  unchanged through canonical diagnostics and operator RCA rather than
+  inferred later from side effects that did not happen
 - procedural uncertainty is not allowed to stop at “retrieve or don’t
   retrieve”; when a turn produces a novel procedural success, failure, or
   mixed outcome, distillation has to preserve that result with reusable
@@ -126,6 +128,34 @@ This file follows the same C4 conventions used elsewhere in the repo:
   canonical RCA must show the blocked tool, the exploration streak, and
   `exploratory_tool_churn` instead of forcing operators to infer the loop from
   repeated tool rows
+- exact-content artifact proof is write-boundary truth, not verifier
+  guesswork. File/note/document-writing tools must emit one typed
+  artifact-proof payload containing path, bytes, content hash, and
+  exact-content evidence when safely representable. Session history must
+  preserve that payload as tool-result metadata, and guard/verifier/RCA
+  consumers must project that same typed proof forward instead of reparsing
+  human-readable output strings. On direct authoring turns, proven artifact
+  writes are primary post-execution evidence; stale retrieval gaps or
+  contradictions are not allowed to override that proof and degrade a turn
+  that has already established exact artifact truth
+- expected exact artifact specs are prompt-boundary truth for bounded
+  authoring. If the user explicitly names one to three artifacts and says they
+  should contain exact content, the pipeline must parse that expectation once,
+  including equivalent directive forms such as `containing exactly` and `with
+  content`, resolve relative artifact names against any explicit container
+  directory in the prompt, reuse it for turn sizing and decomposition, and
+  compare it directly against typed write proof. Embedded artifact bodies are
+  not subtasks, and trailing post-write/reporting directives are not part of
+  the artifact body. Exact-content mismatch remains execution-critical after
+  progress; it is not a narrative-only verifier concern that can be suppressed
+- verifier-triggered rewrites are still subject to verification. A revised
+  answer produced after verifier retry must be re-verified before finalization,
+  and an exhausted retry must degrade to an honest verification-grounded
+  response instead of promoting a still-unverified success claim
+- learning/reuse capture must classify outcome from the final turn
+  disposition and verifier result, not from tool success alone. A degraded
+  turn with successful writes is mixed-result experience, not success-grade
+  procedural knowledge
 - lifecycle policy is not allowed to stop at admission filters; `niche` and
   `under_scrutiny` models must be actively demoted on ordinary operator-facing
   light/standard turns unless the request shape actually matches the niche

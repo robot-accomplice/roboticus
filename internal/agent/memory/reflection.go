@@ -272,6 +272,7 @@ type EpisodeInput struct {
 	AssistantAnswer     string
 	ToolEvents          []ToolEvent
 	EvidenceItems       []string // retrieved-evidence items that reached the model
+	TurnStatus          string
 	VerifierPassed      bool
 	ErrorMessages       []string // stderr / failure outputs captured from tool calls
 	Duration            time.Duration
@@ -303,6 +304,7 @@ func AnalyzeEpisode(input EpisodeInput) *EpisodeSummary {
 		}
 	}
 
+	summary.Outcome = classifyEpisodeOutcome(summary.Outcome, input)
 	summary.VerifierPassed = input.VerifierPassed
 	summary.ModelUsed = strings.TrimSpace(input.ModelUsed)
 	summary.ReactTurns = input.ReactTurns
@@ -322,6 +324,49 @@ func AnalyzeEpisode(input EpisodeInput) *EpisodeSummary {
 	summary.OutcomePatterns = extractOutcomePatterns(summary)
 
 	return summary
+}
+
+func classifyEpisodeOutcome(base string, input EpisodeInput) string {
+	normalizedBase := strings.TrimSpace(base)
+	if normalizedBase == "" {
+		normalizedBase = "conversation"
+	}
+	status := strings.ToLower(strings.TrimSpace(input.TurnStatus))
+	switch status {
+	case "failed", "error":
+		return "failure"
+	case "degraded":
+		if hasEpisodeProgress(input) {
+			return "partial"
+		}
+		return "failure"
+	case "ok":
+		if !input.VerifierPassed {
+			if hasEpisodeProgress(input) {
+				return "partial"
+			}
+			return "failure"
+		}
+	}
+	if !input.VerifierPassed {
+		if hasEpisodeProgress(input) {
+			return "partial"
+		}
+		return "failure"
+	}
+	return normalizedBase
+}
+
+func hasEpisodeProgress(input EpisodeInput) bool {
+	if len(input.EvidenceItems) > 0 {
+		return true
+	}
+	for _, ev := range input.ToolEvents {
+		if ev.Success {
+			return true
+		}
+	}
+	return false
 }
 
 func extractOutcomePatterns(summary *EpisodeSummary) []EpisodeOutcomePattern {

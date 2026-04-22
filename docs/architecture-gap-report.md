@@ -177,10 +177,13 @@ older architecture docs had left too generic:
   effect, duplicate execution is a correctness risk rather than a mere latency
   concern. Replay protection must be decided from the same authoritative tool
   semantics map used by turn shaping, not from ad hoc name checks in the loop.
-  That protection is not allowed to remain an invisible loop detail: canonical
-  diagnostics and operator RCA must expose replay suppression count, the
-  protected tool/resource, and the suppression reason from the same persisted
-  execution fact.
+  Replay identity is also not allowed to collapse to raw argument equality:
+  side-effecting tools must resolve one semantics-derived protected
+  resource/effect fingerprint, with typed artifact proof taking precedence
+  after a successful write. That protection is not allowed to remain an
+  invisible loop detail: canonical diagnostics and operator RCA must expose
+  replay suppression count, the protected tool/resource, and the suppression
+  reason from the same persisted execution fact.
 - **Procedural uncertainty should be allowed to pull applied memory before the
   model starts exploring.**
   Retrieval gating is not allowed to consider only continuity, evidence, and
@@ -227,6 +230,38 @@ older architecture docs had left too generic:
   exploration streak count, and the `exploratory_tool_churn` termination cause
   so operators can see that the framework stopped itself instead of blaming the
   model for an infinite research loop.
+- **Exact-content artifact proof must originate once at the write boundary and
+  survive into verification unchanged.**
+  File/note/document-writing tools are not allowed to collapse successful
+  artifact creation into a byte-count string and force guards, verifier, RCA,
+  or the model itself to reverse-engineer what was written from lossy text. The
+  write boundary must emit one typed artifact-proof payload containing at least
+  artifact kind, path, bytes, content hash, and exact-content evidence when the
+  write is small enough to preserve it safely. Session history must preserve
+  that proof as typed tool-result metadata, and guard/verifier context must
+  project that same proof forward instead of reparsing ad hoc strings. On
+  direct authoring turns, successful artifact proof is the primary
+  post-execution evidence for certainty checks; stale pre-inference retrieval
+  gaps or contradictions are not allowed to outweigh proven artifact writes and
+  force a degraded “cannot guarantee integrity” answer after the system already
+  has exact write evidence.
+- **Expected exact artifact specs must also be parsed once and reused across
+  turn control, decomposition, and verification.**
+  When a prompt explicitly names one to three artifacts and says they should
+  contain exact content — including equivalent directive forms such as
+  `containing exactly` and `with content` — that expectation is not allowed to
+  be rediscovered by separate lexical heuristics in task synthesis,
+  decomposition, turn-envelope policy, guard policy, and verifier logic. The
+  pipeline must parse one bounded expected-artifact spec artifact from the
+  prompt, resolve relative artifact names against any explicit container
+  directory named in that same prompt, reuse that same typed expectation to
+  keep the turn on the focused authoring path, prevent embedded artifact bodies
+  from inflating decomposition, cut exact artifact bodies off before trailing
+  post-artifact follow-up directives, compare it directly against typed write
+  proof, and re-verify any verifier-triggered rewrite before finalization.
+  Exact-content mismatch is an execution-critical failure, not a narrative
+  concern, and must remain retry-blocking even after successful tool-backed
+  progress.
 - **Novel procedural experience must be captured with future reuse in mind.**
   Once the framework learns that a workflow succeeded, failed, or only
   partially worked, that outcome is not allowed to remain buried in one-off
@@ -236,7 +271,10 @@ older architecture docs had left too generic:
   but also “did it work.” RCA must be able to show when a novel experience was
   judged reusable, which outcome polarity was captured, and whether the system
   merely stored an episodic lesson or promoted reusable procedural knowledge
-  for future turns. Those facts are not allowed to remain detail-only side
+  for future turns. Final turn disposition and verifier result must remain
+  authoritative for that polarity; a degraded or verifier-failed turn is not
+  allowed to be captured as `success` just because the underlying tool calls
+  happened to succeed. Those facts are not allowed to remain detail-only side
   notes: the canonical RCA summary and the operator flow must treat
   pre-inference applied-learning and post-turn reuse capture as first-class
   causal facts in the same decision narrative as task, routing, execution,

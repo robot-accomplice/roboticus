@@ -191,11 +191,7 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 	// Lightweight verifier pass: if the answer ignores clear evidence gaps,
 	// contradictions, or multi-part coverage, request one revision before we
 	// persist the assistant message.
-	verifyCtx := BuildVerificationContext(session)
-	verifyCtx.CertaintyClassifier = p.certaintyClass
-	verifyResult := VerifyResponse(result, verifyCtx)
-	AnnotateVerifierTrace(tr, verifyResult)
-	verifySummary := SummarizeVerification(verifyResult)
+	verifyCtx, verifyResult, verifySummary := p.verifyAssistantResult(session, result, tr)
 	verifyRetryDisposition := decideVerifierRetryAfterProgress(verifyResult, verifyCtx, executionProgressFromGuardContext(p.buildGuardContext(session)))
 	if !verifyResult.Passed && verifyRetryDisposition.Allow {
 		policy = p.maybeExpandTurnEnvelope(ctx, session, policy, verifyResult, dr)
@@ -223,6 +219,20 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 		retryContent, retryTurns, retryErr := p.executor.RunLoop(ctx, session)
 		if retryErr != nil {
 			log.Debug().Err(retryErr).Msg("verifier retry inference failed, using pre-verifier result")
+			if dr != nil {
+				dr.RecordEvent("verifier_retry_failed", "error",
+					"verifier retry failed before a valid final answer was produced",
+					"The system attempted a verifier-requested rewrite, but the retry itself failed, so the final answer was downgraded to an honest verification-grounded response.",
+					map[string]any{
+						"issues":      verifyResult.RetryMessage(),
+						"issue_codes": verifySummary.IssueCodes,
+						"reason":      retryErr.Error(),
+					},
+				)
+				p.storeTurnDiagnostics(ctx, dr)
+			}
+			result = verifierFinalizationMessage(verifyResult)
+			session.AddAssistantMessage(result, nil)
 		} else {
 			turns += retryTurns
 			if activeGuards != nil {
@@ -230,7 +240,34 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 				finalGuardResult = activeGuards.ApplyFullWithContext(retryContent, guardCtx)
 				retryContent = finalGuardResult.Content
 			}
-			result = retryContent
+			_, retryVerifyResult, retryVerifySummary := p.verifyAssistantResult(session, retryContent, tr)
+			if !retryVerifyResult.Passed {
+				if dr != nil {
+					dr.RecordEvent("verifier_retry_rechecked", "error",
+						"verifier retry still failed final verification",
+						"The revised answer was checked again before finalization and still did not satisfy verification requirements, so the final operator-facing response was downgraded to an honest verification-grounded statement.",
+						map[string]any{
+							"issues":      retryVerifyResult.RetryMessage(),
+							"issue_codes": retryVerifySummary.IssueCodes,
+						},
+					)
+					p.storeTurnDiagnostics(ctx, dr)
+				}
+				result = verifierFinalizationMessage(retryVerifyResult)
+				session.AddAssistantMessage(result, nil)
+			} else {
+				if dr != nil {
+					dr.RecordEvent("verifier_retry_rechecked", "ok",
+						"verifier retry passed final verification",
+						"The revised answer was re-verified before finalization and satisfied the verification requirements.",
+						map[string]any{
+							"issue_codes": retryVerifySummary.IssueCodes,
+						},
+					)
+					p.storeTurnDiagnostics(ctx, dr)
+				}
+				result = retryContent
+			}
 		}
 	} else if !verifyResult.Passed && dr != nil {
 		progress := executionProgressFromGuardContext(p.buildGuardContext(session))
@@ -327,6 +364,14 @@ func concreteDiagnosticsRecorderFromContext(ctx context.Context) *TurnDiagnostic
 	}
 	dr, _ := v.(*TurnDiagnosticsRecorder)
 	return dr
+}
+
+func (p *Pipeline) verifyAssistantResult(session *Session, content string, tr *TraceRecorder) (VerificationContext, VerificationResult, VerifierSummary) {
+	verifyCtx := BuildVerificationContext(session)
+	verifyCtx.CertaintyClassifier = p.certaintyClass
+	verifyResult := VerifyResponse(content, verifyCtx)
+	AnnotateVerifierTrace(tr, verifyResult)
+	return verifyCtx, verifyResult, SummarizeVerification(verifyResult)
 }
 
 type diagnosticsRecorderKey struct{}

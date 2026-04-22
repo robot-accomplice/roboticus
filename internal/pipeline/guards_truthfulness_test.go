@@ -3,6 +3,8 @@ package pipeline
 import (
 	"strings"
 	"testing"
+
+	agenttools "roboticus/internal/agent/tools"
 )
 
 func TestModelIdentityTruthGuard_Rewrite(t *testing.T) {
@@ -152,11 +154,12 @@ func TestExecutionTruthGuard_RejectsArtifactClaimWithoutArtifactWriteEvidence(t 
 
 func TestExecutionTruthGuard_AllowsArtifactClaimWithArtifactWriteEvidence(t *testing.T) {
 	g := &ExecutionTruthGuard{}
+	proof := agenttools.NewArtifactProof("obsidian_note", "codex-live-test.md", "# Codex Live Test.", false)
 	ctx := &GuardContext{
 		UserPrompt: "Create a new Obsidian note named codex-live-test.md in the vault containing exactly: # Codex Live Test.",
 		Intents:    []string{"task"},
 		ToolResults: []ToolResultEntry{
-			{ToolName: "obsidian_write", Output: "wrote 18 bytes to Obsidian note codex-live-test.md"},
+			{ToolName: "obsidian_write", Output: proof.Output(), Metadata: proof.Metadata(), ArtifactProof: &proof},
 		},
 	}
 	result := g.CheckWithContext("I've successfully created the Obsidian note codex-live-test.md.", ctx)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	agenttools "roboticus/internal/agent/tools"
 	"roboticus/internal/session"
 	"roboticus/testutil"
 )
@@ -84,6 +85,25 @@ func TestBuildGuardContext_UsesPriorTurnAssistantHistoryOnly(t *testing.T) {
 	}
 	if len(ctx.ToolResults) != 1 || ctx.ToolResults[0].ToolName != "obsidian_write" {
 		t.Fatalf("ToolResults = %+v, want current-turn tool results preserved", ctx.ToolResults)
+	}
+}
+
+func TestBuildGuardContext_PreservesArtifactProofMetadata(t *testing.T) {
+	pipe := New(PipelineDeps{BGWorker: testutil.BGWorker(t, 1)})
+	sess := session.New("sess-3", "agent-1", "TestBot")
+	sess.AddUserMessage("write the file")
+	proof := agenttools.NewArtifactProof("workspace_file", "tmp/out.txt", "hello", false)
+	sess.AddToolResultWithMetadata("call-1", "write_file", proof.Output(), proof.Metadata(), false)
+
+	ctx := pipe.buildGuardContext(sess)
+	if len(ctx.ToolResults) != 1 {
+		t.Fatalf("tool results = %d, want 1", len(ctx.ToolResults))
+	}
+	if ctx.ToolResults[0].ArtifactProof == nil {
+		t.Fatal("expected artifact proof on tool result entry")
+	}
+	if ctx.ToolResults[0].ArtifactProof.Path != "tmp/out.txt" {
+		t.Fatalf("artifact path = %q", ctx.ToolResults[0].ArtifactProof.Path)
 	}
 }
 

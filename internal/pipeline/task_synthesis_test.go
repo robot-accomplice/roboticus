@@ -222,6 +222,43 @@ func TestSynthesizeTaskState_BoundedMultiArtifactAuthoringStaysDirect(t *testing
 	}
 }
 
+func TestSynthesizeTaskState_PathShapedFileAuthoringStaysDirect(t *testing.T) {
+	result := SynthesizeTaskState(
+		"Create tmp/procedural-canary/rollout-config.json containing exactly: {\"service\":\"auth\"}.",
+		1,
+		nil,
+	)
+	if result.Intent != "task" {
+		t.Fatalf("intent = %q, want task", result.Intent)
+	}
+	if result.Complexity != "simple" {
+		t.Fatalf("complexity = %q, want simple", result.Complexity)
+	}
+	if result.PlannedAction != "execute_directly" {
+		t.Fatalf("planned action = %q, want execute_directly", result.PlannedAction)
+	}
+	if result.RetrievalNeeded {
+		t.Fatal("path-shaped file authoring should not require retrieval")
+	}
+}
+
+func TestSynthesizeTaskState_InlineExactMultiArtifactAuthoringStaysDirect(t *testing.T) {
+	result := SynthesizeTaskState(
+		"Create the following files:\n- tmp/procedural-canary/rollout-config.json containing exactly:\n{\"service\":\"auth\"}\n- tmp/procedural-canary/rollout-runbook.md containing exactly:\n# Rollout Runbook\n\n1. Read [[rollout-config.json]].",
+		1,
+		nil,
+	)
+	if result.Intent != "task" {
+		t.Fatalf("intent = %q, want task", result.Intent)
+	}
+	if result.Complexity != "moderate" {
+		t.Fatalf("complexity = %q, want moderate", result.Complexity)
+	}
+	if result.PlannedAction != "execute_directly" {
+		t.Fatalf("planned action = %q, want execute_directly", result.PlannedAction)
+	}
+}
+
 func TestSynthesizeTaskState_CapabilityFitRecognizesHyphenatedSkillConcepts(t *testing.T) {
 	result := SynthesizeTaskState(
 		"Create a new markdown document in the Obsidian vault for today's notes.",

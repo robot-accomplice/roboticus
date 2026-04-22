@@ -1,6 +1,7 @@
 package session
 
 import (
+	"encoding/json"
 	"testing"
 
 	"roboticus/internal/llm"
@@ -72,5 +73,20 @@ func TestPendingToolCalls_ReturnsDefensiveCopy(t *testing.T) {
 	again := s.PendingToolCalls()
 	if again[0].Function.Name != "get_runtime_context" {
 		t.Fatalf("pending tool call name = %q, want get_runtime_context", again[0].Function.Name)
+	}
+}
+
+func TestAddToolResultWithMetadata_PreservesTypedToolMetadata(t *testing.T) {
+	s := New("sess-3", "agent-1", "Duncan")
+	meta := json.RawMessage(`{"proof_type":"artifact_write","artifact_kind":"workspace_file","path":"tmp/out.txt"}`)
+
+	s.AddToolResultWithMetadata("call-1", "write_file", `{"proof_type":"artifact_write"}`, meta, false)
+
+	msgs := s.Messages()
+	if len(msgs) != 1 {
+		t.Fatalf("messages = %d, want 1", len(msgs))
+	}
+	if string(msgs[0].Metadata) != string(meta) {
+		t.Fatalf("metadata = %s, want %s", msgs[0].Metadata, meta)
 	}
 }

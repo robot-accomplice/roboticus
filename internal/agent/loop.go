@@ -145,7 +145,7 @@ type Loop struct {
 	lastNoProgress            recentInferenceOutcome
 	readOnlyExplorationStreak int
 	failedCalls               map[string]int    // tool+params → failure count (error dedup)
-	successfulCalls           map[string]int    // tool+params → prior successful executions in this turn
+	successfulCalls           map[string]int    // protected resource/effect fingerprint → prior successes in this turn
 	traceEntries              []ReactTraceEntry // flight recorder
 	doneReason                string
 
@@ -534,7 +534,6 @@ func (l *Loop) act(ctx context.Context, session *Session) (Action, error) {
 		callKey := tc.Function.Name + ":" + tc.Function.Arguments
 		l.mu.Lock()
 		failCount := l.failedCalls[callKey]
-		successCount := l.successfulCalls[callKey]
 		l.mu.Unlock()
 		if failCount >= 2 {
 			l.resetReadOnlyExploration()
@@ -551,59 +550,6 @@ func (l *Loop) act(ctx context.Context, session *Session) (Action, error) {
 			log.Warn().Str("tool", tc.Function.Name).Int("failures", failCount).Msg("suppressing duplicate failed tool call")
 			continue
 		}
-		if successCount > 0 && agenttools.RequiresReplayProtection(tc.Function.Name) {
-			output := fmt.Sprintf("[Tool %s suppressed]: duplicate replay of a successful side-effecting call was blocked to avoid repeating non-idempotent work", tc.Function.Name)
-			session.AddToolResult(tc.ID, tc.Function.Name, output, false)
-			if obs := llm.InferenceObserverFromContext(ctx); obs != nil {
-				obs.IncrementSummaryCounter("replay_suppression_count", 1)
-				obs.RecordEvent("tool_call_replay_suppressed", "warning",
-					"duplicate side-effecting tool replay suppressed",
-					"The framework blocked a repeated side-effecting tool call after an earlier success to avoid replaying non-idempotent work.",
-					map[string]any{
-						"tool_call_id":         tc.ID,
-						"tool_name":            tc.Function.Name,
-						"prior_success_count":  successCount,
-						"requires_protection":  true,
-						"replay_policy_source": "tool_semantics",
-					},
-				)
-			}
-			l.recordToolExecution(ctx, ToolExecutionRecord{
-				TurnID:     core.TurnIDFromCtx(ctx),
-				ToolCallID: tc.ID,
-				ToolName:   tc.Function.Name,
-				Input:      tc.Function.Arguments,
-				Output:     output,
-				Status:     "suppressed_replay",
-			})
-			log.Warn().Str("tool", tc.Function.Name).Int("prior_successes", successCount).Msg("suppressing duplicate successful side-effecting tool call")
-			continue
-		}
-
-		// Policy check.
-		if l.policy != nil {
-			decision := l.policy.EvaluateWithTools(&policy.ToolCallRequest{
-				ToolName:  tc.Function.Name,
-				Arguments: tc.Function.Arguments,
-				Authority: session.Authority,
-			}, l.tools)
-			if decision.Denied() {
-				l.resetReadOnlyExploration()
-				result := fmt.Sprintf("Policy denied: %s", decision.Reason)
-				session.AddToolResult(tc.ID, tc.Function.Name, result, true)
-				l.recordToolExecution(ctx, ToolExecutionRecord{
-					TurnID:     core.TurnIDFromCtx(ctx),
-					ToolCallID: tc.ID,
-					ToolName:   tc.Function.Name,
-					Input:      tc.Function.Arguments,
-					Output:     result,
-					Status:     "denied",
-				})
-				log.Warn().Str("tool", tc.Function.Name).Str("reason", decision.Reason).Str("session", session.ID).Msg("tool call denied by policy")
-				continue
-			}
-		}
-
 		// Execute the tool.
 		tool := l.tools.Get(tc.Function.Name)
 		if tool == nil {
@@ -693,6 +639,76 @@ func (l *Loop) act(ctx context.Context, session *Session) (Action, error) {
 		if execArgs == "" {
 			execArgs = tc.Function.Arguments
 		}
+		replayFingerprint := agenttools.ReplayFingerprintForCall(tc.Function.Name, execArgs)
+		l.mu.Lock()
+		successCount := l.successfulCalls[replayFingerprint.Key]
+		l.mu.Unlock()
+		if historyCount := successfulReplayCount(session, tc.Function.Name, replayFingerprint); historyCount > successCount {
+			successCount = historyCount
+		}
+		if successCount > 0 && agenttools.RequiresReplayProtection(tc.Function.Name) {
+			output := fmt.Sprintf("[Tool %s suppressed]: duplicate replay of a successful side-effecting call was blocked to avoid repeating non-idempotent work", tc.Function.Name)
+			session.AddToolResult(tc.ID, tc.Function.Name, output, false)
+			replayReason := "a prior successful execution made the duplicate call replay-risky"
+			if replayFingerprint.Resource != "" {
+				replayReason = fmt.Sprintf("a prior successful execution already mutated %s in this turn", replayFingerprint.Resource)
+			}
+			if obs := llm.InferenceObserverFromContext(ctx); obs != nil {
+				obs.IncrementSummaryCounter("replay_suppression_count", 1)
+				obs.RecordEvent("tool_call_replay_suppressed", "warning",
+					"duplicate side-effecting tool replay suppressed",
+					"The framework blocked a repeated side-effecting tool call after an earlier success to avoid replaying non-idempotent work.",
+					map[string]any{
+						"tool_call_id":         tc.ID,
+						"tool_name":            tc.Function.Name,
+						"prior_success_count":  successCount,
+						"requires_protection":  true,
+						"replay_policy_source": "tool_semantics",
+						"protected_resource":   replayFingerprint.Resource,
+						"replay_fingerprint":   replayFingerprint.Key,
+						"reason":               replayReason,
+					},
+				)
+			}
+			l.recordToolExecution(ctx, ToolExecutionRecord{
+				TurnID:     core.TurnIDFromCtx(ctx),
+				ToolCallID: tc.ID,
+				ToolName:   tc.Function.Name,
+				Input:      execArgs,
+				Output:     output,
+				Status:     "suppressed_replay",
+			})
+			log.Warn().
+				Str("tool", tc.Function.Name).
+				Str("protected_resource", replayFingerprint.Resource).
+				Int("prior_successes", successCount).
+				Msg("suppressing duplicate successful side-effecting tool call")
+			continue
+		}
+
+		// Policy check.
+		if l.policy != nil {
+			decision := l.policy.EvaluateWithTools(&policy.ToolCallRequest{
+				ToolName:  tc.Function.Name,
+				Arguments: execArgs,
+				Authority: session.Authority,
+			}, l.tools)
+			if decision.Denied() {
+				l.resetReadOnlyExploration()
+				result := fmt.Sprintf("Policy denied: %s", decision.Reason)
+				session.AddToolResult(tc.ID, tc.Function.Name, result, true)
+				l.recordToolExecution(ctx, ToolExecutionRecord{
+					TurnID:     core.TurnIDFromCtx(ctx),
+					ToolCallID: tc.ID,
+					ToolName:   tc.Function.Name,
+					Input:      execArgs,
+					Output:     result,
+					Status:     "denied",
+				})
+				log.Warn().Str("tool", tc.Function.Name).Str("reason", decision.Reason).Str("session", session.ID).Msg("tool call denied by policy")
+				continue
+			}
+		}
 
 		toolStart := time.Now()
 		result, err := tool.Execute(ctx, execArgs, tctx)
@@ -771,10 +787,15 @@ func (l *Loop) act(ctx context.Context, session *Session) (Action, error) {
 		})
 		l.mu.Unlock()
 
-		session.AddToolResult(tc.ID, tc.Function.Name, result.Output, false)
+		session.AddToolResultWithMetadata(tc.ID, tc.Function.Name, result.Output, result.Metadata, false)
 		if agenttools.RequiresReplayProtection(tc.Function.Name) {
+			successFingerprint := agenttools.ReplayFingerprintForResult(tc.Function.Name, execArgs, result.Metadata)
+			key := successFingerprint.Key
+			if key == "" {
+				key = replayFingerprint.Key
+			}
 			l.mu.Lock()
-			l.successfulCalls[callKey]++
+			l.successfulCalls[key]++
 			l.mu.Unlock()
 		}
 		l.noteToolOutcome(tc.Function.Name)
@@ -851,6 +872,25 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+func successfulReplayCount(session *Session, toolName string, fingerprint agenttools.ReplayFingerprint) int {
+	if session == nil || fingerprint.Key == "" {
+		return 0
+	}
+	count := 0
+	for _, msg := range session.Messages() {
+		if msg.Role != "tool" || msg.Name != toolName {
+			continue
+		}
+		if strings.HasPrefix(msg.Content, "Error:") {
+			continue
+		}
+		if proofFingerprint := agenttools.ReplayFingerprintForResult(toolName, "", msg.Metadata); proofFingerprint.Key == fingerprint.Key {
+			count++
+		}
+	}
+	return count
 }
 
 func isPlaceholderAssistantContent(content string) bool {

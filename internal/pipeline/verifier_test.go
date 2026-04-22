@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	agenttools "roboticus/internal/agent/tools"
 	"roboticus/internal/session"
 )
 
@@ -155,6 +156,116 @@ func TestVerifyResponse_PassesWhenFreshnessRiskAcknowledged(t *testing.T) {
 	result := VerifyResponse("Based on the available evidence, this may be outdated. Please verify against the current policy before acting.", ctx)
 	if !result.Passed {
 		t.Fatalf("expected freshness-aware caution to pass, got %+v", result.Issues)
+	}
+}
+
+func TestBuildVerificationContext_PromotesArtifactProofIntoEvidence(t *testing.T) {
+	sess := session.New("s-artifact", "a1", "Bot")
+	sess.AddUserMessage("Create tmp/out.txt containing exactly hello")
+	proof := agenttools.NewArtifactProof("workspace_file", "tmp/out.txt", "hello", false)
+	sess.AddToolResultWithMetadata("call-1", "write_file", proof.Output(), proof.Metadata(), false)
+
+	ctx := BuildVerificationContext(sess)
+	if len(ctx.ArtifactProofs) != 1 {
+		t.Fatalf("artifact proofs = %d, want 1", len(ctx.ArtifactProofs))
+	}
+	if !ctx.HasCanonicalEvidence {
+		t.Fatal("artifact proof should count as canonical evidence")
+	}
+	if len(ctx.EvidenceItems) == 0 {
+		t.Fatal("expected artifact proof evidence item")
+	}
+}
+
+func TestVerifyResponse_AllowsDirectArtifactClaimWhenExactProofOverridesStaleGaps(t *testing.T) {
+	ctx := VerificationContext{
+		UserPrompt:        "Create tmp/out.txt containing exactly hello",
+		HasGaps:           true,
+		HasContradictions: true,
+		ToolResults: []ToolResultEntry{{
+			ToolName: "write_file",
+			Output:   `{"proof_type":"artifact_write"}`,
+			ArtifactProof: func() *agenttools.ArtifactProof {
+				p := agenttools.NewArtifactProof("workspace_file", "tmp/out.txt", "hello", false)
+				return &p
+			}(),
+		}},
+		ArtifactProofs: []agenttools.ArtifactProof{
+			agenttools.NewArtifactProof("workspace_file", "tmp/out.txt", "hello", false),
+		},
+		ExpectedArtifacts: []ExpectedArtifactSpec{{
+			ArtifactKind: "workspace_file",
+			Path:         "tmp/out.txt",
+			ExactContent: "hello",
+		}},
+		ArtifactConformance: ArtifactConformance{
+			Expected:    []ExpectedArtifactSpec{{ArtifactKind: "workspace_file", Path: "tmp/out.txt", ExactContent: "hello"}},
+			MatchedPath: []string{"tmp/out.txt"},
+		},
+	}
+
+	result := VerifyResponse("I created tmp/out.txt containing exactly hello.", ctx)
+	if !result.Passed {
+		t.Fatalf("expected exact artifact proof to override stale gaps/contradictions, got %+v", result.Issues)
+	}
+}
+
+func TestVerifyResponse_AllowsDirectArtifactClaimWhenWithContentPromptExactProofOverridesStaleGaps(t *testing.T) {
+	prompt := "Create two files in tmp/procedural-canary-8/ exactly as follows. File 1: rollout-config.json with content:\n{\n  \"service\": \"billing\",\n  \"strategy\": \"canary\",\n  \"steps\": 3\n}\nFile 2: rollout-runbook.md with content:\n# Billing Canary Runbook\n1. Deploy canary to 10% of traffic.\n2. Check error rate and latency for 15 minutes.\n3. If metrics are healthy, advance to 50%.\n4. If metrics regress, roll back immediately."
+	configProof := agenttools.NewArtifactProof("workspace_file", "tmp/procedural-canary-8/rollout-config.json", "{\n  \"service\": \"billing\",\n  \"strategy\": \"canary\",\n  \"steps\": 3\n}", false)
+	runbookProof := agenttools.NewArtifactProof("workspace_file", "tmp/procedural-canary-8/rollout-runbook.md", "# Billing Canary Runbook\n1. Deploy canary to 10% of traffic.\n2. Check error rate and latency for 15 minutes.\n3. If metrics are healthy, advance to 50%.\n4. If metrics regress, roll back immediately.", false)
+	ctx := VerificationContext{
+		UserPrompt: prompt,
+		HasGaps:    true,
+		EvidenceItems: []string{
+			"[procedural, 0.70] stale prior note-writing pattern",
+		},
+		ToolResults: []ToolResultEntry{
+			{ToolName: "write_file", Output: configProof.Output(), ArtifactProof: &configProof},
+			{ToolName: "write_file", Output: runbookProof.Output(), ArtifactProof: &runbookProof},
+		},
+		ArtifactProofs: []agenttools.ArtifactProof{configProof, runbookProof},
+	}
+	ctx.ExpectedArtifacts = ParseExpectedArtifactSpecs(prompt)
+	ctx.ArtifactConformance = CompareArtifactConformance(ctx.ExpectedArtifacts, ctx.ArtifactProofs)
+	if len(ctx.ExpectedArtifacts) != 2 || !ctx.ArtifactConformance.AllExactSatisfied() {
+		t.Fatalf("expected exact artifact specs and conformance, got specs=%+v conformance=%+v", ctx.ExpectedArtifacts, ctx.ArtifactConformance)
+	}
+
+	result := VerifyResponse("I created rollout-config.json and rollout-runbook.md with the requested content.", ctx)
+	if !result.Passed {
+		t.Fatalf("expected exact artifact proof to override stale gaps for with-content prompt, got %+v", result.Issues)
+	}
+}
+
+func TestVerifyResponse_FailsWhenExactArtifactContentMismatches(t *testing.T) {
+	ctx := VerificationContext{
+		UserPrompt: "Create tmp/out.txt containing exactly hello",
+		ExpectedArtifacts: []ExpectedArtifactSpec{{
+			ArtifactKind: "workspace_file",
+			Path:         "tmp/out.txt",
+			ExactContent: "hello",
+		}},
+		ArtifactProofs: []agenttools.ArtifactProof{
+			agenttools.NewArtifactProof("workspace_file", "tmp/out.txt", "goodbye", false),
+		},
+		ArtifactConformance: ArtifactConformance{
+			Expected: []ExpectedArtifactSpec{{ArtifactKind: "workspace_file", Path: "tmp/out.txt", ExactContent: "hello"}},
+			Mismatched: []ArtifactContentMismatch{{
+				Path:     "tmp/out.txt",
+				Expected: "hello",
+				Actual:   "goodbye",
+				Reason:   "content_mismatch",
+			}},
+		},
+	}
+
+	result := VerifyResponse("I wrote tmp/out.txt.", ctx)
+	if result.Passed {
+		t.Fatal("expected verification failure on exact-content mismatch")
+	}
+	if !result.HasIssue("artifact_content_mismatch") {
+		t.Fatalf("issues = %+v, want artifact_content_mismatch", result.Issues)
 	}
 }
 

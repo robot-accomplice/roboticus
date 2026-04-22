@@ -97,6 +97,7 @@ func TestAnalyzeEpisode_CapturesOutcomePatterns(t *testing.T) {
 			"permission denied",
 			"permission denied",
 		},
+		TurnStatus:     "degraded",
 		VerifierPassed: false,
 	}
 	summary := AnalyzeEpisode(input)
@@ -117,6 +118,33 @@ func TestAnalyzeEpisode_CapturesOutcomePatterns(t *testing.T) {
 	}
 	if !sawFix || !sawError {
 		t.Fatalf("expected both success and partial outcome patterns, got %+v", summary.OutcomePatterns)
+	}
+}
+
+func TestAnalyzeEpisode_DegradedVerifierFailedTurnIsPartialNotSuccess(t *testing.T) {
+	input := EpisodeInput{
+		UserContent: "Create the rollout files",
+		ToolEvents: []ToolEvent{
+			{ToolName: "write_file", Success: true},
+			{ToolName: "write_file", Success: true},
+		},
+		EvidenceItems: []string{
+			"[tool_artifact, canonical] workspace_file tmp/procedural-canary/rollout-config.json",
+		},
+		TurnStatus:     "degraded",
+		VerifierPassed: false,
+	}
+	summary := AnalyzeEpisode(input)
+	if summary == nil {
+		t.Fatal("expected summary, got nil")
+	}
+	if summary.Outcome != "partial" {
+		t.Fatalf("expected partial outcome, got %q", summary.Outcome)
+	}
+	for _, pat := range summary.OutcomePatterns {
+		if pat.Kind == "learning" && pat.Outcome == "success" {
+			t.Fatalf("unexpected success learning pattern on degraded turn: %+v", summary.OutcomePatterns)
+		}
 	}
 }
 

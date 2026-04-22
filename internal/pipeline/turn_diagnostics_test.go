@@ -331,8 +331,9 @@ func TestStoreTurnDiagnostics_DerivesReplaySuppressionNarrative(t *testing.T) {
 	dr.SetSummaryField("operator_narrative", "Turn diagnostics active: request-shape, fallback, and provider-attempt facts are being recorded.")
 	dr.IncrementSummaryCounter("replay_suppression_count", 1)
 	dr.RecordEvent("tool_call_replay_suppressed", "warning", "", "", map[string]any{
-		"tool_name": "obsidian_write",
-		"reason":    "a prior successful execution already created the note",
+		"tool_name":          "obsidian_write",
+		"protected_resource": "note.md",
+		"reason":             "a prior successful execution already mutated note.md in this turn",
 	})
 	pipe.storeTurnDiagnostics(context.Background(), dr)
 
@@ -347,7 +348,7 @@ func TestStoreTurnDiagnostics_DerivesReplaySuppressionNarrative(t *testing.T) {
 	if replaySuppressions != 1 {
 		t.Fatalf("replay_suppression_count = %d, want 1", replaySuppressions)
 	}
-	if !strings.Contains(strings.ToLower(userNarrative), "suppressed") || !strings.Contains(userNarrative, "obsidian_write") {
+	if !strings.Contains(strings.ToLower(userNarrative), "suppressed") || !strings.Contains(userNarrative, "note.md") {
 		t.Fatalf("user_narrative = %q, want replay suppression explanation", userNarrative)
 	}
 	if !strings.Contains(operatorNarrative, "replay_suppressions=1") {

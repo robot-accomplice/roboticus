@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	agenttools "roboticus/internal/agent/tools"
 	"roboticus/internal/llm"
 	sessionpkg "roboticus/internal/session"
 )
@@ -83,6 +84,10 @@ type VerificationContext struct {
 	Subgoals             []string
 	EvidenceItems        []string
 	Contradictions       []sessionpkg.ContradictionEvidence
+	ToolResults          []ToolResultEntry
+	ArtifactProofs       []agenttools.ArtifactProof
+	ExpectedArtifacts    []ExpectedArtifactSpec
+	ArtifactConformance  ArtifactConformance
 
 	// Executive state surfaces the current plan, assumptions, unresolved
 	// questions, verified conclusions, decision checkpoints, and stopping
@@ -139,6 +144,15 @@ func BuildVerificationContext(session *Session) VerificationContext {
 		ctx.VerifiedConclusions = append([]string(nil), ve.VerifiedConclusions...)
 		ctx.StoppingCriteria = append([]string(nil), ve.StoppingCriteria...)
 	}
+	ctx.ToolResults = currentTurnToolResults(session)
+	ctx.ArtifactProofs = toolResultArtifactProofs(ctx.ToolResults)
+	ctx.ExpectedArtifacts = ParseExpectedArtifactSpecs(ctx.UserPrompt)
+	ctx.ArtifactConformance = CompareArtifactConformance(ctx.ExpectedArtifacts, ctx.ArtifactProofs)
+	ctx.EvidenceItems = append(ctx.EvidenceItems, toolResultEvidenceItems(ctx.ToolResults)...)
+	if len(ctx.ArtifactProofs) > 0 {
+		ctx.HasEvidence = true
+		ctx.HasCanonicalEvidence = true
+	}
 
 	ctx.Subgoals = session.TaskSubgoals()
 	if len(ctx.Subgoals) == 0 {
@@ -186,6 +200,7 @@ func verificationSubgoals(prompt string) []string {
 func VerifyResponse(content string, ctx VerificationContext) VerificationResult {
 	result := VerificationResult{Passed: true}
 	lowerContent := strings.ToLower(content)
+	artifactProofPrimary := contradictionChecksSuppressedByArtifactProof(ctx, content)
 
 	if verificationIsSocialTurn(ctx.UserPrompt, ctx.Intent) && verificationLooksOperationalStatus(lowerContent) {
 		result.Passed = false
@@ -195,7 +210,7 @@ func VerifyResponse(content string, ctx VerificationContext) VerificationResult 
 		})
 	}
 
-	if ctx.HasGaps && !containsAny(lowerContent,
+	if ctx.HasGaps && !artifactProofPrimary && !containsAny(lowerContent,
 		"don't know", "do not know", "unclear", "not enough", "insufficient",
 		"need more", "based on the available", "from the available", "i'm not certain",
 	) {
@@ -206,7 +221,7 @@ func VerifyResponse(content string, ctx VerificationContext) VerificationResult 
 		})
 	}
 
-	if ctx.HasContradictions && !containsAny(lowerContent,
+	if ctx.HasContradictions && !artifactProofPrimary && !containsAny(lowerContent,
 		"conflict", "contradict", "inconsistent", "unclear", "mixed evidence", "however",
 		"sources disagree", "depending on", "disagree", "differs", "differ ",
 	) {
@@ -215,6 +230,29 @@ func VerifyResponse(content string, ctx VerificationContext) VerificationResult 
 			Code:   "ignored_contradictions",
 			Detail: "the evidence contains contradictions, but the response does not acknowledge them",
 		})
+	}
+
+	if len(ctx.ExpectedArtifacts) > 0 && ctx.ArtifactConformance.HasUnsatisfied() {
+		result.Passed = false
+		if len(ctx.ArtifactConformance.Missing) > 0 {
+			var paths []string
+			for _, spec := range ctx.ArtifactConformance.Missing {
+				paths = append(paths, spec.Path)
+			}
+			result.Issues = append(result.Issues, VerificationIssue{
+				Code:   "artifact_content_mismatch",
+				Detail: "exact artifact content could not be proven for: " + strings.Join(paths, ", "),
+			})
+		} else if len(ctx.ArtifactConformance.Mismatched) > 0 {
+			var paths []string
+			for _, mismatch := range ctx.ArtifactConformance.Mismatched {
+				paths = append(paths, mismatch.Path)
+			}
+			result.Issues = append(result.Issues, VerificationIssue{
+				Code:   "artifact_content_mismatch",
+				Detail: "written artifact content did not match the requested exact content for: " + strings.Join(paths, ", "),
+			})
+		}
 	}
 
 	if ctx.RequiresFreshness && ctx.HasFreshnessRisk && !containsAny(lowerContent,
@@ -649,4 +687,16 @@ func (vr VerificationResult) RetryMessage() string {
 	}
 	return "Your previous response failed verification: " + strings.Join(parts, "; ") +
 		". Revise the answer so it matches the available evidence, covers each requested part, and acknowledges uncertainty where needed."
+}
+
+func verifierFinalizationMessage(vr VerificationResult) string {
+	if vr.Passed || len(vr.Issues) == 0 {
+		return ""
+	}
+	var parts []string
+	for _, issue := range vr.Issues {
+		parts = append(parts, issue.Detail)
+	}
+	return "I can't honestly claim success because the final verification still failed. Remaining issues: " +
+		strings.Join(parts, "; ") + "."
 }

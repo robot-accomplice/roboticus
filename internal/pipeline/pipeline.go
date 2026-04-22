@@ -529,21 +529,13 @@ func (p *Pipeline) buildGuardContext(session *Session) *GuardContext {
 		ctx.PreviousAssistant = msgs[i].Content
 	}
 
-	// Collect tool results from the current turn (messages after the last user message).
-	if lastUserIdx >= 0 {
-		for i := lastUserIdx + 1; i < len(msgs); i++ {
-			if msgs[i].Role == "tool" {
-				ctx.ToolResults = append(ctx.ToolResults, ToolResultEntry{
-					ToolName: msgs[i].Name,
-					Output:   msgs[i].Content,
-				})
-				if strings.Contains(msgs[i].Name, "delegat") || strings.Contains(msgs[i].Name, "subagent") {
-					ctx.DelegationProvenance.SubagentTaskStarted = true
-					ctx.DelegationProvenance.SubagentTaskCompleted = true
-					if strings.TrimSpace(msgs[i].Content) != "" {
-						ctx.DelegationProvenance.SubagentResultAttached = true
-					}
-				}
+	ctx.ToolResults = currentTurnToolResults(session)
+	for _, tr := range ctx.ToolResults {
+		if strings.Contains(tr.ToolName, "delegat") || strings.Contains(tr.ToolName, "subagent") {
+			ctx.DelegationProvenance.SubagentTaskStarted = true
+			ctx.DelegationProvenance.SubagentTaskCompleted = true
+			if strings.TrimSpace(tr.Output) != "" {
+				ctx.DelegationProvenance.SubagentResultAttached = true
 			}
 		}
 	}

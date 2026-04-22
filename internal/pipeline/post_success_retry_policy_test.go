@@ -69,3 +69,17 @@ func TestDecideVerifierRetryAfterProgress_AllowsExecutionCriticalIssues(t *testi
 		t.Fatal("Allow = false, want true")
 	}
 }
+
+func TestDecideVerifierRetryAfterProgress_AllowsArtifactContentMismatchAfterProgress(t *testing.T) {
+	progress := ExecutionProgress{SuccessfulToolResults: 1, SuccessfulArtifactWrites: 1}
+	ctx := VerificationContext{PlannedAction: "execute_directly"}
+	result := VerificationResult{
+		Passed: false,
+		Issues: []VerificationIssue{{Code: "artifact_content_mismatch"}},
+	}
+
+	disposition := decideVerifierRetryAfterProgress(result, ctx, progress)
+	if !disposition.Allow {
+		t.Fatal("Allow = false, want true")
+	}
+}

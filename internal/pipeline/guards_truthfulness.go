@@ -2,10 +2,13 @@ package pipeline
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	agenttools "roboticus/internal/agent/tools"
 )
+
+var artifactPathMentionRE = regexp.MustCompile(`(?i)([\w./-]+\.[a-z0-9]{1,8})`)
 
 // --- ModelIdentityTruthGuard ---
 
@@ -224,7 +227,7 @@ func (g *ExecutionTruthGuard) CheckWithContext(content string, ctx *GuardContext
 }
 
 func persistentArtifactProofRequired(prompt string) bool {
-	return looksLikeSingleStepAuthoringTask(strings.ToLower(prompt), 0)
+	return len(ParseExpectedArtifactSpecs(prompt)) > 0 || looksLikeBoundedAuthoringTask(strings.ToLower(prompt))
 }
 
 func responseClaimsPersistentArtifactMutation(content string) bool {
@@ -235,7 +238,8 @@ func responseClaimsPersistentArtifactMutation(content string) bool {
 	artifactMarkers := []string{
 		"note", "document", "doc", "markdown", ".md", "file", "vault", "obsidian",
 	}
-	return containsAnyMarker(lower, claimMarkers) && containsAnyMarker(lower, artifactMarkers)
+	return containsAnyMarker(lower, claimMarkers) &&
+		(containsAnyMarker(lower, artifactMarkers) || artifactPathMentionRE.MatchString(lower))
 }
 
 func hasSuccessfulArtifactWriteEvidence(results []ToolResultEntry) bool {
@@ -246,7 +250,25 @@ func hasSuccessfulArtifactWriteEvidence(results []ToolResultEntry) bool {
 		if toolResultSignalsFailure(tr) {
 			continue
 		}
+		if tr.ArtifactProof != nil {
+			return true
+		}
 		return true
+	}
+	return false
+}
+
+func hasExactArtifactWriteEvidence(results []ToolResultEntry) bool {
+	for _, tr := range results {
+		if !agenttools.WritesPersistentArtifact(tr.ToolName) {
+			continue
+		}
+		if toolResultSignalsFailure(tr) || tr.ArtifactProof == nil {
+			continue
+		}
+		if tr.ArtifactProof.ExactContentIncluded {
+			return true
+		}
 	}
 	return false
 }

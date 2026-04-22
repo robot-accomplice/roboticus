@@ -202,9 +202,14 @@ func DeriveInterpretiveDiagnosticsSummary(summary TurnDiagnosticSummary, events 
 			transformer := diagnosticDetailString(callNormalized, "transformer")
 			userNarrative = fmt.Sprintf("The framework repaired malformed %s arguments before execution using %s, and the turn then continued on %s.%s", toolName, nonEmpty(transformer, "the normalization pipeline"), finalRoute, hostClause)
 		case replaySuppressed != nil || summary.ReplaySuppressionCount > 0:
+			protectedResource := diagnosticDetailString(replaySuppressed, "protected_resource")
 			toolName := diagnosticDetailString(replaySuppressed, "tool_name")
 			if toolName == "" {
 				toolName = "the side-effecting tool"
+			}
+			subject := toolName
+			if protectedResource != "" {
+				subject = protectedResource
 			}
 			replayReason := diagnosticDetailString(replaySuppressed, "reason")
 			if replayReason == "" {
@@ -212,7 +217,7 @@ func DeriveInterpretiveDiagnosticsSummary(summary TurnDiagnosticSummary, events 
 			}
 			userNarrative = fmt.Sprintf("The turn completed after the framework suppressed %d duplicate replay-risky tool call(s). %s was not executed again because %s.%s",
 				maxDiagnosticInt(summary.ReplaySuppressionCount, boolToInt(replaySuppressed != nil)),
-				toolName,
+				subject,
 				replayReason,
 				hostClause)
 		case loopTermination != nil && diagnosticDetailString(loopTermination, "reason_code") == "same_route_no_progress":
