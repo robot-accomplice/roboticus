@@ -94,3 +94,17 @@ Every release MUST complete ALL of these before the PR is merged:
 6. **Spec docs**: Update any spec documents affected by the changes (e.g., `docs/memory-architecture-spec.md`)
 
 Skipping any of these is a release defect. The release PR must not be created until all 6 are done.
+
+## Release Ceremony (MANDATORY — review every release)
+
+Before starting the release ceremony, review:
+
+- `docs/testing/release-procedure.md`
+
+That procedure is the canonical release order. Do not improvise the sequence.
+In particular:
+
+- release branch PR goes to `develop` first
+- `develop` is audited and green before PR to `main`
+- tag creation happens only after merge to `main`
+- release monitoring includes artifacts, site sync, fingerprinting, and install verification
