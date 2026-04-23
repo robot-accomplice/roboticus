@@ -95,6 +95,24 @@ func TestWhatsAppFormatter_Links(t *testing.T) {
 	}
 }
 
+func TestWhatsAppFormatter_UnmatchedBoldRemainsLiteral(t *testing.T) {
+	f := &WhatsAppFormatter{}
+	input := "prefix **dangling"
+	result := f.Format(input)
+	if result != input {
+		t.Fatalf("unmatched bold delimiters should remain literal, got %q want %q", result, input)
+	}
+}
+
+func TestWhatsAppFormatter_UnmatchedBackticksRemainLiteral(t *testing.T) {
+	f := &WhatsAppFormatter{}
+	input := "prefix `dangling"
+	result := f.Format(input)
+	if result != input {
+		t.Fatalf("unmatched backticks should remain literal, got %q want %q", result, input)
+	}
+}
+
 func TestSignalFormatter_StripsMarkdown(t *testing.T) {
 	f := &SignalFormatter{}
 	result := f.Format("**bold** and `code`")

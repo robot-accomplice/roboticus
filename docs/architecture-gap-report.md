@@ -205,6 +205,12 @@ older architecture docs had left too generic:
   length and infer that the final diagnostic tail has landed. The transport
   must own an explicit stderr-collector completion signal so slower CI runners
   cannot lose the actionable tail of a real child-process failure.
+- **Formatter fuzz paths must remain linear on malformed delimiter floods.**
+  Channel formatters are not allowed to repeatedly rescan the remainder of the
+  input for every unmatched inline marker, because release-gate fuzzing will
+  turn that into timeout failures on slower CI runners. Markdown-to-channel
+  transforms must keep malformed or adversarial delimiter handling bounded and
+  deterministic instead of relying on quadratic forward scans.
 - **Focused profiles must derive from one complete tool-semantics map.** A
   bounded turn policy is not allowed to silently drop a legitimate inspection or
   read tool because that tool was never classified in the central semantics map.
