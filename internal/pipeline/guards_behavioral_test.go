@@ -47,6 +47,33 @@ func TestTaskDeferralGuard_RealToolUse(t *testing.T) {
 	}
 }
 
+func TestClarificationDeflectionGuard_CannedRestatementRequest(t *testing.T) {
+	g := &ClarificationDeflectionGuard{}
+	ctx := &GuardContext{
+		UserPrompt: "Rewrite my previous response so it sounds natural and avoids repetition.",
+	}
+	result := g.CheckWithContext(`I understand. You need me to address the conversation flow in a more natural and context-aware way, avoiding direct repetition or circular responses.
+
+Please provide the last message or the context you want me to respond to, and I will generate a revised, non-repetitive answer.`, ctx)
+	if result.Passed {
+		t.Error("should reject canned request to restate already-provided context")
+	}
+	if !result.Retry {
+		t.Error("should request retry")
+	}
+}
+
+func TestClarificationDeflectionGuard_TargetedClarificationPasses(t *testing.T) {
+	g := &ClarificationDeflectionGuard{}
+	ctx := &GuardContext{
+		UserPrompt: "Help me debug the test failure.",
+	}
+	result := g.CheckWithContext("Which test is failing, and what error are you seeing?", ctx)
+	if !result.Passed {
+		t.Error("targeted clarification should pass")
+	}
+}
+
 func TestInternalJargonGuard_InfraLeak(t *testing.T) {
 	g := &InternalJargonGuard{}
 	ctx := &GuardContext{}

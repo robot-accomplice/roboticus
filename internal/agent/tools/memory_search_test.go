@@ -85,6 +85,27 @@ func TestMemorySearchTool_LIKEFallbackFindsRelationship(t *testing.T) {
 	}
 }
 
+func TestMemorySearchTool_FindsKnowledgeFacts(t *testing.T) {
+	store := testutil.TempStore(t)
+	ctx := context.Background()
+
+	_, _ = store.ExecContext(ctx,
+		`INSERT INTO knowledge_facts (id, subject, relation, object, confidence)
+		 VALUES ('fact-ledger', 'Billing Service', 'depends_on', 'Ledger Service', 0.8)`)
+
+	tool := NewMemorySearchTool(store)
+	result, err := tool.Execute(ctx, `{"query": "Ledger"}`, nil)
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if strings.Contains(result.Output, "No memories found") {
+		t.Fatalf("should find graph fact, got: %s", result.Output)
+	}
+	if !strings.Contains(result.Output, "Billing Service depends_on Ledger Service") {
+		t.Fatalf("expected graph fact in search results, got: %s", result.Output)
+	}
+}
+
 func TestMemorySearchTool_NoResults(t *testing.T) {
 	store := testutil.TempStore(t)
 	tool := NewMemorySearchTool(store)

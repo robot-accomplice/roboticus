@@ -29,8 +29,10 @@ func TestAllIntentClasses_IncludesMemoryRecall(t *testing.T) {
 	if !found {
 		t.Error("AllIntentClasses() should include IntentMemoryRecall")
 	}
-	if len(all) != 6 {
-		t.Errorf("AllIntentClasses() count = %d, want 6", len(all))
+	// v1.0.6 added IntentCoding. If the count changes again, bump
+	// this expectation and the matrix-total-count test together.
+	if len(all) != 7 {
+		t.Errorf("AllIntentClasses() count = %d, want 7", len(all))
 	}
 }
 
@@ -47,8 +49,9 @@ func TestExerciseMatrix_HasMemoryRecallPrompts(t *testing.T) {
 }
 
 func TestExerciseMatrix_TotalCount(t *testing.T) {
-	if len(ExerciseMatrix) != 30 {
-		t.Errorf("ExerciseMatrix has %d prompts, want 30 (5 complexity x 6 intent)", len(ExerciseMatrix))
+	// v1.0.6: 5 complexity × 7 intent (added CODING) = 35.
+	if len(ExerciseMatrix) != 35 {
+		t.Errorf("ExerciseMatrix has %d prompts, want 35 (5 complexity × 7 intent)", len(ExerciseMatrix))
 	}
 }
 

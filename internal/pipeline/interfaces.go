@@ -20,6 +20,7 @@ package pipeline
 import (
 	"context"
 
+	agenttools "roboticus/internal/agent/tools"
 	"roboticus/internal/core"
 	"roboticus/internal/llm"
 	"roboticus/internal/session"
@@ -69,4 +70,24 @@ type NicknameRefiner interface {
 // Rust equivalent: StreamBuilder trait — provides prepare_stream().
 type StreamPreparer interface {
 	PrepareStream(ctx context.Context, session *session.Session) (*llm.Request, error)
+}
+
+// ToolPruner selects the query-relevant tool set for a turn before
+// inference. Rust-parity seam: `core/tool_prune.rs::prune_tool_definitions`
+// owns this in the Rust pipeline; Go runs it as a dedicated pipeline
+// stage (stageToolPruning) between memory retrieval and prepare-inference.
+//
+// Pruner implementations compute ranking against the current user
+// query's embedding, honor the operator-configured AlwaysInclude pins,
+// and enforce the top-k / token-budget limits. Returning an empty
+// selection is valid (e.g. when no tools are registered); returning
+// nil is reserved for "pruner not wired on this pipeline" and the
+// stage treats that as a skipped span rather than an error.
+//
+// Implementations must be safe under the pipeline's existing
+// context-cancellation model: if ctx.Err() becomes non-nil the pruner
+// should return promptly with whatever partial result it has (or an
+// empty selection).
+type ToolPruner interface {
+	PruneTools(ctx context.Context, session *session.Session) (defs []llm.ToolDef, stats agenttools.ToolSearchStats, err error)
 }

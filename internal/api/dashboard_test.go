@@ -88,6 +88,21 @@ func TestDashboardHandler_ContainsRoboticus(t *testing.T) {
 	}
 }
 
+func TestDashboardHandler_PromptCompressionMarkedBenchmarkOnly(t *testing.T) {
+	handler := DashboardHandler()
+	req := httptest.NewRequest("GET", "/", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "Experimental benchmark-only feature") {
+		t.Fatal("dashboard should mark prompt compression as benchmark-only")
+	}
+	if !strings.Contains(body, "Not recommended for live use on the current runtime") {
+		t.Fatal("dashboard should warn that prompt compression is not recommended for live use")
+	}
+}
+
 func TestDashboardHandler_SecurityHeaders(t *testing.T) {
 	handler := DashboardHandler()
 	req := httptest.NewRequest("GET", "/", nil)

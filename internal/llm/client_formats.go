@@ -19,58 +19,26 @@ func (c *Client) marshalRequest(req *Request) ([]byte, error) {
 		return c.marshalGoogle(req)
 	case FormatOpenAIResponses:
 		return c.marshalOpenAIResponses(req)
+	case FormatOllama:
+		return c.marshalOpenAICompatible(req, FormatOllama)
 	default:
-		// FormatOpenAI, FormatOllama, and any unknown format all use OpenAI-compatible.
-		// Rust standardizes on OpenAI-compatible for all providers including Ollama.
-		return c.marshalOpenAI(req)
+		return c.marshalOpenAICompatible(req, FormatOpenAI)
 	}
 }
 
 func (c *Client) marshalOpenAI(req *Request) ([]byte, error) {
-	// Normalize messages for OpenAI-compatible wire format.
-	// Key fix: assistant messages with tool_calls MUST include "content": null
-	// (not omit the field). Go's omitempty on empty strings drops the field,
-	// which causes tool_call_id correlation failures on the next turn.
-	msgs := make([]map[string]any, 0, len(req.Messages))
-	for _, m := range req.Messages {
-		msg := map[string]any{"role": m.Role}
+	return c.marshalOpenAICompatible(req, FormatOpenAI)
+}
 
-		// Tool result messages.
-		if m.ToolCallID != "" {
-			msg["tool_call_id"] = m.ToolCallID
-			msg["content"] = m.Content
-			if m.Name != "" {
-				msg["name"] = m.Name
-			}
-			msgs = append(msgs, msg)
-			continue
-		}
-
-		// Assistant messages with tool calls: content must be present (not omitted).
-		// Providers disagree on null vs empty string:
-		//   - Moonshot/Kimi rejects null AND empty (wants non-empty)
-		//   - OpenAI rejects null (wants string, accepts empty)
-		// Compromise: use empty string "" — accepted by both.
-		if m.Role == "assistant" && len(m.ToolCalls) > 0 {
-			msg["content"] = m.Content // "" is fine for both
-			msg["tool_calls"] = m.ToolCalls
-			msgs = append(msgs, msg)
-			continue
-		}
-
-		// All other messages: include content, optional fields.
-		if m.Content != "" {
-			msg["content"] = m.Content
-		}
-		if len(m.ToolCalls) > 0 {
-			msg["tool_calls"] = m.ToolCalls
-		}
-		if m.Name != "" {
-			msg["name"] = m.Name
-		}
-		msgs = append(msgs, msg)
+func (c *Client) marshalOpenAICompatible(req *Request, format APIFormat) ([]byte, error) {
+	msgs, err := c.normalizeOpenAICompatibleMessages(format, req.Messages)
+	if err != nil {
+		return nil, err
 	}
+	return c.marshalOpenAICompatibleWithMessages(req, msgs)
+}
 
+func (c *Client) marshalOpenAICompatibleWithMessages(req *Request, msgs []map[string]any) ([]byte, error) {
 	payload := map[string]any{
 		"model":    req.Model,
 		"messages": msgs,
@@ -90,6 +58,17 @@ func (c *Client) marshalOpenAI(req *Request) ([]byte, error) {
 		payload["stop"] = req.Stop
 	}
 	return json.Marshal(payload)
+}
+
+func (c *Client) normalizeOpenAICompatibleMessages(format APIFormat, messages []Message) ([]map[string]any, error) {
+	result := NewToolMessageNormalizationFactory().NormalizeProviderMessages(ProviderMessageNormalizationInput{
+		Format:   format,
+		Messages: messages,
+	})
+	if result.Disposition == ToolMessageTransformFailed || result.Disposition == ToolMessageNoQualifiedTransformer {
+		return nil, core.NewError(core.ErrLLM, fmt.Sprintf("provider message normalization failed: %s", result.Reason))
+	}
+	return result.Messages, nil
 }
 
 func (c *Client) marshalAnthropic(req *Request) ([]byte, error) {
@@ -128,7 +107,6 @@ func (c *Client) marshalAnthropic(req *Request) ([]byte, error) {
 	}
 	return json.Marshal(payload)
 }
-
 
 func (c *Client) marshalGoogle(req *Request) ([]byte, error) {
 	var systemParts []string
@@ -202,6 +180,9 @@ func (c *Client) unmarshalResponse(body io.Reader) (*Response, error) {
 	// tool_call markers, parse them from text (Rust: parse_tool_calls).
 	if len(resp.ToolCalls) == 0 && strings.Contains(resp.Content, `"tool_call"`) {
 		resp.ToolCalls = ParseToolCallsFromText(resp.Content)
+		if len(resp.ToolCalls) > 0 {
+			resp.Content = StripToolCallsFromText(resp.Content)
+		}
 	}
 
 	return resp, nil
@@ -503,13 +484,16 @@ func (c *Client) unmarshalOpenAIResponsesResponse(data []byte) (*Response, error
 // parseErrorResponse reads an error body and returns a categorized error.
 func (c *Client) parseErrorResponse(resp *http.Response) error {
 	body, _ := io.ReadAll(resp.Body)
+	return c.parseErrorResponseBody(resp.StatusCode, body)
+}
 
+func (c *Client) parseErrorResponseBody(statusCode int, body []byte) error {
 	bodyStr := string(body)
 	msg := fmt.Sprintf("provider %s: %s", c.provider.Name, bodyStr)
 
 	// Some providers (e.g. Moonshot) return 429 for billing/quota exhaustion
 	// instead of 402. Detect these by inspecting the error body.
-	isBillingError := resp.StatusCode == 402 ||
+	isBillingError := statusCode == 402 ||
 		strings.Contains(bodyStr, "insufficient balance") ||
 		strings.Contains(bodyStr, "exceeded_current_quota") ||
 		strings.Contains(bodyStr, "account_suspended") ||
@@ -518,12 +502,12 @@ func (c *Client) parseErrorResponse(resp *http.Response) error {
 	switch {
 	case isBillingError:
 		return core.NewError(core.ErrCreditExhausted, msg)
-	case resp.StatusCode == 429:
+	case statusCode == 429:
 		return core.NewError(core.ErrRateLimited, msg)
-	case resp.StatusCode == 401 || resp.StatusCode == 403:
+	case statusCode == 401 || statusCode == 403:
 		return core.NewError(core.ErrUnauthorized, msg)
 	default:
 		return core.NewError(core.ErrLLM,
-			fmt.Sprintf("provider %s returned %d: %s", c.provider.Name, resp.StatusCode, bodyStr))
+			fmt.Sprintf("provider %s returned %d: %s", c.provider.Name, statusCode, bodyStr))
 	}
 }

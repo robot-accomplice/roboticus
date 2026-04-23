@@ -11,6 +11,7 @@ const (
 	RetrievalKeyword                       // FTS5-only
 	RetrievalANN                           // approximate nearest neighbor
 	RetrievalRecency                       // Time-sorted only
+	RetrievalGraph                         // graph traversal / relation expansion
 )
 
 func (m RetrievalMode) String() string {
@@ -25,6 +26,8 @@ func (m RetrievalMode) String() string {
 		return "ann"
 	case RetrievalRecency:
 		return "recency"
+	case RetrievalGraph:
+		return "graph"
 	default:
 		return "unknown"
 	}

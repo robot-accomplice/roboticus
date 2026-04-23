@@ -117,6 +117,52 @@ func TestConnectionManager_Statuses_WithConnections(t *testing.T) {
 	}
 }
 
+func TestConnectionManager_Statuses_AreDeterministicByServerName(t *testing.T) {
+	mgr := NewConnectionManager()
+
+	injectConnection(mgr, &Connection{Name: "server-c"})
+	injectConnection(mgr, &Connection{Name: "server-a"})
+	injectConnection(mgr, &Connection{Name: "server-b"})
+
+	statuses := mgr.Statuses()
+	if len(statuses) != 3 {
+		t.Fatalf("statuses count = %d, want 3", len(statuses))
+	}
+	got := []string{statuses[0].Name, statuses[1].Name, statuses[2].Name}
+	want := []string{"server-a", "server-b", "server-c"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("statuses order = %v, want %v", got, want)
+		}
+	}
+}
+
+func TestConnectionManager_Statuses_ReportDeadConnectionsAsDisconnected(t *testing.T) {
+	mgr := NewConnectionManager()
+	conn := &Connection{
+		Name:          "server-dead",
+		ServerName:    "Dead",
+		ServerVersion: "1.0",
+		Tools:         []ToolDescriptor{{Name: "stale_tool"}},
+	}
+	conn.setReceiverErr(fmt.Errorf("transport closed"))
+	injectConnection(mgr, conn)
+
+	statuses := mgr.Statuses()
+	if len(statuses) != 1 {
+		t.Fatalf("statuses count = %d, want 1", len(statuses))
+	}
+	if statuses[0].Connected {
+		t.Fatal("dead connection should report connected=false")
+	}
+	if statuses[0].ToolCount != 0 {
+		t.Fatalf("dead connection tool_count = %d, want 0", statuses[0].ToolCount)
+	}
+	if statuses[0].Error == "" {
+		t.Fatal("dead connection should surface status error")
+	}
+}
+
 func TestConnectionManager_AllTools_WithConnections(t *testing.T) {
 	mgr := NewConnectionManager()
 
@@ -147,6 +193,65 @@ func TestConnectionManager_AllTools_WithConnections(t *testing.T) {
 		if !nameSet[expected] {
 			t.Errorf("missing tool %s", expected)
 		}
+	}
+}
+
+func TestConnectionManager_AllTools_AreDeterministicByServerName(t *testing.T) {
+	mgr := NewConnectionManager()
+
+	injectConnection(mgr, &Connection{
+		Name:  "server-b",
+		Tools: []ToolDescriptor{{Name: "b1"}, {Name: "b2"}},
+	})
+	injectConnection(mgr, &Connection{
+		Name:  "server-a",
+		Tools: []ToolDescriptor{{Name: "a1"}},
+	})
+
+	tools := mgr.AllTools()
+	if len(tools) != 3 {
+		t.Fatalf("tool count = %d, want 3", len(tools))
+	}
+	got := []string{tools[0].Name, tools[1].Name, tools[2].Name}
+	want := []string{"a1", "b1", "b2"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("tool order = %v, want %v", got, want)
+		}
+	}
+}
+
+func TestConnectionManager_AllTools_ExcludesDeadConnections(t *testing.T) {
+	mgr := NewConnectionManager()
+
+	live := &Connection{Name: "live", Tools: []ToolDescriptor{{Name: "live_tool"}}}
+	dead := &Connection{Name: "dead", Tools: []ToolDescriptor{{Name: "stale_tool"}}}
+	dead.setReceiverErr(fmt.Errorf("transport closed"))
+
+	injectConnection(mgr, dead)
+	injectConnection(mgr, live)
+
+	tools := mgr.AllTools()
+	if len(tools) != 1 {
+		t.Fatalf("tool count = %d, want 1", len(tools))
+	}
+	if tools[0].Name != "live_tool" {
+		t.Fatalf("tool[0] = %q, want live_tool", tools[0].Name)
+	}
+}
+
+func TestConnectionManager_ConnectedCount_ExcludesDeadConnections(t *testing.T) {
+	mgr := NewConnectionManager()
+
+	live := &Connection{Name: "live"}
+	dead := &Connection{Name: "dead"}
+	dead.setReceiverErr(fmt.Errorf("transport closed"))
+
+	injectConnection(mgr, live)
+	injectConnection(mgr, dead)
+
+	if got := mgr.ConnectedCount(); got != 1 {
+		t.Fatalf("ConnectedCount = %d, want 1", got)
 	}
 }
 
@@ -182,6 +287,55 @@ func TestConnectionManager_CallTool_NoServer(t *testing.T) {
 	_, err := mgr.CallTool(context.TODO(), "nonexistent", "tool", nil)
 	if err == nil {
 		t.Error("should error for missing server")
+	}
+}
+
+func TestConnectionManager_RefreshTools_UpdatesLiveConnection(t *testing.T) {
+	mgr := NewConnectionManager()
+
+	expectedID := nextID.Load() + 1
+	qt := newQueuedTransport()
+	qt.recv <- makeResponse(expectedID, map[string]any{
+		"tools": []map[string]any{
+			{"name": "fresh_tool", "description": "fresh"},
+		},
+	})
+
+	injectConnection(mgr, &Connection{
+		Name: "refreshable",
+		Tools: []ToolDescriptor{
+			{Name: "stale_tool", Description: "stale"},
+		},
+		transport: qt,
+	})
+
+	tools, err := mgr.RefreshTools(context.Background(), "refreshable")
+	if err != nil {
+		t.Fatalf("RefreshTools: %v", err)
+	}
+	if len(tools) != 1 || tools[0].Name != "fresh_tool" {
+		t.Fatalf("returned tools = %#v", tools)
+	}
+
+	all := mgr.AllTools()
+	if len(all) != 1 || all[0].Name != "fresh_tool" {
+		t.Fatalf("live manager tools = %#v, want refreshed tool", all)
+	}
+
+	conn, ok := mgr.Connection("refreshable")
+	if !ok {
+		t.Fatal("expected refreshed connection snapshot")
+	}
+	if len(conn.Tools) != 1 || conn.Tools[0].Name != "fresh_tool" {
+		t.Fatalf("connection snapshot tools = %#v, want refreshed tool", conn.Tools)
+	}
+}
+
+func TestConnectionManager_RefreshTools_NoServer(t *testing.T) {
+	mgr := NewConnectionManager()
+	_, err := mgr.RefreshTools(context.Background(), "nonexistent")
+	if err == nil {
+		t.Fatal("expected error for missing server")
 	}
 }
 

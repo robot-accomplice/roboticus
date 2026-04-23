@@ -9,6 +9,8 @@
 package memory
 
 import (
+	"encoding/json"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,12 +25,67 @@ type ToolEvent struct {
 }
 
 // EpisodeSummary is a structured reflection on a completed turn.
+//
+// Milestone 8 enriches the summary beyond goal/actions/outcome so
+// consolidation can promote reusable learnings into longer-term memory
+// instead of only archiving episodes.
 type EpisodeSummary struct {
-	Goal      string        // what was being attempted
-	Actions   []string      // tool names in order
-	Outcome   string        // "success" / "partial" / "failure"
-	Learnings []string      // insights extracted
-	Duration  time.Duration // total turn duration
+	Goal                string        // what was being attempted
+	Actions             []string      // tool names in order
+	Outcome             string        // "success" / "partial" / "failure"
+	Learnings           []string      // insights extracted
+	Duration            time.Duration // total turn duration
+	ModelUsed           string        // selected model for the turn, when known
+	ReactTurns          int           // number of react turns for the final answer
+	EvidenceRefs        []string      // content previews of evidence items that shaped the answer
+	FailedHypotheses    []string      // hypotheses the agent walked back
+	FixPatterns         []string      // tool sequences that succeeded after prior failures
+	ErrorsSeen          []string      // error messages from failed tool calls
+	GuardViolations     []string      // final guard violations applied to the answer
+	GuardRetried        bool          // whether the turn required a guard-triggered retry
+	ResultQuality       float64       // 0-1 blended signal: verifier pass + tool success rate
+	VerifierPassed      bool          // whether the verifier passed the final answer
+	VerifiedRecorded    int           // verified conclusions written into executive state
+	QuestionsOpened     int           // unresolved questions opened for uncovered subgoals
+	QuestionsResolved   int           // prior unresolved questions closed by this turn
+	AssumptionsRecorded int           // assumptions written into executive state
+
+	// Relations captures canonical (subject, relation, object) triples
+	// extracted from the episode's text — assistant answer, learnings, and
+	// evidence-ref content. These are the candidates M8 tallies across
+	// successful, high-quality episodes for promotion into knowledge_facts.
+	//
+	// The triples are extracted by the same canonical-relation extractor
+	// (extractKnowledgeFacts) the per-document semantic ingestion path uses,
+	// so the relation vocabulary is identical across both paths and
+	// `db.IsCanonicalGraphRelation` is the single write gate.
+	Relations []EpisodeRelation
+
+	// OutcomePatterns preserves reusable procedural knowledge with explicit
+	// outcome polarity so later applied-learning retrieval can reuse what
+	// worked, avoid what failed, and recognize mixed-result patterns instead
+	// of flattening everything into positive-only learnings.
+	OutcomePatterns []EpisodeOutcomePattern
+}
+
+// EpisodeRelation is a single canonical relation triple extracted from an
+// episode's textual evidence. The shape mirrors `extractedFact` but is an
+// exported type so the round-trip through episode_summary serialisation can
+// be tested directly.
+type EpisodeRelation struct {
+	Subject  string
+	Relation string
+	Object   string
+}
+
+// EpisodeOutcomePattern is a reusable procedural lesson observed in a turn.
+// It carries the polarity of the experience (`success`, `failure`, `partial`),
+// the kind of pattern (learning, fix_pattern, error_mode, failed_hypothesis),
+// and the human-readable value preserved for future reuse.
+type EpisodeOutcomePattern struct {
+	Outcome string
+	Kind    string
+	Value   string
 }
 
 // Reflect produces a structured episode summary from turn data.
@@ -101,11 +158,520 @@ func (es *EpisodeSummary) FormatForStorage() string {
 		b.WriteString(" | Learnings: ")
 		b.WriteString(strings.Join(es.Learnings, "; "))
 	}
+	if len(es.FailedHypotheses) > 0 {
+		b.WriteString(" | FailedHypotheses: ")
+		b.WriteString(strings.Join(es.FailedHypotheses, "; "))
+	}
+	if len(es.FixPatterns) > 0 {
+		b.WriteString(" | FixPatterns: ")
+		b.WriteString(strings.Join(es.FixPatterns, "; "))
+	}
+	if len(es.EvidenceRefs) > 0 {
+		b.WriteString(" | EvidenceRefs: ")
+		b.WriteString(strings.Join(es.EvidenceRefs, " | "))
+	}
+	if len(es.ErrorsSeen) > 0 {
+		b.WriteString(" | Errors: ")
+		b.WriteString(strings.Join(es.ErrorsSeen, "; "))
+	}
+	if es.ModelUsed != "" {
+		b.WriteString(" | Model: ")
+		b.WriteString(es.ModelUsed)
+	}
+	if es.ReactTurns > 0 {
+		b.WriteString(" | ReactTurns: ")
+		b.WriteString(strconv.Itoa(es.ReactTurns))
+	}
+	if len(es.GuardViolations) > 0 {
+		b.WriteString(" | GuardViolations: ")
+		b.WriteString(strings.Join(es.GuardViolations, "; "))
+	}
+	if es.GuardRetried {
+		b.WriteString(" | GuardRetried: yes")
+	}
+	if es.VerifiedRecorded > 0 {
+		b.WriteString(" | ExecutiveVerified: ")
+		b.WriteString(strconv.Itoa(es.VerifiedRecorded))
+	}
+	if es.QuestionsOpened > 0 {
+		b.WriteString(" | ExecutiveQuestionsOpened: ")
+		b.WriteString(strconv.Itoa(es.QuestionsOpened))
+	}
+	if es.QuestionsResolved > 0 {
+		b.WriteString(" | ExecutiveQuestionsResolved: ")
+		b.WriteString(strconv.Itoa(es.QuestionsResolved))
+	}
+	if es.AssumptionsRecorded > 0 {
+		b.WriteString(" | ExecutiveAssumptions: ")
+		b.WriteString(strconv.Itoa(es.AssumptionsRecorded))
+	}
+	if len(es.Relations) > 0 {
+		// Wire format is `subject||relation||object` per triple, joined by
+		// "; " between triples. The "||" separator avoids collisions with
+		// the existing "; " and " | " separators used elsewhere in this
+		// summary line so parsing stays unambiguous.
+		var triples []string
+		for _, rel := range es.Relations {
+			triples = append(triples, rel.Subject+"||"+rel.Relation+"||"+rel.Object)
+		}
+		b.WriteString(" | Relations: ")
+		b.WriteString(strings.Join(triples, "; "))
+	}
+	if len(es.OutcomePatterns) > 0 {
+		var patterns []string
+		for _, pat := range es.OutcomePatterns {
+			if strings.TrimSpace(pat.Outcome) == "" || strings.TrimSpace(pat.Kind) == "" || strings.TrimSpace(pat.Value) == "" {
+				continue
+			}
+			patterns = append(patterns, pat.Outcome+"||"+pat.Kind+"||"+pat.Value)
+		}
+		if len(patterns) > 0 {
+			b.WriteString(" | OutcomePatterns: ")
+			b.WriteString(strings.Join(patterns, "; "))
+		}
+	}
+	if es.ResultQuality > 0 {
+		b.WriteString(" | Quality: ")
+		b.WriteString(formatQuality(es.ResultQuality))
+	}
 	if es.Duration > 0 {
 		b.WriteString(" | Duration: ")
 		b.WriteString(es.Duration.Round(time.Second).String())
 	}
 	return b.String()
+}
+
+// JSON returns the structured episode summary for machine-consumable storage.
+func (es *EpisodeSummary) JSON() string {
+	if es == nil {
+		return ""
+	}
+	b, err := json.Marshal(es)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// ParseEpisodeSummaryJSON reconstructs an EpisodeSummary from stored JSON.
+func ParseEpisodeSummaryJSON(raw string) (*EpisodeSummary, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	var summary EpisodeSummary
+	if err := json.Unmarshal([]byte(raw), &summary); err != nil {
+		return nil, err
+	}
+	return &summary, nil
+}
+
+// EpisodeInput carries the extra context the enriched reflection needs
+// beyond the original user content and tool events.
+type EpisodeInput struct {
+	UserContent         string
+	AssistantAnswer     string
+	ToolEvents          []ToolEvent
+	EvidenceItems       []string // retrieved-evidence items that reached the model
+	TurnStatus          string
+	VerifierPassed      bool
+	ErrorMessages       []string // stderr / failure outputs captured from tool calls
+	Duration            time.Duration
+	ModelUsed           string
+	ReactTurns          int
+	GuardViolations     []string
+	GuardRetried        bool
+	VerifiedRecorded    int
+	QuestionsOpened     int
+	QuestionsResolved   int
+	AssumptionsRecorded int
+}
+
+// AnalyzeEpisode is the enriched reflection entry point. It extends Reflect
+// with evidence tracking, failed-hypothesis detection, fix-pattern
+// extraction, and a blended result-quality score that combines verifier
+// pass with tool-success rate. The base Reflect() remains as a backward-
+// compatible shim for callers that do not have evidence/verifier data.
+func AnalyzeEpisode(input EpisodeInput) *EpisodeSummary {
+	summary := Reflect(input.UserContent, input.ToolEvents, input.Duration)
+	if summary == nil {
+		if input.AssistantAnswer == "" && len(input.EvidenceItems) == 0 {
+			return nil
+		}
+		summary = &EpisodeSummary{
+			Goal:     extractGoal(input.UserContent),
+			Outcome:  "conversation",
+			Duration: input.Duration,
+		}
+	}
+
+	summary.Outcome = classifyEpisodeOutcome(summary.Outcome, input)
+	summary.VerifierPassed = input.VerifierPassed
+	summary.ModelUsed = strings.TrimSpace(input.ModelUsed)
+	summary.ReactTurns = input.ReactTurns
+	summary.EvidenceRefs = evidencePreviews(input.EvidenceItems, 3)
+	summary.FixPatterns = extractFixPatterns(input.ToolEvents)
+	summary.FailedHypotheses = extractFailedHypotheses(input.AssistantAnswer)
+	summary.ErrorsSeen = dedupeAndTrim(input.ErrorMessages, 3, 200)
+	summary.GuardViolations = dedupeAndTrim(input.GuardViolations, 3, 120)
+	summary.GuardRetried = input.GuardRetried
+	summary.VerifiedRecorded = input.VerifiedRecorded
+	summary.QuestionsOpened = input.QuestionsOpened
+	summary.QuestionsResolved = input.QuestionsResolved
+	summary.AssumptionsRecorded = input.AssumptionsRecorded
+	summary.ResultQuality = computeResultQuality(input)
+	summary.Relations = extractEpisodeRelations(input)
+	summary.Learnings = mergeLearnings(summary.Learnings, structuredLearnings(input))
+	summary.OutcomePatterns = extractOutcomePatterns(summary)
+
+	return summary
+}
+
+func classifyEpisodeOutcome(base string, input EpisodeInput) string {
+	normalizedBase := strings.TrimSpace(base)
+	if normalizedBase == "" {
+		normalizedBase = "conversation"
+	}
+	status := strings.ToLower(strings.TrimSpace(input.TurnStatus))
+	switch status {
+	case "failed", "error":
+		return "failure"
+	case "degraded":
+		if hasEpisodeProgress(input) {
+			return "partial"
+		}
+		return "failure"
+	case "ok":
+		if !input.VerifierPassed {
+			if hasEpisodeProgress(input) {
+				return "partial"
+			}
+			return "failure"
+		}
+	}
+	if !input.VerifierPassed {
+		if hasEpisodeProgress(input) {
+			return "partial"
+		}
+		return "failure"
+	}
+	return normalizedBase
+}
+
+func hasEpisodeProgress(input EpisodeInput) bool {
+	if len(input.EvidenceItems) > 0 {
+		return true
+	}
+	for _, ev := range input.ToolEvents {
+		if ev.Success {
+			return true
+		}
+	}
+	return false
+}
+
+func extractOutcomePatterns(summary *EpisodeSummary) []EpisodeOutcomePattern {
+	if summary == nil {
+		return nil
+	}
+	normalizedOutcome := strings.TrimSpace(summary.Outcome)
+	if normalizedOutcome == "" {
+		normalizedOutcome = "conversation"
+	}
+	var patterns []EpisodeOutcomePattern
+	for _, learning := range summary.Learnings {
+		patterns = append(patterns, EpisodeOutcomePattern{
+			Outcome: normalizedOutcome,
+			Kind:    "learning",
+			Value:   learning,
+		})
+	}
+	for _, pattern := range summary.FixPatterns {
+		patterns = append(patterns, EpisodeOutcomePattern{
+			Outcome: "success",
+			Kind:    "fix_pattern",
+			Value:   pattern,
+		})
+	}
+	for _, err := range summary.ErrorsSeen {
+		patterns = append(patterns, EpisodeOutcomePattern{
+			Outcome: normalizedOutcome,
+			Kind:    "error_mode",
+			Value:   err,
+		})
+	}
+	for _, hyp := range summary.FailedHypotheses {
+		patterns = append(patterns, EpisodeOutcomePattern{
+			Outcome: normalizedOutcome,
+			Kind:    "failed_hypothesis",
+			Value:   hyp,
+		})
+	}
+	return dedupeOutcomePatterns(patterns)
+}
+
+// extractEpisodeRelations runs the canonical relation extractor over the
+// episode's textual surface (assistant answer, evidence refs, learnings)
+// and returns deduped triples. The same extractor that powers per-document
+// semantic ingestion is used here so the relation vocabulary stays
+// identical and `db.IsCanonicalGraphRelation` is the single write gate.
+//
+// A relation appearing more than once in the same episode is collapsed to
+// one occurrence here; the per-episode count is always 0 or 1 in the
+// distillation tally so a single chatty episode can't drive promotion on
+// its own. The promotion threshold cares about the number of distinct
+// episodes that observed the relation, not the per-episode hit count.
+func extractEpisodeRelations(input EpisodeInput) []EpisodeRelation {
+	var sources []string
+	if strings.TrimSpace(input.AssistantAnswer) != "" {
+		sources = append(sources, input.AssistantAnswer)
+	}
+	for _, item := range input.EvidenceItems {
+		if strings.TrimSpace(item) != "" {
+			sources = append(sources, item)
+		}
+	}
+	if len(sources) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]struct{})
+	var out []EpisodeRelation
+	for _, text := range sources {
+		// extractKnowledgeFacts expects (key, value); the empty key
+		// signals the extractor to use the text-derived subject only —
+		// no auto-substitution from a document key.
+		for _, fact := range extractKnowledgeFacts("", text) {
+			signature := strings.ToLower(fact.Subject) + "|" + fact.Relation + "|" + strings.ToLower(fact.Object)
+			if _, dup := seen[signature]; dup {
+				continue
+			}
+			seen[signature] = struct{}{}
+			out = append(out, EpisodeRelation(fact))
+		}
+	}
+	return out
+}
+
+func computeResultQuality(input EpisodeInput) float64 {
+	// Tool component: success rate across all tools, default 1.0 when no tools ran.
+	toolComponent := 1.0
+	if len(input.ToolEvents) > 0 {
+		successes := 0
+		for _, ev := range input.ToolEvents {
+			if ev.Success {
+				successes++
+			}
+		}
+		toolComponent = float64(successes) / float64(len(input.ToolEvents))
+	}
+	// Verifier component: binary pass/fail.
+	verifierComponent := 0.5
+	if input.VerifierPassed {
+		verifierComponent = 1.0
+	}
+	// Evidence component: rewards answers that had evidence to draw from.
+	evidenceComponent := 0.5
+	if len(input.EvidenceItems) >= 3 {
+		evidenceComponent = 1.0
+	} else if len(input.EvidenceItems) >= 1 {
+		evidenceComponent = 0.75
+	}
+	blended := (toolComponent*0.5 + verifierComponent*0.3 + evidenceComponent*0.2)
+	if len(input.GuardViolations) > 0 {
+		blended -= 0.1
+	}
+	if blended < 0 {
+		return 0
+	}
+	if blended > 1 {
+		return 1
+	}
+	return blended
+}
+
+func structuredLearnings(input EpisodeInput) []string {
+	var out []string
+	if input.GuardRetried {
+		out = append(out, "guard-triggered revision required before final answer")
+	}
+	if input.ReactTurns >= 2 {
+		out = append(out, "multi-step react loop used")
+	}
+	return out
+}
+
+func mergeLearnings(base []string, extras []string) []string {
+	if len(extras) == 0 {
+		return base
+	}
+	return dedupeStrings(append(base, extras...))
+}
+
+// extractFixPatterns detects tool sequences where a failure was followed by
+// a success on the same tool, typically indicating a successful retry or
+// correction. Returns a short descriptor per detected pattern.
+func extractFixPatterns(events []ToolEvent) []string {
+	if len(events) < 2 {
+		return nil
+	}
+	var patterns []string
+	seen := make(map[string]bool)
+	for i := 1; i < len(events); i++ {
+		prev := events[i-1]
+		curr := events[i]
+		if prev.ToolName == curr.ToolName && !prev.Success && curr.Success {
+			key := curr.ToolName
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			patterns = append(patterns, key+": fail→success on retry")
+		}
+	}
+	return patterns
+}
+
+// extractFailedHypotheses detects explicit self-corrections in the assistant
+// response — phrases like "actually, I was wrong about X" or "on second
+// thought, Y is incorrect". These are hypotheses the agent walked back and
+// are worth remembering so the same mistake is not made twice.
+var hypothesisWalkbackMarkers = []string{
+	"actually, i was wrong",
+	"actually, i was incorrect",
+	"on second thought",
+	"correction:",
+	"my earlier statement",
+	"revising my answer",
+	"that was incorrect",
+	"i was mistaken",
+	"i need to correct",
+}
+
+func extractFailedHypotheses(answer string) []string {
+	if answer == "" {
+		return nil
+	}
+	lower := strings.ToLower(answer)
+	var out []string
+	for _, marker := range hypothesisWalkbackMarkers {
+		idx := strings.Index(lower, marker)
+		if idx < 0 {
+			continue
+		}
+		// Capture the sentence that contains the marker.
+		sentenceEnd := len(answer)
+		for j := idx + len(marker); j < len(answer); j++ {
+			r := answer[j]
+			if r == '.' || r == '!' || r == '?' || r == '\n' {
+				sentenceEnd = j
+				break
+			}
+		}
+		start := idx
+		for start > 0 {
+			r := answer[start-1]
+			if r == '.' || r == '!' || r == '?' || r == '\n' {
+				break
+			}
+			start--
+		}
+		clause := strings.TrimSpace(answer[start:sentenceEnd])
+		if clause == "" {
+			continue
+		}
+		if len(clause) > 200 {
+			clause = clause[:200]
+		}
+		out = append(out, clause)
+	}
+	return dedupeStrings(out)
+}
+
+func evidencePreviews(items []string, max int) []string {
+	if len(items) == 0 {
+		return nil
+	}
+	var out []string
+	for _, item := range items {
+		trimmed := strings.TrimSpace(item)
+		if trimmed == "" {
+			continue
+		}
+		if len(trimmed) > 120 {
+			trimmed = trimmed[:120] + "…"
+		}
+		out = append(out, trimmed)
+		if len(out) >= max {
+			break
+		}
+	}
+	return out
+}
+
+func dedupeStrings(items []string) []string {
+	seen := make(map[string]struct{}, len(items))
+	var out []string
+	for _, item := range items {
+		key := strings.ToLower(strings.TrimSpace(item))
+		if key == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, item)
+	}
+	return out
+}
+
+func dedupeAndTrim(items []string, max, maxChars int) []string {
+	trimmed := dedupeStrings(items)
+	if max > 0 && len(trimmed) > max {
+		trimmed = trimmed[:max]
+	}
+	for i, item := range trimmed {
+		if maxChars > 0 && len(item) > maxChars {
+			trimmed[i] = item[:maxChars]
+		}
+	}
+	return trimmed
+}
+
+func dedupeOutcomePatterns(items []EpisodeOutcomePattern) []EpisodeOutcomePattern {
+	seen := make(map[string]struct{}, len(items))
+	var out []EpisodeOutcomePattern
+	for _, item := range items {
+		outcome := strings.TrimSpace(item.Outcome)
+		kind := strings.TrimSpace(item.Kind)
+		value := strings.TrimSpace(item.Value)
+		if outcome == "" || kind == "" || value == "" {
+			continue
+		}
+		key := strings.ToLower(outcome) + "|" + strings.ToLower(kind) + "|" + strings.ToLower(value)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, EpisodeOutcomePattern{
+			Outcome: outcome,
+			Kind:    kind,
+			Value:   value,
+		})
+	}
+	return out
+}
+
+func formatQuality(q float64) string {
+	switch {
+	case q >= 0.85:
+		return "high"
+	case q >= 0.60:
+		return "medium"
+	case q > 0:
+		return "low"
+	}
+	return "unknown"
 }
 
 // extractGoal gets the first sentence of user content as the goal.

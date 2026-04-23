@@ -45,6 +45,22 @@ type retrieverAdapter struct {
 }
 
 func (a *retrieverAdapter) Retrieve(ctx context.Context, sessionID, query string, budget int) string {
+	if a.r == nil {
+		return ""
+	}
+	// Per-request intent classification travels via context value —
+	// never a field on the shared *Retriever. Pre-v1.0.6 this adapter
+	// called a.r.SetIntents(...) before Retrieve, which mutated state on
+	// a struct shared across concurrent turns and could bleed intents
+	// from one request into another's routing plan.
+	if strings.TrimSpace(query) != "" {
+		reg := pipeline.NewIntentRegistry()
+		intent, conf := reg.Classify(query)
+		ctx = memory.WithIntents(ctx, []memory.IntentSignal{{
+			Label:      string(intent),
+			Confidence: conf,
+		}})
+	}
 	return a.r.Retrieve(ctx, sessionID, query, budget)
 }
 
@@ -57,21 +73,440 @@ func (a *ingestorAdapter) IngestTurn(ctx context.Context, session *session.Sessi
 	a.m.IngestTurn(ctx, session)
 }
 
-// buildAgentContext assembles a ContextBuilder with system prompt, tool defs,
-// and memory retrieval. Shared by executorAdapter and streamAdapter.
-func buildAgentContext(ctx context.Context, sess *session.Session, tools *agent.ToolRegistry, retriever *memory.Retriever, store *db.Store, promptCfg agent.PromptConfig, budgetCfg *core.ContextBudgetConfig) *agent.ContextBuilder {
+// resolveToolSearchConfig translates the operator-facing core.ToolSearchConfig
+// into the agent-local agenttools.ToolSearchConfig used at ranking time.
+// Zero-valued fields fall back to the package default so a partially-filled
+// TOML section still gets sensible knobs without the operator having to
+// redeclare every value.
+//
+// Clamps MCPLatencyPenalty at zero (negative penalties would be an
+// operator mistake that rewards remote tools; agenttools.RankTools also
+// clamps, but clamping at the boundary makes the telemetry stable).
+func resolveToolSearchConfig(c core.ToolSearchConfig) agenttools.ToolSearchConfig {
+	d := agenttools.DefaultToolSearchConfig()
+
+	topK := c.TopK
+	if topK <= 0 {
+		topK = d.TopK
+	}
+	tokenBudget := c.TokenBudget
+	if tokenBudget <= 0 {
+		tokenBudget = d.TokenBudget
+	}
+	penalty := c.MCPLatencyPenalty
+	if penalty < 0 {
+		penalty = 0
+	}
+	alwaysInclude := c.AlwaysInclude
+	if alwaysInclude == nil {
+		alwaysInclude = d.AlwaysInclude
+	}
+
+	return agenttools.ToolSearchConfig{
+		TopK:              topK,
+		TokenBudget:       tokenBudget,
+		MCPLatencyPenalty: penalty,
+		AlwaysInclude:     alwaysInclude,
+	}
+}
+
+// prunerAdapter wraps the query-time semantic tool ranker (internal/agent/tools.SelectToolDefs)
+// so the pipeline's stageToolPruning can call it without depending on
+// the daemon's concrete types. Implements pipeline.ToolPruner.
+//
+// v1.0.6: ownership of tool selection moved from buildAgentContext into
+// this adapter so the pipeline can emit `tool_search.*` trace
+// annotations around the call (matching Rust's
+// crates/roboticus-pipeline/src/core/tool_prune.rs). The adapter does
+// nothing the old code path didn't do — it simply moves the seam to
+// where the trace recorder lives.
+type prunerAdapter struct {
+	tools         *agent.ToolRegistry
+	embedClient   *llm.EmbeddingClient
+	toolSearchCfg agenttools.ToolSearchConfig
+}
+
+type capabilitySummaryAdapter struct {
+	store      *db.Store
+	tools      *agent.ToolRegistry
+	promptBase agent.PromptConfig
+}
+
+func (a *capabilitySummaryAdapter) Summarize(ctx context.Context, sess *session.Session, query string) string {
+	if a == nil {
+		return ""
+	}
+	cfg := a.promptBase
+	if sess != nil && sess.AgentName != "" && sess.AgentName != "default" {
+		cfg.AgentName = sess.AgentName
+	}
+	if a.tools != nil {
+		cfg.ToolNames = a.tools.Names()
+		cfg.ToolDescs = a.tools.NamesWithDescriptions()
+	}
+	return buildCapabilitySummary(ctx, a.store, cfg, nil, query)
+}
+
+// PruneTools extracts the latest user message as the ranking query and
+// delegates to SelectToolDefs. Returns the selected []llm.ToolDef plus
+// telemetry stats for the pipeline stage to annotate.
+//
+// Never returns a non-nil error today — SelectToolDefs already handles
+// embedding failures internally by returning a status-annotated stats
+// struct. The error position in the signature is reserved so callers
+// can be written against the final shape once we surface embedding
+// errors upward (planned for the CEIL remediation pass).
+func (a *prunerAdapter) PruneTools(ctx context.Context, sess *session.Session) ([]llm.ToolDef, agenttools.ToolSearchStats, error) {
+	query := toolPruningQuery(sess)
+	cfg := a.toolSearchCfg
+	if sess != nil && len(sess.SourceArtifacts()) > 0 {
+		cfg.AlwaysInclude = appendAlwaysInclude(cfg.AlwaysInclude, "read_file")
+	}
+	if sess != nil && sess.TurnToolProfile() == "focused_inspection" {
+		cfg.AlwaysInclude = appendAlwaysInclude(cfg.AlwaysInclude, "glob_files", "list_directory", "read_file")
+	}
+	if sess != nil && sess.TurnToolProfile() == "focused_analysis_authoring" {
+		cfg.AlwaysInclude = appendAlwaysInclude(cfg.AlwaysInclude,
+			"inventory_projects", "list_directory", "bash", "search_files", "glob_files", "read_file",
+			"write_file", "edit_file", "get_runtime_context",
+		)
+	}
+	defs, stats := agenttools.SelectToolDefs(ctx, a.tools, a.embedClient, query, cfg)
+	return defs, stats, nil
+}
+
+// latestUserMessageContent returns the Content of the most recent user
+// message in sess, or "" if the session has no user messages yet.
+// Used by buildAgentContext to derive a ranking query for semantic
+// tool pruning. Empty-string queries are valid (cause ranking to
+// fall back to always_include only).
+func latestUserMessageContent(sess *session.Session) string {
+	msgs := sess.Messages()
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == "user" {
+			return msgs[i].Content
+		}
+	}
+	return ""
+}
+
+func toolPruningQuery(sess *session.Session) string {
+	base := latestUserMessageContent(sess)
+	if sess == nil {
+		return base
+	}
+	sources := sess.SourceArtifacts()
+	if len(sources) == 0 {
+		return base
+	}
+	return base + "\n\nAuthoritative source artifacts to read before answering: " + strings.Join(sources, ", ")
+}
+
+func appendAlwaysInclude(existing []string, names ...string) []string {
+	if len(names) == 0 {
+		return append([]string(nil), existing...)
+	}
+	seen := make(map[string]struct{}, len(existing)+len(names))
+	merged := make([]string, 0, len(existing)+len(names))
+	for _, name := range existing {
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		merged = append(merged, name)
+	}
+	for _, name := range names {
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		merged = append(merged, name)
+	}
+	return merged
+}
+
+func isIntrospectionQuery(query string) bool {
+	lower := strings.ToLower(strings.TrimSpace(query))
+	if lower == "" {
+		return false
+	}
+	markers := []string{
+		"introspect",
+		"introspection",
+		"capability",
+		"capabilities",
+		"what can you do",
+		"what tools",
+		"what tool",
+		"tools you can use",
+		"tool you can use",
+		"available tools",
+		"subagent",
+		"subagents",
+		"functionality",
+		"runtime state",
+	}
+	for _, marker := range markers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+type capabilitySubagent struct {
+	Name        string
+	DisplayName string
+	Model       string
+	Role        string
+	Description string
+	Enabled     bool
+}
+
+func loadCapabilitySubagents(ctx context.Context, store *db.Store) []capabilitySubagent {
+	if store == nil {
+		return nil
+	}
+	rows, err := db.NewRouteQueries(store).ListSubAgentRoster(ctx)
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []capabilitySubagent
+	for rows.Next() {
+		var (
+			name, displayName, model, role, description string
+			enabled                                     bool
+		)
+		if err := rows.Scan(&name, &displayName, &model, &enabled, &role, &description); err != nil {
+			return out
+		}
+		out = append(out, capabilitySubagent{
+			Name:        name,
+			DisplayName: displayName,
+			Model:       model,
+			Role:        role,
+			Description: description,
+			Enabled:     enabled,
+		})
+	}
+	return out
+}
+
+func buildCapabilitySummary(
+	ctx context.Context,
+	store *db.Store,
+	cfg agent.PromptConfig,
+	selectedDefs []llm.ToolDef,
+	query string,
+) string {
+	if !isIntrospectionQuery(query) {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("This snapshot is authoritative runtime state for capability questions. ")
+	sb.WriteString("Use it directly before reaching for exploratory introspection tools.\n")
+
+	if len(cfg.Skills) > 0 {
+		limit := min(len(cfg.Skills), 8)
+		_, _ = fmt.Fprintf(&sb, "- Active skills (%d): %s\n", len(cfg.Skills), strings.Join(cfg.Skills[:limit], ", "))
+		if len(cfg.Skills) > limit {
+			_, _ = fmt.Fprintf(&sb, "- Additional skills not listed here: %d\n", len(cfg.Skills)-limit)
+		}
+	}
+
+	toolNames := make([]string, 0, len(selectedDefs))
+	for _, def := range selectedDefs {
+		name := strings.TrimSpace(def.Function.Name)
+		if name != "" {
+			toolNames = append(toolNames, name)
+		}
+	}
+	if len(toolNames) == 0 {
+		toolNames = append(toolNames, cfg.ToolNames...)
+	}
+	if len(toolNames) > 0 {
+		limit := min(len(toolNames), 12)
+		_, _ = fmt.Fprintf(&sb, "- Live tool surface (%d): %s\n", len(toolNames), strings.Join(toolNames[:limit], ", "))
+		if len(toolNames) > limit {
+			_, _ = fmt.Fprintf(&sb, "- Additional tools not listed here: %d\n", len(toolNames)-limit)
+		}
+	}
+
+	subagents := loadCapabilitySubagents(ctx, store)
+	if len(subagents) > 0 {
+		enabled := 0
+		for _, sa := range subagents {
+			if sa.Enabled {
+				enabled++
+			}
+		}
+		_, _ = fmt.Fprintf(&sb, "- Configured subagents: %d total, %d enabled\n", len(subagents), enabled)
+		limit := min(len(subagents), 6)
+		for _, sa := range subagents[:limit] {
+			label := sa.Name
+			if strings.TrimSpace(sa.DisplayName) != "" && sa.DisplayName != sa.Name {
+				label = sa.DisplayName + " (" + sa.Name + ")"
+			}
+			status := "disabled"
+			if sa.Enabled {
+				status = "enabled"
+			}
+			line := fmt.Sprintf("  - %s: role=%s, model=%s, status=%s", label, sa.Role, sa.Model, status)
+			if desc := strings.TrimSpace(sa.Description); desc != "" {
+				line += ", purpose=" + desc
+			}
+			sb.WriteString(line + "\n")
+		}
+		if len(subagents) > limit {
+			_, _ = fmt.Fprintf(&sb, "- Additional subagents not listed here: %d\n", len(subagents)-limit)
+		}
+	}
+
+	return strings.TrimSpace(sb.String())
+}
+
+func promptToolSurface(defs []llm.ToolDef) ([]string, [][2]string) {
+	if len(defs) == 0 {
+		return nil, nil
+	}
+	names := make([]string, 0, len(defs))
+	descs := make([][2]string, 0, len(defs))
+	for _, def := range defs {
+		name := strings.TrimSpace(def.Function.Name)
+		if name == "" {
+			continue
+		}
+		names = append(names, name)
+		descs = append(descs, [2]string{name, strings.TrimSpace(def.Function.Description)})
+	}
+	return names, descs
+}
+
+func applyPromptProfileForSession(ctx context.Context, store *db.Store, sess *session.Session, cfg agent.PromptConfig) (agent.PromptConfig, string) {
+	if sess == nil {
+		return cfg, "orchestrator"
+	}
+	sess.SetAgentRole("orchestrator")
+	if sess.AgentName != "" && sess.AgentName != "default" {
+		cfg.AgentName = sess.AgentName
+	}
+	isSubagent, err := db.IsSubagentName(ctx, store, sess.AgentID)
+	if err != nil {
+		log.Warn().Err(err).Str("agent_id", sess.AgentID).Msg("subagent role lookup failed, falling back to orchestrator prompt profile")
+		return cfg, "orchestrator"
+	}
+	if !isSubagent {
+		return cfg, "orchestrator"
+	}
+	sess.SetAgentRole("subagent")
+	cfg.IsSubagent = true
+	cfg.Personality = ""
+	cfg.Operator = ""
+	cfg.Directives = ""
+	return cfg, "subagent_minimal"
+}
+
+// buildAgentContext assembles a ContextBuilder with system prompt, PRUNED
+// tool defs, and pipeline-prepared memory. Shared by executorAdapter and
+// streamAdapter.
+//
+// v1.0.6: retriever and store are no longer parameters — see the memory
+// injection block below for why. The pipeline's Stage 8.5 is the single
+// authority for memory preparation; this adapter just reads what the
+// pipeline already wrote to the session.
+//
+// v1.0.6 Rust-parity (tool_search port): the tool set injected into the
+// LLM request is SEMANTICALLY PRUNED against the current user query,
+// not bulk-injected. Matches Rust's roboticus-agent/src/tool_search.rs.
+// Pruning is done ONCE per user request and cached on the
+// ContextBuilder; the ReAct loop reuses the same pruned set for every
+// iteration of that user request.
+//
+// Callers pass embedClient (for query embedding) and toolSearchCfg
+// (pruning knobs: top_k, token_budget, mcp_penalty, always_include).
+// If embedClient is nil or the embedding call fails, pruning falls
+// back to always_include + the tool set sorted by registration order
+// within budget — callers still get a bounded tool surface, just
+// without query-relevance ranking.
+func buildAgentContext(ctx context.Context, sess *session.Session, store *db.Store, tools *agent.ToolRegistry, embedClient *llm.EmbeddingClient, toolSearchCfg agenttools.ToolSearchConfig, promptCfg agent.PromptConfig, budgetCfg *core.ContextBudgetConfig, cacheCfg *core.CacheConfig) *agent.ContextBuilder {
 	ccfg := agent.DefaultContextConfig()
 	if budgetCfg != nil {
 		ccfg.BudgetConfig = budgetCfg
 	}
+	// Prompt compression gate (SYS-01-005). This remains benchmark-only
+	// on the current runtime: the config wire still exists so controlled
+	// comparison soaks can exercise the live request path, but the
+	// feature is disabled by default and is not recommended for normal
+	// operator-facing use.
+	if cacheCfg != nil {
+		ccfg.PromptCompression = cacheCfg.PromptCompression
+		ccfg.CompressionTargetRatio = cacheCfg.CompressionTargetRatio
+	}
 	ctxBuilder := agent.NewContextBuilder(ccfg)
 
-	cfg := promptCfg
-	// Use session's agent name only if explicitly set (not "default").
-	// Otherwise keep the configured agent name (e.g., "Duncan").
-	if sess.AgentName != "" && sess.AgentName != "default" {
-		cfg.AgentName = sess.AgentName
+	// Tool pruning: primary owner is the pipeline's stageToolPruning
+	// (internal/pipeline/pipeline_run_stages.go). When the pipeline ran,
+	// `sess.SelectedToolDefs()` is non-nil and carries exactly the set
+	// the pipeline chose, annotated on the trace under `tool_search.*`.
+	//
+	// When a caller bypasses the pipeline (tests that drive the
+	// executor adapter directly, or ad-hoc tooling), the session will
+	// not have a pruned set. In that case this adapter runs the same
+	// ranker inline as a defensive fallback so the tool surface is
+	// still bounded — the only thing lost is the pipeline-trace
+	// annotation, which is fine for non-pipeline callers.
+	//
+	// See internal/agent/tools/tool_search.go for the algorithm and
+	// config defaults (TopK=15, TokenBudget=4000, MCPPenalty=0.05).
+	// Pre-v1.0.6 this path did `tools.ToolDefs()` — bulk injection of
+	// all 46 tools (~5886 tokens). Every production turn carried ~47%
+	// more context overhead than Rust's pipeline. Closing that
+	// regression here; the ownership move to the pipeline stage is
+	// tracked in docs/parity-forensics/systems/02-tool-exposure-pruning-and-execution-loop.md.
+	var (
+		selectedDefs []llm.ToolDef
+		searchStats  agenttools.ToolSearchStats
+		searchSource string
+		selectedSet  bool
+	)
+	if pruned := sess.SelectedToolDefs(); pruned != nil {
+		selectedDefs = pruned
+		searchSource = "pipeline"
+		selectedSet = true
+		ctxBuilder.SetTools(selectedDefs)
+	} else if tools != nil {
+		query := toolPruningQuery(sess)
+		cfg := toolSearchCfg
+		if len(sess.SourceArtifacts()) > 0 {
+			cfg.AlwaysInclude = appendAlwaysInclude(cfg.AlwaysInclude, "read_file")
+		}
+		selectedDefs, searchStats = agenttools.SelectToolDefs(ctx, tools, embedClient, query, cfg)
+		searchSource = "fallback"
+		selectedSet = true
+		ctxBuilder.SetTools(selectedDefs)
 	}
+
+	cfg, promptProfile := applyPromptProfileForSession(ctx, store, sess, promptCfg)
+	// Keep the prompt-layer roster aligned with the structured tool surface
+	// sent in llm.Request.Tools. Pre-v1.0.6 this block kept the daemon boot's
+	// full registry roster in PromptConfig while the request carried a pruned
+	// set, which told the model about tools it could not actually call.
+	if selectedSet {
+		cfg.ToolNames, cfg.ToolDescs = promptToolSurface(selectedDefs)
+	}
+	cfg.CapabilitySummary = buildCapabilitySummary(
+		ctx,
+		store,
+		cfg,
+		selectedDefs,
+		latestUserMessageContent(sess),
+	)
+	cfg.InspectionTarget = sess.InspectionTargetSummary()
+	cfg.DestinationTarget = sess.DestinationTargetSummary()
+	cfg.ToolProfile = sess.TurnToolProfile()
 	systemPrompt := agent.BuildSystemPrompt(cfg)
 
 	// HMAC trust boundary: wrap system prompt so model output verification
@@ -84,27 +519,48 @@ func buildAgentContext(ctx context.Context, sess *session.Session, tools *agent.
 		}
 	}
 
+	ctxBuilder.SetSystemPrompt(systemPrompt)
+
 	log.Info().
 		Str("agent_name", cfg.AgentName).
+		Str("prompt_profile", promptProfile).
 		Int("personality_len", len(cfg.Personality)).
 		Int("firmware_len", len(cfg.Firmware)).
 		Int("prompt_len", len(systemPrompt)).
-		Int("tool_defs", func() int {
-			if tools != nil {
-				return len(tools.ToolDefs())
-			}
-			return 0
-		}()).
+		Int("selected_tool_count", len(selectedDefs)).
+		Str("tool_search_source", searchSource).
+		Int("fallback_tool_defs_before", searchStats.CandidatesConsidered).
+		Int("fallback_tool_defs_after", searchStats.CandidatesSelected).
+		Int("fallback_tool_token_savings", searchStats.TokenSavings).
+		Str("fallback_tool_search_status", searchStats.EmbeddingStatus).
 		Int("tool_names_in_prompt", len(cfg.ToolNames)).
-		Bool("has_retriever", retriever != nil).
+		Bool("memory_ctx_present", sess.MemoryContext() != "").
+		Bool("memory_idx_present", sess.MemoryIndex() != "").
 		Msg("context built for inference")
-	ctxBuilder.SetSystemPrompt(systemPrompt)
 
-	if tools != nil {
-		ctxBuilder.SetTools(tools.ToolDefs())
-	}
-
-	// Memory injection: two-stage pattern (Rust parity).
+	// Memory injection: pipeline-owned.
+	//
+	// The pipeline's Stage 8.5 (internal/pipeline/pipeline_run_stages.go,
+	// stageMemoryRetrieval) is the single authority for preparing memory
+	// context + memory index on the session. By the time this adapter runs
+	// (inside the pipeline's inference stage), Stage 8.5 has already:
+	//
+	//   * populated MemoryIndex unconditionally (the recall handle that the
+	//     model uses for on-demand lookups; always present, even when no
+	//     retrieval was run, so the model can call recall_memory(id))
+	//   * populated MemoryContext IFF retrieval strategy != "none" (working
+	//     memory + ambient + filtered tiered evidence); empty means the
+	//     strategy decided no retrieval was useful for this turn
+	//
+	// Pre-v1.0.6 this adapter had a FALLBACK path that reconstructed both
+	// if the session fields were empty (RetrieveDirectOnly +
+	// BuildMemoryIndex inline). The v1.0.6 architecture audit flagged that
+	// fallback as a "pipeline is single behavioral authority" violation —
+	// when Stage 8.5 decided "no retrieval needed" for an early-turn
+	// simple request, the fallback ignored that decision and retrieved
+	// anyway. That's split-brain: two code paths producing memory, one
+	// outside the pipeline. The fix is to trust the pipeline's output
+	// verbatim and serve whatever it prepared (including empty).
 	//
 	// Rust architecture (retrieval.rs lines 235-258):
 	//   "Memory = index, not storage. Only working memory and recent activity
@@ -116,65 +572,117 @@ func buildAgentContext(ctx context.Context, sess *session.Session, tools *agent.
 	// content. If the model sees a blob of "memories" it assumes that's
 	// everything and never calls recall_memory — leading to confabulation
 	// when the topic isn't in the injected block.
-	if retriever != nil {
-		msgs := sess.Messages()
-		var query string
-		for i := len(msgs) - 1; i >= 0; i-- {
-			if msgs[i].Role == "user" {
-				query = msgs[i].Content
-				break
-			}
-		}
-		// Retrieve working + ambient only (Rust: direct_sections filter).
-		mem := retriever.RetrieveDirectOnly(ctx, sess.ID, query, 2048)
-		if mem != "" {
-			ctxBuilder.SetMemory(mem)
-		}
+	if memCtx := sess.MemoryContext(); memCtx != "" {
+		ctxBuilder.SetMemory(memCtx)
+	}
+	if memIdx := sess.MemoryIndex(); memIdx != "" {
+		ctxBuilder.SetMemoryIndex(memIdx)
 	}
 
-	// Memory index: always inject so the model can call recall_memory(id).
-	// Rust: two-stage pattern — index always injected, full content on demand.
-	// Beyond-parity: query-aware index selection — when the user asks about a
-	// specific topic, FTS-matched entries are included alongside the global top-N.
-	if store != nil {
-		msgs := sess.Messages()
-		var userQuery string
-		for i := len(msgs) - 1; i >= 0; i-- {
-			if msgs[i].Role == "user" {
-				userQuery = msgs[i].Content
-				break
-			}
-		}
-		index := agenttools.BuildMemoryIndex(ctx, store, 20, userQuery)
-		if index != "" {
-			ctxBuilder.SetMemoryIndex(index)
-		} else {
-			ctxBuilder.SetMemoryIndex("[Memory Index: No memories stored yet. " +
-				"Memories will accumulate as conversations continue. " +
-				"When a user asks about a past topic, use search_memories(query) to check, " +
-				"or be honest that you don't have stored memories about it yet.]")
-		}
+	// Hippocampus summary: pipeline-owned (stageHippocampusSummary).
+	// When present, it joins the assembled system-prompt stream as an
+	// additional ambient note so the model knows which agent-owned
+	// tables, knowledge sources, and system tables are available
+	// without having to call get_memory_stats or a registry tool every
+	// turn. Matches Rust parity (context_builder.rs:356-369).
+	//
+	// Consumers that bypass the pipeline (non-pipeline test paths)
+	// will see an empty summary here; injection is gated on non-empty
+	// so there's no risk of an empty system message reaching the
+	// model.
+	if hippo := sess.HippocampusSummary(); hippo != "" {
+		ctxBuilder.AppendSystemNote(hippo)
 	}
+	appendCheckpointRestoreNote(ctx, ctxBuilder, store, sess)
 
 	return ctxBuilder
 }
 
+func appendCheckpointRestoreNote(ctx context.Context, ctxBuilder *agent.ContextBuilder, store *db.Store, sess *session.Session) {
+	if store == nil || sess == nil || strings.TrimSpace(sess.ID) == "" {
+		return
+	}
+	rec, err := db.NewCheckpointRepository(store).LoadLatestRecord(ctx, sess.ID)
+	if err != nil || rec == nil {
+		return
+	}
+	note := formatCheckpointRestoreNote(*rec)
+	if note == "" {
+		return
+	}
+	ctxBuilder.AppendSystemNote(note)
+}
+
+func formatCheckpointRestoreNote(rec db.CheckpointRecord) string {
+	const summaryCap = 1200
+	const tasksCap = 400
+	const digestCap = 400
+
+	summary := strings.TrimSpace(rec.MemorySummary)
+	digest := strings.TrimSpace(rec.ConversationDigest)
+	tasks := strings.TrimSpace(rec.ActiveTasks)
+	if summary == "" && digest == "" && tasks == "" {
+		return ""
+	}
+
+	var parts []string
+	if summary != "" {
+		header := "Session checkpoint restore"
+		if rec.TurnCount > 0 {
+			header = fmt.Sprintf("Session checkpoint restore (turn_count=%d)", rec.TurnCount)
+		}
+		parts = append(parts, header+": "+truncateForNote(summary, summaryCap))
+	} else if rec.TurnCount > 0 {
+		parts = append(parts, fmt.Sprintf("Session checkpoint restore (turn_count=%d)", rec.TurnCount))
+	}
+	if tasks != "" {
+		parts = append(parts, "Active tasks: "+truncateForNote(tasks, tasksCap))
+	}
+	if digest != "" {
+		parts = append(parts, "Conversation digest: "+truncateForNote(digest, digestCap))
+	}
+	return "[Checkpoint Restore]\n" + strings.Join(parts, "\n")
+}
+
+func truncateForNote(s string, max int) string {
+	s = strings.Join(strings.Fields(strings.TrimSpace(s)), " ")
+	if max <= 0 || len(s) <= max {
+		return s
+	}
+	if max <= 3 {
+		return s[:max]
+	}
+	return s[:max-3] + "..."
+}
+
 // executorAdapter wraps the full agent loop deps → pipeline.ToolExecutor.
+//
+// v1.0.6: retriever and store were removed. Memory preparation is the
+// pipeline's responsibility (Stage 8.5); the executor just reads what
+// the pipeline wrote to the session. See buildAgentContext for details.
+//
+// v1.0.6 Rust-parity (tool_search port): embedClient + toolSearchCfg
+// added so buildAgentContext can do query-time tool pruning via
+// agenttools.SelectToolDefs instead of bulk-injecting the full
+// registry.
 type executorAdapter struct {
 	llmSvc          *llm.Service
+	store           *db.Store
 	tools           *agent.ToolRegistry
 	policy          *policy.Engine
 	injection       *agent.InjectionDetector
 	memMgr          *memory.Manager
-	retriever       *memory.Retriever
-	store           *db.Store
+	embedClient     *llm.EmbeddingClient
+	toolSearchCfg   agenttools.ToolSearchConfig
 	promptConfig    agent.PromptConfig
 	budgetCfg       *core.ContextBudgetConfig
+	cacheCfg        *core.CacheConfig
 	maxTurnDuration time.Duration
+	toolRecorder    agent.ToolCallRecorder
 }
 
 func (a *executorAdapter) RunLoop(ctx context.Context, sess *session.Session) (string, int, error) {
-	ctxBuilder := buildAgentContext(ctx, sess, a.tools, a.retriever, a.store, a.promptConfig, a.budgetCfg)
+	ctxBuilder := buildAgentContext(ctx, sess, a.store, a.tools, a.embedClient, a.toolSearchCfg, a.promptConfig, a.budgetCfg, a.cacheCfg)
 
 	loopCfg := agent.DefaultLoopConfig()
 	if a.maxTurnDuration > 0 {
@@ -183,14 +691,36 @@ func (a *executorAdapter) RunLoop(ctx context.Context, sess *session.Session) (s
 	loop := agent.NewLoop(loopCfg, agent.LoopDeps{
 		LLM:       a.llmSvc,
 		Tools:     a.tools,
+		Recorder:  a.toolRecorder,
 		Policy:    a.policy,
 		Injection: a.injection,
 		Memory:    a.memMgr,
 		Context:   ctxBuilder,
+		Store:     a.store,
 	})
 
 	content, err := loop.Run(ctx, sess)
 	return content, loop.TurnCount(), err
+}
+
+type toolCallRecorderAdapter struct {
+	store *db.Store
+}
+
+func (a *toolCallRecorderAdapter) RecordToolExecution(ctx context.Context, rec agent.ToolExecutionRecord) error {
+	if a == nil || a.store == nil || rec.TurnID == "" {
+		return nil
+	}
+	repo := db.NewToolsRepository(a.store)
+	return repo.Record(ctx, db.ToolCallRow{
+		ID:         rec.TurnID + ":" + rec.ToolCallID,
+		TurnID:     rec.TurnID,
+		ToolName:   rec.ToolName,
+		Input:      rec.Input,
+		Output:     rec.Output,
+		Status:     rec.Status,
+		DurationMs: rec.DurationMs,
+	})
 }
 
 // nicknameAdapter wraps *llm.Service + *db.Store → pipeline.NicknameRefiner.
@@ -355,17 +885,23 @@ func (a *skillAdapter) buildParams(defaults map[string]string, userInput, previo
 }
 
 // streamAdapter wraps agent context builder deps → pipeline.StreamPreparer.
+//
+// v1.0.6: retriever and store were removed. See executorAdapter note.
+// Also carries embedClient + toolSearchCfg for query-time tool
+// pruning (Rust parity: tool_search.rs).
 type streamAdapter struct {
-	llmSvc       *llm.Service
-	tools        *agent.ToolRegistry
-	retriever    *memory.Retriever
-	store        *db.Store
-	promptConfig agent.PromptConfig
-	budgetCfg    *core.ContextBudgetConfig
+	llmSvc        *llm.Service
+	store         *db.Store
+	tools         *agent.ToolRegistry
+	embedClient   *llm.EmbeddingClient
+	toolSearchCfg agenttools.ToolSearchConfig
+	promptConfig  agent.PromptConfig
+	budgetCfg     *core.ContextBudgetConfig
+	cacheCfg      *core.CacheConfig
 }
 
 func (a *streamAdapter) PrepareStream(ctx context.Context, sess *session.Session) (*llm.Request, error) {
-	ctxBuilder := buildAgentContext(ctx, sess, a.tools, a.retriever, a.store, a.promptConfig, a.budgetCfg)
+	ctxBuilder := buildAgentContext(ctx, sess, a.store, a.tools, a.embedClient, a.toolSearchCfg, a.promptConfig, a.budgetCfg, a.cacheCfg)
 	req := ctxBuilder.BuildRequest(sess)
 	req.Stream = true
 	return req, nil

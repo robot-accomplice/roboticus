@@ -60,13 +60,13 @@ const (
 	TurnCreative
 )
 
-// Manager handles 5-tier memory ingestion and retrieval.
+// Manager handles memory ingestion and retrieval across the layered stores.
 type Manager struct {
 	config      Config
 	store       *db.Store
 	errBus      *core.ErrorBus
 	embedClient *llm.EmbeddingClient
-	vectorIndex   db.VectorIndex
+	vectorIndex db.VectorIndex
 }
 
 // NewManager creates a memory manager with the given config.
@@ -329,24 +329,46 @@ func (mm *Manager) storeEpisodicMemoryWithImportance(ctx context.Context, classi
 
 // storeSemanticMemory writes to the semantic_memory table with UPSERT.
 // When a key is superseded, the old entry is marked stale rather than deleted.
+//
+// Milestone 3 (canonical knowledge layer):
+//   - When an existing key's value changes, bump version and refresh
+//     effective_date so retrieval can prefer the latest authoritative
+//     revision.
+//   - When the new value matches the existing value, leave version alone so
+//     idempotent re-writes do not inflate the revision counter.
 func (mm *Manager) storeSemanticMemory(ctx context.Context, category, key, value string) {
 	entryID := db.NewID()
 	_, err := mm.store.ExecContext(ctx,
-		`INSERT INTO semantic_memory (id, category, key, value)
-		 VALUES (?, ?, ?, ?)
+		`INSERT INTO semantic_memory (id, category, key, value, version, effective_date)
+		 VALUES (?, ?, ?, ?, 1, datetime('now'))
 		 ON CONFLICT(category, key) DO UPDATE SET
 		     value = excluded.value,
 		     updated_at = datetime('now'),
 		     memory_state = 'active',
-		     state_reason = NULL`,
+		     state_reason = NULL,
+		     superseded_by = NULL,
+		     version = CASE
+		         WHEN semantic_memory.value = excluded.value THEN semantic_memory.version
+		         ELSE semantic_memory.version + 1
+		     END,
+		     effective_date = CASE
+		         WHEN semantic_memory.value = excluded.value THEN semantic_memory.effective_date
+		         ELSE datetime('now')
+		     END`,
 		entryID, category, key, value,
 	)
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to store semantic memory")
 		return
 	}
-	mm.autoIndex(ctx, "semantic_memory", entryID, key+": "+value)
-	mm.embedAndStore(ctx, "semantic_memory", entryID, key+": "+value)
+	actualID := entryID
+	_ = mm.store.QueryRowContext(ctx,
+		`SELECT id FROM semantic_memory WHERE category = ? AND key = ?`,
+		category, key,
+	).Scan(&actualID)
+	mm.autoIndex(ctx, "semantic_memory", actualID, key+": "+value)
+	mm.embedAndStore(ctx, "semantic_memory", actualID, key+": "+value)
+	mm.extractKnowledgeFacts(ctx, "semantic_memory", actualID, key, value)
 }
 
 // MarkSemanticStale marks semantic entries as stale by category and key prefix.
@@ -400,7 +422,8 @@ func (mm *Manager) ingestRelationshipsWithTrust(ctx context.Context, messages []
 				 ON CONFLICT(entity_id) DO UPDATE SET
 				   trust_score = MAX(trust_score, ?),
 				   interaction_count = interaction_count + 1,
-				   last_interaction = datetime('now')`,
+				   last_interaction = datetime('now'),
+				   updated_at = datetime('now')`,
 				db.NewID(), entity, entity, trustScore, trustScore,
 			); err != nil {
 				mm.errBus.ReportIfErr(err, "memory", "ingest_relationship", core.SevWarning)
@@ -423,6 +446,101 @@ func semanticKey(content string) string {
 	h := fnv.New32a()
 	h.Write([]byte(content))
 	return fmt.Sprintf("%s_%08x", prefix, h.Sum32())
+}
+
+type extractedFact struct {
+	Subject  string
+	Relation string
+	Object   string
+}
+
+var graphRelationPatterns = []struct {
+	relation string
+	markers  []string
+}{
+	{relation: "depends_on", markers: []string{" depends on ", " dependent on "}},
+	{relation: "owned_by", markers: []string{" owned by ", " owner is "}},
+	{relation: "uses", markers: []string{" uses ", " use ", " powered by "}},
+	{relation: "blocks", markers: []string{" blocks "}},
+	{relation: "blocked_by", markers: []string{" blocked by "}},
+	{relation: "causes", markers: []string{" causes "}},
+	{relation: "caused_by", markers: []string{" caused by "}},
+	{relation: "version_of", markers: []string{" version of "}},
+}
+
+func (mm *Manager) extractKnowledgeFacts(ctx context.Context, sourceTable, sourceID, key, value string) {
+	if mm.store == nil {
+		return
+	}
+	for _, fact := range extractKnowledgeFacts(key, value) {
+		factID := knowledgeFactID(sourceTable, sourceID, fact.Subject, fact.Relation, fact.Object)
+		if _, err := mm.store.ExecContext(ctx,
+			`INSERT INTO knowledge_facts (id, subject, relation, object, source_table, source_id, confidence)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)
+			 ON CONFLICT(id) DO UPDATE SET
+			   subject = excluded.subject,
+			   relation = excluded.relation,
+			   object = excluded.object,
+			   source_table = excluded.source_table,
+			   source_id = excluded.source_id,
+			   confidence = excluded.confidence,
+			   updated_at = datetime('now')`,
+			factID, fact.Subject, fact.Relation, fact.Object, sourceTable, sourceID, 0.75,
+		); err != nil {
+			mm.errBus.ReportIfErr(err, "memory", "store_knowledge_fact", core.SevWarning)
+			continue
+		}
+		mm.autoIndex(ctx, "knowledge_facts", factID, fact.Subject+" "+fact.Relation+" "+fact.Object)
+	}
+}
+
+func extractKnowledgeFacts(key, value string) []extractedFact {
+	text := strings.TrimSpace(value)
+	if text == "" {
+		return nil
+	}
+
+	subjectHint := strings.TrimSpace(key)
+	lower := strings.ToLower(text)
+	seen := make(map[string]struct{})
+	var facts []extractedFact
+
+	for _, pattern := range graphRelationPatterns {
+		for _, marker := range pattern.markers {
+			idx := strings.Index(lower, marker)
+			if idx < 0 {
+				continue
+			}
+			left := strings.TrimSpace(text[:idx])
+			right := strings.TrimSpace(text[idx+len(marker):])
+			left = strings.Trim(left, " .,:;")
+			right = strings.Trim(right, " .,:;")
+			if subjectHint != "" && (left == "" || strings.EqualFold(left, "the system")) {
+				left = subjectHint
+			}
+			if left == "" || right == "" {
+				continue
+			}
+			signature := strings.ToLower(left + "|" + pattern.relation + "|" + right)
+			if _, ok := seen[signature]; ok {
+				continue
+			}
+			seen[signature] = struct{}{}
+			facts = append(facts, extractedFact{
+				Subject:  left,
+				Relation: pattern.relation,
+				Object:   right,
+			})
+		}
+	}
+
+	return facts
+}
+
+func knowledgeFactID(sourceTable, sourceID, subject, relation, object string) string {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(sourceTable + "|" + sourceID + "|" + strings.ToLower(subject) + "|" + relation + "|" + strings.ToLower(object)))
+	return fmt.Sprintf("fact_%08x", h.Sum32())
 }
 
 // Turn classification and tool output helpers moved to manager_classify.go.\n\n

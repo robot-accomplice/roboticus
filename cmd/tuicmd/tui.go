@@ -1,8 +1,8 @@
 package tuicmd
 
 import (
-	"roboticus/cmd/internal/cmdutil"
 	"fmt"
+	"roboticus/cmd/internal/cmdutil"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"

@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"strings"
 	"sync"
 
 	"github.com/rs/zerolog/log"
@@ -61,6 +62,10 @@ func NewQualityTracker(windowSize int) *QualityTracker {
 
 // Record adds a quality observation for a model. Quality is clamped to [0.0, 1.0].
 func (qt *QualityTracker) Record(model string, quality float64) {
+	model = canonicalModelKey(model)
+	if model == "" {
+		return
+	}
 	if quality < 0 {
 		quality = 0
 	}
@@ -82,6 +87,10 @@ func (qt *QualityTracker) Record(model string, quality float64) {
 // EstimatedQuality returns the windowed average quality for a model.
 // Returns 0.5 (neutral) if no observations exist.
 func (qt *QualityTracker) EstimatedQuality(model string) float64 {
+	model = canonicalModelKey(model)
+	if model == "" {
+		return 0.5
+	}
 	qt.mu.RLock()
 	defer qt.mu.RUnlock()
 
@@ -92,8 +101,44 @@ func (qt *QualityTracker) EstimatedQuality(model string) float64 {
 	return rb.average()
 }
 
+// EstimatedQualityForTarget resolves the routed/provider-qualified aliases for a
+// model and combines any matching historical evidence into one quality view.
+func (qt *QualityTracker) EstimatedQualityForTarget(provider, model string) float64 {
+	keys := modelIdentityKeys(provider, model)
+	if len(keys) == 0 {
+		return 0.5
+	}
+	qt.mu.RLock()
+	defer qt.mu.RUnlock()
+
+	var sum float64
+	var count int
+	seen := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		canonical := canonicalModelKey(key)
+		if _, exists := seen[canonical]; exists {
+			continue
+		}
+		seen[canonical] = struct{}{}
+		rb, ok := qt.models[canonical]
+		if !ok || rb.count == 0 {
+			continue
+		}
+		sum += rb.average() * float64(rb.count)
+		count += rb.count
+	}
+	if count == 0 {
+		return 0.5
+	}
+	return sum / float64(count)
+}
+
 // ObservationCount returns the number of recorded observations for a model.
 func (qt *QualityTracker) ObservationCount(model string) int {
+	model = canonicalModelKey(model)
+	if model == "" {
+		return 0
+	}
 	qt.mu.RLock()
 	defer qt.mu.RUnlock()
 
@@ -104,6 +149,33 @@ func (qt *QualityTracker) ObservationCount(model string) int {
 	return rb.count
 }
 
+// ObservationCountForTarget resolves the routed/provider-qualified aliases for
+// a model and sums the matching observation counts.
+func (qt *QualityTracker) ObservationCountForTarget(provider, model string) int {
+	keys := modelIdentityKeys(provider, model)
+	if len(keys) == 0 {
+		return 0
+	}
+	qt.mu.RLock()
+	defer qt.mu.RUnlock()
+
+	total := 0
+	seen := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		canonical := canonicalModelKey(key)
+		if _, exists := seen[canonical]; exists {
+			continue
+		}
+		seen[canonical] = struct{}{}
+		rb, ok := qt.models[canonical]
+		if !ok {
+			continue
+		}
+		total += rb.count
+	}
+	return total
+}
+
 // HasObservations returns true if any quality data exists for this model.
 func (qt *QualityTracker) HasObservations(model string) bool {
 	return qt.ObservationCount(model) > 0
@@ -111,6 +183,10 @@ func (qt *QualityTracker) HasObservations(model string) bool {
 
 // ClearModel removes all observations for a single model and returns the number removed.
 func (qt *QualityTracker) ClearModel(model string) int {
+	model = canonicalModelKey(model)
+	if model == "" {
+		return 0
+	}
 	qt.mu.Lock()
 	defer qt.mu.Unlock()
 
@@ -136,16 +212,17 @@ func (qt *QualityTracker) ClearAll() int {
 	return total
 }
 
-// SeedFromHistory warms the tracker from recent turns stored in the database.
-// Quality heuristic: min(1.0, tokens_out / 100.0) for turns with tokens_out > 0.
+// SeedFromHistory warms the tracker from recent inference observations in the database.
+// Only stored quality scores are used here. The router should not infer
+// efficacy from response length during warm start.
 func (qt *QualityTracker) SeedFromHistory(ctx context.Context, store *db.Store) {
 	if store == nil {
 		return
 	}
 
 	rows, err := store.QueryContext(ctx,
-		`SELECT model, tokens_out FROM turns
-		 WHERE model != '' AND tokens_out > 0
+		`SELECT provider, model, quality_score FROM inference_costs
+		 WHERE model != '' AND quality_score IS NOT NULL
 		 ORDER BY created_at DESC
 		 LIMIT 500`)
 	if err != nil {
@@ -156,16 +233,13 @@ func (qt *QualityTracker) SeedFromHistory(ctx context.Context, store *db.Store) 
 
 	seeded := 0
 	for rows.Next() {
+		var provider string
 		var model string
-		var tokensOut int
-		if err := rows.Scan(&model, &tokensOut); err != nil {
+		var quality float64
+		if err := rows.Scan(&provider, &model, &quality); err != nil {
 			continue
 		}
-		quality := float64(tokensOut) / 100.0
-		if quality > 1.0 {
-			quality = 1.0
-		}
-		qt.Record(model, quality)
+		qt.Record(historyModelKey(provider, model), quality)
 		seeded++
 	}
 
@@ -186,7 +260,8 @@ type IntentClassKey struct {
 type IntentQualityTracker struct {
 	mu         sync.RWMutex
 	intents    map[IntentClassKey]*ringBuffer
-	baselines  map[string]float64 // intentClass → baseline quality
+	priors     map[IntentClassKey]float64 // model+intent cold-start priors
+	baselines  map[string]float64         // intentClass → baseline quality
 	windowSize int
 }
 
@@ -197,21 +272,31 @@ func NewIntentQualityTracker(windowSize int) *IntentQualityTracker {
 	}
 	return &IntentQualityTracker{
 		intents:    make(map[IntentClassKey]*ringBuffer),
+		priors:     make(map[IntentClassKey]float64),
 		baselines:  make(map[string]float64),
 		windowSize: windowSize,
 	}
 }
 
+func canonicalIntentClassKey(model, intentClass string) IntentClassKey {
+	return IntentClassKey{
+		Model:       canonicalModelKey(model),
+		IntentClass: strings.TrimSpace(strings.ToUpper(intentClass)),
+	}
+}
+
 // RecordWithIntent adds a quality observation for a model + intent class pair.
 func (iq *IntentQualityTracker) RecordWithIntent(model, intentClass string, score float64) {
+	key := canonicalIntentClassKey(model, intentClass)
+	if key.Model == "" || key.IntentClass == "" {
+		return
+	}
 	if score < 0 {
 		score = 0
 	}
 	if score > 1 {
 		score = 1
 	}
-
-	key := IntentClassKey{Model: model, IntentClass: intentClass}
 
 	iq.mu.Lock()
 	defer iq.mu.Unlock()
@@ -228,7 +313,10 @@ func (iq *IntentQualityTracker) RecordWithIntent(model, intentClass string, scor
 // model+intentClass pair. Falls back to the baseline for the intent class
 // if no observations exist, or 0.5 if no baseline is set either.
 func (iq *IntentQualityTracker) EstimatedQualityForIntent(model, intentClass string) float64 {
-	key := IntentClassKey{Model: model, IntentClass: intentClass}
+	key := canonicalIntentClassKey(model, intentClass)
+	if key.Model == "" || key.IntentClass == "" {
+		return 0.5
+	}
 
 	iq.mu.RLock()
 	defer iq.mu.RUnlock()
@@ -238,11 +326,118 @@ func (iq *IntentQualityTracker) EstimatedQualityForIntent(model, intentClass str
 		return rb.average()
 	}
 
+	if prior, exists := iq.priors[key]; exists {
+		return prior
+	}
+
 	// Fall back to baseline for this intent class.
+	if baseline, exists := iq.baselines[key.IntentClass]; exists {
+		return baseline
+	}
+	return 0.5
+}
+
+// EstimatedQualityForIntentTarget resolves the routed/provider-qualified alias
+// set for a model and combines any matching intent evidence into one quality
+// estimate. Falls back to priors/baselines when no observations exist.
+func (iq *IntentQualityTracker) EstimatedQualityForIntentTarget(provider, model, intentClass string) float64 {
+	keys := modelIdentityKeys(provider, model)
+	intentClass = strings.TrimSpace(strings.ToUpper(intentClass))
+	if len(keys) == 0 || intentClass == "" {
+		return 0.5
+	}
+
+	iq.mu.RLock()
+	defer iq.mu.RUnlock()
+
+	var sum float64
+	var count int
+	seenObserved := make(map[IntentClassKey]struct{}, len(keys))
+	for _, keyModel := range keys {
+		key := IntentClassKey{Model: canonicalModelKey(keyModel), IntentClass: intentClass}
+		if _, exists := seenObserved[key]; exists {
+			continue
+		}
+		seenObserved[key] = struct{}{}
+		rb, ok := iq.intents[key]
+		if !ok || rb.count == 0 {
+			continue
+		}
+		sum += rb.average() * float64(rb.count)
+		count += rb.count
+	}
+	if count > 0 {
+		return sum / float64(count)
+	}
+
+	seenPriors := make(map[IntentClassKey]struct{}, len(keys))
+	for _, keyModel := range keys {
+		key := IntentClassKey{Model: canonicalModelKey(keyModel), IntentClass: intentClass}
+		if _, exists := seenPriors[key]; exists {
+			continue
+		}
+		seenPriors[key] = struct{}{}
+		if prior, exists := iq.priors[key]; exists {
+			return prior
+		}
+	}
 	if baseline, exists := iq.baselines[intentClass]; exists {
 		return baseline
 	}
 	return 0.5
+}
+
+// ObservationCountForIntent returns the number of recorded observations for a
+// model+intentClass pair.
+func (iq *IntentQualityTracker) ObservationCountForIntent(model, intentClass string) int {
+	key := canonicalIntentClassKey(model, intentClass)
+	if key.Model == "" || key.IntentClass == "" {
+		return 0
+	}
+
+	iq.mu.RLock()
+	defer iq.mu.RUnlock()
+
+	rb, ok := iq.intents[key]
+	if !ok {
+		return 0
+	}
+	return rb.count
+}
+
+// ObservationCountForIntentTarget resolves the routed/provider-qualified alias
+// set for a model and sums matching intent-observation counts.
+func (iq *IntentQualityTracker) ObservationCountForIntentTarget(provider, model, intentClass string) int {
+	keys := modelIdentityKeys(provider, model)
+	intentClass = strings.TrimSpace(strings.ToUpper(intentClass))
+	if len(keys) == 0 || intentClass == "" {
+		return 0
+	}
+
+	iq.mu.RLock()
+	defer iq.mu.RUnlock()
+
+	total := 0
+	seen := make(map[IntentClassKey]struct{}, len(keys))
+	for _, keyModel := range keys {
+		key := IntentClassKey{Model: canonicalModelKey(keyModel), IntentClass: intentClass}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		rb, ok := iq.intents[key]
+		if !ok {
+			continue
+		}
+		total += rb.count
+	}
+	return total
+}
+
+// HasObservationsForIntent reports whether any quality data exists for the
+// model+intentClass pair.
+func (iq *IntentQualityTracker) HasObservationsForIntent(model, intentClass string) bool {
+	return iq.ObservationCountForIntent(model, intentClass) > 0
 }
 
 // SeedFromBaselines sets cold-start priors for intent classes. These are used
@@ -252,6 +447,10 @@ func (iq *IntentQualityTracker) SeedFromBaselines(baselines map[string]float64) 
 	defer iq.mu.Unlock()
 
 	for k, v := range baselines {
+		k = strings.TrimSpace(strings.ToUpper(k))
+		if k == "" {
+			continue
+		}
 		if v < 0 {
 			v = 0
 		}
@@ -262,24 +461,79 @@ func (iq *IntentQualityTracker) SeedFromBaselines(baselines map[string]float64) 
 	}
 }
 
-// qualityFromResponse computes a quality score from a response using
-// output length as a crude proxy. Longer, more substantive responses
-// score higher.
+// SeedFromExerciseResults warms the tracker from persisted benchmark/exercise
+// observations so routing evidence reflects real exercised capability rather
+// than only cold-start priors.
+func (iq *IntentQualityTracker) SeedFromExerciseResults(ctx context.Context, store *db.Store) {
+	if store == nil {
+		return
+	}
+
+	rows, err := store.QueryContext(ctx,
+		`SELECT model, intent_class, quality
+		 FROM exercise_results
+		 WHERE model != '' AND intent_class != ''
+		 ORDER BY created_at DESC
+		 LIMIT 1000`)
+	if err != nil {
+		log.Warn().Err(err).Msg("intent quality tracker: failed to seed from exercise results")
+		return
+	}
+	defer func() { _ = rows.Close() }()
+
+	seeded := 0
+	for rows.Next() {
+		var model, intentClass string
+		var quality float64
+		if err := rows.Scan(&model, &intentClass, &quality); err != nil {
+			continue
+		}
+		iq.RecordWithIntent(model, intentClass, quality)
+		seeded++
+	}
+
+	if seeded > 0 {
+		log.Info().Int("seeded", seeded).Msg("intent quality tracker: warm-started from exercise results")
+	}
+}
+
+// qualityFromResponse computes a weak online efficacy prior. This score must
+// stay near-neutral because it is not grounded in user or verifier feedback.
+// Structural failures are penalized, but concise valid responses are not.
 func qualityFromResponse(resp *Response) float64 {
 	if resp == nil {
 		return 0
 	}
+	score := 0.55
 	tokens := resp.Usage.OutputTokens
 	if tokens <= 0 {
-		// Fall back to content length estimate (rough 4 chars per token).
-		tokens = EstimateTokens(resp.Content)
+		content := strings.TrimSpace(resp.Content)
+		if content == "" {
+			return 0.15
+		}
+		tokens = EstimateTokens(content)
 	}
-	q := float64(tokens) / 100.0
-	if q > 1.0 {
-		q = 1.0
+
+	switch {
+	case tokens < 4:
+		score -= 0.20
+	case tokens < 12:
+		score -= 0.08
+	case tokens <= 256:
+		score += 0.05
+	case tokens > 1024:
+		score -= 0.05
 	}
-	if q < 0 {
-		q = 0
+
+	if resp.FinishReason == "length" {
+		score -= 0.20
 	}
-	return q
+
+	if score < 0 {
+		return 0
+	}
+	if score > 1 {
+		return 1
+	}
+	return score
 }

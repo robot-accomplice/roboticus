@@ -1,10 +1,10 @@
 package admin
 
 import (
-	"roboticus/cmd/internal/cmdutil"
 	"context"
 	"fmt"
 	"os"
+	"roboticus/cmd/internal/cmdutil"
 
 	"github.com/spf13/cobra"
 
@@ -97,4 +97,5 @@ var mechanicCmd = &cobra.Command{
 }
 
 func init() {
-	mechanicCmd.Flags().Bool("repair", false, "run VACUUM and integrity check")}
+	mechanicCmd.Flags().Bool("repair", false, "run VACUUM and integrity check")
+}

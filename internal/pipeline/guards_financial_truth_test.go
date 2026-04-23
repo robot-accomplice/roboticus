@@ -57,6 +57,23 @@ func TestFinancialActionTruthGuard_AllowsWithPaymentTool(t *testing.T) {
 	}
 }
 
+func TestFinancialActionTruthGuard_BlocksClaimAfterDeniedFinancialTool(t *testing.T) {
+	g := &FinancialActionTruthGuard{}
+	ctx := &GuardContext{
+		ToolResults: []ToolResultEntry{
+			{ToolName: "wallet_transfer", Output: "Policy denied: amount 50000 cents exceeds limit of 10000 cents"},
+		},
+	}
+
+	result := g.CheckWithContext("I transferred $500 to your account.", ctx)
+	if result.Passed {
+		t.Fatal("expected denied financial tool result to block fabricated success claim")
+	}
+	if !result.Retry {
+		t.Fatal("expected retry when success was claimed after denied financial tool")
+	}
+}
+
 func TestFinancialActionTruthGuard_PassesNonFinancialContent(t *testing.T) {
 	g := &FinancialActionTruthGuard{}
 	ctx := &GuardContext{}

@@ -3,10 +3,6 @@ package db
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
-
-	"github.com/rs/zerolog/log"
 )
 
 // Installer handles skill installation, activation, and filesystem management.
@@ -27,30 +23,21 @@ func (si *Installer) Install(ctx context.Context, name, content string) (string,
 	if name == "" || content == "" {
 		return "", fmt.Errorf("name and content are required")
 	}
-
-	dir := si.skillsDir
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", fmt.Errorf("create skills directory: %w", err)
+	repo := NewSkillCompositionRepository(si.store, si.skillsDir)
+	_, spec, err := repo.Upsert(ctx, SkillCompositionSpec{
+		Name:           name,
+		Kind:           "instruction",
+		Content:        content,
+		Enabled:        true,
+		Version:        "1.0.0",
+		Author:         "catalog",
+		RegistrySource: "catalog",
+		RiskLevel:      "Caution",
+	})
+	if err != nil {
+		return "", err
 	}
-
-	path := filepath.Join(dir, name+".md")
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		return "", fmt.Errorf("write skill file: %w", err)
-	}
-
-	// Register in database.
-	if si.store != nil {
-		id := NewID()
-		if _, err := si.store.ExecContext(ctx,
-			`INSERT INTO skills (id, name, kind, source_path, content_hash, enabled, version, risk_level)
-			 VALUES (?, ?, 'instruction', ?, '', 1, '1.0.0', 'Safe')
-			 ON CONFLICT(name) DO UPDATE SET source_path = excluded.source_path`,
-			id, name, path); err != nil {
-			log.Warn().Err(err).Str("skill", name).Msg("skills: failed to register in database")
-		}
-	}
-
-	return path, nil
+	return spec.SourcePath, nil
 }
 
 // Activate enables a skill by name in the database.

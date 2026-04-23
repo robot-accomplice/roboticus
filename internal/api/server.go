@@ -15,6 +15,7 @@ import (
 	"roboticus/internal/agent/tools"
 	"roboticus/internal/api/routes"
 	"roboticus/internal/browser"
+	"roboticus/internal/channel"
 	"roboticus/internal/core"
 	"roboticus/internal/db"
 	"roboticus/internal/llm"
@@ -29,6 +30,7 @@ type AppState struct {
 	Pipeline        pipeline.Runner          // connectors must depend on the interface, not *pipeline.Pipeline
 	StreamFinalizer pipeline.StreamFinalizer // post-stream work (Rule 7.2 parity)
 	LLM             *llm.Service
+	Embeddings      *llm.EmbeddingClient
 	Config          *core.Config
 	Keystore        *core.Keystore
 	EventBus        *EventBus
@@ -38,6 +40,18 @@ type AppState struct {
 	MCPGateway      *mcp.Gateway // serves the agent's tools to external MCP clients
 	Plugins         *plugin.Registry
 	Browser         *browser.Browser
+	TelegramWebhook routesWebhookBatchParser
+	WhatsAppWebhook routesWhatsAppWebhook
+}
+
+type routesWebhookBatchParser interface {
+	ProcessWebhookBatch(data []byte) ([]channel.InboundMessage, error)
+}
+
+type routesWhatsAppWebhook interface {
+	routesWebhookBatchParser
+	VerifyWebhook(mode, token, challenge string) (string, bool)
+	ValidateWebhookSignature(body []byte, signature string) bool
 }
 
 // ServerConfig controls the HTTP server.
@@ -65,6 +79,7 @@ func DefaultServerConfig() ServerConfig {
 // The context controls the lifetime of background goroutines (rate limit cleanup, ticket cleanup).
 func NewServer(ctx context.Context, cfg ServerConfig, state *AppState) *http.Server {
 	r := chi.NewRouter()
+	mcpToolSurface := newMCPToolSurface(state.Tools, state.Embeddings)
 
 	// Global middleware.
 	r.Use(chimw.RequestID)
@@ -105,9 +120,9 @@ func NewServer(ctx context.Context, cfg ServerConfig, state *AppState) *http.Ser
 		r.Get("/.well-known/agent.json", routes.AgentCard())
 		r.Get("/openapi.yaml", OpenAPIHandler())
 		r.Get("/api/docs", DocsHandler())
-		r.Post("/api/webhooks/telegram", routes.WebhookTelegram(state.Pipeline))
-		r.Get("/api/webhooks/whatsapp", routes.WebhookWhatsAppVerify(""))
-		r.Post("/api/webhooks/whatsapp", routes.WebhookWhatsApp(state.Pipeline))
+		r.Post("/api/webhooks/telegram", routes.WebhookTelegram(state.Pipeline, state.TelegramWebhook))
+		r.Get("/api/webhooks/whatsapp", routes.WebhookWhatsAppVerify(state.WhatsAppWebhook))
+		r.Post("/api/webhooks/whatsapp", routes.WebhookWhatsApp(state.Pipeline, state.WhatsAppWebhook, state.WhatsAppWebhook))
 
 		// MCP gateway — external MCP clients authenticate via their own mechanism.
 		if state.MCPGateway != nil {
@@ -235,9 +250,9 @@ func NewServer(ctx context.Context, cfg ServerConfig, state *AppState) *http.Ser
 		// Plugins.
 		r.Get("/api/plugins", routes.ListPlugins(state.Plugins))
 		r.Get("/api/plugins/tools", routes.ListPluginTools(state.Plugins))
-		r.Post("/api/plugins/{name}/enable", routes.EnablePlugin(state.Plugins))
-		r.Post("/api/plugins/{name}/disable", routes.DisablePlugin(state.Plugins))
-		r.Post("/api/plugins/catalog/install", routes.InstallPlugin(state.Config))
+		r.Post("/api/plugins/{name}/enable", routes.EnablePlugin(state.Plugins, state.Tools, state.Embeddings))
+		r.Post("/api/plugins/{name}/disable", routes.DisablePlugin(state.Plugins, state.Tools, state.Embeddings))
+		r.Post("/api/plugins/catalog/install", routes.InstallPlugin(state.Config, state.Plugins, state.Tools, state.Embeddings))
 		r.Post("/api/plugins/{name}/execute/{tool}", routes.ExecutePluginTool(state.Plugins))
 
 		// Stats.
@@ -254,10 +269,17 @@ func NewServer(ctx context.Context, cfg ServerConfig, state *AppState) *http.Ser
 		// Models.
 		r.Get("/api/models/available", routes.GetAvailableModels(state.LLM))
 		r.Get("/api/models/selections", routes.GetModelSelections(state.Store))
-		r.Get("/api/models/routing-diagnostics", routes.GetRoutingDiagnostics(state.Config))
+		r.Get("/api/models/routing-diagnostics", routes.GetRoutingDiagnostics(state.Store, state.Config, state.LLM))
+		r.Get("/api/models/policies", routes.ListModelPolicies(state.Store, state.Config))
+		r.Put("/api/models/policies", routes.UpsertModelPolicy(state.Store, state.Config, state.LLM))
+		r.Delete("/api/models/policies", routes.DeleteModelPolicy(state.Store, state.Config, state.LLM))
 		r.Get("/api/models/routing-dataset", routes.GetRoutingDataset(state.Store))
 		r.Post("/api/models/reset", routes.ResetModelScores(state.LLM))
-		r.Post("/api/models/exercise", routes.ExerciseModel(state.LLM, state.Store))
+		r.Post("/api/models/exercise", routes.ExerciseModel(state.Pipeline, state.Store, state.Config, agentName))
+		r.Post("/api/models/exercise/runs", routes.StartExerciseRun(state.Store, state.Config))
+		r.Get("/api/models/exercise/runs", routes.ListExerciseRuns(state.Store))
+		r.Post("/api/models/exercise/runs/{runID}/results", routes.AppendExerciseRunResult(state.Store))
+		r.Post("/api/models/exercise/runs/{runID}/complete", routes.CompleteExerciseRun(state.Store, state.Config))
 		r.Get("/api/models/exercise/status", routes.GetExerciseStatus(state.Store))
 		r.Get("/api/models/exercise/scorecard", routes.GetExerciseScorecard(state.Store))
 		r.Post("/api/models/routing-eval", routes.RunRoutingEval(state.LLM))
@@ -326,6 +348,14 @@ func NewServer(ctx context.Context, cfg ServerConfig, state *AppState) *http.Ser
 		r.Get("/api/workspace/tasks", routes.ListWorkspaceTasks(state.Store))
 		r.Get("/api/admin/task-events", routes.GetTaskEvents(state.Store))
 
+		// v1.0.6: system warnings (config-defaults-used, ambient DB
+		// creation, etc.). Polled by the dashboard for the
+		// top-of-page warning banner. See
+		// internal/core/system_warnings.go for the collector
+		// surface and internal/api/routes/system_warnings.go for
+		// the wire shape.
+		r.Get("/api/admin/system-warnings", routes.GetSystemWarnings())
+
 		// Runtime discovery.
 		r.Get("/api/runtime/surfaces", routes.GetRuntimeSurfaces())
 		r.Get("/api/runtime/discovery", routes.GetRuntimeDiscovery(state.Store))
@@ -336,8 +366,8 @@ func NewServer(ctx context.Context, cfg ServerConfig, state *AppState) *http.Ser
 		r.Post("/api/runtime/devices/{id}/verify", routes.VerifyPairedDevice(state.Store))
 		r.Delete("/api/runtime/devices/{id}", routes.UnpairDevice(state.Store))
 		r.Get("/api/runtime/mcp", routes.GetMCPRuntime(state.Config, state.MCP))
-		r.Post("/api/runtime/mcp/clients/{name}/discover", routes.DiscoverMCPTools(state.MCP))
-		r.Post("/api/runtime/mcp/clients/{name}/disconnect", routes.DisconnectMCPClient(state.MCP))
+		r.Post("/api/runtime/mcp/clients/{name}/discover", routes.DiscoverMCPTools(state.MCP, mcpToolSurface))
+		r.Post("/api/runtime/mcp/clients/{name}/disconnect", routes.DisconnectMCPClient(state.MCP, mcpToolSurface))
 
 		// Provider key management.
 		r.Put("/api/providers/{provider}/key", routes.SetProviderKey(state.Keystore))
@@ -351,6 +381,7 @@ func NewServer(ctx context.Context, cfg ServerConfig, state *AppState) *http.Ser
 		r.Get("/api/traces/{turn_id}/export", routes.ExportTrace(state.Store))
 		r.Post("/api/traces/{turn_id}/replay", routes.ReplayTrace(state.Store))
 		r.Get("/api/traces/{turn_id}/flow", routes.GetTraceFlow(state.Store))
+		r.Get("/api/traces/{turn_id}/diagnostics", routes.GetTurnDiagnostics(state.Store))
 
 		// Themes.
 		r.Get("/api/themes", routes.GetThemesList())
@@ -365,10 +396,11 @@ func NewServer(ctx context.Context, cfg ServerConfig, state *AppState) *http.Ser
 		r.Get("/api/mcp/servers", routes.ListMCPServers(state.Config, state.MCP))
 		r.Get("/api/mcp/servers/{name}", routes.GetMCPServer(state.Config, state.MCP))
 		r.Post("/api/mcp/servers/{name}/test", routes.TestMCPServer(state.Config))
+		r.Post("/api/mcp/servers/{name}/validate-sse", routes.ValidateSSEMCPServer(state.Config))
 		r.Get("/api/mcp/connections", routes.ListMCPConnections(state.MCP))
 		r.Get("/api/mcp/tools", routes.ListMCPTools(state.MCP))
-		r.Post("/api/mcp/connect", routes.ConnectMCPServer(state.MCP))
-		r.Post("/api/mcp/disconnect/{name}", routes.DisconnectMCPServer(state.MCP))
+		r.Post("/api/mcp/connect", routes.ConnectMCPServer(state.MCP, mcpToolSurface))
+		r.Post("/api/mcp/disconnect/{name}", routes.DisconnectMCPServer(state.MCP, mcpToolSurface))
 
 		// Browser.
 		if state.Browser != nil {

@@ -85,6 +85,8 @@ func TestModelSpecForTarget(t *testing.T) {
 	}{
 		{RouteTarget{Provider: "openai", Model: "gpt-4"}, "openai/gpt-4"},
 		{RouteTarget{Provider: "openai", Model: "openai/gpt-4"}, "openai/gpt-4"}, // already has slash
+		{RouteTarget{Provider: "openrouter", Model: "openai/gpt-4o-mini"}, "openrouter/openai/gpt-4o-mini"},
+		{RouteTarget{Provider: "openrouter", Model: "openrouter/openai/gpt-4o-mini"}, "openrouter/openai/gpt-4o-mini"},
 		{RouteTarget{Provider: "", Model: "gpt-4"}, "gpt-4"},
 		{RouteTarget{Provider: "openai", Model: ""}, "openai"},
 		{RouteTarget{Provider: "", Model: ""}, ""},
@@ -386,7 +388,7 @@ func TestQualityFromResponse_Extended(t *testing.T) {
 	// Test content-length fallback with large content.
 	resp := &Response{Content: strings.Repeat("x", 400), Usage: Usage{OutputTokens: 0}}
 	got := qualityFromResponse(resp)
-	if got < 0.9 || got > 1.1 {
+	if got < 0.55 || got > 0.65 {
 		t.Errorf("qualityFromResponse (content fallback) = %f", got)
 	}
 }
@@ -522,11 +524,13 @@ func TestEmbeddingClient_SetAuth(t *testing.T) {
 	origResolver := KeyResolver
 	defer func() { KeyResolver = origResolver }()
 	KeyResolver = func(key string) string {
-		if key == "test-embed_api_key" { return "testkey123" }
+		if key == "test-embed_api_key" {
+			return "testkey123"
+		}
 		return ""
 	}
 	ec = &EmbeddingClient{provider: &Provider{
-		Name: "test-embed",
+		Name:         "test-embed",
 		ExtraHeaders: map[string]string{"X-Custom": "val"},
 	}}
 
@@ -720,6 +724,51 @@ func TestService_Stream_CacheHit(t *testing.T) {
 	}
 	if content.String() != "cached-stream" {
 		t.Errorf("cached stream = %q", content.String())
+	}
+}
+
+func TestService_Stream_NoEscalateSkipsCache(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+		_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"fresh-stream\"}}]}\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer ts.Close()
+
+	client, _ := NewClientWithHTTP(&Provider{
+		Name: "stream-nocache", URL: ts.URL, Format: FormatOpenAI,
+	}, ts.Client())
+
+	svc, _ := NewService(ServiceConfig{
+		Providers: []Provider{{Name: "stream-nocache", URL: ts.URL, Format: FormatOpenAI}},
+		Primary:   "stream-nocache",
+		Cache:     CacheConfig{Enabled: true, MaxEntries: 100, TTL: time.Hour},
+	}, nil)
+	svc.providers["stream-nocache"] = client
+
+	req := &Request{Model: "gpt-4", Messages: []Message{{Role: "user", Content: "stream-no-cache"}}}
+	svc.cache.Put(context.Background(), req, &Response{Content: "cached-stream"})
+
+	chunks, errs := svc.Stream(context.Background(), &Request{
+		Model:      "gpt-4",
+		Messages:   []Message{{Role: "user", Content: "stream-no-cache"}},
+		NoEscalate: true,
+	})
+
+	var content strings.Builder
+	for chunk := range chunks {
+		content.WriteString(chunk.Delta)
+	}
+	select {
+	case err := <-errs:
+		if err != nil {
+			t.Fatalf("stream error: %v", err)
+		}
+	default:
+	}
+	if content.String() != "fresh-stream" {
+		t.Fatalf("content = %q, want fresh-stream", content.String())
 	}
 }
 

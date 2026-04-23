@@ -17,14 +17,40 @@ import (
 
 // Evidence represents a single retrieval result with provenance metadata.
 type Evidence struct {
-	Content    string
-	SourceTier MemoryTier
-	SourceID   string
-	Score      float64 // blended retrieval score from HybridSearch
-	FTSScore   float64 // per-leg FTS score (0 if not found by FTS)
-	VecScore   float64 // per-leg vector score (0 if not found by vector)
-	AgeDays    float64 // how old the entry is
-	IsCanonical bool   // true for authoritative/policy documents
+	Content        string
+	SourceTier     MemoryTier
+	SourceID       string
+	SourceTable    string
+	SourceLabel    string
+	SourceCategory string
+	Score          float64 // blended retrieval score from HybridSearch
+	FTSScore       float64 // per-leg FTS score (0 if not found by FTS)
+	VecScore       float64 // per-leg vector score (0 if not found by vector)
+	AgeDays        float64 // how old the entry is
+	IsCanonical    bool    // true for authoritative/policy documents
+	AuthorityScore float64 // 0-1 source authority signal
+	RetrievalMode  string  // hybrid / keyword / recency / semantic / ann
+	RouteWeight    float64 // router-assigned tier importance prior to fusion
+	PositionDecay  float64 // retrieval-order decay carried into fusion
+
+	// Fusion-stage diagnostics. These are populated by the explicit fusion
+	// layer before reranking so RCA and later ML work can observe the same
+	// retrieval-quality decision boundary the live path used.
+	CorroborationCount        int
+	FusionBaseScore           float64
+	FusionRouteFactor         float64
+	FusionAuthorityFactor     float64
+	FusionFreshnessFactor     float64
+	FusionCorroborationFactor float64
+	FusionScore               float64
+
+	// LLM-stage diagnostics. When optional LLM reranking runs successfully, it
+	// assigns an explicit rank/score and the final filter uses that semantic
+	// ordering instead of raw fused score. When absent, the deterministic fused
+	// score path remains authoritative.
+	LLMRank  int
+	LLMScore float64
+	LLMModel string
 }
 
 // RerankerConfig controls evidence filtering behavior.
@@ -69,20 +95,25 @@ func (rr *Reranker) Filter(candidates []Evidence, maxResults int) []Evidence {
 		return nil
 	}
 
-	// Phase 1: Adjust scores based on authority and recency.
+	// Phase 1: Use fusion-stage scores when present. The explicit fusion layer
+	// owns route-weight / authority / freshness / corroboration semantics on the
+	// live path. Keep the older authority/recency adjustment only as a backward
+	// compatible fallback for synthetic callers that still feed raw evidence
+	// directly into the reranker without running fusion first.
 	adjusted := make([]Evidence, 0, len(candidates))
 	for _, c := range candidates {
 		score := c.Score
-
-		// Authority boost: canonical/policy documents are more trustworthy.
-		if c.IsCanonical {
-			score *= rr.config.AuthorityBoost
-		}
-
-		// Recency penalty: old entries without FTS match are less relevant.
-		// FTS-matched old entries are explicitly query-relevant, so they're exempt.
-		if c.AgeDays > rr.config.RecencyThreshold && c.FTSScore == 0 {
-			score *= rr.config.RecencyPenalty
+		if c.LLMScore > 0 {
+			score = c.LLMScore
+		} else if c.FusionScore > 0 {
+			score = c.FusionScore
+		} else {
+			if c.IsCanonical {
+				score *= rr.config.AuthorityBoost
+			}
+			if c.AgeDays > rr.config.RecencyThreshold && c.FTSScore == 0 {
+				score *= rr.config.RecencyPenalty
+			}
 		}
 
 		c.Score = score

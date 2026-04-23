@@ -144,6 +144,15 @@ func (p *ConsolidationPipeline) phaseIndexBackfill(ctx context.Context, store *d
 	}
 	count += p.indexRows(ctx, store, rows, "semantic_memory")
 
+	rows, err = store.QueryContext(ctx,
+		`SELECT kf.id, kf.subject || ' ' || kf.relation || ' ' || kf.object FROM knowledge_facts kf
+		 WHERE NOT EXISTS (SELECT 1 FROM memory_index mi WHERE mi.source_table = 'knowledge_facts' AND mi.source_id = kf.id)`)
+	if err != nil {
+		log.Warn().Err(err).Msg("consolidation: index backfill knowledge_facts query failed")
+		return count
+	}
+	count += p.indexRows(ctx, store, rows, "knowledge_facts")
+
 	return count
 }
 
@@ -460,8 +469,11 @@ func (p *ConsolidationPipeline) phaseContradictionDetection(ctx context.Context,
 				// in predicate are contradictions; different-subject entries are complementary.
 				if subjectSimilarity(entry.value, existValue) > 0.5 {
 					if _, err := store.ExecContext(ctx,
-						`UPDATE semantic_memory SET memory_state = 'stale', state_reason = 'superseded by newer entry'
-						 WHERE id = ?`, existID); err == nil {
+						`UPDATE semantic_memory
+						    SET memory_state = 'stale',
+						        state_reason = 'superseded by newer entry',
+						        superseded_by = ?
+						  WHERE id = ?`, entry.id, existID); err == nil {
 						alreadySuperseded[existID] = true
 						superseded++
 					}
@@ -608,6 +620,7 @@ func (p *ConsolidationPipeline) phaseOrphanCleanup(ctx context.Context, store *d
 		 (source_table = 'semantic_memory' AND source_id NOT IN (SELECT id FROM semantic_memory)) OR
 		 (source_table = 'procedural_memory' AND source_id NOT IN (SELECT id FROM procedural_memory)) OR
 		 (source_table = 'relationship_memory' AND source_id NOT IN (SELECT id FROM relationship_memory)) OR
+		 (source_table = 'knowledge_facts' AND source_id NOT IN (SELECT id FROM knowledge_facts)) OR
 		 (source_table = 'working_memory' AND source_id NOT IN (SELECT id FROM working_memory))`)
 	if err != nil {
 		log.Warn().Err(err).Msg("consolidation: orphan embedding cleanup failed")
@@ -622,7 +635,8 @@ func (p *ConsolidationPipeline) phaseOrphanCleanup(ctx context.Context, store *d
 		 (source_table = 'episodic_memory' AND source_id NOT IN (SELECT id FROM episodic_memory)) OR
 		 (source_table = 'semantic_memory' AND source_id NOT IN (SELECT id FROM semantic_memory)) OR
 		 (source_table = 'procedural_memory' AND source_id NOT IN (SELECT id FROM procedural_memory)) OR
-		 (source_table = 'relationship_memory' AND source_id NOT IN (SELECT id FROM relationship_memory))`)
+		 (source_table = 'relationship_memory' AND source_id NOT IN (SELECT id FROM relationship_memory)) OR
+		 (source_table = 'knowledge_facts' AND source_id NOT IN (SELECT id FROM knowledge_facts))`)
 	if err != nil {
 		log.Warn().Err(err).Msg("consolidation: orphan index cleanup failed")
 	} else {

@@ -1,7 +1,9 @@
 package pipeline
 
 import (
+	"regexp"
 	"strings"
+	"unicode"
 
 	"github.com/rs/zerolog/log"
 )
@@ -10,13 +12,15 @@ import (
 // synthesize_task_state output. Used by the pipeline to make routing and
 // delegation decisions.
 type TaskSynthesis struct {
-	Intent          string   // Classified intent (e.g., "question", "task", "creative", "code")
-	Complexity      string   // "simple", "moderate", "complex", "specialist"
-	PlannedAction   string   // "execute_directly", "delegate_to_specialist", "compose_subagent"
-	Confidence      float64  // Planner confidence 0–1
-	RetrievalNeeded bool     // Whether memory retrieval is beneficial
-	MissingSkills   []string // Capabilities not covered by registered skills
-	CapabilityFit   float64  // 0–1 ratio of available capability coverage
+	Intent                string   // Classified intent (e.g., "question", "task", "creative", "code")
+	Complexity            string   // "simple", "moderate", "complex", "specialist"
+	PlannedAction         string   // "execute_directly", "delegate_to_specialist", "compose_subagent"
+	Confidence            float64  // Planner confidence 0–1
+	RetrievalNeeded       bool     // Whether memory retrieval is beneficial
+	RetrievalReason       string   // Why memory retrieval was selected
+	ProceduralUncertainty bool     // Whether the framework is uncertain how to carry out the task
+	MissingSkills         []string // Capabilities not covered by registered skills
+	CapabilityFit         float64  // 0–1 ratio of available capability coverage
 }
 
 // SynthesizeTaskState performs intent classification, complexity analysis, and
@@ -46,17 +50,21 @@ func SynthesizeTaskState(content string, sessionTurns int, agentSkills []string)
 		}
 	}
 
-	// Retrieval decision: retrieve for questions, task context, and longer conversations.
-	retrievalNeeded := intent == "question" || intent == "task" || sessionTurns > 3
+	// Retrieval decision: action turns only pull memory when there is an
+	// explicit continuity/context signal. Simple direct tasks should not widen
+	// into memory-bearing autonomous turns by intent label alone.
+	retrievalNeeded, retrievalReason, proceduralUncertainty := shouldRetrieveForTurn(intent, content, sessionTurns, fit, missing, action, complexity)
 
 	result := TaskSynthesis{
-		Intent:          intent,
-		Complexity:      complexity,
-		PlannedAction:   action,
-		Confidence:      confidence,
-		RetrievalNeeded: retrievalNeeded,
-		MissingSkills:   missing,
-		CapabilityFit:   fit,
+		Intent:                intent,
+		Complexity:            complexity,
+		PlannedAction:         action,
+		Confidence:            confidence,
+		RetrievalNeeded:       retrievalNeeded,
+		RetrievalReason:       retrievalReason,
+		ProceduralUncertainty: proceduralUncertainty,
+		MissingSkills:         missing,
+		CapabilityFit:         fit,
 	}
 
 	log.Debug().
@@ -66,15 +74,170 @@ func SynthesizeTaskState(content string, sessionTurns int, agentSkills []string)
 		Float64("confidence", confidence).
 		Float64("capability_fit", fit).
 		Bool("retrieval", retrievalNeeded).
+		Bool("procedural_uncertainty", proceduralUncertainty).
+		Str("retrieval_reason", retrievalReason).
 		Msg("task state synthesized")
 
 	return result
+}
+
+func shouldRetrieveForTurn(intent, content string, sessionTurns int, capabilityFit float64, missingSkills []string, plannedAction, complexity string) (bool, string, bool) {
+	lower := strings.ToLower(content)
+	proceduralUncertainty := appliedLearningHelpful(intent, content, lower, capabilityFit, missingSkills, plannedAction, complexity)
+
+	if looksLikeInspectionBackedArtifactAuthoring(content) {
+		return false, "none", proceduralUncertainty
+	}
+
+	if looksLikeFocusedInspectionTurn(content) {
+		return false, "none", proceduralUncertainty
+	}
+
+	if intent == "question" {
+		return true, "question_default", proceduralUncertainty
+	}
+
+	if intent == "task" || intent == "code" {
+		if schedulingAliasNeedsContinuity(lower, sessionTurns) {
+			return true, "scheduling_alias_continuity", false
+		}
+		if taskNeedsPriorContext(lower) || taskNeedsEvidence(lower) {
+			return true, "continuity_or_evidence", proceduralUncertainty
+		}
+		if proceduralUncertainty {
+			return true, "applied_learning_uncertainty", true
+		}
+	}
+
+	if sessionTurns > 3 && turnCarriesContinuityCue(lower) {
+		return true, "session_continuity", proceduralUncertainty
+	}
+
+	return false, "none", proceduralUncertainty
+}
+
+func appliedLearningHelpful(intent, content, lower string, capabilityFit float64, missingSkills []string, plannedAction, complexity string) bool {
+	if intent != "task" && intent != "code" {
+		return false
+	}
+	if looksLikeSchedulingTask(lower) {
+		return false
+	}
+	if len(ParseExpectedArtifactSpecs(content)) > 0 {
+		return false
+	}
+	if looksLikeBoundedAuthoringTask(lower) {
+		return false
+	}
+	if hasProceduralLearningCue(lower) {
+		return true
+	}
+	if plannedAction != "execute_directly" {
+		return false
+	}
+	if capabilityFit >= 0.45 {
+		return false
+	}
+	if complexity == "moderate" || complexity == "complex" || complexity == "specialist" {
+		return true
+	}
+	return len(missingSkills) >= 2
+}
+
+func schedulingAliasNeedsContinuity(lower string, sessionTurns int) bool {
+	if sessionTurns <= 1 || !looksLikeSchedulingTask(lower) {
+		return false
+	}
+	explicitScheduleMarkers := []string{
+		"cron", "every ", "minute", "minutes", "hour", "hours",
+		"daily", "weekly", "monthly", "*/", "0 ",
+	}
+	if containsAnyMarker(lower, explicitScheduleMarkers) {
+		return false
+	}
+	aliasMarkers := []string{
+		"quiet ticker", "ticker", "the reminder", "that reminder", "that job",
+	}
+	return containsAnyMarker(lower, aliasMarkers)
+}
+
+func hasProceduralLearningCue(lower string) bool {
+	proceduralMarkers := []string{
+		"how do i", "how to", "steps to", "procedure", "runbook",
+		"playbook", "workflow", "process for",
+	}
+	return containsAnyMarker(lower, proceduralMarkers)
+}
+
+func taskNeedsPriorContext(lower string) bool {
+	contextMarkers := []string{
+		"previous", "earlier", "existing", "current", "continue", "follow up", "follow-up",
+		"we discussed", "as before", "same as", "based on", "from the session", "in the session",
+		"remember", "context", "history", "prior", "last time", "again",
+		"update", "revise", "modify", "edit", "append", "resume",
+	}
+	for _, marker := range contextMarkers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func taskNeedsEvidence(lower string) bool {
+	evidenceMarkers := []string{
+		"report", "analysis", "analyze", "explain", "identify",
+		"root cause", "affected", "which systems", "what happened",
+		"why this happened", "summarize", "summary", "investigate",
+	}
+	for _, marker := range evidenceMarkers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func turnCarriesContinuityCue(lower string) bool {
+	cues := []string{
+		"previous", "earlier", "we discussed", "as before", "same as",
+		"continue", "follow up", "follow-up", "remember", "history",
+		"context", "last time", "resume",
+	}
+	for _, cue := range cues {
+		if strings.Contains(lower, cue) {
+			return true
+		}
+	}
+	return false
 }
 
 // classifyIntent determines the user's intent from message content.
 // Matches Rust's semantic classifier categories.
 func classifyIntent(content string) string {
 	lower := strings.ToLower(content)
+	artifactContract := ParseArtifactPromptContract(content)
+
+	// Short phatic / social turns are not information-seeking even when they
+	// contain question words like "what's" or "how's".
+	if isSocialConversationalTurn(lower) {
+		return "conversational"
+	}
+
+	// A bounded expected-artifact contract is authoritative. Source-backed exact
+	// authoring should stay on the direct authoring path rather than being
+	// reclassified as generic code work because of JSON/Markdown/workflow nouns.
+	if len(artifactContract.ExpectedOutputs) > 0 {
+		return "task"
+	}
+
+	if looksLikeFocusedInspectionTurn(content) {
+		return "task"
+	}
+
+	if looksLikeInspectionBackedArtifactAuthoring(content) {
+		return "task"
+	}
 
 	// Question patterns.
 	questionMarkers := []string{"what", "how", "why", "when", "where", "who", "which", "can you explain", "tell me"}
@@ -85,17 +248,25 @@ func classifyIntent(content string) string {
 	}
 
 	// Code/technical patterns.
-	codeMarkers := []string{"write code", "implement", "function", "class", "api", "debug", "fix bug", "refactor", "test"}
+	codeMarkers := []string{
+		"write code", "implement", "function", "class", "api",
+		"debug", "fix bug", "refactor", "unit test", "test suite",
+		"write tests", "failing test", "run the tests",
+	}
 	for _, m := range codeMarkers {
-		if strings.Contains(lower, m) {
+		if containsIntentMarker(lower, m) {
 			return "code"
 		}
 	}
 
 	// Task/action patterns.
-	taskMarkers := []string{"create", "build", "make", "set up", "configure", "install", "deploy", "update", "delete", "remove", "send", "schedule"}
+	taskMarkers := []string{
+		"create", "build", "make", "set up", "configure", "install", "deploy",
+		"update", "delete", "remove", "send", "schedule", "count", "list",
+		"find", "scan", "look in", "look at",
+	}
 	for _, m := range taskMarkers {
-		if strings.Contains(lower, m) {
+		if containsIntentMarker(lower, m) {
 			return "task"
 		}
 	}
@@ -103,7 +274,7 @@ func classifyIntent(content string) string {
 	// Creative patterns.
 	creativeMarkers := []string{"write", "compose", "draft", "generate", "brainstorm", "design", "story", "poem"}
 	for _, m := range creativeMarkers {
-		if strings.Contains(lower, m) {
+		if containsIntentMarker(lower, m) {
 			return "creative"
 		}
 	}
@@ -116,10 +287,89 @@ func classifyIntent(content string) string {
 	return "general"
 }
 
+func isSocialConversationalTurn(lower string) bool {
+	lower = strings.TrimSpace(lower)
+	if lower == "" {
+		return false
+	}
+
+	normalized := normalizeIntentLexicon(lower)
+	padded := " " + normalized + " "
+	socialMarkers := []string{
+		"hello", "hi", "hey", "thanks", "thank you",
+		"good morning", "good afternoon", "good evening",
+		"how are you", "how's it going", "hows it going",
+		"what's new", "whats new", "what is new",
+		"anything new", "anything new with you",
+		"what's up", "whats up", "what is up",
+		"what's going on", "whats going on",
+		"what's shakin", "whats shakin",
+		"what's shaking", "whats shaking",
+		"what's the good word", "whats the good word",
+	}
+	for _, marker := range socialMarkers {
+		if strings.Contains(padded, " "+normalizeIntentLexicon(marker)+" ") {
+			return true
+		}
+	}
+
+	// Very short, clearly phatic turns should stay conversational even when
+	// phrased informally as a question.
+	words := len(strings.Fields(lower))
+	return words <= 6 && (strings.HasPrefix(lower, "yo") || strings.HasPrefix(lower, "sup"))
+}
+
+func normalizeIntentLexicon(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	lastSpace := false
+	for _, r := range strings.ToLower(s) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+			lastSpace = false
+			continue
+		}
+		if !lastSpace {
+			b.WriteByte(' ')
+			lastSpace = true
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func containsIntentMarker(lower, marker string) bool {
+	if strings.TrimSpace(lower) == "" || strings.TrimSpace(marker) == "" {
+		return false
+	}
+	padded := " " + normalizeIntentLexicon(lower) + " "
+	needle := " " + normalizeIntentLexicon(marker) + " "
+	return strings.Contains(padded, needle)
+}
+
 // classifyComplexity estimates task complexity from content and session context.
 // Matches Rust's classify_complexity with feature extraction.
 func classifyComplexity(content string, sessionTurns int) string {
 	words := len(strings.Fields(content))
+	lower := strings.ToLower(content)
+	expectedArtifacts := ParseExpectedArtifactSpecs(content)
+	if len(expectedArtifacts) > 0 {
+		if len(expectedArtifacts) > 1 {
+			return "moderate"
+		}
+		return "simple"
+	}
+	artifactCount := boundedAuthoringArtifactCount(lower)
+
+	// Direct artifact authoring/editing requests should not get upcast on word
+	// count or embedded artifact-body structure alone. Multiple explicit
+	// artifacts can still be bounded direct work.
+	if looksLikeBoundedAuthoringTask(lower) {
+		if artifactCount > 1 {
+			return "moderate"
+		}
+		return "simple"
+	}
+
 	subtasks := extractSubtasks(content)
 
 	// Multi-step tasks are inherently more complex.
@@ -133,7 +383,6 @@ func classifyComplexity(content string, sessionTurns int) string {
 	}
 
 	// Medium-length requests with technical markers.
-	lower := strings.ToLower(content)
 	techMarkers := []string{"integrate", "migrate", "architecture", "system", "pipeline", "workflow"}
 	techCount := 0
 	for _, m := range techMarkers {
@@ -152,17 +401,96 @@ func classifyComplexity(content string, sessionTurns int) string {
 	return "simple"
 }
 
+func looksLikeBoundedAuthoringTask(lower string) bool {
+	actionMarkers := []string{
+		"create", "write", "draft", "make", "add", "update", "edit",
+	}
+	artifactMarkers := []string{
+		"note", "document", "doc", "markdown", ".md", "file", "vault", "obsidian",
+	}
+	artifactCount := boundedAuthoringArtifactCount(lower)
+	hasArtifactSignal := containsAnyMarker(lower, artifactMarkers) || artifactCount > 0
+	if !containsAnyMarker(lower, actionMarkers) || !hasArtifactSignal {
+		return false
+	}
+	if artifactCount == 0 || artifactCount > 3 {
+		return false
+	}
+
+	complexityEscalators := []string{
+		"analyze", "analysis", "investigate", "report", "summarize", "summary",
+		"root cause", "compare", "evaluate", "plan", "strategy", "workflow",
+		"system", "architecture", "pipeline", "debug", "fix bug", "implement",
+	}
+	return !containsAnyMarker(lower, complexityEscalators)
+}
+
+var authoringFilePattern = regexp.MustCompile(`\b(?:[a-z0-9_][a-z0-9_.-]*/)*[a-z0-9_][a-z0-9_.-]*\.(md|markdown|txt|json|yaml|yml|toml)\b`)
+
+func boundedAuthoringArtifactCount(lower string) int {
+	matches := authoringFilePattern.FindAllString(lower, -1)
+	if len(matches) > 0 {
+		seen := make(map[string]struct{}, len(matches))
+		for _, match := range matches {
+			seen[match] = struct{}{}
+		}
+		return len(seen)
+	}
+
+	quantifiedArtifacts := []struct {
+		markers []string
+		count   int
+	}{
+		{[]string{"two notes", "two files", "two documents", "2 notes", "2 files", "2 documents"}, 2},
+		{[]string{"three notes", "three files", "three documents", "3 notes", "3 files", "3 documents"}, 3},
+	}
+	for _, qa := range quantifiedArtifacts {
+		if containsAnyMarker(lower, qa.markers) {
+			return qa.count
+		}
+	}
+
+	if containsAnyMarker(lower, []string{"note", "notes", "file", "files", "document", "documents", "doc", "docs"}) {
+		return 1
+	}
+	return 0
+}
+
+func containsAnyMarker(lower string, markers []string) bool {
+	for _, marker := range markers {
+		if containsIntentMarker(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 // capabilityTokens extracts capability-relevant tokens from user content.
 // Matches Rust's capability_tokens: non-alphanumeric split, min 4 chars.
 func capabilityTokens(content string) []string {
+	words := lexiconTokens(content)
+	seen := make(map[string]struct{}, len(words))
+	var tokens []string
+	for _, w := range words {
+		if _, dup := seen[w]; dup {
+			continue
+		}
+		seen[w] = struct{}{}
+		tokens = append(tokens, w)
+	}
+	return tokens
+}
+
+func lexiconTokens(content string) []string {
 	words := strings.FieldsFunc(strings.ToLower(content), func(r rune) bool {
-		return (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '-' && r != '_'
+		return !unicode.IsLetter(r) && !unicode.IsNumber(r)
 	})
 	var tokens []string
 	for _, w := range words {
-		if len(w) >= 4 {
-			tokens = append(tokens, w)
+		if len(w) < 4 {
+			continue
 		}
+		tokens = append(tokens, w)
 	}
 	return tokens
 }
@@ -309,10 +637,8 @@ func matchCapabilities(capTokens, skills []string) (float64, []string) {
 
 	skillSet := make(map[string]bool, len(skills))
 	for _, s := range skills {
-		for _, word := range strings.Fields(strings.ToLower(s)) {
-			if len(word) >= 4 {
-				skillSet[word] = true
-			}
+		for _, word := range lexiconTokens(s) {
+			skillSet[word] = true
 		}
 	}
 

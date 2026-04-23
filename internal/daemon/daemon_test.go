@@ -5,6 +5,7 @@ import (
 
 	"github.com/kardianos/service"
 
+	"roboticus/internal/agent/skills"
 	"roboticus/internal/core"
 )
 
@@ -56,4 +57,19 @@ func TestNew_ValidConfig(t *testing.T) {
 func TestDaemon_ImplementsServiceInterface(t *testing.T) {
 	// Compile-time check that Daemon implements service.Interface.
 	var _ service.Interface = (*Daemon)(nil)
+}
+
+func TestMergeLoadedSkills_DedupesBySourcePath(t *testing.T) {
+	base := []*skills.Skill{{SourcePath: "/tmp/a.md", Manifest: skills.Manifest{Name: "a"}}}
+	extra := []*skills.Skill{
+		{SourcePath: "/tmp/a.md", Manifest: skills.Manifest{Name: "a-dup"}},
+		{SourcePath: "/tmp/b.md", Manifest: skills.Manifest{Name: "b"}},
+	}
+	merged := mergeLoadedSkills(base, extra)
+	if len(merged) != 2 {
+		t.Fatalf("merged len = %d, want 2", len(merged))
+	}
+	if merged[1].Name() != "b" {
+		t.Fatalf("second merged skill = %q, want b", merged[1].Name())
+	}
 }

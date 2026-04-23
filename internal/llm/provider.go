@@ -7,9 +7,9 @@ import (
 
 // Provider represents an LLM API endpoint (OpenAI, Anthropic, Ollama, Google, etc).
 type Provider struct {
-	Name             string            `json:"name"`
-	URL              string            `json:"url"`
-	Format           APIFormat         `json:"format"`
+	Name   string    `json:"name"`
+	URL    string    `json:"url"`
+	Format APIFormat `json:"format"`
 	// APIKeyEnv removed — keys come from keystore via KeyResolver only.
 	ChatPath         string            `json:"chat_path,omitempty"`
 	EmbeddingPath    string            `json:"embedding_path,omitempty"`
@@ -139,6 +139,24 @@ type Request struct {
 	// model's raw capability — no cache hits, no fallback contamination, no
 	// polluting the cache with synthetic prompts.
 	NoEscalate bool `json:"-"`
+	// AgentRole carries the execution role for this request ("orchestrator" or
+	// "subagent"). Routing uses it to apply role-specific model eligibility and
+	// diagnostics. Not sent to the provider.
+	AgentRole string `json:"-"`
+	// TurnWeight carries the pipeline-selected request weight (light, standard,
+	// heavy) so routing can apply the same envelope semantics the pipeline used
+	// to shape the request. Not sent to the provider.
+	TurnWeight string `json:"-"`
+	// TaskIntent carries the pipeline-synthesized task intent label
+	// (conversational, question, task, code, creative, general). It is the
+	// authoritative task-fit signal for request-aware routing and diagnostics.
+	// Not sent to the provider.
+	TaskIntent string `json:"-"`
+	// TaskComplexity carries the pipeline-synthesized task complexity label
+	// (simple, moderate, complex, specialist). Routing consumes this before any
+	// heuristic reconstruction from assembled request shape. Not sent to the
+	// provider.
+	TaskComplexity string `json:"-"`
 }
 
 // Response is a provider-agnostic inference response.

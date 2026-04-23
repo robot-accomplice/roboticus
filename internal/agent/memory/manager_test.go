@@ -1,10 +1,13 @@
 package memory
 
 import (
+	"context"
 	"strings"
 	"testing"
 
+	"roboticus/internal/db"
 	"roboticus/internal/llm"
+	"roboticus/testutil"
 )
 
 func TestClassifyTurn_ToolUse(t *testing.T) {
@@ -256,6 +259,63 @@ func TestIsToolFailure(t *testing.T) {
 		if isToolFailure(s) {
 			t.Errorf("isToolFailure(%q) = true, want false", s)
 		}
+	}
+}
+
+func TestExtractKnowledgeFacts(t *testing.T) {
+	facts := extractKnowledgeFacts("billing-service", "Billing Service depends on Ledger Service for invoice settlement.")
+	if len(facts) == 0 {
+		t.Fatal("expected extracted facts")
+	}
+	found := false
+	for _, fact := range facts {
+		if fact.Relation == "depends_on" && fact.Subject == "Billing Service" && strings.Contains(fact.Object, "Ledger Service") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected depends_on fact, got %+v", facts)
+	}
+}
+
+func TestStoreSemanticMemory_ExtractsKnowledgeFacts(t *testing.T) {
+	store := testutil.TempStore(t)
+	mgr := NewManager(DefaultConfig(), store)
+	ctx := context.Background()
+
+	mgr.storeSemanticMemory(ctx, "architecture", "billing-service", "Billing Service depends on Ledger Service for invoice settlement.")
+
+	var count int
+	err := store.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM knowledge_facts WHERE relation = 'depends_on' AND subject = 'Billing Service'`).Scan(&count)
+	if err != nil {
+		t.Fatalf("query knowledge_facts: %v", err)
+	}
+	if count == 0 {
+		t.Fatal("expected knowledge fact to be persisted")
+	}
+
+	var indexed int
+	err = store.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM memory_index WHERE source_table = 'knowledge_facts'`).Scan(&indexed)
+	if err != nil {
+		t.Fatalf("query memory_index: %v", err)
+	}
+	if indexed == 0 {
+		t.Fatal("expected knowledge facts to be indexed")
+	}
+}
+
+func TestKnowledgeFactID_Stable(t *testing.T) {
+	id1 := knowledgeFactID("semantic_memory", db.NewID(), "Billing Service", "depends_on", "Ledger Service")
+	id2 := knowledgeFactID("semantic_memory", db.NewID(), "Billing Service", "depends_on", "Ledger Service")
+	if id1 == id2 {
+		t.Fatal("different source IDs should produce different fact IDs")
+	}
+	id3 := knowledgeFactID("semantic_memory", "sem-1", "Billing Service", "depends_on", "Ledger Service")
+	id4 := knowledgeFactID("semantic_memory", "sem-1", "Billing Service", "depends_on", "Ledger Service")
+	if id3 != id4 {
+		t.Fatal("same inputs should produce same fact ID")
 	}
 }
 

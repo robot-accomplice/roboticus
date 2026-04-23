@@ -132,17 +132,17 @@ func (p *Pipeline) ErrReporter() *core.ErrorBus { return p.errBus }
 // ── Compile-time interface satisfaction checks ────────────────────────────
 
 var (
-	_ SessionDeps      = (*Pipeline)(nil)
-	_ RetrievalDeps    = (*Pipeline)(nil)
-	_ DelegationDeps   = (*Pipeline)(nil)
-	_ SkillDeps        = (*Pipeline)(nil)
+	_ SessionDeps        = (*Pipeline)(nil)
+	_ RetrievalDeps      = (*Pipeline)(nil)
+	_ DelegationDeps     = (*Pipeline)(nil)
+	_ SkillDeps          = (*Pipeline)(nil)
 	_ InferenceCoreDeps  = (*Pipeline)(nil)
 	_ InferenceMemDeps   = (*Pipeline)(nil)
 	_ InferenceAsyncDeps = (*Pipeline)(nil)
 	_ InferenceDeps      = (*Pipeline)(nil)
-	_ CacheDeps        = (*Pipeline)(nil)
-	_ PostTurnCoreDeps = (*Pipeline)(nil)
-	_ PostTurnDeps     = (*Pipeline)(nil)
+	_ CacheDeps          = (*Pipeline)(nil)
+	_ PostTurnCoreDeps   = (*Pipeline)(nil)
+	_ PostTurnDeps       = (*Pipeline)(nil)
 )
 
 // ── Dependency Matrix (for audit reference) ───────────────────────────────

@@ -93,3 +93,68 @@ func RegisterMCPTools(registry *Registry, manager *mcp.ConnectionManager) int {
 
 	return registered
 }
+
+// SyncMCPTools refreshes MCP-backed bridge tools from the live connection
+// manager. Builtin/plugin tools keep precedence on name conflicts; colliding
+// MCP tools are skipped. Disconnected servers and removed tools are pruned from
+// the registry so the live tool surface matches runtime truth.
+func SyncMCPTools(registry *Registry, manager *mcp.ConnectionManager) int {
+	if registry == nil || manager == nil {
+		return 0
+	}
+
+	registered := 0
+	activeToolNames := make(map[string]bool)
+	activeServers := make(map[string]bool)
+
+	for _, status := range manager.Statuses() {
+		if !status.Connected {
+			continue
+		}
+		activeServers[status.Name] = true
+
+		conn, ok := manager.Connection(status.Name)
+		if !ok {
+			continue
+		}
+
+		for _, td := range conn.Tools {
+			activeToolNames[td.Name] = true
+			if existing := registry.Get(td.Name); existing != nil {
+				if bridge, ok := existing.(*McpBridgeTool); !ok {
+					log.Warn().Str("tool", td.Name).Str("server", status.Name).
+						Msg("skipping MCP tool registration due to existing non-MCP tool")
+					continue
+				} else if bridge.serverName != status.Name {
+					log.Warn().Str("tool", td.Name).Str("server", status.Name).
+						Str("existing_server", bridge.serverName).
+						Msg("skipping MCP tool registration due to existing MCP tool from another server")
+					continue
+				}
+			}
+
+			registry.Register(&McpBridgeTool{
+				name:        td.Name,
+				description: td.Description,
+				schema:      td.InputSchema,
+				risk:        RiskCaution,
+				serverName:  status.Name,
+				manager:     manager,
+			})
+			registered++
+		}
+	}
+
+	for _, toolName := range registry.Names() {
+		existing := registry.Get(toolName)
+		bridge, ok := existing.(*McpBridgeTool)
+		if !ok {
+			continue
+		}
+		if !activeServers[bridge.serverName] || !activeToolNames[toolName] {
+			registry.Unregister(toolName)
+		}
+	}
+
+	return registered
+}

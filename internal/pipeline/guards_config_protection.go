@@ -1,24 +1,15 @@
 package pipeline
 
-import "strings"
+import (
+	"strings"
+
+	"roboticus/internal/security"
+)
 
 // ConfigProtectionGuard blocks tool calls that attempt to mutate
 // security-sensitive configuration keys. It inspects tool results for
 // evidence of config mutation and rejects responses that include them.
 type ConfigProtectionGuard struct{}
-
-// sensitiveConfigPatterns are prefixes/keys that must not be mutated by tools.
-var sensitiveConfigPatterns = []string{
-	"api_key",
-	"database.path",
-	"keystore.",
-	"server.bind",
-	"server.tls_cert",
-	"server.tls_key",
-	"server.auth_token",
-	"wallet.passphrase",
-	"wallet.keyfile",
-}
 
 func (g *ConfigProtectionGuard) Name() string { return "config_protection" }
 
@@ -37,13 +28,11 @@ func (g *ConfigProtectionGuard) CheckWithContext(content string, ctx *GuardConte
 			continue
 		}
 		outputLower := strings.ToLower(tr.Output)
-		for _, pattern := range sensitiveConfigPatterns {
-			if strings.Contains(outputLower, pattern) {
-				return GuardResult{
-					Passed:  false,
-					Content: "I cannot modify security-sensitive configuration settings through tool calls.",
-					Reason:  "config_protection: tool attempted to modify " + pattern,
-				}
+		if pattern, matched := security.MatchProtectedConfigPattern(outputLower); matched {
+			return GuardResult{
+				Passed:  false,
+				Content: "I cannot modify security-sensitive configuration settings through tool calls.",
+				Reason:  "config_protection: tool attempted to modify " + pattern,
 			}
 		}
 	}

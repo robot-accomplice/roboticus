@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -176,20 +177,27 @@ func (p *Pipeline) executeDelegation(ctx context.Context, session *Session, deco
 		return nil
 	}
 
-	// Build the delegation prompt from subtasks.
-	var sb strings.Builder
-	sb.WriteString("Execute the following subtasks:\n")
-	for i, st := range decomp.Subtasks {
-		fmt.Fprintf(&sb, "%d. %s\n", i+1, st)
+	workflowID, workflowPrompt, orchestrationErr := p.prepareDelegationWorkflow(ctx, session, decomp)
+	if orchestrationErr != nil {
+		log.Warn().Err(orchestrationErr).Str("session", session.ID).Msg("delegation orchestration setup failed, threading error context to inference")
+		errNote := fmt.Sprintf("Delegation attempted for %d subtasks but orchestration setup failed: %s", len(decomp.Subtasks), orchestrationErr.Error())
+		return &DelegationOutcome{
+			Content:  errNote,
+			Complete: false,
+			Quality:  QualityResult{Verdict: QualityRetry, Score: 0, Reason: "delegation orchestration setup failed"},
+		}
 	}
-
-	// Inject delegation directive as a system message.
-	session.AddSystemMessage(sb.String())
+	if workflowPrompt != "" {
+		session.AddSystemMessage(workflowPrompt)
+	}
 
 	// Run through the standard executor (which handles tool calls including
 	// orchestrate-subagents if registered).
 	result, turns, err := p.executor.RunLoop(ctx, session)
 	if err != nil {
+		if workflowID != "" {
+			_ = p.markDelegationWorkflowFailed(ctx, workflowID, err.Error())
+		}
 		log.Warn().Err(err).Str("session", session.ID).Msg("delegation execution failed, threading error context to inference")
 		// Thread the failure context back to inference rather than silently dropping.
 		errNote := fmt.Sprintf("Delegation attempted for %d subtasks but failed: %s", len(decomp.Subtasks), err.Error())
@@ -210,6 +218,16 @@ func (p *Pipeline) executeDelegation(ctx context.Context, session *Session, deco
 			result = retryResult
 			turns += retryTurns
 			quality = evaluateOutputQuality(result, strings.Join(decomp.Subtasks, " "))
+		} else if workflowID != "" {
+			_ = p.markDelegationWorkflowFailed(ctx, workflowID, retryErr.Error())
+		}
+	}
+
+	if workflowID != "" {
+		if quality.Score >= 50 {
+			_ = p.markDelegationWorkflowCompleted(ctx, workflowID, result)
+		} else {
+			_ = p.markDelegationWorkflowThreaded(ctx, workflowID, quality.Reason)
 		}
 	}
 
@@ -228,6 +246,98 @@ func (p *Pipeline) executeDelegation(ctx context.Context, session *Session, deco
 		Complete: quality.Score >= 50, // Rust: complete when quality passes threshold.
 		Quality:  quality,
 	}
+}
+
+func (p *Pipeline) prepareDelegationWorkflow(ctx context.Context, session *Session, decomp *DecompositionResult) (workflowID string, prompt string, err error) {
+	if p.store == nil {
+		return "", buildLegacyDelegationPrompt(decomp.Subtasks), nil
+	}
+	repo := db.NewSubagentOrchestrationRepository(p.store)
+	spec := db.OrchestrationPlanSpec{
+		WorkflowName: firstNonEmptyString("Delegated workflow"),
+		Pattern:      db.OrchestrationPatternFanOut,
+		RequestedBy:  strings.TrimSpace(firstNonEmptyString(session.AgentName, session.AgentID)),
+		Subtasks:     make([]db.OrchestrationSubtaskSpec, 0, len(decomp.Subtasks)),
+	}
+	for _, subtask := range decomp.Subtasks {
+		spec.Subtasks = append(spec.Subtasks, db.OrchestrationSubtaskSpec{
+			Description: strings.TrimSpace(subtask),
+		})
+	}
+	workflow, err := repo.CreateWorkflow(ctx, spec)
+	if err != nil {
+		return "", "", err
+	}
+	return workflow.WorkflowID, buildDelegationPlanPrompt(workflow), nil
+}
+
+func (p *Pipeline) markDelegationWorkflowThreaded(ctx context.Context, workflowID, summary string) error {
+	if p.store == nil || workflowID == "" {
+		return nil
+	}
+	return db.NewSubagentOrchestrationRepository(p.store).MarkThreadedToInference(ctx, workflowID, summary)
+}
+
+func (p *Pipeline) markDelegationWorkflowCompleted(ctx context.Context, workflowID, summary string) error {
+	if p.store == nil || workflowID == "" {
+		return nil
+	}
+	return db.NewSubagentOrchestrationRepository(p.store).MarkCompleted(ctx, workflowID, summarizeDelegationResult(summary))
+}
+
+func (p *Pipeline) markDelegationWorkflowFailed(ctx context.Context, workflowID, errMsg string) error {
+	if p.store == nil || workflowID == "" {
+		return nil
+	}
+	return db.NewSubagentOrchestrationRepository(p.store).MarkFailed(ctx, workflowID, errMsg)
+}
+
+func buildLegacyDelegationPrompt(subtasks []string) string {
+	var sb strings.Builder
+	sb.WriteString("Execute the following subtasks:\n")
+	for i, st := range subtasks {
+		fmt.Fprintf(&sb, "%d. %s\n", i+1, st)
+	}
+	return sb.String()
+}
+
+func buildDelegationPlanPrompt(workflow *db.OrchestrationWorkflow) string {
+	if workflow == nil {
+		return ""
+	}
+	payload, _ := json.Marshal(workflow)
+	var sb strings.Builder
+	sb.WriteString("[Delegation Plan]\n")
+	sb.WriteString("The runtime has created a bounded subagent orchestration workflow.\n")
+	sb.WriteString("Use the assignments below as the authoritative delegation artifact.\n")
+	for i, assignment := range workflow.Assignments {
+		fmt.Fprintf(&sb, "%d. %s -> %s (%s)\n",
+			i+1,
+			assignment.Description,
+			assignment.AssignedSubagent,
+			assignment.AssignmentReason,
+		)
+	}
+	sb.WriteString("Workflow artifact JSON:\n")
+	sb.WriteString(string(payload))
+	return sb.String()
+}
+
+func summarizeDelegationResult(result string) string {
+	result = strings.TrimSpace(result)
+	if len(result) <= 240 {
+		return result
+	}
+	return result[:237] + "..."
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 // recordDelegationOutcome persists delegation metrics to the database.
@@ -357,15 +467,23 @@ func (p *Pipeline) recordShortcutCost(ctx context.Context, turnID, sessionID, ch
 // Matches Rust's periodic context checkpoint in post_turn_ingest.
 
 const checkpointIntervalTurns = 10
+const checkpointRetentionCount = 3
 
 // maybeCheckpoint saves a context checkpoint if the turn count hits the interval.
 func (p *Pipeline) maybeCheckpoint(ctx context.Context, session *Session, turnID string) {
 	if p.store == nil {
 		return
 	}
+	if !p.checkpointPolicy.Enabled {
+		return
+	}
+	interval := p.checkpointPolicy.IntervalTurns
+	if interval <= 0 {
+		interval = checkpointIntervalTurns
+	}
 
 	turnCount := session.TurnCount()
-	if turnCount == 0 || turnCount%checkpointIntervalTurns != 0 {
+	if turnCount == 0 || turnCount%interval != 0 {
 		return
 	}
 
@@ -395,14 +513,26 @@ func (p *Pipeline) maybeCheckpoint(ctx context.Context, session *Session, turnID
 	h := sha256.Sum256([]byte(memorySummary))
 	promptHash := hex.EncodeToString(h[:8])
 
-	_, err := p.store.ExecContext(ctx,
-		`INSERT INTO context_checkpoints (id, session_id, system_prompt_hash, memory_summary, conversation_digest, turn_count)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		db.NewID(), session.ID, promptHash, memorySummary, digest, turnCount,
-	)
+	repo := db.NewCheckpointRepository(p.store)
+	err := repo.SaveRecord(ctx, db.CheckpointRecord{
+		SessionID:          session.ID,
+		SystemPromptHash:   promptHash,
+		MemorySummary:      memorySummary,
+		ConversationDigest: digest,
+		TurnCount:          turnCount,
+	})
 	if err != nil {
 		log.Warn().Err(err).Str("session", session.ID).Int("turn", turnCount).Msg("checkpoint save failed")
-	} else {
-		log.Debug().Str("session", session.ID).Int("turn", turnCount).Msg("context checkpoint saved")
+		return
 	}
+	if _, err := repo.DeleteOld(ctx, checkpointRetentionCount); err != nil {
+		log.Warn().Err(err).Str("session", session.ID).Int("turn", turnCount).Msg("checkpoint prune failed")
+		return
+	}
+	log.Debug().
+		Str("session", session.ID).
+		Int("turn", turnCount).
+		Int("interval", interval).
+		Int("retained", checkpointRetentionCount).
+		Msg("context checkpoint saved")
 }

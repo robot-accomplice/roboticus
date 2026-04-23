@@ -4,7 +4,7 @@
 // Run with: go test -tags=integration ./internal/mcp/... -v
 //
 // Prerequisites:
-// - Playwright MCP: npx @anthropic-ai/mcp-playwright (stdio)
+// - Playwright MCP: npx @playwright/mcp (stdio)
 // - Or any MCP server available via stdio/SSE transport
 //
 // These tests validate the full lifecycle: connect → tool discovery → call → response.
@@ -20,7 +20,7 @@ import (
 )
 
 // TestIntegration_StdioConnect connects to a real stdio MCP server.
-// Set MCP_TEST_COMMAND to the server command (e.g., "npx @anthropic-ai/mcp-playwright").
+// Set MCP_TEST_COMMAND to the server command (e.g., "npx @playwright/mcp").
 func splitCommand(raw string) (string, []string) {
 	parts := strings.Fields(raw)
 	if len(parts) == 0 {

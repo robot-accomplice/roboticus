@@ -1,8 +1,8 @@
 package agent
 
 import (
-	"roboticus/cmd/internal/cmdutil"
 	"fmt"
+	"roboticus/cmd/internal/cmdutil"
 
 	"github.com/spf13/cobra"
 )
@@ -150,4 +150,5 @@ var sessionsBackfillNicknamesCmd = &cobra.Command{
 func init() {
 	sessionsExportCmd.Flags().String("format", "json", "output format (json/markdown)")
 	sessionsCmd.AddCommand(sessionsListCmd, sessionsShowCmd, sessionsDeleteCmd, sessionsExportCmd,
-		sessionsCreateCmd, sessionsBackfillNicknamesCmd)}
+		sessionsCreateCmd, sessionsBackfillNicknamesCmd)
+}

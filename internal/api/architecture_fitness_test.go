@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"roboticus/internal/pipeline"
 )
 
 // ---------------------------------------------------------------------------
@@ -133,109 +135,50 @@ func TestFitness_NoCyclicDependencies(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestFitness_DefaultGuardChain_ContainsRequiredGuards(t *testing.T) {
-	// Import the pipeline package indirectly: we parse the source of guards.go
-	// and verify DefaultGuardChain references all required guard types.
-	src := readRepoFile(t, repoRootPath("internal", "pipeline", "guards.go"))
-
-	// Find the FullGuardChain function body (DefaultGuardChain delegates to it).
-	idx := strings.Index(src, "func FullGuardChain()")
-	if idx < 0 {
-		t.Fatal("FullGuardChain function not found in guards.go")
-	}
-	body := src[idx:]
-	// Trim to closing brace of the function.
-	braceDepth := 0
-	for i, ch := range body {
-		if ch == '{' {
-			braceDepth++
-		}
-		if ch == '}' {
-			braceDepth--
-			if braceDepth == 0 {
-				body = body[:i+1]
-				break
-			}
-		}
+	chain := pipeline.FullGuardChain()
+	names := make(map[string]bool)
+	for _, name := range chain.GuardNamesForTest() {
+		names[name] = true
 	}
 
 	required := []string{
-		"EmptyResponseGuard",
-		"SystemPromptLeakGuard",
-		"InternalMarkerGuard",
-		"ContentClassificationGuard",
-		"RepetitionGuard",
+		"empty_response",
+		"system_prompt_leak",
+		"internal_marker",
+		"content_classification",
+		"repetition",
 	}
 	for _, guard := range required {
-		if !strings.Contains(body, guard) {
+		if !names[guard] {
 			t.Errorf("FullGuardChain must include %s", guard)
 		}
 	}
 }
 
 func TestFitness_DefaultGuardChain_DelegatesCorrectly(t *testing.T) {
-	// DefaultGuardChain must delegate to FullGuardChain.
-	src := readRepoFile(t, repoRootPath("internal", "pipeline", "guards.go"))
-
-	idx := strings.Index(src, "func DefaultGuardChain()")
-	if idx < 0 {
-		t.Fatal("DefaultGuardChain function not found")
+	def := pipeline.DefaultGuardChain()
+	full := pipeline.FullGuardChain()
+	if def.Len() != full.Len() {
+		t.Fatalf("DefaultGuardChain len=%d, FullGuardChain len=%d", def.Len(), full.Len())
 	}
-	body := src[idx : idx+200]
-	if !strings.Contains(body, "FullGuardChain()") {
-		t.Error("DefaultGuardChain must delegate to FullGuardChain")
+	defGuards := def.GuardNamesForTest()
+	fullGuards := full.GuardNamesForTest()
+	for i := range fullGuards {
+		if defGuards[i] != fullGuards[i] {
+			t.Fatalf("guard[%d] = %q, want %q", i, defGuards[i], fullGuards[i])
+		}
 	}
 }
 
 func TestFitness_AllGuards_ImplementCheckMethod(t *testing.T) {
-	// Every struct instantiated in FullGuardChain must have a Check method
-	// defined in the pipeline package. We scan all .go files for
-	// func (g *XxxGuard) Check(...) GuardResult signatures.
+	// Every guard surfaced by the runtime full chain must still have a
+	// concrete Check(...) implementation in the pipeline package.
 	pipelineDir := repoRootPath("internal", "pipeline")
-
-	// Collect all guard type names from FullGuardChain body.
-	src := readRepoFile(t, filepath.Join(pipelineDir, "guards.go"))
-	idx := strings.Index(src, "func FullGuardChain()")
-	if idx < 0 {
-		t.Fatal("FullGuardChain not found")
-	}
-	body := src[idx:]
-	braceDepth := 0
-	for i, ch := range body {
-		if ch == '{' {
-			braceDepth++
-		}
-		if ch == '}' {
-			braceDepth--
-			if braceDepth == 0 {
-				body = body[:i+1]
-				break
-			}
-		}
-	}
-
-	// Extract guard type names (patterns like &FooGuard{} or NewFooGuard()).
-	var guardTypes []string
-	for _, line := range strings.Split(body, "\n") {
-		trimmed := strings.TrimSpace(line)
-		// Match &TypeName{}.
-		if strings.HasPrefix(trimmed, "&") && strings.Contains(trimmed, "Guard{") {
-			name := strings.TrimPrefix(trimmed, "&")
-			name = strings.SplitN(name, "{", 2)[0]
-			guardTypes = append(guardTypes, name)
-		}
-		// Match NewTypeNameGuard() constructors -- the underlying type is TypeNameGuard.
-		if strings.HasPrefix(trimmed, "New") && strings.Contains(trimmed, "Guard(") {
-			name := strings.TrimPrefix(trimmed, "New")
-			name = strings.SplitN(name, "(", 2)[0]
-			guardTypes = append(guardTypes, name)
-		}
-	}
-
+	guardTypes := pipeline.FullGuardChain().GuardTypesForTest()
 	if len(guardTypes) == 0 {
 		t.Fatal("could not extract guard types from FullGuardChain")
 	}
 
-	// Collect all Check method receivers across the pipeline package.
 	var allSrc strings.Builder
 	for _, f := range walkGoFiles(t, pipelineDir) {
 		allSrc.WriteString(readRepoFile(t, f))
@@ -244,10 +187,9 @@ func TestFitness_AllGuards_ImplementCheckMethod(t *testing.T) {
 	combined := allSrc.String()
 
 	for _, gt := range guardTypes {
-		// Look for "func (g *GuardType) Check(" pattern.
-		sig := ") Check("
-		receiver := "*" + gt
-		pattern := receiver + sig
+		gt = strings.TrimPrefix(gt, "*pipeline.")
+		gt = strings.TrimPrefix(gt, "pipeline.")
+		pattern := "*" + gt + ") Check("
 		if !strings.Contains(combined, pattern) {
 			t.Errorf("guard %s registered in FullGuardChain but no Check method found", gt)
 		}

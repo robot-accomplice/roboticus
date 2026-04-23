@@ -3,6 +3,7 @@ package schedule
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -40,14 +41,21 @@ func (t *TreasuryLoopTask) Run(ctx context.Context, tctx *TickContext) TaskResul
 		return TaskResult{Success: false, Message: "no store configured"}
 	}
 
-	var totalBalance float64
+	var usdcBalance float64
 	row := t.Store.QueryRowContext(ctx,
-		`SELECT COALESCE(SUM(balance), 0) FROM wallet_balances`)
-	if err := row.Scan(&totalBalance); err != nil {
-		return TaskResult{Success: false, Message: fmt.Sprintf("query balance: %v", err)}
+		`SELECT COALESCE(SUM(balance), 0) FROM wallet_balances WHERE symbol = 'USDC'`)
+	if err := row.Scan(&usdcBalance); err != nil {
+		return TaskResult{Success: false, Message: fmt.Sprintf("query usdc balance: %v", err)}
 	}
 
-	tctx.USDCBalance = totalBalance
+	tctx.USDCBalance = usdcBalance
+
+	var nativeBalance float64
+	nRow := t.Store.QueryRowContext(ctx,
+		`SELECT COALESCE(SUM(balance), 0) FROM wallet_balances WHERE is_native = 1`)
+	if err := nRow.Scan(&nativeBalance); err != nil {
+		return TaskResult{Success: false, Message: fmt.Sprintf("query native balance: %v", err)}
+	}
 
 	// Read aToken/yield balance for persistence.
 	var atokenBalance float64
@@ -57,24 +65,27 @@ func (t *TreasuryLoopTask) Run(ctx context.Context, tctx *TickContext) TaskResul
 
 	// Persist treasury state to DB (Rust parity: treasury loop writes state).
 	_, err := t.Store.ExecContext(ctx,
-		`INSERT INTO treasury_state (id, usdc_balance, atoken_balance, survival_tier, updated_at)
-		 VALUES (1, ?, ?, ?, datetime('now'))
+		`INSERT INTO treasury_state (id, usdc_balance, native_balance, atoken_balance, survival_tier, updated_at)
+		 VALUES (1, ?, ?, ?, ?, datetime('now'))
 		 ON CONFLICT(id) DO UPDATE SET
 		   usdc_balance = excluded.usdc_balance,
+		   native_balance = excluded.native_balance,
 		   atoken_balance = excluded.atoken_balance,
 		   survival_tier = excluded.survival_tier,
 		   updated_at = datetime('now')`,
-		totalBalance, atokenBalance, tctx.SurvivalTier.String())
+		usdcBalance, nativeBalance, atokenBalance, tctx.SurvivalTier.String())
 	if err != nil {
 		log.Debug().Err(err).Msg("treasury loop: state persistence failed (table may not exist)")
 	}
 
 	log.Debug().
-		Float64("total_balance", totalBalance).
+		Float64("usdc_balance", usdcBalance).
+		Float64("native_balance", nativeBalance).
+		Float64("atoken_balance", atokenBalance).
 		Str("tier", tctx.SurvivalTier.String()).
-		Msg("treasury loop: balance check")
+		Msg("treasury loop: balance refresh")
 
-	return TaskResult{Success: true, Message: fmt.Sprintf("balance=%.4f", totalBalance)}
+	return TaskResult{Success: true, Message: fmt.Sprintf("usdc=%.4f native=%.4f atoken=%.4f", usdcBalance, nativeBalance, atokenBalance)}
 }
 
 // ---------------------------------------------------------------------------
@@ -151,9 +162,10 @@ func (t *MaintenanceLoopTask) Run(ctx context.Context, _ *TickContext) TaskResul
 		return TaskResult{Success: false, Message: "no store configured"}
 	}
 
-	// Evict stale cache entries (response cache older than 24h).
+	// Evict expired cache entries using the live TTL contract.
 	res, err := t.Store.ExecContext(ctx,
-		`DELETE FROM response_cache WHERE created_at < datetime('now', '-24 hours')`)
+		`DELETE FROM semantic_cache
+		 WHERE expires_at IS NOT NULL AND expires_at <= datetime('now')`)
 	evicted := int64(0)
 	if err == nil {
 		evicted, _ = res.RowsAffected()
@@ -194,11 +206,21 @@ func (t *MetricSnapshotTask) Run(ctx context.Context, tctx *TickContext) TaskRes
 		return TaskResult{Success: false, Message: "no store configured"}
 	}
 
+	payload, err := json.Marshal(map[string]any{
+		"timestamp":      tctx.Timestamp.Format(time.RFC3339),
+		"survival_tier":  tctx.SurvivalTier.String(),
+		"credit_balance": tctx.CreditBalance,
+		"usdc_balance":   tctx.USDCBalance,
+	})
+	if err != nil {
+		return TaskResult{Success: false, Message: fmt.Sprintf("marshal snapshot: %v", err)}
+	}
+
 	// Record a metric snapshot row for historical tracking.
-	_, err := t.Store.ExecContext(ctx,
-		`INSERT OR IGNORE INTO metric_snapshots (timestamp, tier, usdc_balance)
-		 VALUES (?, ?, ?)`,
-		tctx.Timestamp.Format(time.RFC3339), tctx.SurvivalTier.String(), tctx.USDCBalance)
+	_, err = t.Store.ExecContext(ctx,
+		`INSERT INTO metric_snapshots (id, metrics_json, alerts_json)
+		 VALUES (hex(randomblob(16)), ?, NULL)`,
+		string(payload))
 	if err != nil {
 		// Table may not exist yet; this is non-fatal.
 		log.Debug().Err(err).Msg("metric snapshot: insert skipped (table may not exist)")

@@ -333,7 +333,8 @@ func TestFitness_TaskSynthesisAnnotations(t *testing.T) {
 	spans := extractSpans(t, trace.StagesJSON)
 
 	// Task synthesis must annotate intent, complexity, planned_action, confidence.
-	// These are namespaced under TraceNSTaskState ("taskstate").
+	// These are namespaced under TraceNSTaskState ("task_state"). Matches
+	// Rust's ns::TASK_STATE constant.
 	synthSpan := findSpan(spans, "task_synthesis")
 	if synthSpan == nil {
 		t.Fatal("missing task_synthesis span")
@@ -421,13 +422,16 @@ func TestFitness_CacheRoundTrip(t *testing.T) {
 	// Wait for background cache store (bgWorker.Submit is async).
 	pipe.bgWorker.Drain(5 * time.Second)
 
-	// Manually verify cache was stored.
-	hit := pipe.CheckCache(context.Background(),input.Content)
-	if hit == nil {
-		t.Fatal("cache should contain the response after first run")
+	// Second run should replay through the live pipeline cache path.
+	outcome2, err := RunPipeline(context.Background(), pipe, cfg, input)
+	if err != nil {
+		t.Fatalf("second run: %v", err)
 	}
-	if hit.Content != outcome1.Content {
-		t.Errorf("cached content mismatch: got %q, want %q", hit.Content, outcome1.Content)
+	if !outcome2.FromCache {
+		t.Fatal("second run should be served from cache")
+	}
+	if outcome2.Content != outcome1.Content {
+		t.Errorf("cached content mismatch: got %q, want %q", outcome2.Content, outcome1.Content)
 	}
 }
 
@@ -440,10 +444,10 @@ func TestFitness_CacheRejectsShortResponses(t *testing.T) {
 	})
 
 	// Store a short response directly.
-	pipe.StoreInCache(context.Background(),"test prompt for short rejection", "short", "mock")
+	pipe.StoreInCache(context.Background(), "test prompt for short rejection", "short", "mock")
 
 	// Check should return nil (rejected by length guard).
-	hit := pipe.CheckCache(context.Background(),"test prompt for short rejection")
+	hit := pipe.CheckCache(context.Background(), "test prompt for short rejection")
 	if hit != nil {
 		t.Error("cache should reject responses shorter than 20 chars")
 	}
@@ -459,9 +463,9 @@ func TestFitness_CacheRejectsParroting(t *testing.T) {
 
 	prompt := "What is the meaning of life and the universe?"
 	// Try to store a response that heavily overlaps with the prompt.
-	pipe.StoreInCache(context.Background(),prompt, prompt, "mock")
+	pipe.StoreInCache(context.Background(), prompt, prompt, "mock")
 
-	hit := pipe.CheckCache(context.Background(),prompt)
+	hit := pipe.CheckCache(context.Background(), prompt)
 	if hit != nil {
 		t.Error("cache should reject parroting responses (>60% overlap)")
 	}
@@ -480,11 +484,98 @@ func TestFitness_CacheRejectsAcknowledgements(t *testing.T) {
 	// StoreInCache should reject these because TryMatch detects them.
 	ackResponses := []string{"ok", "thanks", "got it", "understood", "sure", "yep"}
 	for _, ack := range ackResponses {
-		pipe.StoreInCache(context.Background(),"test ack rejection prompt "+ack, ack, "mock")
-		hit := pipe.CheckCache(context.Background(),"test ack rejection prompt " + ack)
+		pipe.StoreInCache(context.Background(), "test ack rejection prompt "+ack, ack, "mock")
+		hit := pipe.CheckCache(context.Background(), "test ack rejection prompt "+ack)
 		if hit != nil {
 			t.Errorf("cache should not store/return acknowledgement response %q", ack)
 		}
+	}
+}
+
+func TestFitness_CacheRejectsExpiredEntries(t *testing.T) {
+	store := testutil.TempStore(t)
+	pipe := New(PipelineDeps{
+		Store:    store,
+		BGWorker: testutil.BGWorker(t, 4),
+		CacheTTL: 50 * time.Millisecond,
+	})
+
+	prompt := "expired cache prompt"
+	response := "This is a sufficiently long cached response that should expire quickly."
+	pipe.StoreInCache(context.Background(), prompt, response, "mock")
+
+	time.Sleep(80 * time.Millisecond)
+
+	hit := pipe.CheckCache(context.Background(), prompt)
+	if hit != nil {
+		t.Fatal("expired cache entry should not be returned")
+	}
+}
+
+func TestFitness_PipelineCacheKeyIncludesSessionScaffold(t *testing.T) {
+	store := testutil.TempStore(t)
+	pipe := New(PipelineDeps{
+		Store:    store,
+		Executor: &stubExecutor{response: "unused"},
+		BGWorker: testutil.BGWorker(t, 4),
+	})
+
+	cfg := PresetAPI()
+	prompt := "same prompt, different memory"
+	response := "This is a sufficiently long cached response for contextual cache key verification."
+
+	sessA := NewSession("s-a", "default", "Agent")
+	sessA.Channel = "api"
+	sessA.AddSystemMessage("system scaffold A")
+	sessA.AddUserMessage(prompt)
+	sessA.SetMemoryContext("[Retrieved Evidence]\n1. cache A")
+	sessA.SetMemoryIndex("[Memory Index]\n- cache A")
+	sessA.SetHippocampusSummary("tables: A")
+
+	sessB := NewSession("s-b", "default", "Agent")
+	sessB.Channel = "api"
+	sessB.AddSystemMessage("system scaffold B")
+	sessB.AddUserMessage(prompt)
+	sessB.SetMemoryContext("[Retrieved Evidence]\n1. cache B")
+	sessB.SetMemoryIndex("[Memory Index]\n- cache B")
+	sessB.SetHippocampusSummary("tables: B")
+
+	pipe.StoreInCacheForSession(context.Background(), sessA, cfg, prompt, response, "mock")
+
+	if hit := pipe.CheckCacheForSession(context.Background(), sessA, cfg, prompt); hit == nil {
+		t.Fatal("expected contextual cache hit for matching session scaffold")
+	}
+	if hit := pipe.CheckCacheForSession(context.Background(), sessB, cfg, prompt); hit != nil {
+		t.Fatalf("expected cache miss when shaped session scaffold differs, got %+v", hit)
+	}
+}
+
+func TestFitness_NoEscalateBypassesPipelineCache(t *testing.T) {
+	store := testutil.TempStore(t)
+	pipe := New(PipelineDeps{
+		Store:    store,
+		Executor: &stubExecutor{response: "Fresh inference response that should win when no-escalate bypasses pipeline cache."},
+		BGWorker: testutil.BGWorker(t, 4),
+	})
+
+	cfg := PresetAPI()
+	prompt := "no-escalate pipeline cache bypass"
+	cached := "This is a sufficiently long cached response that must be ignored on no-escalate turns."
+	pipe.StoreInCache(context.Background(), prompt, cached, "cached-model")
+
+	outcome, err := RunPipeline(context.Background(), pipe, cfg, Input{
+		Content:    prompt,
+		AgentID:    "default",
+		NoEscalate: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.FromCache {
+		t.Fatal("NoEscalate turn should not be served from pipeline cache")
+	}
+	if outcome.Content != "Fresh inference response that should win when no-escalate bypasses pipeline cache." {
+		t.Fatalf("unexpected outcome content: %q", outcome.Content)
 	}
 }
 
@@ -535,10 +626,18 @@ func TestFitness_CacheHitRecordsFromCacheParam(t *testing.T) {
 		BGWorker: testutil.BGWorker(t, 4),
 	})
 
-	// Seed cache with a valid response.
 	prompt := "cache hit params fitness test input"
-	response := "This is a quality response for cache hit inference params fitness verification"
-	pipe.StoreInCache(context.Background(),prompt, response, "gpt-4")
+	firstOutcome, err := RunPipeline(context.Background(), pipe, PresetAPI(), Input{
+		Content: prompt,
+		AgentID: "default",
+	})
+	if err != nil {
+		t.Fatalf("seed run: %v", err)
+	}
+	pipe.bgWorker.Drain(5 * time.Second)
+	if firstOutcome.FromCache {
+		t.Fatal("seed run should not be from cache")
+	}
 
 	// Run pipeline — should hit cache.
 	outcome, err := RunPipeline(context.Background(), pipe, PresetAPI(), Input{
@@ -564,8 +663,8 @@ func TestFitness_CacheHitRecordsFromCacheParam(t *testing.T) {
 	if !params.FromCache {
 		t.Error("FromCache should be true for cache hits")
 	}
-	if params.ModelActual != "gpt-4" {
-		t.Errorf("ModelActual = %q, want 'gpt-4'", params.ModelActual)
+	if params.ModelActual != firstOutcome.Model {
+		t.Errorf("ModelActual = %q, want %q", params.ModelActual, firstOutcome.Model)
 	}
 }
 
@@ -892,10 +991,10 @@ func TestFitness_TraceNamespaceConstants(t *testing.T) {
 		"TraceNSGuard":      "guard",
 		"TraceNSInference":  "inference",
 		"TraceNSRetrieval":  "retrieval",
-		"TraceNSToolSearch": "toolsearch",
+		"TraceNSToolSearch": "tool_search",
 		"TraceNSMCP":        "mcp",
 		"TraceNSDelegation": "delegation",
-		"TraceNSTaskState":  "taskstate",
+		"TraceNSTaskState":  "task_state",
 	}
 
 	actual := map[string]string{
@@ -1109,15 +1208,15 @@ func TestFitness_PersonalityReinforcementOnEarlyTurns(t *testing.T) {
 
 	// Use a stub retriever that always returns empty (simulating cold start).
 	pipe := New(PipelineDeps{
-		Store:    store,
-		Executor: &stubExecutor{response: "Personality reinforcement fitness test response with character-appropriate content"},
+		Store:     store,
+		Executor:  &stubExecutor{response: "Personality reinforcement fitness test response with character-appropriate content"},
 		Retriever: &stubRetriever{result: ""},
-		BGWorker: testutil.BGWorker(t, 4),
+		BGWorker:  testutil.BGWorker(t, 4),
 	})
 
 	cfg := PresetAPI()
 	outcome, err := RunPipeline(context.Background(), pipe, cfg, Input{
-		Content: "Hello, who are you?",
+		Content: "What kind of assistant are you?",
 		AgentID: "default",
 	})
 	if err != nil {
@@ -1167,6 +1266,37 @@ func TestFitness_PersonalityReinforcementNotOnLaterTurns(t *testing.T) {
 	}
 	if hasAnnotation(memSpan, "personality_boost") {
 		t.Error("personality_boost should NOT fire when memory retrieval returns content")
+	}
+}
+
+func TestFitness_PersonalityReinforcementNotForSubagents(t *testing.T) {
+	store := testutil.TempStore(t)
+	if _, err := store.ExecContext(context.Background(),
+		`INSERT INTO sub_agents (id, name, model, role, enabled) VALUES ('sa-1', 'automation_scripting', 'auto', 'subagent', 1)`); err != nil {
+		t.Fatalf("seed sub_agents: %v", err)
+	}
+
+	pipe := New(PipelineDeps{
+		Store:     store,
+		Executor:  &stubExecutor{response: "Subagent execution response"},
+		Retriever: &stubRetriever{result: ""},
+		BGWorker:  testutil.BGWorker(t, 4),
+	})
+
+	cfg := PresetAPI()
+	outcome, err := RunPipeline(context.Background(), pipe, cfg, Input{
+		Content: "Why did the delegated task fail?",
+		AgentID: "automation_scripting",
+	})
+	if err != nil {
+		t.Fatalf("RunPipeline: %v", err)
+	}
+
+	trace := extractFullTrace(t, store, outcome.SessionID)
+	spans := extractSpans(t, trace.StagesJSON)
+	memSpan := findSpan(spans, "memory_retrieval")
+	if memSpan != nil && hasAnnotation(memSpan, "personality_boost") {
+		t.Error("subagent sessions should not receive personality_boost")
 	}
 }
 

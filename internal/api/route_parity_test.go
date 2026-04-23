@@ -107,6 +107,10 @@ func TestParity_APIRouteSet(t *testing.T) {
 		"GET /api/models/routing-dataset",
 		"POST /api/models/reset",
 		"POST /api/models/exercise",
+		"POST /api/models/exercise/runs",
+		"GET /api/models/exercise/runs",
+		"POST /api/models/exercise/runs/{runID}/results",
+		"POST /api/models/exercise/runs/{runID}/complete",
 		"GET /api/models/exercise/scorecard",
 
 		// Routing profile

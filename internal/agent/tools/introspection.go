@@ -7,6 +7,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"roboticus/internal/db"
 )
 
 // IntrospectionTool lets the agent inspect its own capabilities and state.
@@ -17,6 +19,14 @@ type IntrospectionTool struct {
 	toolNames func() []string
 }
 
+// IntrospectionAliasTool exposes the same implementation under alternate names
+// (for example "introspection") so the model can still succeed when it picks a
+// natural-language synonym instead of the canonical "introspect" name.
+type IntrospectionAliasTool struct {
+	name string
+	base *IntrospectionTool
+}
+
 // NewIntrospectionTool creates an introspection tool.
 func NewIntrospectionTool(agentName, version string, toolNames func() []string) *IntrospectionTool {
 	return &IntrospectionTool{
@@ -25,6 +35,11 @@ func NewIntrospectionTool(agentName, version string, toolNames func() []string) 
 		version:   version,
 		toolNames: toolNames,
 	}
+}
+
+// NewIntrospectionAliasTool creates an alias for the introspection surface.
+func NewIntrospectionAliasTool(name string, base *IntrospectionTool) *IntrospectionAliasTool {
+	return &IntrospectionAliasTool{name: strings.TrimSpace(name), base: base}
 }
 
 func (t *IntrospectionTool) Name() string { return "introspect" }
@@ -72,11 +87,23 @@ func (t *IntrospectionTool) Execute(ctx context.Context, params string, _ *Conte
 	return &Result{Output: strings.Join(sections, "\n\n")}, nil
 }
 
+func (t *IntrospectionAliasTool) Name() string { return t.name }
+func (t *IntrospectionAliasTool) Description() string {
+	return t.base.Description()
+}
+func (t *IntrospectionAliasTool) Risk() RiskLevel { return t.base.Risk() }
+func (t *IntrospectionAliasTool) ParameterSchema() json.RawMessage {
+	return t.base.ParameterSchema()
+}
+func (t *IntrospectionAliasTool) Execute(ctx context.Context, params string, tctx *Context) (*Result, error) {
+	return t.base.Execute(ctx, params, tctx)
+}
+
 func (t *IntrospectionTool) capabilities() string {
 	return fmt.Sprintf(`## Capabilities
 - Agent: %s (v%s)
 - Multi-model inference with cascade routing
-- 5-tier memory system (working, episodic, semantic, procedural, relationship)
+- 6-store memory system (working, episodic, semantic, procedural, relationship, graph facts)
 - Multi-channel delivery (Telegram, Discord, Signal, WhatsApp, Voice, A2A)
 - Tool execution with sandboxed filesystem access
 - Cron scheduling with durable execution
@@ -122,7 +149,8 @@ func (t *IntrospectionTool) memoryInfo() string {
 - Episodic: Past events with temporal decay re-ranking
 - Semantic: Structured knowledge (category/key/value with confidence)
 - Procedural: Tool usage statistics (success/failure rates)
-- Relationship: Entity interaction tracking (trust scores, frequency)`
+- Relationship: Entity interaction tracking (trust scores, frequency)
+- Graph Facts: Typed dependencies and relations (subject/relation/object with provenance)`
 }
 
 // --- MemoryStatsTool ---
@@ -167,6 +195,7 @@ func (t *MemoryStatsTool) Execute(ctx context.Context, params string, tctx *Cont
 		{"semantic_memory", "SELECT COUNT(*) FROM semantic_memory"},
 		{"procedural_memory", "SELECT COUNT(*) FROM procedural_memory"},
 		{"relationship_memory", "SELECT COUNT(*) FROM relationship_memory"},
+		{"knowledge_facts", "SELECT COUNT(*) FROM knowledge_facts"},
 	}
 
 	// If a session_id is provided, scope working_memory to that session.
@@ -321,19 +350,14 @@ func (t *SubagentStatusTool) Execute(ctx context.Context, _ string, tctx *Contex
 		}
 	}
 
-	// Query open tasks (pending or in_progress).
+	// Query open delegated tasks through the shared lifecycle repository instead
+	// of maintaining a status-sidecar interpretation here.
 	var tasks []openTask
-	taskRows, err := tctx.Store.QueryContext(ctx,
-		`SELECT id, COALESCE(title, ''), status FROM tasks
-		 WHERE status IN ('pending', 'in_progress')
-		 ORDER BY created_at DESC LIMIT 50`)
+	lifecycleRepo := db.NewDelegatedTaskLifecycleRepository(tctx.Store)
+	openTasks, err := lifecycleRepo.ListOpen(ctx, 50)
 	if err == nil {
-		defer func() { _ = taskRows.Close() }()
-		for taskRows.Next() {
-			var t openTask
-			if taskRows.Scan(&t.ID, &t.Title, &t.Status) == nil {
-				tasks = append(tasks, t)
-			}
+		for _, task := range openTasks {
+			tasks = append(tasks, openTask{ID: task.ID, Title: task.Title, Status: task.Status})
 		}
 	}
 
@@ -345,5 +369,184 @@ func (t *SubagentStatusTool) Execute(ctx context.Context, _ string, tctx *Contex
 		Tasks:  tasks,
 	}
 	data, _ := json.Marshal(result)
+	return &Result{Output: string(data)}, nil
+}
+
+// --- SubagentRosterTool ---
+
+// SubagentRosterTool exposes the configured subagent roster as a first-class
+// live-path operational tool instead of relying on prompt-side capability
+// snapshots or admin-only surfaces.
+type SubagentRosterTool struct{}
+
+func (t *SubagentRosterTool) Name() string { return "list-subagent-roster" }
+func (t *SubagentRosterTool) Description() string {
+	return "List the configured subagent roster with role, model, enabled status, fixed skills, fallback models, and usage metadata."
+}
+func (t *SubagentRosterTool) Risk() RiskLevel { return RiskSafe }
+func (t *SubagentRosterTool) ParameterSchema() json.RawMessage {
+	return json.RawMessage(`{"type":"object","properties":{}}`)
+}
+
+func (t *SubagentRosterTool) Execute(ctx context.Context, _ string, tctx *Context) (*Result, error) {
+	if tctx.Store == nil {
+		return &Result{Output: "no subagent roster available"}, nil
+	}
+
+	rows, err := tctx.Store.QueryContext(ctx,
+		`SELECT name, COALESCE(display_name, name), model, role, COALESCE(description, ''),
+		        skills_json, fallback_models_json, enabled, session_count, COALESCE(last_used_at, 'never')
+		   FROM sub_agents
+		  ORDER BY enabled DESC, name ASC`)
+	if err != nil {
+		return &Result{Output: "failed to query subagent roster"}, nil
+	}
+	defer func() { _ = rows.Close() }()
+
+	type subagentRosterEntry struct {
+		Name           string   `json:"name"`
+		DisplayName    string   `json:"display_name"`
+		Model          string   `json:"model"`
+		Role           string   `json:"role"`
+		Description    string   `json:"description,omitempty"`
+		FixedSkills    []string `json:"fixed_skills,omitempty"`
+		FallbackModels []string `json:"fallback_models,omitempty"`
+		Enabled        bool     `json:"enabled"`
+		SessionCount   int      `json:"session_count"`
+		LastUsedAt     string   `json:"last_used_at"`
+	}
+
+	var roster []subagentRosterEntry
+	for rows.Next() {
+		var entry subagentRosterEntry
+		var skillsJSON, fallbackJSON string
+		if err := rows.Scan(
+			&entry.Name,
+			&entry.DisplayName,
+			&entry.Model,
+			&entry.Role,
+			&entry.Description,
+			&skillsJSON,
+			&fallbackJSON,
+			&entry.Enabled,
+			&entry.SessionCount,
+			&entry.LastUsedAt,
+		); err == nil {
+			_ = json.Unmarshal([]byte(skillsJSON), &entry.FixedSkills)
+			_ = json.Unmarshal([]byte(fallbackJSON), &entry.FallbackModels)
+			roster = append(roster, entry)
+		}
+	}
+
+	out := struct {
+		Subagents []subagentRosterEntry `json:"subagents"`
+		Count     int                   `json:"count"`
+		Enabled   int                   `json:"enabled_count"`
+	}{
+		Subagents: roster,
+		Count:     len(roster),
+	}
+	for _, entry := range roster {
+		if entry.Enabled {
+			out.Enabled++
+		}
+	}
+
+	data, _ := json.Marshal(out)
+	return &Result{Output: string(data)}, nil
+}
+
+// --- AvailableSkillsTool ---
+
+// AvailableSkillsTool exposes the skill inventory on the live runtime tool
+// surface so orchestrators can inspect what skills exist without depending on
+// admin routes or prompt-side snapshots.
+type AvailableSkillsTool struct{}
+
+func (t *AvailableSkillsTool) Name() string { return "list-available-skills" }
+func (t *AvailableSkillsTool) Description() string {
+	return "List the available skills with kind, enabled status, triggers, tool chain, risk level, source, and usage metadata."
+}
+func (t *AvailableSkillsTool) Risk() RiskLevel { return RiskSafe }
+func (t *AvailableSkillsTool) ParameterSchema() json.RawMessage {
+	return json.RawMessage(`{"type":"object","properties":{}}`)
+}
+
+func (t *AvailableSkillsTool) Execute(ctx context.Context, _ string, tctx *Context) (*Result, error) {
+	if tctx.Store == nil {
+		return &Result{Output: "no skill inventory available"}, nil
+	}
+
+	rows, err := tctx.Store.QueryContext(ctx,
+		`SELECT name, kind, COALESCE(description, ''), enabled,
+		        COALESCE(risk_level, 'Caution'),
+		        COALESCE(version, '0.0.0'),
+		        COALESCE(author, 'local'),
+		        COALESCE(registry_source, 'local'),
+		        COALESCE(triggers_json, '[]'),
+		        COALESCE(tool_chain_json, '[]'),
+		        usage_count,
+		        COALESCE(last_used_at, 'never')
+		   FROM skills
+		  ORDER BY enabled DESC, name ASC`)
+	if err != nil {
+		return &Result{Output: "failed to query skills"}, nil
+	}
+	defer func() { _ = rows.Close() }()
+
+	type availableSkill struct {
+		Name           string   `json:"name"`
+		Kind           string   `json:"kind"`
+		Description    string   `json:"description,omitempty"`
+		Enabled        bool     `json:"enabled"`
+		RiskLevel      string   `json:"risk_level"`
+		Version        string   `json:"version"`
+		Author         string   `json:"author"`
+		RegistrySource string   `json:"registry_source"`
+		Triggers       []string `json:"triggers,omitempty"`
+		ToolChain      []string `json:"tool_chain,omitempty"`
+		UsageCount     int      `json:"usage_count"`
+		LastUsedAt     string   `json:"last_used_at"`
+	}
+
+	var skills []availableSkill
+	for rows.Next() {
+		var skill availableSkill
+		var triggersJSON, chainJSON string
+		if err := rows.Scan(
+			&skill.Name,
+			&skill.Kind,
+			&skill.Description,
+			&skill.Enabled,
+			&skill.RiskLevel,
+			&skill.Version,
+			&skill.Author,
+			&skill.RegistrySource,
+			&triggersJSON,
+			&chainJSON,
+			&skill.UsageCount,
+			&skill.LastUsedAt,
+		); err == nil {
+			_ = json.Unmarshal([]byte(triggersJSON), &skill.Triggers)
+			_ = json.Unmarshal([]byte(chainJSON), &skill.ToolChain)
+			skills = append(skills, skill)
+		}
+	}
+
+	out := struct {
+		Skills  []availableSkill `json:"skills"`
+		Count   int              `json:"count"`
+		Enabled int              `json:"enabled_count"`
+	}{
+		Skills: skills,
+		Count:  len(skills),
+	}
+	for _, skill := range skills {
+		if skill.Enabled {
+			out.Enabled++
+		}
+	}
+
+	data, _ := json.Marshal(out)
 	return &Result{Output: string(data)}, nil
 }

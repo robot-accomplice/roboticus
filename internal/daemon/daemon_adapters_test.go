@@ -15,6 +15,7 @@ import (
 	"roboticus/internal/agent/skills"
 	"roboticus/internal/agent/tools"
 	"roboticus/internal/core"
+	"roboticus/internal/db"
 	"roboticus/internal/llm"
 	"roboticus/internal/pipeline"
 	"roboticus/internal/session"
@@ -69,6 +70,66 @@ func TestRetrieverAdapter_Retrieve(t *testing.T) {
 	result := a.Retrieve(context.Background(), "test-session", "hello", 1024)
 	if strings.Contains(result, "error") {
 		t.Errorf("empty store should not produce errors, got: %s", result)
+	}
+}
+
+func TestToolPruningQuery_AppendsSourceArtifactHints(t *testing.T) {
+	sess := session.New("s1", "agent1", "Bot")
+	sess.AddUserMessage("Read the source file and create the outputs.")
+	sess.SetSourceArtifacts([]string{"tmp/input.txt"})
+
+	got := toolPruningQuery(sess)
+	if !strings.Contains(got, "Read the source file and create the outputs.") {
+		t.Fatalf("query = %q, want original user prompt", got)
+	}
+	if !strings.Contains(got, "Authoritative source artifacts to read before answering: tmp/input.txt") {
+		t.Fatalf("query = %q, want appended source artifact hint", got)
+	}
+}
+
+func TestAppendAlwaysInclude_DeduplicatesNames(t *testing.T) {
+	got := appendAlwaysInclude([]string{"get_runtime_context", "read_file"}, "read_file", "write_file")
+	want := []string{"get_runtime_context", "read_file", "write_file"}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("appendAlwaysInclude = %v, want %v", got, want)
+	}
+}
+
+func TestToolPruningQuery_FocusedInspectionPinsFilesystemAlwaysInclude(t *testing.T) {
+	sess := session.New("s1", "agent1", "Bot")
+	sess.AddUserMessage("Count markdown files recursively in the target docs dir and return only the number.")
+	sess.SetTaskVerificationHints("task", "simple", "execute_directly", nil)
+	sess.SetTurnEnvelopePolicy("standard", "focused_inspection", "direct filesystem inspection should stay on a focused inspection envelope")
+
+	cfg := resolveToolSearchConfig(core.ToolSearchConfig{})
+	if sess.TurnToolProfile() == "focused_inspection" {
+		cfg.AlwaysInclude = appendAlwaysInclude(cfg.AlwaysInclude, "glob_files", "list_directory", "read_file")
+	}
+	if !strings.Contains(fmt.Sprint(cfg.AlwaysInclude), "glob_files") {
+		t.Fatalf("always_include = %v, want glob_files pinned", cfg.AlwaysInclude)
+	}
+	if !strings.Contains(fmt.Sprint(cfg.AlwaysInclude), "list_directory") {
+		t.Fatalf("always_include = %v, want list_directory pinned", cfg.AlwaysInclude)
+	}
+}
+
+func TestToolPruningQuery_FocusedAnalysisAuthoringPinsAnalysisAndWriteTools(t *testing.T) {
+	sess := session.New("s1", "agent1", "Bot")
+	sess.AddUserMessage("Generate a report on all development projects in my code directory and write it to my Desktop vault.")
+	sess.SetTaskVerificationHints("task", "moderate", "execute_directly", nil)
+	sess.SetTurnEnvelopePolicy("standard", "focused_analysis_authoring", "inspection-backed report authoring should stay on a focused analysis+authoring envelope")
+
+	cfg := resolveToolSearchConfig(core.ToolSearchConfig{})
+	if sess.TurnToolProfile() == "focused_analysis_authoring" {
+		cfg.AlwaysInclude = appendAlwaysInclude(cfg.AlwaysInclude,
+			"inventory_projects", "search_files", "glob_files", "list_directory", "read_file",
+			"bash", "write_file", "edit_file", "get_runtime_context",
+		)
+	}
+	for _, want := range []string{"inventory_projects", "search_files", "bash", "write_file", "get_runtime_context"} {
+		if !strings.Contains(fmt.Sprint(cfg.AlwaysInclude), want) {
+			t.Fatalf("always_include = %v, want %s pinned", cfg.AlwaysInclude, want)
+		}
 	}
 }
 
@@ -597,9 +658,9 @@ func TestBuildAgentContext_Basic(t *testing.T) {
 	sess.AddUserMessage("Hello there")
 
 	// No tools, no retriever — should not panic.
-	ctx := buildAgentContext(context.Background(), sess, nil, nil, nil, agent.PromptConfig{
+	ctx := buildAgentContext(context.Background(), sess, nil, nil, nil, tools.DefaultToolSearchConfig(), agent.PromptConfig{
 		AgentName: "TestBot",
-	}, nil)
+	}, nil, nil)
 	if ctx == nil {
 		t.Fatal("context builder should not be nil")
 	}
@@ -612,44 +673,460 @@ func TestBuildAgentContext_WithTools(t *testing.T) {
 	reg := agent.NewToolRegistry()
 	reg.Register(&tools.EchoTool{})
 
-	ctx := buildAgentContext(context.Background(), sess, reg, nil, nil, agent.PromptConfig{
+	ctx := buildAgentContext(context.Background(), sess, nil, reg, nil, tools.DefaultToolSearchConfig(), agent.PromptConfig{
 		AgentName: "TestBot",
-	}, nil)
+	}, nil, nil)
 	if ctx == nil {
 		t.Fatal("context builder should not be nil")
 	}
 }
 
-func TestBuildAgentContext_WithRetriever(t *testing.T) {
+func TestBuildAgentContext_PromptToolRosterUsesSelectedDefs(t *testing.T) {
+	sess := session.New("s1", "a1", "TestBot")
+	sess.AddUserMessage("test")
+	sess.SetSelectedToolDefs([]llm.ToolDef{
+		{
+			Type: "function",
+			Function: llm.ToolFuncDef{
+				Name:        "echo",
+				Description: "Echo a string back",
+			},
+		},
+	})
+
+	ctx := buildAgentContext(context.Background(), sess, nil, nil, nil, tools.DefaultToolSearchConfig(), agent.PromptConfig{
+		AgentName: "TestBot",
+		ToolNames: []string{"echo", "search_memories"},
+		ToolDescs: [][2]string{
+			{"echo", "Echo a string back"},
+			{"search_memories", "Search long-term memory"},
+		},
+	}, nil, nil)
+	req := ctx.BuildRequest(sess)
+	if len(req.Messages) == 0 || req.Messages[0].Role != "system" {
+		t.Fatalf("expected system prompt in first message")
+	}
+	prompt := req.Messages[0].Content
+	if !strings.Contains(prompt, "**echo**") {
+		t.Fatal("expected selected tool in prompt roster")
+	}
+	if strings.Contains(prompt, "**search_memories**") {
+		t.Fatal("prompt roster should not advertise tools outside selected defs")
+	}
+	if len(req.Tools) != 1 || req.Tools[0].Function.Name != "echo" {
+		t.Fatalf("structured tool surface drifted from selected defs: %+v", req.Tools)
+	}
+}
+
+func TestBuildAgentContext_PromptToolRosterClearsWhenSelectedDefsEmpty(t *testing.T) {
+	sess := session.New("s1", "a1", "TestBot")
+	sess.AddUserMessage("test")
+	sess.SetSelectedToolDefs([]llm.ToolDef{})
+
+	ctx := buildAgentContext(context.Background(), sess, nil, nil, nil, tools.DefaultToolSearchConfig(), agent.PromptConfig{
+		AgentName: "TestBot",
+		ToolNames: []string{"echo", "search_memories"},
+		ToolDescs: [][2]string{
+			{"echo", "Echo a string back"},
+			{"search_memories", "Search long-term memory"},
+		},
+	}, nil, nil)
+	req := ctx.BuildRequest(sess)
+	if len(req.Messages) == 0 || req.Messages[0].Role != "system" {
+		t.Fatalf("expected system prompt in first message")
+	}
+	prompt := req.Messages[0].Content
+	if strings.Contains(prompt, "**echo**") || strings.Contains(prompt, "**search_memories**") {
+		t.Fatal("prompt roster should be empty when the pipeline selected zero tools")
+	}
+	if len(req.Tools) != 0 {
+		t.Fatalf("structured tool surface should be empty, got %+v", req.Tools)
+	}
+}
+
+func TestBuildAgentContext_PropagatesTurnWeight(t *testing.T) {
+	sess := session.New("s1", "a1", "TestBot")
+	sess.AddUserMessage("hello")
+	sess.SetTaskVerificationHints("code", "complex", "execute_directly", nil)
+	sess.SetTurnEnvelopePolicy("light", "", "simple conversational turn should stay minimal")
+
+	ctx := buildAgentContext(context.Background(), sess, nil, nil, nil, tools.DefaultToolSearchConfig(), agent.PromptConfig{
+		AgentName: "TestBot",
+	}, nil, nil)
+	req := ctx.BuildRequest(sess)
+	if req.TurnWeight != "light" {
+		t.Fatalf("TurnWeight = %q, want light", req.TurnWeight)
+	}
+	if req.TaskIntent != "code" {
+		t.Fatalf("TaskIntent = %q, want code", req.TaskIntent)
+	}
+	if req.TaskComplexity != "complex" {
+		t.Fatalf("TaskComplexity = %q, want complex", req.TaskComplexity)
+	}
+	if req.IntentClass != llm.IntentCoding.String() {
+		t.Fatalf("IntentClass = %q, want %q", req.IntentClass, llm.IntentCoding.String())
+	}
+}
+
+func TestBuildAgentContext_ReusesSelectedToolSurfaceAcrossLoopTurns(t *testing.T) {
+	sess := session.New("s1", "a1", "TestBot")
+	sess.AddUserMessage("use a tool if needed")
+	sess.SetSelectedToolDefs([]llm.ToolDef{
+		{
+			Type: "function",
+			Function: llm.ToolFuncDef{
+				Name:        "echo",
+				Description: "Echo a string back",
+			},
+		},
+	})
+
+	reg := agent.NewToolRegistry()
+	reg.Register(&tools.EchoTool{})
+	reg.Register(&tools.WebSearchTool{})
+
+	ctx := buildAgentContext(context.Background(), sess, nil, reg, nil, tools.DefaultToolSearchConfig(), agent.PromptConfig{
+		AgentName: "TestBot",
+		ToolNames: []string{"echo", "web_search"},
+		ToolDescs: [][2]string{
+			{"echo", "Echo a string back"},
+			{"web_search", "Search the web"},
+		},
+	}, nil, nil)
+
+	req1 := ctx.BuildRequest(sess)
+	if len(req1.Tools) != 1 || req1.Tools[0].Function.Name != "echo" {
+		t.Fatalf("first request tool surface = %+v, want only echo", req1.Tools)
+	}
+
+	sess.AddAssistantMessage("I will use echo.", []llm.ToolCall{{
+		ID:   "call-1",
+		Type: "function",
+		Function: llm.ToolCallFunc{
+			Name:      "echo",
+			Arguments: `{"text":"hello"}`,
+		},
+	}})
+	sess.AddToolResult("call-1", "echo", "hello", false)
+	sess.AddUserMessage("continue")
+
+	req2 := ctx.BuildRequest(sess)
+	if len(req2.Tools) != 1 || req2.Tools[0].Function.Name != "echo" {
+		t.Fatalf("loop-turn request tool surface = %+v, want only echo", req2.Tools)
+	}
+	if strings.Contains(req2.Messages[0].Content, "**web_search**") {
+		t.Fatal("prompt roster drifted back to registry tools on later loop turn")
+	}
+	if !strings.Contains(req2.Messages[0].Content, "**echo**") {
+		t.Fatal("prompt roster lost the selected tool on later loop turn")
+	}
+}
+
+func TestBuildAgentContext_IntrospectionQueryGetsCapabilitySnapshot(t *testing.T) {
 	store := testutil.TempStore(t)
-	retriever := memory.NewRetriever(memory.DefaultRetrievalConfig(), memory.TierBudget{
-		Working: 0.5,
-	}, store)
+	_, err := store.ExecContext(context.Background(),
+		`INSERT INTO sub_agents (id, name, display_name, model, role, description, enabled)
+		 VALUES ('sa1', 'researcher', 'Researcher', 'qwen2.5:14b', 'specialist', 'research and synthesis', 1)`)
+	if err != nil {
+		t.Fatalf("insert subagent: %v", err)
+	}
+
+	sess := session.New("s1", "a1", "TestBot")
+	sess.AddUserMessage("use your introspection tool to discover your current subagent functionality and summarize it for me")
+	sess.SetSelectedToolDefs([]llm.ToolDef{
+		{
+			Type: "function",
+			Function: llm.ToolFuncDef{
+				Name:        "introspection",
+				Description: "Inspect agent capabilities, available tools, and runtime state.",
+			},
+		},
+		{
+			Type: "function",
+			Function: llm.ToolFuncDef{
+				Name:        "get_subagent_status",
+				Description: "Get status of all registered subagents including their model, role, and activity.",
+			},
+		},
+	})
+
+	ctx := buildAgentContext(context.Background(), sess, store, nil, nil, tools.DefaultToolSearchConfig(), agent.PromptConfig{
+		AgentName: "TestBot",
+		Skills:    []string{"research", "monitoring"},
+	}, nil, nil)
+	req := ctx.BuildRequest(sess)
+	if len(req.Messages) == 0 || req.Messages[0].Role != "system" {
+		t.Fatalf("expected system prompt in first message")
+	}
+	prompt := req.Messages[0].Content
+	if !strings.Contains(prompt, "## Capability Snapshot") {
+		t.Fatal("expected capability snapshot in system prompt")
+	}
+	if !strings.Contains(prompt, "This snapshot is authoritative runtime state") {
+		t.Fatal("expected authoritative capability snapshot guidance")
+	}
+	if !strings.Contains(prompt, "Live tool surface") || !strings.Contains(prompt, "introspection") {
+		t.Fatal("expected live selected tools in capability snapshot")
+	}
+	if !strings.Contains(prompt, "Configured subagents") || !strings.Contains(prompt, "Researcher (researcher)") {
+		t.Fatal("expected subagent roster in capability snapshot")
+	}
+}
+
+func TestBuildAgentContext_NonIntrospectionQueryDoesNotInjectCapabilitySnapshot(t *testing.T) {
+	sess := session.New("s1", "a1", "TestBot")
+	sess.AddUserMessage("count markdown files recursively in /Users/jmachen/code and return only the number")
+	sess.SetSelectedToolDefs([]llm.ToolDef{
+		{
+			Type: "function",
+			Function: llm.ToolFuncDef{
+				Name:        "bash",
+				Description: "Execute shell commands.",
+			},
+		},
+	})
+
+	ctx := buildAgentContext(context.Background(), sess, nil, nil, nil, tools.DefaultToolSearchConfig(), agent.PromptConfig{
+		AgentName: "TestBot",
+		Skills:    []string{"research"},
+	}, nil, nil)
+	req := ctx.BuildRequest(sess)
+	if len(req.Messages) == 0 || req.Messages[0].Role != "system" {
+		t.Fatalf("expected system prompt in first message")
+	}
+	if strings.Contains(req.Messages[0].Content, "## Capability Snapshot") {
+		t.Fatal("non-introspection turn should not pay capability snapshot prompt tax")
+	}
+}
+
+func TestBuildAgentContext_ToolCapabilityQueryGetsCapabilitySnapshot(t *testing.T) {
+	sess := session.New("s1", "a1", "TestBot")
+	sess.AddUserMessage("tell me about the tools you can use, pick one at random, and use it")
+	sess.SetSelectedToolDefs([]llm.ToolDef{
+		{
+			Type: "function",
+			Function: llm.ToolFuncDef{
+				Name:        "bash",
+				Description: "Execute shell commands.",
+			},
+		},
+		{
+			Type: "function",
+			Function: llm.ToolFuncDef{
+				Name:        "weather",
+				Description: "Fetch weather.",
+			},
+		},
+	})
+
+	ctx := buildAgentContext(context.Background(), sess, nil, nil, nil, tools.DefaultToolSearchConfig(), agent.PromptConfig{
+		AgentName: "TestBot",
+		Skills:    []string{"research"},
+	}, nil, nil)
+	req := ctx.BuildRequest(sess)
+	if len(req.Messages) == 0 || req.Messages[0].Role != "system" {
+		t.Fatalf("expected system prompt in first message")
+	}
+	prompt := req.Messages[0].Content
+	if !strings.Contains(prompt, "## Capability Snapshot") {
+		t.Fatal("expected capability snapshot for tool-capability query")
+	}
+	if !strings.Contains(prompt, "Live tool surface") || !strings.Contains(prompt, "bash") {
+		t.Fatal("expected selected tool surface in capability snapshot")
+	}
+}
+
+func TestBuildAgentContext_WithRetriever(t *testing.T) {
+	// v1.0.6: buildAgentContext no longer holds a retriever reference.
+	// Memory preparation is the pipeline's responsibility; this test now
+	// just confirms the context builder is constructed regardless of
+	// session memory state.
+	_ = testutil.TempStore(t) // keep schema init for consistency with peer tests
 
 	sess := session.New("s1", "a1", "TestBot")
 	sess.AddUserMessage("query about something")
 
-	ctx := buildAgentContext(context.Background(), sess, nil, retriever, store, agent.PromptConfig{
+	ctx := buildAgentContext(context.Background(), sess, nil, nil, nil, tools.DefaultToolSearchConfig(), agent.PromptConfig{
 		AgentName: "TestBot",
-	}, nil)
+	}, nil, nil)
 	if ctx == nil {
 		t.Fatal("context builder should not be nil")
 	}
 }
 
 func TestBuildAgentContext_NoUserMessages(t *testing.T) {
-	store := testutil.TempStore(t)
-	retriever := memory.NewRetriever(memory.DefaultRetrievalConfig(), memory.TierBudget{
-		Working: 0.5,
-	}, store)
+	// v1.0.6: no retriever threaded through buildAgentContext; the
+	// pipeline is authoritative for memory preparation. Test just
+	// confirms empty-session construction doesn't panic.
+	_ = testutil.TempStore(t)
 
 	sess := session.New("s1", "a1", "TestBot")
 	// No messages.
-	ctx := buildAgentContext(context.Background(), sess, nil, retriever, store, agent.PromptConfig{
+	ctx := buildAgentContext(context.Background(), sess, nil, nil, nil, tools.DefaultToolSearchConfig(), agent.PromptConfig{
 		AgentName: "TestBot",
-	}, nil)
+	}, nil, nil)
 	if ctx == nil {
 		t.Fatal("context builder should not be nil")
+	}
+}
+
+func TestBuildAgentContext_PrefersPipelineMemoryContext(t *testing.T) {
+	// REGRESSION TRIPWIRE against fallback-path reintroduction.
+	//
+	// Test setup: populate the session's MemoryContext (pipeline-path
+	// state) AND seed the working_memory DB table (the data a
+	// fallback-path retriever would pick up). The assertions below
+	// confirm that:
+	//   (1) the pipeline-path data makes it into the request
+	//   (2) the fallback-path data does NOT
+	//
+	// As of v1.0.6 P1-B, buildAgentContext has NO CODE PATH that can
+	// reach the working_memory DB — the fallback was deleted. So the
+	// "fallback retrieval memory" DB row in this test is UNREACHABLE
+	// by the code under test; assertion (2) is trivially true. Do not
+	// delete the DB seed: if a future engineer re-introduces the
+	// fallback pattern (e.g., "just a quick RetrieveDirectOnly call
+	// to patch empty memory"), the seed becomes reachable again and
+	// THIS TEST FAILS, catching the regression before it ships.
+	//
+	// The seed stays. The assertion stays. The DB I/O is intentional.
+	store := testutil.TempStore(t)
+
+	sess := session.New("s1", "a1", "TestBot")
+	sess.AddUserMessage("query about something")
+	sess.SetMemoryContext("[Working State]\n- pipeline prepared memory")
+
+	// Tripwire seed: this row MUST remain unreachable by
+	// buildAgentContext. See the block comment above.
+	_, err := store.ExecContext(context.Background(),
+		`INSERT INTO working_memory (id, session_id, entry_type, content, importance)
+		 VALUES ('wm1', 's1', 'note', 'fallback retrieval memory', 5)`)
+	if err != nil {
+		t.Fatalf("seed working memory tripwire: %v", err)
+	}
+
+	ctx := buildAgentContext(context.Background(), sess, store, nil, nil, tools.DefaultToolSearchConfig(), agent.PromptConfig{
+		AgentName: "TestBot",
+	}, nil, nil)
+	req := ctx.BuildRequest(sess)
+
+	var sawPipeline bool
+	var sawFallback bool
+	for _, msg := range req.Messages {
+		if msg.Role != "system" {
+			continue
+		}
+		if strings.Contains(msg.Content, "pipeline prepared memory") {
+			sawPipeline = true
+		}
+		if strings.Contains(msg.Content, "fallback retrieval memory") {
+			sawFallback = true
+		}
+	}
+
+	if !sawPipeline {
+		t.Fatal("expected pipeline-prepared memory context in request")
+	}
+	if sawFallback {
+		t.Fatal("FALLBACK REGRESSION: buildAgentContext reached the working_memory DB — the v1.0.6 P1-B removal of the fallback path has been undone")
+	}
+}
+
+func TestBuildAgentContext_PrefersPipelineMemoryIndex(t *testing.T) {
+	store := testutil.TempStore(t)
+
+	sess := session.New("s1", "a1", "TestBot")
+	sess.AddUserMessage("query about something")
+	sess.SetMemoryIndex("[Memory Index]\n- pipeline index entry")
+
+	_, err := store.ExecContext(context.Background(),
+		`INSERT INTO memory_index (id, source_table, source_id, summary, confidence)
+		 VALUES ('idx1', 'semantic_memory', 'sem1', 'fallback index entry', 0.9)`)
+	if err != nil {
+		t.Fatalf("seed memory index: %v", err)
+	}
+
+	ctx := buildAgentContext(context.Background(), sess, store, nil, nil, tools.DefaultToolSearchConfig(), agent.PromptConfig{
+		AgentName: "TestBot",
+	}, nil, nil)
+	req := ctx.BuildRequest(sess)
+
+	var sawPipeline bool
+	var sawFallback bool
+	for _, msg := range req.Messages {
+		if msg.Role != "system" {
+			continue
+		}
+		if strings.Contains(msg.Content, "pipeline index entry") {
+			sawPipeline = true
+		}
+		if strings.Contains(msg.Content, "fallback index entry") {
+			sawFallback = true
+		}
+	}
+
+	if !sawPipeline {
+		t.Fatal("expected pipeline-prepared memory index in request")
+	}
+	if sawFallback {
+		t.Fatal("expected session memory index to win over store-built fallback")
+	}
+}
+
+func TestBuildAgentContext_AppendsCheckpointRestoreFromRepository(t *testing.T) {
+	store := testutil.TempStore(t)
+	sess := session.New("s1", "a1", "TestBot")
+	if _, err := store.FindOrCreateSession(context.Background(), sess.AgentID, "scope:checkpoint-note"); err != nil {
+		t.Fatalf("FindOrCreateSession: %v", err)
+	}
+	if err := store.QueryRowContext(context.Background(),
+		`SELECT id FROM sessions WHERE agent_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+		sess.AgentID,
+	).Scan(&sess.ID); err != nil {
+		t.Fatalf("load session id: %v", err)
+	}
+	sess.AddUserMessage("current question")
+
+	repo := db.NewCheckpointRepository(store)
+	if err := repo.SaveRecord(context.Background(), db.CheckpointRecord{
+		SessionID:          sess.ID,
+		MemorySummary:      "checkpoint memory summary that should be restored in full",
+		ConversationDigest: "assistant checkpoint digest that should be restored",
+		ActiveTasks:        `["task-a"]`,
+		TurnCount:          10,
+	}); err != nil {
+		t.Fatalf("SaveRecord: %v", err)
+	}
+
+	ctx := buildAgentContext(context.Background(), sess, store, nil, nil, tools.DefaultToolSearchConfig(), agent.PromptConfig{
+		AgentName: "TestBot",
+	}, nil, nil)
+	req := ctx.BuildRequest(sess)
+
+	var sawRestore, sawTasks, sawDigest bool
+	for _, msg := range req.Messages {
+		if msg.Role != "system" {
+			continue
+		}
+		if strings.Contains(msg.Content, "[Checkpoint Restore]") &&
+			strings.Contains(msg.Content, "Session checkpoint restore (turn_count=10): checkpoint memory summary that should be restored in full") {
+			sawRestore = true
+		}
+		if strings.Contains(msg.Content, `Active tasks: ["task-a"]`) {
+			sawTasks = true
+		}
+		if strings.Contains(msg.Content, "Conversation digest: assistant checkpoint digest that should be restored") {
+			sawDigest = true
+		}
+	}
+	if !sawRestore {
+		t.Fatal("expected checkpoint restore system note in request")
+	}
+	if !sawTasks {
+		t.Fatal("expected active tasks in checkpoint system note")
+	}
+	if !sawDigest {
+		t.Fatal("expected conversation digest in checkpoint restore note")
 	}
 }
 
@@ -657,14 +1134,52 @@ func TestBuildAgentContext_SetsAgentName(t *testing.T) {
 	sess := session.New("s1", "a1", "OverrideName")
 	sess.AddUserMessage("test")
 
-	ctx := buildAgentContext(context.Background(), sess, nil, nil, nil, agent.PromptConfig{
+	ctx := buildAgentContext(context.Background(), sess, nil, nil, nil, tools.DefaultToolSearchConfig(), agent.PromptConfig{
 		AgentName: "DefaultName",
-	}, nil)
+	}, nil, nil)
 	if ctx == nil {
 		t.Fatal("nil")
 	}
 	// The agent name should come from session, overriding the prompt config's default.
 	// We can verify indirectly that it was set without panicking.
+}
+
+func TestBuildAgentContext_UsesMinimalPromptProfileForSubagent(t *testing.T) {
+	store := testutil.TempStore(t)
+	if _, err := store.ExecContext(context.Background(),
+		`INSERT INTO sub_agents (id, name, model, role, enabled) VALUES ('sa-1', 'automation_scripting', 'auto', 'subagent', 1)`); err != nil {
+		t.Fatalf("seed sub_agents: %v", err)
+	}
+
+	sess := session.New("s1", "automation_scripting", "automation_scripting")
+	sess.AddUserMessage("do the task")
+
+	ctx := buildAgentContext(context.Background(), sess, store, nil, nil, tools.DefaultToolSearchConfig(), agent.PromptConfig{
+		AgentName:   "Duncan",
+		Personality: "Friendly and helpful.",
+		Operator:    "Operator prefers dry humor.",
+		Directives:  "Optimize for operator rapport.",
+	}, nil, nil)
+	req := ctx.BuildRequest(sess)
+	if len(req.Messages) == 0 || req.Messages[0].Role != "system" {
+		t.Fatal("expected system prompt message")
+	}
+	if req.AgentRole != "subagent" {
+		t.Fatalf("request agent role = %q, want subagent", req.AgentRole)
+	}
+	prompt := req.Messages[0].Content
+	if strings.Contains(prompt, "## Identity") {
+		t.Fatal("subagent context should not include identity block")
+	}
+	if strings.Contains(prompt, "## Operator Context") {
+		t.Fatal("subagent context should not include operator context block")
+	}
+	if strings.Contains(prompt, "## Active Directives") {
+		t.Fatal("subagent context should not include active directives block")
+	}
+	if !strings.Contains(prompt, "specialist subagent") {
+		t.Fatal("subagent context should include orchestration block")
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -691,7 +1206,6 @@ func TestStreamAdapter_PrepareStream(t *testing.T) {
 	a := &streamAdapter{
 		llmSvc:       llmSvc,
 		tools:        nil,
-		retriever:    nil,
 		promptConfig: agent.PromptConfig{AgentName: "Bot"},
 	}
 

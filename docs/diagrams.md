@@ -30,7 +30,7 @@ C4Context
     Person(user, "End User", "Interacts via chat channels")
     Person(admin, "Administrator", "Configures and monitors the agent")
 
-    System(roboticus, "Roboticus", "Autonomous AI agent runtime with multi-channel support, tool execution, memory, and policy enforcement")
+    System(roboticus, "Roboticus", "Autonomous AI agent runtime with multi-channel support, orchestration, delegation, persistent diagnostics, and operator-visible model policy")
 
     System_Ext(llmProviders, "LLM Providers", "OpenAI, Anthropic, Ollama, Google — inference APIs")
     System_Ext(telegram, "Telegram Bot API", "Chat messaging")
@@ -67,17 +67,19 @@ C4Container
     Person(admin, "Administrator")
 
     System_Boundary(gob, "Roboticus Runtime") {
-        Container(api, "API Server", "Go, chi", "REST + WebSocket endpoints, embedded dashboard SPA, middleware chain")
-        Container(pipeline, "Unified Pipeline", "Go", "Owns ALL business logic: injection defense → session → inference → guards → memory")
-        Container(agent, "Agent Core", "Go", "ReAct loop, tool registry, policy engine, injection detector, context builder")
-        Container(llm, "LLM Pipeline", "Go", "Multi-provider client with cache, router, circuit breaker, dedup")
+        Container(api, "API + Web UI Surface", "Go, chi + embedded SPA", "REST/admin routes, WebSocket/webchannel delivery, operator dashboard, live flow and diagnostics views")
+        Container(pipeline, "Unified Pipeline", "Go", "Owns ALL business logic: task synthesis → envelope policy → inference → delegation → guards → diagnostics → persistence")
+        Container(agent, "Agent Core", "Go", "ReAct loop, tool registry, policy engine, orchestrator/subagent prompt profiles, context builder")
+        Container(llm, "LLM Routing + Inference", "Go", "Multi-provider client with cache, router, circuit breaker, role eligibility, lifecycle filtering, benchmark-aware selection")
         Container(channels, "Channel Adapters", "Go", "Protocol translation for Telegram, Discord, Signal, WhatsApp, Email, WebSocket, Voice, A2A")
         Container(delivery, "Delivery Queue", "Go + SQLite", "Persistent outbound message queue with retry, DLQ, and heap-based scheduling")
         Container(scheduler, "Scheduler", "Go", "Cron evaluation, heartbeat daemon, lease-based execution")
-        Container(memory, "Memory & RAG", "Go + SQLite FTS5", "5-tier memory, hybrid FTS5+vector retrieval, episodic decay")
+        Container(memory, "Memory & RAG", "Go + SQLite FTS5", "5-tier memory, hybrid FTS5+vector retrieval, parallel tier fan-out, explicit fusion, optional LLM reranking with deterministic fallback, enriched semantic FTS corpus for key/category/value retrieval, episodic decay, retrieval suppression for lightweight conversation")
+        Container(policy, "Model Policy + Benchmarks", "Go + SQLite", "Persistent model lifecycle state, reason/evidence history, baseline_runs, exercise_results, host resource snapshots, role-aware live/benchmark gating")
+        Container(observability, "Turn Diagnostics + Flow Telemetry", "Go + SQLite", "Canonical turn diagnostics, diagnostic events, host resource snapshots, pipeline traces, model selection evidence, operator-facing decision rationale")
         Container(wallet, "Wallet Engine", "Go, go-ethereum", "internal/wallet — HD wallet, x402, yield; ships as a library (daemon/api do not import it yet; /api/wallet/* reads via db/ until composed)")
         Container(browser_c, "Browser Automation", "Go, chromedp", "CDP session management, page interaction")
-        ContainerDb(db, "SQLite Database", "SQLite WAL", "39 tables, FTS5, 14 versioned migrations")
+        ContainerDb(db, "SQLite Database", "SQLite WAL", "Sessions, memories, traces, diagnostics, model policy, benchmark history, queue/scheduler state")
     }
 
     System_Ext(llmProviders, "LLM Providers", "OpenAI / Anthropic / Ollama / Google")
@@ -85,12 +87,14 @@ C4Container
     System_Ext(ethereum, "Ethereum", "Base L2, Aave, Compound")
 
     Rel(user, channels, "Sends messages", "Channel protocol")
-    Rel(admin, api, "Manages agent", "HTTPS/WSS")
+    Rel(admin, api, "Manages agent and reviews decisions", "HTTPS/WSS")
     Rel(api, pipeline, "Delegates requests", "Go function call")
     Rel(channels, pipeline, "Delegates inbound messages", "Go function call")
     Rel(pipeline, agent, "Runs ReAct loop", "Go function call")
     Rel(agent, llm, "Requests inference", "Go interface call")
     Rel(agent, memory, "Stores/retrieves memories", "Go + SQL")
+    Rel(pipeline, policy, "Resolves model lifecycle and benchmark policy", "Go + SQL")
+    Rel(pipeline, observability, "Persists diagnostics and flow evidence", "Go + SQL")
     Rel(pipeline, delivery, "Enqueues outbound messages", "SQL INSERT")
     Rel(delivery, channels, "Dispatches messages", "Go function call")
     Rel(channels, externalChannels, "Sends/receives", "HTTPS/WSS/JSON-RPC")
@@ -99,6 +103,9 @@ C4Container
     Rel(wallet, ethereum, "Signs & broadcasts tx", "JSON-RPC")
     Rel(agent, db, "Reads/writes state", "SQL")
     Rel(llm, db, "Caches responses", "SQL")
+    Rel(policy, db, "Persists lifecycle and benchmark rows", "SQL")
+    Rel(observability, db, "Persists traces and RCA artifacts", "SQL")
+    Rel(api, observability, "Streams and renders flow telemetry", "Go + WebSocket")
     Rel(delivery, db, "Persists queue", "SQL")
     Rel(memory, db, "Stores memories + embeddings", "SQL")
     Rel(scheduler, db, "Manages leases + cron", "SQL")
@@ -126,10 +133,10 @@ C4Component
         Component(policy, "Policy Engine", "Go", "policy/engine.go (+ approvals.go) — authority, safety, paths, limits")
         Component(injection, "Injection Detector", "Go", "injection.go — L1–L4 defense; NFKC + homoglyph normalization")
         Component(ctx, "Context Builder", "Go", "context.go — compaction stages, token budget, reminders")
-        Component(prompt, "Prompt Builder", "Go", "prompt.go — system prompt: identity, firmware, personality, skills, safety")
+        Component(prompt, "Prompt Builder", "Go", "prompt.go — orchestrator and subagent prompt profiles; subagents report only to orchestrators")
         Component(memMgr, "Memory Manager", "Go", "memory/manager.go — 5-tier ingestion with graceful degradation")
-        Component(retrieval, "Memory Retriever", "Go", "memory/retrieval.go — hybrid FTS5 + vector + episodic decay")
-        Component(orch, "Orchestrator", "Go", "orchestration/orchestration.go — multi-step workflows and subtasks")
+        Component(retrieval, "Memory Retriever", "Go", "memory/retrieval.go — hybrid FTS5 + vector + episodic decay, routed tier fan-out, explicit fusion, optional LLM reranking, enriched semantic key/category/value FTS retrieval, deterministic evidence merge")
+        Component(orch, "Orchestrator", "Go", "orchestration/orchestration.go + delegated task lifecycle — bounded multi-step workflows, subagent assignment, durable task/event/outcome evidence, result aggregation for operator presentation")
         Component(skills, "Skill Loader", "Go", "skills/loader.go — load .md/.toml skills with frontmatter + hashing")
     }
 
@@ -152,6 +159,7 @@ C4Component
     Rel(memMgr, db, "Persists memory rows", "SQL")
     Rel(retrieval, db, "Queries FTS5 / vectors", "SQL")
     Rel(orch, session, "Coordinates subtask sessions", "Go")
+    Rel(orch, prompt, "Constrains subagent reporting and evidence expectations", "Go")
     Rel(skills, toolReg, "Registers tools from skill packages", "Go")
 ```
 
@@ -168,29 +176,35 @@ C4Component
     Person(admin, "Administrator", "Configures providers and monitors LLM status via API")
 
     Container_Boundary(llm, "LLM Pipeline") {
-        Component(service, "Service", "Go", "service.go — orchestrates Dedup→Cache→Router→Breaker→Client→Transforms; optional local-model escalation")
+        Component(service, "Service", "Go", "service.go — orchestrates Dedup→Cache→Policy→Router→Breaker→Client→Transforms and records routing evidence")
         Component(dedup, "Dedup", "Go", "dedup.go — concurrent request collapsing (singleflight-style) + TTL")
         Component(cache, "Semantic Cache", "Go", "cache.go — L1 LRU + L2 SQLite; hashed requests")
-        Component(router, "Router", "Go", "router.go — tier and cost-aware model selection")
+        Component(policy, "Policy Resolver", "Go", "model_policy.go + model_policy_sources.go — merges configured + persisted lifecycle state, reasons, benchmark gating")
+        Component(router, "Router", "Go", "router.go + profile.go — request-aware metascore routing using task semantics, role eligibility, and runtime health")
         Component(breaker, "Circuit Breaker", "Go", "circuit.go — per-provider health, backoff, 402 handling")
         Component(client, "Client", "Go", "client.go — HTTP/2; provider.go types; OpenAI / Anthropic / Ollama / Google + SSE")
         Component(transforms, "Transform Pipeline", "Go", "transform.go — ResponseTransform chain on text before cache")
+        Component(selection, "Selection Evidence", "Go", "routing_trace.go + service.go — model_selection_events and task-fit / policy reasoning for RCA and ML")
     }
 
     Container_Ext(agent, "Agent Core", "ReAct loop and tools; internal/agent")
     System_Ext(llmAPIs, "LLM Provider APIs", "Vendor inference endpoints")
     ContainerDb_Ext(db, "SQLite Database", "Persistent semantic cache + cost telemetry")
 
-    Rel(admin, service, "Configures providers, views status and breakers", "HTTPS")
+    Rel(admin, service, "Configures providers and reviews routing health", "HTTPS")
     Rel(agent, service, "Calls Complete and Stream", "Go")
     Rel(service, dedup, "Wraps each logical completion", "Go")
     Rel(service, cache, "Gets and puts cached completions", "Go")
-    Rel(service, router, "Selects route when model unspecified", "Go")
+    Rel(service, policy, "Resolves lifecycle policy before selection", "Go + SQL-backed policy")
+    Rel(service, router, "Selects route from policy-eligible targets", "Go")
     Rel(service, breaker, "Guards each provider attempt", "Go")
     Rel(service, client, "Executes HTTP inference for chosen provider", "Go")
     Rel(service, transforms, "Normalizes provider response text before cache", "Go")
+    Rel(service, selection, "Persists routing candidates and reasons", "Go + SQL")
     Rel(client, llmAPIs, "Sends chat completion requests", "HTTPS + SSE")
     Rel(cache, db, "Reads and writes cache pages", "SQL")
+    Rel(policy, db, "Reads model lifecycle and benchmark state", "SQL")
+    Rel(selection, db, "Writes model selection evidence", "SQL")
     Rel(service, db, "Records usage and cost (async)", "SQL")
 ```
 

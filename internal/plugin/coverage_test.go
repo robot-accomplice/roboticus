@@ -982,3 +982,108 @@ func TestRegistry_ScanDirectory_YMLManifest(t *testing.T) {
 		t.Errorf("found %d, want 1", n)
 	}
 }
+
+func TestRegistry_ScanDirectory_ParsesToolDefinitions(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "toolplugin")
+	_ = os.MkdirAll(dir, 0o755)
+	manifest := `
+name = "toolplugin"
+version = "1.0.0"
+description = "plugin with tools"
+
+[[tools]]
+name = "echo"
+description = "Echo text"
+dangerous = false
+parameters_schema = '{"type":"object","properties":{"text":{"type":"string"}}}'
+`
+	_ = os.WriteFile(filepath.Join(dir, "manifest.toml"), []byte(strings.TrimSpace(manifest)), 0o644)
+
+	reg := NewRegistry(nil, nil, PermissionPolicy{})
+	n, err := reg.ScanDirectory(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("found %d plugins, want 1", n)
+	}
+	errs := reg.InitAll()
+	if len(errs) != 0 {
+		t.Fatalf("init errs = %v", errs)
+	}
+
+	tools := reg.AllTools()
+	if len(tools) != 1 {
+		t.Fatalf("AllTools length = %d, want 1", len(tools))
+	}
+	if tools[0].Name != "echo" {
+		t.Fatalf("tool name = %q, want echo", tools[0].Name)
+	}
+	if tools[0].Description != "Echo text" {
+		t.Fatalf("tool description = %q", tools[0].Description)
+	}
+}
+
+func TestRegistry_LoadDirectory_ActivatesPlugin(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "loadme")
+	_ = os.MkdirAll(dir, 0o755)
+	manifest := `
+name = "loadme"
+version = "1.0.0"
+
+[[tools]]
+name = "ping"
+description = "ping tool"
+`
+	_ = os.WriteFile(filepath.Join(dir, "manifest.toml"), []byte(strings.TrimSpace(manifest)), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "ping"), []byte("#!/bin/sh\necho ok\n"), 0o755)
+
+	reg := NewRegistry(nil, nil, PermissionPolicy{})
+	info, err := reg.LoadDirectory(dir)
+	if err != nil {
+		t.Fatalf("LoadDirectory: %v", err)
+	}
+	if info.Name != "loadme" || info.Status != StatusActive {
+		t.Fatalf("info = %+v, want active loadme", info)
+	}
+	tools := reg.AllTools()
+	if len(tools) != 1 || tools[0].Name != "ping" {
+		t.Fatalf("tools = %+v, want ping", tools)
+	}
+}
+
+func TestRegistry_LoadDirectory_AppliesScriptExecutionPolicy(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "policy")
+	_ = os.MkdirAll(dir, 0o755)
+	manifest := `
+name = "policy"
+version = "1.0.0"
+
+[[tools]]
+name = "pycheck"
+description = "python tool"
+`
+	_ = os.WriteFile(filepath.Join(dir, "manifest.toml"), []byte(strings.TrimSpace(manifest)), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "pycheck.py"), []byte("#!/usr/bin/env python3\nprint('ok')\n"), 0o755)
+
+	reg := NewRegistry(nil, nil, PermissionPolicy{
+		AllowedInterpreters: []string{"bash"},
+	})
+	if _, err := reg.LoadDirectory(dir); err != nil {
+		t.Fatalf("LoadDirectory: %v", err)
+	}
+
+	result, err := reg.ExecuteTool(context.Background(), "pycheck", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("ExecuteTool: %v", err)
+	}
+	if result.Success {
+		t.Fatal("expected interpreter policy failure")
+	}
+	if !strings.Contains(result.Output, "interpreter validation failed") {
+		t.Fatalf("output = %q, want interpreter validation failure", result.Output)
+	}
+}

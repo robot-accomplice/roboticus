@@ -7,11 +7,13 @@ import (
 
 func TestMcpServerConfig_JSON(t *testing.T) {
 	cfg := McpServerConfig{
-		Name:      "test-server",
-		Transport: "stdio",
-		Command:   "python",
-		Args:      []string{"-m", "mcp_server"},
-		Enabled:   true,
+		Name:         "test-server",
+		Transport:    "stdio",
+		Command:      "python",
+		Args:         []string{"-m", "mcp_server"},
+		Headers:      map[string]string{"Authorization": "Bearer x"},
+		AuthTokenEnv: "MCP_TOKEN",
+		Enabled:      true,
 	}
 	data, err := json.Marshal(cfg)
 	if err != nil {
@@ -26,6 +28,12 @@ func TestMcpServerConfig_JSON(t *testing.T) {
 	}
 	if parsed.Transport != "stdio" {
 		t.Errorf("transport = %s", parsed.Transport)
+	}
+	if parsed.Headers["Authorization"] != "Bearer x" {
+		t.Errorf("authorization header = %q", parsed.Headers["Authorization"])
+	}
+	if parsed.AuthTokenEnv != "MCP_TOKEN" {
+		t.Errorf("auth token env = %q", parsed.AuthTokenEnv)
 	}
 }
 

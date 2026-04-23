@@ -57,6 +57,13 @@ func utilityMargin(complexity float64, subtasks int, fitRatio float64) float64 {
 // EvaluateDecomposition decides whether a request needs multi-agent delegation.
 // Uses heuristics to detect multi-part requests that could benefit from parallel execution.
 func EvaluateDecomposition(content string, sessionTurns int) DecompositionResult {
+	if len(ParseExpectedArtifactSpecs(content)) > 0 {
+		return DecompositionResult{
+			Decision:  DecompCentralized,
+			Rationale: "bounded exact-content authoring should remain centralized",
+		}
+	}
+
 	// Detect numbered lists or bullet points as potential subtasks.
 	subtasks := extractSubtasks(content)
 

@@ -34,8 +34,8 @@ type Config struct {
 	Themes     ThemesConfig              `json:"themes" toml:"themes" mapstructure:"themes"`
 	DKIM       DKIMConfig                `json:"dkim" toml:"dkim" mapstructure:"dkim"`
 	CORS       CORSConfig                `json:"cors" toml:"cors" mapstructure:"cors"`
-	Revenue       RevenueConfig             `json:"revenue" toml:"revenue" mapstructure:"revenue"`
-	Heartbeat     HeartbeatConfig           `json:"heartbeat" toml:"heartbeat" mapstructure:"heartbeat"`
+	Revenue    RevenueConfig             `json:"revenue" toml:"revenue" mapstructure:"revenue"`
+	Heartbeat  HeartbeatConfig           `json:"heartbeat" toml:"heartbeat" mapstructure:"heartbeat"`
 
 	// New roboticus-compatible sections.
 	CircuitBreaker           CircuitBreakerConfig `json:"circuit_breaker" toml:"circuit_breaker" mapstructure:"circuit_breaker"`
@@ -58,7 +58,50 @@ type Config struct {
 	Obsidian                 ObsidianConfig       `json:"obsidian" toml:"obsidian" mapstructure:"obsidian"`
 	Backups                  BackupsConfig        `json:"backups" toml:"backups" mapstructure:"backups"`
 	ContextBudget            ContextBudgetConfig  `json:"context_budget" toml:"context_budget" mapstructure:"context_budget"`
+	ToolSearch               ToolSearchConfig     `json:"tool_search" toml:"tool_search" mapstructure:"tool_search"`
 	DisabledBundledProviders []string             `json:"disabled_bundled_providers" toml:"disabled_bundled_providers" mapstructure:"disabled_bundled_providers"`
+}
+
+// ToolSearchConfig controls the query-time semantic tool-pruning pass.
+//
+// Rust parity anchor: crates/roboticus-agent/src/tool_search.rs::SearchConfig
+// and crates/roboticus-pipeline/src/core/tool_prune.rs (runtime owner).
+// Rust hard-codes these at runtime — no TOML section exists there. Go
+// exposes them as an operator-overridable config as a deliberate Go
+// improvement (recorded in docs/parity-forensics/systems/02-...md under
+// Intentional Deviations), because on-machine context ceilings vary
+// widely by model and operators need to tune top_k/token_budget without
+// a rebuild.
+type ToolSearchConfig struct {
+	// TopK is the maximum number of tools kept after ranking, regardless
+	// of token budget. Rust default: 15. Zero falls back to the default.
+	TopK int `json:"top_k" toml:"top_k" mapstructure:"top_k"`
+
+	// TokenBudget is the cumulative token cap for the selected tool set.
+	// Rust default: 4000. Zero falls back to the default.
+	TokenBudget int `json:"token_budget" toml:"token_budget" mapstructure:"token_budget"`
+
+	// MCPLatencyPenalty is subtracted from the raw cosine-similarity
+	// score for MCP tools before ranking, breaking ties in favor of
+	// local tools. Rust default: 0.05. Zero is a valid explicit value;
+	// negative values are clamped to zero at consumption time.
+	MCPLatencyPenalty float64 `json:"mcp_latency_penalty" toml:"mcp_latency_penalty" mapstructure:"mcp_latency_penalty"`
+
+	// AlwaysInclude names tools pinned into the selected set regardless
+	// of score. Rust pins a 12-item operational-tools list at runtime
+	// (see crates/roboticus-pipeline/src/core/tool_prune.rs::always_include_operational_tools).
+	// Go pins only names that exist in Go's registry — pinning a name
+	// that isn't registered is a silent no-op and hides the intent.
+	// Go's default list is the functional analogue: memory recall
+	// primitives plus operational introspection tools. Names beyond
+	// Rust's list that exist in Go (e.g. search_memories, get_subagent_status)
+	// are included because they serve the same purpose Rust's pinned
+	// tools serve — keeping memory + subagent/skill reach reachable at
+	// every turn regardless of the query.
+	//
+	// Empty list disables pinning entirely; the default list is applied
+	// when this field is unset.
+	AlwaysInclude []string `json:"always_include" toml:"always_include" mapstructure:"always_include"`
 }
 
 // MCPConfig holds MCP (Model Context Protocol) server configuration.
@@ -113,15 +156,15 @@ type AgentConfig struct {
 	LogLevel                    string  `json:"log_level" toml:"log_level" mapstructure:"log_level"`
 	DelegationEnabled           bool    `json:"delegation_enabled" toml:"delegation_enabled" mapstructure:"delegation_enabled"`
 	DelegationMinComplexity     float64 `json:"delegation_min_complexity" toml:"delegation_min_complexity" mapstructure:"delegation_min_complexity"`
-	DelegationMinUtilityMargin  float64 `json:"delegation_min_utility_margin" toml:"delegation_min_utility_margin" mapstructure:"delegation_min_utility_margin"`     // Rust parity: 0.15 default
+	DelegationMinUtilityMargin  float64 `json:"delegation_min_utility_margin" toml:"delegation_min_utility_margin" mapstructure:"delegation_min_utility_margin"`                         // Rust parity: 0.15 default
 	SpecialistRequiresApproval  bool    `json:"specialist_creation_requires_approval" toml:"specialist_creation_requires_approval" mapstructure:"specialist_creation_requires_approval"` // Rust parity: true
 	CompositionPolicy           string  `json:"composition_policy" toml:"composition_policy" mapstructure:"composition_policy"`
-	SkillCreationRigor          string  `json:"skill_creation_rigor" toml:"skill_creation_rigor" mapstructure:"skill_creation_rigor"`                       // generate|validate|full (Rust parity)
-	OutputValidationPolicy      string  `json:"output_validation_policy" toml:"output_validation_policy" mapstructure:"output_validation_policy"`               // strict|sample|off (Rust parity)
-	OutputValidationSampleRate  float64 `json:"output_validation_sample_rate" toml:"output_validation_sample_rate" mapstructure:"output_validation_sample_rate"`     // Rust parity: 0.1 default
-	MaxOutputRetries            int     `json:"max_output_retries" toml:"max_output_retries" mapstructure:"max_output_retries"`                           // Rust parity: 2 default
-	RetirementSuccessThreshold  float64 `json:"retirement_success_threshold" toml:"retirement_success_threshold" mapstructure:"retirement_success_threshold"`       // Rust parity: 0.7 default
-	RetirementMinDelegations    int     `json:"retirement_min_delegations" toml:"retirement_min_delegations" mapstructure:"retirement_min_delegations"`           // Rust parity: 10 default
+	SkillCreationRigor          string  `json:"skill_creation_rigor" toml:"skill_creation_rigor" mapstructure:"skill_creation_rigor"`                            // generate|validate|full (Rust parity)
+	OutputValidationPolicy      string  `json:"output_validation_policy" toml:"output_validation_policy" mapstructure:"output_validation_policy"`                // strict|sample|off (Rust parity)
+	OutputValidationSampleRate  float64 `json:"output_validation_sample_rate" toml:"output_validation_sample_rate" mapstructure:"output_validation_sample_rate"` // Rust parity: 0.1 default
+	MaxOutputRetries            int     `json:"max_output_retries" toml:"max_output_retries" mapstructure:"max_output_retries"`                                  // Rust parity: 2 default
+	RetirementSuccessThreshold  float64 `json:"retirement_success_threshold" toml:"retirement_success_threshold" mapstructure:"retirement_success_threshold"`    // Rust parity: 0.7 default
+	RetirementMinDelegations    int     `json:"retirement_min_delegations" toml:"retirement_min_delegations" mapstructure:"retirement_min_delegations"`          // Rust parity: 10 default
 }
 
 // ServerConfig holds HTTP server settings.
@@ -146,15 +189,36 @@ type DatabaseConfig struct {
 
 // ModelsConfig holds LLM provider and model settings.
 type ModelsConfig struct {
-	Primary          string                   `json:"primary" toml:"primary" mapstructure:"primary"`
-	Fallback         []string                 `json:"fallbacks,omitempty" toml:"fallbacks" mapstructure:"fallbacks"`
-	Routing          RoutingConfig            `json:"routing" toml:"routing" mapstructure:"routing"`
-	ModelOverrides   map[string]ModelOverride  `json:"model_overrides,omitempty" toml:"model_overrides" mapstructure:"model_overrides"`
-	StreamByDefault  bool                     `json:"stream_by_default" toml:"stream_by_default" mapstructure:"stream_by_default"`
-	TieredInference  TieredInferenceConfig    `json:"tiered_inference" toml:"tiered_inference" mapstructure:"tiered_inference"`
-	Timeouts         map[string]int           `json:"timeouts,omitempty" toml:"timeouts" mapstructure:"timeouts"`
-	ToolBlocklist    []string                 `json:"tool_blocklist,omitempty" toml:"tool_blocklist" mapstructure:"tool_blocklist"`
-	ToolAllowlist    []string                 `json:"tool_allowlist,omitempty" toml:"tool_allowlist" mapstructure:"tool_allowlist"`
+	Primary         string                       `json:"primary" toml:"primary" mapstructure:"primary"`
+	Fallback        []string                     `json:"fallbacks,omitempty" toml:"fallbacks" mapstructure:"fallbacks"`
+	Policy          map[string]ModelPolicyConfig `json:"policy,omitempty" toml:"policy" mapstructure:"policy"`
+	Routing         RoutingConfig                `json:"routing" toml:"routing" mapstructure:"routing"`
+	RoleEligibility map[string]ModelRoleConfig   `json:"role_eligibility,omitempty" toml:"role_eligibility" mapstructure:"role_eligibility"`
+	ModelOverrides  map[string]ModelOverride     `json:"model_overrides,omitempty" toml:"model_overrides" mapstructure:"model_overrides"`
+	StreamByDefault bool                         `json:"stream_by_default" toml:"stream_by_default" mapstructure:"stream_by_default"`
+	TieredInference TieredInferenceConfig        `json:"tiered_inference" toml:"tiered_inference" mapstructure:"tiered_inference"`
+	Timeouts        map[string]int               `json:"timeouts,omitempty" toml:"timeouts" mapstructure:"timeouts"`
+	ToolBlocklist   []string                     `json:"tool_blocklist,omitempty" toml:"tool_blocklist" mapstructure:"tool_blocklist"`
+	ToolAllowlist   []string                     `json:"tool_allowlist,omitempty" toml:"tool_allowlist" mapstructure:"tool_allowlist"`
+}
+
+// ModelRoleConfig controls whether a configured model is eligible for the
+// operator-facing orchestrator, bounded subagents, or both.
+type ModelRoleConfig struct {
+	Orchestrator bool   `json:"orchestrator" toml:"orchestrator" mapstructure:"orchestrator"`
+	Subagent     bool   `json:"subagent" toml:"subagent" mapstructure:"subagent"`
+	Reason       string `json:"reason,omitempty" toml:"reason" mapstructure:"reason"`
+}
+
+// ModelPolicyConfig controls lifecycle state for a routed model together with
+// the reason and evidence behind that state.
+type ModelPolicyConfig struct {
+	State             string   `json:"state" toml:"state" mapstructure:"state"`
+	PrimaryReasonCode string   `json:"primary_reason_code,omitempty" toml:"primary_reason_code" mapstructure:"primary_reason_code"`
+	ReasonCodes       []string `json:"reason_codes,omitempty" toml:"reason_codes" mapstructure:"reason_codes"`
+	HumanReason       string   `json:"human_reason,omitempty" toml:"human_reason" mapstructure:"human_reason"`
+	EvidenceRefs      []string `json:"evidence_refs,omitempty" toml:"evidence_refs" mapstructure:"evidence_refs"`
+	Source            string   `json:"source,omitempty" toml:"source" mapstructure:"source"`
 }
 
 // ResolveModelTimeout returns the timeout for a specific model.
@@ -171,19 +235,19 @@ func (mc ModelsConfig) ResolveModelTimeout(model string) int {
 
 // RoutingConfig holds model routing parameters.
 type RoutingConfig struct {
-	Mode                   string   `json:"mode" toml:"mode" mapstructure:"mode"`
-	ConfidenceThreshold    float64  `json:"confidence_threshold" toml:"confidence_threshold" mapstructure:"confidence_threshold"`
-	EstimatedOutputTokens  int      `json:"estimated_output_tokens" toml:"estimated_output_tokens" mapstructure:"estimated_output_tokens"`
-	AccuracyFloor          float64  `json:"accuracy_floor" toml:"accuracy_floor" mapstructure:"accuracy_floor"`
-	AccuracyMinObs         int      `json:"accuracy_min_obs" toml:"accuracy_min_obs" mapstructure:"accuracy_min_obs"`
-	CostWeight             *float64 `json:"cost_weight,omitempty" toml:"cost_weight" mapstructure:"cost_weight"`
-	CostAware              bool     `json:"cost_aware" toml:"cost_aware" mapstructure:"cost_aware"`
-	CanaryFraction         float64  `json:"canary_fraction" toml:"canary_fraction" mapstructure:"canary_fraction"`
-	CanaryModel            string   `json:"canary_model" toml:"canary_model" mapstructure:"canary_model"`
-	BlockedModels          []string `json:"blocked_models" toml:"blocked_models" mapstructure:"blocked_models"`
-	PerProviderTimeoutSecs int      `json:"per_provider_timeout_seconds" toml:"per_provider_timeout_seconds" mapstructure:"per_provider_timeout_seconds"`
-	MaxTotalInferenceSecs  int      `json:"max_total_inference_seconds" toml:"max_total_inference_seconds" mapstructure:"max_total_inference_seconds"`
-	MaxFallbackAttempts    int      `json:"max_fallback_attempts" toml:"max_fallback_attempts" mapstructure:"max_fallback_attempts"`
+	Mode                   string              `json:"mode" toml:"mode" mapstructure:"mode"`
+	ConfidenceThreshold    float64             `json:"confidence_threshold" toml:"confidence_threshold" mapstructure:"confidence_threshold"`
+	EstimatedOutputTokens  int                 `json:"estimated_output_tokens" toml:"estimated_output_tokens" mapstructure:"estimated_output_tokens"`
+	AccuracyFloor          float64             `json:"accuracy_floor" toml:"accuracy_floor" mapstructure:"accuracy_floor"`
+	AccuracyMinObs         int                 `json:"accuracy_min_obs" toml:"accuracy_min_obs" mapstructure:"accuracy_min_obs"`
+	CostWeight             *float64            `json:"cost_weight,omitempty" toml:"cost_weight" mapstructure:"cost_weight"`
+	CostAware              bool                `json:"cost_aware" toml:"cost_aware" mapstructure:"cost_aware"`
+	CanaryFraction         float64             `json:"canary_fraction" toml:"canary_fraction" mapstructure:"canary_fraction"`
+	CanaryModel            string              `json:"canary_model" toml:"canary_model" mapstructure:"canary_model"`
+	BlockedModels          []string            `json:"blocked_models" toml:"blocked_models" mapstructure:"blocked_models"`
+	PerProviderTimeoutSecs int                 `json:"per_provider_timeout_seconds" toml:"per_provider_timeout_seconds" mapstructure:"per_provider_timeout_seconds"`
+	MaxTotalInferenceSecs  int                 `json:"max_total_inference_seconds" toml:"max_total_inference_seconds" mapstructure:"max_total_inference_seconds"`
+	MaxFallbackAttempts    int                 `json:"max_fallback_attempts" toml:"max_fallback_attempts" mapstructure:"max_fallback_attempts"`
 	LocalFirst             bool                `json:"local_first" toml:"local_first" mapstructure:"local_first"`
 	Profile                *RoutingProfileData `json:"profile,omitempty" toml:"profile" mapstructure:"profile"` // persisted 6-axis profile (lossless)
 }
@@ -201,9 +265,9 @@ type RoutingProfileData struct {
 
 // ProviderConfig describes a single LLM provider endpoint.
 type ProviderConfig struct {
-	URL                 string            `json:"url" toml:"url" mapstructure:"url"`
-	Tier                string            `json:"tier" toml:"tier" mapstructure:"tier"`
-	Format              string            `json:"format,omitempty" toml:"format" mapstructure:"format"`
+	URL    string `json:"url" toml:"url" mapstructure:"url"`
+	Tier   string `json:"tier" toml:"tier" mapstructure:"tier"`
+	Format string `json:"format,omitempty" toml:"format" mapstructure:"format"`
 	// APIKeyEnv removed — keys must come from the keystore, not environment variables.
 	ChatPath            string            `json:"chat_path,omitempty" toml:"chat_path" mapstructure:"chat_path"`
 	EmbeddingPath       string            `json:"embedding_path,omitempty" toml:"embedding_path" mapstructure:"embedding_path"`
@@ -244,33 +308,38 @@ type MemoryConfig struct {
 	HybridWeightOverride     float64 `json:"hybrid_weight_override" toml:"hybrid_weight_override" mapstructure:"hybrid_weight_override"` // 0 = adaptive (default); >0 = manual override
 	DecayHalfLifeDays        float64 `json:"decay_half_life_days" toml:"decay_half_life_days" mapstructure:"decay_half_life_days"`
 	SimilarityThreshold      float64 `json:"similarity_threshold" toml:"similarity_threshold" mapstructure:"similarity_threshold"`
-	VectorIndexThreshold     int     `json:"vector_index_threshold" toml:"vector_index_threshold" mapstructure:"vector_index_threshold"` // corpus size for HNSW promotion (default 1000)
+	VectorIndexThreshold     int     `json:"vector_index_threshold" toml:"vector_index_threshold" mapstructure:"vector_index_threshold"`       // corpus size for HNSW promotion (default 1000)
 	RerankerMinScore         float64 `json:"reranker_min_score" toml:"reranker_min_score" mapstructure:"reranker_min_score"`                   // discard evidence below this (default 0.1)
-	RerankerAuthorityBoost   float64 `json:"reranker_authority_boost" toml:"reranker_authority_boost" mapstructure:"reranker_authority_boost"`   // canonical source multiplier (default 1.5)
-	RerankerRecencyPenalty   float64 `json:"reranker_recency_penalty" toml:"reranker_recency_penalty" mapstructure:"reranker_recency_penalty"`   // old entry multiplier (default 0.8)
-	RerankerCollapseSpread   float64 `json:"reranker_collapse_spread" toml:"reranker_collapse_spread" mapstructure:"reranker_collapse_spread"`   // spread below which collapse detected (default 0.05)
+	RerankerAuthorityBoost   float64 `json:"reranker_authority_boost" toml:"reranker_authority_boost" mapstructure:"reranker_authority_boost"` // canonical source multiplier (default 1.5)
+	RerankerRecencyPenalty   float64 `json:"reranker_recency_penalty" toml:"reranker_recency_penalty" mapstructure:"reranker_recency_penalty"` // old entry multiplier (default 0.8)
+	RerankerCollapseSpread   float64 `json:"reranker_collapse_spread" toml:"reranker_collapse_spread" mapstructure:"reranker_collapse_spread"` // spread below which collapse detected (default 0.05)
+	LLMRerankerEnabled       bool    `json:"llm_reranker_enabled" toml:"llm_reranker_enabled" mapstructure:"llm_reranker_enabled"`
+	LLMRerankerMinCandidates int     `json:"llm_reranker_min_candidates" toml:"llm_reranker_min_candidates" mapstructure:"llm_reranker_min_candidates"`
+	LLMRerankerMaxCandidates int     `json:"llm_reranker_max_candidates" toml:"llm_reranker_max_candidates" mapstructure:"llm_reranker_max_candidates"`
+	LLMRerankerKeepTop       int     `json:"llm_reranker_keep_top" toml:"llm_reranker_keep_top" mapstructure:"llm_reranker_keep_top"`
+	LLMRerankerModel         string  `json:"llm_reranker_model,omitempty" toml:"llm_reranker_model" mapstructure:"llm_reranker_model"`
 }
 
 // CacheConfig holds semantic cache settings.
 type CacheConfig struct {
-	Enabled                 bool    `json:"enabled" toml:"enabled" mapstructure:"enabled"`
-	TTLSeconds              int     `json:"ttl_seconds" toml:"ttl_seconds" mapstructure:"ttl_seconds"`
-	SimilarityThreshold     float64 `json:"similarity_threshold" toml:"similarity_threshold" mapstructure:"similarity_threshold"`
-	MaxEntries              int     `json:"max_entries" toml:"max_entries" mapstructure:"max_entries"`
-	PromptCompression       bool    `json:"prompt_compression" toml:"prompt_compression" mapstructure:"prompt_compression"`
-	CompressionTargetRatio  float64 `json:"compression_target_ratio" toml:"compression_target_ratio" mapstructure:"compression_target_ratio"`
+	Enabled                bool    `json:"enabled" toml:"enabled" mapstructure:"enabled"`
+	TTLSeconds             int     `json:"ttl_seconds" toml:"ttl_seconds" mapstructure:"ttl_seconds"`
+	SimilarityThreshold    float64 `json:"similarity_threshold" toml:"similarity_threshold" mapstructure:"similarity_threshold"`
+	MaxEntries             int     `json:"max_entries" toml:"max_entries" mapstructure:"max_entries"`
+	PromptCompression      bool    `json:"prompt_compression" toml:"prompt_compression" mapstructure:"prompt_compression"`
+	CompressionTargetRatio float64 `json:"compression_target_ratio" toml:"compression_target_ratio" mapstructure:"compression_target_ratio"`
 }
 
 // TreasuryConfig holds financial policy limits.
 type TreasuryConfig struct {
-	DailyCap              float64           `json:"daily_cap" toml:"daily_cap" mapstructure:"daily_cap"`
-	PerPaymentCap         float64           `json:"per_payment_cap" toml:"per_payment_cap" mapstructure:"per_payment_cap"`
-	TransferLimit         float64           `json:"transfer_limit" toml:"transfer_limit" mapstructure:"transfer_limit"`
-	MinimumReserve        float64           `json:"minimum_reserve" toml:"minimum_reserve" mapstructure:"minimum_reserve"`
-	HourlyTransferLimit   float64           `json:"hourly_transfer_limit" toml:"hourly_transfer_limit" mapstructure:"hourly_transfer_limit"`
-	DailyTransferLimit    float64           `json:"daily_transfer_limit" toml:"daily_transfer_limit" mapstructure:"daily_transfer_limit"`
-	DailyInferenceBudget  float64           `json:"daily_inference_budget" toml:"daily_inference_budget" mapstructure:"daily_inference_budget"`
-	RevenueSwap           RevenueSwapConfig `json:"revenue_swap" toml:"revenue_swap" mapstructure:"revenue_swap"`
+	DailyCap             float64           `json:"daily_cap" toml:"daily_cap" mapstructure:"daily_cap"`
+	PerPaymentCap        float64           `json:"per_payment_cap" toml:"per_payment_cap" mapstructure:"per_payment_cap"`
+	TransferLimit        float64           `json:"transfer_limit" toml:"transfer_limit" mapstructure:"transfer_limit"`
+	MinimumReserve       float64           `json:"minimum_reserve" toml:"minimum_reserve" mapstructure:"minimum_reserve"`
+	HourlyTransferLimit  float64           `json:"hourly_transfer_limit" toml:"hourly_transfer_limit" mapstructure:"hourly_transfer_limit"`
+	DailyTransferLimit   float64           `json:"daily_transfer_limit" toml:"daily_transfer_limit" mapstructure:"daily_transfer_limit"`
+	DailyInferenceBudget float64           `json:"daily_inference_budget" toml:"daily_inference_budget" mapstructure:"daily_inference_budget"`
+	RevenueSwap          RevenueSwapConfig `json:"revenue_swap" toml:"revenue_swap" mapstructure:"revenue_swap"`
 }
 
 // WalletConfig holds crypto wallet settings.
@@ -308,7 +377,7 @@ type ChannelsConfig struct {
 
 // TelegramConfig holds Telegram bot adapter settings.
 type TelegramConfig struct {
-	Enabled            bool    `json:"enabled" toml:"enabled" mapstructure:"enabled"`
+	Enabled bool `json:"enabled" toml:"enabled" mapstructure:"enabled"`
 	// TokenEnv removed — tokens come from keystore via token_ref.
 	TokenRef           string  `json:"token_ref,omitempty" toml:"token_ref" mapstructure:"token_ref"`
 	AllowedChatIDs     []int64 `json:"allowed_chat_ids,omitempty" toml:"allowed_chat_ids" mapstructure:"allowed_chat_ids"`
@@ -320,7 +389,7 @@ type TelegramConfig struct {
 
 // WhatsAppConfig holds WhatsApp Cloud API adapter settings.
 type WhatsAppConfig struct {
-	Enabled        bool     `json:"enabled" toml:"enabled" mapstructure:"enabled"`
+	Enabled bool `json:"enabled" toml:"enabled" mapstructure:"enabled"`
 	// TokenEnv removed — tokens come from keystore via token_ref.
 	TokenRef       string   `json:"token_ref,omitempty" toml:"token_ref" mapstructure:"token_ref"`
 	PhoneNumberID  string   `json:"phone_number_id" toml:"phone_number_id" mapstructure:"phone_number_id"`
@@ -331,7 +400,7 @@ type WhatsAppConfig struct {
 
 // DiscordConfig holds Discord bot adapter settings.
 type DiscordConfig struct {
-	Enabled         bool     `json:"enabled" toml:"enabled" mapstructure:"enabled"`
+	Enabled bool `json:"enabled" toml:"enabled" mapstructure:"enabled"`
 	// TokenEnv removed — tokens come from keystore via token_ref.
 	TokenRef        string   `json:"token_ref,omitempty" toml:"token_ref" mapstructure:"token_ref"`
 	ApplicationID   string   `json:"application_id" toml:"application_id" mapstructure:"application_id"`
@@ -348,19 +417,19 @@ type SignalConfig struct {
 
 // EmailConfig holds email (IMAP/SMTP) adapter settings.
 type EmailConfig struct {
-	Enabled            bool     `json:"enabled" toml:"enabled" mapstructure:"enabled"`
-	IMAPHost           string   `json:"imap_host" toml:"imap_host" mapstructure:"imap_host"`
-	IMAPPort           int      `json:"imap_port" toml:"imap_port" mapstructure:"imap_port"`
-	SMTPHost           string   `json:"smtp_host" toml:"smtp_host" mapstructure:"smtp_host"`
-	SMTPPort           int      `json:"smtp_port" toml:"smtp_port" mapstructure:"smtp_port"`
-	Username           string   `json:"username" toml:"username" mapstructure:"username"`
+	Enabled  bool   `json:"enabled" toml:"enabled" mapstructure:"enabled"`
+	IMAPHost string `json:"imap_host" toml:"imap_host" mapstructure:"imap_host"`
+	IMAPPort int    `json:"imap_port" toml:"imap_port" mapstructure:"imap_port"`
+	SMTPHost string `json:"smtp_host" toml:"smtp_host" mapstructure:"smtp_host"`
+	SMTPPort int    `json:"smtp_port" toml:"smtp_port" mapstructure:"smtp_port"`
+	Username string `json:"username" toml:"username" mapstructure:"username"`
 	// PasswordEnv removed — passwords come from keystore.
-	FromAddress        string   `json:"from_address" toml:"from_address" mapstructure:"from_address"`
-	AllowedSenders     []string `json:"allowed_senders,omitempty" toml:"allowed_senders" mapstructure:"allowed_senders"`
-	PollIntervalSecs   int      `json:"poll_interval_seconds" toml:"poll_interval_seconds" mapstructure:"poll_interval_seconds"`
-	OAuth2TokenEnv     string   `json:"oauth2_token_env,omitempty" toml:"oauth2_token_env" mapstructure:"oauth2_token_env"`
-	UseOAuth2          bool     `json:"use_oauth2" toml:"use_oauth2" mapstructure:"use_oauth2"`
-	IMAPIdleEnabled    bool     `json:"imap_idle_enabled" toml:"imap_idle_enabled" mapstructure:"imap_idle_enabled"`
+	FromAddress      string   `json:"from_address" toml:"from_address" mapstructure:"from_address"`
+	AllowedSenders   []string `json:"allowed_senders,omitempty" toml:"allowed_senders" mapstructure:"allowed_senders"`
+	PollIntervalSecs int      `json:"poll_interval_seconds" toml:"poll_interval_seconds" mapstructure:"poll_interval_seconds"`
+	OAuth2TokenEnv   string   `json:"oauth2_token_env,omitempty" toml:"oauth2_token_env" mapstructure:"oauth2_token_env"`
+	UseOAuth2        bool     `json:"use_oauth2" toml:"use_oauth2" mapstructure:"use_oauth2"`
+	IMAPIdleEnabled  bool     `json:"imap_idle_enabled" toml:"imap_idle_enabled" mapstructure:"imap_idle_enabled"`
 }
 
 // VoiceConfig holds voice channel adapter settings.

@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"roboticus/internal/core"
 )
 
 // --- Echo Tool ---
@@ -40,11 +42,11 @@ type ReadFileTool struct{}
 
 func (t *ReadFileTool) Name() string { return "read_file" }
 func (t *ReadFileTool) Description() string {
-	return "Read a UTF-8 text file from the workspace (max 1MB)."
+	return "Read a UTF-8 text file from the workspace or from an absolute path inside allowed_paths (max 1MB)."
 }
 func (t *ReadFileTool) Risk() RiskLevel { return RiskCaution }
 func (t *ReadFileTool) ParameterSchema() json.RawMessage {
-	return json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Relative path within workspace"}},"required":["path"]}`)
+	return json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Workspace-relative path or absolute allowed path"}},"required":["path"]}`)
 }
 func (t *ReadFileTool) Execute(_ context.Context, params string, tctx *Context) (*Result, error) {
 	var args struct {
@@ -69,7 +71,24 @@ func (t *ReadFileTool) Execute(_ context.Context, params string, tctx *Context) 
 		return nil, fmt.Errorf("file exceeds 1MB limit (%d bytes)", len(data))
 	}
 
-	return &Result{Output: string(data)}, nil
+	proof := NewArtifactReadProof("workspace_file", args.Path, string(data))
+	return &Result{Output: string(data), Metadata: proof.Metadata()}, nil
+}
+
+func rejectProtectedSourceArtifactWrite(path string, tctx *Context) error {
+	if tctx == nil || len(tctx.ProtectedReadOnlyPaths) == 0 {
+		return nil
+	}
+	key := strings.TrimSpace(strings.ToLower(path))
+	if key == "" {
+		return nil
+	}
+	for _, protected := range tctx.ProtectedReadOnlyPaths {
+		if strings.TrimSpace(strings.ToLower(protected)) == key {
+			return fmt.Errorf("refusing to overwrite prompt-declared source artifact %q; use a read tool instead", path)
+		}
+	}
+	return nil
 }
 
 // --- Write File Tool ---
@@ -79,11 +98,11 @@ type WriteFileTool struct{}
 
 func (t *WriteFileTool) Name() string { return "write_file" }
 func (t *WriteFileTool) Description() string {
-	return "Write text content to a file in the workspace. Creates parent directories if needed."
+	return "Write text content to a workspace-relative file or to an absolute path inside allowed_paths. Creates parent directories if needed."
 }
 func (t *WriteFileTool) Risk() RiskLevel { return RiskCaution }
 func (t *WriteFileTool) ParameterSchema() json.RawMessage {
-	return json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Relative path within workspace"},"content":{"type":"string","description":"Content to write"},"append":{"type":"boolean","description":"Append instead of overwrite","default":false}},"required":["path","content"]}`)
+	return json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Workspace-relative path or absolute allowed path"},"content":{"type":"string","description":"Content to write"},"append":{"type":"boolean","description":"Append instead of overwrite","default":false}},"required":["path","content"]}`)
 }
 func (t *WriteFileTool) Execute(_ context.Context, params string, tctx *Context) (*Result, error) {
 	var args struct {
@@ -93,6 +112,9 @@ func (t *WriteFileTool) Execute(_ context.Context, params string, tctx *Context)
 	}
 	if err := json.Unmarshal([]byte(params), &args); err != nil {
 		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	if err := rejectProtectedSourceArtifactWrite(args.Path, tctx); err != nil {
+		return nil, err
 	}
 
 	resolved, err := resolvePath(tctx.Workspace, args.Path, tctx.AllowedPaths)
@@ -121,7 +143,91 @@ func (t *WriteFileTool) Execute(_ context.Context, params string, tctx *Context)
 		return nil, fmt.Errorf("failed to write file: %w", err)
 	}
 
-	return &Result{Output: fmt.Sprintf("wrote %d bytes to %s", len(args.Content), args.Path)}, nil
+	proof := NewArtifactProof("workspace_file", args.Path, args.Content, args.Append)
+	return &Result{
+		Output:   proof.Output(),
+		Metadata: proof.Metadata(),
+	}, nil
+}
+
+// --- Obsidian Write Tool ---
+
+// ObsidianWriteTool writes Markdown notes into the configured Obsidian vault.
+// It is a first-class vault-authoring capability, not a prompt hint layered on
+// top of generic file tools.
+type ObsidianWriteTool struct {
+	VaultPath string
+}
+
+func (t *ObsidianWriteTool) Name() string { return "obsidian_write" }
+func (t *ObsidianWriteTool) Description() string {
+	return "Create or update a Markdown note in the configured Obsidian vault using a vault-relative path."
+}
+func (t *ObsidianWriteTool) Risk() RiskLevel { return RiskCaution }
+func (t *ObsidianWriteTool) ParameterSchema() json.RawMessage {
+	return json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Vault-relative note path or note title"},"content":{"type":"string","description":"Markdown content to write"},"append":{"type":"boolean","description":"Append instead of overwrite","default":false}},"required":["path","content"]}`)
+}
+func (t *ObsidianWriteTool) Execute(_ context.Context, params string, tctx *Context) (*Result, error) {
+	if strings.TrimSpace(t.VaultPath) == "" {
+		return nil, fmt.Errorf("obsidian vault is not configured")
+	}
+
+	var args struct {
+		Path    string `json:"path"`
+		Content string `json:"content"`
+		Append  bool   `json:"append"`
+	}
+	if err := json.Unmarshal([]byte(params), &args); err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	if strings.TrimSpace(args.Path) == "" {
+		return nil, fmt.Errorf("path is required")
+	}
+
+	relPath := strings.TrimSpace(args.Path)
+	relPath = strings.TrimPrefix(relPath, "/")
+	if filepath.Ext(relPath) == "" {
+		relPath += ".md"
+	}
+	if err := rejectProtectedSourceArtifactWrite(relPath, tctx); err != nil {
+		return nil, err
+	}
+
+	resolved, err := resolvePath(t.VaultPath, filepath.Join(t.VaultPath, relPath), tctx.AllowedPaths)
+	if err != nil {
+		return nil, err
+	}
+
+	if int64(len(args.Content)) > core.MaxObsidianNoteBytes {
+		return nil, fmt.Errorf("note exceeds maximum size of %d bytes", core.MaxObsidianNoteBytes)
+	}
+
+	if err := tctx.GetFS().MkdirAll(filepath.Dir(resolved), 0o755); err != nil {
+		return nil, fmt.Errorf("failed to create directories: %w", err)
+	}
+
+	flag := os.O_WRONLY | os.O_CREATE
+	if args.Append {
+		flag |= os.O_APPEND
+	} else {
+		flag |= os.O_TRUNC
+	}
+
+	f, err := tctx.GetFS().OpenFile(resolved, flag, 0o644)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open note: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	if _, err := f.WriteString(args.Content); err != nil {
+		return nil, fmt.Errorf("failed to write note: %w", err)
+	}
+
+	proof := NewArtifactProof("obsidian_note", relPath, args.Content, args.Append)
+	return &Result{
+		Output:   proof.Output(),
+		Metadata: proof.Metadata(),
+	}, nil
 }
 
 // --- Edit File Tool ---
@@ -130,10 +236,12 @@ func (t *WriteFileTool) Execute(_ context.Context, params string, tctx *Context)
 type EditFileTool struct{}
 
 func (t *EditFileTool) Name() string        { return "edit_file" }
-func (t *EditFileTool) Description() string { return "Replace text in an existing workspace file." }
+func (t *EditFileTool) Description() string {
+	return "Replace text in an existing workspace-relative file or in a file at an absolute path inside allowed_paths."
+}
 func (t *EditFileTool) Risk() RiskLevel     { return RiskCaution }
 func (t *EditFileTool) ParameterSchema() json.RawMessage {
-	return json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Relative path within workspace"},"old_text":{"type":"string","description":"Text to find"},"new_text":{"type":"string","description":"Replacement text"},"replace_all":{"type":"boolean","default":false}},"required":["path","old_text","new_text"]}`)
+	return json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Workspace-relative path or absolute allowed path"},"old_text":{"type":"string","description":"Text to find"},"new_text":{"type":"string","description":"Replacement text"},"replace_all":{"type":"boolean","default":false}},"required":["path","old_text","new_text"]}`)
 }
 func (t *EditFileTool) Execute(_ context.Context, params string, tctx *Context) (*Result, error) {
 	var args struct {
@@ -144,6 +252,9 @@ func (t *EditFileTool) Execute(_ context.Context, params string, tctx *Context) 
 	}
 	if err := json.Unmarshal([]byte(params), &args); err != nil {
 		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	if err := rejectProtectedSourceArtifactWrite(args.Path, tctx); err != nil {
+		return nil, err
 	}
 
 	resolved, err := resolvePath(tctx.Workspace, args.Path, tctx.AllowedPaths)
@@ -182,11 +293,11 @@ type ListDirectoryTool struct{}
 
 func (t *ListDirectoryTool) Name() string { return "list_directory" }
 func (t *ListDirectoryTool) Description() string {
-	return "List files and folders in a workspace directory."
+	return "List files and folders in a workspace directory or in an absolute directory inside allowed_paths."
 }
 func (t *ListDirectoryTool) Risk() RiskLevel { return RiskCaution }
 func (t *ListDirectoryTool) ParameterSchema() json.RawMessage {
-	return json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Relative path within workspace","default":"."}},"required":[]}`)
+	return json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Workspace-relative path or absolute allowed directory","default":"."}},"required":[]}`)
 }
 func (t *ListDirectoryTool) Execute(_ context.Context, params string, tctx *Context) (*Result, error) {
 	var args struct {
@@ -220,7 +331,8 @@ func (t *ListDirectoryTool) Execute(_ context.Context, params string, tctx *Cont
 			fmt.Fprintf(&b, "%s (%d bytes)\n", e.Name(), size)
 		}
 	}
-	return &Result{Output: b.String()}, nil
+	proof := NewInspectionProof("directory_listing", t.Name(), args.Path, len(entries))
+	return &Result{Output: b.String(), Metadata: proof.Metadata()}, nil
 }
 
 // --- Search Files Tool ---
@@ -230,11 +342,11 @@ type SearchFilesTool struct{}
 
 func (t *SearchFilesTool) Name() string { return "search_files" }
 func (t *SearchFilesTool) Description() string {
-	return "Search for text content across workspace files with line number reporting."
+	return "Search for text content across workspace files or files under an absolute allowed directory, with line number reporting."
 }
 func (t *SearchFilesTool) Risk() RiskLevel { return RiskCaution }
 func (t *SearchFilesTool) ParameterSchema() json.RawMessage {
-	return json.RawMessage(`{"type":"object","properties":{"query":{"type":"string","description":"Text to search for"},"path":{"type":"string","description":"Directory to search in","default":"."},"limit":{"type":"integer","description":"Max results","default":20},"case_sensitive":{"type":"boolean","default":false}},"required":["query"]}`)
+	return json.RawMessage(`{"type":"object","properties":{"query":{"type":"string","description":"Text to search for"},"path":{"type":"string","description":"Workspace-relative path or absolute allowed directory","default":"."},"limit":{"type":"integer","description":"Max results","default":20},"case_sensitive":{"type":"boolean","default":false}},"required":["query"]}`)
 }
 func (t *SearchFilesTool) Execute(_ context.Context, params string, tctx *Context) (*Result, error) {
 	var args struct {
@@ -317,9 +429,11 @@ func (t *SearchFilesTool) Execute(_ context.Context, params string, tctx *Contex
 	})
 
 	if len(results) == 0 {
-		return &Result{Output: "no matches found"}, nil
+		proof := NewInspectionProof("content_search", t.Name(), args.Path, 0).WithQuery(args.Query)
+		return &Result{Output: "no matches found", Metadata: proof.Metadata()}, nil
 	}
-	return &Result{Output: strings.Join(results, "\n")}, nil
+	proof := NewInspectionProof("content_search", t.Name(), args.Path, len(results)).WithQuery(args.Query)
+	return &Result{Output: strings.Join(results, "\n"), Metadata: proof.Metadata()}, nil
 }
 
 // --- Glob Files Tool ---
@@ -329,11 +443,11 @@ type GlobFilesTool struct{}
 
 func (t *GlobFilesTool) Name() string { return "glob_files" }
 func (t *GlobFilesTool) Description() string {
-	return "Find files matching a wildcard pattern under the workspace."
+	return "Find files matching a wildcard pattern under the workspace or under an absolute path inside allowed_paths. Use actual filename extensions in patterns (for example `**/*.md`, `**/*.txt`, `**/*.go`)."
 }
 func (t *GlobFilesTool) Risk() RiskLevel { return RiskCaution }
 func (t *GlobFilesTool) ParameterSchema() json.RawMessage {
-	return json.RawMessage(`{"type":"object","properties":{"pattern":{"type":"string","description":"Glob pattern (e.g., **/*.go)"},"path":{"type":"string","default":"."},"limit":{"type":"integer","default":50}},"required":["pattern"]}`)
+	return json.RawMessage(`{"type":"object","properties":{"pattern":{"type":"string","description":"Glob pattern using actual filename extensions (e.g., **/*.md or **/*.go)"},"path":{"type":"string","description":"Workspace-relative path or absolute allowed directory","default":"."},"limit":{"type":"integer","default":50}},"required":["pattern"]}`)
 }
 func (t *GlobFilesTool) Execute(_ context.Context, params string, tctx *Context) (*Result, error) {
 	var args struct {
@@ -376,9 +490,11 @@ func (t *GlobFilesTool) Execute(_ context.Context, params string, tctx *Context)
 	}
 
 	if len(results) == 0 {
-		return &Result{Output: "no files matched"}, nil
+		proof := NewInspectionProof("file_glob", t.Name(), args.Path, 0).WithPattern(args.Pattern)
+		return &Result{Output: "no files matched", Metadata: proof.Metadata()}, nil
 	}
-	return &Result{Output: strings.Join(results, "\n")}, nil
+	proof := NewInspectionProof("file_glob", t.Name(), args.Path, len(results)).WithPattern(args.Pattern)
+	return &Result{Output: strings.Join(results, "\n"), Metadata: proof.Metadata()}, nil
 }
 
 // --- Bash Tool ---
@@ -438,23 +554,34 @@ type RuntimeContextTool struct{}
 
 func (t *RuntimeContextTool) Name() string { return "get_runtime_context" }
 func (t *RuntimeContextTool) Description() string {
-	return "Report runtime context (agent id, session, workspace, allowed paths)."
+	return "Report runtime context and effective sandbox constraints (workspace root, absolute-path allowlist, protected read-only inputs)."
 }
 func (t *RuntimeContextTool) Risk() RiskLevel { return RiskSafe }
 func (t *RuntimeContextTool) ParameterSchema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{}}`)
 }
 func (t *RuntimeContextTool) Execute(_ context.Context, _ string, tctx *Context) (*Result, error) {
+	relativeRule := "relative paths resolve inside the workspace root"
+	absoluteRule := "absolute paths must fall under an allowed path"
+	protected := "none"
+	if len(tctx.ProtectedReadOnlyPaths) > 0 {
+		protected = strings.Join(tctx.ProtectedReadOnlyPaths, ", ")
+	}
 	info := fmt.Sprintf(`Agent: %s
 Session: %s
 Workspace: %s
 Channel: %s
-Allowed Paths: %s`,
+Allowed Paths: %s
+Effective Path Policy: %s; %s
+Protected Read-Only Inputs: %s`,
 		tctx.AgentID,
 		tctx.SessionID,
 		tctx.Workspace,
 		tctx.Channel,
 		strings.Join(tctx.AllowedPaths, ", "),
+		relativeRule,
+		absoluteRule,
+		protected,
 	)
 	return &Result{Output: info}, nil
 }
@@ -463,35 +590,5 @@ Allowed Paths: %s`,
 
 // resolvePath safely resolves a path within the workspace.
 func resolvePath(workspace, path string, allowedPaths []string) (string, error) {
-	if filepath.IsAbs(path) {
-		cleanPath := filepath.Clean(path)
-		// Check if absolute path is within an allowed path (exact match or proper subtree).
-		// Uses path-separator boundary check to prevent /vault matching /vaultBackup.
-		for _, allowed := range allowedPaths {
-			cleanAllowed := filepath.Clean(allowed)
-			if cleanPath == cleanAllowed || strings.HasPrefix(cleanPath, cleanAllowed+string(filepath.Separator)) {
-				return cleanPath, nil
-			}
-		}
-		return "", fmt.Errorf("absolute paths must be in allowed_paths list")
-	}
-
-	resolved := filepath.Join(workspace, path)
-	resolved = filepath.Clean(resolved)
-
-	// Ensure the resolved path is within workspace.
-	absWorkspace, err := filepath.Abs(workspace)
-	if err != nil {
-		return "", fmt.Errorf("invalid workspace: %w", err)
-	}
-	absResolved, err := filepath.Abs(resolved)
-	if err != nil {
-		return "", fmt.Errorf("invalid path: %w", err)
-	}
-
-	if absResolved != absWorkspace && !strings.HasPrefix(absResolved, absWorkspace+string(filepath.Separator)) {
-		return "", fmt.Errorf("path escapes workspace boundary")
-	}
-
-	return resolved, nil
+	return ResolvePath(path, workspace, &ToolSandboxSnapshot{AllowedPaths: allowedPaths})
 }

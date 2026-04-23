@@ -3,6 +3,8 @@ package tools
 import (
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -92,6 +94,91 @@ func TestValidatePath(t *testing.T) {
 				t.Errorf("ValidatePath() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestResolvePathAndValidatePath_ShareAllowedAbsoluteSemantics(t *testing.T) {
+	tmpDir := t.TempDir()
+	allowedDir := filepath.Join(tmpDir, "..", "external-allowed")
+	target := filepath.Join(allowedDir, "notes.txt")
+	snapshot := &ToolSandboxSnapshot{AllowedPaths: []string{allowedDir}}
+
+	resolved, err := ResolvePath(target, tmpDir, snapshot)
+	if err != nil {
+		t.Fatalf("ResolvePath: %v", err)
+	}
+	if resolved != canonicalSandboxPath(target) {
+		t.Fatalf("resolved = %q, want %q", resolved, canonicalSandboxPath(target))
+	}
+
+	if err := ValidatePath(target, tmpDir, snapshot); err != nil {
+		t.Fatalf("ValidatePath: %v", err)
+	}
+}
+
+func TestResolvePath_AllowsCaseVariantAbsolutePathWithinAllowedRoot(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
+		t.Skip("case-variant allowlist semantics only apply on case-insensitive platforms")
+	}
+	tmpDir := t.TempDir()
+	allowedDir := filepath.Join(tmpDir, "AllowedRoot")
+	if err := os.MkdirAll(allowedDir, 0o755); err != nil {
+		t.Fatalf("mkdir allowed dir: %v", err)
+	}
+	allowedDir = canonicalSandboxPath(allowedDir)
+	target := filepath.Join(allowedDir, "notes.txt")
+	snapshot := &ToolSandboxSnapshot{AllowedPaths: []string{strings.ToLower(allowedDir)}}
+
+	resolved, err := ResolvePath(target, tmpDir, snapshot)
+	if err != nil {
+		t.Fatalf("ResolvePath: %v", err)
+	}
+	if resolved != filepath.Clean(target) {
+		t.Fatalf("resolved = %q, want %q", resolved, filepath.Clean(target))
+	}
+}
+
+func TestValidatePath_AllowsFutureChildUnderSymlinkedWorkspaceRoot(t *testing.T) {
+	parent := t.TempDir()
+	realRoot := filepath.Join(parent, "real-root")
+	if err := os.MkdirAll(realRoot, 0o755); err != nil {
+		t.Fatalf("mkdir real root: %v", err)
+	}
+	aliasRoot := filepath.Join(parent, "alias-root")
+	if err := os.Symlink(realRoot, aliasRoot); err != nil {
+		t.Skipf("symlink unsupported in this environment: %v", err)
+	}
+
+	target := filepath.Join(aliasRoot, "nested", "future.txt")
+	if err := ValidatePath(target, aliasRoot, nil); err != nil {
+		t.Fatalf("ValidatePath under symlinked workspace root: %v", err)
+	}
+}
+
+func TestResolvePath_AllowsFutureChildUnderSymlinkedAllowedRoot(t *testing.T) {
+	parent := t.TempDir()
+	realRoot := filepath.Join(parent, "real-root")
+	if err := os.MkdirAll(realRoot, 0o755); err != nil {
+		t.Fatalf("mkdir real root: %v", err)
+	}
+	aliasRoot := filepath.Join(parent, "alias-root")
+	if err := os.Symlink(realRoot, aliasRoot); err != nil {
+		t.Skipf("symlink unsupported in this environment: %v", err)
+	}
+
+	workspace := filepath.Join(parent, "workspace")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatalf("mkdir workspace: %v", err)
+	}
+
+	target := filepath.Join(aliasRoot, "Projects", "Daily Note.md")
+	snapshot := &ToolSandboxSnapshot{AllowedPaths: []string{aliasRoot}}
+	resolved, err := ResolvePath(target, workspace, snapshot)
+	if err != nil {
+		t.Fatalf("ResolvePath under symlinked allowed root: %v", err)
+	}
+	if !pathWithinSandboxRoot(resolved, realRoot) {
+		t.Fatalf("resolved path %q should stay under canonical real root %q", resolved, realRoot)
 	}
 }
 

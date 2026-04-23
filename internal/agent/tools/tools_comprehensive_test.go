@@ -520,8 +520,8 @@ func TestMemoryStatsTool_WithStore(t *testing.T) {
 	if err := json.Unmarshal([]byte(result.Output), &stats); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if len(stats) != 5 {
-		t.Errorf("expected 5 tiers, got %d", len(stats))
+	if len(stats) != 6 {
+		t.Errorf("expected 6 tiers, got %d", len(stats))
 	}
 }
 
@@ -537,6 +537,366 @@ func TestMemoryStatsTool_WithSessionID(t *testing.T) {
 	}
 	if result.Output == "" {
 		t.Error("empty output")
+	}
+}
+
+func TestSubagentRosterTool_WithStore(t *testing.T) {
+	store := testutil.TempStore(t)
+	if _, err := store.ExecContext(context.Background(),
+		`INSERT INTO sub_agents
+		    (id, name, display_name, model, role, description, skills_json, fallback_models_json, enabled, session_count, last_used_at)
+		  VALUES
+		    ('sa-1', 'researcher', 'Researcher', 'ollama/phi4-mini:latest', 'researcher', 'Finds evidence',
+		     '["search","synthesis"]', '["moonshot/kimi-k2-turbo-preview"]', 1, 4, '2026-04-20T12:00:00Z')`); err != nil {
+		t.Fatalf("insert subagent: %v", err)
+	}
+
+	tool := &SubagentRosterTool{}
+	result, err := tool.Execute(context.Background(), `{}`, &Context{Store: store})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	var out struct {
+		Subagents []struct {
+			Name           string   `json:"name"`
+			DisplayName    string   `json:"display_name"`
+			Model          string   `json:"model"`
+			Role           string   `json:"role"`
+			FixedSkills    []string `json:"fixed_skills"`
+			FallbackModels []string `json:"fallback_models"`
+			Enabled        bool     `json:"enabled"`
+		} `json:"subagents"`
+		Count   int `json:"count"`
+		Enabled int `json:"enabled_count"`
+	}
+	if err := json.Unmarshal([]byte(result.Output), &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if out.Count != 1 || out.Enabled != 1 {
+		t.Fatalf("counts = %+v", out)
+	}
+	if len(out.Subagents) != 1 || out.Subagents[0].Name != "researcher" {
+		t.Fatalf("subagents = %+v", out.Subagents)
+	}
+	if len(out.Subagents[0].FixedSkills) != 2 || len(out.Subagents[0].FallbackModels) != 1 {
+		t.Fatalf("expected parsed JSON arrays, got %+v", out.Subagents[0])
+	}
+}
+
+func TestAvailableSkillsTool_WithStore(t *testing.T) {
+	store := testutil.TempStore(t)
+	if _, err := store.ExecContext(context.Background(),
+		`INSERT INTO skills
+		    (id, name, kind, description, source_path, content_hash, triggers_json, tool_chain_json, enabled, risk_level, version, author, registry_source, usage_count, last_used_at)
+		  VALUES
+		    ('sk-1', 'research-skill', 'structured', 'Research helper', '/tmp/research.md', 'abc123',
+		     '["research","investigate"]', '["search_memories","graph_query"]', 1, 'Caution', '1.2.3', 'local', 'local', 7, '2026-04-20T12:00:00Z')`); err != nil {
+		t.Fatalf("insert skill: %v", err)
+	}
+
+	tool := &AvailableSkillsTool{}
+	result, err := tool.Execute(context.Background(), `{}`, &Context{Store: store})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	var out struct {
+		Skills []struct {
+			Name      string   `json:"name"`
+			Kind      string   `json:"kind"`
+			Triggers  []string `json:"triggers"`
+			ToolChain []string `json:"tool_chain"`
+			Enabled   bool     `json:"enabled"`
+		} `json:"skills"`
+		Count   int `json:"count"`
+		Enabled int `json:"enabled_count"`
+	}
+	if err := json.Unmarshal([]byte(result.Output), &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if out.Count != 1 || out.Enabled != 1 {
+		t.Fatalf("counts = %+v", out)
+	}
+	if len(out.Skills) != 1 || out.Skills[0].Name != "research-skill" {
+		t.Fatalf("skills = %+v", out.Skills)
+	}
+	if len(out.Skills[0].Triggers) != 2 || len(out.Skills[0].ToolChain) != 2 {
+		t.Fatalf("expected parsed trigger/tool arrays, got %+v", out.Skills[0])
+	}
+}
+
+func TestTaskStatusTool_WithStore(t *testing.T) {
+	store := testutil.TempStore(t)
+	if _, err := store.ExecContext(context.Background(),
+		`INSERT INTO tasks (id, title, description, status, priority, source)
+		 VALUES ('task-1', 'Delegated', 'desc', 'in_progress', 1, '{"kind":"delegated"}')`); err != nil {
+		t.Fatalf("seed task: %v", err)
+	}
+	if _, err := store.ExecContext(context.Background(),
+		`INSERT INTO task_events (id, task_id, assigned_to, event_type, payload_json)
+		 VALUES ('ev-1', 'task-1', 'scribe', 'started', '{}')`); err != nil {
+		t.Fatalf("seed task event: %v", err)
+	}
+
+	tool := &TaskStatusTool{}
+	result, err := tool.Execute(context.Background(), `{"task_id":"task-1"}`, &Context{Store: store})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	var out struct {
+		Found bool `json:"found"`
+		Task  struct {
+			Task struct {
+				ID         string `json:"id"`
+				AssignedTo string `json:"assigned_to"`
+			} `json:"task"`
+		} `json:"task"`
+	}
+	if err := json.Unmarshal([]byte(result.Output), &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !out.Found {
+		t.Fatal("expected found=true")
+	}
+	if out.Task.Task.ID != "task-1" || out.Task.Task.AssignedTo != "scribe" {
+		t.Fatalf("unexpected task payload: %+v", out.Task.Task)
+	}
+}
+
+func TestListOpenTasksTool_WithStore(t *testing.T) {
+	store := testutil.TempStore(t)
+	if _, err := store.ExecContext(context.Background(),
+		`INSERT INTO tasks (id, title, status) VALUES ('task-open', 'Open', 'pending'), ('task-closed', 'Closed', 'failed')`); err != nil {
+		t.Fatalf("seed tasks: %v", err)
+	}
+
+	tool := &ListOpenTasksTool{}
+	result, err := tool.Execute(context.Background(), `{"limit":10}`, &Context{Store: store})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	var out struct {
+		Count int `json:"count"`
+		Tasks []struct {
+			ID string `json:"id"`
+		} `json:"tasks"`
+	}
+	if err := json.Unmarshal([]byte(result.Output), &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if out.Count != 1 || len(out.Tasks) != 1 || out.Tasks[0].ID != "task-open" {
+		t.Fatalf("unexpected open task payload: %+v", out)
+	}
+}
+
+func TestRetryTaskTool_WithStore(t *testing.T) {
+	store := testutil.TempStore(t)
+	if _, err := store.ExecContext(context.Background(),
+		`INSERT INTO tasks (id, title, status) VALUES ('task-1', 'Retry Me', 'failed')`); err != nil {
+		t.Fatalf("seed task: %v", err)
+	}
+
+	tool := &RetryTaskTool{}
+	result, err := tool.Execute(context.Background(), `{"task_id":"task-1","reason":"proof gap"}`, &Context{Store: store, AgentName: "Duncan"})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	var out struct {
+		Found       bool   `json:"found"`
+		Updated     bool   `json:"updated"`
+		PriorStatus string `json:"prior_status"`
+	}
+	if err := json.Unmarshal([]byte(result.Output), &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !out.Found || !out.Updated || out.PriorStatus != "failed" {
+		t.Fatalf("unexpected retry payload: %+v", out)
+	}
+}
+
+func TestComposeSubagentTool_WithStore(t *testing.T) {
+	store := testutil.TempStore(t)
+	tool := &ComposeSubagentTool{}
+
+	result, err := tool.Execute(context.Background(), `{
+		"name":"researcher",
+		"display_name":"Researcher",
+		"model":"ollama/phi4-mini:latest",
+		"role":"subagent",
+		"description":"Finds evidence",
+		"fixed_skills":["search","summarize"],
+		"fallback_models":["moonshot/kimi-k2-turbo-preview"],
+		"enabled":true
+	}`, &Context{Store: store, AgentName: "Duncan"})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	var out struct {
+		Created  bool `json:"created"`
+		Subagent struct {
+			Name        string   `json:"name"`
+			DisplayName string   `json:"display_name"`
+			Model       string   `json:"model"`
+			FixedSkills []string `json:"fixed_skills"`
+		} `json:"subagent"`
+	}
+	if err := json.Unmarshal([]byte(result.Output), &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !out.Created || out.Subagent.Name != "researcher" || out.Subagent.DisplayName != "Researcher" || out.Subagent.Model != "ollama/phi4-mini:latest" {
+		t.Fatalf("unexpected compose payload: %+v", out)
+	}
+	if len(out.Subagent.FixedSkills) != 2 {
+		t.Fatalf("expected fixed skills, got %+v", out.Subagent.FixedSkills)
+	}
+}
+
+func TestComposeSubagentTool_RejectsSubagentCaller(t *testing.T) {
+	store := testutil.TempStore(t)
+	if _, err := store.ExecContext(context.Background(),
+		`INSERT INTO sub_agents (id, name, model, role, enabled) VALUES ('sa-1', 'worker', 'ollama/phi4-mini:latest', 'subagent', 1)`); err != nil {
+		t.Fatalf("seed subagent: %v", err)
+	}
+
+	tool := &ComposeSubagentTool{}
+	_, err := tool.Execute(context.Background(), `{"name":"new-worker","model":"ollama/phi4-mini:latest"}`, &Context{
+		Store:     store,
+		AgentName: "worker",
+		AgentID:   "worker",
+	})
+	if err == nil || !strings.Contains(err.Error(), "subagents may not compose subagents directly") {
+		t.Fatalf("expected orchestrator-only error, got %v", err)
+	}
+}
+
+func TestComposeSkillTool_WithStore(t *testing.T) {
+	store := testutil.TempStore(t)
+	skillsDir := t.TempDir()
+	tool := NewComposeSkillTool(skillsDir)
+
+	result, err := tool.Execute(context.Background(), `{
+		"name":"greeting_skill",
+		"kind":"instruction",
+		"description":"Greets politely",
+		"content":"Say hello and offer help.",
+		"triggers":["hello","hi"],
+		"priority":7,
+		"enabled":true
+	}`, &Context{Store: store, AgentName: "Duncan"})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	var out struct {
+		Created bool `json:"created"`
+		Skill   struct {
+			Name       string   `json:"name"`
+			Kind       string   `json:"kind"`
+			Triggers   []string `json:"triggers"`
+			SourcePath string   `json:"source_path"`
+		} `json:"skill"`
+	}
+	if err := json.Unmarshal([]byte(result.Output), &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !out.Created || out.Skill.Name != "greeting_skill" || out.Skill.Kind != "instruction" {
+		t.Fatalf("unexpected compose payload: %+v", out)
+	}
+	if len(out.Skill.Triggers) != 2 {
+		t.Fatalf("expected triggers, got %+v", out.Skill.Triggers)
+	}
+	if out.Skill.SourcePath == "" {
+		t.Fatal("expected source_path in response")
+	}
+	data, err := os.ReadFile(out.Skill.SourcePath)
+	if err != nil {
+		t.Fatalf("read artifact: %v", err)
+	}
+	if !strings.Contains(string(data), "name: greeting_skill") {
+		t.Fatalf("unexpected artifact:\n%s", string(data))
+	}
+}
+
+func TestComposeSkillTool_RejectsSubagentCaller(t *testing.T) {
+	store := testutil.TempStore(t)
+	if _, err := store.ExecContext(context.Background(),
+		`INSERT INTO sub_agents (id, name, model, role, enabled) VALUES ('sa-1', 'worker', 'ollama/phi4-mini:latest', 'subagent', 1)`); err != nil {
+		t.Fatalf("seed subagent: %v", err)
+	}
+
+	tool := NewComposeSkillTool(t.TempDir())
+	_, err := tool.Execute(context.Background(), `{"name":"helper","content":"do a thing"}`, &Context{
+		Store:     store,
+		AgentName: "worker",
+		AgentID:   "worker",
+	})
+	if err == nil || !strings.Contains(err.Error(), "subagents may not compose skills directly") {
+		t.Fatalf("expected orchestrator-only error, got %v", err)
+	}
+}
+
+func TestOrchestrateSubagentsTool_WithStore(t *testing.T) {
+	store := testutil.TempStore(t)
+	if _, err := store.ExecContext(context.Background(),
+		`INSERT INTO sub_agents (id, name, model, role, description, skills_json, enabled)
+		 VALUES
+		 ('sa-1', 'researcher', 'ollama/phi4-mini:latest', 'subagent', 'Finds evidence', '["research"]', 1),
+		 ('sa-2', 'writer', 'ollama/phi4-mini:latest', 'subagent', 'Writes summaries', '["writing"]', 1)`); err != nil {
+		t.Fatalf("seed subagents: %v", err)
+	}
+
+	tool := &OrchestrateSubagentsTool{}
+	result, err := tool.Execute(context.Background(), `{
+		"workflow_name":"Evidence sweep",
+		"pattern":"fan_out_fan_in",
+		"subtasks":[
+			{"description":"Find source evidence","required_skills":["research"]},
+			{"description":"Write final summary","required_skills":["writing"]}
+		]
+	}`, &Context{Store: store, AgentName: "Duncan"})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	var out struct {
+		Created  bool `json:"created"`
+		Workflow struct {
+			WorkflowID  string `json:"workflow_id"`
+			Assignments []struct {
+				AssignedSubagent string `json:"assigned_subagent"`
+			} `json:"assignments"`
+		} `json:"workflow"`
+	}
+	if err := json.Unmarshal([]byte(result.Output), &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !out.Created || out.Workflow.WorkflowID == "" || len(out.Workflow.Assignments) != 2 {
+		t.Fatalf("unexpected orchestration payload: %+v", out)
+	}
+	if out.Workflow.Assignments[0].AssignedSubagent != "researcher" || out.Workflow.Assignments[1].AssignedSubagent != "writer" {
+		t.Fatalf("unexpected assignments: %+v", out.Workflow.Assignments)
+	}
+}
+
+func TestOrchestrateSubagentsTool_RejectsSubagentCaller(t *testing.T) {
+	store := testutil.TempStore(t)
+	if _, err := store.ExecContext(context.Background(),
+		`INSERT INTO sub_agents (id, name, model, role, enabled) VALUES ('sa-1', 'worker', 'ollama/phi4-mini:latest', 'subagent', 1)`); err != nil {
+		t.Fatalf("seed subagent: %v", err)
+	}
+
+	tool := &OrchestrateSubagentsTool{}
+	_, err := tool.Execute(context.Background(), `{
+		"workflow_name":"Bad recursion",
+		"subtasks":[{"description":"Do work"}]
+	}`, &Context{Store: store, AgentName: "worker", AgentID: "worker"})
+	if err == nil || !strings.Contains(err.Error(), "subagents may not orchestrate other subagents directly") {
+		t.Fatalf("expected orchestrator-only error, got %v", err)
 	}
 }
 
@@ -1348,6 +1708,7 @@ func TestAgentTableName(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestAllToolRiskLevels(t *testing.T) {
+	composeSkill := NewComposeSkillTool(t.TempDir())
 	tests := []struct {
 		tool Tool
 		want RiskLevel
@@ -1368,6 +1729,14 @@ func TestAllToolRiskLevels(t *testing.T) {
 		{&DropTableTool{}, RiskCaution},
 		{&CronTool{}, RiskCaution},
 		{&MemoryStatsTool{}, RiskSafe},
+		{&SubagentRosterTool{}, RiskSafe},
+		{&AvailableSkillsTool{}, RiskSafe},
+		{composeSkill, RiskDangerous},
+		{&ComposeSubagentTool{}, RiskDangerous},
+		{&OrchestrateSubagentsTool{}, RiskDangerous},
+		{&TaskStatusTool{}, RiskSafe},
+		{&ListOpenTasksTool{}, RiskSafe},
+		{&RetryTaskTool{}, RiskDangerous},
 		{NewIntrospectionTool("", "", func() []string { return nil }), RiskSafe},
 		{NewWebSearchTool("", ""), RiskCaution},
 		{NewHTTPFetchTool(), RiskCaution},

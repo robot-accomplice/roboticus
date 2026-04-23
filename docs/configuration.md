@@ -37,14 +37,14 @@ autonomy_max_react_turns = 25
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `port` | int | `18789` | HTTP server listen port. Must be 1-65535. |
-| `bind` | string | `"127.0.0.1"` | Bind address. Use `"0.0.0.0"` to expose to network. Must be a valid IP or `"localhost"`. |
+| `bind` | string | `"localhost"` | Bind address. Use `"0.0.0.0"` to expose to network. Must be a valid IP or `"localhost"`. |
 | `log_dir` | string | `~/.roboticus/logs` | Directory for log file output. |
 | `cron_max_concurrency` | int | `4` | Maximum concurrent cron job executions. Must be 1-16. |
 
 ```toml
 [server]
 port = 18789
-bind = "127.0.0.1"
+bind = "localhost"
 cron_max_concurrency = 4
 ```
 

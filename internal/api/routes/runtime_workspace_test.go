@@ -1,9 +1,11 @@
 package routes
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -309,6 +311,52 @@ func TestGetRoster_WithSeededAgents(t *testing.T) {
 	// 1 primary + 2 seeded subagents.
 	if len(agents) != 3 {
 		t.Fatalf("expected 3 agents, got %d", len(agents))
+	}
+}
+
+func TestRosterAndSubagentListShareProjection(t *testing.T) {
+	store := testutil.TempStore(t)
+	_, _ = store.ExecContext(bgCtx,
+		`INSERT INTO sub_agents (id, name, model, enabled, role, display_name, fallback_models_json, skills_json, session_count, status)
+		 VALUES ('sa1', 'researcher', 'gpt-4', 1, 'specialist', 'Researcher', '["backup-a"]', '["search"]', 2, 'running')`)
+	_, _ = store.ExecContext(bgCtx,
+		`INSERT INTO skills (id, name, kind, enabled, version, risk_level) VALUES ('sk1', 'search', 'structured', 1, '1.0.0', 'safe')`)
+
+	rosterRec := httptest.NewRecorder()
+	GetRoster(store, testConfig()).ServeHTTP(rosterRec, httptest.NewRequest("GET", "/api/roster", nil))
+	if rosterRec.Code != http.StatusOK {
+		t.Fatalf("roster status = %d, want 200", rosterRec.Code)
+	}
+	rosterBody := jsonBody(t, rosterRec)
+	roster := rosterBody["roster"].([]any)
+
+	listRec := httptest.NewRecorder()
+	ListSubagents(store).ServeHTTP(listRec, httptest.NewRequest("GET", "/api/subagents", nil))
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("subagents status = %d, want 200", listRec.Code)
+	}
+	listBody := jsonBody(t, listRec)
+	subagents := listBody["agents"].([]any)
+	if len(subagents) != 1 {
+		t.Fatalf("got %d subagents, want 1", len(subagents))
+	}
+
+	var rosterSub map[string]any
+	for _, raw := range roster {
+		agent := raw.(map[string]any)
+		if agent["name"] == "researcher" {
+			rosterSub = agent
+			break
+		}
+	}
+	if rosterSub == nil {
+		t.Fatal("researcher missing from roster")
+	}
+	listSub := subagents[0].(map[string]any)
+	for _, key := range []string{"name", "display_name", "model", "role", "status"} {
+		if rosterSub[key] != listSub[key] {
+			t.Fatalf("%s mismatch: roster=%v list=%v", key, rosterSub[key], listSub[key])
+		}
 	}
 }
 
@@ -1015,6 +1063,24 @@ func TestInstallSkillFromCatalog_Success(t *testing.T) {
 	}
 	if body["status"] != "installed" {
 		t.Errorf("status = %v", body["status"])
+	}
+	path, _ := body["path"].(string)
+	if path == "" {
+		t.Fatal("expected install path")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read installed skill: %v", err)
+	}
+	if !strings.Contains(string(data), "name: greeting") {
+		t.Fatalf("unexpected installed artifact:\n%s", string(data))
+	}
+	row, err := db.NewSkillsRepository(store).GetByName(context.Background(), "greeting")
+	if err != nil {
+		t.Fatalf("GetByName: %v", err)
+	}
+	if row == nil || row.SourcePath != path || row.Kind != "instruction" {
+		t.Fatalf("unexpected stored skill row: %+v", row)
 	}
 }
 

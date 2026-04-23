@@ -1,12 +1,16 @@
 package routes
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"roboticus/internal/core"
 	"roboticus/internal/llm"
+	"roboticus/internal/pipeline"
 	"roboticus/testutil"
 )
 
@@ -66,5 +70,74 @@ func TestHealth_WithStore(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d", rec.Code)
+	}
+}
+
+type captureRunner struct {
+	input pipeline.Input
+}
+
+func (c *captureRunner) Run(_ context.Context, _ pipeline.Config, input pipeline.Input) (*pipeline.Outcome, error) {
+	c.input = input
+	return &pipeline.Outcome{
+		SessionID: "s1",
+		MessageID: "m1",
+		Content:   "ok",
+	}, nil
+}
+
+type errorRunner struct {
+	err error
+}
+
+func (e *errorRunner) Run(_ context.Context, _ pipeline.Config, _ pipeline.Input) (*pipeline.Outcome, error) {
+	return nil, e.err
+}
+
+func TestAgentMessage_PreservesNoEscalate(t *testing.T) {
+	runner := &captureRunner{}
+	handler := AgentMessage(runner, "Duncan")
+
+	body, err := json.Marshal(map[string]any{
+		"content":     "test",
+		"no_cache":    true,
+		"no_escalate": true,
+	})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	req := httptest.NewRequest("POST", "/api/agent/message", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if !runner.input.NoCache {
+		t.Fatal("expected NoCache to reach pipeline input")
+	}
+	if !runner.input.NoEscalate {
+		t.Fatal("expected NoEscalate to reach pipeline input")
+	}
+}
+
+func TestAgentMessage_Returns404ForMissingSession(t *testing.T) {
+	handler := AgentMessage(&errorRunner{err: core.NewError(core.ErrNotFound, "session not found")}, "Duncan")
+
+	body, err := json.Marshal(map[string]any{
+		"content":    "test",
+		"session_id": "missing-session",
+	})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	req := httptest.NewRequest("POST", "/api/agent/message", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
 	}
 }

@@ -158,7 +158,6 @@ func TestArchitecture_ConnectorFilesInvokeRunPipeline(t *testing.T) {
 	files := []string{
 		filepath.Join("routes", "agent.go"),
 		filepath.Join("routes", "sessions.go"),
-		filepath.Join("routes", "cron.go"),
 		filepath.Join("routes", "admin_webhooks.go"),
 	}
 	for _, path := range files {
@@ -166,6 +165,44 @@ func TestArchitecture_ConnectorFilesInvokeRunPipeline(t *testing.T) {
 		if !strings.Contains(src, "pipeline.RunPipeline(") {
 			t.Errorf("%s must invoke pipeline.RunPipeline(...) — connectors stay thin via the unified pipeline", path)
 		}
+	}
+
+	routeFamilies := map[string][]string{
+		"routing_admin": {
+			filepath.Join("routes", "routing_admin.go"),
+			filepath.Join("routes", "routing_admin_exercise.go"),
+			filepath.Join("routes", "routing_admin_dataset.go"),
+			filepath.Join("routes", "routing_admin_scores.go"),
+		},
+	}
+	for family, paths := range routeFamilies {
+		familyInvokesPipeline := false
+		for _, path := range paths {
+			src := readRepoFile(t, path)
+			if strings.Contains(src, "pipeline.RunPipeline(") {
+				familyInvokesPipeline = true
+				break
+			}
+		}
+		if !familyInvokesPipeline {
+			t.Errorf("%s route surface must invoke pipeline.RunPipeline(...) via the unified connector path", family)
+		}
+	}
+
+	cronFiles := []string{
+		filepath.Join("routes", "cron.go"),
+		filepath.Join("routes", "cron_run_now.go"),
+	}
+	cronInvokesPipeline := false
+	for _, path := range cronFiles {
+		src := readRepoFile(t, path)
+		if strings.Contains(src, "pipeline.RunPipeline(") {
+			cronInvokesPipeline = true
+			break
+		}
+	}
+	if !cronInvokesPipeline {
+		t.Errorf("cron route surface must invoke pipeline.RunPipeline(...) via the unified connector path")
 	}
 }
 

@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"roboticus/internal/core"
@@ -333,6 +334,24 @@ func TestResolveSession_SessionFromBody_ExistingSession(t *testing.T) {
 	}
 }
 
+func TestResolveSession_SessionFromBody_MissingSession(t *testing.T) {
+	store := testutil.TempStore(t)
+	pipe := New(PipelineDeps{Store: store})
+	ctx := context.Background()
+
+	_, err := pipe.resolveSession(ctx, Config{SessionResolution: SessionFromBody}, Input{
+		SessionID: "missing-session-id",
+		AgentID:   "a1",
+		Platform:  "test",
+	})
+	if err == nil {
+		t.Fatal("expected missing session to fail")
+	}
+	if !errors.Is(err, core.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
 func TestResolveSession_SessionDedicated(t *testing.T) {
 	store := testutil.TempStore(t)
 	pipe := New(PipelineDeps{Store: store})
@@ -541,6 +560,27 @@ func TestTryShortcut_Help(t *testing.T) {
 	}
 }
 
+type stubCapabilitySummarizer struct {
+	summary string
+}
+
+func (s stubCapabilitySummarizer) Summarize(_ context.Context, _ *Session, _ string) string {
+	return s.summary
+}
+
+func TestTryShortcut_Introspection(t *testing.T) {
+	pipe := &Pipeline{capabilities: stubCapabilitySummarizer{summary: "Enabled subagents: researcher\nLive tool surface: introspection, get_subagent_status"}}
+	sess := NewSession("s1", "a1", "Bot")
+
+	result := pipe.tryShortcut(context.Background(), sess, "use your introspection tool to discover your current subagent functionality and summarize it for me", false, "test")
+	if result == nil {
+		t.Fatal("introspection shortcut should match")
+	}
+	if !strings.Contains(result.Content, "Enabled subagents: researcher") {
+		t.Fatalf("unexpected shortcut content: %q", result.Content)
+	}
+}
+
 func TestTryShortcut_NoMatch(t *testing.T) {
 	pipe := &Pipeline{}
 	sess := NewSession("s1", "a1", "Bot")
@@ -558,7 +598,7 @@ func TestTryShortcut_NoMatch(t *testing.T) {
 func TestGuardOutcome_NoGuards(t *testing.T) {
 	pipe := &Pipeline{}
 	outcome := &Outcome{Content: "hello"}
-	result := pipe.guardOutcome(Config{GuardSet: GuardSetFull}, outcome)
+	result := pipe.guardOutcome(Config{GuardSet: GuardSetFull}, nil, outcome)
 	if result.Content != "hello" {
 		t.Error("no guards should pass through")
 	}
@@ -567,7 +607,7 @@ func TestGuardOutcome_NoGuards(t *testing.T) {
 func TestGuardOutcome_WithGuards(t *testing.T) {
 	pipe := &Pipeline{guards: DefaultGuardChain()}
 	outcome := &Outcome{Content: "valid response"}
-	result := pipe.guardOutcome(Config{GuardSet: GuardSetFull}, outcome)
+	result := pipe.guardOutcome(Config{GuardSet: GuardSetFull}, nil, outcome)
 	if result == nil {
 		t.Fatal("should return outcome")
 	}
@@ -576,7 +616,7 @@ func TestGuardOutcome_WithGuards(t *testing.T) {
 func TestGuardOutcome_GuardSetNone(t *testing.T) {
 	pipe := &Pipeline{guards: DefaultGuardChain()}
 	outcome := &Outcome{Content: "anything"}
-	result := pipe.guardOutcome(Config{GuardSet: GuardSetNone}, outcome)
+	result := pipe.guardOutcome(Config{GuardSet: GuardSetNone}, nil, outcome)
 	if result.Content != "anything" {
 		t.Error("GuardSetNone should pass through")
 	}
@@ -584,7 +624,7 @@ func TestGuardOutcome_GuardSetNone(t *testing.T) {
 
 func TestGuardOutcome_NilOutcome(t *testing.T) {
 	pipe := &Pipeline{guards: DefaultGuardChain()}
-	result := pipe.guardOutcome(Config{GuardSet: GuardSetFull}, nil)
+	result := pipe.guardOutcome(Config{GuardSet: GuardSetFull}, nil, nil)
 	if result != nil {
 		t.Error("nil outcome should return nil")
 	}
@@ -606,7 +646,25 @@ func TestStoreTrace_WithStore(t *testing.T) {
 	tr.BeginSpan("test")
 	tr.EndSpan("ok")
 	// Best-effort, should not panic even if pipeline_traces table exists.
-	pipe.storeTrace(context.Background(), tr, "s1", "m1", "api")
+	pipe.storeTrace(context.Background(), tr, "s1", "turn-1", "api")
+}
+
+func TestStoreTrace_PersistsAuthoritativeTurnID(t *testing.T) {
+	store := testutil.TempStore(t)
+	pipe := &Pipeline{store: store}
+	tr := NewTraceRecorder()
+	tr.BeginSpan("test")
+	tr.EndSpan("ok")
+
+	pipe.storeTrace(context.Background(), tr, "s1", "turn-123", "api")
+
+	var got string
+	if err := store.QueryRowContext(context.Background(), `SELECT turn_id FROM pipeline_traces ORDER BY created_at DESC LIMIT 1`).Scan(&got); err != nil {
+		t.Fatalf("select pipeline trace turn_id: %v", err)
+	}
+	if got != "turn-123" {
+		t.Fatalf("pipeline_traces.turn_id = %q, want %q", got, "turn-123")
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -709,6 +767,17 @@ func (s *stubExec) RunLoop(_ context.Context, sess *Session) (string, int, error
 	return s.response, 1, nil
 }
 
+type countingExec struct {
+	response string
+	calls    int
+}
+
+func (c *countingExec) RunLoop(_ context.Context, sess *Session) (string, int, error) {
+	c.calls++
+	sess.AddAssistantMessage(c.response, nil)
+	return c.response, 1, nil
+}
+
 type errorExec struct{}
 
 func (e *errorExec) RunLoop(_ context.Context, _ *Session) (string, int, error) {
@@ -727,6 +796,35 @@ func TestRunStandardInference_ExecutorError(t *testing.T) {
 	_, err := pipe.runStandardInference(context.Background(), Config{}, sess, "m1", "t1")
 	if err == nil {
 		t.Error("should propagate executor error")
+	}
+}
+
+func TestRunStandardInference_NoEscalateSkipsGuardRetries(t *testing.T) {
+	store := testutil.TempStore(t)
+	bgw := core.NewBackgroundWorker(4)
+	exec := &countingExec{response: "Ready."}
+	pipe := &Pipeline{
+		store:    store,
+		executor: exec,
+		guards:   DefaultGuardChain(),
+		bgWorker: bgw,
+	}
+	sess := NewSession("s1", "a1", "Bot")
+	sess.AddAssistantMessage("Ready.", nil)
+	sess.AddUserMessage("Reply with just: ready")
+
+	outcome, err := pipe.runStandardInference(context.Background(), Config{
+		GuardSet:   GuardSetFull,
+		NoEscalate: true,
+	}, sess, "m1", "t1")
+	if err != nil {
+		t.Fatalf("runStandardInference: %v", err)
+	}
+	if exec.calls != 1 {
+		t.Fatalf("executor calls = %d, want 1 when no-escalate disables guard retries", exec.calls)
+	}
+	if outcome.Content != "Ready." {
+		t.Fatalf("content = %q, want raw response", outcome.Content)
 	}
 }
 

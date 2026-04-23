@@ -25,7 +25,8 @@ func ListObservabilityTraces(store *db.Store) http.HandlerFunc {
 		for rows.Next() {
 			var id, turnID, sessionID, channel, stagesJSON, createdAt string
 			var totalMs int64
-			if err := rows.Scan(&id, &turnID, &sessionID, &channel, &totalMs, &stagesJSON, &createdAt); err != nil {
+			var hasDiagnostics int
+			if err := rows.Scan(&id, &turnID, &sessionID, &channel, &totalMs, &stagesJSON, &createdAt, &hasDiagnostics); err != nil {
 				writeError(w, http.StatusInternalServerError, "failed to read observability trace row")
 				return
 			}
@@ -36,6 +37,7 @@ func ListObservabilityTraces(store *db.Store) http.HandlerFunc {
 			traces = append(traces, map[string]any{
 				"id": id, "turn_id": turnID, "session_id": sessionID,
 				"channel": channel, "total_ms": totalMs, "stages": stages, "created_at": createdAt,
+				"has_diagnostics": hasDiagnostics != 0,
 			})
 		}
 
@@ -46,7 +48,13 @@ func ListObservabilityTraces(store *db.Store) http.HandlerFunc {
 		}
 
 		writeJSON(w, http.StatusOK, map[string]any{
-			"traces": traces, "total": total, "limit": limit, "offset": offset,
+			"route_family": "observability_traces",
+			"artifact":     "trace_observability_page",
+			"fidelity":     "observability_page",
+			"traces":       traces,
+			"total":        total,
+			"limit":        limit,
+			"offset":       offset,
 		})
 	}
 }
@@ -72,9 +80,16 @@ func TraceWaterfall(store *db.Store) http.HandlerFunc {
 		}
 
 		writeJSON(w, http.StatusOK, map[string]any{
-			"id": traceID, "turn_id": turnID, "channel": channel,
-			"total_ms": totalMs, "stages": stages, "created_at": createdAt,
-			"format": "waterfall",
+			"route_family": "observability_traces",
+			"artifact":     "trace_waterfall",
+			"fidelity":     "waterfall",
+			"id":           traceID,
+			"turn_id":      turnID,
+			"channel":      channel,
+			"total_ms":     totalMs,
+			"stages":       stages,
+			"created_at":   createdAt,
+			"format":       "waterfall",
 		})
 	}
 }

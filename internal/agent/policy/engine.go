@@ -3,6 +3,8 @@ package policy
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -10,6 +12,7 @@ import (
 
 	"roboticus/internal/agent/tools"
 	"roboticus/internal/core"
+	"roboticus/internal/security"
 )
 
 // DecisionResult holds the outcome of a policy evaluation.
@@ -253,8 +256,10 @@ func (r *pathProtectionRule) Priority() int { return 4 }
 
 var protectedPatterns = []string{
 	".env", ".ssh", "/etc/", "wallet.json", "roboticus.toml",
-	"roboticus.toml", "credentials", "secret", "private_key",
+	"config-overrides.toml",
 }
+
+var tildePathPattern = regexp.MustCompile(`(^|[^A-Za-z0-9_])~(?:/|$)`)
 
 func (r *pathProtectionRule) Evaluate(req *ToolCallRequest, _ *tools.Registry) DecisionResult {
 	lower := strings.ToLower(req.Arguments)
@@ -272,6 +277,10 @@ func (r *pathProtectionRule) Evaluate(req *ToolCallRequest, _ *tools.Registry) D
 
 	// Workspace-only enforcement: deny absolute paths not in allowed list and not under /tmp.
 	if r.workspaceOnly {
+		if tildePathPattern.MatchString(req.Arguments) {
+			return Deny("path_protection", "home-directory shortcuts (~) are not allowed in workspace_only mode")
+		}
+
 		// Extract potential file paths from arguments.
 		var args map[string]json.RawMessage
 		if err := json.Unmarshal([]byte(req.Arguments), &args); err == nil {
@@ -291,9 +300,11 @@ func (r *pathProtectionRule) Evaluate(req *ToolCallRequest, _ *tools.Registry) D
 				if strings.HasPrefix(pathVal, "/tmp") || strings.HasPrefix(pathVal, "/tmp/") {
 					continue // /tmp is always allowed
 				}
+				cleanPath := filepath.Clean(pathVal)
 				allowed := false
 				for _, ap := range r.allowedPaths {
-					if strings.HasPrefix(pathVal, ap) {
+					cleanAllowed := filepath.Clean(ap)
+					if cleanPath == cleanAllowed || strings.HasPrefix(cleanPath, cleanAllowed+string(filepath.Separator)) {
 						allowed = true
 						break
 					}
@@ -472,29 +483,6 @@ var configWriteTools = map[string]bool{
 	"run_script": true,
 }
 
-// protectedConfigFiles are filenames that contain critical configuration.
-var protectedConfigFiles = []string{
-	"roboticus.toml",
-	"config-overrides.toml",
-}
-
-// protectedConfigFields are field names/patterns that must not be written via tools.
-// Exact matches and suffix patterns (starting with *) are supported.
-var protectedConfigFields = []string{
-	"scope_mode",
-	"api_key",
-	"admin_token",
-	"keystore",
-	"trusted_proxy",
-	"private_key",
-}
-
-// protectedConfigSuffixes are suffix patterns for fields like *_secret, *_token.
-var protectedConfigSuffixes = []string{
-	"_secret",
-	"_token",
-}
-
 func (r *configProtectionRule) Evaluate(req *ToolCallRequest, _ *tools.Registry) DecisionResult {
 	if !configWriteTools[req.ToolName] {
 		return Allow()
@@ -503,29 +491,13 @@ func (r *configProtectionRule) Evaluate(req *ToolCallRequest, _ *tools.Registry)
 	lowerArgs := strings.ToLower(req.Arguments)
 
 	// Check if arguments reference a config file.
-	referencesConfig := false
-	for _, cf := range protectedConfigFiles {
-		if strings.Contains(lowerArgs, cf) {
-			referencesConfig = true
-			break
-		}
-	}
-	if !referencesConfig {
+	if !security.ReferencesProtectedConfigFile(lowerArgs) {
 		return Allow()
 	}
 
-	// Check if arguments contain a protected field.
-	for _, field := range protectedConfigFields {
-		if strings.Contains(lowerArgs, field) {
-			return Deny("config_protection",
-				fmt.Sprintf("write to config file references protected field %q", field))
-		}
-	}
-	for _, suffix := range protectedConfigSuffixes {
-		if strings.Contains(lowerArgs, suffix) {
-			return Deny("config_protection",
-				fmt.Sprintf("write to config file references protected field pattern %q", "*"+suffix))
-		}
+	if pattern, matched := security.MatchProtectedConfigPattern(lowerArgs); matched {
+		return Deny("config_protection",
+			fmt.Sprintf("write to config file references protected field %q", pattern))
 	}
 
 	return Allow()

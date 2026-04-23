@@ -212,12 +212,25 @@ func TestListObservabilityTraces_HappyPath(t *testing.T) {
 
 	_, _ = store.ExecContext(bgCtx, `INSERT INTO sessions (id, agent_id, scope_key) VALUES ('s1', 'a1', 'test')`)
 	_, _ = store.ExecContext(bgCtx, `INSERT INTO turns (id, session_id) VALUES ('t1', 's1')`)
+	_, _ = store.ExecContext(bgCtx, `INSERT INTO turns (id, session_id) VALUES ('t2', 's1')`)
 	_, _ = store.ExecContext(bgCtx,
 		`INSERT INTO pipeline_traces (id, turn_id, session_id, channel, total_ms, stages_json, created_at)
 		 VALUES ('pt1', 't1', 's1', 'api', 200, '[]', datetime('now'))`)
 	_, _ = store.ExecContext(bgCtx,
 		`INSERT INTO pipeline_traces (id, turn_id, session_id, channel, total_ms, stages_json, created_at)
-		 VALUES ('pt2', 't1', 's1', 'discord', 350, '[]', datetime('now'))`)
+		 VALUES ('pt2', 't2', 's1', 'discord', 350, '[]', datetime('now'))`)
+	_, _ = store.ExecContext(bgCtx,
+		`INSERT INTO turn_diagnostics (
+			id, turn_id, session_id, channel, status, total_ms,
+			inference_attempts, fallback_count, tool_call_count, guard_retry_count, verifier_retry_count,
+			request_messages, request_tools, request_approx_tokens, context_pressure, resource_pressure,
+			primary_diagnosis, diagnosis_confidence, user_narrative, operator_narrative, recommendations_json
+		) VALUES (
+			'd1', 't1', 's1', 'api', 'ok', 200,
+			1, 0, 0, 0, 0,
+			2, 0, 128, 'low', 'low',
+			'healthy', 0.95, 'Diagnostics available.', 'Canonical diagnostics were persisted.', '[]'
+		)`)
 
 	handler := ListObservabilityTraces(store)
 	req := httptest.NewRequest("GET", "/api/observability/traces?limit=10&offset=0", nil)
@@ -228,9 +241,29 @@ func TestListObservabilityTraces_HappyPath(t *testing.T) {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
 	body := jsonBody(t, rec)
+	if body["route_family"] != "observability_traces" {
+		t.Fatalf("route_family = %v, want observability_traces", body["route_family"])
+	}
+	if body["artifact"] != "trace_observability_page" {
+		t.Fatalf("artifact = %v, want trace_observability_page", body["artifact"])
+	}
+	if body["fidelity"] != "observability_page" {
+		t.Fatalf("fidelity = %v, want observability_page", body["fidelity"])
+	}
 	traces := body["traces"].([]any)
 	if len(traces) != 2 {
 		t.Fatalf("got %d traces, want 2", len(traces))
+	}
+	traceByTurn := map[string]map[string]any{}
+	for _, raw := range traces {
+		entry := raw.(map[string]any)
+		traceByTurn[entry["turn_id"].(string)] = entry
+	}
+	if traceByTurn["t1"]["has_diagnostics"] != true {
+		t.Fatalf("t1 has_diagnostics = %v, want true", traceByTurn["t1"]["has_diagnostics"])
+	}
+	if traceByTurn["t2"]["has_diagnostics"] != false {
+		t.Fatalf("t2 has_diagnostics = %v, want false", traceByTurn["t2"]["has_diagnostics"])
 	}
 	if body["total"].(float64) != 2 {
 		t.Errorf("total = %v, want 2", body["total"])
@@ -261,6 +294,9 @@ func TestListObservabilityTraces_Pagination(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	body := jsonBody(t, rec)
+	if body["route_family"] != "observability_traces" {
+		t.Fatalf("route_family = %v, want observability_traces", body["route_family"])
+	}
 	traces := body["traces"].([]any)
 	if len(traces) != 1 {
 		t.Fatalf("got %d traces, want 1 (pagination)", len(traces))
@@ -311,6 +347,15 @@ func TestTraceWaterfall_HappyPath(t *testing.T) {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
 	body := jsonBody(t, rec)
+	if body["route_family"] != "observability_traces" {
+		t.Fatalf("route_family = %v, want observability_traces", body["route_family"])
+	}
+	if body["artifact"] != "trace_waterfall" {
+		t.Fatalf("artifact = %v, want trace_waterfall", body["artifact"])
+	}
+	if body["fidelity"] != "waterfall" {
+		t.Fatalf("fidelity = %v, want waterfall", body["fidelity"])
+	}
 	if body["id"] != "pt1" {
 		t.Errorf("id = %v, want pt1", body["id"])
 	}
@@ -351,6 +396,9 @@ func TestTraceWaterfall_InvalidJSON(t *testing.T) {
 		t.Fatalf("status = %d, want 200 (invalid JSON falls back to empty array)", rec.Code)
 	}
 	body := jsonBody(t, rec)
+	if body["route_family"] != "observability_traces" {
+		t.Fatalf("route_family = %v, want observability_traces", body["route_family"])
+	}
 	stages, ok := body["stages"].([]any)
 	if !ok {
 		t.Fatal("stages should be an empty array on invalid JSON")

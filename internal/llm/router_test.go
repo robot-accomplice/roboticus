@@ -84,3 +84,28 @@ func TestRouter_FallsUpward(t *testing.T) {
 		t.Errorf("should fall upward to available model, got %s", selected.Model)
 	}
 }
+
+func TestFilterProfilesForCapabilityEvidence_ToolBearingPrefersObservedToolUse(t *testing.T) {
+	profiles := []ModelProfile{
+		{Model: "under-evidenced", CapabilityEvidence: "unproven_for_intent"},
+		{Model: "observed", CapabilityEvidence: "observed_for_intent"},
+		{Model: "unexercised", CapabilityEvidence: "unexercised"},
+	}
+	req := &Request{Tools: []ToolDef{{Function: ToolFuncDef{Name: "list_tools"}}}}
+	got := filterProfilesForCapabilityEvidence(profiles, req)
+	if len(got) != 1 || got[0].Model != "observed" {
+		t.Fatalf("filtered profiles = %#v, want only observed candidate", got)
+	}
+}
+
+func TestFilterProfilesForCapabilityEvidence_NoObservedToolUseKeepsCandidates(t *testing.T) {
+	profiles := []ModelProfile{
+		{Model: "under-evidenced", CapabilityEvidence: "unproven_for_intent"},
+		{Model: "unexercised", CapabilityEvidence: "unexercised"},
+	}
+	req := &Request{Tools: []ToolDef{{Function: ToolFuncDef{Name: "list_tools"}}}}
+	got := filterProfilesForCapabilityEvidence(profiles, req)
+	if len(got) != len(profiles) {
+		t.Fatalf("len(filtered) = %d, want %d", len(got), len(profiles))
+	}
+}

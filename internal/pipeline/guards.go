@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"fmt"
 	"strings"
 )
 
@@ -48,6 +49,25 @@ type ApplyResult struct {
 
 // Len returns the number of guards in the chain.
 func (gc *GuardChain) Len() int { return len(gc.guards) }
+
+// GuardNamesForTest exposes the runtime guard names for fitness and parity
+// tests without exposing the concrete guard slice to production callers.
+func (gc *GuardChain) GuardNamesForTest() []string {
+	names := make([]string, 0, len(gc.guards))
+	for _, g := range gc.guards {
+		names = append(names, g.Name())
+	}
+	return names
+}
+
+// GuardTypesForTest exposes the concrete guard type names for fitness tests.
+func (gc *GuardChain) GuardTypesForTest() []string {
+	types := make([]string, 0, len(gc.guards))
+	for _, g := range gc.guards {
+		types = append(types, fmt.Sprintf("%T", g))
+	}
+	return types
+}
 
 // Apply runs all guards on the content. Returns the final result.
 func (gc *GuardChain) Apply(content string) string {
@@ -264,59 +284,17 @@ func DefaultGuardChain() *GuardChain {
 	return FullGuardChain()
 }
 
-// FullGuardChain returns all guards for standard inference.
+// FullGuardChain returns the registry-authoritative full preset.
 func FullGuardChain() *GuardChain {
-	return NewGuardChain(
-		// Core guards.
-		&EmptyResponseGuard{},
-		NewContentClassificationGuard(),
-		NewRepetitionGuard(),
-		NewSystemPromptLeakGuard(),
-		NewInternalMarkerGuard(),
-		// Behavioral guards.
-		&SubagentClaimGuard{},
-		&TaskDeferralGuard{},
-		&InternalJargonGuard{},
-		&DeclaredActionGuard{},
-		&PerspectiveGuard{},      // Wave 8, #78
-		&InternalProtocolGuard{}, // Wave 8, #79
-		// Quality guards.
-		&PlaceholderContentGuard{},
-		&LowValueParrotingGuard{},
-		&NonRepetitionGuardV2{},
-		&OutputContractGuard{},
-		&UserEchoGuard{},
-		// Truthfulness guards.
-		&ModelIdentityTruthGuard{},
-		&CurrentEventsTruthGuard{},
-		&ExecutionTruthGuard{},
-		&ExecutionBlockGuard{},
-		&DelegationMetadataGuard{},
-		&FilesystemDenialGuard{},
-		&FinancialActionTruthGuard{},
-		&PersonalityIntegrityGuard{},
-		&ActionVerificationGuard{}, // Wave 8, #76
-		&LiteraryQuoteRetryGuard{}, // Wave 8, #77
-		// Protection guards.
-		&ConfigProtectionGuard{},
-	)
+	return NewDefaultGuardRegistry().Chain(GuardSetFull)
 }
 
-// StreamGuardChain returns a lightweight chain for SSE streaming.
-// Matches Rust's 6-guard streaming set: no retry-capable guards.
+// StreamGuardChain returns the registry-authoritative streaming preset.
 func StreamGuardChain() *GuardChain {
-	return NewGuardChain(
-		&EmptyResponseGuard{},
-		&ExecutionTruthGuard{},
-		&TaskDeferralGuard{},
-		&ModelIdentityTruthGuard{},
-		&InternalJargonGuard{},
-		&NonRepetitionGuardV2{},
-	)
+	return NewDefaultGuardRegistry().Chain(GuardSetStream)
 }
 
-// CachedGuardChain returns the guard chain for cached responses.
-// Matches Rust's cached guard set (same as Full).
+// CachedGuardChain returns the registry-authoritative cached preset.
 func CachedGuardChain() *GuardChain {
-	return FullGuardChain()
+	return NewDefaultGuardRegistry().Chain(GuardSetCached)
 }

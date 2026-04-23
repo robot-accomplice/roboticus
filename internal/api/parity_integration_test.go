@@ -58,7 +58,6 @@ func parityServer(t *testing.T) (*httptest.Server, *db.Store) {
 		LLM:       llmSvc,
 		Injection: agent.NewInjectionDetector(),
 		Executor:  &parityExecutor{},
-		Guards:    pipeline.DefaultGuardChain(),
 	})
 
 	cfgVal := core.DefaultConfig()

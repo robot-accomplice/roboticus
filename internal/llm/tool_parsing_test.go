@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -81,6 +82,20 @@ func TestParseToolCallsFromText_ShorthandName(t *testing.T) {
 	}
 	if calls[0].Function.Name != "bash" {
 		t.Errorf("name = %q, want bash", calls[0].Function.Name)
+	}
+}
+
+func TestStripToolCallsFromText_RemovesEmbeddedJSON(t *testing.T) {
+	content := `I'll count the files.
+{"tool_call": {"name": "bash", "params": {"command": "find . -type f | wc -l"}}}
+Then I'll answer with just the number.`
+
+	stripped := StripToolCallsFromText(content)
+	if strings.Contains(stripped, `"tool_call"`) {
+		t.Fatalf("stripped content still contains tool call JSON: %q", stripped)
+	}
+	if stripped != "I'll count the files.\nThen I'll answer with just the number." {
+		t.Fatalf("unexpected stripped content: %q", stripped)
 	}
 }
 

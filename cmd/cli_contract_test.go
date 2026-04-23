@@ -124,10 +124,12 @@ func TestCLI_SubcommandSets(t *testing.T) {
 		{"schedule", []string{"list", "create", "delete", "run", "history"}},
 		{"sessions", []string{"list", "show", "delete", "export", "create"}},
 		{"memory", []string{"working", "episodic", "semantic", "search", "stats"}},
-		{"models", []string{"list", "diagnostics", "scan", "exercise", "suggest", "reset", "baseline"}},
+		// v1.0.6: `baseline` consolidated into `exercise` — see
+		// cmd/models/models.go modelsExerciseCmd docstring.
+		{"models", []string{"list", "diagnostics", "scan", "exercise", "suggest", "reset"}},
 		{"config", []string{"show", "get", "validate"}},
 		{"auth", []string{"status", "login", "logout"}},
-		{"mcp", []string{"list", "connect", "disconnect"}},
+		{"mcp", []string{"list", "connect", "disconnect", "validate-sse"}},
 		{"circuit", []string{"status", "reset"}},
 		{"channels", []string{"list", "test", "dead-letter"}},
 		{"profile", []string{"list", "create", "switch", "delete"}},

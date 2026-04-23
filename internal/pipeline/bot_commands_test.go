@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"roboticus/internal/core"
+	"roboticus/testutil"
 )
 
 func TestBotCommandHandler_Match(t *testing.T) {
@@ -21,8 +22,8 @@ func TestBotCommandHandler_Match(t *testing.T) {
 		{"status command", "/status", true, "online"},
 		{"tools command", "/tools", true, "tools"},
 		{"skills command", "/skills", true, "skills"},
-		{"model command", "/model", true, ""},  // llmSvc nil — just check it matches
-		{"models command", "/models", true, ""}, // llmSvc nil — just check it matches
+		{"model command", "/model", true, ""},     // llmSvc nil — just check it matches
+		{"models command", "/models", true, ""},   // llmSvc nil — just check it matches
 		{"breaker command", "/breaker", true, ""}, // llmSvc nil — just check it matches
 		{"retry command", "/retry", true, "no previous"},
 		{"whoami command", "/whoami", true, "session"},
@@ -92,6 +93,49 @@ func TestBotCommand_BotNameStripping(t *testing.T) {
 				t.Errorf("matched = %v, want %v for %q", matched, tt.wantMatch, tt.input)
 			}
 		})
+	}
+}
+
+func TestBotCommand_Status_UsesTreasuryStateUSDCBalance(t *testing.T) {
+	store := testutil.TempStore(t)
+	if _, err := store.ExecContext(context.Background(),
+		`INSERT INTO treasury_state (id, usdc_balance, native_balance, atoken_balance, survival_tier, updated_at)
+		 VALUES (1, 42.50, 1.25, 7.00, 'stable', datetime('now'))`); err != nil {
+		t.Fatalf("seed treasury_state: %v", err)
+	}
+
+	handler := NewBotCommandHandler(nil, store)
+	session := NewSession("s1", "agent1", "TestBot")
+	result, matched := handler.TryHandle(context.Background(), "/status", session)
+	if !matched {
+		t.Fatal("/status should match")
+	}
+	if !strings.Contains(result.Content, "Wallet: $42.50") {
+		t.Fatalf("status content missing wallet line: %s", result.Content)
+	}
+}
+
+func TestBotCommand_Status_UsesAuthoritativeCronTimestamp(t *testing.T) {
+	store := testutil.TempStore(t)
+	if _, err := store.ExecContext(context.Background(),
+		`INSERT INTO cron_jobs (id, name, agent_id, schedule_kind, schedule_expr, payload_json, enabled)
+		 VALUES ('job1', 'Job 1', 'agent1', 'cron', '* * * * *', '{}', 1)`); err != nil {
+		t.Fatalf("seed cron job: %v", err)
+	}
+	if _, err := store.ExecContext(context.Background(),
+		`INSERT INTO cron_runs (job_id, status, duration_ms, error_msg, timestamp)
+		 VALUES ('job1', 'failed', 10, 'boom', datetime('now'))`); err != nil {
+		t.Fatalf("seed cron run: %v", err)
+	}
+
+	handler := NewBotCommandHandler(nil, store)
+	session := NewSession("s1", "agent1", "TestBot")
+	result, matched := handler.TryHandle(context.Background(), "/status", session)
+	if !matched {
+		t.Fatal("/status should match")
+	}
+	if !strings.Contains(result.Content, "Cron: 1 jobs (1 failed/24h)") {
+		t.Fatalf("status content missing cron line: %s", result.Content)
 	}
 }
 

@@ -1,10 +1,10 @@
 package admin
 
 import (
-	"roboticus/cmd/internal/cmdutil"
 	"bufio"
 	"fmt"
 	"net/http"
+	"roboticus/cmd/internal/cmdutil"
 
 	"github.com/spf13/cobra"
 )
@@ -68,4 +68,5 @@ func followLogs(basePath string) error {
 func init() {
 	logsCmd.Flags().Int("lines", 50, "number of log lines to fetch")
 	logsCmd.Flags().String("level", "", "filter by log level (debug, info, warn, error)")
-	logsCmd.Flags().Bool("follow", false, "follow log output in real time")}
+	logsCmd.Flags().Bool("follow", false, "follow log output in real time")
+}

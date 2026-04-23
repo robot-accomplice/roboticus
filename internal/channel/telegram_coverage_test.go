@@ -45,7 +45,7 @@ func TestTelegramProcessWebhook(t *testing.T) {
 	}{
 		{
 			name:    "valid message from allowed chat",
-			payload: `{"update_id":1,"message":{"message_id":42,"from":{"id":99,"username":"bob"},"chat":{"id":111},"date":1700000000,"text":"hello"}}`,
+			payload: `{"update_id":1,"message":{"message_id":42,"from":{"id":99,"username":"bob"},"chat":{"id":111,"type":"private"},"date":1700000000,"text":"hello"}}`,
 			allowed: []int64{111},
 			wantTxt: "hello",
 		},
@@ -92,6 +92,12 @@ func TestTelegramProcessWebhook(t *testing.T) {
 			}
 			if msg.Platform != "telegram" {
 				t.Fatalf("expected platform telegram, got %s", msg.Platform)
+			}
+			if got := msg.Metadata["is_group"]; got != false {
+				t.Fatalf("is_group = %v, want false", got)
+			}
+			if got := msg.Metadata["sender_username"]; got != "bob" {
+				t.Fatalf("sender_username = %v, want bob", got)
 			}
 		})
 	}

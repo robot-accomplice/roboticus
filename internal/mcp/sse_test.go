@@ -510,3 +510,106 @@ func TestConnectSSE_InitializeFailure(t *testing.T) {
 		t.Errorf("error = %q, should mention initialize failure", err.Error())
 	}
 }
+
+func TestSSETransport_EndpointEventOverridesPostURL(t *testing.T) {
+	var postedPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			flusher := w.(http.Flusher)
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprint(w, "event: endpoint\ndata: /messages\n\n")
+			flusher.Flush()
+			<-r.Context().Done()
+		case http.MethodPost:
+			postedPath = r.URL.Path
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	transport, err := NewSSETransportWithConfig(ctx, McpServerConfig{
+		Name:      "endpoint-test",
+		Transport: "sse",
+		URL:       srv.URL,
+	})
+	if err != nil {
+		t.Fatalf("NewSSETransportWithConfig: %v", err)
+	}
+	defer func() { _ = transport.Close() }()
+
+	time.Sleep(100 * time.Millisecond)
+	if err := transport.Send(ctx, json.RawMessage(`{"jsonrpc":"2.0","id":1}`)); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if postedPath != "/messages" {
+		t.Fatalf("posted path = %q, want /messages", postedPath)
+	}
+	if got := transport.MessageURL(); !strings.HasSuffix(got, "/messages") {
+		t.Fatalf("message url = %q, want suffix /messages", got)
+	}
+}
+
+func TestSSETransport_ConfiguredHeadersAppliedToGetAndPost(t *testing.T) {
+	var getAuth, postAuth string
+	var responseCh = make(chan json.RawMessage, 2)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			getAuth = r.Header.Get("Authorization")
+			flusher := w.(http.Flusher)
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(http.StatusOK)
+			flusher.Flush()
+			for {
+				select {
+				case msg := <-responseCh:
+					_, _ = fmt.Fprintf(w, "data: %s\n\n", string(msg))
+					flusher.Flush()
+				case <-r.Context().Done():
+					return
+				}
+			}
+		case http.MethodPost:
+			postAuth = r.Header.Get("Authorization")
+			body, _ := io.ReadAll(r.Body)
+			var req map[string]any
+			_ = json.Unmarshal(body, &req)
+			id, _ := req["id"].(float64)
+			respBytes, _ := json.Marshal(map[string]any{
+				"jsonrpc": "2.0",
+				"id":      id,
+				"result":  map[string]any{},
+			})
+			responseCh <- json.RawMessage(respBytes)
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	conn, err := ConnectSSEWithConfig(ctx, McpServerConfig{
+		Name:      "auth-sse",
+		Transport: "sse",
+		URL:       srv.URL,
+		Headers:   map[string]string{"Authorization": "Bearer token-123"},
+	})
+	if err != nil {
+		t.Fatalf("ConnectSSEWithConfig: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	if getAuth != "Bearer token-123" {
+		t.Fatalf("GET auth header = %q", getAuth)
+	}
+	if postAuth != "Bearer token-123" {
+		t.Fatalf("POST auth header = %q", postAuth)
+	}
+}

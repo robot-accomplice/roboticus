@@ -19,6 +19,9 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Database.Path == "" {
 		t.Error("default database path should not be empty")
 	}
+	if cfg.Cache.PromptCompression {
+		t.Error("prompt compression should be disabled by default")
+	}
 }
 
 func TestConfigValidate(t *testing.T) {

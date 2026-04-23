@@ -12,6 +12,7 @@ import (
 	agentmemory "roboticus/internal/agent/memory"
 	"roboticus/internal/core"
 	"roboticus/internal/db"
+	"roboticus/internal/llm"
 )
 
 // PostTurnIngest runs background work after a turn completes.
@@ -53,13 +54,24 @@ func (p *Pipeline) PostTurnIngest(ctx context.Context, session *Session, turnID 
 		// 3. Observer subagent dispatch (Rust: role="observer" receives turn summary).
 		p.dispatchToObservers(bgCtx, sessionID, turnID, userContent, assistantContent)
 
-		// 4. Reflection: generate structured episode summary (agentic architecture Layer 16).
-		p.reflectOnTurn(bgCtx, userContent, session)
+		// 4. Executive state growth: record verified conclusions for answered
+		// subgoals that have evidence support, open unresolved questions for
+		// subgoals the turn could not close, and resolve any prior unresolved
+		// questions the agent has now answered.
+		growth := p.growExecutiveState(bgCtx, session, assistantContent)
 
-		// 5. Procedure detection: extract tool sequences and persist learned skills.
-		p.detectAndPersistProcedures(bgCtx, session)
+		// 5. Reflection: generate structured episode summary (agentic
+		// architecture Layer 16). Reflection runs after executive growth so the
+		// stored episodic artifact can record what continuity state this turn
+		// actually changed instead of inferring it later from separate stores.
+		p.reflectOnTurn(bgCtx, turnID, userContent, session, growth)
 
-		// 6. Log the turn pair for analytics/debugging.
+		// 6. Procedure detection/promotion: after the turn has already been
+		// captured as reusable experience, promote repeated multi-step tool
+		// chains into explicit workflow knowledge when warranted.
+		p.detectAndPersistProcedures(bgCtx, turnID, session)
+
+		// 7. Log the turn pair for analytics/debugging.
 		if userContent != "" {
 			log.Trace().
 				Str("session", sessionID).
@@ -164,67 +176,598 @@ func (p *Pipeline) storeChunkEmbedding(ctx context.Context, sessionID, turnID, c
 
 // reflectOnTurn generates a structured episode summary and stores it as
 // episodic memory. Wires reflection.go into the post-turn pipeline.
-func (p *Pipeline) reflectOnTurn(ctx context.Context, userContent string, session *Session) {
+func (p *Pipeline) reflectOnTurn(ctx context.Context, turnID, userContent string, session *Session, growth ExecutiveGrowthResult) {
 	if p.store == nil || userContent == "" {
 		return
 	}
 
-	// Extract tool events from session messages.
-	// Track success/failure: a tool call is followed by a tool result message.
-	// If the result starts with error patterns, mark as failure.
-	var toolEvents []agentmemory.ToolEvent
-	msgs := session.Messages()
-	for i, msg := range msgs {
-		if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
-			for _, tc := range msg.ToolCalls {
-				success := true
-				// Look ahead for the tool result message.
-				if i+1 < len(msgs) && msgs[i+1].Role == "tool" {
-					result := strings.ToLower(msgs[i+1].Content)
-					if strings.HasPrefix(result, "error") || strings.HasPrefix(result, "failed") ||
-						strings.HasPrefix(result, `{"error`) {
-						success = false
-					}
-				}
-				toolEvents = append(toolEvents, agentmemory.ToolEvent{
-					ToolName: tc.Function.Name,
-					Success:  success,
-				})
-			}
-		}
+	toolEvents, errorMessages := p.loadReflectionToolEvents(ctx, turnID)
+	if len(toolEvents) == 0 {
+		toolEvents, errorMessages = inferReflectionToolEvents(session.Messages())
 	}
 
-	// Estimate turn duration from session timestamps.
-	var turnDuration time.Duration
-	if len(msgs) >= 2 {
-		// Use session's created_at as proxy (actual turn timing would require
-		// the turn record, which isn't available in the session struct).
-		turnDuration = 0 // TODO: wire actual turn start time from pipeline context
-	}
+	turnDuration := p.loadReflectionTurnDuration(ctx, turnID, toolEvents)
+	selectedModel, params := p.loadReflectionInferenceArtifacts(ctx, turnID)
+	turnStatus := p.loadReflectionTurnStatus(ctx, turnID)
 
-	summary := agentmemory.Reflect(userContent, toolEvents, turnDuration)
+	// Enriched reflection: pass evidence items and verifier outcome so the
+	// summary captures evidence refs, fix patterns, failed hypotheses, and
+	// a blended result-quality score.
+	verifyCtx := BuildVerificationContext(session)
+	verifyCtx.CertaintyClassifier = p.certaintyClass
+	verifyResult := VerifyResponse(session.LastAssistantContent(), verifyCtx)
+	summary := agentmemory.AnalyzeEpisode(agentmemory.EpisodeInput{
+		UserContent:         userContent,
+		AssistantAnswer:     session.LastAssistantContent(),
+		ToolEvents:          toolEvents,
+		EvidenceItems:       verifyCtx.EvidenceItems,
+		TurnStatus:          turnStatus,
+		VerifierPassed:      verifyResult.Passed,
+		ErrorMessages:       errorMessages,
+		Duration:            turnDuration,
+		ModelUsed:           selectedModel,
+		ReactTurns:          reflectionReactTurns(params),
+		GuardViolations:     reflectionGuardViolations(params),
+		GuardRetried:        params != nil && params.GuardRetried,
+		VerifiedRecorded:    growth.VerifiedRecorded,
+		QuestionsOpened:     growth.QuestionsOpened,
+		QuestionsResolved:   growth.QuestionsResolved,
+		AssumptionsRecorded: growth.AssumptionsRecorded,
+	})
 	if summary == nil {
 		return
 	}
 
 	// Store as episodic memory with high importance.
 	formatted := summary.FormatForStorage()
+	summaryJSON := summary.JSON()
 	_, err := p.store.ExecContext(ctx,
-		`INSERT INTO episodic_memory (id, classification, content, importance)
-		 VALUES (?, 'episode_summary', ?, 8)`,
-		db.NewID(), formatted)
+		`INSERT INTO episodic_memory (id, classification, content, content_json, importance)
+		 VALUES (?, 'episode_summary', ?, ?, 8)`,
+		db.NewID(), formatted, summaryJSON)
 	if err != nil {
 		log.Debug().Err(err).Msg("reflection: failed to store episode summary")
 	} else {
 		log.Debug().Str("outcome", summary.Outcome).Int("actions", len(summary.Actions)).
 			Msg("reflection: episode summary stored")
+		p.appendTurnDiagnosticEvent(ctx, turnID, "procedural_learning_captured", "ok",
+			"turn captured reusable procedural outcome evidence",
+			"The system recorded this turn as reusable experience for future tasks.",
+			map[string]any{
+				"outcome":                   summary.Outcome,
+				"pattern_count":             len(summary.OutcomePatterns),
+				"success_pattern_count":     countOutcomePatterns(summary.OutcomePatterns, "success"),
+				"failure_pattern_count":     countOutcomePatterns(summary.OutcomePatterns, "failure"),
+				"partial_pattern_count":     countOutcomePatterns(summary.OutcomePatterns, "partial"),
+				"promotion_state":           "captured_only",
+				"storage_target":            "episodic_memory.episode_summary",
+				"reusable_outcome_patterns": append([]string(nil), outcomePatternStrings(summary.OutcomePatterns)...),
+			},
+		)
 	}
+}
+
+func (p *Pipeline) loadReflectionTurnStatus(ctx context.Context, turnID string) string {
+	if p.store == nil || strings.TrimSpace(turnID) == "" {
+		return ""
+	}
+	var status string
+	if err := p.store.QueryRowContext(ctx,
+		`SELECT COALESCE(status, '')
+		   FROM turn_diagnostics
+		  WHERE turn_id = ?
+		  ORDER BY created_at DESC, rowid DESC
+		  LIMIT 1`,
+		turnID,
+	).Scan(&status); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(status)
+}
+
+func (p *Pipeline) loadReflectionToolEvents(ctx context.Context, turnID string) ([]agentmemory.ToolEvent, []string) {
+	if p.store == nil || strings.TrimSpace(turnID) == "" {
+		return nil, nil
+	}
+	rows, err := p.store.QueryContext(ctx,
+		`SELECT tool_name, status, COALESCE(output, ''), COALESCE(duration_ms, 0)
+		   FROM tool_calls
+		  WHERE turn_id = ?
+		  ORDER BY created_at ASC, rowid ASC`,
+		turnID,
+	)
+	if err != nil {
+		return nil, nil
+	}
+	defer func() { _ = rows.Close() }()
+
+	var toolEvents []agentmemory.ToolEvent
+	var errorMessages []string
+	for rows.Next() {
+		var name, status, output string
+		var durationMs int64
+		if err := rows.Scan(&name, &status, &output, &durationMs); err != nil {
+			continue
+		}
+		success := strings.EqualFold(strings.TrimSpace(status), "success")
+		if !success {
+			if msg := strings.TrimSpace(output); msg != "" {
+				errorMessages = append(errorMessages, msg)
+			}
+		}
+		toolEvents = append(toolEvents, agentmemory.ToolEvent{
+			ToolName: strings.TrimSpace(name),
+			Success:  success,
+			Duration: time.Duration(durationMs) * time.Millisecond,
+		})
+	}
+	return toolEvents, errorMessages
+}
+
+func inferReflectionToolEvents(msgs []llm.Message) ([]agentmemory.ToolEvent, []string) {
+	var toolEvents []agentmemory.ToolEvent
+	var errorMessages []string
+	for i, msg := range msgs {
+		if msg.Role != "assistant" || len(msg.ToolCalls) == 0 {
+			continue
+		}
+		for _, tc := range msg.ToolCalls {
+			success := true
+			if i+1 < len(msgs) && msgs[i+1].Role == "tool" {
+				result := strings.ToLower(msgs[i+1].Content)
+				if strings.HasPrefix(result, "error") || strings.HasPrefix(result, "failed") ||
+					strings.HasPrefix(result, `{"error`) {
+					success = false
+					errorMessages = append(errorMessages, strings.TrimSpace(msgs[i+1].Content))
+				}
+			}
+			toolEvents = append(toolEvents, agentmemory.ToolEvent{
+				ToolName: tc.Function.Name,
+				Success:  success,
+			})
+		}
+	}
+	return toolEvents, errorMessages
+}
+
+func (p *Pipeline) loadReflectionTurnDuration(ctx context.Context, turnID string, toolEvents []agentmemory.ToolEvent) time.Duration {
+	if p.store != nil && strings.TrimSpace(turnID) != "" {
+		var totalMs int64
+		err := p.store.QueryRowContext(ctx,
+			`SELECT total_ms
+			   FROM pipeline_traces
+			  WHERE turn_id = ?
+			  ORDER BY created_at DESC, rowid DESC
+			  LIMIT 1`,
+			turnID,
+		).Scan(&totalMs)
+		if err == nil && totalMs > 0 {
+			return time.Duration(totalMs) * time.Millisecond
+		}
+	}
+	var sum time.Duration
+	for _, te := range toolEvents {
+		sum += te.Duration
+	}
+	return sum
+}
+
+func (p *Pipeline) loadReflectionInferenceArtifacts(ctx context.Context, turnID string) (string, *InferenceParams) {
+	if p.store == nil || strings.TrimSpace(turnID) == "" {
+		return "", nil
+	}
+	var selectedModel string
+	_ = p.store.QueryRowContext(ctx,
+		`SELECT selected_model
+		   FROM model_selection_events
+		  WHERE turn_id = ?
+		  ORDER BY created_at DESC, rowid DESC
+		  LIMIT 1`,
+		turnID,
+	).Scan(&selectedModel)
+
+	var raw string
+	err := p.store.QueryRowContext(ctx,
+		`SELECT COALESCE(inference_params_json, '')
+		   FROM pipeline_traces
+		  WHERE turn_id = ?
+		  ORDER BY created_at DESC, rowid DESC
+		  LIMIT 1`,
+		turnID,
+	).Scan(&raw)
+	if err != nil || strings.TrimSpace(raw) == "" {
+		return strings.TrimSpace(selectedModel), nil
+	}
+	params, err := ParseInferenceParams(raw)
+	if err != nil {
+		return strings.TrimSpace(selectedModel), nil
+	}
+	if strings.TrimSpace(selectedModel) == "" {
+		if params.ModelActual != "" {
+			selectedModel = params.ModelActual
+		} else if params.ModelRequested != "" {
+			selectedModel = params.ModelRequested
+		}
+	}
+	return strings.TrimSpace(selectedModel), params
+}
+
+func reflectionReactTurns(params *InferenceParams) int {
+	if params == nil || params.ReactTurns < 0 {
+		return 0
+	}
+	return params.ReactTurns
+}
+
+func reflectionGuardViolations(params *InferenceParams) []string {
+	if params == nil || len(params.GuardViolations) == 0 {
+		return nil
+	}
+	return append([]string(nil), params.GuardViolations...)
+}
+
+// ExecutiveGrowthResult reports what the auto-grow pass wrote for a turn.
+type ExecutiveGrowthResult struct {
+	TaskID              string
+	VerifiedRecorded    int
+	QuestionsOpened     int
+	QuestionsResolved   int
+	AssumptionsRecorded int
+}
+
+// growExecutiveState converts the outcome of the current turn into structured
+// executive-state entries on the active task. Verified conclusions record the
+// subgoals that were both covered in the response and supported by retrieved
+// evidence. Unresolved questions record the subgoals the turn could not close.
+// Existing unresolved questions whose keywords now appear in the response are
+// resolved so the task graph stays current.
+//
+// Returns an ExecutiveGrowthResult so callers and tests can see what was
+// written. All writes are also surfaced via structured logs with the
+// "executive_write" category so operators can audit growth decisions even
+// though post-turn runs after the trace is closed.
+func (p *Pipeline) growExecutiveState(ctx context.Context, session *Session, assistantContent string) ExecutiveGrowthResult {
+	result := ExecutiveGrowthResult{}
+	if p.store == nil || session == nil {
+		return result
+	}
+	content := strings.TrimSpace(assistantContent)
+	if content == "" {
+		return result
+	}
+
+	vctx := BuildVerificationContext(session)
+	if len(vctx.Subgoals) == 0 {
+		return result
+	}
+	verifyResult := VerifyResponse(content, vctx)
+	executiveClosureBlocked := verificationBlocksExecutiveClosure(verifyResult)
+
+	mm := agentmemory.NewManager(agentmemory.DefaultConfig(), p.store)
+	state, err := mm.LoadExecutiveState(ctx, session.ID, "")
+	if err != nil {
+		log.Debug().Err(err).Msg("executive: load state for growth failed")
+		return result
+	}
+	if state == nil || state.TaskID == "" {
+		return result
+	}
+	taskID := state.TaskID
+	result.TaskID = taskID
+	lowerResponse := strings.ToLower(content)
+
+	// Record verified conclusions for subgoals that pass the same support
+	// checks the verifier uses to avoid writing premature conclusions.
+	for _, goal := range vctx.Subgoals {
+		trimmed := strings.TrimSpace(goal)
+		if trimmed == "" {
+			continue
+		}
+		if executiveClosureBlocked {
+			continue
+		}
+		if !verificationGoalCovered(trimmed, lowerResponse) {
+			continue
+		}
+		if len(vctx.EvidenceItems) == 0 {
+			continue
+		}
+		if verificationGoalAllowsPlanInference(trimmed) {
+			// Remediation / plan subgoals get their own check — do not record
+			// them as verified conclusions unless tool-grounded.
+			continue
+		}
+		if !verificationGoalSupportedByEvidence(trimmed, lowerResponse, vctx.EvidenceItems) {
+			continue
+		}
+		contentEntry := "subgoal verified: " + truncate(trimmed, 120)
+		exists, err := mm.HasExecutiveEntry(ctx, session.ID, taskID, agentmemory.EntryVerifiedConclusion, contentEntry)
+		if err != nil {
+			log.Debug().Err(err).Msg("executive: duplicate check failed")
+			continue
+		}
+		if exists {
+			continue
+		}
+		payload := agentmemory.VerifiedConclusionPayload{
+			SupportingEvidence: vctx.EvidenceItems,
+			VerifiedAt:         time.Now().UTC().Format(time.RFC3339),
+		}
+		if err := mm.RecordVerifiedConclusion(ctx, session.ID, taskID, contentEntry, payload); err != nil {
+			log.Debug().Err(err).Msg("executive: record verified conclusion failed")
+			continue
+		}
+		result.VerifiedRecorded++
+		log.Debug().
+			Str("session", session.ID).
+			Str("task", taskID).
+			Str("subgoal", trimmed).
+			Str("category", "executive_write").
+			Msg("executive verified_conclusion recorded")
+	}
+
+	// Record unresolved questions for subgoals that are not covered by the
+	// response or that the response explicitly punted on.
+	uncertaintyPresent := containsAny(lowerResponse,
+		"don't know", "do not know", "unclear", "not enough", "insufficient",
+		"need more", "i'm not certain", "we're not certain", "cannot confirm",
+	)
+	for _, goal := range vctx.Subgoals {
+		trimmed := strings.TrimSpace(goal)
+		if trimmed == "" {
+			continue
+		}
+		covered := verificationGoalCovered(trimmed, lowerResponse)
+		if covered && !uncertaintyPresent {
+			continue
+		}
+		contentEntry := "unresolved: " + truncate(trimmed, 120)
+		exists, err := mm.HasExecutiveEntry(ctx, session.ID, taskID, agentmemory.EntryUnresolvedQuestion, contentEntry)
+		if err != nil {
+			log.Debug().Err(err).Msg("executive: duplicate check failed")
+			continue
+		}
+		if exists {
+			continue
+		}
+		payload := agentmemory.UnresolvedQuestionPayload{
+			BlockingSubgoal: truncate(trimmed, 120),
+		}
+		if err := mm.RecordUnresolvedQuestion(ctx, session.ID, taskID, contentEntry, payload); err != nil {
+			log.Debug().Err(err).Msg("executive: record unresolved question failed")
+			continue
+		}
+		result.QuestionsOpened++
+		log.Debug().
+			Str("session", session.ID).
+			Str("task", taskID).
+			Str("subgoal", trimmed).
+			Str("category", "executive_write").
+			Msg("executive unresolved_question opened")
+	}
+
+	// Resolve any prior unresolved question whose keywords now appear in the
+	// response with enough confidence to consider it answered.
+	for _, q := range state.UnresolvedQuestions {
+		if executiveClosureBlocked {
+			continue
+		}
+		keywords := verificationKeywords(q.Content)
+		if len(keywords) == 0 {
+			continue
+		}
+		matches := 0
+		for _, kw := range keywords {
+			if strings.Contains(lowerResponse, kw) {
+				matches++
+			}
+		}
+		threshold := 1
+		if len(keywords) >= 4 {
+			threshold = 2
+		}
+		if matches < threshold {
+			continue
+		}
+		// Only resolve if the response is not itself uncertain about this item.
+		if uncertaintyPresent {
+			continue
+		}
+		if err := mm.ResolveQuestion(ctx, session.ID, taskID, q.ID); err != nil {
+			log.Debug().Err(err).Msg("executive: resolve question failed")
+			continue
+		}
+		result.QuestionsResolved++
+		log.Debug().
+			Str("session", session.ID).
+			Str("task", taskID).
+			Str("question", q.Content).
+			Str("category", "executive_write").
+			Msg("executive unresolved_question resolved")
+	}
+
+	// Record assumptions the agent named explicitly in the response.
+	for _, assumption := range extractAssumptions(content) {
+		trimmed := strings.TrimSpace(assumption)
+		if trimmed == "" {
+			continue
+		}
+		entryContent := "assumption: " + truncate(trimmed, 160)
+		exists, err := mm.HasExecutiveEntry(ctx, session.ID, taskID, agentmemory.EntryAssumption, entryContent)
+		if err != nil {
+			log.Debug().Err(err).Msg("executive: duplicate check failed for assumption")
+			continue
+		}
+		if exists {
+			continue
+		}
+		payload := agentmemory.AssumptionPayload{
+			Source:     "response",
+			Confidence: 0.5,
+		}
+		if err := mm.RecordAssumption(ctx, session.ID, taskID, entryContent, payload); err != nil {
+			log.Debug().Err(err).Msg("executive: record assumption failed")
+			continue
+		}
+		result.AssumptionsRecorded++
+		log.Debug().
+			Str("session", session.ID).
+			Str("task", taskID).
+			Str("assumption", trimmed).
+			Str("category", "executive_write").
+			Msg("executive assumption recorded")
+	}
+
+	// Record tool-output assumptions via the narrow allowlist harvester.
+	// Reference gate: only persist facts whose keywords actually appear in
+	// the final response, so observation alone does not flood working
+	// memory.
+	for _, fact := range FilterFactsReferencedByResponse(ExtractToolFacts(session), content) {
+		entryContent := "tool-fact: " + truncate(fact.Value, 160)
+		exists, err := mm.HasExecutiveEntry(ctx, session.ID, taskID, agentmemory.EntryAssumption, entryContent)
+		if err != nil {
+			log.Debug().Err(err).Msg("executive: duplicate check failed for tool fact")
+			continue
+		}
+		if exists {
+			continue
+		}
+		payload := agentmemory.AssumptionPayload{
+			Source:     string(fact.Source),
+			Confidence: fact.Confidence,
+		}
+		if err := mm.RecordAssumption(ctx, session.ID, taskID, entryContent, payload); err != nil {
+			log.Debug().Err(err).Msg("executive: record tool fact failed")
+			continue
+		}
+		result.AssumptionsRecorded++
+		log.Debug().
+			Str("session", session.ID).
+			Str("task", taskID).
+			Str("tool", fact.ToolName).
+			Str("source", string(fact.Source)).
+			Float64("confidence", fact.Confidence).
+			Str("category", "executive_write").
+			Msg("executive tool-fact recorded")
+	}
+
+	if result.VerifiedRecorded+result.QuestionsOpened+result.QuestionsResolved+result.AssumptionsRecorded > 0 {
+		log.Info().
+			Str("session", session.ID).
+			Str("task", taskID).
+			Int("verified", result.VerifiedRecorded).
+			Int("questions_opened", result.QuestionsOpened).
+			Int("questions_resolved", result.QuestionsResolved).
+			Int("assumptions", result.AssumptionsRecorded).
+			Str("category", "executive_growth").
+			Msg("executive state grown after turn")
+	}
+	return result
+}
+
+func verificationBlocksExecutiveClosure(result VerificationResult) bool {
+	if result.Passed {
+		return false
+	}
+	for _, issue := range result.Issues {
+		switch issue.Code {
+		case "unsupported_certainty",
+			"ignored_contradictions",
+			"freshness_overclaim",
+			"unsupported_subgoal",
+			"canonical_source_omitted",
+			"unresolved_contradicted_claim",
+			"weak_provenance_coverage",
+			"unsupported_absolute_claim",
+			"proof_obligation_unmet":
+			return true
+		}
+	}
+	return false
+}
+
+// assumptionMarkers are phrases that frequently precede an explicit
+// assumption in natural-language text. The scan is case-insensitive.
+var assumptionMarkers = []string{
+	"assuming that ",
+	"i'll assume ",
+	"i will assume ",
+	"i am assuming ",
+	"i'm assuming ",
+	"my assumption is that ",
+	"we assume ",
+	"assuming ",
+	"presuming that ",
+	"presumably, ",
+	"if we assume ",
+	"based on the assumption that ",
+}
+
+// extractAssumptions scans a response for explicit assumption markers and
+// returns the clause following each marker. Returned clauses are deduplicated
+// and trimmed to sentence-length content.
+func extractAssumptions(response string) []string {
+	lower := strings.ToLower(response)
+	seen := make(map[string]struct{})
+	var out []string
+	for _, marker := range assumptionMarkers {
+		start := 0
+		for {
+			idx := strings.Index(lower[start:], marker)
+			if idx < 0 {
+				break
+			}
+			abs := start + idx + len(marker)
+			if abs >= len(response) {
+				break
+			}
+			// Skip word-boundary false positives (e.g., "reassuming").
+			if idx > 0 {
+				prev := lower[start+idx-1]
+				if (prev >= 'a' && prev <= 'z') || (prev >= '0' && prev <= '9') {
+					start = abs
+					continue
+				}
+			}
+			clause := extractAssumptionClause(response[abs:])
+			if clause != "" {
+				key := strings.ToLower(strings.TrimSpace(clause))
+				if _, ok := seen[key]; !ok {
+					seen[key] = struct{}{}
+					out = append(out, clause)
+				}
+			}
+			start = abs
+		}
+	}
+	return out
+}
+
+// extractAssumptionClause returns the clause following an assumption marker,
+// bounded by sentence-ending punctuation or a newline.
+func extractAssumptionClause(rest string) string {
+	end := len(rest)
+	for i, r := range rest {
+		if r == '.' || r == '\n' || r == '!' || r == '?' || r == ';' {
+			end = i
+			break
+		}
+	}
+	clause := strings.TrimSpace(rest[:end])
+	if clause == "" || len(clause) < 4 {
+		return ""
+	}
+	// Avoid picking up purely modal leftovers like "we are" after "assuming".
+	if len(clause) > 200 {
+		clause = clause[:200]
+	}
+	return clause
 }
 
 // detectAndPersistProcedures uses LearningExtractor's sliding-window procedure
 // detection to find recurring multi-step tool sequences and persist them.
 // This wires the full agent.LearningExtractor into production.
-func (p *Pipeline) detectAndPersistProcedures(ctx context.Context, session *Session) {
+func (p *Pipeline) detectAndPersistProcedures(ctx context.Context, turnID string, session *Session) {
 	if p.store == nil {
 		return
 	}
@@ -266,7 +809,104 @@ func (p *Pipeline) detectAndPersistProcedures(ctx context.Context, session *Sess
 		agent.PersistLearnedSkill(ctx, p.store, proc)
 		log.Debug().Str("procedure", strings.Join(proc.Steps, "-")).Int("count", proc.Count).
 			Msg("procedure detection: persisted learned skill")
+
+		// Promote repeatedly-observed procedures into a reusable workflow
+		// record so procedural retrieval can surface them with steps and
+		// metadata instead of only a tool-stat rollup.
+		if proc.Count >= 3 {
+			p.promoteProcedureToWorkflow(ctx, turnID, session, proc)
+		}
 	}
+}
+
+// promoteProcedureToWorkflow records a detected tool chain as a reusable
+// workflow in procedural_memory. The session ID is written into the
+// success_evidence list so operators can audit which run confirmed the
+// promotion. Failures on the promotion path are logged but non-fatal — the
+// learned_skills row is already persisted by the time we get here.
+func (p *Pipeline) promoteProcedureToWorkflow(ctx context.Context, turnID string, session *Session, proc agent.Procedure) {
+	if p.store == nil {
+		return
+	}
+	name := strings.Join(proc.Steps, " → ")
+	if name == "" {
+		return
+	}
+
+	// Derive richer contextual metadata so the promoted workflow is more than
+	// a step list — operators need to see why this workflow is worth
+	// recalling and what has gone wrong with it historically.
+	errorModes := extractErrorModesFromSession(session, proc.Steps)
+	preconditions := extractPreconditionsFromSession(session)
+	contextTags := []string{"auto_promoted", "tool_chain"}
+	if intent := session.TaskIntent(); intent != "" {
+		contextTags = append(contextTags, "intent:"+intent)
+	}
+	if complexity := session.TaskComplexity(); complexity != "" {
+		contextTags = append(contextTags, "complexity:"+complexity)
+	}
+
+	mm := agentmemory.NewManager(agentmemory.DefaultConfig(), p.store)
+	if err := mm.RecordWorkflow(ctx, agentmemory.Workflow{
+		Name:          name,
+		Steps:         append([]string(nil), proc.Steps...),
+		Preconditions: preconditions,
+		ErrorModes:    errorModes,
+		Category:      agentmemory.WorkflowCategoryWorkflow,
+		Confidence:    0.75,
+		ContextTags:   contextTags,
+	}); err != nil {
+		log.Debug().Err(err).Str("workflow", name).Msg("workflow: promotion failed")
+		return
+	}
+	evidence := session.ID
+	if err := mm.RecordWorkflowSuccess(ctx, name, evidence); err != nil {
+		log.Debug().Err(err).Str("workflow", name).Msg("workflow: success record failed")
+		return
+	}
+	log.Info().
+		Str("workflow", name).
+		Int("count", proc.Count).
+		Str("session", session.ID).
+		Str("category", "workflow_promoted").
+		Msg("procedure promoted to workflow")
+	p.appendTurnDiagnosticEvent(ctx, turnID, "procedural_knowledge_promoted", "ok",
+		"reusable procedural knowledge promoted for future retrieval",
+		"The system promoted a repeated workflow into reusable knowledge for future tasks.",
+		map[string]any{
+			"workflow_name":    name,
+			"support_count":    proc.Count,
+			"steps":            append([]string(nil), proc.Steps...),
+			"promotion_target": "procedural_memory.workflow",
+		},
+	)
+}
+
+func countOutcomePatterns(patterns []agentmemory.EpisodeOutcomePattern, outcome string) int {
+	count := 0
+	for _, pattern := range patterns {
+		if strings.EqualFold(strings.TrimSpace(pattern.Outcome), outcome) {
+			count++
+		}
+	}
+	return count
+}
+
+func outcomePatternStrings(patterns []agentmemory.EpisodeOutcomePattern) []string {
+	if len(patterns) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(patterns))
+	for _, pattern := range patterns {
+		outcome := strings.TrimSpace(pattern.Outcome)
+		kind := strings.TrimSpace(pattern.Kind)
+		value := strings.TrimSpace(pattern.Value)
+		if outcome == "" || kind == "" || value == "" {
+			continue
+		}
+		out = append(out, outcome+":"+kind+":"+value)
+	}
+	return out
 }
 
 // truncatePreview truncates text for storage as a content preview.
@@ -344,4 +984,97 @@ func findSentenceBoundary(text string, maxChars int) int {
 
 	// Hard cut as last resort.
 	return maxChars
+}
+
+// extractErrorModesFromSession pulls error summaries from tool-result messages
+// for any step in the promoted chain. Only the first error line is kept per
+// step so the error_modes list stays scannable. Duplicates across the chain
+// collapse via a seen-map.
+func extractErrorModesFromSession(session *Session, steps []string) []string {
+	if session == nil || len(steps) == 0 {
+		return nil
+	}
+	stepSet := make(map[string]struct{}, len(steps))
+	for _, step := range steps {
+		stepSet[step] = struct{}{}
+	}
+
+	seen := make(map[string]struct{})
+	var out []string
+	msgs := session.Messages()
+	for i, msg := range msgs {
+		if msg.Role != "assistant" || len(msg.ToolCalls) == 0 {
+			continue
+		}
+		for _, tc := range msg.ToolCalls {
+			if _, ok := stepSet[tc.Function.Name]; !ok {
+				continue
+			}
+			if i+1 >= len(msgs) || msgs[i+1].Role != "tool" {
+				continue
+			}
+			lower := strings.ToLower(msgs[i+1].Content)
+			if !strings.HasPrefix(lower, "error") && !strings.HasPrefix(lower, "failed") && !strings.HasPrefix(lower, `{"error`) {
+				continue
+			}
+			firstLine := strings.TrimSpace(msgs[i+1].Content)
+			if newline := strings.Index(firstLine, "\n"); newline >= 0 {
+				firstLine = firstLine[:newline]
+			}
+			if len(firstLine) > 160 {
+				firstLine = firstLine[:160]
+			}
+			entry := tc.Function.Name + ": " + firstLine
+			key := strings.ToLower(entry)
+			if _, dup := seen[key]; dup {
+				continue
+			}
+			seen[key] = struct{}{}
+			out = append(out, entry)
+			if len(out) >= 4 {
+				return out
+			}
+		}
+	}
+	return out
+}
+
+// extractPreconditionsFromSession derives a small set of preconditions from
+// the session's task state and user prompt intent signals. The goal is to
+// capture what was true at the time the workflow succeeded so later callers
+// can judge whether it applies to their situation.
+func extractPreconditionsFromSession(session *Session) []string {
+	if session == nil {
+		return nil
+	}
+	var out []string
+	seen := make(map[string]struct{})
+	add := func(s string) {
+		trimmed := strings.TrimSpace(s)
+		if trimmed == "" {
+			return
+		}
+		key := strings.ToLower(trimmed)
+		if _, dup := seen[key]; dup {
+			return
+		}
+		seen[key] = struct{}{}
+		out = append(out, trimmed)
+	}
+	if intent := session.TaskIntent(); intent != "" {
+		add("intent = " + intent)
+	}
+	if complexity := session.TaskComplexity(); complexity != "" {
+		add("complexity = " + complexity)
+	}
+	for _, goal := range session.TaskSubgoals() {
+		if len(out) >= 4 {
+			break
+		}
+		if len(goal) > 120 {
+			goal = goal[:120]
+		}
+		add("subgoal: " + goal)
+	}
+	return out
 }

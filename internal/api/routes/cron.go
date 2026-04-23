@@ -7,7 +7,6 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"roboticus/internal/db"
-	"roboticus/internal/pipeline"
 )
 
 // ListCronJobs returns all cron jobs.
@@ -292,37 +291,5 @@ func DeleteCronJob(store *db.Store) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
-	}
-}
-
-// RunCronJobNow triggers immediate execution of a cron job.
-func RunCronJobNow(p pipeline.Runner, store *db.Store, agentName ...string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		id := chi.URLParam(r, "id")
-		row := db.NewRouteQueries(store).GetCronJobPayload(r.Context(), id)
-
-		var payloadJSON string
-		if err := row.Scan(&payloadJSON); err != nil {
-			writeError(w, http.StatusNotFound, "cron job not found or disabled")
-			return
-		}
-
-		cronAgentName := "Roboticus"
-		if len(agentName) > 0 && agentName[0] != "" {
-			cronAgentName = agentName[0]
-		}
-		input := pipeline.Input{
-			Content:   payloadJSON,
-			AgentID:   "default",
-			AgentName: cronAgentName,
-			Platform:  "cron",
-		}
-
-		outcome, err := pipeline.RunPipeline(r.Context(), p, pipeline.PresetCron(), input)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, outcome)
 	}
 }

@@ -3,8 +3,11 @@ package routes
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -230,9 +233,33 @@ func TestGetThemeCatalog(t *testing.T) {
 
 	body := jsonBody(t, rec)
 	themes := body["themes"].([]any)
-	if len(themes) != 14 {
-		t.Errorf("got %d themes, want 14 (4 builtin + 10 catalog)", len(themes))
+	if len(themes) != 15 {
+		t.Errorf("got %d themes, want 15 (4 builtin + 11 catalog)", len(themes))
 	}
+}
+
+func TestGetThemeCatalog_ResolvesBundledTexturePreview(t *testing.T) {
+	store := testutil.TempStore(t)
+	handler := GetThemeCatalog(store)
+	req := httptest.NewRequest("GET", "/api/themes/catalog", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	body := jsonBody(t, rec)
+	themes := body["themes"].([]any)
+	for _, raw := range themes {
+		theme := raw.(map[string]any)
+		if theme["id"] != "psychedelic-freakout-marble" {
+			continue
+		}
+		textures := theme["textures"].(map[string]any)
+		bodyTexture := textures["body"].(map[string]any)
+		if got := bodyTexture["value"]; got != "url(/api/themes/psychedelic-freakout-marble/textures/body.jpg)" {
+			t.Fatalf("bundled preview texture = %v", got)
+		}
+		return
+	}
+	t.Fatal("psychedelic-freakout-marble not found in theme catalog")
 }
 
 func TestInstallCatalogThemeAndActivate(t *testing.T) {
@@ -261,6 +288,32 @@ func TestInstallCatalogThemeAndActivate(t *testing.T) {
 	}
 }
 
+func TestInstallCatalogTheme_MaterializesBundledTexture(t *testing.T) {
+	store := testutil.TempStore(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	installReq := httptest.NewRequest("POST", "/api/themes/catalog/install", strings.NewReader(`{"id":"psychedelic-freakout-marble"}`))
+	installRec := httptest.NewRecorder()
+	InstallCatalogTheme(store).ServeHTTP(installRec, installReq)
+	if installRec.Code != http.StatusOK {
+		t.Fatalf("install status = %d", installRec.Code)
+	}
+
+	manifestPath := filepath.Join(home, ".roboticus", "themes", "psychedelic-freakout-marble", "manifest.json")
+	if _, err := os.Stat(manifestPath); err != nil {
+		t.Fatalf("manifest not written: %v", err)
+	}
+	texturePath := filepath.Join(home, ".roboticus", "themes", "psychedelic-freakout-marble", "textures", "body.jpg")
+	info, err := os.Stat(texturePath)
+	if err != nil {
+		t.Fatalf("bundled texture not materialized: %v", err)
+	}
+	if info.Size() == 0 {
+		t.Fatal("bundled texture was written but empty")
+	}
+}
+
 func TestGetSetActiveTheme(t *testing.T) {
 	store := testutil.TempStore(t)
 
@@ -285,12 +338,22 @@ func TestGetSetActiveTheme(t *testing.T) {
 
 func TestSearchTraces(t *testing.T) {
 	store := testutil.TempStore(t)
+	_, _ = store.ExecContext(bgCtx, `INSERT INTO sessions (id, agent_id, scope_key) VALUES ('s1', 'a1', 'test')`)
+	_, _ = store.ExecContext(bgCtx, `INSERT INTO sessions (id, agent_id, scope_key) VALUES ('s2', 'a2', 'test')`)
+	_, _ = store.ExecContext(bgCtx, `INSERT INTO turns (id, session_id) VALUES ('t1', 's1')`)
+	_, _ = store.ExecContext(bgCtx, `INSERT INTO turns (id, session_id) VALUES ('t2', 's2')`)
 	_, _ = store.ExecContext(bgCtx,
 		`INSERT INTO pipeline_traces (id, turn_id, session_id, channel, total_ms, stages_json, react_trace_json, created_at)
 		 VALUES ('pt1', 't1', 's1', 'api', 250, '[{"tool":"search_files"}]', '{"guard":"approval"}', datetime('now'))`)
 	_, _ = store.ExecContext(bgCtx,
 		`INSERT INTO pipeline_traces (id, turn_id, session_id, channel, total_ms, stages_json, react_trace_json, created_at)
 		 VALUES ('pt2', 't2', 's2', 'chat', 50, '[{"tool":"web_search"}]', '{"guard":"none"}', datetime('now'))`)
+	_, _ = store.ExecContext(bgCtx,
+		`INSERT INTO tool_calls (id, turn_id, tool_name, input, status, created_at)
+		 VALUES ('tc1', 't1', 'search_files', '{}', 'success', datetime('now'))`)
+	_, _ = store.ExecContext(bgCtx,
+		`INSERT INTO tool_calls (id, turn_id, tool_name, input, status, created_at)
+		 VALUES ('tc2', 't2', 'web_search', '{}', 'success', datetime('now'))`)
 
 	req := httptest.NewRequest("GET", "/api/traces/search?tool_name=search_files&guard_name=approval&min_duration_ms=100", nil)
 	rec := httptest.NewRecorder()
@@ -299,6 +362,15 @@ func TestSearchTraces(t *testing.T) {
 		t.Fatalf("status = %d", rec.Code)
 	}
 	body := jsonBody(t, rec)
+	if body["route_family"] != "traces" {
+		t.Fatalf("route_family = %v, want traces", body["route_family"])
+	}
+	if body["artifact"] != "trace_search_results" {
+		t.Fatalf("artifact = %v, want trace_search_results", body["artifact"])
+	}
+	if body["fidelity"] != "summary_search" {
+		t.Fatalf("fidelity = %v, want summary_search", body["fidelity"])
+	}
 	if body["count"] != float64(1) {
 		t.Fatalf("count = %v, want 1", body["count"])
 	}
@@ -306,6 +378,81 @@ func TestSearchTraces(t *testing.T) {
 	first := results[0].(map[string]any)
 	if first["turn_id"] != "t1" {
 		t.Errorf("turn_id = %v, want t1", first["turn_id"])
+	}
+}
+
+func TestSearchTraces_ToolFilterUsesExactToolCalls(t *testing.T) {
+	store := testutil.TempStore(t)
+	_, _ = store.ExecContext(bgCtx, `INSERT INTO sessions (id, agent_id, scope_key) VALUES ('s1', 'a1', 'test')`)
+	_, _ = store.ExecContext(bgCtx, `INSERT INTO sessions (id, agent_id, scope_key) VALUES ('s2', 'a2', 'test')`)
+	_, _ = store.ExecContext(bgCtx, `INSERT INTO turns (id, session_id) VALUES ('t1', 's1')`)
+	_, _ = store.ExecContext(bgCtx, `INSERT INTO turns (id, session_id) VALUES ('t2', 's2')`)
+	_, _ = store.ExecContext(bgCtx,
+		`INSERT INTO pipeline_traces (id, turn_id, session_id, channel, total_ms, stages_json, react_trace_json, created_at)
+		 VALUES ('pt1', 't1', 's1', 'api', 250, '[{"tool":"search_files_backup"}]', '{"guard":"approval"}', datetime('now'))`)
+	_, _ = store.ExecContext(bgCtx,
+		`INSERT INTO pipeline_traces (id, turn_id, session_id, channel, total_ms, stages_json, react_trace_json, created_at)
+		 VALUES ('pt2', 't2', 's2', 'api', 250, '[{"tool":"search_files"}]', '{"guard":"approval"}', datetime('now'))`)
+	_, _ = store.ExecContext(bgCtx,
+		`INSERT INTO tool_calls (id, turn_id, tool_name, input, status, created_at)
+		 VALUES ('tc1', 't1', 'search_files_backup', '{}', 'success', datetime('now'))`)
+	_, _ = store.ExecContext(bgCtx,
+		`INSERT INTO tool_calls (id, turn_id, tool_name, input, status, created_at)
+		 VALUES ('tc2', 't2', 'search_files', '{}', 'success', datetime('now'))`)
+
+	req := httptest.NewRequest("GET", "/api/traces/search?tool_name=search_files", nil)
+	rec := httptest.NewRecorder()
+	SearchTraces(store).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	body := jsonBody(t, rec)
+	if body["route_family"] != "traces" {
+		t.Fatalf("route_family = %v, want traces", body["route_family"])
+	}
+	if body["count"] != float64(1) {
+		t.Fatalf("count = %v, want 1", body["count"])
+	}
+	results := body["results"].([]any)
+	first := results[0].(map[string]any)
+	if first["turn_id"] != "t2" {
+		t.Fatalf("turn_id = %v, want t2", first["turn_id"])
+	}
+}
+
+func TestSearchTraces_GuardFilterAppliesBeforeLimit(t *testing.T) {
+	store := testutil.TempStore(t)
+	_, _ = store.ExecContext(bgCtx, `INSERT INTO sessions (id, agent_id, scope_key) VALUES ('s1', 'a1', 'test')`)
+	_, _ = store.ExecContext(bgCtx, `INSERT INTO sessions (id, agent_id, scope_key) VALUES ('s2', 'a2', 'test')`)
+	_, _ = store.ExecContext(bgCtx, `INSERT INTO turns (id, session_id) VALUES ('t1', 's1')`)
+	_, _ = store.ExecContext(bgCtx, `INSERT INTO turns (id, session_id) VALUES ('t2', 's2')`)
+
+	// Newer row does NOT match the guard filter.
+	_, _ = store.ExecContext(bgCtx,
+		`INSERT INTO pipeline_traces (id, turn_id, session_id, channel, total_ms, stages_json, react_trace_json, created_at)
+		 VALUES ('pt1', 't1', 's1', 'api', 250, '[{"tool":"search_files"}]', '{"guard":"none"}', datetime('now'))`)
+	// Older row DOES match the guard filter.
+	_, _ = store.ExecContext(bgCtx,
+		`INSERT INTO pipeline_traces (id, turn_id, session_id, channel, total_ms, stages_json, react_trace_json, created_at)
+		 VALUES ('pt2', 't2', 's2', 'api', 250, '[{"tool":"search_files"}]', '{"guard":"approval"}', datetime('now', '-1 second'))`)
+
+	req := httptest.NewRequest("GET", "/api/traces/search?guard_name=approval&limit=1", nil)
+	rec := httptest.NewRecorder()
+	SearchTraces(store).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	body := jsonBody(t, rec)
+	if body["route_family"] != "traces" {
+		t.Fatalf("route_family = %v, want traces", body["route_family"])
+	}
+	if body["count"] != float64(1) {
+		t.Fatalf("count = %v, want 1", body["count"])
+	}
+	results := body["results"].([]any)
+	first := results[0].(map[string]any)
+	if first["turn_id"] != "t2" {
+		t.Fatalf("turn_id = %v, want t2", first["turn_id"])
 	}
 }
 
@@ -384,6 +531,15 @@ func TestListTraces(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	body := jsonBody(t, rec)
+	if body["route_family"] != "traces" {
+		t.Fatalf("route_family = %v, want traces", body["route_family"])
+	}
+	if body["artifact"] != "trace_summary_list" {
+		t.Fatalf("artifact = %v, want trace_summary_list", body["artifact"])
+	}
+	if body["fidelity"] != "summary" {
+		t.Fatalf("fidelity = %v, want summary", body["fidelity"])
+	}
 	traces := body["traces"].([]any)
 	if len(traces) != 1 {
 		t.Errorf("got %d traces, want 1", len(traces))
@@ -625,6 +781,104 @@ func TestGetMCPServerAndTestEndpoint(t *testing.T) {
 	testBody := jsonBody(t, testRec)
 	if testBody["ok"] != false {
 		t.Fatalf("ok = %v, want false for broken stdio server", testBody["ok"])
+	}
+}
+
+func TestValidateSSEMCPServer(t *testing.T) {
+	const tokenEnv = "ROBOTICUS_TEST_ROUTE_SSE_TOKEN"
+	t.Setenv(tokenEnv, "route-token")
+
+	var responseCh = make(chan json.RawMessage, 8)
+	router := chi.NewRouter()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			flusher := w.(http.Flusher)
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("event: endpoint\ndata: /messages\n\n"))
+			flusher.Flush()
+			for {
+				select {
+				case msg := <-responseCh:
+					_, _ = w.Write([]byte("data: "))
+					_, _ = w.Write(msg)
+					_, _ = w.Write([]byte("\n\n"))
+					flusher.Flush()
+				case <-r.Context().Done():
+					return
+				}
+			}
+		case http.MethodPost:
+			body, _ := io.ReadAll(r.Body)
+			var req map[string]any
+			_ = json.Unmarshal(body, &req)
+			method, _ := req["method"].(string)
+			id := req["id"]
+			var result any
+			switch method {
+			case "initialize":
+				result = map[string]any{
+					"protocolVersion": "2024-11-05",
+					"serverInfo": map[string]string{
+						"name":    "route-fixture",
+						"version": "v1.0.7",
+					},
+				}
+			case "tools/list":
+				result = map[string]any{
+					"tools": []map[string]any{{
+						"name":        "echo",
+						"description": "Echo fixture",
+						"inputSchema": map[string]any{"type": "object"},
+					}},
+				}
+			case "tools/call":
+				result = map[string]any{
+					"content": []map[string]any{{"type": "text", "text": "route-ok"}},
+					"isError": false,
+				}
+			default:
+				result = map[string]any{}
+			}
+			respBytes, _ := json.Marshal(map[string]any{
+				"jsonrpc": "2.0",
+				"id":      id,
+				"result":  result,
+			})
+			responseCh <- json.RawMessage(respBytes)
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer srv.Close()
+
+	cfg := testConfig()
+	cfg.MCP.Servers = []core.MCPServerEntry{{
+		Name:         "vendor-sse",
+		Transport:    "sse",
+		URL:          srv.URL,
+		Enabled:      true,
+		AuthTokenEnv: tokenEnv,
+	}}
+
+	router.Post("/api/mcp/servers/{name}/validate-sse", ValidateSSEMCPServer(cfg))
+	req := httptest.NewRequest(http.MethodPost, "/api/mcp/servers/vendor-sse/validate-sse", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("validate-sse status = %d, want 200", rec.Code)
+	}
+	body := jsonBody(t, rec)
+	if body["ok"] != true {
+		t.Fatalf("ok = %v, want true", body["ok"])
+	}
+	evidence := body["evidence"].(map[string]any)
+	if evidence["server_name"] != "route-fixture" {
+		t.Fatalf("server_name = %v", evidence["server_name"])
+	}
+	if evidence["resolved_post_url"] != srv.URL+"/messages" {
+		t.Fatalf("resolved_post_url = %v", evidence["resolved_post_url"])
 	}
 }
 

@@ -1,5 +1,12 @@
 package pipeline
 
+import (
+	"encoding/json"
+	"strings"
+
+	agenttools "roboticus/internal/agent/tools"
+)
+
 // GuardContext provides rich context for guards that need more than just the
 // response text. Guards implementing ContextualGuard receive this context;
 // simple text-only guards implement the base Guard interface.
@@ -39,8 +46,55 @@ type GuardContext struct {
 
 // ToolResultEntry pairs a tool name with its output.
 type ToolResultEntry struct {
-	ToolName string
-	Output   string
+	ToolName      string
+	Output        string
+	Metadata      json.RawMessage
+	ArtifactProof *agenttools.ArtifactProof
+	ReadProof     *agenttools.ArtifactReadProof
+	Inspection    *agenttools.InspectionProof
+}
+
+func toolOutputContainsAny(output string, markers []string) bool {
+	lower := strings.ToLower(output)
+	for _, marker := range markers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+var policyOrSandboxDenialMarkers = []string{
+	"policy denied:",
+	"not allowed",
+	"classified as forbidden",
+	"requires creator authority",
+	"requires self-generated or higher authority",
+	"requires peer or higher authority",
+	"approval denied",
+	"approval required",
+	"absolute paths must be in allowed_paths list",
+	"home-directory shortcuts are not allowed",
+	"path escapes workspace boundary",
+	"path resolves outside workspace",
+	"path traversal detected",
+}
+
+var toolFailureMarkers = []string{
+	"error:",
+	"failed",
+	"failure",
+	"insufficient",
+	"rejected",
+	"denied",
+}
+
+func toolResultSignalsPolicyOrSandboxDenial(tr ToolResultEntry) bool {
+	return toolOutputContainsAny(tr.Output, policyOrSandboxDenialMarkers)
+}
+
+func toolResultSignalsFailure(tr ToolResultEntry) bool {
+	return toolResultSignalsPolicyOrSandboxDenial(tr) || toolOutputContainsAny(tr.Output, toolFailureMarkers)
 }
 
 // DelegationProvenance tracks whether subagent delegation steps completed.
@@ -82,6 +136,7 @@ type ContextualGuard interface {
 // ApplyFullWithContext runs all guards with the given context.
 // Contextual guards receive the context; basic guards receive only content.
 func (gc *GuardChain) ApplyFullWithContext(content string, ctx *GuardContext) ApplyResult {
+	precomputeGuardScores(ctx, content)
 	result := ApplyResult{Content: content}
 	for _, g := range gc.guards {
 		var gr GuardResult

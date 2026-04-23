@@ -28,7 +28,7 @@ func APIBaseURL() string {
 	if port == 0 {
 		port = core.DefaultServerPort
 	}
-	return fmt.Sprintf("http://127.0.0.1:%d", port)
+	return fmt.Sprintf("http://localhost:%d", port)
 }
 
 // APIGet performs a GET request to the local API.
@@ -281,6 +281,15 @@ func EnsureParentDir(path string) error {
 var Version = "dev"
 
 // EffectiveConfigPath returns the config file path from viper or the default location.
+//
+// Returns the path AS TYPED by the operator — may be relative (if
+// `--config configs/prod.toml` was passed) or absolute. For display,
+// error messages, and anywhere "what the user typed" matters, use this.
+//
+// Callers that need a STABLE, filesystem-portable path across different
+// working directories (e.g., embedding into a service installation, a
+// launchd plist, or a systemd unit where the service manager's CWD
+// isn't the shell's CWD) must use EffectiveConfigPathAbs instead.
 func EffectiveConfigPath() string {
 	if cf := viper.GetString("config"); cf != "" {
 		return cf
@@ -293,4 +302,32 @@ func EffectiveConfigPath() string {
 		return filepath.Join(".roboticus", "roboticus.toml")
 	}
 	return filepath.Join(home, ".roboticus", "roboticus.toml")
+}
+
+// EffectiveConfigPathAbs returns the config path absolutized against the
+// current working directory. This is the install-time variant that
+// MUST be used when the resolved path will outlive the current shell
+// process — the canonical example is embedding `--config <path>` into
+// a service definition (systemd, launchd, Windows SCM). The service
+// manager's working directory when it later invokes roboticus is
+// /, /var, or some other system-controlled location — a relative path
+// would resolve against that, NOT the operator's install-time CWD.
+//
+// v1.0.6 P2-H: audit flagged that daemon.Install embedded the raw
+// EffectiveConfigPath() into service args, so
+// `roboticus daemon install --config configs/prod.toml` would later
+// boot the service against whatever `configs/prod.toml` resolved to
+// from the service manager's working directory — typically nothing at
+// all. Absolutizing at install time freezes the intent.
+//
+// Filepath.Abs errors (invalid PWD, removed CWD) are surfaced to the
+// caller, which should refuse to install a service with an ambiguous
+// config reference rather than silently embed a broken path.
+func EffectiveConfigPathAbs() (string, error) {
+	raw := EffectiveConfigPath()
+	abs, err := filepath.Abs(raw)
+	if err != nil {
+		return "", fmt.Errorf("resolve config path %q to absolute: %w", raw, err)
+	}
+	return abs, nil
 }

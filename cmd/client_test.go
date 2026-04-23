@@ -18,7 +18,7 @@ func TestAPIBaseURL_Default(t *testing.T) {
 
 	url := apiBaseURL()
 	// Should use the default port from core.DefaultServerPort.
-	if !strings.HasPrefix(url, "http://127.0.0.1:") {
+	if !strings.HasPrefix(url, "http://localhost:") {
 		t.Errorf("unexpected URL: %s", url)
 	}
 }
@@ -29,7 +29,7 @@ func TestAPIBaseURL_CustomPort(t *testing.T) {
 	defer viper.Set("server.port", old)
 
 	url := apiBaseURL()
-	if url != "http://127.0.0.1:9999" {
+	if url != "http://localhost:9999" {
 		t.Errorf("expected port 9999 in URL, got %s", url)
 	}
 }
@@ -52,7 +52,7 @@ func TestAPIGet_Success(t *testing.T) {
 	defer server.Close()
 
 	// Override the port to point at our test server.
-	port := strings.TrimPrefix(server.URL, "http://127.0.0.1:")
+	port := strings.TrimPrefix(strings.TrimPrefix(server.URL, "http://127.0.0.1:"), "http://localhost:")
 	old := viper.GetInt("server.port")
 	viper.Set("server.port", port)
 	defer viper.Set("server.port", old)
@@ -73,7 +73,7 @@ func TestAPIGet_ErrorResponse(t *testing.T) {
 	}))
 	defer server.Close()
 
-	port := strings.TrimPrefix(server.URL, "http://127.0.0.1:")
+	port := strings.TrimPrefix(strings.TrimPrefix(server.URL, "http://127.0.0.1:"), "http://localhost:")
 	old := viper.GetInt("server.port")
 	viper.Set("server.port", port)
 	defer viper.Set("server.port", old)
@@ -93,7 +93,7 @@ func TestAPIGet_InvalidJSON(t *testing.T) {
 	}))
 	defer server.Close()
 
-	port := strings.TrimPrefix(server.URL, "http://127.0.0.1:")
+	port := strings.TrimPrefix(strings.TrimPrefix(server.URL, "http://127.0.0.1:"), "http://localhost:")
 	old := viper.GetInt("server.port")
 	viper.Set("server.port", port)
 	defer viper.Set("server.port", old)

@@ -1,8 +1,8 @@
 package agent
 
 import (
-	"roboticus/cmd/internal/cmdutil"
 	"fmt"
+	"roboticus/cmd/internal/cmdutil"
 
 	"github.com/spf13/cobra"
 )

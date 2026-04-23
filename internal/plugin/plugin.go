@@ -12,7 +12,9 @@ import (
 	"strings"
 	"sync"
 
+	toml "github.com/pelletier/go-toml/v2"
 	"github.com/rs/zerolog/log"
+	"gopkg.in/yaml.v3"
 )
 
 // PluginStatus tracks a plugin's lifecycle state.
@@ -101,8 +103,11 @@ type ManifestTool struct {
 
 // PermissionPolicy controls what plugins are allowed to do.
 type PermissionPolicy struct {
-	StrictMode bool     `json:"strict_mode"`
-	Allowed    []string `json:"allowed"`
+	StrictMode          bool     `json:"strict_mode"`
+	Allowed             []string `json:"allowed"`
+	AllowedInterpreters []string `json:"allowed_interpreters,omitempty"`
+	MaxOutputBytes      int      `json:"max_output_bytes,omitempty"`
+	SandboxEnv          bool     `json:"sandbox_env"`
 }
 
 type pluginEntry struct {
@@ -179,6 +184,27 @@ func (r *Registry) Register(p Plugin) error {
 	}
 	log.Info().Str("plugin", name).Str("version", p.Version()).Msg("plugin registered")
 	return nil
+}
+
+// LoadDirectory loads a manifest-backed plugin from a directory into the live registry.
+// If a plugin with the same name already exists, it is replaced atomically and the old
+// instance is shut down after the new one is installed.
+func (r *Registry) LoadDirectory(dir string) (PluginInfo, error) {
+	manifest, err := LoadManifestDir(dir)
+	if err != nil {
+		return PluginInfo{}, err
+	}
+
+	sp := NewScriptPlugin(*manifest, dir).WithPolicy(r.policy)
+	if err := r.replace(sp); err != nil {
+		return PluginInfo{}, err
+	}
+	if err := sp.Init(); err != nil {
+		r.setStatus(sp.Name(), StatusError)
+		return PluginInfo{}, err
+	}
+	r.setStatus(sp.Name(), StatusActive)
+	return r.info(sp.Name())
 }
 
 // InitAll initializes all registered plugins.
@@ -260,6 +286,95 @@ func (r *Registry) AllTools() []ToolDef {
 	return tools
 }
 
+// PluginTools returns the tool set for a named plugin, regardless of status.
+func (r *Registry) PluginTools(name string) []ToolDef {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	entry, ok := r.plugins[name]
+	if !ok {
+		return nil
+	}
+	tools := entry.plugin.Tools()
+	out := make([]ToolDef, len(tools))
+	copy(out, tools)
+	return out
+}
+
+func (r *Registry) replace(p Plugin) error {
+	name := p.Name()
+
+	if !validPluginName.MatchString(name) || len(name) > 128 {
+		return fmt.Errorf("plugin: invalid name: %s", name)
+	}
+	if r.denyList[name] {
+		return fmt.Errorf("plugin: %s is denied", name)
+	}
+	if len(r.allowList) > 0 && !r.allowList[name] {
+		return fmt.Errorf("plugin: %s not in allow list", name)
+	}
+
+	for _, tool := range p.Tools() {
+		if tool.RiskLevel != "" && !ValidRiskLevels[tool.RiskLevel] {
+			return fmt.Errorf("plugin: %s tool %q has invalid risk_level %q (must be safe, caution, or high)", name, tool.Name, tool.RiskLevel)
+		}
+	}
+	if r.policy.StrictMode {
+		for _, tool := range p.Tools() {
+			for _, perm := range tool.Permissions {
+				if !r.isPermissionAllowed(perm) {
+					return fmt.Errorf("plugin: %s requires undeclared permission: %s", name, perm)
+				}
+			}
+		}
+	}
+
+	var old Plugin
+	r.mu.Lock()
+	if existing, ok := r.plugins[name]; ok {
+		old = existing.plugin
+	}
+	r.plugins[name] = &pluginEntry{
+		plugin: p,
+		status: StatusLoaded,
+	}
+	r.mu.Unlock()
+
+	if old != nil {
+		if err := old.Shutdown(); err != nil {
+			log.Warn().Str("plugin", name).Err(err).Msg("plugin shutdown failed during replacement")
+		}
+	}
+	log.Info().Str("plugin", name).Str("version", p.Version()).Msg("plugin loaded from directory")
+	return nil
+}
+
+func (r *Registry) setStatus(name string, status PluginStatus) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if entry, ok := r.plugins[name]; ok {
+		entry.status = status
+	}
+}
+
+func (r *Registry) info(name string) (PluginInfo, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	entry, ok := r.plugins[name]
+	if !ok {
+		return PluginInfo{}, fmt.Errorf("plugin: %s not found", name)
+	}
+	info := PluginInfo{
+		Name:    entry.plugin.Name(),
+		Version: entry.plugin.Version(),
+		Status:  entry.status,
+	}
+	for _, t := range entry.plugin.Tools() {
+		info.Tools = append(info.Tools, t.Name)
+	}
+	return info, nil
+}
+
 // Enable activates a disabled plugin.
 func (r *Registry) Enable(name string) error {
 	r.mu.Lock()
@@ -310,40 +425,14 @@ func (r *Registry) ScanDirectory(dir string) (int, error) {
 			return nil
 		}
 
-		data, readErr := os.ReadFile(path)
+		manifest, readErr := loadManifestFile(path)
 		if readErr != nil {
-			return nil
-		}
-
-		var manifest Manifest
-		// Simple line-based parsing (avoids TOML/YAML library dependency).
-		for _, line := range strings.Split(string(data), "\n") {
-			line = strings.TrimSpace(line)
-			parts := strings.SplitN(line, "=", 2)
-			if len(parts) != 2 {
-				parts = strings.SplitN(line, ":", 2)
-			}
-			if len(parts) != 2 {
-				continue
-			}
-			key := strings.TrimSpace(parts[0])
-			val := strings.Trim(strings.TrimSpace(parts[1]), `"'`)
-			switch key {
-			case "name":
-				manifest.Name = val
-			case "version":
-				manifest.Version = val
-			case "description":
-				manifest.Description = val
-			}
-		}
-
-		if manifest.Name == "" {
+			log.Warn().Err(readErr).Str("path", path).Msg("plugin manifest parse failed")
 			return nil
 		}
 
 		pluginDir := filepath.Dir(path)
-		sp := NewScriptPlugin(manifest, pluginDir)
+		sp := NewScriptPlugin(*manifest, pluginDir).WithPolicy(r.policy)
 		if err := r.Register(sp); err != nil {
 			log.Warn().Err(err).Str("plugin", manifest.Name).Msg("plugin registration failed")
 			return nil
@@ -353,6 +442,41 @@ func (r *Registry) ScanDirectory(dir string) (int, error) {
 	})
 
 	return count, err
+}
+
+func loadManifestFile(path string) (*Manifest, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	var manifest Manifest
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".yaml", ".yml":
+		if err := yaml.Unmarshal(data, &manifest); err != nil {
+			return nil, fmt.Errorf("yaml decode: %w", err)
+		}
+	default:
+		if err := toml.Unmarshal(data, &manifest); err != nil {
+			return nil, fmt.Errorf("toml decode: %w", err)
+		}
+	}
+
+	if err := ValidateManifest(&manifest); err != nil {
+		return nil, err
+	}
+	return &manifest, nil
+}
+
+// LoadManifestDir loads a manifest from a plugin directory, accepting toml/yaml/yml.
+func LoadManifestDir(dir string) (*Manifest, error) {
+	for _, name := range []string{"manifest.toml", "manifest.yaml", "manifest.yml"} {
+		path := filepath.Join(dir, name)
+		if _, err := os.Stat(path); err == nil {
+			return loadManifestFile(path)
+		}
+	}
+	return nil, fmt.Errorf("plugin directory %q must contain manifest.toml or manifest.yaml", dir)
 }
 
 // --- File hash for hot-reload ---

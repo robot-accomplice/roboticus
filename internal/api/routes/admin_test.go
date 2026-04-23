@@ -110,7 +110,9 @@ func TestGetTurnFeedback_ReturnsStoredFeedback(t *testing.T) {
 func TestListSubagents(t *testing.T) {
 	store := testutil.TempStore(t)
 	_, _ = store.ExecContext(bgCtx,
-		`INSERT INTO sub_agents (id, name, model, role, enabled) VALUES ('sa1', 'coder', 'gpt-4', 'specialist', 1)`)
+		`INSERT INTO sub_agents (id, name, model, role, enabled, fallback_models_json, skills_json, session_count, status) VALUES ('sa1', 'coder', 'gpt-4', 'specialist', 1, '["backup-1"]', '["research"]', 3, 'running')`)
+	_, _ = store.ExecContext(bgCtx,
+		`INSERT INTO skills (id, name, kind, enabled, version, risk_level) VALUES ('sk1', 'research', 'structured', 1, '1.0.0', 'safe')`)
 
 	handler := ListSubagents(store)
 	req := httptest.NewRequest("GET", "/api/subagents", nil)
@@ -121,6 +123,48 @@ func TestListSubagents(t *testing.T) {
 	agents := body["agents"].([]any)
 	if len(agents) != 1 {
 		t.Errorf("got %d subagents, want 1", len(agents))
+	}
+	agent := agents[0].(map[string]any)
+	if agent["display_name"] != "coder" {
+		t.Fatalf("display_name = %v, want coder", agent["display_name"])
+	}
+	if agent["session_count"].(float64) != 3 {
+		t.Fatalf("session_count = %v, want 3", agent["session_count"])
+	}
+	if agent["status"] != "running" {
+		t.Fatalf("status = %v, want running", agent["status"])
+	}
+	fallbacks := agent["fallback_models"].([]any)
+	if len(fallbacks) != 1 || fallbacks[0] != "backup-1" {
+		t.Fatalf("fallback_models = %v, want [backup-1]", fallbacks)
+	}
+	skills := agent["skills"].([]any)
+	if len(skills) != 1 || skills[0] != "research" {
+		t.Fatalf("skills = %v, want [research]", skills)
+	}
+}
+
+func TestCreateSubagent(t *testing.T) {
+	store := testutil.TempStore(t)
+	handler := CreateSubagent(store)
+	req := httptest.NewRequest("POST", "/api/subagents", strings.NewReader(`{
+		"name":"researcher",
+		"model":"ollama/phi4-mini:latest",
+		"capabilities":["search","summarize"]
+	}`))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201", rec.Code)
+	}
+	row := store.QueryRowContext(bgCtx, `SELECT model FROM sub_agents WHERE name = 'researcher'`)
+	var model string
+	if err := row.Scan(&model); err != nil {
+		t.Fatalf("scan model: %v", err)
+	}
+	if model != "ollama/phi4-mini:latest" {
+		t.Fatalf("model = %q", model)
 	}
 }
 

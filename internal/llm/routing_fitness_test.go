@@ -388,6 +388,219 @@ func TestRouter_BreakerBlockedSkippedInMetascore(t *testing.T) {
 	}
 }
 
+func TestRouter_LightTurnDemotesSlowLocalModel(t *testing.T) {
+	targets := []RouteTarget{
+		{Model: "ollama/qwen2.5:32b", Provider: "ollama", Tier: TierLarge, IsLocal: true, Cost: 0.0},
+		{Model: "openrouter/openai/gpt-4o-mini", Provider: "openrouter", Tier: TierSmall, IsLocal: false, Cost: 0.00002},
+	}
+	router := NewRouter(targets, RouterConfig{CostAware: true})
+
+	qt := NewQualityTracker(32)
+	seedQuality(qt, "ollama/qwen2.5:32b", 0.95, 16)
+	seedQuality(qt, "openrouter/openai/gpt-4o-mini", 0.75, 16)
+
+	lt := NewLatencyTracker(32)
+	for i := 0; i < 8; i++ {
+		lt.Record("ollama/qwen2.5:32b", 120000)
+		lt.Record("openrouter/openai/gpt-4o-mini", 1800)
+	}
+
+	breakers := NewBreakerRegistry(DefaultCircuitBreakerConfig())
+	router.EnableMetascoreRouting(qt, lt, nil, breakers)
+
+	req := &Request{
+		Messages:   []Message{{Role: "user", Content: "hello"}},
+		TurnWeight: "light",
+	}
+	got := router.Select(req)
+	if got.Model != "openrouter/openai/gpt-4o-mini" {
+		t.Fatalf("light turn should demote slow local model, got %q", got.Model)
+	}
+}
+
+func TestRouter_LightTurnDoesNotCollapseToFirstCandidateOnColdQuality(t *testing.T) {
+	targets := []RouteTarget{
+		{Model: "qwen2.5:32b", Provider: "ollama", Tier: TierLarge, IsLocal: true, Cost: 0.0},
+		{Model: "openai/gpt-4o-mini", Provider: "openrouter", Tier: TierSmall, IsLocal: false, Cost: 0.00002},
+	}
+	router := NewRouter(targets, RouterConfig{CostAware: true})
+
+	// No quality observations: this matches a fresh restart before any turn
+	// feedback is accumulated.
+	qt := NewQualityTracker(32)
+
+	lt := NewLatencyTracker(32)
+	for i := 0; i < 8; i++ {
+		lt.Record("qwen2.5:32b", 120000)
+		lt.Record("openai/gpt-4o-mini", 1800)
+	}
+
+	breakers := NewBreakerRegistry(DefaultCircuitBreakerConfig())
+	router.EnableMetascoreRouting(qt, lt, nil, breakers)
+
+	req := &Request{
+		Messages:   []Message{{Role: "user", Content: "hello"}},
+		TurnWeight: "light",
+	}
+	got := router.Select(req)
+	if got.Model != "openai/gpt-4o-mini" {
+		t.Fatalf("cold-start light turn should prefer the faster model, got %q", got.Model)
+	}
+}
+
+func TestRouter_StandardTurnPrefersHealthyLocalWhenCompetitive(t *testing.T) {
+	targets := []RouteTarget{
+		{Model: "gemma3:12b", Provider: "ollama", Tier: TierMedium, IsLocal: true, Cost: 0.0},
+		{Model: "kimi-k2-turbo-preview", Provider: "moonshot", Tier: TierFrontier, Cost: 0.00008},
+	}
+	router := NewRouter(targets, RouterConfig{CostAware: true})
+
+	qt := NewQualityTracker(32)
+	seedQuality(qt, "gemma3:12b", 0.78, 16)
+	seedQuality(qt, "kimi-k2-turbo-preview", 0.84, 16)
+
+	lt := NewLatencyTracker(32)
+	for i := 0; i < 8; i++ {
+		lt.Record("gemma3:12b", 1800)
+		lt.Record("kimi-k2-turbo-preview", 2400)
+	}
+
+	breakers := NewBreakerRegistry(DefaultCircuitBreakerConfig())
+	router.EnableMetascoreRouting(qt, lt, nil, breakers)
+
+	req := &Request{
+		Messages: []Message{{
+			Role:    "user",
+			Content: "Summarize the last meeting notes and pull out the key decisions.",
+		}},
+		TurnWeight: "standard",
+	}
+	got := router.Select(req)
+	if got.Model != "gemma3:12b" {
+		t.Fatalf("standard turn should prefer healthy local model when quality is competitive, got %q", got.Model)
+	}
+}
+
+func TestRouter_StandardTurnDemotesUnhealthyLocalDespiteLocalBias(t *testing.T) {
+	targets := []RouteTarget{
+		{Model: "gemma3:12b", Provider: "ollama", Tier: TierMedium, IsLocal: true, Cost: 0.0},
+		{Model: "kimi-k2-turbo-preview", Provider: "moonshot", Tier: TierFrontier, Cost: 0.00008},
+	}
+	router := NewRouter(targets, RouterConfig{CostAware: true})
+
+	qt := NewQualityTracker(32)
+	seedQuality(qt, "gemma3:12b", 0.78, 16)
+	seedQuality(qt, "kimi-k2-turbo-preview", 0.84, 16)
+
+	lt := NewLatencyTracker(32)
+	for i := 0; i < 8; i++ {
+		lt.Record("gemma3:12b", 9000)
+		lt.Record("kimi-k2-turbo-preview", 2400)
+	}
+
+	breakers := NewBreakerRegistry(DefaultCircuitBreakerConfig())
+	breakers.Get("ollama").SetCapacityPressure(true)
+	router.EnableMetascoreRouting(qt, lt, nil, breakers)
+
+	req := &Request{
+		Messages: []Message{{
+			Role:    "user",
+			Content: "Summarize the last meeting notes and pull out the key decisions.",
+		}},
+		TurnWeight: "standard",
+	}
+	got := router.Select(req)
+	if got.Model != "kimi-k2-turbo-preview" {
+		t.Fatalf("standard turn should demote unhealthy local model, got %q", got.Model)
+	}
+}
+
+func TestRouter_HeavyTurnDemotesStalledLocalModel(t *testing.T) {
+	targets := []RouteTarget{
+		{Model: "gemma4", Provider: "ollama", Tier: TierLarge, IsLocal: true, Cost: 0.0},
+		{Model: "kimi-k2-turbo-preview", Provider: "moonshot", Tier: TierFrontier, Cost: 0.00008},
+	}
+	router := NewRouter(targets, RouterConfig{CostAware: true})
+
+	qt := NewQualityTracker(32)
+	seedQuality(qt, "gemma4", 0.80, 16)
+	seedQuality(qt, "kimi-k2-turbo-preview", 0.40, 16)
+
+	lt := NewLatencyTracker(32)
+	for i := 0; i < 8; i++ {
+		lt.Record("gemma4", 120000)
+		lt.Record("kimi-k2-turbo-preview", 2200)
+	}
+
+	breakers := NewBreakerRegistry(DefaultCircuitBreakerConfig())
+	router.EnableMetascoreRouting(qt, lt, nil, breakers)
+
+	req := &Request{
+		Messages: []Message{{
+			Role:    "user",
+			Content: "Compare these approaches and explain the trade-offs for rolling out a medium-weight routing policy that preserves efficacy while preferring healthy local models when they are fit for the task.",
+		}},
+		Tools:      makeToolDefs(8),
+		TurnWeight: "heavy",
+	}
+	got := router.Select(req)
+	if got.Model != "kimi-k2-turbo-preview" {
+		t.Fatalf("heavy turn should demote a stalled local model, got %q", got.Model)
+	}
+}
+
+func TestRequestRoutingComplexity_PrefersPipelineSemanticLabel(t *testing.T) {
+	req := &Request{
+		Messages:       makeMessages(24, strings.Repeat("detail ", 200)),
+		Tools:          makeToolDefs(8),
+		TaskComplexity: "simple",
+	}
+	got := requestRoutingComplexity(req)
+	if math.Abs(got-0.15) > 0.001 {
+		t.Fatalf("requestRoutingComplexity = %f, want semantic simple score 0.15", got)
+	}
+}
+
+func TestRouter_RequestIntentQualityShapesSelection(t *testing.T) {
+	targets := []RouteTarget{
+		{Model: "local-coder", Provider: "ollama", Tier: TierMedium, IsLocal: true, Cost: 0.0},
+		{Model: "cloud-generalist", Provider: "openrouter", Tier: TierFrontier, IsLocal: false, Cost: 0.00004},
+	}
+	router := NewRouter(targets, RouterConfig{CostAware: true})
+
+	qt := NewQualityTracker(32)
+	seedQuality(qt, "local-coder", 0.65, 16)
+	seedQuality(qt, "cloud-generalist", 0.80, 16)
+
+	iq := NewIntentQualityTracker(32)
+	iq.SeedFromBaselines(map[string]float64{
+		IntentCoding.String(): 0.5,
+	})
+	iq.RecordWithIntent("local-coder", IntentCoding.String(), 0.92)
+	iq.RecordWithIntent("cloud-generalist", IntentCoding.String(), 0.45)
+
+	lt := NewLatencyTracker(32)
+	for i := 0; i < 8; i++ {
+		lt.Record("local-coder", 2200)
+		lt.Record("cloud-generalist", 2400)
+	}
+
+	router.SetIntentQualityTracker(iq)
+	router.EnableMetascoreRouting(qt, lt, nil, nil)
+
+	req := &Request{
+		Messages:       []Message{{Role: "user", Content: "Review this Go race condition and propose a safe fix."}},
+		TurnWeight:     "heavy",
+		TaskIntent:     "code",
+		TaskComplexity: "complex",
+		IntentClass:    IntentCoding.String(),
+	}
+	got := router.Select(req)
+	if got.Model != "local-coder" {
+		t.Fatalf("coding turn should prefer the stronger coding model, got %q", got.Model)
+	}
+}
+
 func TestRouter_EmptyTargetsReturnsFallback(t *testing.T) {
 	router := NewRouter(nil, RouterConfig{})
 	req := &Request{Model: "requested-model", Messages: []Message{{Role: "user", Content: "hi"}}}
@@ -492,11 +705,11 @@ func TestBuildModelProfiles_Confidence(t *testing.T) {
 		wantConf  float64
 		tolerance float64
 	}{
-		{name: "0 observations", obs: 0, wantConf: 0.0, tolerance: 0.01},
-		{name: "5 observations", obs: 5, wantConf: 0.5, tolerance: 0.01},
+		{name: "0 observations", obs: 0, wantConf: 0.6, tolerance: 0.01},
+		{name: "5 observations", obs: 5, wantConf: 0.8, tolerance: 0.01},
 		{name: "10 observations", obs: 10, wantConf: 1.0, tolerance: 0.01},
 		{name: "20 observations", obs: 20, wantConf: 1.0, tolerance: 0.01},
-		{name: "1 observation", obs: 1, wantConf: 0.1, tolerance: 0.01},
+		{name: "1 observation", obs: 1, wantConf: 0.64, tolerance: 0.01},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -516,8 +729,8 @@ func TestBuildModelProfiles_Confidence(t *testing.T) {
 func TestBuildModelProfiles_NilQualityConfidenceDefault(t *testing.T) {
 	targets := []RouteTarget{{Model: "m", Provider: "p"}}
 	profiles := BuildModelProfiles(targets, nil, nil, nil, nil)
-	if profiles[0].Confidence != 0.5 {
-		t.Errorf("nil quality tracker confidence should be 0.5, got %f", profiles[0].Confidence)
+	if profiles[0].Confidence != 0.6 {
+		t.Errorf("nil quality tracker confidence should be 0.6, got %f", profiles[0].Confidence)
 	}
 }
 
@@ -674,6 +887,34 @@ func TestRoutingFitness_HighQualityCloudBeatsLowQualityLocal(t *testing.T) {
 	got := router.Select(req)
 	if got.Model != "cloud" {
 		t.Fatalf("high-quality cloud should beat low-quality local, got %q", got.Model)
+	}
+}
+
+func TestRoutingFitness_ToolBearingIgnoresUnderEvidencedCandidatesWhenObservedExist(t *testing.T) {
+	targets := []RouteTarget{
+		{Model: "apertus", Provider: "ollama", Tier: TierMedium, IsLocal: true, Cost: 0.00001},
+		{Model: "gemma4", Provider: "ollama", Tier: TierMedium, IsLocal: true, Cost: 0.00002},
+	}
+	qt := NewQualityTracker(32)
+	qt.Record("ollama/apertus", 0.95)
+	qt.Record("ollama/apertus", 0.95)
+	qt.Record("ollama/gemma4", 0.70)
+	qt.Record("ollama/gemma4", 0.70)
+
+	iq := NewIntentQualityTracker(32)
+	iq.RecordWithIntent("ollama/gemma4", IntentToolUse.String(), 0.71)
+
+	router := NewRouter(targets, RouterConfig{CostAware: true})
+	router.SetIntentQualityTracker(iq)
+	router.EnableMetascoreRouting(qt, nil, nil, nil)
+
+	req := &Request{
+		TaskIntent: "question",
+		Tools:      []ToolDef{{Function: ToolFuncDef{Name: "list_tools"}}},
+	}
+	got := router.Select(req)
+	if got.Model != "gemma4" {
+		t.Fatalf("tool-bearing request selected %q, want observed TOOL_USE model gemma4", got.Model)
 	}
 }
 

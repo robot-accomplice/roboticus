@@ -113,6 +113,7 @@ type ConsolidationReport struct {
 	Indexed            int
 	Deduped            int
 	Promoted           int
+	Distilled          int
 	Superseded         int
 	ConfidenceDecayed  int
 	ImportanceDecayed  int
@@ -192,6 +193,7 @@ func (p *ConsolidationPipeline) Run(ctx context.Context, store *db.Store) Consol
 		report.Deduped = p.phaseWithinTierDedup(ctx, store)
 	}
 	report.Promoted = p.phaseEpisodicPromotion(ctx, store)
+	report.Distilled = p.phaseEpisodeDistillation(ctx, store)
 	report.Superseded = p.phaseContradictionDetection(ctx, store)
 	report.ConfidenceDecayed = p.phaseConfidenceDecay(ctx, store)
 	report.TierSynced = p.Phase4_TierStateSync(ctx, store)

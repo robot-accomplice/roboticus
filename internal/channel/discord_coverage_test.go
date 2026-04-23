@@ -143,6 +143,12 @@ func TestDiscordProcessWebhook(t *testing.T) {
 			if msg.Platform != "discord" {
 				t.Fatalf("expected platform discord, got %s", msg.Platform)
 			}
+			if got := msg.Metadata["is_group"]; got != true {
+				t.Fatalf("is_group = %v, want true", got)
+			}
+			if got := msg.Metadata["guild_id"]; got != "g1" {
+				t.Fatalf("guild_id = %v, want g1", got)
+			}
 		})
 	}
 }

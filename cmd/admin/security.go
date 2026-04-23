@@ -1,12 +1,12 @@
 package admin
 
 import (
-	"roboticus/cmd/internal/cmdutil"
 	"encoding/json"
 	"fmt"
 	"net"
 	"os"
 	"path/filepath"
+	"roboticus/cmd/internal/cmdutil"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -96,11 +96,11 @@ var securityAuditCmd = &cobra.Command{
 			fmt.Println("  [OK]   Provider API keys present")
 		}
 
-		// Check: bind address.
-		bind := cfg.Server.Bind
-		if bind == "" {
-			bind = "127.0.0.1"
-		}
+			// Check: bind address.
+			bind := cfg.Server.Bind
+			if bind == "" {
+				bind = "localhost"
+			}
 		ip := net.ParseIP(bind)
 		if ip != nil && !ip.IsLoopback() && bind != "0.0.0.0" {
 			fmt.Printf("  [OK]   Bind address: %s\n", bind)
@@ -208,4 +208,5 @@ var securityAuditCmd = &cobra.Command{
 }
 
 func init() {
-	securityCmd.AddCommand(securityShowCmd, securityAuditCmd)}
+	securityCmd.AddCommand(securityShowCmd, securityAuditCmd)
+}

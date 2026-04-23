@@ -70,6 +70,7 @@ func NewLatencyTracker(windowSize int) *LatencyTracker {
 
 // Record adds a latency observation (milliseconds) for a model.
 func (lt *LatencyTracker) Record(model string, latencyMs int64) {
+	model = canonicalModelKey(model)
 	if model == "" || latencyMs < 0 {
 		return
 	}
@@ -86,6 +87,10 @@ func (lt *LatencyTracker) Record(model string, latencyMs int64) {
 // MedianLatency returns the windowed median latency for a model.
 // Returns 0 if no observations exist.
 func (lt *LatencyTracker) MedianLatency(model string) int64 {
+	model = canonicalModelKey(model)
+	if model == "" {
+		return 0
+	}
 	lt.mu.RLock()
 	defer lt.mu.RUnlock()
 	buf, ok := lt.models[model]
@@ -121,6 +126,10 @@ func (lt *LatencyTracker) SpeedScore(model string, fastMs, slowMs int64) float64
 
 // HasObservations returns true if any latency data exists for this model.
 func (lt *LatencyTracker) HasObservations(model string) bool {
+	model = canonicalModelKey(model)
+	if model == "" {
+		return false
+	}
 	lt.mu.RLock()
 	defer lt.mu.RUnlock()
 	buf, ok := lt.models[model]
@@ -129,6 +138,10 @@ func (lt *LatencyTracker) HasObservations(model string) bool {
 
 // ObservationCount returns the number of latency observations for a model.
 func (lt *LatencyTracker) ObservationCount(model string) int {
+	model = canonicalModelKey(model)
+	if model == "" {
+		return 0
+	}
 	lt.mu.RLock()
 	defer lt.mu.RUnlock()
 	buf, ok := lt.models[model]
@@ -145,7 +158,7 @@ func (lt *LatencyTracker) SeedFromHistory(ctx context.Context, store *db.Store) 
 	}
 
 	rows, err := store.QueryContext(ctx,
-		`SELECT model, latency_ms FROM inference_costs
+		`SELECT provider, model, latency_ms FROM inference_costs
 		 WHERE model != '' AND latency_ms > 0
 		 ORDER BY created_at DESC
 		 LIMIT 500`)
@@ -157,12 +170,13 @@ func (lt *LatencyTracker) SeedFromHistory(ctx context.Context, store *db.Store) 
 
 	seeded := 0
 	for rows.Next() {
+		var provider string
 		var model string
 		var latencyMs int64
-		if err := rows.Scan(&model, &latencyMs); err != nil {
+		if err := rows.Scan(&provider, &model, &latencyMs); err != nil {
 			continue
 		}
-		lt.Record(model, latencyMs)
+		lt.Record(historyModelKey(provider, model), latencyMs)
 		seeded++
 	}
 

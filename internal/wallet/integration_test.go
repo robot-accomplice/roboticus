@@ -92,7 +92,13 @@ func TestWallet_EncryptDecrypt(t *testing.T) {
 	}
 
 	// Encrypt the private key.
-	keyBytes := w.privateKey.D.Bytes()
+	// Test-only: production persistence uses PKCS8 via crypto/x509; this test
+	// exercises the AEAD envelope directly on raw key material to validate
+	// round-trip. The Go 1.26 deprecation on privateKey.D applies to production
+	// key manipulation where invariants can be broken — not to a read-only copy
+	// for testing the encryption layer.
+	keyBytes := w.privateKey.D.Bytes() //nolint:staticcheck // SA1019: test-only raw-byte access
+
 	ciphertext, err := w.encrypt(keyBytes)
 	if err != nil {
 		t.Fatalf("encrypt: %v", err)

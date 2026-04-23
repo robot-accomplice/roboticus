@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -96,6 +97,111 @@ func TestReadFileTool_NotFound(t *testing.T) {
 	}
 }
 
+func TestFilesystemInspectionTools_AdvertiseAbsoluteAllowedPaths(t *testing.T) {
+	read := &ReadFileTool{}
+	if !strings.Contains(read.Description(), "absolute path inside allowed_paths") {
+		t.Fatalf("read_file description = %q", read.Description())
+	}
+	if !strings.Contains(string(read.ParameterSchema()), "absolute allowed path") {
+		t.Fatalf("read_file schema = %s", string(read.ParameterSchema()))
+	}
+
+	list := &ListDirectoryTool{}
+	if !strings.Contains(list.Description(), "absolute directory inside allowed_paths") {
+		t.Fatalf("list_directory description = %q", list.Description())
+	}
+	if !strings.Contains(string(list.ParameterSchema()), "absolute allowed directory") {
+		t.Fatalf("list_directory schema = %s", string(list.ParameterSchema()))
+	}
+
+	glob := &GlobFilesTool{}
+	if !strings.Contains(glob.Description(), "absolute path inside allowed_paths") {
+		t.Fatalf("glob_files description = %q", glob.Description())
+	}
+	if !strings.Contains(string(glob.ParameterSchema()), "absolute allowed directory") {
+		t.Fatalf("glob_files schema = %s", string(glob.ParameterSchema()))
+	}
+	if !strings.Contains(glob.Description(), "**/*.md") {
+		t.Fatalf("glob_files description should advertise actual extension examples, got %q", glob.Description())
+	}
+	if !strings.Contains(string(glob.ParameterSchema()), "**/*.md") {
+		t.Fatalf("glob_files schema should advertise actual extension examples, got %s", string(glob.ParameterSchema()))
+	}
+
+	write := &WriteFileTool{}
+	if !strings.Contains(write.Description(), "absolute path inside allowed_paths") {
+		t.Fatalf("write_file description = %q", write.Description())
+	}
+	if !strings.Contains(string(write.ParameterSchema()), "absolute allowed path") {
+		t.Fatalf("write_file schema = %s", string(write.ParameterSchema()))
+	}
+
+	edit := &EditFileTool{}
+	if !strings.Contains(edit.Description(), "absolute path inside allowed_paths") {
+		t.Fatalf("edit_file description = %q", edit.Description())
+	}
+	if !strings.Contains(string(edit.ParameterSchema()), "absolute allowed path") {
+		t.Fatalf("edit_file schema = %s", string(edit.ParameterSchema()))
+	}
+}
+
+func TestListDirectoryTool_Execute_EmitsInspectionProof(t *testing.T) {
+	ws := t.TempDir()
+	if err := os.WriteFile(filepath.Join(ws, "alpha.txt"), []byte("A"), 0o644); err != nil {
+		t.Fatalf("seed alpha: %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(ws, "nested"), 0o755); err != nil {
+		t.Fatalf("seed nested dir: %v", err)
+	}
+
+	tool := &ListDirectoryTool{}
+	tctx := &Context{Workspace: ws}
+	result, err := tool.Execute(context.Background(), `{"path":"."}`, tctx)
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	proof, ok := ParseInspectionProof(result.Metadata)
+	if !ok {
+		t.Fatal("expected inspection proof metadata")
+	}
+	if proof.ToolName != "list_directory" || proof.InspectionKind != "directory_listing" {
+		t.Fatalf("proof = %+v", proof)
+	}
+	if proof.Count != 2 || proof.Empty {
+		t.Fatalf("proof count/empty = %+v", proof)
+	}
+}
+
+func TestGlobFilesTool_Execute_EmitsInspectionProof(t *testing.T) {
+	ws := t.TempDir()
+	if err := os.WriteFile(filepath.Join(ws, "alpha.md"), []byte("A"), 0o644); err != nil {
+		t.Fatalf("seed alpha: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, "beta.txt"), []byte("B"), 0o644); err != nil {
+		t.Fatalf("seed beta: %v", err)
+	}
+
+	tool := &GlobFilesTool{}
+	tctx := &Context{Workspace: ws}
+	result, err := tool.Execute(context.Background(), `{"path":".","pattern":"*.md"}`, tctx)
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	proof, ok := ParseInspectionProof(result.Metadata)
+	if !ok {
+		t.Fatal("expected inspection proof metadata")
+	}
+	if proof.ToolName != "glob_files" || proof.InspectionKind != "file_glob" {
+		t.Fatalf("proof = %+v", proof)
+	}
+	if proof.Count != 1 || proof.Empty {
+		t.Fatalf("proof count/empty = %+v", proof)
+	}
+	if proof.Pattern != "*.md" {
+		t.Fatalf("pattern = %q", proof.Pattern)
+	}
+}
+
 func TestWriteFileTool_Execute(t *testing.T) {
 	ws := t.TempDir()
 	tool := &WriteFileTool{}
@@ -112,6 +218,118 @@ func TestWriteFileTool_Execute(t *testing.T) {
 	data, _ := os.ReadFile(filepath.Join(ws, "out.txt"))
 	if string(data) != "data" {
 		t.Errorf("written = %q", string(data))
+	}
+	proof, ok := ParseArtifactProof(result.Metadata)
+	if !ok {
+		t.Fatal("expected artifact proof metadata")
+	}
+	if proof.Path != "out.txt" || proof.ArtifactKind != "workspace_file" {
+		t.Fatalf("proof = %+v", proof)
+	}
+	if !proof.ExactContentIncluded || proof.Content != "data" {
+		t.Fatalf("proof exact content = %+v", proof)
+	}
+	if !strings.Contains(result.Output, `"proof_type":"artifact_write"`) {
+		t.Fatalf("result output should carry structured proof, got %q", result.Output)
+	}
+}
+
+func TestWriteFileTool_RejectsProtectedSourceArtifact(t *testing.T) {
+	ws := t.TempDir()
+	tool := &WriteFileTool{}
+	tctx := &Context{
+		Workspace:              ws,
+		ProtectedReadOnlyPaths: []string{"requirements.txt"},
+	}
+
+	_, err := tool.Execute(context.Background(), `{"path": "requirements.txt", "content": "mutated"}`, tctx)
+	if err == nil {
+		t.Fatal("expected protected source artifact rejection")
+	}
+	if !strings.Contains(err.Error(), "prompt-declared source artifact") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestReadFileTool_Execute_EmitsArtifactReadProof(t *testing.T) {
+	ws := t.TempDir()
+	if err := os.WriteFile(filepath.Join(ws, "input.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatalf("seed file: %v", err)
+	}
+	tool := &ReadFileTool{}
+	tctx := &Context{Workspace: ws}
+
+	result, err := tool.Execute(context.Background(), `{"path":"input.txt"}`, tctx)
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if result == nil {
+		t.Fatal("result should not be nil")
+	}
+	if result.Output != "hello" {
+		t.Fatalf("output = %q, want hello", result.Output)
+	}
+	proof, ok := ParseArtifactReadProof(result.Metadata)
+	if !ok {
+		t.Fatal("expected artifact read proof metadata")
+	}
+	if proof.Path != "input.txt" || proof.ArtifactKind != "workspace_file" {
+		t.Fatalf("proof = %+v", proof)
+	}
+	if !proof.ExactContentIncluded || proof.Content != "hello" {
+		t.Fatalf("proof exact content = %+v", proof)
+	}
+}
+
+func TestObsidianWriteTool_Execute(t *testing.T) {
+	vault := t.TempDir()
+	tool := &ObsidianWriteTool{VaultPath: vault}
+	tctx := &Context{
+		Workspace:    t.TempDir(),
+		AllowedPaths: []string{vault},
+	}
+
+	result, err := tool.Execute(context.Background(), `{"path":"Projects/Daily Note","content":"# Notes"}`, tctx)
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if result == nil {
+		t.Fatal("result should not be nil")
+	}
+	data, err := os.ReadFile(filepath.Join(vault, "Projects", "Daily Note.md"))
+	if err != nil {
+		t.Fatalf("read written note: %v", err)
+	}
+	if string(data) != "# Notes" {
+		t.Fatalf("written note = %q, want %q", string(data), "# Notes")
+	}
+	proof, ok := ParseArtifactProof(result.Metadata)
+	if !ok {
+		t.Fatal("expected artifact proof metadata")
+	}
+	if proof.Path != "Projects/Daily Note.md" || proof.ArtifactKind != "obsidian_note" {
+		t.Fatalf("proof = %+v", proof)
+	}
+	if !proof.ExactContentIncluded || proof.Content != "# Notes" {
+		t.Fatalf("proof exact content = %+v", proof)
+	}
+}
+
+func TestObsidianWriteTool_RejectsProtectedSourceArtifact(t *testing.T) {
+	vault := t.TempDir()
+	tool := &ObsidianWriteTool{VaultPath: vault}
+	tctx := &Context{
+		Workspace:              t.TempDir(),
+		AllowedPaths:           []string{vault},
+		ProtectedReadOnlyPaths: []string{"Projects/Daily Note.md"},
+	}
+
+	_, err := tool.Execute(context.Background(), `{"path":"Projects/Daily Note","content":"# mutated"}`, tctx)
+	if err == nil {
+		t.Fatal("expected protected source artifact rejection")
+	}
+	if !strings.Contains(err.Error(), "prompt-declared source artifact") {
+		t.Fatalf("error = %v", err)
 	}
 }
 
@@ -151,6 +369,16 @@ func TestBashTool_Execute(t *testing.T) {
 	}
 	if len(mr.calls) != 1 {
 		t.Errorf("calls = %d, want 1", len(mr.calls))
+	}
+}
+
+func TestResolvePath_RejectsHomeShortcut(t *testing.T) {
+	_, err := resolvePath("/workspace", "~/Downloads", nil)
+	if err == nil {
+		t.Fatal("expected home shortcut to be rejected")
+	}
+	if !strings.Contains(err.Error(), "home-directory shortcuts") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -194,6 +422,8 @@ func TestRuntimeContextTool(t *testing.T) {
 	tctx := &Context{
 		SessionID: "s1", AgentID: "a1", AgentName: "bot",
 		Workspace: "/ws", Channel: "api",
+		AllowedPaths:           []string{"/safe", "/vault"},
+		ProtectedReadOnlyPaths: []string{"requirements.txt"},
 	}
 	result, err := tool.Execute(context.Background(), `{}`, tctx)
 	if err != nil {
@@ -201,6 +431,15 @@ func TestRuntimeContextTool(t *testing.T) {
 	}
 	if result.Output == "" {
 		t.Error("should have output")
+	}
+	if !strings.Contains(result.Output, "Effective Path Policy") {
+		t.Fatalf("runtime context should expose effective path policy, got %q", result.Output)
+	}
+	if !strings.Contains(result.Output, "absolute paths must fall under an allowed path") {
+		t.Fatalf("runtime context should expose absolute-path constraint, got %q", result.Output)
+	}
+	if !strings.Contains(result.Output, "requirements.txt") {
+		t.Fatalf("runtime context should expose protected read-only inputs, got %q", result.Output)
 	}
 }
 

@@ -147,28 +147,22 @@ func TestService_RecordCost_WithStore(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// QualityTracker.SeedFromHistory with SQLite (quality.go:109 — 0%)
+// QualityTracker.SeedFromHistory with SQLite.
 // ---------------------------------------------------------------------------
 
 func TestQualityTracker_SeedFromHistory_WithStore(t *testing.T) {
 	store := tempStore(t)
 	ctx := context.Background()
 
-	// Insert a session first (turns references sessions).
-	_, err := store.ExecContext(ctx,
-		`INSERT INTO sessions (id, agent_id, scope_key, created_at) VALUES ('s1', 'test-agent', 'agent', datetime('now'))`)
-	if err != nil {
-		t.Fatalf("insert session: %v", err)
-	}
-
-	// Insert some turns.
+	// Insert scored inference history. The tracker should use persisted
+	// quality scores and canonical model keys.
 	for i := 0; i < 5; i++ {
 		_, err := store.ExecContext(ctx,
-			`INSERT INTO turns (id, session_id, model, tokens_in, tokens_out, created_at)
-			 VALUES (?, 's1', 'gpt-4', 10, ?, datetime('now'))`,
-			fmt.Sprintf("turn-%d", i), (i+1)*20)
+			`INSERT INTO inference_costs (id, provider, model, tokens_in, tokens_out, cost, latency_ms, quality_score, escalation, turn_id, cached, created_at)
+			 VALUES (?, 'openrouter', 'openrouter/gpt-4', 10, 20, 0.01, 900, ?, 0, ?, 0, datetime('now'))`,
+			fmt.Sprintf("cost-%d", i), 0.4+float64(i)*0.1, fmt.Sprintf("turn-%d", i))
 		if err != nil {
-			t.Fatalf("insert turn %d: %v", i, err)
+			t.Fatalf("insert inference_cost %d: %v", i, err)
 		}
 	}
 
@@ -179,10 +173,61 @@ func TestQualityTracker_SeedFromHistory_WithStore(t *testing.T) {
 		t.Errorf("expected 5 observations, got %d", qt.ObservationCount("gpt-4"))
 	}
 
-	// Quality should be based on tokens_out / 100.
 	quality := qt.EstimatedQuality("gpt-4")
-	if quality <= 0 || quality > 1 {
-		t.Errorf("quality = %f, want (0, 1]", quality)
+	if quality < 0.55 || quality > 0.65 {
+		t.Errorf("quality = %f, want around 0.6", quality)
+	}
+}
+
+func TestIntentQualityTracker_SeedFromExerciseResults_WithStore(t *testing.T) {
+	store := tempStore(t)
+	ctx := context.Background()
+
+	for i := 0; i < 3; i++ {
+		_, err := store.ExecContext(ctx,
+			`INSERT INTO exercise_results (id, run_id, model, intent_class, complexity, prompt, content, quality, latency_ms, passed, error_msg, created_at)
+			 VALUES (?, 'run-tool', 'openrouter/openai/gpt-4o-mini', 'TOOL_USE', 'simple', 'prompt', 'content', ?, 900, 1, NULL, datetime('now'))`,
+			fmt.Sprintf("exercise-%d", i), 0.7+float64(i)*0.05)
+		if err != nil {
+			t.Fatalf("insert exercise_result %d: %v", i, err)
+		}
+	}
+
+	iq := NewIntentQualityTracker(50)
+	iq.SeedFromExerciseResults(ctx, store)
+
+	if got := iq.ObservationCountForIntent("openai/gpt-4o-mini", "TOOL_USE"); got != 3 {
+		t.Fatalf("canonical tool-use observations = %d, want 3", got)
+	}
+	quality := iq.EstimatedQualityForIntent("openai/gpt-4o-mini", "TOOL_USE")
+	if quality < 0.74 || quality > 0.81 {
+		t.Fatalf("quality = %f, want around 0.75", quality)
+	}
+}
+
+func TestIntentQualityTracker_SeedFromExerciseResults_ResolvesLocalAliasKeys(t *testing.T) {
+	store := tempStore(t)
+	ctx := context.Background()
+
+	for i := 0; i < 2; i++ {
+		_, err := store.ExecContext(ctx,
+			`INSERT INTO exercise_results (id, run_id, model, intent_class, complexity, prompt, content, quality, latency_ms, passed, error_msg, created_at)
+			 VALUES (?, 'run-local-tool', 'ollama/gemma4', 'TOOL_USE', 'simple', 'prompt', 'content', ?, 900, 1, NULL, datetime('now'))`,
+			fmt.Sprintf("exercise-local-%d", i), 0.65+float64(i)*0.1)
+		if err != nil {
+			t.Fatalf("insert local exercise_result %d: %v", i, err)
+		}
+	}
+
+	iq := NewIntentQualityTracker(50)
+	iq.SeedFromExerciseResults(ctx, store)
+
+	if got := iq.ObservationCountForIntentTarget("ollama", "gemma4", "TOOL_USE"); got != 2 {
+		t.Fatalf("local alias observation count = %d, want 2", got)
+	}
+	quality := iq.EstimatedQualityForIntentTarget("ollama", "gemma4", "TOOL_USE")
+	if quality < 0.69 || quality > 0.76 {
+		t.Fatalf("local alias quality = %f, want around 0.70", quality)
 	}
 }
 
@@ -435,10 +480,10 @@ func TestNewClient_EnvVarMissing(t *testing.T) {
 	// (they fail at request time). This enables the service to start
 	// even when some providers are unconfigured.
 	client, err := NewClient(&Provider{
-		Name:      "test",
-		URL:       "http://test",
-		Format:    FormatOpenAI,
-		IsLocal:   false,
+		Name:    "test",
+		URL:     "http://test",
+		Format:  FormatOpenAI,
+		IsLocal: false,
 	})
 	if err != nil {
 		t.Errorf("construction should succeed with missing key: %v", err)

@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 
 	"github.com/rs/zerolog/log"
@@ -42,7 +43,7 @@ func (m *ConnectionManager) Connect(ctx context.Context, cfg McpServerConfig) er
 		if cfg.URL == "" {
 			return fmt.Errorf("mcp: SSE transport requires a URL")
 		}
-		conn, err = ConnectSSE(ctx, cfg.Name, cfg.URL)
+		conn, err = ConnectSSEWithConfig(ctx, cfg)
 	default:
 		return fmt.Errorf("mcp: unsupported transport %q (supported: stdio, sse)", cfg.Transport)
 	}
@@ -102,14 +103,20 @@ func (m *ConnectionManager) Statuses() []ServerStatus {
 	defer m.mu.RUnlock()
 
 	statuses := make([]ServerStatus, 0, len(m.connections))
-	for _, conn := range m.connections {
-		statuses = append(statuses, ServerStatus{
+	for _, conn := range orderedConnections(m.connections) {
+		status := ServerStatus{
 			Name:          conn.Name,
 			Connected:     true,
 			ToolCount:     len(conn.Tools),
 			ServerName:    conn.ServerName,
 			ServerVersion: conn.ServerVersion,
-		})
+		}
+		if err := conn.receiverErr(); err != nil {
+			status.Connected = false
+			status.ToolCount = 0
+			status.Error = err.Error()
+		}
+		statuses = append(statuses, status)
 	}
 	return statuses
 }
@@ -120,10 +127,28 @@ func (m *ConnectionManager) AllTools() []ToolDescriptor {
 	defer m.mu.RUnlock()
 
 	var tools []ToolDescriptor
-	for _, conn := range m.connections {
+	for _, conn := range orderedConnections(m.connections) {
+		if conn.receiverErr() != nil {
+			continue
+		}
 		tools = append(tools, conn.Tools...)
 	}
 	return tools
+}
+
+// ConnectedCount returns the number of live MCP connections whose transport is
+// still healthy enough to serve tool calls.
+func (m *ConnectionManager) ConnectedCount() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	count := 0
+	for _, conn := range m.connections {
+		if conn.receiverErr() == nil {
+			count++
+		}
+	}
+	return count
 }
 
 // CallTool dispatches a tool call to the appropriate server.
@@ -138,6 +163,22 @@ func (m *ConnectionManager) CallTool(ctx context.Context, serverName, toolName s
 	return conn.CallTool(ctx, toolName, input)
 }
 
+// RefreshTools re-discovers tools for a connected server and updates the live
+// connection held by the manager.
+func (m *ConnectionManager) RefreshTools(ctx context.Context, name string) ([]ToolDescriptor, error) {
+	m.mu.RLock()
+	conn, ok := m.connections[name]
+	m.mu.RUnlock()
+
+	if !ok {
+		return nil, fmt.Errorf("mcp: server %q not connected", name)
+	}
+	if err := conn.RefreshTools(ctx); err != nil {
+		return nil, err
+	}
+	return append([]ToolDescriptor(nil), conn.Tools...), nil
+}
+
 // Connection returns a snapshot of a named connection if present.
 func (m *ConnectionManager) Connection(name string) (*Connection, bool) {
 	m.mu.RLock()
@@ -148,9 +189,12 @@ func (m *ConnectionManager) Connection(name string) (*Connection, bool) {
 		return nil, false
 	}
 
-	copyConn := *conn
-	copyConn.Tools = append([]ToolDescriptor(nil), conn.Tools...)
-	return &copyConn, true
+	return &Connection{
+		Name:          conn.Name,
+		Tools:         append([]ToolDescriptor(nil), conn.Tools...),
+		ServerName:    conn.ServerName,
+		ServerVersion: conn.ServerVersion,
+	}, true
 }
 
 // CloseAll disconnects all servers.
@@ -164,4 +208,17 @@ func (m *ConnectionManager) CloseAll() {
 		}
 	}
 	m.connections = make(map[string]*Connection)
+}
+
+func orderedConnections(connections map[string]*Connection) []*Connection {
+	names := make([]string, 0, len(connections))
+	for name := range connections {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	ordered := make([]*Connection, 0, len(names))
+	for _, name := range names {
+		ordered = append(ordered, connections[name])
+	}
+	return ordered
 }

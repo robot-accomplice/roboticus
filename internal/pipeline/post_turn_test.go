@@ -2,7 +2,12 @@ package pipeline
 
 import (
 	"context"
+	"database/sql"
+	"strings"
 	"testing"
+
+	"roboticus/internal/session"
+	"roboticus/testutil"
 )
 
 func TestChunkText_SmallInput(t *testing.T) {
@@ -107,4 +112,228 @@ func TestPostTurnIngest_EmptyContent(t *testing.T) {
 	p := &Pipeline{}
 	// Should not panic with empty content.
 	p.PostTurnIngest(context.Background(), NewSession("s", "a", "n"), "t1", "")
+}
+
+func TestReflectOnTurn_UsesPersistedTurnArtifacts(t *testing.T) {
+	store := testutil.TempStore(t)
+	p := &Pipeline{store: store}
+	ctx := context.Background()
+
+	sess, err := store.FindOrCreateSession(ctx, "agent-reflect", "scope:reflect")
+	if err != nil {
+		t.Fatalf("FindOrCreateSession: %v", err)
+	}
+	if _, err := store.ExecContext(ctx,
+		`INSERT INTO turns (id, session_id) VALUES (?, ?)`,
+		"turn-reflect", sess.ID,
+	); err != nil {
+		t.Fatalf("insert turn: %v", err)
+	}
+	if _, err := store.ExecContext(ctx,
+		`INSERT INTO tool_calls (id, turn_id, tool_name, input, output, status, duration_ms)
+		 VALUES
+		   ('tc-1', 'turn-reflect', 'search_memories', '{}', 'ok', 'success', 1200),
+		   ('tc-2', 'turn-reflect', 'bash', '{}', 'error: denied', 'error', 350)`,
+	); err != nil {
+		t.Fatalf("insert tool calls: %v", err)
+	}
+	if _, err := store.ExecContext(ctx,
+		`INSERT INTO pipeline_traces (id, turn_id, session_id, total_ms, stages_json)
+		 VALUES ('pt-1', 'turn-reflect', ?, 2200, '[]')`,
+		sess.ID,
+	); err != nil {
+		t.Fatalf("insert pipeline trace: %v", err)
+	}
+	if _, err := store.ExecContext(ctx,
+		`UPDATE pipeline_traces
+		    SET inference_params_json = ?
+		  WHERE id = 'pt-1'`,
+		(&InferenceParams{
+			ModelActual:     "ollama/llama3",
+			ReactTurns:      2,
+			GuardViolations: []string{"rewrite_tracking"},
+			GuardRetried:    true,
+		}).JSON(),
+	); err != nil {
+		t.Fatalf("seed inference params: %v", err)
+	}
+	if _, err := store.ExecContext(ctx,
+		`INSERT INTO model_selection_events
+		     (id, turn_id, session_id, agent_id, channel, selected_model, strategy, primary_model, user_excerpt, candidates_json)
+		 VALUES ('mse-1', 'turn-reflect', ?, 'agent-reflect', 'api', 'ollama/llama3', 'router', 'ollama/llama3', 'find something relevant', '[]')`,
+		sess.ID,
+	); err != nil {
+		t.Fatalf("insert model selection event: %v", err)
+	}
+
+	live := session.New(sess.ID, sess.AgentID, "TestBot")
+	live.AddUserMessage("find something relevant")
+	live.AddAssistantMessage("final answer after tools", nil)
+
+	p.reflectOnTurn(ctx, "turn-reflect", "find something relevant", live, ExecutiveGrowthResult{
+		VerifiedRecorded:    1,
+		QuestionsOpened:     2,
+		QuestionsResolved:   1,
+		AssumptionsRecorded: 3,
+	})
+
+	var content string
+	var contentJSON sql.NullString
+	if err := store.QueryRowContext(ctx,
+		`SELECT content, content_json
+		   FROM episodic_memory
+		  WHERE classification = 'episode_summary'
+		  ORDER BY created_at DESC, rowid DESC
+		  LIMIT 1`,
+	).Scan(&content, &contentJSON); err != nil {
+		t.Fatalf("load episode summary: %v", err)
+	}
+	if content == "" {
+		t.Fatal("episode summary content should not be empty")
+	}
+	if !containsAll(content,
+		"Actions: search_memories",
+		"bash",
+		"Errors: error: denied",
+		"Duration: 2s",
+		"Model: ollama/llama3",
+		"ReactTurns: 2",
+		"GuardViolations: rewrite_tracking",
+		"GuardRetried: yes",
+		"ExecutiveVerified: 1",
+		"ExecutiveQuestionsOpened: 2",
+		"ExecutiveQuestionsResolved: 1",
+		"ExecutiveAssumptions: 3",
+	) {
+		t.Fatalf("episode summary did not reflect persisted turn artifacts: %q", content)
+	}
+	if !contentJSON.Valid || !strings.Contains(contentJSON.String, "\"ModelUsed\":\"ollama/llama3\"") || !strings.Contains(contentJSON.String, "\"VerifiedRecorded\":1") {
+		t.Fatalf("episode summary JSON did not carry structured payload: %+v", contentJSON)
+	}
+}
+
+func TestReflectOnTurn_AppendsProceduralLearningCapturedEvent(t *testing.T) {
+	store := testutil.TempStore(t)
+	p := &Pipeline{store: store}
+	ctx := context.Background()
+
+	sess, err := store.FindOrCreateSession(ctx, "agent-reflect-event", "scope:reflect")
+	if err != nil {
+		t.Fatalf("FindOrCreateSession: %v", err)
+	}
+	if _, err := store.ExecContext(ctx,
+		`INSERT INTO turns (id, session_id) VALUES (?, ?)`,
+		"turn-reflect-event", sess.ID,
+	); err != nil {
+		t.Fatalf("insert turn: %v", err)
+	}
+	if _, err := store.ExecContext(ctx,
+		`INSERT INTO turn_diagnostics (id, turn_id, session_id, channel, status)
+		 VALUES (?, ?, ?, 'api', 'ok')`,
+		"td-reflect-event", "turn-reflect-event", sess.ID,
+	); err != nil {
+		t.Fatalf("insert turn diagnostics: %v", err)
+	}
+	if _, err := store.ExecContext(ctx,
+		`INSERT INTO tool_calls (id, turn_id, tool_name, input, output, status, duration_ms)
+		 VALUES ('tc-r-1', 'turn-reflect-event', 'obsidian_write', '{}', 'ok', 'success', 50)`,
+	); err != nil {
+		t.Fatalf("insert tool call: %v", err)
+	}
+
+	live := session.New(sess.ID, sess.AgentID, "TestBot")
+	live.AddUserMessage("Create a reusable runbook note and capture what worked.")
+	live.AddAssistantMessage("Created the runbook note successfully.", nil)
+	live.SetVerificationEvidence(&session.VerificationEvidence{
+		HasEvidence: true,
+		HasGaps:     false,
+		EvidenceItems: []string{
+			"[tool_artifact, canonical] obsidian_note Vault/runbook.md sha256=abc",
+		},
+	})
+
+	p.reflectOnTurn(ctx, "turn-reflect-event", "Create a reusable runbook note and capture what worked.", live, ExecutiveGrowthResult{})
+
+	var detailsJSON string
+	if err := store.QueryRowContext(ctx,
+		`SELECT details_json
+		   FROM turn_diagnostic_events
+		  WHERE turn_id = ? AND event_type = 'procedural_learning_captured'
+		  ORDER BY seq DESC LIMIT 1`,
+		"turn-reflect-event",
+	).Scan(&detailsJSON); err != nil {
+		t.Fatalf("query procedural learning event: %v", err)
+	}
+	if !strings.Contains(detailsJSON, `"promotion_state":"captured_only"`) {
+		t.Fatalf("details_json = %q, want captured_only promotion state", detailsJSON)
+	}
+	if !strings.Contains(detailsJSON, `"outcome":"partial"`) {
+		t.Fatalf("details_json = %q, want partial outcome when reusable evidence is captured without exact proof authority", detailsJSON)
+	}
+}
+
+func TestReflectOnTurn_UsesTurnDiagnosticsStatusForOutcomePolarity(t *testing.T) {
+	store := testutil.TempStore(t)
+	p := &Pipeline{store: store}
+	ctx := context.Background()
+
+	sess, err := store.FindOrCreateSession(ctx, "agent-reflect-degraded", "scope:reflect")
+	if err != nil {
+		t.Fatalf("FindOrCreateSession: %v", err)
+	}
+	if _, err := store.ExecContext(ctx,
+		`INSERT INTO turns (id, session_id) VALUES (?, ?)`,
+		"turn-reflect-degraded", sess.ID,
+	); err != nil {
+		t.Fatalf("insert turn: %v", err)
+	}
+	if _, err := store.ExecContext(ctx,
+		`INSERT INTO turn_diagnostics (id, turn_id, session_id, channel, status)
+		 VALUES (?, ?, ?, 'api', 'degraded')`,
+		"td-reflect-degraded", "turn-reflect-degraded", sess.ID,
+	); err != nil {
+		t.Fatalf("insert turn diagnostics: %v", err)
+	}
+	if _, err := store.ExecContext(ctx,
+		`INSERT INTO tool_calls (id, turn_id, tool_name, input, output, status, duration_ms)
+		 VALUES ('tc-rd-1', 'turn-reflect-degraded', 'write_file', '{}', 'ok', 'success', 50)`,
+	); err != nil {
+		t.Fatalf("insert tool call: %v", err)
+	}
+
+	live := session.New(sess.ID, sess.AgentID, "TestBot")
+	live.AddUserMessage("Create the rollout note exactly.")
+	live.AddAssistantMessage("Created the rollout note successfully.", nil)
+	live.SetVerificationEvidence(&session.VerificationEvidence{
+		HasEvidence: true,
+		HasGaps:     true,
+		EvidenceItems: []string{
+			"[tool_artifact, canonical] workspace_file tmp/out.txt sha256=abc",
+		},
+	})
+
+	p.reflectOnTurn(ctx, "turn-reflect-degraded", "Create the rollout note exactly.", live, ExecutiveGrowthResult{})
+
+	var detailsJSON string
+	if err := store.QueryRowContext(ctx,
+		`SELECT details_json
+		   FROM turn_diagnostic_events
+		  WHERE turn_id = ? AND event_type = 'procedural_learning_captured'
+		  ORDER BY seq DESC LIMIT 1`,
+		"turn-reflect-degraded",
+	).Scan(&detailsJSON); err != nil {
+		t.Fatalf("query procedural learning event: %v", err)
+	}
+	if !strings.Contains(detailsJSON, `"outcome":"partial"`) {
+		t.Fatalf("details_json = %q, want partial outcome", detailsJSON)
+	}
+}
+
+func containsAll(haystack string, needles ...string) bool {
+	for _, needle := range needles {
+		if !strings.Contains(haystack, needle) {
+			return false
+		}
+	}
+	return true
 }
