@@ -1,6 +1,9 @@
 package channel
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func FuzzTelegramFormatter(f *testing.F) {
 	formatter := &TelegramFormatter{}
@@ -40,6 +43,11 @@ func FuzzWhatsAppFormatter(f *testing.F) {
 	f.Add("# Header")
 	f.Add("[link](https://example.com)")
 	f.Add("")
+	f.Add(strings.Repeat("*", 8192))
+	f.Add(strings.Repeat("**", 4096))
+	f.Add(strings.Repeat("`", 8192))
+	f.Add(strings.Repeat("[", 8192))
+	f.Add(strings.Repeat("[x](y)", 2048))
 
 	f.Fuzz(func(t *testing.T, input string) {
 		_ = formatter.Format(input)
