@@ -4,6 +4,35 @@ All notable changes to Roboticus are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.6] - 2026-04-19
+
+### Changed
+
+- Closed the remaining scoped parity dispositions for v1.0.6 and made prompt
+  compression an explicit deferral instead of leaving it as an ambiguous
+  release risk.
+- Completed the memory-architecture acceptance path for HybridSearch-first
+  retrieval, relational distillation into `knowledge_facts`, and telemetry for
+  operator-driven LIKE fallback retirement.
+- Tightened runtime truth surfaces across checkpoint ownership, guard retry
+  flow, cache replay shaping, capability introspection, channel metadata
+  normalization, and scheduler/maintenance lifecycle wiring.
+
+### Fixed
+
+- Reworked daemon stop/control so operators no longer need `sudo`, stale
+  `launchctl` state is handled correctly, and service-control commands no
+  longer boot the full runtime just to obtain a handle.
+- Fixed the v1.0.5 operational cascade by making SQLite migration 042
+  SQLite-compliant, tightening DB/WAL permissions to `0600`, and surfacing
+  rogue-config / rogue-DB conditions through system warnings.
+- Turned MCP and pipeline failures into operator-actionable diagnostics by
+  capturing child stderr on stdio startup failure, keeping per-call timeout
+  fallout local to the timed-out request, and adding a pipeline stage liveness
+  watchdog.
+- Preserved user-owned provider and skill config on upgrade by default, while
+  improving upgrade narration and checksum mismatch diagnostics.
+
 ## [1.0.0] - 2026-04-11
 
 ### Theme: The Go Rewrite

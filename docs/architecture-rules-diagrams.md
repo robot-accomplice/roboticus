@@ -684,50 +684,50 @@ flowchart LR
     %% fabricate canned execution summaries in their place.
 ```
 
-## 9. Supplementary Rule View — Host Resource Snapshot Ownership
+## 7. Supplementary Rule View — Release Control Plane
 
-Host resource state is not allowed to live as an ad hoc side metric or a
-manual operator guess. Benchmark validity and turn RCA both depend on one
-shared resource-sampling seam that feeds durable benchmark artifacts and the
-canonical turn diagnostics artifact.
+This view captures the release-distribution seam that `v1.0.6` exposed. The
+operator-facing release is not the git tag by itself; it is the full published
+control plane from tag through public site.
 
-```mermaid
-flowchart LR
-    sampler["Host Resource Sampler\nCPU / memory / swap / process RSS"]
-    benchmark["Benchmark Persistence\nbaseline_runs + exercise_results"]
-    rca["Canonical Turn Diagnostics\nturn_diagnostics + event details"]
-    ui["Operator RCA / benchmark UI"]
+Two source-tree artifacts are part of that control plane before publication:
 
-    sampler --> benchmark
-    sampler --> rca
-    benchmark --> ui
-    rca --> ui
-```
+- `docs/releases/vX.Y.Z-release-notes.md`
+- `CHANGELOG.md` section `## [X.Y.Z]`
 
-## 9. Supplementary Rule View — MCP SSE Validation Ownership
-
-This view captures the rule behind `PAR-008`: SSE readiness claims must come
-from one central validation harness and evidence artifact, not from scattered
-fixture tests, checklist prose, or connector folklore. The same rule requires
-one shared config-to-runtime conversion seam so auth/header semantics cannot
-drift between daemon startup, route tests, and validation tooling.
+If either is missing for the tagged version, the release is malformed and the
+publication path must stop before claiming a live operator-facing release.
 
 ```mermaid
 flowchart LR
-    target["Named SSE Validation Target\n(url, optional headers,\nexpected server/tool assertions)"]
-    config["Shared MCP Config Conversion\n(core config -> runtime config)"]
-    harness["Central SSE Validation Harness"]
-    transport["MCP SSE Transport\n(GET stream + endpoint discovery\n+ auth-bearing POST JSON-RPC)"]
-    evidence["Validation Evidence Artifact\n(server identity, tool count,\ncall result, failure details)"]
-    checklist["Release Checklist / System 08"]
-    operator["Operator Confidence Claim"]
+    tag["Git tag"]
+    gate["Tag-gated release checks"]
+    ghrel["GitHub Release object\nassets + SHA256SUMS.txt"]
+    latest["GitHub releases/latest"]
+    dispatch["Site sync trigger"]
+    sitesync["roboticus.ai release-sync"]
+    deploy["Production deploy"]
+    installers["/install.sh + /install.ps1"]
+    upgrade["roboticus update/upgrade"]
+    operator["Operator install / upgrade"]
 
-    target --> config --> harness --> transport
-    transport --> evidence
-    evidence --> checklist --> operator
+    tag --> gate --> ghrel --> latest
+    ghrel --> dispatch --> sitesync --> deploy
+    sitesync --> installers
+    latest --> installers
+    latest --> upgrade
+    installers --> operator
+    upgrade --> operator
+
+    %% Rule notes:
+    %% - A tag without ghrel is not a release.
+    %% - Public installers must be copied from the tagged source repo,
+    %%   not maintained as a divergent site-local fork.
+    %% - Site sync may not depend on source-tree paths that are not part
+    %%   of the tagged release contract.
 ```
 
-## 10. Supplementary Rule View — Streaming Is Not A Separate Product
+## 8. Supplementary Rule View — Streaming Is Not A Separate Product
 
 This is a supporting diagram rather than a C4 view because it expresses a
 behavioral equivalence rule.
@@ -748,6 +748,49 @@ flowchart LR
 
     s1 --> shared --> s2
     t1 --> shared --> t2
+```
+
+## 9. Supplementary Rule View — Host Resource Snapshot Ownership
+
+Host resource state is not allowed to live as an ad hoc side metric or a
+manual operator guess. Benchmark validity and turn RCA both depend on one
+shared resource-sampling seam that feeds durable benchmark artifacts and the
+canonical turn diagnostics artifact.
+
+```mermaid
+flowchart LR
+    sampler["Host Resource Sampler\nCPU / memory / swap / process RSS"]
+    benchmark["Benchmark Persistence\nbaseline_runs + exercise_results"]
+    rca["Canonical Turn Diagnostics\nturn_diagnostics + event details"]
+    ui["Operator RCA / benchmark UI"]
+
+    sampler --> benchmark
+    sampler --> rca
+    benchmark --> ui
+    rca --> ui
+```
+
+## 10. Supplementary Rule View — MCP SSE Validation Ownership
+
+This view captures the rule behind `PAR-008`: SSE readiness claims must come
+from one central validation harness and evidence artifact, not from scattered
+fixture tests, checklist prose, or connector folklore. The same rule requires
+one shared config-to-runtime conversion seam so auth/header semantics cannot
+drift between daemon startup, route tests, and validation tooling.
+
+```mermaid
+flowchart LR
+    target["Named SSE Validation Target\n(url, optional headers,\nexpected server/tool assertions)"]
+    config["Shared MCP Config Conversion\n(core config -> runtime config)"]
+    harness["Central SSE Validation Harness"]
+    transport["MCP SSE Transport\n(GET stream + endpoint discovery\n+ auth-bearing POST JSON-RPC)"]
+    evidence["Validation Evidence Artifact\n(server identity, tool count,\ncall result, failure details)"]
+    checklist["Release Checklist / System 08"]
+    operator["Operator Confidence Claim"]
+
+    target --> config --> harness --> transport
+    transport --> evidence
+    evidence --> checklist --> operator
 ```
 
 ## 11. Supplementary Rule View — Channel Ingress Ownership

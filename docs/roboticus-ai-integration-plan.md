@@ -28,6 +28,22 @@ From the site repository:
 - sync scripts regenerate site data modules
 - `deploy.yml` publishes the updated site to Vercel on push to `main`
 
+## v1.0.6 Postmortem Findings
+
+The 2026-04-19 `v1.0.6` release attempt exposed four real integration defects:
+
+1. The source repo produced a tag but no published GitHub Release object,
+   because the tag-gated release workflow failed before asset publication.
+2. The source repo did not actively trigger the site sync workflow; the only
+   notify workflow in-tree was an example file pointed at a different repo.
+3. The site's public installer scripts had drifted from the source repo's
+   canonical installer scripts, including checksum filename expectations.
+4. The site sync workflow assumed `registry/*` files existed in the source
+   repo, but the tagged release tree did not provide them.
+
+That means the old "tag and then sync the site" story was not a real control
+plane. It was a collection of partially connected steps.
+
 ## What The Site Currently Does
 
 `roboticus-site/.github/workflows/release-sync.yml` performs the following:
@@ -42,6 +58,13 @@ From the site repository:
 8. validates public registry integrity
 9. builds the site
 10. commits and pushes the synchronized result
+
+For this to be trustworthy, the workflow must also:
+
+11. copy the canonical installer scripts from the tagged source repo
+12. avoid hard failures on source-tree paths that are not part of the release
+    contract
+13. fail loudly if the source release object itself does not exist
 
 Then `deploy.yml` builds and deploys the site from `main`.
 
@@ -97,10 +120,23 @@ Required outputs:
 - per-platform artifacts
 - canonical checksum manifest (`SHA256SUMS.txt`)
 - release notes
-- changelog entry
+- changelog entry in `CHANGELOG.md` for the exact released version
 - registry files or a Go-native equivalent canonical source
 - architecture/docs source for site indexing
 - metrics source or generation inputs
+
+The source repo must also publish or expose:
+
+- one canonical release event that the site can subscribe to
+- a release object whose assets match the installer contract
+- a source tree layout that matches what the site sync workflow expects, or a
+  site sync workflow that gracefully handles absent optional trees
+
+The site sync layer is allowed to carry a narrowly scoped repair path for
+historical broken tags whose source tree predates these guarantees. That repair
+path is not part of the normal release contract and must not weaken the rule
+that current releases publish both release notes and a matching changelog
+section before tagging.
 
 ## Required Site Changes For Cutover
 
@@ -116,6 +152,12 @@ Required changes:
 5. ensure metrics extraction supports Go source layout
 6. ensure changelog sync can read Roboticus changelog format
 7. ensure architecture/docs sync uses Roboticus docs as canonical after cutover
+8. sync public installer scripts directly from the tagged source repo instead
+   of maintaining independent copies
+9. remove any site copy that still assumes `checksums.txt` when the source
+   release contract is `SHA256SUMS.txt`
+10. stop advertising `go install github.com/robot-accomplice/roboticus@latest`
+    as a supported fallback until the module path contract matches that command
 
 ## Distribution Compatibility Decision
 
@@ -154,6 +196,13 @@ The first Roboticus-backed release must not be announced until:
 4. Dry-run the sync against a test Roboticus tag.
 5. Validate install/upgrade end to end.
 6. Cut the production release only after all of the above are green.
+
+## Control Plane Rule
+
+The site must treat the source repo's tagged installer scripts and published
+release assets as the only authoritative install contract. If the site carries a
+different script body, checksum filename, or archive naming assumption, the
+control plane is already broken even before an operator reports it.
 
 ## Migration Risk To Avoid
 
