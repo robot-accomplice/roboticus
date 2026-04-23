@@ -4,34 +4,35 @@ All notable changes to Roboticus are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.0.6] - 2026-04-19
+## [1.0.7] - 2026-04-23
 
 ### Changed
 
-- Closed the remaining scoped parity dispositions for v1.0.6 and made prompt
-  compression an explicit deferral instead of leaving it as an ambiguous
-  release risk.
-- Completed the memory-architecture acceptance path for HybridSearch-first
-  retrieval, relational distillation into `knowledge_facts`, and telemetry for
-  operator-driven LIKE fallback retirement.
-- Tightened runtime truth surfaces across checkpoint ownership, guard retry
-  flow, cache replay shaping, capability introspection, channel metadata
-  normalization, and scheduler/maintenance lifecycle wiring.
+- Turned `v1.0.7` into an explicit behavior-hardening release with canonical
+  RCA, focused tool surfaces, stricter artifact/source proof, and cleaner
+  retry/replay boundaries instead of continuing to treat repeated agent
+  failures as isolated bugs.
+- Tightened model/routing truth so lifecycle policy, intent-scoped exercise,
+  tool-use evidence, and observed provider/model identity now line up across
+  routing, execution, benchmarks, and operator diagnostics.
+- Hardened the release/deployment control plane by making release procedure
+  explicit, fixing version stamping, removing deprecated Node 20 workflow
+  actions, and aligning the declared Go security floor with the toolchain CI
+  actually needs.
 
 ### Fixed
 
-- Reworked daemon stop/control so operators no longer need `sudo`, stale
-  `launchctl` state is handled correctly, and service-control commands no
-  longer boot the full runtime just to obtain a handle.
-- Fixed the v1.0.5 operational cascade by making SQLite migration 042
-  SQLite-compliant, tightening DB/WAL permissions to `0600`, and surfacing
-  rogue-config / rogue-DB conditions through system warnings.
-- Turned MCP and pipeline failures into operator-actionable diagnostics by
-  capturing child stderr on stdio startup failure, keeping per-call timeout
-  fallout local to the timed-out request, and adding a pipeline stage liveness
-  watchdog.
-- Preserved user-owned provider and skill config on upgrade by default, while
-  improving upgrade narration and checksum mismatch diagnostics.
+- Removed several framework-owned false negatives around tool use and authoring
+  by adding central tool-I/O normalization, exact artifact proof, source-read
+  protection, replay suppression, and authoritative verifier rechecks before
+  finalization.
+- Fixed multiple observability/RCA truth seams so turn diagnostics, trace flow,
+  host-resource evidence, learning/reuse capture, and operator UI all report
+  the same causal story instead of drifting into stale fallback or trace-only
+  views.
+- Closed release-branch and post-merge CI defects uncovered during the
+  ceremony, including Linux-specific MCP stderr diagnostics, brittle shell test
+  fixtures, unstable pipeline tests, and vulnerable/stale workflow dependencies.
 
 ## [1.0.0] - 2026-04-11
 
