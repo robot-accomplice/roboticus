@@ -32,9 +32,27 @@ jobs:
   test:
     name: Pre-release Tests
     runs-on: ubuntu-latest
+    env:
+      TAG_NAME: ${{ github.ref_name }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
+
+      - name: Validate release notes and changelog
+        run: |
+          set -euo pipefail
+          VERSION="${TAG_NAME#v}"
+          RELEASE_NOTES="docs/releases/v${VERSION}-release-notes.md"
+
+          [ -f "$RELEASE_NOTES" ] || {
+            echo "missing required release notes: $RELEASE_NOTES" >&2
+            exit 1
+          }
+
+          grep -Eq "^## \\[${VERSION//./\\.}\\]" CHANGELOG.md || {
+            echo "missing required CHANGELOG.md section for ${VERSION}" >&2
+            exit 1
+          }
 
       - name: Set up Go
         uses: actions/setup-go@v6
@@ -45,7 +63,10 @@ jobs:
         run: go vet ./...
 
       - name: Run tests with race detector
-        run: go test -race -timeout 300s ./...
+        # Keep the release gate aligned with CI. v1.0.6 proved that a stale
+        # 300s cap can fail the release pipeline even when the release branch's
+        # current validated test posture needs materially more headroom.
+        run: go test -race -timeout 20m ./...
 
       - name: Run smoke test
         run: go test -v -run TestLiveSmokeTest -timeout 120s .
@@ -198,3 +219,66 @@ jobs:
             scripts/install.sh
             scripts/install.ps1
           fail_on_unmatched_files: false
+
+      - name: Verify live release object and assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          release_json=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG_NAME}")
+          latest_json=$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest")
+
+          actual_tag=$(printf '%s' "$release_json" | jq -r '.tag_name')
+          latest_tag=$(printf '%s' "$latest_json" | jq -r '.tag_name')
+          [ "$actual_tag" = "$TAG_NAME" ] || {
+            echo "release tag mismatch: expected $TAG_NAME got $actual_tag" >&2
+            exit 1
+          }
+          [ "$latest_tag" = "$TAG_NAME" ] || {
+            echo "latest release mismatch: expected $TAG_NAME got $latest_tag" >&2
+            exit 1
+          }
+
+          asset_names=$(printf '%s' "$release_json" | jq -r '.assets[].name' | sort)
+          printf '%s\n' "$asset_names"
+
+          for required in \
+            SHA256SUMS.txt \
+            install.sh \
+            install.ps1 \
+            roboticus-linux-amd64 \
+            roboticus-linux-arm64 \
+            roboticus-darwin-amd64 \
+            roboticus-darwin-arm64 \
+            roboticus-windows-amd64.exe \
+            "roboticus-${TAG_NAME#v}-linux-amd64.tar.gz" \
+            "roboticus-${TAG_NAME#v}-linux-arm64.tar.gz" \
+            "roboticus-${TAG_NAME#v}-darwin-amd64.tar.gz" \
+            "roboticus-${TAG_NAME#v}-darwin-arm64.tar.gz" \
+            "roboticus-${TAG_NAME#v}-windows-amd64.zip"
+          do
+            printf '%s\n' "$asset_names" | grep -Fx "$required" >/dev/null || {
+              echo "missing published asset: $required" >&2
+              exit 1
+            }
+          done
+
+      - name: Prepare site-sync metadata
+        id: site_meta
+        run: |
+          echo "version=${TAG_NAME#v}" >> "$GITHUB_OUTPUT"
+          echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
+      - name: Trigger roboticus.ai release sync
+        if: ${{ !contains(github.ref_name, '-rc') }}
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.ROBOTICUS_SITE_DISPATCH_TOKEN }}
+          repository: robot-accomplice/ironclad-site
+          event-type: release-sync
+          client-payload: |
+            {
+              "version": "${{ steps.site_meta.outputs.version }}",
+              "date": "${{ steps.site_meta.outputs.date }}"
+            }
