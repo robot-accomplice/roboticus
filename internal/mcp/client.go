@@ -346,49 +346,31 @@ func ConnectStdio(ctx context.Context, name, command string, args []string, env 
 }
 
 // waitForStderrDrain pauses briefly to let the stderr-collection
-// goroutine catch up after the child process has been killed/closed.
-// Without this small wait, the diagnostic returned by
-// ChildDiagnostic() can be empty even when the child wrote real
-// error text just before exiting — collectStderr's Read returns EOF
-// immediately on Close but the bytes already in the pipe buffer may
-// not have been appended yet.
+// goroutine and child-exit observer complete after the child process
+// has been killed/closed. Without this wait, ChildDiagnostic() can
+// miss either the final stderr tail or the final exit state on slower
+// runners.
 //
-// If stderr collection and exit observation have already completed,
-// returns immediately. Otherwise, for still-running children, polls until the
-// buffer stops growing OR timeout elapses, whichever comes first. The poll
-// interval is short (10ms) so a quickly-flushing child doesn't pay the full
-// timeout.
+// This function intentionally waits on transport-owned completion
+// signals, not a buffer-length stability heuristic. Heuristics allowed
+// premature returns on Linux CI, dropping the actionable stderr tail
+// from large child-failure diagnostics.
 func waitForStderrDrain(t *StdioTransport, timeout time.Duration) {
-	select {
-	case <-t.stderrDone:
-		select {
-		case <-t.waitDone:
-			return
-		default:
-		}
-	default:
-	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
 
-	deadline := time.Now().Add(timeout)
-	prevLen := -1
-	for time.Now().Before(deadline) {
+	stderrDone := false
+	waitDone := false
+
+	for !(stderrDone && waitDone) {
 		select {
 		case <-t.stderrDone:
-			select {
-			case <-t.waitDone:
-				return
-			default:
-			}
-		default:
+			stderrDone = true
+		case <-t.waitDone:
+			waitDone = true
+		case <-timer.C:
+			return
 		}
-		t.stderrMu.Lock()
-		curLen := len(t.stderrBuf)
-		t.stderrMu.Unlock()
-		if curLen == prevLen && curLen > 0 {
-			return // stable
-		}
-		prevLen = curLen
-		time.Sleep(10 * time.Millisecond)
 	}
 }
 
