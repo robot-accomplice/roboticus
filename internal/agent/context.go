@@ -56,11 +56,11 @@ type ContextConfig struct {
 	// compresses every other message over ~200 chars through
 	// llm.SmartCompress at CompressionTargetRatio.
 	//
-	// False (the default) is a no-op; the request is returned with
-	// the full content of every message. Operators flip this on when
-	// model context ceilings force aggressive reduction; the trade
-	// is information density (less verbose history) vs fidelity
-	// (keyword-only compressed content).
+	// False (the default) is the intended live-path setting. v1.0.7
+	// keeps this feature only for controlled benchmark/comparison work
+	// because the history-bearing soak stayed decisively negative on the
+	// current runtime. It is not recommended as a live operator-facing
+	// optimization.
 	//
 	// Rust gate anchor: context_builder.rs:436-445.
 	PromptCompression bool
@@ -69,8 +69,8 @@ type ContextConfig struct {
 	// PromptCompression is true. Clamped to [0.1, 1.0] by
 	// llm.SmartCompress. Rust default is 0.6; zero or unset values
 	// here are treated as 0.6 by BuildRequest to give operators a
-	// sensible behavior when they flip on PromptCompression but
-	// haven't thought about the ratio yet.
+	// sensible behavior when they explicitly enable the experimental
+	// benchmark-only gate but have not tuned the ratio yet.
 	CompressionTargetRatio float64
 }
 
@@ -105,7 +105,7 @@ type ContextBuilder struct {
 	memoryIndex  string // lightweight memory index for recall_memory
 
 	// systemNotes are additional ambient system messages produced by
-	// pipeline stages (e.g. hippocampus summary, checkpoint digest)
+	// pipeline stages (e.g. hippocampus summary, checkpoint restore note)
 	// and injected after the memory index. Order matches insertion
 	// order; each note becomes its own system message so the model
 	// sees them as distinct ambient context rather than one
@@ -141,7 +141,7 @@ func (cb *ContextBuilder) SetMemoryIndex(index string) {
 // AppendSystemNote queues an additional ambient system message to be
 // injected after the memory index and before conversation history.
 // Intended for pipeline-owned ambient context (hippocampus summary,
-// checkpoint digest, runtime diagnostics) that does not belong inside
+// checkpoint restore note, runtime diagnostics) that does not belong inside
 // the main system prompt but should reach the model on every turn.
 //
 // Empty notes are silently ignored — upstream stages emit "" when the
@@ -227,7 +227,7 @@ func (cb *ContextBuilder) BuildRequest(session *Session) *llm.Request {
 	}
 
 	// Inject ambient system notes queued by pipeline stages
-	// (hippocampus summary, checkpoint digest, diagnostics). Each note
+	// (hippocampus summary, checkpoint restore, diagnostics). Each note
 	// goes in as its own system message — matches Rust's
 	// context_builder.rs:356-369 which emits the hippocampus summary
 	// as a separate UnifiedMessage rather than concatenating it to the
@@ -312,84 +312,77 @@ func (cb *ContextBuilder) BuildRequest(session *Session) *llm.Request {
 	//       that's the message the user is actively waiting for a
 	//       response to; older history is context that helps but is
 	//       not the request.
-	var historyMessages []llm.Message
+	chunks := chunkConversationMessages(currentTopicMsgs)
+	var selectedChunks [][]llm.Message
 	usedTokens := 0
 
-	latestUserIdx := -1
-	for i := len(currentTopicMsgs) - 1; i >= 0; i-- {
-		if currentTopicMsgs[i].Role == "user" {
-			latestUserIdx = i
+	latestUserChunkIdx := -1
+	for i := len(chunks) - 1; i >= 0; i-- {
+		if chunkContainsLatestUser(chunks[i]) {
+			latestUserChunkIdx = i
 			break
 		}
 	}
 
-	for i := len(currentTopicMsgs) - 1; i >= 0; i-- {
-		m := currentTopicMsgs[i]
-		content := cb.compact(m, stage)
-		tokens := cb.estimateTokens(content)
+	for i := len(chunks) - 1; i >= 0; i-- {
+		chunk := chunks[i]
+		chunkMessages := make([]llm.Message, 0, len(chunk.Messages))
+		chunkTokens := 0
 
-		// Latest user message: include unconditionally AND verbatim.
-		// Two distinct invariants here:
-		//   (1) The message survives even if the budget is exhausted
-		//       (older history gets dropped instead of the request
-		//       the user is actively waiting for).
-		//   (2) The message content is NOT compacted, regardless of
-		//       compaction stage. Pre-v1.0.6 this was the layered
-		//       bug behind the empty-prompt failure: even when the
-		//       user message survived the budget loop, `compact()`
-		//       at StageSkeleton replaced its content with the
-		//       literal string "[user message]" — so the LLM saw
-		//       "[user message]" instead of the actual prompt and
-		//       responded "the user has not provided instructions."
-		//       The user's prompt is the smallest, most important
-		//       payload in the whole request; compacting it makes
-		//       no sense regardless of pressure.
-		if i == latestUserIdx {
-			verbatim := m.Content
-			tokens = cb.estimateTokens(verbatim)
-			if usedTokens+tokens > remaining {
+		for _, m := range chunk.Messages {
+			content := cb.compact(m, stage)
+			if i == latestUserChunkIdx && m.Role == "user" {
+				content = m.Content
+			}
+			if strings.TrimSpace(content) == "" && len(m.ToolCalls) == 0 && m.ToolCallID == "" {
+				continue
+			}
+			chunkMessages = append(chunkMessages, llm.Message{
+				Role:       m.Role,
+				Content:    content,
+				ToolCalls:  m.ToolCalls,
+				ToolCallID: m.ToolCallID,
+				Name:       m.Name,
+				Metadata:   m.Metadata,
+			})
+			chunkTokens += cb.estimateTokens(content)
+		}
+		if len(chunkMessages) == 0 {
+			continue
+		}
+
+		if i == latestUserChunkIdx {
+			if usedTokens+chunkTokens > remaining {
 				log.Warn().
 					Int("budget", remaining).
 					Int("used", usedTokens).
-					Int("user_msg_tokens", tokens).
+					Int("user_msg_tokens", chunkTokens).
 					Int("system_prompt_tokens", sysTokCount).
 					Int("memory_tokens", memTokCount).
 					Int("tool_def_tokens", toolTokCount).
 					Msg("context budget exhausted by system prompt + memory + tool defs; including latest user message anyway (the alternative — dropping it — produces 'no user instructions' replies). Consider reducing system prompt, memory cap, or tool count.")
 			}
-			historyMessages = append(historyMessages, llm.Message{
-				Role:       m.Role,
-				Content:    verbatim,
-				ToolCalls:  m.ToolCalls,
-				ToolCallID: m.ToolCallID,
-				Name:       m.Name,
-			})
-			usedTokens += tokens
+			selectedChunks = append(selectedChunks, chunkMessages)
+			usedTokens += chunkTokens
 			continue
 		}
 
-		// Non-latest-user message: subject to budget. Older history
-		// gets dropped first when the budget is tight.
-		if strings.TrimSpace(content) == "" && len(m.ToolCalls) == 0 && m.ToolCallID == "" {
-			continue
-		}
-		if usedTokens+tokens > remaining {
+		if usedTokens+chunkTokens > remaining {
 			continue
 		}
 
-		historyMessages = append(historyMessages, llm.Message{
-			Role:       m.Role,
-			Content:    content,
-			ToolCalls:  m.ToolCalls,
-			ToolCallID: m.ToolCallID,
-			Name:       m.Name,
-		})
-		usedTokens += tokens
+		selectedChunks = append(selectedChunks, chunkMessages)
+		usedTokens += chunkTokens
 	}
 
-	// Reverse to chronological order.
-	for i, j := 0, len(historyMessages)-1; i < j; i, j = i+1, j-1 {
-		historyMessages[i], historyMessages[j] = historyMessages[j], historyMessages[i]
+	// Reverse chunk order to chronological order while preserving message order
+	// inside each atomic chunk.
+	for i, j := 0, len(selectedChunks)-1; i < j; i, j = i+1, j-1 {
+		selectedChunks[i], selectedChunks[j] = selectedChunks[j], selectedChunks[i]
+	}
+	var historyMessages []llm.Message
+	for _, chunk := range selectedChunks {
+		historyMessages = append(historyMessages, chunk...)
 	}
 
 	// Inject anti-fade reminder if conversation is long.
@@ -454,8 +447,31 @@ func (cb *ContextBuilder) BuildRequest(session *Session) *llm.Request {
 	}
 
 	return &llm.Request{
-		Messages: result,
-		Tools:    cb.toolDefs,
+		Messages:       result,
+		Tools:          cb.toolDefs,
+		IntentClass:    llmIntentClassForSession(session),
+		AgentRole:      session.AgentRole(),
+		TurnWeight:     session.TurnWeight(),
+		TaskIntent:     session.TaskIntent(),
+		TaskComplexity: session.TaskComplexity(),
+	}
+}
+
+func llmIntentClassForSession(session *Session) string {
+	if session == nil {
+		return ""
+	}
+	switch strings.TrimSpace(strings.ToLower(session.TaskIntent())) {
+	case "conversational", "creative":
+		return llm.IntentConversation.String()
+	case "code":
+		return llm.IntentCoding.String()
+	case "task":
+		return llm.IntentToolUse.String()
+	case "question":
+		return llm.IntentExecution.String()
+	default:
+		return ""
 	}
 }
 
@@ -545,6 +561,15 @@ func countNonSystem(msgs []llm.Message) int {
 		}
 	}
 	return count
+}
+
+func chunkContainsLatestUser(chunk conversationChunk) bool {
+	for _, msg := range chunk.Messages {
+		if msg.Role == "user" {
+			return true
+		}
+	}
+	return false
 }
 
 // semanticCompress preserves the most informative sentences while reducing content length.

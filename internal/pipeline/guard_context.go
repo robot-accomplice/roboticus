@@ -1,6 +1,11 @@
 package pipeline
 
-import "strings"
+import (
+	"encoding/json"
+	"strings"
+
+	agenttools "roboticus/internal/agent/tools"
+)
 
 // GuardContext provides rich context for guards that need more than just the
 // response text. Guards implementing ContextualGuard receive this context;
@@ -41,8 +46,12 @@ type GuardContext struct {
 
 // ToolResultEntry pairs a tool name with its output.
 type ToolResultEntry struct {
-	ToolName string
-	Output   string
+	ToolName      string
+	Output        string
+	Metadata      json.RawMessage
+	ArtifactProof *agenttools.ArtifactProof
+	ReadProof     *agenttools.ArtifactReadProof
+	Inspection    *agenttools.InspectionProof
 }
 
 func toolOutputContainsAny(output string, markers []string) bool {

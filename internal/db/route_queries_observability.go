@@ -220,8 +220,11 @@ func (rq *RouteQueries) GetTraceByIDOrTurnID(ctx context.Context, id string) *sq
 // ListObservabilityTracesPage returns traces with full detail and pagination.
 func (rq *RouteQueries) ListObservabilityTracesPage(ctx context.Context, limit, offset int) (*sql.Rows, error) {
 	return rq.q.QueryContext(ctx,
-		`SELECT id, turn_id, session_id, channel, total_ms, stages_json, created_at
-		 FROM pipeline_traces ORDER BY created_at DESC LIMIT ? OFFSET ?`, limit, offset)
+		`SELECT pt.id, pt.turn_id, pt.session_id, pt.channel, pt.total_ms, pt.stages_json, pt.created_at,
+		        CASE WHEN td.turn_id IS NOT NULL THEN 1 ELSE 0 END AS has_diagnostics
+		   FROM pipeline_traces pt
+		   LEFT JOIN turn_diagnostics td ON td.turn_id = pt.turn_id
+		  ORDER BY pt.created_at DESC LIMIT ? OFFSET ?`, limit, offset)
 }
 
 // CountPipelineTraces returns the total number of pipeline traces.

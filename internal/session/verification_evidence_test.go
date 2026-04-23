@@ -16,6 +16,9 @@ func TestSetMemoryContext_DerivesVerificationEvidence(t *testing.T) {
 	if len(ve.EvidenceItems) != 1 || ve.EvidenceItems[0] != "deploy doc" {
 		t.Fatalf("unexpected derived evidence items: %+v", ve.EvidenceItems)
 	}
+	if len(ve.Contradictions) != 0 {
+		t.Fatalf("did not expect contradiction items, got %+v", ve.Contradictions)
+	}
 	if len(ve.UnresolvedQuestions) != 1 || ve.UnresolvedQuestions[0] != "is rollout blocked by legal?" {
 		t.Fatalf("unexpected unresolved questions: %+v", ve.UnresolvedQuestions)
 	}
@@ -36,5 +39,24 @@ func TestSetMemoryContext_DoesNotOverrideExplicitVerificationEvidence(t *testing
 
 	if sess.VerificationEvidence() != explicit {
 		t.Fatal("expected explicit verification evidence to win over derived compatibility artifact")
+	}
+}
+
+func TestSetMemoryContext_DerivesStructuredContradictionItems(t *testing.T) {
+	sess := New("s1", "a1", "bot")
+	sess.SetMemoryContext("[Active Memory]\n\n[Contradictions]\n- refund window evidence disagrees across retrieved items\n")
+
+	ve := sess.VerificationEvidence()
+	if ve == nil {
+		t.Fatal("expected derived verification evidence")
+	}
+	if !ve.HasContradictions {
+		t.Fatalf("expected contradiction flag, got %+v", ve)
+	}
+	if len(ve.Contradictions) != 1 {
+		t.Fatalf("expected one derived contradiction item, got %+v", ve.Contradictions)
+	}
+	if ve.Contradictions[0].Summary != "refund window evidence disagrees across retrieved items" {
+		t.Fatalf("unexpected contradiction summary: %+v", ve.Contradictions[0])
 	}
 }

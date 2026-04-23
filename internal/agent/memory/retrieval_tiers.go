@@ -78,17 +78,18 @@ const (
 
 // retrieveSemanticEvidence fetches semantic memory with richer provenance preserved.
 //
-// M3.2: HybridSearch is the
-// primary read path. The residual LIKE branch only fires as a safety net
-// when the hybrid leg returned zero candidates for a real search query.
-// The unfiltered "newest 20" branch is retained for the no-query / non-search
-// browse path (mode=Recency or empty query) and is not classified as a
-// fallback — it is the intended browse behavior.
+// M3.2 / PAR-014: HybridSearch is the primary semantic read path. When the
+// blended hybrid leg returns zero semantic candidates for a real search query,
+// semantic retrieval now falls back to a tier-scoped FTS query over an
+// enriched semantic FTS corpus (category + key + value), not a residual LIKE
+// safety net. The unfiltered "newest 20" branch is retained for the no-query /
+// non-search browse path (mode=Recency or empty query) and is not classified
+// as a fallback — it is the intended browse behavior.
 //
-// Trace annotation: every hybrid-mode search emits "retrieval.path.semantic"
-// = "fts" | "vector" | "hybrid" | "like_fallback" | "empty" so M3.3 can
-// measure whether the LIKE safety net is doing meaningful work before
-// removal.
+// Trace annotation: every hybrid-mode semantic search emits
+// "retrieval.path.semantic" = "fts" | "vector" | "hybrid" | "empty".
+// Semantic retrieval no longer uses RetrievalPathLikeFallback; that label is
+// still valid for other tiers that intentionally retain a LIKE safety net.
 func (mr *Retriever) retrieveSemanticEvidence(ctx context.Context, query string, queryEmbed []float32, mode RetrievalMode, budgetTokens int) []Evidence {
 	maxChars := budgetTokens * mr.charsPerToken
 	used := 0
@@ -175,23 +176,29 @@ func (mr *Retriever) retrieveSemanticEvidence(ctx context.Context, query string,
 			annotateRetrievalPath(ctx, RetrievalTierSemantic, classifyHybridPath(ftsHits, vecHits))
 			return evidence
 		}
-		// Hybrid produced zero rows for this tier — fall through to the
-		// LIKE safety net. The annotation is deferred to the bottom of
-		// this function once we know whether LIKE produced anything.
+		// Hybrid produced zero semantic rows for this tier — fall through to the
+		// semantic-tier FTS fallback so we can preserve semantic key/category
+		// lookup without using heuristic SQL.
 	}
 
 	var rows *sql.Rows
 	var err error
-	likeAttempted := isSearch
 	if isSearch {
-		rows, err = mr.store.QueryContext(ctx,
-			`SELECT id, category, key, value, confidence,
-			        julianday('now') - julianday(updated_at) AS age_days,
-			        is_canonical, source_label
-			   FROM semantic_memory
-			  WHERE memory_state = 'active' AND (value LIKE ? OR key LIKE ?)
-			  ORDER BY is_canonical DESC, confidence DESC, updated_at DESC LIMIT 20`,
-			"%"+query+"%", "%"+query+"%")
+		ftsQuery := db.SanitizeFTSQuery(query)
+		if ftsQuery != "" {
+			rows, err = mr.store.QueryContext(ctx,
+				`SELECT sm.id, sm.category, sm.key, sm.value, sm.confidence,
+				        julianday('now') - julianday(sm.updated_at) AS age_days,
+				        sm.is_canonical, sm.source_label
+				   FROM memory_fts fts
+				   JOIN semantic_memory sm ON sm.id = fts.source_id
+				  WHERE fts.source_table = 'semantic_memory'
+				    AND memory_fts MATCH ?
+				    AND sm.memory_state = 'active'
+				  ORDER BY bm25(memory_fts), sm.is_canonical DESC, sm.confidence DESC, sm.updated_at DESC
+				  LIMIT 20`,
+				ftsQuery)
+		}
 	}
 	if err != nil || rows == nil {
 		rows, err = mr.store.QueryContext(ctx,
@@ -210,7 +217,7 @@ func (mr *Retriever) retrieveSemanticEvidence(ctx context.Context, query string,
 	}
 	defer func() { _ = rows.Close() }()
 
-	likeProduced := 0
+	ftsFallbackProduced := 0
 	for rows.Next() {
 		var (
 			id             string
@@ -249,14 +256,14 @@ func (mr *Retriever) retrieveSemanticEvidence(ctx context.Context, query string,
 			RetrievalMode:  mode.String(),
 		})
 		if len(evidence) > before {
-			likeProduced++
+			ftsFallbackProduced++
 		}
 	}
 
 	if isHybridMode && isSearch {
 		switch {
-		case likeAttempted && likeProduced > 0:
-			annotateRetrievalPath(ctx, RetrievalTierSemantic, RetrievalPathLikeFallback)
+		case ftsFallbackProduced > 0:
+			annotateRetrievalPath(ctx, RetrievalTierSemantic, RetrievalPathFTS)
 		default:
 			annotateRetrievalPath(ctx, RetrievalTierSemantic, RetrievalPathEmpty)
 		}
@@ -479,6 +486,80 @@ func (mr *Retriever) retrieveProceduralMemory(ctx context.Context, query string,
 					fmt.Fprintf(&b, "- [learned] %s: %d runs, priority=%d\n", name, successCount, priority)
 				}
 				_ = skillRows.Close()
+			}
+		}
+	}
+
+	// Part 3: Reusable procedural outcome patterns promoted from structured
+	// episode summaries. These rows capture prior successes, failures, and
+	// mixed outcomes so the agent can reuse or avoid known approaches instead
+	// of treating only positive experience as learnable.
+	var outcomeRows *sql.Rows
+	if filtered {
+		ftsQuery := db.SanitizeFTSQuery(query)
+		if ftsQuery != "" {
+			outcomeRows, err = mr.store.QueryContext(ctx,
+				`SELECT sm.value, sm.confidence
+				   FROM memory_fts fts
+				   JOIN semantic_memory sm ON sm.id = fts.source_id
+				  WHERE fts.source_table = 'semantic_memory'
+				    AND memory_fts MATCH ?
+				    AND sm.category = 'procedural_outcome'
+				    AND sm.memory_state = 'active'
+				  ORDER BY bm25(memory_fts), sm.confidence DESC, sm.updated_at DESC
+				  LIMIT 5`,
+				ftsQuery,
+			)
+		}
+	} else {
+		outcomeRows, err = mr.store.QueryContext(ctx,
+			`SELECT value, confidence
+			   FROM semantic_memory
+			  WHERE category = 'procedural_outcome'
+			    AND memory_state = 'active'
+			  ORDER BY confidence DESC, updated_at DESC
+			  LIMIT 5`)
+	}
+	if err == nil && outcomeRows != nil {
+		emitted := 0
+		for outcomeRows.Next() {
+			var value string
+			var confidence float64
+			if outcomeRows.Scan(&value, &confidence) != nil {
+				continue
+			}
+			if strings.TrimSpace(value) == "" {
+				continue
+			}
+			fmt.Fprintf(&b, "- [outcome %.2f] %s\n", confidence, value)
+			emitted++
+		}
+		_ = outcomeRows.Close()
+		if filtered && emitted == 0 {
+			like := "%" + query + "%"
+			outcomeRows, err = mr.store.QueryContext(ctx,
+				`SELECT value, confidence
+				   FROM semantic_memory
+				  WHERE category = 'procedural_outcome'
+				    AND memory_state = 'active'
+				    AND value LIKE ?
+				  ORDER BY confidence DESC, updated_at DESC
+				  LIMIT 5`,
+				like,
+			)
+			if err == nil {
+				for outcomeRows.Next() {
+					var value string
+					var confidence float64
+					if outcomeRows.Scan(&value, &confidence) != nil {
+						continue
+					}
+					if strings.TrimSpace(value) == "" {
+						continue
+					}
+					fmt.Fprintf(&b, "- [outcome %.2f] %s\n", confidence, value)
+				}
+				_ = outcomeRows.Close()
 			}
 		}
 	}

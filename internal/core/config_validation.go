@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Validate checks the config for required fields and constraint violations.
@@ -185,6 +187,12 @@ func (c *Config) NormalizePaths() {
 	c.Obsidian.VaultPath = expandTilde(c.Obsidian.VaultPath)
 	c.Daemon.PIDFile = expandTilde(c.Daemon.PIDFile)
 
+	if c.Obsidian.Enabled && strings.TrimSpace(c.Obsidian.VaultPath) == "" {
+		if detected := detectWorkspaceObsidianVault(c.Agent.Workspace, c.Obsidian.AutoDetectPaths); detected != "" {
+			c.Obsidian.VaultPath = detected
+		}
+	}
+
 	for i, p := range c.Security.AllowedPaths {
 		c.Security.AllowedPaths[i] = expandTilde(p)
 	}
@@ -223,4 +231,38 @@ func (c *Config) NormalizePaths() {
 			c.Security.AllowedPaths = append(c.Security.AllowedPaths, sp)
 		}
 	}
+}
+
+func detectWorkspaceObsidianVault(workspace string, extraCandidates []string) string {
+	var candidates []string
+	if strings.TrimSpace(workspace) != "" {
+		candidates = append(candidates,
+			filepath.Join(workspace, "Vault"),
+			filepath.Join(workspace, "vault"),
+			filepath.Join(workspace, "Obsidian"),
+			filepath.Join(workspace, "obsidian"),
+		)
+	}
+	for _, raw := range extraCandidates {
+		if path := strings.TrimSpace(expandTilde(raw)); path != "" {
+			candidates = append(candidates, path)
+		}
+	}
+
+	seen := make(map[string]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		if _, dup := seen[candidate]; dup || candidate == "" {
+			continue
+		}
+		seen[candidate] = struct{}{}
+
+		info, err := os.Stat(candidate)
+		if err != nil || !info.IsDir() {
+			continue
+		}
+		if marker, err := os.Stat(filepath.Join(candidate, ".obsidian")); err == nil && marker.IsDir() {
+			return candidate
+		}
+	}
+	return ""
 }

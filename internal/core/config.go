@@ -189,15 +189,36 @@ type DatabaseConfig struct {
 
 // ModelsConfig holds LLM provider and model settings.
 type ModelsConfig struct {
-	Primary         string                   `json:"primary" toml:"primary" mapstructure:"primary"`
-	Fallback        []string                 `json:"fallbacks,omitempty" toml:"fallbacks" mapstructure:"fallbacks"`
-	Routing         RoutingConfig            `json:"routing" toml:"routing" mapstructure:"routing"`
-	ModelOverrides  map[string]ModelOverride `json:"model_overrides,omitempty" toml:"model_overrides" mapstructure:"model_overrides"`
-	StreamByDefault bool                     `json:"stream_by_default" toml:"stream_by_default" mapstructure:"stream_by_default"`
-	TieredInference TieredInferenceConfig    `json:"tiered_inference" toml:"tiered_inference" mapstructure:"tiered_inference"`
-	Timeouts        map[string]int           `json:"timeouts,omitempty" toml:"timeouts" mapstructure:"timeouts"`
-	ToolBlocklist   []string                 `json:"tool_blocklist,omitempty" toml:"tool_blocklist" mapstructure:"tool_blocklist"`
-	ToolAllowlist   []string                 `json:"tool_allowlist,omitempty" toml:"tool_allowlist" mapstructure:"tool_allowlist"`
+	Primary         string                       `json:"primary" toml:"primary" mapstructure:"primary"`
+	Fallback        []string                     `json:"fallbacks,omitempty" toml:"fallbacks" mapstructure:"fallbacks"`
+	Policy          map[string]ModelPolicyConfig `json:"policy,omitempty" toml:"policy" mapstructure:"policy"`
+	Routing         RoutingConfig                `json:"routing" toml:"routing" mapstructure:"routing"`
+	RoleEligibility map[string]ModelRoleConfig   `json:"role_eligibility,omitempty" toml:"role_eligibility" mapstructure:"role_eligibility"`
+	ModelOverrides  map[string]ModelOverride     `json:"model_overrides,omitempty" toml:"model_overrides" mapstructure:"model_overrides"`
+	StreamByDefault bool                         `json:"stream_by_default" toml:"stream_by_default" mapstructure:"stream_by_default"`
+	TieredInference TieredInferenceConfig        `json:"tiered_inference" toml:"tiered_inference" mapstructure:"tiered_inference"`
+	Timeouts        map[string]int               `json:"timeouts,omitempty" toml:"timeouts" mapstructure:"timeouts"`
+	ToolBlocklist   []string                     `json:"tool_blocklist,omitempty" toml:"tool_blocklist" mapstructure:"tool_blocklist"`
+	ToolAllowlist   []string                     `json:"tool_allowlist,omitempty" toml:"tool_allowlist" mapstructure:"tool_allowlist"`
+}
+
+// ModelRoleConfig controls whether a configured model is eligible for the
+// operator-facing orchestrator, bounded subagents, or both.
+type ModelRoleConfig struct {
+	Orchestrator bool   `json:"orchestrator" toml:"orchestrator" mapstructure:"orchestrator"`
+	Subagent     bool   `json:"subagent" toml:"subagent" mapstructure:"subagent"`
+	Reason       string `json:"reason,omitempty" toml:"reason" mapstructure:"reason"`
+}
+
+// ModelPolicyConfig controls lifecycle state for a routed model together with
+// the reason and evidence behind that state.
+type ModelPolicyConfig struct {
+	State             string   `json:"state" toml:"state" mapstructure:"state"`
+	PrimaryReasonCode string   `json:"primary_reason_code,omitempty" toml:"primary_reason_code" mapstructure:"primary_reason_code"`
+	ReasonCodes       []string `json:"reason_codes,omitempty" toml:"reason_codes" mapstructure:"reason_codes"`
+	HumanReason       string   `json:"human_reason,omitempty" toml:"human_reason" mapstructure:"human_reason"`
+	EvidenceRefs      []string `json:"evidence_refs,omitempty" toml:"evidence_refs" mapstructure:"evidence_refs"`
+	Source            string   `json:"source,omitempty" toml:"source" mapstructure:"source"`
 }
 
 // ResolveModelTimeout returns the timeout for a specific model.
@@ -276,22 +297,27 @@ type SessionConfig struct {
 // MemoryConfig holds memory budget settings as percentages (must sum to 100).
 // WorkingBudgetPct is an alias for WorkingBudget for roboticus compatibility.
 type MemoryConfig struct {
-	WorkingBudget          float64 `json:"working_budget" toml:"working_budget" mapstructure:"working_budget"`
-	WorkingBudgetPct       float64 `json:"working_budget_pct,omitempty" toml:"working_budget_pct" mapstructure:"working_budget_pct"`
-	EpisodicBudget         float64 `json:"episodic_budget" toml:"episodic_budget" mapstructure:"episodic_budget"`
-	SemanticBudget         float64 `json:"semantic_budget" toml:"semantic_budget" mapstructure:"semantic_budget"`
-	ProceduralBudget       float64 `json:"procedural_budget" toml:"procedural_budget" mapstructure:"procedural_budget"`
-	RelationshipBudget     float64 `json:"relationship_budget" toml:"relationship_budget" mapstructure:"relationship_budget"`
-	EmbeddingProvider      string  `json:"embedding_provider,omitempty" toml:"embedding_provider" mapstructure:"embedding_provider"`
-	EmbeddingModel         string  `json:"embedding_model,omitempty" toml:"embedding_model" mapstructure:"embedding_model"`
-	HybridWeightOverride   float64 `json:"hybrid_weight_override" toml:"hybrid_weight_override" mapstructure:"hybrid_weight_override"` // 0 = adaptive (default); >0 = manual override
-	DecayHalfLifeDays      float64 `json:"decay_half_life_days" toml:"decay_half_life_days" mapstructure:"decay_half_life_days"`
-	SimilarityThreshold    float64 `json:"similarity_threshold" toml:"similarity_threshold" mapstructure:"similarity_threshold"`
-	VectorIndexThreshold   int     `json:"vector_index_threshold" toml:"vector_index_threshold" mapstructure:"vector_index_threshold"`       // corpus size for HNSW promotion (default 1000)
-	RerankerMinScore       float64 `json:"reranker_min_score" toml:"reranker_min_score" mapstructure:"reranker_min_score"`                   // discard evidence below this (default 0.1)
-	RerankerAuthorityBoost float64 `json:"reranker_authority_boost" toml:"reranker_authority_boost" mapstructure:"reranker_authority_boost"` // canonical source multiplier (default 1.5)
-	RerankerRecencyPenalty float64 `json:"reranker_recency_penalty" toml:"reranker_recency_penalty" mapstructure:"reranker_recency_penalty"` // old entry multiplier (default 0.8)
-	RerankerCollapseSpread float64 `json:"reranker_collapse_spread" toml:"reranker_collapse_spread" mapstructure:"reranker_collapse_spread"` // spread below which collapse detected (default 0.05)
+	WorkingBudget            float64 `json:"working_budget" toml:"working_budget" mapstructure:"working_budget"`
+	WorkingBudgetPct         float64 `json:"working_budget_pct,omitempty" toml:"working_budget_pct" mapstructure:"working_budget_pct"`
+	EpisodicBudget           float64 `json:"episodic_budget" toml:"episodic_budget" mapstructure:"episodic_budget"`
+	SemanticBudget           float64 `json:"semantic_budget" toml:"semantic_budget" mapstructure:"semantic_budget"`
+	ProceduralBudget         float64 `json:"procedural_budget" toml:"procedural_budget" mapstructure:"procedural_budget"`
+	RelationshipBudget       float64 `json:"relationship_budget" toml:"relationship_budget" mapstructure:"relationship_budget"`
+	EmbeddingProvider        string  `json:"embedding_provider,omitempty" toml:"embedding_provider" mapstructure:"embedding_provider"`
+	EmbeddingModel           string  `json:"embedding_model,omitempty" toml:"embedding_model" mapstructure:"embedding_model"`
+	HybridWeightOverride     float64 `json:"hybrid_weight_override" toml:"hybrid_weight_override" mapstructure:"hybrid_weight_override"` // 0 = adaptive (default); >0 = manual override
+	DecayHalfLifeDays        float64 `json:"decay_half_life_days" toml:"decay_half_life_days" mapstructure:"decay_half_life_days"`
+	SimilarityThreshold      float64 `json:"similarity_threshold" toml:"similarity_threshold" mapstructure:"similarity_threshold"`
+	VectorIndexThreshold     int     `json:"vector_index_threshold" toml:"vector_index_threshold" mapstructure:"vector_index_threshold"`       // corpus size for HNSW promotion (default 1000)
+	RerankerMinScore         float64 `json:"reranker_min_score" toml:"reranker_min_score" mapstructure:"reranker_min_score"`                   // discard evidence below this (default 0.1)
+	RerankerAuthorityBoost   float64 `json:"reranker_authority_boost" toml:"reranker_authority_boost" mapstructure:"reranker_authority_boost"` // canonical source multiplier (default 1.5)
+	RerankerRecencyPenalty   float64 `json:"reranker_recency_penalty" toml:"reranker_recency_penalty" mapstructure:"reranker_recency_penalty"` // old entry multiplier (default 0.8)
+	RerankerCollapseSpread   float64 `json:"reranker_collapse_spread" toml:"reranker_collapse_spread" mapstructure:"reranker_collapse_spread"` // spread below which collapse detected (default 0.05)
+	LLMRerankerEnabled       bool    `json:"llm_reranker_enabled" toml:"llm_reranker_enabled" mapstructure:"llm_reranker_enabled"`
+	LLMRerankerMinCandidates int     `json:"llm_reranker_min_candidates" toml:"llm_reranker_min_candidates" mapstructure:"llm_reranker_min_candidates"`
+	LLMRerankerMaxCandidates int     `json:"llm_reranker_max_candidates" toml:"llm_reranker_max_candidates" mapstructure:"llm_reranker_max_candidates"`
+	LLMRerankerKeepTop       int     `json:"llm_reranker_keep_top" toml:"llm_reranker_keep_top" mapstructure:"llm_reranker_keep_top"`
+	LLMRerankerModel         string  `json:"llm_reranker_model,omitempty" toml:"llm_reranker_model" mapstructure:"llm_reranker_model"`
 }
 
 // CacheConfig holds semantic cache settings.

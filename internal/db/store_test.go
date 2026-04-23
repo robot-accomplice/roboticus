@@ -59,6 +59,7 @@ func TestTablesExist(t *testing.T) {
 		"semantic_cache", "delivery_queue", "approval_requests",
 		"plugins", "embeddings", "sub_agents", "skills",
 		"abuse_events", "learned_skills", "hygiene_log",
+		"turn_diagnostics", "turn_diagnostic_events", "baseline_runs", "model_policies",
 	}
 
 	for _, table := range expectedTables {
@@ -179,5 +180,31 @@ CREATE TABLE treasury_state (
 	}
 	if tier != core.SurvivalTierStable.String() {
 		t.Fatalf("survival_tier = %q, want %q", tier, core.SurvivalTierStable.String())
+	}
+}
+
+func TestIsSubagentName(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+
+	if _, err := store.ExecContext(ctx,
+		`INSERT INTO sub_agents (id, name, model, role, enabled) VALUES ('sa-1', 'automation_scripting', 'auto', 'subagent', 1)`); err != nil {
+		t.Fatalf("seed sub_agents: %v", err)
+	}
+
+	got, err := IsSubagentName(ctx, store, "automation_scripting")
+	if err != nil {
+		t.Fatalf("IsSubagentName(subagent): %v", err)
+	}
+	if !got {
+		t.Fatal("expected registered subagent name to resolve true")
+	}
+
+	got, err = IsSubagentName(ctx, store, "default")
+	if err != nil {
+		t.Fatalf("IsSubagentName(orchestrator): %v", err)
+	}
+	if got {
+		t.Fatal("expected non-subagent name to resolve false")
 	}
 }

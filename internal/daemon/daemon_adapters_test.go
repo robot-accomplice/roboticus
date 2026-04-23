@@ -73,6 +73,66 @@ func TestRetrieverAdapter_Retrieve(t *testing.T) {
 	}
 }
 
+func TestToolPruningQuery_AppendsSourceArtifactHints(t *testing.T) {
+	sess := session.New("s1", "agent1", "Bot")
+	sess.AddUserMessage("Read the source file and create the outputs.")
+	sess.SetSourceArtifacts([]string{"tmp/input.txt"})
+
+	got := toolPruningQuery(sess)
+	if !strings.Contains(got, "Read the source file and create the outputs.") {
+		t.Fatalf("query = %q, want original user prompt", got)
+	}
+	if !strings.Contains(got, "Authoritative source artifacts to read before answering: tmp/input.txt") {
+		t.Fatalf("query = %q, want appended source artifact hint", got)
+	}
+}
+
+func TestAppendAlwaysInclude_DeduplicatesNames(t *testing.T) {
+	got := appendAlwaysInclude([]string{"get_runtime_context", "read_file"}, "read_file", "write_file")
+	want := []string{"get_runtime_context", "read_file", "write_file"}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("appendAlwaysInclude = %v, want %v", got, want)
+	}
+}
+
+func TestToolPruningQuery_FocusedInspectionPinsFilesystemAlwaysInclude(t *testing.T) {
+	sess := session.New("s1", "agent1", "Bot")
+	sess.AddUserMessage("Count markdown files recursively in the target docs dir and return only the number.")
+	sess.SetTaskVerificationHints("task", "simple", "execute_directly", nil)
+	sess.SetTurnEnvelopePolicy("standard", "focused_inspection", "direct filesystem inspection should stay on a focused inspection envelope")
+
+	cfg := resolveToolSearchConfig(core.ToolSearchConfig{})
+	if sess.TurnToolProfile() == "focused_inspection" {
+		cfg.AlwaysInclude = appendAlwaysInclude(cfg.AlwaysInclude, "glob_files", "list_directory", "read_file")
+	}
+	if !strings.Contains(fmt.Sprint(cfg.AlwaysInclude), "glob_files") {
+		t.Fatalf("always_include = %v, want glob_files pinned", cfg.AlwaysInclude)
+	}
+	if !strings.Contains(fmt.Sprint(cfg.AlwaysInclude), "list_directory") {
+		t.Fatalf("always_include = %v, want list_directory pinned", cfg.AlwaysInclude)
+	}
+}
+
+func TestToolPruningQuery_FocusedAnalysisAuthoringPinsAnalysisAndWriteTools(t *testing.T) {
+	sess := session.New("s1", "agent1", "Bot")
+	sess.AddUserMessage("Generate a report on all development projects in my code directory and write it to my Desktop vault.")
+	sess.SetTaskVerificationHints("task", "moderate", "execute_directly", nil)
+	sess.SetTurnEnvelopePolicy("standard", "focused_analysis_authoring", "inspection-backed report authoring should stay on a focused analysis+authoring envelope")
+
+	cfg := resolveToolSearchConfig(core.ToolSearchConfig{})
+	if sess.TurnToolProfile() == "focused_analysis_authoring" {
+		cfg.AlwaysInclude = appendAlwaysInclude(cfg.AlwaysInclude,
+			"inventory_projects", "search_files", "glob_files", "list_directory", "read_file",
+			"bash", "write_file", "edit_file", "get_runtime_context",
+		)
+	}
+	for _, want := range []string{"inventory_projects", "search_files", "bash", "write_file", "get_runtime_context"} {
+		if !strings.Contains(fmt.Sprint(cfg.AlwaysInclude), want) {
+			t.Fatalf("always_include = %v, want %s pinned", cfg.AlwaysInclude, want)
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // ingestorAdapter
 // ---------------------------------------------------------------------------
@@ -684,6 +744,30 @@ func TestBuildAgentContext_PromptToolRosterClearsWhenSelectedDefsEmpty(t *testin
 	}
 }
 
+func TestBuildAgentContext_PropagatesTurnWeight(t *testing.T) {
+	sess := session.New("s1", "a1", "TestBot")
+	sess.AddUserMessage("hello")
+	sess.SetTaskVerificationHints("code", "complex", "execute_directly", nil)
+	sess.SetTurnEnvelopePolicy("light", "", "simple conversational turn should stay minimal")
+
+	ctx := buildAgentContext(context.Background(), sess, nil, nil, nil, tools.DefaultToolSearchConfig(), agent.PromptConfig{
+		AgentName: "TestBot",
+	}, nil, nil)
+	req := ctx.BuildRequest(sess)
+	if req.TurnWeight != "light" {
+		t.Fatalf("TurnWeight = %q, want light", req.TurnWeight)
+	}
+	if req.TaskIntent != "code" {
+		t.Fatalf("TaskIntent = %q, want code", req.TaskIntent)
+	}
+	if req.TaskComplexity != "complex" {
+		t.Fatalf("TaskComplexity = %q, want complex", req.TaskComplexity)
+	}
+	if req.IntentClass != llm.IntentCoding.String() {
+		t.Fatalf("IntentClass = %q, want %q", req.IntentClass, llm.IntentCoding.String())
+	}
+}
+
 func TestBuildAgentContext_ReusesSelectedToolSurfaceAcrossLoopTurns(t *testing.T) {
 	sess := session.New("s1", "a1", "TestBot")
 	sess.AddUserMessage("use a tool if needed")
@@ -989,7 +1073,7 @@ func TestBuildAgentContext_PrefersPipelineMemoryIndex(t *testing.T) {
 	}
 }
 
-func TestBuildAgentContext_AppendsCheckpointDigestFromRepository(t *testing.T) {
+func TestBuildAgentContext_AppendsCheckpointRestoreFromRepository(t *testing.T) {
 	store := testutil.TempStore(t)
 	sess := session.New("s1", "a1", "TestBot")
 	if _, err := store.FindOrCreateSession(context.Background(), sess.AgentID, "scope:checkpoint-note"); err != nil {
@@ -1006,6 +1090,7 @@ func TestBuildAgentContext_AppendsCheckpointDigestFromRepository(t *testing.T) {
 	repo := db.NewCheckpointRepository(store)
 	if err := repo.SaveRecord(context.Background(), db.CheckpointRecord{
 		SessionID:          sess.ID,
+		MemorySummary:      "checkpoint memory summary that should be restored in full",
 		ConversationDigest: "assistant checkpoint digest that should be restored",
 		ActiveTasks:        `["task-a"]`,
 		TurnCount:          10,
@@ -1018,24 +1103,30 @@ func TestBuildAgentContext_AppendsCheckpointDigestFromRepository(t *testing.T) {
 	}, nil, nil)
 	req := ctx.BuildRequest(sess)
 
-	var sawDigest, sawTasks bool
+	var sawRestore, sawTasks, sawDigest bool
 	for _, msg := range req.Messages {
 		if msg.Role != "system" {
 			continue
 		}
-		if strings.Contains(msg.Content, "[Checkpoint Digest]") &&
-			strings.Contains(msg.Content, "assistant checkpoint digest that should be restored") {
-			sawDigest = true
+		if strings.Contains(msg.Content, "[Checkpoint Restore]") &&
+			strings.Contains(msg.Content, "Session checkpoint restore (turn_count=10): checkpoint memory summary that should be restored in full") {
+			sawRestore = true
 		}
 		if strings.Contains(msg.Content, `Active tasks: ["task-a"]`) {
 			sawTasks = true
 		}
+		if strings.Contains(msg.Content, "Conversation digest: assistant checkpoint digest that should be restored") {
+			sawDigest = true
+		}
 	}
-	if !sawDigest {
-		t.Fatal("expected checkpoint digest system note in request")
+	if !sawRestore {
+		t.Fatal("expected checkpoint restore system note in request")
 	}
 	if !sawTasks {
 		t.Fatal("expected active tasks in checkpoint system note")
+	}
+	if !sawDigest {
+		t.Fatal("expected conversation digest in checkpoint restore note")
 	}
 }
 
@@ -1051,6 +1142,44 @@ func TestBuildAgentContext_SetsAgentName(t *testing.T) {
 	}
 	// The agent name should come from session, overriding the prompt config's default.
 	// We can verify indirectly that it was set without panicking.
+}
+
+func TestBuildAgentContext_UsesMinimalPromptProfileForSubagent(t *testing.T) {
+	store := testutil.TempStore(t)
+	if _, err := store.ExecContext(context.Background(),
+		`INSERT INTO sub_agents (id, name, model, role, enabled) VALUES ('sa-1', 'automation_scripting', 'auto', 'subagent', 1)`); err != nil {
+		t.Fatalf("seed sub_agents: %v", err)
+	}
+
+	sess := session.New("s1", "automation_scripting", "automation_scripting")
+	sess.AddUserMessage("do the task")
+
+	ctx := buildAgentContext(context.Background(), sess, store, nil, nil, tools.DefaultToolSearchConfig(), agent.PromptConfig{
+		AgentName:   "Duncan",
+		Personality: "Friendly and helpful.",
+		Operator:    "Operator prefers dry humor.",
+		Directives:  "Optimize for operator rapport.",
+	}, nil, nil)
+	req := ctx.BuildRequest(sess)
+	if len(req.Messages) == 0 || req.Messages[0].Role != "system" {
+		t.Fatal("expected system prompt message")
+	}
+	if req.AgentRole != "subagent" {
+		t.Fatalf("request agent role = %q, want subagent", req.AgentRole)
+	}
+	prompt := req.Messages[0].Content
+	if strings.Contains(prompt, "## Identity") {
+		t.Fatal("subagent context should not include identity block")
+	}
+	if strings.Contains(prompt, "## Operator Context") {
+		t.Fatal("subagent context should not include operator context block")
+	}
+	if strings.Contains(prompt, "## Active Directives") {
+		t.Fatal("subagent context should not include active directives block")
+	}
+	if !strings.Contains(prompt, "specialist subagent") {
+		t.Fatal("subagent context should include orchestration block")
+	}
 }
 
 // ---------------------------------------------------------------------------

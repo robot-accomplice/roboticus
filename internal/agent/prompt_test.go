@@ -42,6 +42,38 @@ func TestBuildSystemPrompt_ContainsPersonality(t *testing.T) {
 	}
 }
 
+func TestBuildSystemPrompt_SubagentOmitsPersonalityOperatorAndDirectives(t *testing.T) {
+	cfg := PromptConfig{
+		AgentName:   "Bot",
+		Personality: "Friendly and helpful.",
+		Operator:    "Operator prefers dry humor.",
+		Directives:  "Optimize for operator rapport.",
+		IsSubagent:  true,
+	}
+	prompt := BuildSystemPrompt(cfg)
+	if strings.Contains(prompt, "## Identity") {
+		t.Fatal("subagent prompt should not contain identity block")
+	}
+	if strings.Contains(prompt, "## Operator Context") {
+		t.Fatal("subagent prompt should not contain operator context block")
+	}
+	if strings.Contains(prompt, "## Active Directives") {
+		t.Fatal("subagent prompt should not contain active directives block")
+	}
+	if !strings.Contains(prompt, "specialist subagent") {
+		t.Fatal("subagent prompt should contain orchestration block")
+	}
+	if !strings.Contains(prompt, "Report upward to the orchestrator layer, never directly to the operator") {
+		t.Fatal("subagent prompt should enforce orchestrator-only reporting")
+	}
+	if !strings.Contains(prompt, "only claim completion when backed by concrete tool output") {
+		t.Fatal("subagent prompt should require proof-backed completion claims")
+	}
+	if !strings.Contains(prompt, "Separate completed work, evidence, and remaining gaps or uncertainty") {
+		t.Fatal("subagent prompt should require explicit evidence and gap reporting")
+	}
+}
+
 func TestBuildSystemPrompt_Empty(t *testing.T) {
 	cfg := PromptConfig{}
 	prompt := BuildSystemPrompt(cfg)
@@ -110,6 +142,15 @@ func TestBuildSystemPrompt_OperationalIntrospectionBlock(t *testing.T) {
 	if !strings.Contains(prompt, "3 tools") {
 		t.Error("L2 should list tool count")
 	}
+	if !strings.Contains(prompt, "use that first") {
+		t.Error("L2 should treat injected current-turn evidence as the first memory authority")
+	}
+	if !strings.Contains(prompt, "effective path constraints") {
+		t.Error("introspection should reference effective path constraints instead of vague policy")
+	}
+	if strings.Contains(prompt, "ALWAYS call `recall_memory` to search — even if injected memories are present") {
+		t.Error("L2 should not instruct unconditional memory re-search when injected evidence exists")
+	}
 }
 
 func TestBuildSystemPrompt_RuntimeMetadataBlock(t *testing.T) {
@@ -131,6 +172,98 @@ func TestBuildSystemPrompt_RuntimeMetadataBlock(t *testing.T) {
 	}
 }
 
+func TestBuildSystemPrompt_InspectionTargetSummary(t *testing.T) {
+	cfg := PromptConfig{
+		AgentName:        "Bot",
+		InspectionTarget: "This turn is a filesystem inspection request. Resolved target path: /Users/jmachen/Desktop/My Vault. Inspect this target directly with list_directory before answering.",
+	}
+	prompt := BuildSystemPrompt(cfg)
+	if !strings.Contains(prompt, "## Inspection Target") {
+		t.Fatal("prompt should include inspection target block")
+	}
+	if !strings.Contains(prompt, "/Users/jmachen/Desktop/My Vault") {
+		t.Fatal("prompt should include resolved inspection target path")
+	}
+}
+
+func TestBuildSystemPrompt_DestinationTargetSummary(t *testing.T) {
+	cfg := PromptConfig{
+		AgentName:         "Bot",
+		ToolNames:         []string{"write_file", "get_runtime_context"},
+		DestinationTarget: "This turn requests authoring into the allowlisted destination root /Users/jmachen/Desktop/My Vault. This path is writable. Because it is not the configured default Obsidian vault, use write_file with an absolute path under this root.",
+	}
+	prompt := BuildSystemPrompt(cfg)
+	if !strings.Contains(prompt, "## Destination Target") {
+		t.Fatal("prompt should include destination target block")
+	}
+	if !strings.Contains(prompt, "/Users/jmachen/Desktop/My Vault") {
+		t.Fatal("prompt should include resolved destination path")
+	}
+	if !strings.Contains(prompt, "`write_file` and `edit_file` may target") {
+		t.Fatal("prompt should advertise absolute-allowed write surface")
+	}
+}
+
+func TestBuildSystemPrompt_FocusedAnalysisAuthoringContract(t *testing.T) {
+	cfg := PromptConfig{
+		AgentName:         "Bot",
+		ToolProfile:       "focused_analysis_authoring",
+		ToolNames:         []string{"inventory_projects", "bash", "write_file", "list_directory"},
+		InspectionTarget:  "Resolved target path: /Users/jmachen/code",
+		DestinationTarget: "Resolved destination root: /Users/jmachen/Desktop/My Vault",
+	}
+	prompt := BuildSystemPrompt(cfg)
+	if !strings.Contains(prompt, "## Analysis + Authoring Contract") {
+		t.Fatal("prompt should include focused analysis+authoring contract")
+	}
+	if !strings.Contains(prompt, "Do not fill required columns with `--`, `Unknown`, or placeholders") {
+		t.Fatal("prompt should forbid placeholder-heavy incomplete reports")
+	}
+	if !strings.Contains(prompt, "Prefer `inventory_projects` for project-root reports") {
+		t.Fatal("prompt should prefer the first-class project inventory tool")
+	}
+	if !strings.Contains(prompt, "Use `bash` when filesystem or git metadata is most naturally derived from shell commands.") {
+		t.Fatal("prompt should guide bash usage for metadata-heavy analysis turns")
+	}
+	if !strings.Contains(prompt, "prefer one structured `bash` inventory pass over repeated extension-specific globbing") {
+		t.Fatal("prompt should discourage extension-globbing heuristics on project reports")
+	}
+	if !strings.Contains(prompt, "treat the immediate child directories of the inspection target as candidate project roots") {
+		t.Fatal("prompt should steer project-directory reports toward immediate child project roots")
+	}
+}
+
+func TestBuildSystemPrompt_OmitsBashGuidanceWhenBashIsNotSelected(t *testing.T) {
+	cfg := PromptConfig{
+		AgentName: "Bot",
+		ToolNames: []string{"read_file", "write_file", "get_runtime_context"},
+	}
+	prompt := BuildSystemPrompt(cfg)
+	if strings.Contains(prompt, "`bash` executes in the workspace root") {
+		t.Error("should not mention bash runtime guidance when bash is not selected")
+	}
+	if strings.Contains(prompt, "real shell access") {
+		t.Error("should not claim shell access when bash is not selected")
+	}
+	if !strings.Contains(prompt, "attribute it to the tool that produced it") {
+		t.Error("should include generic tool attribution guidance when bash is not selected")
+	}
+}
+
+func TestBuildSystemPrompt_BashGuidanceUsesEffectivePathConstraints(t *testing.T) {
+	cfg := PromptConfig{
+		AgentName: "Bot",
+		ToolNames: []string{"bash", "get_runtime_context"},
+	}
+	prompt := BuildSystemPrompt(cfg)
+	if !strings.Contains(prompt, "effective path constraints") {
+		t.Fatalf("prompt should mention effective path constraints, got %q", prompt)
+	}
+	if strings.Contains(prompt, "allowed paths and security policy") {
+		t.Fatalf("prompt should not overclaim security policy visibility, got %q", prompt)
+	}
+}
+
 func TestBuildSystemPrompt_ObsidianDirective_Enabled(t *testing.T) {
 	cfg := PromptConfig{
 		AgentName: "Bot",
@@ -145,6 +278,9 @@ func TestBuildSystemPrompt_ObsidianDirective_Enabled(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "/home/user/vault") {
 		t.Error("should contain vault path")
+	}
+	if !strings.Contains(prompt, "obsidian_write") {
+		t.Error("should mention the explicit obsidian_write tool")
 	}
 }
 

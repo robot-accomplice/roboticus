@@ -83,3 +83,11 @@ func TestEvaluateDecomposition_ShortWithManySubtasks(t *testing.T) {
 		t.Errorf("short multi-task: decision = %v, want Centralized", result.Decision)
 	}
 }
+
+func TestEvaluateDecomposition_ExactArtifactBodiesStayCentralized(t *testing.T) {
+	content := "Create the following files exactly as specified in the workspace.\n- tmp/procedural-canary/rollout-config.json containing exactly:\n{\n  \"service\": \"auth\"\n}\n- tmp/procedural-canary/rollout-runbook.md containing exactly:\n# Rollout Runbook\n\n1. Read [[rollout-config.json]].\n2. Validate the canary percent.\n3. Confirm the deployment target."
+	result := EvaluateDecomposition(content, 2)
+	if result.Decision != DecompCentralized {
+		t.Fatalf("decision = %v, want centralized", result.Decision)
+	}
+}

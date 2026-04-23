@@ -1216,7 +1216,7 @@ func TestFitness_PersonalityReinforcementOnEarlyTurns(t *testing.T) {
 
 	cfg := PresetAPI()
 	outcome, err := RunPipeline(context.Background(), pipe, cfg, Input{
-		Content: "Hello, who are you?",
+		Content: "What kind of assistant are you?",
 		AgentID: "default",
 	})
 	if err != nil {
@@ -1266,6 +1266,37 @@ func TestFitness_PersonalityReinforcementNotOnLaterTurns(t *testing.T) {
 	}
 	if hasAnnotation(memSpan, "personality_boost") {
 		t.Error("personality_boost should NOT fire when memory retrieval returns content")
+	}
+}
+
+func TestFitness_PersonalityReinforcementNotForSubagents(t *testing.T) {
+	store := testutil.TempStore(t)
+	if _, err := store.ExecContext(context.Background(),
+		`INSERT INTO sub_agents (id, name, model, role, enabled) VALUES ('sa-1', 'automation_scripting', 'auto', 'subagent', 1)`); err != nil {
+		t.Fatalf("seed sub_agents: %v", err)
+	}
+
+	pipe := New(PipelineDeps{
+		Store:     store,
+		Executor:  &stubExecutor{response: "Subagent execution response"},
+		Retriever: &stubRetriever{result: ""},
+		BGWorker:  testutil.BGWorker(t, 4),
+	})
+
+	cfg := PresetAPI()
+	outcome, err := RunPipeline(context.Background(), pipe, cfg, Input{
+		Content: "Why did the delegated task fail?",
+		AgentID: "automation_scripting",
+	})
+	if err != nil {
+		t.Fatalf("RunPipeline: %v", err)
+	}
+
+	trace := extractFullTrace(t, store, outcome.SessionID)
+	spans := extractSpans(t, trace.StagesJSON)
+	memSpan := findSpan(spans, "memory_retrieval")
+	if memSpan != nil && hasAnnotation(memSpan, "personality_boost") {
+		t.Error("subagent sessions should not receive personality_boost")
 	}
 }
 

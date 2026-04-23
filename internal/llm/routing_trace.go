@@ -1,6 +1,9 @@
 package llm
 
-import "context"
+import (
+	"context"
+	"strings"
+)
 
 // RoutingTracer is the minimal annotation surface the LLM service needs to
 // report routing decisions without depending on the pipeline package.
@@ -31,11 +34,12 @@ func routingTracerFromContext(ctx context.Context) RoutingTracer {
 	return tr
 }
 
-func annotateRoutingDecision(ctx context.Context, router *Router, req *Request, target RouteTarget) {
+func annotateRoutingDecision(ctx context.Context, svc *Service, req *Request, target RouteTarget) {
 	tr := routingTracerFromContext(ctx)
-	if tr == nil || router == nil || req == nil {
+	if tr == nil || svc == nil || svc.router == nil || req == nil {
 		return
 	}
+	router := svc.router
 
 	candidates := make([]string, 0, len(router.Targets()))
 	for _, rt := range router.Targets() {
@@ -47,21 +51,65 @@ func annotateRoutingDecision(ctx context.Context, router *Router, req *Request, 
 			candidates = append(candidates, model)
 		}
 	}
-
+	roleCandidates := make([]string, 0, len(router.Targets()))
+	for _, rt := range filterTargetsForRole(router.Targets(), req) {
+		model := ModelSpecForTarget(rt)
+		if model == "" {
+			model = rt.Model
+		}
+		if model != "" {
+			roleCandidates = append(roleCandidates, model)
+		}
+	}
 	winner := ModelSpecForTarget(target)
 	if winner == "" {
 		winner = target.Model
 	}
+	_, features := svc.routingAssessment(req, winner)
+
 	mode := "heuristic"
 	if router.MetascoreSelector != nil {
 		mode = "metascore"
 	}
 
 	tr.Annotate("inference.routing.candidates", candidates)
+	tr.Annotate("inference.routing.role_eligible_candidates", roleCandidates)
+	if len(features.RequestEligibleCandidates) > 0 {
+		tr.Annotate("inference.routing.request_eligible_candidates", features.RequestEligibleCandidates)
+	}
+	if len(features.ExcludedCandidates) > 0 {
+		tr.Annotate("inference.routing.excluded_candidates", features.ExcludedCandidates)
+	}
+	if len(features.IgnoredForEvidenceModels) > 0 {
+		tr.Annotate("inference.routing.ignored_for_missing_capability_evidence", features.IgnoredForEvidenceModels)
+	}
+	if suggestion := strings.TrimSpace(features.IgnoredForEvidenceSuggestion); suggestion != "" {
+		tr.Annotate("inference.routing.capability_evidence_recommendation", suggestion)
+	}
 	tr.Annotate("inference.routing.winner", winner)
 	tr.Annotate("inference.routing.winner_score", 0.0)
 	tr.Annotate("inference.routing.mode", mode)
 	tr.Annotate("inference.routing.trace_source", "actual_request")
+	tr.Annotate("inference.routing.agent_role", normalizeAgentRole(req.AgentRole))
 	tr.Annotate("inference.routing.request_message_count", len(req.Messages))
 	tr.Annotate("inference.routing.request_tool_count", len(req.Tools))
+	tr.Annotate("inference.routing.policy_state", normalizeModelState(target.State))
+	tr.Annotate("inference.routing.policy_source", strings.TrimSpace(target.PolicySource))
+	tr.Annotate("inference.routing.primary_reason_code", strings.TrimSpace(target.PrimaryReasonCode))
+	if len(target.ReasonCodes) > 0 {
+		tr.Annotate("inference.routing.reason_codes", append([]string(nil), target.ReasonCodes...))
+	}
+	if humanReason := strings.TrimSpace(target.HumanReason); humanReason != "" {
+		tr.Annotate("inference.routing.human_reason", humanReason)
+	}
+	if len(target.EvidenceRefs) > 0 {
+		tr.Annotate("inference.routing.evidence_refs", append([]string(nil), target.EvidenceRefs...))
+	}
+	tr.Annotate("inference.routing.live_routable", liveRoutingAllowedForState(target.State))
+	tr.Annotate("inference.routing.benchmark_eligible", benchmarkAllowedForState(target.State))
+	tr.Annotate("inference.routing.orchestrator_eligible", target.OrchestratorEligible)
+	tr.Annotate("inference.routing.subagent_eligible", target.SubagentEligible)
+	if reason := strings.TrimSpace(target.EligibilityReason); reason != "" {
+		tr.Annotate("inference.routing.eligibility_reason", reason)
+	}
 }

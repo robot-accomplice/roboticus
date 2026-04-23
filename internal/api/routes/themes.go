@@ -140,6 +140,17 @@ var catalogThemes = []ThemeManifest{
 			"--border": "#4c566a",
 		},
 		Version: "1.0.0", Source: "catalog"},
+	{ID: "psychedelic-freakout-marble", Name: "Psychedelic Freakout Marble", Description: "Optional upgrade for Psychedelic Freakout with a packaged liquid-marble background texture", Author: "Roboticus", Swatch: "#ff00ff",
+		Variables: map[string]string{
+			"--bg": "#14061d", "--surface": "#270d38", "--surface-2": "#3a1553",
+			"--accent": "#ff4ff8", "--text": "#fff4a8", "--muted": "#8fffe5",
+			"--border": "#ff8ef2", "--highlight": "#00ffcc", "--secondary": "#ffff00",
+		},
+		Textures: map[string]ThemeTexture{
+			"body": {Kind: "bundled", Value: "psychedelic-freakout-marble/body.jpg"},
+		},
+		Fonts:   []string{"https://fonts.googleapis.com/css2?family=Bungee+Shade&display=swap"},
+		Version: "1.0.0", Source: "catalog"},
 	// ── Go-original catalog themes (beyond-parity) ───────────────────────
 	{ID: "solarized-cyan", Name: "Solarized Cyan", Description: "Solarized variant with cyan accent and noise texture", Author: "Roboticus", Swatch: "#2aa198",
 		Variables: map[string]string{

@@ -30,7 +30,7 @@ from typing import Dict, List, Tuple
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BASE_SOAK = REPO_ROOT / "scripts" / "run-agent-behavior-soak.py"
 DEFAULT_REPORT = "/tmp/roboticus-prompt-compression-soak-report.json"
-DEFAULT_BASE_URL = os.environ.get("BASE_URL", "http://127.0.0.1:18790").rstrip("/")
+DEFAULT_BASE_URL = os.environ.get("BASE_URL", "http://localhost:18790").rstrip("/")
 SERVER_MODE = os.environ.get("SOAK_SERVER_MODE", "clone").strip().lower()
 DEFAULT_COMPRESSION_SCENARIOS = ",".join(
     [
@@ -88,7 +88,7 @@ def parse_base_url(base_url: str) -> Tuple[str, int, str]:
     from urllib.parse import urlparse
 
     parsed = urlparse(base_url)
-    host = parsed.hostname or "127.0.0.1"
+    host = parsed.hostname or "localhost"
     scheme = parsed.scheme or "http"
     port = parsed.port
     if port is None:

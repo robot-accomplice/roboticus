@@ -23,6 +23,16 @@ func NewTaskEventsRepository(q Querier) *TaskEventsRepository {
 	return &TaskEventsRepository{q: q}
 }
 
+// Append records a new task lifecycle event.
+func (r *TaskEventsRepository) Append(ctx context.Context, row TaskEventRow) error {
+	_, err := r.q.ExecContext(ctx,
+		`INSERT INTO task_events (id, task_id, parent_task_id, assigned_to, event_type, payload_json)
+		 VALUES (?, ?, NULLIF(?, ''), NULLIF(?, ''), ?, ?)`,
+		row.ID, row.TaskID, row.ParentTaskID, row.AssignedTo, row.EventType, row.PayloadJSON,
+	)
+	return err
+}
+
 // ListRecent returns recent task events, optionally scoped to a task.
 func (r *TaskEventsRepository) ListRecent(ctx context.Context, taskID string, limit int) ([]TaskEventRow, error) {
 	if limit <= 0 {

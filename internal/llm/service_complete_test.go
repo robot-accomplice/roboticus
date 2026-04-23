@@ -2,8 +2,26 @@ package llm
 
 import (
 	"context"
+	"io"
+	"net/http"
+	"strings"
 	"testing"
 )
+
+type recordingHTTP struct {
+	statusCode int
+	body       string
+	requests   []*http.Request
+}
+
+func (m *recordingHTTP) Do(r *http.Request) (*http.Response, error) {
+	m.requests = append(m.requests, r.Clone(r.Context()))
+	return &http.Response{
+		StatusCode: m.statusCode,
+		Body:       io.NopCloser(strings.NewReader(m.body)),
+		Header:     make(http.Header),
+	}, nil
+}
 
 func TestService_Complete_WithMockProvider(t *testing.T) {
 	mock := &mockHTTP{
@@ -130,6 +148,50 @@ func TestService_Complete_NoEscalateSkipsFallbackChain(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected primary failure without fallback when NoEscalate is set")
+	}
+}
+
+func TestService_Complete_RoutedOpenRouterNamespacePreservesOuterProvider(t *testing.T) {
+	openRouterHTTP := &recordingHTTP{
+		statusCode: 200,
+		body:       `{"id":"or","model":"openai/gpt-4o-mini","choices":[{"message":{"content":"openrouter response"},"finish_reason":"stop"}],"usage":{}}`,
+	}
+	openAIHTTP := &recordingHTTP{
+		statusCode: 401,
+		body:       `{"error":{"message":"missing key"}}`,
+	}
+
+	openRouterClient, _ := NewClientWithHTTP(&Provider{
+		Name: "openrouter", URL: "http://openrouter", Format: FormatOpenAI,
+	}, openRouterHTTP)
+	openAIClient, _ := NewClientWithHTTP(&Provider{
+		Name: "openai", URL: "http://openai", Format: FormatOpenAI,
+	}, openAIHTTP)
+
+	svc, _ := NewService(ServiceConfig{
+		Primary: "openrouter/openai/gpt-4o-mini",
+		Providers: []Provider{
+			{Name: "openrouter", URL: "http://openrouter", Format: FormatOpenAI},
+			{Name: "openai", URL: "http://openai", Format: FormatOpenAI},
+		},
+	}, nil)
+	svc.providers["openrouter"] = openRouterClient
+	svc.providers["openai"] = openAIClient
+
+	resp, err := svc.Complete(context.Background(), &Request{
+		Messages: []Message{{Role: "user", Content: "hello"}},
+	})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if resp.Content != "openrouter response" {
+		t.Fatalf("resp.Content = %q, want openrouter response", resp.Content)
+	}
+	if len(openRouterHTTP.requests) != 1 {
+		t.Fatalf("openrouter requests = %d, want 1", len(openRouterHTTP.requests))
+	}
+	if len(openAIHTTP.requests) != 0 {
+		t.Fatalf("openai requests = %d, want 0", len(openAIHTTP.requests))
 	}
 }
 

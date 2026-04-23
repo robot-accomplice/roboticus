@@ -88,6 +88,10 @@ The program defaults to skepticism:
 - "Feature exists" is not enough unless the artifact proves the live path is
   using it.
 
+For v1.0.7, [v1.0.7-roadmap.md](./v1.0.7-roadmap.md) is the authoritative
+execution inventory for remaining parity work. A remaining gap is not allowed
+to exist only as prose in a system document, release note, or old audit log.
+
 ## Required Success Criteria Per System
 
 Each system document must include an explicit `Success Criteria` section.

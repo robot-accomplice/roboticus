@@ -81,7 +81,7 @@ build-ci:
     commit_sha="$(git rev-parse HEAD)"
     export CGO_ENABLED=0 GOOS=linux GOARCH=amd64
     go build -trimpath \
-        -ldflags="-s -w -X roboticus/cmd.version=ci-${commit_sha:0:8} -X roboticus/internal/daemon.version=ci-${commit_sha:0:8}" \
+        -ldflags="-s -w -X roboticus/cmd/internal/cmdutil.Version=ci-${commit_sha:0:8} -X roboticus/internal/daemon.version=ci-${commit_sha:0:8}" \
         -o roboticus .
     if [[ "$(uname -s)" == "Linux" && "$(uname -m)" == "x86_64" ]]; then
         ./roboticus version

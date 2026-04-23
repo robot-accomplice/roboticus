@@ -1,6 +1,7 @@
 package routes
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -11,6 +12,83 @@ import (
 	"roboticus/internal/core"
 	"roboticus/internal/db"
 )
+
+func buildSubagentRosterCards(ctx context.Context, rq *db.RouteQueries, allSkillNames []string, supervisor string) ([]map[string]any, []string, int, int) {
+	rows, err := rq.ListSubAgentRosterEnriched(ctx)
+	if err != nil {
+		return []map[string]any{}, []string{}, 0, 0
+	}
+	defer func() { _ = rows.Close() }()
+
+	subTotal, subRunning := 0, 0
+	var subordinateNames []string
+	var subagentCards []map[string]any
+	for rows.Next() {
+		var name, displayName, model, role, description string
+		var fallbackJSON, skillsJSON string
+		var enabled bool
+		var sessionCount int
+		var lastUsedAt, status *string
+		if err := rows.Scan(&name, &displayName, &model, &enabled,
+			&role, &description, &fallbackJSON, &skillsJSON,
+			&sessionCount, &lastUsedAt, &status); err != nil {
+			continue
+		}
+		subTotal++
+		if enabled {
+			subRunning++
+		}
+		subordinateNames = append(subordinateNames, name)
+
+		var fallbackModels []string
+		_ = json.Unmarshal([]byte(fallbackJSON), &fallbackModels)
+		if fallbackModels == nil {
+			fallbackModels = []string{}
+		}
+
+		var fixedSkills []string
+		_ = json.Unmarshal([]byte(skillsJSON), &fixedSkills)
+		if fixedSkills == nil {
+			fixedSkills = []string{}
+		}
+
+		statusStr := "stopped"
+		if status != nil {
+			statusStr = *status
+		}
+
+		entry := map[string]any{
+			"id":              name,
+			"name":            name,
+			"display_name":    displayName,
+			"model":           model,
+			"resolved_model":  model,
+			"model_mode":      "assigned",
+			"enabled":         enabled,
+			"role":            role,
+			"description":     description,
+			"color":           "",
+			"fallback_models": fallbackModels,
+			"fixed_skills":    fixedSkills,
+			"shared_skills":   allSkillNames,
+			"skills":          fixedSkills,
+			"session_count":   sessionCount,
+			"supervisor":      strings.ToLower(supervisor),
+			"status":          statusStr,
+		}
+		if lastUsedAt != nil {
+			entry["last_used_at"] = *lastUsedAt
+		}
+		subagentCards = append(subagentCards, entry)
+	}
+	if subagentCards == nil {
+		subagentCards = []map[string]any{}
+	}
+	if subordinateNames == nil {
+		subordinateNames = []string{}
+	}
+	return subagentCards, subordinateNames, subTotal, subRunning
+}
 
 // GetRoster returns the agent roster with rich personality data.
 // Rust parity: workspace_roster.rs — includes voice, missions, firmware rules,
@@ -52,81 +130,8 @@ func GetRoster(store *db.Store, cfg *core.Config) http.HandlerFunc {
 			}
 		}
 
-		// --- Collect subagent names and counts ---
-		var subordinateNames []string
-		subTotal, subRunning := 0, 0
-
-		rows, err := rq.ListSubAgentRosterEnriched(ctx)
-		var subagentCards []map[string]any
-		if err == nil {
-			defer func() { _ = rows.Close() }()
-			for rows.Next() {
-				var name, displayName, model, role, description string
-				var fallbackJSON, skillsJSON string
-				var enabled bool
-				var sessionCount int
-				var lastUsedAt, status *string
-				if err := rows.Scan(&name, &displayName, &model, &enabled,
-					&role, &description, &fallbackJSON, &skillsJSON,
-					&sessionCount, &lastUsedAt, &status); err != nil {
-					continue
-				}
-				subTotal++
-				statusStr := "stopped"
-				if status != nil {
-					statusStr = *status
-				}
-				if enabled {
-					subRunning++
-				}
-
-				subordinateNames = append(subordinateNames, name)
-
-				// Parse fallback models JSON.
-				var fallbackModels []string
-				_ = json.Unmarshal([]byte(fallbackJSON), &fallbackModels)
-				if fallbackModels == nil {
-					fallbackModels = []string{}
-				}
-
-				// Parse skills JSON (subagent-specific).
-				var fixedSkills []string
-				_ = json.Unmarshal([]byte(skillsJSON), &fixedSkills)
-				if fixedSkills == nil {
-					fixedSkills = []string{}
-				}
-
-				entry := map[string]any{
-					"id":              name,
-					"name":            name,
-					"display_name":    displayName,
-					"model":           model,
-					"resolved_model":  model,
-					"model_mode":      "assigned",
-					"enabled":         enabled,
-					"role":            role,
-					"description":     description,
-					"color":           "",
-					"fallback_models": fallbackModels,
-					"fixed_skills":    fixedSkills,
-					"shared_skills":   allSkillNames,
-					"skills":          fixedSkills,
-					"session_count":   sessionCount,
-					"supervisor":      strings.ToLower(primaryNameOrDefault(cfg)),
-					"status":          statusStr,
-				}
-				if lastUsedAt != nil {
-					entry["last_used_at"] = *lastUsedAt
-				}
-				subagentCards = append(subagentCards, entry)
-			}
-		}
-		if subagentCards == nil {
-			subagentCards = []map[string]any{}
-		}
-		if subordinateNames == nil {
-			subordinateNames = []string{}
-		}
+		primaryName := primaryNameOrDefault(cfg)
+		subagentCards, subordinateNames, subTotal, subRunning := buildSubagentRosterCards(ctx, rq, allSkillNames, primaryName)
 
 		// --- Build voice object ---
 		voice := rosterVoice(osConfig)
@@ -165,7 +170,6 @@ func GetRoster(store *db.Store, cfg *core.Config) http.HandlerFunc {
 		}
 
 		// --- Primary agent card ---
-		primaryName := primaryNameOrDefault(cfg)
 		primaryModel := cfg.Models.Primary
 		if primaryModel == "" {
 			primaryModel = "auto"
@@ -304,13 +308,24 @@ func UpdateSubagent(store *db.Store) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "invalid JSON")
 			return
 		}
-		repo := db.NewAgentsRepository(store)
-		if err := repo.UpdateModel(r.Context(), name, req.Model, req.Description); err != nil {
-			if errors.Is(err, db.ErrNoRowsAffected) {
-				writeError(w, http.StatusNotFound, "subagent not found")
-			} else {
-				writeError(w, http.StatusInternalServerError, err.Error())
-			}
+		repo := db.NewSubagentCompositionRepository(store)
+		existing, err := repo.GetByName(r.Context(), name)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if existing == nil {
+			writeError(w, http.StatusNotFound, "subagent not found")
+			return
+		}
+		if req.Model != "" {
+			existing.Model = req.Model
+		}
+		if req.Description != "" {
+			existing.Description = req.Description
+		}
+		if _, _, err := repo.Upsert(r.Context(), *existing); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})

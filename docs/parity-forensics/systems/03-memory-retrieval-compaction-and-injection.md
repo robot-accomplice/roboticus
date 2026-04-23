@@ -122,7 +122,7 @@ path and consumed without rebuilding weaker alternatives elsewhere.
 
 | ID | Priority | Concern | Rust behavior | Go behavior | Classification | Status | Evidence |
 |----|----------|---------|---------------|-------------|----------------|--------|----------|
-| SYS-03-001 | P1 | Memory compaction parity still incomplete on live request path | Rust compacts memory text before context assembly with dedup, formatting compression, and budgeted retention | Go retriever assembles structured evidence, but final `ContextBuilder` committed path still truncates injected memory text naively | Degradation | Active remediation | Rust: `compaction.rs:78-154`, `293-348`; Go: `internal/agent/context.go:141-158`, `internal/agent/memory/retrieval.go:279-303` |
+| SYS-03-001 | P1 | Memory compaction parity still incomplete on live request path | Rust compacts memory text before context assembly with dedup, formatting compression, and budgeted retention | The live request path now compacts injected memory through the Rust-inspired compaction port instead of naive truncation; the remaining retrieval-quality work is fusion/reranking/read-path cleanup, not this compaction seam | Degradation remediated | Closed | Rust: `compaction.rs:78-154`, `293-348`; Go: `internal/agent/context.go`, `internal/agent/memory/compaction.go`, `internal/agent/memory/retrieval.go` |
 | SYS-03-002 | P1 | Structured evidence still had a rendered-text fallback downstream | Rust pipeline carries structured prepared context forward | Go now emits typed evidence, and the verifier consumes typed artifacts only. Compatibility callers that set only `MemoryContext` are normalized at the session boundary into `VerificationEvidence`, so downstream stages no longer parse rendered memory text directly | Improved | Closed, retain as invariant | `internal/agent/memory/context_assembly.go:162-225`, `internal/session/verification_evidence.go`, `internal/pipeline/verifier.go` |
 | SYS-03-003 | P1 | Pipeline single-authority claim must be continuously re-proven | Rust request builder consumes prepared retrieval output in one path | Go comments and tests say Stage 8.5 is sole authority; must keep proving no fallback rebuild path reappears | Improvement | Closed for current tree, retain as invariant | `internal/pipeline/pipeline_run_stages.go:442-460`, `internal/daemon/daemon_adapters.go:174-212`, `internal/pipeline/retrieval_parity_test.go` |
 | SYS-03-004 | P2 | Hippocampus summary is split between retrieval-adjacent repo API and prompt assembly ownership | Rust injects compact summary in context builder | Go has repository support and related introspection use, but live prompt-injection ownership still belongs to System 01 remediation | Missing Functionality | Tracked in System 01 | `internal/db/hippocampus_repo.go:207-260` plus absence from current committed request path |
@@ -184,6 +184,35 @@ System 03 is closed for v1.0.6.
 - `search_memories` and the richer `recall_memory` lookup remain accepted
   Go-native improvements.
 
+## v1.0.7 Reopening
+
+System 03 was reopened for the remaining retrieval-quality seam that still
+mattered to parity and agent efficacy:
+
+- `PAR-014` — semantic read-path cleanup (now closed)
+
+`PAR-012` is now closed. The architecture rule is explicit and implemented:
+
+- tier retrieval may compute raw relevance and provenance in parallel
+- **fusion** is the first central stage allowed to combine route weight,
+  provenance, freshness, authority, and corroboration into one retrieval
+  quality score
+- reranking follows fusion and owns narrowing / collapse protection, not the
+  fusion semantics themselves
+- LLM-based reranking, when enabled, is a second-stage semantic scorer owned by
+  the retriever itself. It must consume fused evidence, emit explicit RCA
+  counters, and degrade cleanly to deterministic score-based reranking when
+  policy, provider health, or structured output quality does not justify the
+  extra pass
+- semantic retrieval is no longer allowed to depend on a residual `LIKE`
+  safety net just to recover semantic `key` / `category` lookups. The clean
+  fix is to make the semantic FTS corpus rich enough to preserve that behavior
+  on the primary semantic read path
+
+That distinction matters for both RCA and future ML work. Fusion needs a
+single owned stage so operators can understand why evidence surfaced and later
+training data can observe the same decision boundary.
+
 ## Progress Log
 
 - 2026-04-16: Initialized System 03 document.
@@ -214,3 +243,25 @@ System 03 is closed for v1.0.6.
   `Session.SetMemoryContext(...)`. This keeps format-sensitive parsing out of
   downstream consumers while preserving backward compatibility for tests and
   ad-hoc harnesses.
+- 2026-04-20: Reopened `PAR-012` as an architecture-first retrieval closure.
+  The current pipeline still routes and retrieves in parallel, but fusion is
+  mostly implicit across router weights and reranker heuristics. v1.0.7 now
+  treats fusion as its own stage between routed tier retrieval and reranking.
+- 2026-04-20: Closed `PAR-012`. `internal/agent/memory/fusion.go` now owns the
+  route-weight / provenance / freshness / authority / corroboration merge,
+  retrieval traces record fusion-stage counters, and the full memory package
+  stayed green after the change.
+- 2026-04-20: Reopened `PAR-013` as an architecture-first ranking closure. The
+  live path now has an explicit fusion stage, so any LLM-based reranking must
+  run after fusion, remain optional and centrally configured, and preserve the
+  existing deterministic reranker as the fallback rather than replacing it.
+- 2026-04-20: Closed `PAR-013`. The retriever now owns an optional LLM-backed
+  reranking stage after fusion and before context assembly. It uses the shared
+  LLM service with `NoEscalate`, emits explicit `retrieval.rerank.llm.*`
+  annotations for RCA/ML work, and falls back cleanly to deterministic
+  score-based reranking on disablement, parse failure, or provider failure.
+- 2026-04-20: Reopened `PAR-014` as a semantic-tier cleanup, not a blind
+  fallback deletion. The remaining issue is that semantic retrieval still uses
+  a tier-local `LIKE` safety net to recover `key` lookups because the semantic
+  FTS corpus only indexes `value`. v1.0.7 must enrich the semantic FTS corpus
+  so `key` / `category` retrieval survives without heuristic SQL.

@@ -250,18 +250,34 @@ func TestMCPServer(cfg *core.Config) http.HandlerFunc {
 	}
 }
 
+// ValidateSSEMCPServer runs the authoritative named-target SSE validation
+// harness for a configured SSE MCP server.
+func ValidateSSEMCPServer(cfg *core.Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		name := chi.URLParam(r, "name")
+		server, ok := findMCPServerConfig(cfg, name)
+		if !ok {
+			writeError(w, http.StatusNotFound, "MCP server not found")
+			return
+		}
+		if server.Transport != "sse" {
+			writeError(w, http.StatusBadRequest, "MCP server is not configured for SSE transport")
+			return
+		}
+		evidence := mcp.ValidateSSETarget(r.Context(), server)
+		okResult := evidence.InitializeOK && evidence.ToolListOK &&
+			(evidence.ToolCount == 0 || evidence.ToolCall.Interpretable)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":       okResult,
+			"evidence": evidence,
+		})
+	}
+}
+
 func findMCPServerConfig(cfg *core.Config, name string) (mcp.McpServerConfig, bool) {
 	for _, server := range cfg.MCP.Servers {
 		if server.Name == name {
-			return mcp.McpServerConfig{
-				Name:      server.Name,
-				Transport: server.Transport,
-				Command:   server.Command,
-				Args:      server.Args,
-				URL:       server.URL,
-				Env:       server.Env,
-				Enabled:   server.Enabled,
-			}, true
+			return mcp.ConfigFromCoreEntry(server), true
 		}
 	}
 	return mcp.McpServerConfig{}, false
@@ -316,7 +332,7 @@ func testMCPServer(ctx context.Context, cfg mcp.McpServerConfig) (mcp.ServerStat
 		if cfg.URL == "" {
 			return mcp.ServerStatus{}, fmt.Errorf("mcp: SSE transport requires a URL")
 		}
-		conn, err := mcp.ConnectSSE(ctx, cfg.Name, cfg.URL)
+		conn, err := mcp.ConnectSSEWithConfig(ctx, cfg)
 		if err != nil {
 			return mcp.ServerStatus{}, err
 		}

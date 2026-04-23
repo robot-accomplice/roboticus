@@ -2,11 +2,15 @@ package models
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"sort"
 	"strings"
 	"time"
@@ -16,7 +20,79 @@ import (
 	"roboticus/cmd/internal/cmdutil"
 	"roboticus/internal/core"
 	"roboticus/internal/llm"
+	"roboticus/internal/modelstate"
 )
+
+func exerciseConfigFingerprint(config map[string]any) string {
+	b, err := json.Marshal(config)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}
+
+func currentGitRevision() string {
+	out, err := exec.Command("git", "rev-parse", "HEAD").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func startExerciseRun(models []string, iterations int, config map[string]any, intentClass string) (string, error) {
+	payload := map[string]any{
+		"initiator":          "cli",
+		"models":             models,
+		"iterations":         iterations,
+		"config_fingerprint": exerciseConfigFingerprint(config),
+		"git_revision":       currentGitRevision(),
+	}
+	if strings.TrimSpace(intentClass) != "" {
+		payload["notes"] = "intent filter: " + intentClass
+	}
+	resp, err := cmdutil.APIPost("/api/models/exercise/runs", payload)
+	if err != nil {
+		return "", err
+	}
+	runID, _ := resp["run_id"].(string)
+	if runID == "" {
+		return "", fmt.Errorf("exercise run start did not return run_id")
+	}
+	return runID, nil
+}
+
+func appendExerciseRunResult(runID string, o llm.PromptOutcome) error {
+	errMsg := ""
+	if o.Err != nil {
+		errMsg = o.Err.Error()
+	}
+	_, err := cmdutil.APIPost("/api/models/exercise/runs/"+runID+"/results", map[string]any{
+		"model":             o.Model,
+		"intent_class":      o.Prompt.Intent.String(),
+		"complexity":        o.Prompt.Complexity.String(),
+		"prompt":            o.Prompt.Prompt,
+		"content":           o.Content,
+		"quality":           o.Quality,
+		"latency_ms":        o.LatencyMs,
+		"passed":            o.Passed,
+		"error_msg":         errMsg,
+		"resource_start":    o.ResourceStart,
+		"resource_end":      o.ResourceEnd,
+		"model_state_start": o.ModelStateStart,
+		"model_state_end":   o.ModelStateEnd,
+	})
+	return err
+}
+
+func completeExerciseRun(runID, status, notes string, models []string) error {
+	_, err := cmdutil.APIPost("/api/models/exercise/runs/"+runID+"/complete", map[string]any{
+		"status": status,
+		"notes":  notes,
+		"models": models,
+	})
+	return err
+}
 
 var modelsCmd = &cobra.Command{
 	Use:   "models",
@@ -390,6 +466,8 @@ SELECTOR:
 FLAGS:
   -n N             Run the matrix N times per model for statistical
                    confidence. Default: 1.
+  --intent NAME    Exercise only one canonical intent slice from the
+                   matrix (for example TOOL_USE or MEMORY_RECALL).
   --new-only       Skip models that already have baseline data. Only
                    applies when no model args are given.
   --flush          Flush all existing quality observations before
@@ -410,6 +488,17 @@ scored latency averages. Cloud models skip warm-up.`,
 		minQuality, _ := cmd.Flags().GetFloat64("min-quality")
 		newOnly, _ := cmd.Flags().GetBool("new-only")
 		flush, _ := cmd.Flags().GetBool("flush")
+		intentName, _ := cmd.Flags().GetString("intent")
+		var intentFilter *llm.IntentClass
+		intentLabel := ""
+		if strings.TrimSpace(intentName) != "" {
+			intent, err := llm.ParseIntentClassStrict(intentName)
+			if err != nil {
+				return err
+			}
+			intentFilter = &intent
+			intentLabel = intent.String()
+		}
 
 		config, err := cmdutil.APIGet("/api/config")
 		if err != nil {
@@ -430,7 +519,16 @@ scored latency averages. Cloud models skip warm-up.`,
 
 		// Pre-flight summary: how many calls, estimated duration,
 		// what we'll do (flush or not).
-		totalPrompts := len(llm.ExerciseMatrix) * iterations
+		promptCount := len(llm.ExerciseMatrix)
+		if intentFilter != nil {
+			promptCount = 0
+			for _, prompt := range llm.ExerciseMatrix {
+				if prompt.Intent == *intentFilter {
+					promptCount++
+				}
+			}
+		}
+		totalPrompts := promptCount * iterations
 		fmt.Printf("\n  Exercising %d model(s):\n", len(models))
 		for _, m := range models {
 			label := "local"
@@ -439,7 +537,10 @@ scored latency averages. Cloud models skip warm-up.`,
 			}
 			fmt.Printf("    %-40s  %s\n", m, label)
 		}
-		fmt.Printf("  %d prompts × %d iteration(s) = %d scored calls per model.\n", len(llm.ExerciseMatrix), iterations, totalPrompts)
+		if intentFilter != nil {
+			fmt.Printf("  Intent filter: %s\n", intentLabel)
+		}
+		fmt.Printf("  %d prompts × %d iteration(s) = %d scored calls per model.\n", promptCount, iterations, totalPrompts)
 		if flush && len(args) == 0 {
 			fmt.Printf("  Quality scores will be FLUSHED before exercising (--flush).\n")
 		}
@@ -459,19 +560,59 @@ scored latency averages. Cloud models skip warm-up.`,
 		}
 
 		// Dispatch to the business-logic orchestrator.
+		runID, err := startExerciseRun(models, iterations, config, intentLabel)
+		if err != nil {
+			return fmt.Errorf("start exercise run: %w", err)
+		}
+		runStatus := "completed"
+		runNotes := ""
+		defer func() {
+			if err := completeExerciseRun(runID, runStatus, runNotes, models); err != nil {
+				fmt.Fprintf(os.Stderr, "  warning: failed to finalize exercise run %s: %v\n", runID, err)
+			}
+		}()
+
+		var persistErr error
 		req := llm.ExerciseRequest{
 			Models:       models,
+			IntentFilter: intentFilter,
 			Iterations:   iterations,
 			SendPrompt:   cliPromptSender,
 			SendWarmup:   cliWarmupSender(config),
-			OnPrompt:     renderPromptProgress,
-			Progress:     os.Stdout,
+			OnPrompt: func(o llm.PromptOutcome) {
+				renderPromptProgress(o)
+				if persistErr != nil {
+					return
+				}
+				if err := appendExerciseRunResult(runID, o); err != nil {
+					persistErr = err
+				}
+			},
+			Progress: os.Stdout,
+			SampleModelState: func(ctx context.Context, model string) *modelstate.Snapshot {
+				snapshot := modelstate.Sample(ctx, exerciseCfg, model)
+				if snapshot.Empty() {
+					return nil
+				}
+				return &snapshot
+			},
 			IsLocal:      func(m string) bool { return llm.ExerciseModelIsLocal(exerciseCfg, m) },
 			ModelTimeout: func(m string) time.Duration { return llm.ExerciseModelTimeout(exerciseCfg, m) },
 		}
 		report, err := llm.ExerciseModels(cmd.Context(), req)
 		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				runStatus = "canceled"
+			} else {
+				runStatus = "failed"
+			}
+			runNotes = err.Error()
 			return fmt.Errorf("exercise: %w", err)
+		}
+		if persistErr != nil {
+			runStatus = "failed"
+			runNotes = persistErr.Error()
+			return fmt.Errorf("persist exercise results: %w", persistErr)
 		}
 
 		// Always render the cross-model comparison — a single model's
@@ -553,7 +694,7 @@ func hasExistingData(existing map[string]any, model string) bool {
 // cliPromptSender is the CLI-side llm.ModelSender: dispatches one
 // scored prompt through the pipeline via /api/agent/message.
 func cliPromptSender(ctx context.Context, model, content string, timeout time.Duration) (string, int64, error) {
-	body := map[string]any{"content": content, "no_cache": true}
+	body := map[string]any{"content": content, "no_cache": true, "no_escalate": true}
 	if model != "" {
 		body["model"] = model
 	}
@@ -576,9 +717,10 @@ func cliPromptSender(ctx context.Context, model, content string, timeout time.Du
 func cliWarmupSender(config map[string]any) llm.WarmupSender {
 	return func(ctx context.Context, model string, timeout time.Duration) llm.WarmupResult {
 		body := map[string]any{
-			"content":  llm.WarmupPrompt,
-			"model":    model,
-			"no_cache": true,
+			"content":     llm.WarmupPrompt,
+			"model":       model,
+			"no_cache":    true,
+			"no_escalate": true,
 		}
 		start := time.Now()
 		_, err := cmdutil.APIPostSlow("/api/agent/message", body, timeout)
@@ -611,14 +753,38 @@ func renderPromptProgress(o llm.PromptOutcome) {
 	switch {
 	case o.Err != nil:
 		fmt.Printf("FAIL  %v\n", o.Err)
+	case !o.Passed && strings.TrimSpace(o.Content) == "":
+		fmt.Printf("FAIL  empty response  %.1fs%s\n", float64(o.LatencyMs)/1000.0, formatModelStateSummary(o.ModelStateEnd))
 	case !o.Passed:
-		fmt.Printf("FAIL  empty response  %.1fs\n", float64(o.LatencyMs)/1000.0)
+		preview := strings.TrimSpace(o.Content)
+		if len(preview) > 50 {
+			preview = preview[:50] + "..."
+		}
+		fmt.Printf("FAIL  quality gate  %.1fs: %s%s\n", float64(o.LatencyMs)/1000.0, preview, formatModelStateSummary(o.ModelStateEnd))
 	default:
 		preview := o.Content
 		if len(preview) > 50 {
 			preview = preview[:50] + "..."
 		}
 		fmt.Printf("PASS  Q=%.2f  %.1fs: %s\n", o.Quality, float64(o.LatencyMs)/1000.0, preview)
+	}
+}
+
+func formatModelStateSummary(snapshot *modelstate.Snapshot) string {
+	if snapshot == nil || snapshot.StateClass == "" {
+		return ""
+	}
+	switch snapshot.StateClass {
+	case "ready", "provider_managed":
+		return ""
+	case "installed_not_loaded":
+		return "  [state: installed, not loaded]"
+	case "model_missing":
+		return "  [state: model missing]"
+	case "provider_unreachable":
+		return "  [state: provider unreachable]"
+	default:
+		return "  [state: " + snapshot.StateClass + "]"
 	}
 }
 
@@ -1129,6 +1295,7 @@ func init() {
 	// `exercise` and `baseline`; see the command Long description
 	// for the merge rationale.
 	modelsExerciseCmd.Flags().IntP("iterations", "n", 1, "Number of iterations over the prompt matrix")
+	modelsExerciseCmd.Flags().String("intent", "", "Exercise only one canonical intent class from the matrix")
 	modelsExerciseCmd.Flags().Float64("min-quality", 0, "Minimum quality threshold (0.0-1.0) — flag models below this for removal")
 	modelsExerciseCmd.Flags().Bool("new-only", false, "Only exercise models with no existing baseline data (ignored when explicit args are given)")
 	modelsExerciseCmd.Flags().Bool("flush", false, "Flush ALL existing quality observations before exercising (preserves the old `baseline` command's reset-first semantics)")

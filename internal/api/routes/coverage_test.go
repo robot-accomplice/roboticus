@@ -724,7 +724,8 @@ func TestGetEscalationStats_NilService(t *testing.T) {
 
 func TestGetRoutingDiagnostics(t *testing.T) {
 	cfg := coverageTestConfig()
-	handler := GetRoutingDiagnostics(cfg)
+	store := testutil.TempStore(t)
+	handler := GetRoutingDiagnostics(store, cfg, nil)
 	req := httptest.NewRequest("GET", "/api/stats/routing", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -736,6 +737,21 @@ func TestGetRoutingDiagnostics(t *testing.T) {
 	config := body["config"].(map[string]any)
 	if _, ok := config["routing_mode"]; !ok {
 		t.Error("expected routing_mode in config")
+	}
+	if _, ok := config["policy"]; !ok {
+		t.Error("expected policy in config")
+	}
+	if _, ok := config["persisted_policy"]; !ok {
+		t.Error("expected persisted_policy in config")
+	}
+	if _, ok := config["effective_policy"]; !ok {
+		t.Error("expected effective_policy in config")
+	}
+	if _, ok := config["role_eligibility"]; !ok {
+		t.Error("expected role_eligibility in config")
+	}
+	if _, ok := config["effective_targets"]; !ok {
+		t.Error("expected effective_targets in config")
 	}
 }
 

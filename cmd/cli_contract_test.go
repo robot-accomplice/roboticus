@@ -129,7 +129,7 @@ func TestCLI_SubcommandSets(t *testing.T) {
 		{"models", []string{"list", "diagnostics", "scan", "exercise", "suggest", "reset"}},
 		{"config", []string{"show", "get", "validate"}},
 		{"auth", []string{"status", "login", "logout"}},
-		{"mcp", []string{"list", "connect", "disconnect"}},
+		{"mcp", []string{"list", "connect", "disconnect", "validate-sse"}},
 		{"circuit", []string{"status", "reset"}},
 		{"channels", []string{"list", "test", "dead-letter"}},
 		{"profile", []string{"list", "create", "switch", "delete"}},

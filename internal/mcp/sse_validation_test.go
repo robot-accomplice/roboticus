@@ -39,6 +39,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"roboticus/internal/core"
 )
 
 // TestSSEReleaseChecklist_FullValidation exercises every requirement
@@ -251,4 +253,105 @@ func TestSSEReleaseChecklist_FullValidation(t *testing.T) {
 		"  tools/call:    %s({\"text\":%q}) → %q\n"+
 		"  verdict:       PASS (in-tree SSE fixture; no blessed third-party target this release)\n",
 		srv.URL, conn.ServerName, conn.ServerVersion, len(conn.Tools), toolName, echoText, callResult.Content)
+}
+
+func TestValidateSSETarget_ProducesStructuredEvidence(t *testing.T) {
+	const tokenEnv = "ROBOTICUS_TEST_SSE_VALIDATE_TOKEN"
+	t.Setenv(tokenEnv, "validate-token")
+
+	var getAuth, postAuth string
+	var messagePath string
+	var responseCh = make(chan json.RawMessage, 8)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			getAuth = r.Header.Get("Authorization")
+			flusher := w.(http.Flusher)
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("event: endpoint\ndata: /messages\n\n"))
+			flusher.Flush()
+			for {
+				select {
+				case msg := <-responseCh:
+					_, _ = w.Write([]byte("data: "))
+					_, _ = w.Write(msg)
+					_, _ = w.Write([]byte("\n\n"))
+					flusher.Flush()
+				case <-r.Context().Done():
+					return
+				}
+			}
+		case http.MethodPost:
+			postAuth = r.Header.Get("Authorization")
+			messagePath = r.URL.Path
+			body, _ := io.ReadAll(r.Body)
+			var req map[string]any
+			_ = json.Unmarshal(body, &req)
+			method, _ := req["method"].(string)
+			id := req["id"]
+			var result any
+			switch method {
+			case "initialize":
+				result = map[string]any{
+					"protocolVersion": "2024-11-05",
+					"serverInfo": map[string]string{
+						"name":    "validate-fixture",
+						"version": "v1.0.7",
+					},
+				}
+			case "tools/list":
+				result = map[string]any{
+					"tools": []map[string]any{{
+						"name":        "echo",
+						"description": "Echo fixture",
+						"inputSchema": map[string]any{"type": "object"},
+					}},
+				}
+			case "tools/call":
+				result = map[string]any{
+					"content": []map[string]any{{"type": "text", "text": "echo ok"}},
+					"isError": false,
+				}
+			default:
+				result = map[string]any{}
+			}
+			respBytes, _ := json.Marshal(map[string]any{
+				"jsonrpc": "2.0",
+				"id":      id,
+				"result":  result,
+			})
+			responseCh <- json.RawMessage(respBytes)
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer srv.Close()
+
+	evidence := ValidateSSETarget(context.Background(), ConfigFromCoreEntry(core.MCPServerEntry{
+		Name:         "fixture",
+		Transport:    "sse",
+		URL:          srv.URL,
+		Enabled:      true,
+		AuthTokenEnv: tokenEnv,
+	}))
+
+	if evidence.FatalError != "" {
+		t.Fatalf("unexpected fatal error: %s", evidence.FatalError)
+	}
+	if !evidence.InitializeOK || !evidence.ToolListOK {
+		t.Fatalf("expected initialize/tool list success: %+v", evidence)
+	}
+	if evidence.ToolCall.ContentPreview != "echo ok" {
+		t.Fatalf("content preview = %q", evidence.ToolCall.ContentPreview)
+	}
+	if !strings.HasSuffix(evidence.ResolvedPostURL, "/messages") {
+		t.Fatalf("resolved post url = %q", evidence.ResolvedPostURL)
+	}
+	if getAuth != "Bearer validate-token" || postAuth != "Bearer validate-token" {
+		t.Fatalf("auth headers GET=%q POST=%q", getAuth, postAuth)
+	}
+	if messagePath != "/messages" {
+		t.Fatalf("message path = %q", messagePath)
+	}
 }

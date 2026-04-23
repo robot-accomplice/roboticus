@@ -97,6 +97,10 @@ type TopicBlock struct {
 	FirstUserContent string
 }
 
+type conversationChunk struct {
+	Messages []llm.Message
+}
+
 // PartitionByTopic splits messages into current-topic (kept in full) and
 // off-topic blocks (summarized). Matches Rust's partition_by_topic().
 //
@@ -107,9 +111,8 @@ func PartitionByTopic(messages []llm.Message, currentTopic string) (currentMsgs 
 	}
 
 	var currentBlock *TopicBlock
-
-	for _, m := range messages {
-		tag := m.TopicTag
+	for _, chunk := range chunkConversationMessages(messages) {
+		tag := chunkTopicTag(chunk.Messages)
 		isCurrent := tag == "" || tag == currentTopic
 
 		if isCurrent {
@@ -118,7 +121,7 @@ func PartitionByTopic(messages []llm.Message, currentTopic string) (currentMsgs 
 				offTopicBlocks = append(offTopicBlocks, *currentBlock)
 				currentBlock = nil
 			}
-			currentMsgs = append(currentMsgs, m)
+			currentMsgs = append(currentMsgs, chunk.Messages...)
 		} else {
 			// Accumulate into off-topic block.
 			if currentBlock == nil || currentBlock.Tag != tag {
@@ -127,9 +130,11 @@ func PartitionByTopic(messages []llm.Message, currentTopic string) (currentMsgs 
 				}
 				currentBlock = &TopicBlock{Tag: tag}
 			}
-			currentBlock.Messages = append(currentBlock.Messages, m)
-			if m.Role == "user" && currentBlock.FirstUserContent == "" {
-				currentBlock.FirstUserContent = m.Content
+			currentBlock.Messages = append(currentBlock.Messages, chunk.Messages...)
+			for _, m := range chunk.Messages {
+				if m.Role == "user" && currentBlock.FirstUserContent == "" {
+					currentBlock.FirstUserContent = m.Content
+				}
 			}
 		}
 	}
@@ -152,4 +157,45 @@ func SummarizeTopicBlock(block TopicBlock) string {
 	}
 	return fmt.Sprintf("[Earlier topic (%s, %d messages): \"%s...\"]",
 		block.Tag, len(block.Messages), snippet)
+}
+
+func chunkConversationMessages(messages []llm.Message) []conversationChunk {
+	if len(messages) == 0 {
+		return nil
+	}
+	chunks := make([]conversationChunk, 0, len(messages))
+	for i := 0; i < len(messages); i++ {
+		msg := messages[i]
+		if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
+			callIDs := make(map[string]struct{}, len(msg.ToolCalls))
+			for _, tc := range msg.ToolCalls {
+				callIDs[tc.ID] = struct{}{}
+			}
+			chunk := conversationChunk{Messages: []llm.Message{msg}}
+			for j := i + 1; j < len(messages); j++ {
+				next := messages[j]
+				if next.Role != "tool" {
+					break
+				}
+				if _, ok := callIDs[next.ToolCallID]; !ok {
+					break
+				}
+				chunk.Messages = append(chunk.Messages, next)
+				i = j
+			}
+			chunks = append(chunks, chunk)
+			continue
+		}
+		chunks = append(chunks, conversationChunk{Messages: []llm.Message{msg}})
+	}
+	return chunks
+}
+
+func chunkTopicTag(messages []llm.Message) string {
+	for _, msg := range messages {
+		if strings.TrimSpace(msg.TopicTag) != "" {
+			return msg.TopicTag
+		}
+	}
+	return ""
 }

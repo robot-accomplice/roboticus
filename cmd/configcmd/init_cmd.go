@@ -97,7 +97,7 @@ autonomy_max_turn_duration_seconds = 90
 
 [server]
 port = 18789
-bind = "127.0.0.1"
+bind = "localhost"
 
 [database]
 path = "~/.roboticus/roboticus.db"

@@ -2,7 +2,9 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -124,6 +126,10 @@ func (p *Pipeline) stageSessionResolution(ctx context.Context, pc *pipelineConte
 	session, err := p.resolveSession(ctx, pc.cfg, pc.input)
 	if err != nil {
 		pc.tr.EndSpan("error")
+		var ge *core.GobError
+		if errors.As(err, &ge) {
+			return nil, err
+		}
 		return nil, core.WrapError(core.ErrDatabase, "session resolution failed", err)
 	}
 	pc.session = session
@@ -145,7 +151,16 @@ func (p *Pipeline) stageSessionResolution(ctx context.Context, pc *pipelineConte
 	if pc.isBotCommand && p.botCmds != nil {
 		if result, matched := p.botCmds.TryHandle(ctx, pc.input.Content, pc.session); matched {
 			pc.tr.Annotate("bot_command", true)
+			pc.dr.SetSummaryField("session_id", pc.session.ID)
+			pc.dr.SetSummaryField("channel", pc.cfg.ChannelLabel)
+			pc.dr.SetSummaryField("status", "ok")
+			pc.dr.RecordEvent("bot_command_handled", "ok",
+				"bot command handled without inference",
+				"The system answered a command directly.",
+				map[string]any{"content": pc.input.Content},
+			)
 			p.storeTrace(ctx, pc.tr, pc.session.ID, "", pc.cfg.ChannelLabel)
+			p.storeTurnDiagnostics(ctx, pc.dr)
 			return result, nil
 		}
 	}
@@ -225,16 +240,19 @@ func (p *Pipeline) stageDecomposition(ctx context.Context, pc *pipelineContext) 
 	// Stage 7.5: Task state synthesis (Rust: synthesize_task_state + plan).
 	if pc.cfg.TaskOperatingState != "" || pc.cfg.DecompositionGate {
 		pc.tr.BeginSpan("task_synthesis")
-		// Populate agent skills from DB (Rust: list_skills → filter enabled).
+		// Populate capability-bearing enabled skill lexicon from the same
+		// authoritative inventory the operator sees. Capability fit must not
+		// rely on whitespace-splitting raw skill names alone.
 		var agentSkills []string
 		if p.store != nil {
-			skillNames := SkillRegistryNamesFromDB(p.store)
-			for name := range skillNames {
-				agentSkills = append(agentSkills, name)
-			}
+			agentSkills = SkillCapabilityLexiconFromDB(p.store)
 		}
 		pc.synthesis = SynthesizeTaskState(pc.content, pc.session.TurnCount(), agentSkills)
+		pc.policy = DeriveTurnEnvelopePolicy(pc.content, pc.synthesis, pc.session.TurnCount())
+		pc.session.SetTurnEnvelopePolicy(string(pc.policy.Weight), string(pc.policy.ToolProfile), pc.policy.Reason)
 		AnnotateTaskStateTrace(pc.tr, pc.synthesis)
+		pc.tr.Annotate("turn_weight", string(pc.policy.Weight))
+		pc.tr.Annotate("turn_policy_reason", pc.policy.Reason)
 		pc.tr.EndSpan("ok")
 
 		gateDecision := MapPlannedAction(pc.synthesis, pc.decomp)
@@ -255,24 +273,73 @@ func (p *Pipeline) stageDecomposition(ctx context.Context, pc *pipelineContext) 
 	if len(verificationSubgoalsHint) == 0 {
 		verificationSubgoalsHint = verificationSubgoals(pc.content)
 	}
+	perception := BuildPerception(pc.content, pc.synthesis)
 	if pc.session != nil {
+		artifactContract := ParseArtifactPromptContract(pc.content)
+		inspectionTarget := ResolveInspectionTarget(pc.content, p.workspace, p.allowedPaths)
+		destinationTarget := ResolveFilesystemDestination(pc.content, p.workspace, p.allowedPaths, filepath.Join(p.workspace, "Vault"))
+		verificationSubgoalsHint = normalizeSemanticSubgoals(verificationSubgoalsHint)
 		pc.session.SetTaskVerificationHints(
 			pc.synthesis.Intent,
 			pc.synthesis.Complexity,
 			pc.synthesis.PlannedAction,
 			verificationSubgoalsHint,
 		)
+		pc.session.SetSourceArtifacts(artifactContract.SourceInputs)
+		pc.session.SetInspectionTargetSummary(inspectionTarget.PromptSummary)
+		pc.session.SetDestinationTargetSummary(destinationTarget.PromptSummary)
 
 		// Build and stash the unified perception artifact (Milestone 2)
 		// so downstream stages consume a single classifier output.
-		perception := BuildPerception(pc.content, pc.synthesis)
 		pc.session.SetPerception(
 			string(perception.Risk),
 			string(perception.SourceOfTruth),
 			perception.RequiredMemoryTiers,
 			perception.FreshnessRequired,
 		)
-		AnnotatePerceptionTrace(pc.tr, perception)
+	}
+	AnnotatePerceptionTrace(pc.tr, perception)
+	if pc.dr != nil && pc.session != nil {
+		pc.dr.RecordEvent("task_synthesis_completed", "ok",
+			"task synthesis classified the turn before routing",
+			"The system classified the task and selected an initial turn envelope.",
+			map[string]any{
+				"intent":                 pc.synthesis.Intent,
+				"complexity":             pc.synthesis.Complexity,
+				"planned_action":         pc.synthesis.PlannedAction,
+				"retrieval_needed":       pc.synthesis.RetrievalNeeded,
+				"retrieval_reason":       pc.synthesis.RetrievalReason,
+				"procedural_uncertainty": pc.synthesis.ProceduralUncertainty,
+				"capability_fit":         pc.synthesis.CapabilityFit,
+				"missing_skills":         append([]string(nil), pc.synthesis.MissingSkills...),
+				"turn_weight":            string(pc.policy.Weight),
+				"turn_policy_reason":     pc.policy.Reason,
+			},
+		)
+		if pc.synthesis.ProceduralUncertainty {
+			retrievalDecision := "used"
+			status := "ok"
+			userSummary := "The framework looked for prior experience before trying this task."
+			operatorSummary := "applied-learning retrieval planned before inference"
+			if !pc.synthesis.RetrievalNeeded {
+				retrievalDecision = "skipped"
+				status = "warning"
+				userSummary = "The framework detected procedural uncertainty but skipped prior-experience retrieval."
+				operatorSummary = "applied-learning retrieval skipped despite procedural uncertainty"
+			}
+			pc.dr.RecordEvent("applied_learning_retrieval_planned", status,
+				operatorSummary,
+				userSummary,
+				map[string]any{
+					"retrieval_decision":     retrievalDecision,
+					"retrieval_reason":       pc.synthesis.RetrievalReason,
+					"source_of_truth":        string(perception.SourceOfTruth),
+					"required_memory_tiers":  append([]string(nil), perception.RequiredMemoryTiers...),
+					"outcome_scope":          []string{"success", "failure", "partial"},
+					"procedural_uncertainty": true,
+				},
+			)
+		}
 	}
 
 	// Persist the synthesis as a plan entry in working memory so later turns
@@ -444,6 +511,13 @@ func (p *Pipeline) stageAuthority(_ context.Context, pc *pipelineContext) {
 
 func (p *Pipeline) stageMemoryRetrieval(ctx context.Context, pc *pipelineContext) {
 	retrievalStrat := DecideRetrievalStrategy(pc.synthesis, pc.session.TurnCount(), 2048)
+	if !pc.policy.AllowRetrieval {
+		retrievalStrat = RetrievalStrategy{
+			Strategy: "none",
+			Budget:   0,
+			Reason:   "turn envelope policy selected a lightweight first pass",
+		}
+	}
 
 	// Memory INDEX is the lightweight recall handle — it's injected on every
 	// turn regardless of retrieval strategy so the model can call
@@ -455,13 +529,13 @@ func (p *Pipeline) stageMemoryRetrieval(ctx context.Context, pc *pipelineContext
 	// audit flagged that fallback as a "pipeline is single authority"
 	// violation. Fix: always populate the index here, then drop the
 	// daemon fallback (see daemon_adapters.go buildAgentContext).
-	if p.store != nil {
+	if p.store != nil && !shouldKeepSocialTurnAmbientContextMinimal(pc.policy, pc.synthesis) {
 		index := agenttools.BuildMemoryIndex(ctx, p.store, 20, pc.content)
 		if index == "" {
 			index = "[Memory Index: No memories stored yet. " +
 				"Memories will accumulate as conversations continue. " +
-				"When a user asks about a past topic, use search_memories(query) to check, " +
-				"or be honest that you don't have stored memories about it yet.]"
+				"If the current turn still needs prior knowledge and no retrieved evidence answers it, " +
+				"use search_memories(query) to check; otherwise be honest that you don't have stored memories about it yet.]"
 		}
 		pc.session.SetMemoryIndex(index)
 	}
@@ -492,8 +566,15 @@ func (p *Pipeline) stageMemoryRetrieval(ctx context.Context, pc *pipelineContext
 			fragmentCount = strings.Count(pc.memoryBlock, "---") + 1
 		}
 
-		// Personality reinforcement on early turns (Rust parity).
-		if pc.memoryBlock == "" && pc.session.TurnCount() <= 3 {
+		isSubagent, err := db.IsSubagentName(ctx, p.store, pc.session.AgentID)
+		if err != nil {
+			log.Warn().Err(err).Str("agent_id", pc.session.AgentID).Msg("subagent role lookup failed during personality reinforcement check")
+		}
+
+		// Personality reinforcement on early turns (Rust parity) is reserved for
+		// the operator-facing orchestrator. Subagents are execution workers and
+		// should not receive persona reinforcement.
+		if pc.memoryBlock == "" && pc.session.TurnCount() <= 3 && !isSubagent {
 			personalityBoost := "[Identity Reinforcement] This is an early turn in the conversation. " +
 				"Your personality, voice, and behavioral directives from the system prompt are " +
 				"your PRIMARY guide for tone, style, and approach. Embody them fully — do not " +
@@ -538,7 +619,7 @@ func (p *Pipeline) stageDelegation(ctx context.Context, pc *pipelineContext) (*O
 			if delegOutcome.Complete {
 				pc.tr.Annotate("delegation_complete", true)
 				pc.tr.EndSpan("ok")
-				p.storeTrace(ctx, pc.tr, pc.session.ID, pc.msgID, pc.cfg.ChannelLabel)
+				p.storeTrace(ctx, pc.tr, pc.session.ID, pc.turnID, pc.cfg.ChannelLabel)
 				p.tasks.Complete(pc.taskID)
 				return &Outcome{
 					SessionID:  pc.session.ID,
@@ -564,7 +645,15 @@ func (p *Pipeline) stageSkillFirst(ctx context.Context, pc *pipelineContext) (*O
 	if skillResult := p.trySkillFirst(ctx, pc.cfg, pc.secClaim.Authority, pc.session, pc.content); skillResult != nil {
 		pc.tr.Annotate("matched", true)
 		pc.tr.EndSpan("ok")
-		p.storeTrace(ctx, pc.tr, pc.session.ID, pc.msgID, pc.cfg.ChannelLabel)
+		pc.dr.SetSummaryField("session_id", pc.session.ID)
+		pc.dr.SetSummaryField("turn_id", pc.turnID)
+		pc.dr.RecordEvent("skill_dispatch", "ok",
+			"skill-first shortcut fulfilled the turn",
+			"The system handled the turn through a direct skill path.",
+			nil,
+		)
+		p.storeTrace(ctx, pc.tr, pc.session.ID, pc.turnID, pc.cfg.ChannelLabel)
+		p.storeTurnDiagnostics(ctx, pc.dr)
 		p.tasks.Complete(pc.taskID)
 		return p.guardOutcome(pc.cfg, pc.session, skillResult), nil
 	}
@@ -581,7 +670,15 @@ func (p *Pipeline) stageShortcut(ctx context.Context, pc *pipelineContext) (*Out
 			pc.tr.Annotate("matched", true)
 			pc.tr.EndSpan("ok")
 			p.recordShortcutCost(ctx, pc.turnID, pc.session.ID, pc.cfg.ChannelLabel)
-			p.storeTrace(ctx, pc.tr, pc.session.ID, pc.msgID, pc.cfg.ChannelLabel)
+			pc.dr.SetSummaryField("session_id", pc.session.ID)
+			pc.dr.SetSummaryField("turn_id", pc.turnID)
+			pc.dr.RecordEvent("shortcut_dispatch", "ok",
+				"shortcut path fulfilled the turn",
+				"The system answered through a built-in shortcut path.",
+				nil,
+			)
+			p.storeTrace(ctx, pc.tr, pc.session.ID, pc.turnID, pc.cfg.ChannelLabel)
+			p.storeTurnDiagnostics(ctx, pc.dr)
 			p.tasks.Complete(pc.taskID)
 			return p.guardOutcome(pc.cfg, pc.session, result), nil
 		}
@@ -651,7 +748,16 @@ func (p *Pipeline) stageCacheCheck(ctx context.Context, pc *pipelineContext) (*O
 			}
 			pc.session.AddAssistantMessage(cacheOutcome.Content, nil)
 
-			p.storeTraceWithArtifacts(ctx, pc.tr, pc.session.ID, pc.msgID, pc.cfg.ChannelLabel, cacheOutcome)
+			p.storeTraceWithArtifacts(ctx, pc.tr, pc.session.ID, pc.turnID, pc.cfg.ChannelLabel, cacheOutcome)
+			pc.dr.SetSummaryField("session_id", pc.session.ID)
+			pc.dr.SetSummaryField("turn_id", pc.turnID)
+			pc.dr.SetSummaryField("status", "ok")
+			pc.dr.RecordEvent("cache_hit", "ok",
+				"response served from cache",
+				"The system reused a cached answer for this turn.",
+				map[string]any{"model": hit.Model},
+			)
+			p.storeTurnDiagnostics(ctx, pc.dr)
 			p.tasks.Complete(pc.taskID)
 			return cacheOutcome, nil
 		}
@@ -683,11 +789,11 @@ func (p *Pipeline) stageCacheCheck(ctx context.Context, pc *pipelineContext) (*O
 // is the equivalent owner on the Rust side.
 
 func (p *Pipeline) stageToolPruning(ctx context.Context, pc *pipelineContext) {
-	if p.pruner == nil {
+	if p.pruner == nil && !pc.policy.LightweightToolSurface {
 		return
 	}
 	pc.tr.BeginSpan("tool_pruning")
-	defs, stats, err := p.pruner.PruneTools(ctx, pc.session)
+	stats, err := pc.policy.applyToolPolicy(ctx, pc.session, p.pruner)
 	if err != nil {
 		log.Warn().Err(err).Str("session", pc.session.ID).
 			Msg("tool pruning failed; buildAgentContext will fall back to defensive pruning")
@@ -695,8 +801,8 @@ func (p *Pipeline) stageToolPruning(ctx context.Context, pc *pipelineContext) {
 		pc.tr.EndSpan("error")
 		return
 	}
-	pc.session.SetSelectedToolDefs(defs)
 	AnnotateToolSearchTrace(pc.tr, stats)
+	pc.tr.Annotate("turn_weight", string(pc.policy.Weight))
 	pc.tr.EndSpan("ok")
 }
 
@@ -746,18 +852,21 @@ func (p *Pipeline) stageHippocampusSummary(ctx context.Context, pc *pipelineCont
 
 func (p *Pipeline) stagePrepareInference(ctx context.Context, pc *pipelineContext) {
 	pc.tr.BeginSpan("prepare_inference")
-	p.PrepareForInference(ctx, pc.session, pc.memoryBlock, pc.cfg.BudgetTier)
+	p.PrepareForInference(ctx, pc.session, pc.memoryBlock, pc.cfg.BudgetTier, pc.policy)
 
 	// Annotate context budget allocation so the dashboard shows where tokens go.
 	{
-		budget := defaultTokenBudget
-		switch pc.cfg.BudgetTier {
-		case 0:
-			budget = 4096
-		case 2:
-			budget = 16384
-		case 3:
-			budget = 32768
+		budget := pc.policy.ContextBudget
+		if budget <= 0 {
+			budget = defaultTokenBudget
+			switch pc.cfg.BudgetTier {
+			case 0:
+				budget = 4096
+			case 2:
+				budget = 16384
+			case 3:
+				budget = 32768
+			}
 		}
 		var sysToks, memToks, histToks int
 		for _, m := range pc.session.Messages() {
@@ -800,12 +909,19 @@ func (p *Pipeline) stagePrepareInference(ctx context.Context, pc *pipelineContex
 
 	// Thread delegation result into inference context (Rust parity H8).
 	if pc.delegationResult != "" {
-		pc.session.AddSystemMessage(fmt.Sprintf(
-			"[Prior delegation result from orchestrate-subagents]\n%s\n"+
-				"[Incorporate the above delegation output into your response. "+
-				"If it's incomplete, supplement with your own reasoning.]",
-			pc.delegationResult,
-		))
+		pc.session.AddSystemMessage(buildDelegationReportingContract(pc.delegationResult))
+		pc.tr.Annotate("delegation_reporting_contract", true)
+		pc.dr.RecordEvent("delegation_reporting_contract_applied", "ok",
+			"delegated work was threaded into inference with evidence-reporting requirements",
+			"The system instructed the final answer to report delegated results with evidence and gaps, not as unsupported claims.",
+			map[string]any{
+				"delegation_result_len":   len(pc.delegationResult),
+				"requires_evidence":       true,
+				"requires_gap_report":     true,
+				"operator_reports_final":  true,
+				"subagent_direct_to_user": false,
+			},
+		)
 	}
 }
 
@@ -814,6 +930,8 @@ func (p *Pipeline) stagePrepareInference(ctx context.Context, pc *pipelineContex
 func (p *Pipeline) stageInference(ctx context.Context, pc *pipelineContext) (*Outcome, error) {
 	pc.tr.BeginSpan("inference")
 	ctx = llm.WithRoutingTracer(ctx, pc.tr)
+	ctx = WithDiagnosticsRecorder(ctx, pc.dr)
+	ctx = WithTurnEnvelopePolicy(ctx, pc.policy)
 	p.dashNotify("stream_start", map[string]string{
 		"session_id": pc.session.ID, "agent_id": pc.input.AgentID,
 	})
@@ -835,7 +953,16 @@ func (p *Pipeline) stageInference(ctx context.Context, pc *pipelineContext) (*Ou
 	}
 	if err != nil {
 		pc.tr.EndSpan("error")
-		p.storeTrace(ctx, pc.tr, pc.session.ID, pc.msgID, pc.cfg.ChannelLabel)
+		pc.dr.SetSummaryField("session_id", pc.session.ID)
+		pc.dr.SetSummaryField("turn_id", pc.turnID)
+		pc.dr.SetSummaryField("status", "degraded")
+		pc.dr.RecordEvent("turn_failed", "error",
+			"inference stage failed",
+			"The system could not complete this turn cleanly.",
+			map[string]any{"error": err.Error()},
+		)
+		p.storeTrace(ctx, pc.tr, pc.session.ID, pc.turnID, pc.cfg.ChannelLabel)
+		p.storeTurnDiagnostics(ctx, pc.dr)
 		return nil, err
 	}
 	pc.tr.EndSpan("ok")
@@ -861,7 +988,11 @@ func (p *Pipeline) stagePostInference(ctx context.Context, pc *pipelineContext, 
 		log.Warn().Str("session", pc.session.ID).Msg("pipeline produced empty content — injected fallback")
 	}
 
-	p.storeTraceWithArtifacts(ctx, pc.tr, pc.session.ID, pc.msgID, pc.cfg.ChannelLabel, outcome)
+	p.storeTraceWithArtifacts(ctx, pc.tr, pc.session.ID, pc.turnID, pc.cfg.ChannelLabel, outcome)
+	pc.dr.SetSummaryField("session_id", pc.session.ID)
+	pc.dr.SetSummaryField("turn_id", pc.turnID)
+	pc.dr.SetSummaryField("channel", pc.cfg.ChannelLabel)
+	p.storeTurnDiagnostics(ctx, pc.dr)
 
 	// Mark task completed.
 	p.tasks.Complete(pc.taskID)

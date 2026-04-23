@@ -113,3 +113,19 @@ func TestSession_MessageCount(t *testing.T) {
 		t.Errorf("after add: count = %d", s.MessageCount())
 	}
 }
+
+func TestSession_SourceArtifactsDefensiveCopy(t *testing.T) {
+	s := NewSession("s", "a", "G")
+	paths := []string{"requirements.txt"}
+	s.SetSourceArtifacts(paths)
+	paths[0] = "mutated.txt"
+
+	got := s.SourceArtifacts()
+	if len(got) != 1 || got[0] != "requirements.txt" {
+		t.Fatalf("source artifacts = %+v", got)
+	}
+	got[0] = "changed.txt"
+	if again := s.SourceArtifacts(); len(again) != 1 || again[0] != "requirements.txt" {
+		t.Fatalf("source artifacts mutated through getter: %+v", again)
+	}
+}

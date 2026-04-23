@@ -30,6 +30,8 @@ import (
 	"time"
 
 	"roboticus/internal/core"
+	"roboticus/internal/hostresources"
+	"roboticus/internal/modelstate"
 )
 
 // ModelSender is the pluggable transport for dispatching a single
@@ -60,6 +62,10 @@ type PromptOutcome struct {
 	Quality         float64 // 0 when Passed=false
 	Passed          bool    // true iff response non-empty AND no error
 	Err             error   // transport error, nil on success
+	ResourceStart   *hostresources.Snapshot
+	ResourceEnd     *hostresources.Snapshot
+	ModelStateStart *modelstate.Snapshot
+	ModelStateEnd   *modelstate.Snapshot
 }
 
 // OnPromptFn is invoked once per scored prompt AFTER the call
@@ -77,6 +83,11 @@ type ExerciseRequest struct {
 	// Models is the list of model identifiers to exercise. Order is
 	// preserved in the returned report. Must be non-empty.
 	Models []string
+
+	// IntentFilter optionally narrows the canonical ExerciseMatrix to a single
+	// intent class. The exercise factory owns this filtering so connectors do
+	// not drift into ad hoc prompt subsets.
+	IntentFilter *IntentClass
 
 	// Iterations is the number of passes each model makes through
 	// ExerciseMatrix. Values < 1 are coerced to 1.
@@ -103,6 +114,12 @@ type ExerciseRequest struct {
 	// Nil is treated as io.Discard. Independent from OnPrompt
 	// because warm-up is a pre-scoring phase, not a scored prompt.
 	Progress io.Writer
+
+	// SampleModelState captures provider/model runtime state for the exact model
+	// under test. It is optional but strongly recommended for benchmarks so
+	// empty/failed rows can be attributed to real model readiness instead of
+	// guessed after the fact.
+	SampleModelState func(ctx context.Context, model string) *modelstate.Snapshot
 
 	// IsLocal reports whether a model is local-hosted (and thus
 	// should go through warm-up). Required — implementations read
@@ -170,6 +187,9 @@ func ExerciseModels(ctx context.Context, req ExerciseRequest) (ExerciseReport, e
 	if req.ModelTimeout == nil {
 		return ExerciseReport{}, errors.New("ExerciseModels: ModelTimeout is required")
 	}
+	if req.IntentFilter != nil && !IsValidIntentClass(*req.IntentFilter) {
+		return ExerciseReport{}, fmt.Errorf("ExerciseModels: invalid IntentFilter %d", *req.IntentFilter)
+	}
 	if req.Iterations < 1 {
 		req.Iterations = 1
 	}
@@ -179,6 +199,13 @@ func ExerciseModels(ctx context.Context, req ExerciseRequest) (ExerciseReport, e
 	// about progress output rely on this normalization.
 	if req.Progress == nil {
 		req.Progress = io.Discard
+	}
+	prompts := ExerciseMatrix
+	if req.IntentFilter != nil {
+		prompts = filterExerciseMatrix(*req.IntentFilter)
+	}
+	if len(prompts) == 0 {
+		return ExerciseReport{}, errors.New("ExerciseModels: no prompts matched the requested intent filter")
 	}
 
 	report := ExerciseReport{}
@@ -200,7 +227,7 @@ func ExerciseModels(ctx context.Context, req ExerciseRequest) (ExerciseReport, e
 		// for the per-phase rationale.
 		mr.Warmup = RunWarmupStage(ctx, req.Progress, model, req.IsLocal(model), modelTimeout, req.SendWarmup)
 
-		totalPrompts := len(ExerciseMatrix) * req.Iterations
+		totalPrompts := len(prompts) * req.Iterations
 
 		// Aggregation accumulators. Per-intent sums and counts so the
 		// final average isn't biased by intent-class sample-size imbalance.
@@ -210,7 +237,7 @@ func ExerciseModels(ctx context.Context, req ExerciseRequest) (ExerciseReport, e
 		var qualityCount int
 
 		for iter := 1; iter <= req.Iterations; iter++ {
-			for i, ep := range ExerciseMatrix {
+			for i, ep := range prompts {
 				if err := ctx.Err(); err != nil {
 					// Partial result is preserved on the report — the
 					// caller sees whatever accumulated before cancel.
@@ -226,7 +253,7 @@ func ExerciseModels(ctx context.Context, req ExerciseRequest) (ExerciseReport, e
 					return report, err
 				}
 
-				promptNum := (iter-1)*len(ExerciseMatrix) + i + 1
+				promptNum := (iter-1)*len(prompts) + i + 1
 
 				// Per the v1.0.6 "no silent blocking calls" rule:
 				// print a prefix line and run the prompt dispatch
@@ -236,14 +263,24 @@ func ExerciseModels(ctx context.Context, req ExerciseRequest) (ExerciseReport, e
 				// logged output stays clean.
 				prefix := fmt.Sprintf("    [%d/%d] %s:C%d ... ", promptNum, totalPrompts, ep.Intent.String(), ep.Complexity)
 				var (
-					content   string
-					latencyMs int64
-					err       error
+					content         string
+					latencyMs       int64
+					err             error
+					modelStateStart *modelstate.Snapshot
+					modelStateEnd   *modelstate.Snapshot
 				)
+				if req.SampleModelState != nil {
+					modelStateStart = req.SampleModelState(ctx, model)
+				}
+				resourceStart := hostresources.Sample(ctx)
 				start := time.Now()
 				core.RunWithSpinner(req.Progress, prefix, func() {
 					content, latencyMs, err = req.SendPrompt(ctx, model, ep.Prompt, modelTimeout)
 				})
+				resourceEnd := hostresources.Sample(ctx)
+				if req.SampleModelState != nil {
+					modelStateEnd = req.SampleModelState(ctx, model)
+				}
 				// SendPrompt is allowed to return latencyMs==0 if it
 				// doesn't track its own timing; fall back to our
 				// start-based measurement so callers always see a
@@ -263,6 +300,10 @@ func ExerciseModels(ctx context.Context, req ExerciseRequest) (ExerciseReport, e
 					Iteration:       iter,
 					TotalIterations: req.Iterations,
 					LatencyMs:       latencyMs,
+					ResourceStart:   &resourceStart,
+					ResourceEnd:     &resourceEnd,
+					ModelStateStart: modelStateStart,
+					ModelStateEnd:   modelStateEnd,
 				}
 
 				switch {
@@ -305,4 +346,14 @@ func ExerciseModels(ctx context.Context, req ExerciseRequest) (ExerciseReport, e
 	}
 
 	return report, nil
+}
+
+func filterExerciseMatrix(intent IntentClass) []ExercisePrompt {
+	filtered := make([]ExercisePrompt, 0, len(ExerciseMatrix))
+	for _, prompt := range ExerciseMatrix {
+		if prompt.Intent == intent {
+			filtered = append(filtered, prompt)
+		}
+	}
+	return filtered
 }

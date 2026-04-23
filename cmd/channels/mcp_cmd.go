@@ -118,6 +118,28 @@ var mcpTestCmd = &cobra.Command{
 	},
 }
 
+var mcpValidateSSECmd = &cobra.Command{
+	Use:   "validate-sse <NAME>",
+	Short: "Run the named-target SSE validation harness for a configured MCP server",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		name := args[0]
+		fmt.Printf("Validating SSE MCP server %q...\n", name)
+
+		data, err := cmdutil.APIPost("/api/mcp/servers/"+name+"/validate-sse", nil)
+		if err != nil {
+			return err
+		}
+		if ok, _ := data["ok"].(bool); ok {
+			fmt.Printf("SSE MCP server %q: OK\n", name)
+		} else {
+			fmt.Printf("SSE MCP server %q: validation produced evidence but did not fully pass\n", name)
+		}
+		cmdutil.PrintJSON(data)
+		return nil
+	},
+}
+
 func init() {
-	mcpCmd.AddCommand(mcpListCmd, mcpConnectCmd, mcpDisconnectCmd, mcpShowCmd, mcpTestCmd)
+	mcpCmd.AddCommand(mcpListCmd, mcpConnectCmd, mcpDisconnectCmd, mcpShowCmd, mcpTestCmd, mcpValidateSSECmd)
 }

@@ -28,7 +28,8 @@
 //   mcp_latency_penalty = 0.05
 //   always_include = ["recall_memory", "search_memories",
 //                     "get_memory_stats", "get_runtime_context",
-//                     "get_subagent_status"]
+//                     "get_subagent_status", "list-subagent-roster",
+//                     "list-available-skills", "compose-skill"]
 //
 // Rust's equivalent has no TOML section — Go's is an Improvement (operator
 // overridability), recorded as an Intentional Deviation in System 02.
@@ -37,9 +38,11 @@
 // `always_include_operational_tools` (12-item list in
 // `crates/roboticus-pipeline/src/core/tool_prune.rs`). Go pins the subset
 // of names that map onto tools which actually exist in Go's registry —
-// memory recall primitives (Go improvements per System 03 SYS-03-005)
-// plus Rust-parity introspection tools. Pinning names that aren't
-// registered is a silent no-op, so the list is deliberately Go-native.
+// memory recall primitives (Go improvements per System 03 SYS-03-005),
+// Rust-parity introspection tools, and the v1.0.7 roster/inventory/composition
+// tools restored through PAR-002 and PAR-004. Pinning names that aren't
+// registered is a
+// silent no-op, so the list is deliberately Go-native.
 // Do not restore Rust's `SearchConfig::default` values
 // (`["memory_store", "delegate"]`) — that default is a Rust agent-crate
 // test fixture and is not the list Rust uses at runtime.
@@ -134,7 +137,9 @@ type ToolSearchConfig struct {
 // functional analogue of Rust's runtime
 // `always_include_operational_tools`, pinning the memory-recall
 // primitives Go refined beyond the Rust baseline (see System 03
-// SYS-03-005) plus the Rust-parity introspection tools Go registers.
+// SYS-03-005), the Rust-parity introspection tools Go registers, and the
+// explicit roster/inventory/composition tools restored in PAR-002 and
+// PAR-004.
 //
 // This helper exists for callers that construct ToolSearchConfig
 // outside the normal config-loading path (tests, ad-hoc tooling, and
@@ -152,6 +157,14 @@ func DefaultToolSearchConfig() ToolSearchConfig {
 			"get_memory_stats",
 			"get_runtime_context",
 			"get_subagent_status",
+			"obsidian_write",
+			"list-subagent-roster",
+			"list-available-skills",
+			"compose-skill",
+			"compose-subagent",
+			"orchestrate-subagents",
+			"task-status",
+			"list-open-tasks",
 		},
 	}
 }

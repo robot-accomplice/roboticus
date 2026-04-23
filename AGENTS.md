@@ -9,10 +9,20 @@ go vet ./...                # Lint
 ./roboticus parity-audit --rust-dir=../roboticus-rust  # Feature parity check
 ```
 
+## Operating Principles
+- Control flow is hierarchical by default: Operators direct orchestrators, orchestrators direct subagents, subagents execute bounded work and report results upward, and orchestrators analyze and repackage results for operators.
+- Subagents are execution workers, not operator-facing personas. They should default to zero personality and prove work with concrete evidence, artifacts, or observations from the current run.
+- Subagents must never report directly to operators, including scheduled or cron-triggered subagent work. Scheduled subagent output is still input to orchestration, not a substitute for operator-facing reporting.
+
 ## Architecture
 - **Connector-Factory pattern**: All business logic lives in `internal/pipeline/`. Channel adapters and HTTP routes are thin connectors.
 - Route handlers in `internal/api/routes/` must NOT import `internal/agent` directly — use interfaces or pass through pipeline. The architecture test (`architecture_test.go`) enforces this.
 - All pipeline invocations should use `pipeline.RunPipeline()` (the package-level wrapper), not `p.Run()` directly.
+
+## Operating Principles
+- **Orchestrator vs subagent split**: The orchestrator is operator-facing and may carry a budgeted personality layer. Subagents are not operator-facing; they exist to execute bounded delegated work and report back to the orchestrator.
+- **Subagents default to zero personality**: Subagents should not inherit the orchestrator's personality, operator-context, or broad directive footprint by default. Any subagent prompt shaping must be task-local, minimal, and justified by execution need rather than style.
+- **Determinism over style for subagents**: Subagent optimization targets are correctness, bounded execution, and clear structured results. Human-facing tone, voice, and persona are orchestrator concerns unless a subagent explicitly requires otherwise.
 
 ## Lessons Learned
 
@@ -38,6 +48,12 @@ go vet ./...                # Lint
 ### Config Changes
 - New config sections must be added to `internal/core/config.go` in the `Config` struct AND given defaults in `DefaultConfig()`.
 - Environment overrides use `ROBOTICUS_` prefix (e.g., `ROBOTICUS_SERVER_PORT=8080`).
+
+### Architecture And Documentation Ordering
+- We ALWAYS start with architecture.
+- We ALWAYS follow with documentation.
+- Both architecture and documentation changes happen before code changes.
+- If a change introduces or materially alters an architectural seam, ownership boundary, lifecycle policy, or cross-layer control flow, update `docs/architecture-gap-report.md` and `docs/architecture-rules-diagrams.md` as part of the change before implementation is considered complete.
 
 ### Go Module Dependencies
 - `github.com/coder/websocket` — already in go.mod, used for WebSocket (EventBus + CDP sessions)
@@ -78,3 +94,17 @@ Every release MUST complete ALL of these before the PR is merged:
 6. **Spec docs**: Update any spec documents affected by the changes (e.g., `docs/memory-architecture-spec.md`)
 
 Skipping any of these is a release defect. The release PR must not be created until all 6 are done.
+
+## Release Ceremony (MANDATORY — review every release)
+
+Before starting the release ceremony, review:
+
+- `docs/testing/release-procedure.md`
+
+That procedure is the canonical release order. Do not improvise the sequence.
+In particular:
+
+- release branch PR goes to `develop` first
+- `develop` is audited and green before PR to `main`
+- tag creation happens only after merge to `main`
+- release monitoring includes artifacts, site sync, fingerprinting, and install verification

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/rs/zerolog/log"
 
@@ -19,7 +20,9 @@ import (
 // and manages a connection pool internally.
 type Store struct {
 	db                *sql.DB
+	dbPath            string
 	onSessionArchived []func(ctx context.Context, sessionID string)
+	repairMu          sync.Mutex
 }
 
 // OnSessionArchived registers a callback that fires after a session is archived.
@@ -63,24 +66,38 @@ func Open(dbPath string) (*Store, error) {
 	// readers alongside the single writer.
 	db.SetMaxOpenConns(4)
 
+	s := &Store{db: db, dbPath: dbPath}
 	if err := db.Ping(); err != nil {
-		_ = db.Close()
-		return nil, core.WrapError(core.ErrDatabase, "failed to ping database", err)
+		repaired, repairErr := s.maybeRepairDerivedCorruption(context.Background(), err)
+		if repairErr != nil {
+			_ = db.Close()
+			return nil, core.WrapError(core.ErrDatabase, "failed to ping database", repairErr)
+		}
+		if !repaired {
+			_ = db.Close()
+			return nil, core.WrapError(core.ErrDatabase, "failed to ping database", err)
+		}
+		if err := db.Ping(); err != nil {
+			_ = db.Close()
+			return nil, core.WrapError(core.ErrDatabase, "failed to ping database after derived repair", err)
+		}
 	}
 
-	s := &Store{db: db}
-
-	if err := s.initSchema(); err != nil {
+	if err := s.runStartupStepWithDerivedRepair(context.Background(), s.initSchema); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
 
-	if err := s.runMigrations(); err != nil {
+	if err := s.runStartupStepWithDerivedRepair(context.Background(), s.runMigrations); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
 
-	if err := s.ensureOptionalColumns(); err != nil {
+	if err := s.runStartupStepWithDerivedRepair(context.Background(), s.ensureOptionalColumns); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if _, err := s.maybeRepairDerivedCorruption(context.Background(), fmt.Errorf("database disk image is malformed")); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -190,7 +207,33 @@ func (s *Store) Stats() sql.DBStats {
 
 // ExecContext executes a query without returning rows.
 func (s *Store) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	res, err := s.db.ExecContext(ctx, query, args...)
+	if err == nil {
+		return res, nil
+	}
+	repaired, repairErr := s.maybeRepairDerivedCorruption(ctx, err)
+	if repairErr != nil {
+		return nil, repairErr
+	}
+	if !repaired {
+		return nil, err
+	}
 	return s.db.ExecContext(ctx, query, args...)
+}
+
+func (s *Store) runStartupStepWithDerivedRepair(ctx context.Context, step func() error) error {
+	err := step()
+	if err == nil {
+		return nil
+	}
+	repaired, repairErr := s.maybeRepairDerivedCorruption(ctx, err)
+	if repairErr != nil {
+		return repairErr
+	}
+	if !repaired {
+		return err
+	}
+	return step()
 }
 
 // QueryContext executes a query that returns rows.

@@ -68,6 +68,9 @@ func (g *NonRepetitionGuardV2) CheckWithContext(content string, ctx *GuardContex
 	if ctx == nil {
 		return GuardResult{Passed: true}
 	}
+	if shouldAllowLightweightSocialVariation(content, ctx) {
+		return GuardResult{Passed: true}
+	}
 
 	// Cross-turn: compare with previous assistant message.
 	if ctx.PreviousAssistant != "" {
@@ -120,6 +123,24 @@ func (g *NonRepetitionGuardV2) CheckWithContext(content string, ctx *GuardContex
 	}
 
 	return GuardResult{Passed: true}
+}
+
+func shouldAllowLightweightSocialVariation(content string, ctx *GuardContext) bool {
+	if ctx == nil {
+		return false
+	}
+	intent := ""
+	if len(ctx.Intents) > 0 {
+		intent = ctx.Intents[0]
+	}
+	if !verificationIsSocialTurn(ctx.UserPrompt, intent) {
+		return false
+	}
+	if verificationLooksOperationalStatus(strings.ToLower(content)) {
+		return false
+	}
+	words := len(strings.Fields(content))
+	return words > 0 && words <= 24
 }
 
 // freshDeltaMarkers are phrases that indicate the user wants new/changed info.

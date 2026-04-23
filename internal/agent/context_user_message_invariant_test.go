@@ -234,3 +234,45 @@ func TestBuildRequest_SkipsAntiFadeReminderWhenItDoesNotFitBudget(t *testing.T) 
 		t.Fatal("final user prompt missing after anti-fade budget check")
 	}
 }
+
+func TestBuildRequest_PreservesToolExchangeAtomicallyUnderBudgetPressure(t *testing.T) {
+	cfg := DefaultContextConfig()
+	cfg.MaxTokens = 120
+	cb := NewContextBuilder(cfg)
+	cb.SetSystemPrompt(strings.Repeat("x", 200))
+
+	sess := NewSession("s1", "agent-id", "Test")
+	sess.AddUserMessage("build the report")
+	sess.AddAssistantMessage("", []llm.ToolCall{{
+		ID: "call-1",
+		Function: llm.ToolCallFunc{
+			Name:      "write_file",
+			Arguments: `{"path":"report.md","content":"hello"}`,
+		},
+	}})
+	sess.AddToolResult("call-1", "write_file", strings.Repeat("tool result payload ", 40), false)
+	sess.AddUserMessage("FINAL_PROMPT")
+
+	req := cb.BuildRequest(sess)
+
+	foundAssistantCall := false
+	foundToolReply := false
+	assistantIdx := -1
+	toolIdx := -1
+	for i, m := range req.Messages {
+		if m.Role == "assistant" && len(m.ToolCalls) > 0 && m.ToolCalls[0].ID == "call-1" {
+			foundAssistantCall = true
+			assistantIdx = i
+		}
+		if m.Role == "tool" && m.ToolCallID == "call-1" {
+			foundToolReply = true
+			toolIdx = i
+		}
+	}
+	if foundAssistantCall != foundToolReply {
+		t.Fatalf("tool exchange was compacted non-atomically: assistant_call=%v tool_reply=%v", foundAssistantCall, foundToolReply)
+	}
+	if foundAssistantCall && assistantIdx > toolIdx {
+		t.Fatalf("tool exchange order corrupted: assistant_idx=%d tool_idx=%d", assistantIdx, toolIdx)
+	}
+}

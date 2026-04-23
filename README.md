@@ -322,6 +322,16 @@ Open `http://localhost:18789` for the dashboard.
 ./roboticus status
 ```
 
+The personality interview starts by asking you to picture the kind of
+assistant you actually want: a character from a book, film, or television
+show, or any other concrete archetype that captures the behavior you want the
+agent to exhibit. The first explicit interview question is then the agent's
+name, followed by broader and sometimes repeated behavior questions intended to
+triangulate the desired operating style rather than guessing from a single
+answer. If you give a reference identity, the interview will also use that
+identity's likely traits as provisional defaults and ask you to confirm or
+correct them.
+
 ---
 
 ## Configuration

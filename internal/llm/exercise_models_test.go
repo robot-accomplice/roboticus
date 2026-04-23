@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"roboticus/internal/modelstate"
 )
 
 // fakeSender returns the same canned response every time. Records all
@@ -52,6 +54,10 @@ func TestExerciseModels_Rejects_EmptyInputs(t *testing.T) {
 		{"nil SendWarmup", func(r *ExerciseRequest) { r.SendWarmup = nil }, "SendWarmup is required"},
 		{"nil IsLocal", func(r *ExerciseRequest) { r.IsLocal = nil }, "IsLocal is required"},
 		{"nil ModelTimeout", func(r *ExerciseRequest) { r.ModelTimeout = nil }, "ModelTimeout is required"},
+		{"invalid intent filter", func(r *ExerciseRequest) {
+			invalid := IntentClass(999)
+			r.IntentFilter = &invalid
+		}, "invalid IntentFilter"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -65,6 +71,47 @@ func TestExerciseModels_Rejects_EmptyInputs(t *testing.T) {
 				t.Fatalf("error = %q; want substring %q", err.Error(), tc.wantIn)
 			}
 		})
+	}
+}
+
+func TestExerciseModels_FiltersToSingleIntent(t *testing.T) {
+	calls := 0
+	promptSender := func(ctx context.Context, model, content string, timeout time.Duration) (string, int64, error) {
+		calls++
+		return "ok", 1, nil
+	}
+	warmupSender := func(ctx context.Context, model string, timeout time.Duration) WarmupResult {
+		return WarmupResult{LatencyMs: 1}
+	}
+	intent := IntentToolUse
+
+	req := ExerciseRequest{
+		Models:       []string{"m"},
+		IntentFilter: &intent,
+		Iterations:   2,
+		SendPrompt:   promptSender,
+		SendWarmup:   warmupSender,
+		IsLocal:      func(string) bool { return true },
+		ModelTimeout: func(string) time.Duration { return time.Second },
+	}
+
+	report, err := ExerciseModels(context.Background(), req)
+	if err != nil {
+		t.Fatalf("ExerciseModels: %v", err)
+	}
+
+	expectedPrompts := len(filterExerciseMatrix(intent)) * req.Iterations
+	if calls != expectedPrompts {
+		t.Fatalf("prompt calls = %d, want %d", calls, expectedPrompts)
+	}
+	if len(report.Models) != 1 {
+		t.Fatalf("model results = %d, want 1", len(report.Models))
+	}
+	if len(report.Models[0].IntentQuality) != 1 {
+		t.Fatalf("intent quality entries = %d, want 1", len(report.Models[0].IntentQuality))
+	}
+	if _, ok := report.Models[0].IntentQuality[intent.String()]; !ok {
+		t.Fatalf("missing intent quality for %s", intent.String())
 	}
 }
 
@@ -244,6 +291,52 @@ func TestExerciseModels_CapturesTransportErrors(t *testing.T) {
 	}
 	if seenErrs != len(ExerciseMatrix) {
 		t.Fatalf("OnPrompt saw %d errors; want %d", seenErrs, len(ExerciseMatrix))
+	}
+}
+
+func TestExerciseModels_CapturesModelStateSnapshots(t *testing.T) {
+	promptSender := func(ctx context.Context, model, content string, timeout time.Duration) (string, int64, error) {
+		return "ok", 1, nil
+	}
+	warmupSender := func(ctx context.Context, model string, timeout time.Duration) WarmupResult {
+		return WarmupResult{LatencyMs: 1}
+	}
+
+	var seen PromptOutcome
+	req := ExerciseRequest{
+		Models:       []string{"ollama/test-model"},
+		IntentFilter: func() *IntentClass { v := IntentToolUse; return &v }(),
+		Iterations:   1,
+		SendPrompt:   promptSender,
+		SendWarmup:   warmupSender,
+		OnPrompt: func(o PromptOutcome) {
+			seen = o
+		},
+		SampleModelState: func(ctx context.Context, model string) *modelstate.Snapshot {
+			state := modelstate.Snapshot{
+				CollectedAt:        "2026-04-21T12:00:00Z",
+				Model:              model,
+				Provider:           "ollama",
+				ProviderConfigured: true,
+				ProviderReachable:  true,
+				ModelAvailable:     true,
+				ModelLoaded:        true,
+				StateClass:         "ready",
+			}
+			return &state
+		},
+		IsLocal:      func(string) bool { return true },
+		ModelTimeout: func(string) time.Duration { return time.Second },
+	}
+
+	if _, err := ExerciseModels(context.Background(), req); err != nil {
+		t.Fatalf("ExerciseModels: %v", err)
+	}
+	if seen.ModelStateStart == nil || seen.ModelStateEnd == nil {
+		t.Fatalf("expected prompt outcomes to carry model-state snapshots: %+v", seen)
+	}
+	if seen.ModelStateEnd.StateClass != "ready" {
+		t.Fatalf("end state = %q, want ready", seen.ModelStateEnd.StateClass)
 	}
 }
 

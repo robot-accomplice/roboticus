@@ -616,6 +616,298 @@ func TestApplyRemovedLegacyConfigMigration(t *testing.T) {
 	}
 }
 
+func TestRunUpdateAll_DefaultModeDoesNotFailOnProviderPackMismatch(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	configPath := filepath.Join(home, "roboticus.toml")
+	if err := os.WriteFile(configPath, []byte(""), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	declaredHash := BytesSHA256([]byte("manifest says this"))
+	servedProviders := "registry serves something else"
+	servedSkill := "# example\n"
+	manifest := RegistryManifest{
+		Version: "v2026.04.10",
+		Packs: RegistryPacks{
+			Providers: ProviderPack{
+				Path:   "packs/providers.toml",
+				SHA256: declaredHash,
+			},
+			Skills: SkillPack{
+				Path: "packs/skills/",
+				Files: map[string]string{
+					"example.md": BytesSHA256([]byte(servedSkill)),
+				},
+			},
+		},
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/registry/manifest.json":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(manifest)
+		case "/registry/packs/providers.toml":
+			_, _ = w.Write([]byte(servedProviders))
+		case "/registry/packs/skills/example.md":
+			_, _ = w.Write([]byte(servedSkill))
+		case "/releases/latest":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(LatestRelease{
+				TagName: "v2026.04.10",
+				HTMLURL: "https://example.com/releases/v2026.04.10",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	origCheckURL := updateCheckURL
+	origClient := UpdateHTTPClient
+	origRegistryURL := UpdateRegistryURL
+	origBinaryFunc := updateBinaryFunc
+	origMaintenance := updateMaintenance
+	updateCheckURL = server.URL + "/releases/latest"
+	UpdateHTTPClient = server.Client()
+	UpdateRegistryURL = server.URL + "/registry/manifest.json"
+	updateBinaryFunc = func(ctx context.Context, rel LatestRelease, skipConfirm bool) error { return nil }
+	updateMaintenance = func(path string) error { return nil }
+	defer func() {
+		updateCheckURL = origCheckURL
+		UpdateHTTPClient = origClient
+		UpdateRegistryURL = origRegistryURL
+		updateBinaryFunc = origBinaryFunc
+		updateMaintenance = origMaintenance
+	}()
+
+	if err := runUpdateAll(context.Background(), "2026.04.05", true, false); err != nil {
+		t.Fatalf("runUpdateAll should preserve binary success when provider refresh is stale: %v", err)
+	}
+
+	state, err := loadUpdateState()
+	if err != nil {
+		t.Fatalf("loadUpdateState: %v", err)
+	}
+	if state.BinaryVersion != "2026.04.10" {
+		t.Fatalf("binary version = %q, want 2026.04.10", state.BinaryVersion)
+	}
+	if state.InstalledContent.Providers != nil {
+		t.Fatalf("providers state should remain unset after skipped refresh: %#v", state.InstalledContent.Providers)
+	}
+	if state.InstalledContent.Skills == nil {
+		t.Fatalf("skills state should still be updated on successful skills refresh")
+	}
+}
+
+func TestRunUpdateAll_RefreshConfigStillFailsOnProviderPackMismatch(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	configPath := filepath.Join(home, "roboticus.toml")
+	if err := os.WriteFile(configPath, []byte(""), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	declaredHash := BytesSHA256([]byte("manifest says this"))
+	servedProviders := "registry serves something else"
+	manifest := RegistryManifest{
+		Version: "v2026.04.10",
+		Packs: RegistryPacks{
+			Providers: ProviderPack{
+				Path:   "packs/providers.toml",
+				SHA256: declaredHash,
+			},
+		},
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/registry/manifest.json":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(manifest)
+		case "/registry/packs/providers.toml":
+			_, _ = w.Write([]byte(servedProviders))
+		case "/releases/latest":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(LatestRelease{
+				TagName: "v2026.04.10",
+				HTMLURL: "https://example.com/releases/v2026.04.10",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	origCheckURL := updateCheckURL
+	origClient := UpdateHTTPClient
+	origRegistryURL := UpdateRegistryURL
+	origBinaryFunc := updateBinaryFunc
+	origMaintenance := updateMaintenance
+	updateCheckURL = server.URL + "/releases/latest"
+	UpdateHTTPClient = server.Client()
+	UpdateRegistryURL = server.URL + "/registry/manifest.json"
+	updateBinaryFunc = func(ctx context.Context, rel LatestRelease, skipConfirm bool) error { return nil }
+	updateMaintenance = func(path string) error { return nil }
+	defer func() {
+		updateCheckURL = origCheckURL
+		UpdateHTTPClient = origClient
+		UpdateRegistryURL = origRegistryURL
+		updateBinaryFunc = origBinaryFunc
+		updateMaintenance = origMaintenance
+	}()
+
+	err := runUpdateAll(context.Background(), "2026.04.05", true, true)
+	if err == nil {
+		t.Fatal("expected refresh-config mode to fail on provider pack checksum mismatch")
+	}
+	if !strings.Contains(err.Error(), "provider update failed") || !strings.Contains(err.Error(), "checksum mismatch") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestReconcileUpdateState_RecoversExistingLocalInstall(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	configPath := filepath.Join(home, ".roboticus", "roboticus.toml")
+	providersPath := filepath.Join(home, ".roboticus", "providers.toml")
+	skillsDir := filepath.Join(home, ".roboticus", "skills")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, []byte(""), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	providersBody := "[providers.openai]\nurl = \"https://api.openai.com\"\n"
+	if err := os.WriteFile(providersPath, []byte(providersBody), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(skillsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	skillBody := "# Hello\n"
+	if err := os.WriteFile(filepath.Join(skillsDir, "hello.md"), []byte(skillBody), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	state, repaired, err := reconcileUpdateState(configPath, "v1.0.6")
+	if err != nil {
+		t.Fatalf("reconcileUpdateState: %v", err)
+	}
+	if !repaired {
+		t.Fatal("expected reconcileUpdateState to repair missing updater state")
+	}
+	if state.BinaryVersion != "1.0.6" {
+		t.Fatalf("binary version = %q", state.BinaryVersion)
+	}
+	if state.InstalledContent.Providers == nil {
+		t.Fatal("expected providers record to be synthesized")
+	}
+	if state.InstalledContent.Providers.SHA256 != BytesSHA256([]byte(providersBody)) {
+		t.Fatalf("provider hash mismatch: %q", state.InstalledContent.Providers.SHA256)
+	}
+	if state.InstalledContent.Skills == nil {
+		t.Fatal("expected skills record to be synthesized")
+	}
+	if state.InstalledContent.Skills.Files["hello.md"] != BytesSHA256([]byte(skillBody)) {
+		t.Fatalf("skill hash mismatch: %#v", state.InstalledContent.Skills.Files)
+	}
+
+	saved, err := loadUpdateState()
+	if err != nil {
+		t.Fatalf("loadUpdateState: %v", err)
+	}
+	if saved.BinaryVersion != "1.0.6" {
+		t.Fatalf("saved binary version = %q", saved.BinaryVersion)
+	}
+}
+
+func TestReconcileUpdateState_RepairsIncompleteExistingState(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	configPath := filepath.Join(home, ".roboticus", "roboticus.toml")
+	providersPath := filepath.Join(home, ".roboticus", "providers.toml")
+	skillsDir := filepath.Join(home, ".roboticus", "skills")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, []byte(""), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	providersBody := "[providers.openai]\nurl = \"https://api.openai.com\"\n"
+	if err := os.WriteFile(providersPath, []byte(providersBody), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(skillsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	skillBody := "# Hello\n"
+	if err := os.WriteFile(filepath.Join(skillsDir, "hello.md"), []byte(skillBody), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	incomplete := updateState{
+		InstalledContent: installedContent{
+			Providers: &contentRecord{Version: "unknown"},
+			Skills:    &skillsRecord{Version: "unknown"},
+		},
+	}
+	if err := saveUpdateState(incomplete); err != nil {
+		t.Fatalf("saveUpdateState: %v", err)
+	}
+
+	state, repaired, err := reconcileUpdateState(configPath, "v1.0.6")
+	if err != nil {
+		t.Fatalf("reconcileUpdateState: %v", err)
+	}
+	if !repaired {
+		t.Fatal("expected reconcileUpdateState to repair incomplete updater state")
+	}
+	if state.RegistryURL == "" {
+		t.Fatal("expected registry URL to be repaired")
+	}
+	if state.InstalledContent.Providers == nil || state.InstalledContent.Providers.SHA256 != BytesSHA256([]byte(providersBody)) {
+		t.Fatalf("provider record not repaired: %#v", state.InstalledContent.Providers)
+	}
+	if state.InstalledContent.Skills == nil || state.InstalledContent.Skills.Files["hello.md"] != BytesSHA256([]byte(skillBody)) {
+		t.Fatalf("skills record not repaired: %#v", state.InstalledContent.Skills)
+	}
+}
+
+func TestLoadUpdateState_UsesLegacyHyphenatedPath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	if err := os.MkdirAll(filepath.Join(home, ".roboticus"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	legacyState := updateState{
+		BinaryVersion: "1.0.5",
+		LastCheck:     "2026-04-01T00:00:00Z",
+		RegistryURL:   "https://example.com/registry/manifest.json",
+	}
+	data, err := json.Marshal(legacyState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacyUpdateStatePath(), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := loadUpdateState()
+	if err != nil {
+		t.Fatalf("loadUpdateState: %v", err)
+	}
+	if loaded.BinaryVersion != legacyState.BinaryVersion || loaded.RegistryURL != legacyState.RegistryURL {
+		t.Fatalf("legacy state not loaded correctly: %#v", loaded)
+	}
+}
+
 func TestApplySecurityConfigMigrationAddsSectionWhenMissing(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "roboticus.toml")
 	if err := os.WriteFile(path, []byte("[agent]\nname = \"roboticus\"\n"), 0o600); err != nil {

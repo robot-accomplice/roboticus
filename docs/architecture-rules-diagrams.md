@@ -28,6 +28,404 @@ This file follows the same C4 conventions used elsewhere in the repo:
   admin install UX and route handlers
 - pipeline shown as the central factory
 - supporting non-C4 diagrams clearly labeled as such
+- parity preserves what is best: if a heuristic fallback exists only because an
+  indexed corpus is incomplete, fix the corpus and retire the heuristic rather
+  than downgrading the live path to mimic an older baseline
+- shared low-level primitives such as hashing and ID/content normalization live
+  at or below `internal/core`; `internal/db` is not allowed to depend upward on
+  `internal/agent/*` for generic helpers
+- release-shaped binaries get version truth from one authoritative build seam:
+  CLI version is stamped into `cmd/internal/cmdutil.Version`, daemon banner
+  version into `internal/daemon.version`, and CI/release/local helper build
+  paths are not allowed to drift from that contract
+- route handlers may share connector-local helpers, but policy/exercise/export
+  admin surfaces are not allowed to collapse into one monolithic route file
+- unified pipeline-path enforcement follows the whole connector surface for a
+  route family, not one legacy filename after a bounded split
+- verification coverage, executive-plan growth, and retry guidance must all
+  consume one canonical subgoal set; the framework is not allowed to count the
+  whole prompt and its conjunction-split parts as separate requested goals
+- benchmark validity and RCA require host resource snapshots on the same
+  canonical seams that own benchmark persistence and turn diagnostics
+- benchmark validity also requires provider/model runtime-state snapshots on
+  the same benchmark seams, so empty or failed exercise rows can be attributed
+  to capability weakness vs missing/unloaded/unreachable model state
+- session resolution must not continue on a phantom explicit `session_id`;
+  body-scoped session ids either resolve to a durable `sessions` row or fail
+  cleanly as not found before message persistence begins
+- operator RCA views must remain legible and honest when canonical diagnostics
+  are missing: macro/detail controls stay visible, diagnostics bind by turn id,
+  and the UI falls back explicitly to trace-only narrative instead of quietly
+  reverting to an unlabeled stage dump
+- pipeline traces and canonical diagnostics must share the same authoritative
+  turn id on live turns; the UI is not allowed to reconstruct that join by
+  session/time proximity
+- simple direct tasks are not allowed to widen into heavy autonomous turns by
+  intent label alone; when synthesis says `simple` + `execute_directly`, the
+  first-pass envelope must stay focused with bounded tools and only
+  evidence-driven retrieval
+- tool-bearing turns route on `TOOL_USE` evidence first; if any
+  request-eligible candidates have observed `TOOL_USE` evidence, under-evidenced
+  candidates are ignored for live selection rather than merely narrated as
+  “ignored” in RCA
+- workspace-local vault authoring must exist as an explicit runtime capability
+  when Obsidian is configured; a prompt hint or indirect skill reference is
+  not an acceptable substitute for a real tool surface
+- capability truth must converge before inference; DB skill inventory, runtime
+  skill loading, tool registration, prompt guidance, and UI are not allowed to
+  disagree about whether a capability is actually live
+- cross-turn guards must preserve temporal atomicity; `PreviousAssistant` and
+  prior assistant history must exclude assistant content already emitted in the
+  current turn, or a successful tool-backed completion can be misclassified as
+  self-repetition and force a pointless retry
+- lexical noise such as `test` inside a filename or note title is not allowed
+  to upcast a simple authoring turn into a coding envelope
+- a single-step direct authoring request is not allowed to become
+  `moderate`/`complex` on raw word count alone; structural step count and
+  artifact count must dominate for note/document/file authoring so the focused
+  execution envelope can still activate on realistic operator phrasing
+- once the focused authoring envelope activates, it is not allowed to inherit
+  the generic operational always-include tool set; the request must use a
+  capability-scoped tool profile built around artifact-writing tools first,
+  minimal runtime/workspace context second, and retrieval only when continuity
+  evidence actually exists
+- once a turn has already made substantive execution progress, guard and
+  verifier policy are not allowed to trigger another full inference attempt
+  for purely narrative-quality defects; post-success retries must be reserved
+  for execution-critical failures that make the claimed work untrustworthy or
+  materially incomplete
+- once a side-effecting tool call has succeeded, the loop is not allowed to
+  execute the same call again in the same turn unless that tool explicitly
+  declares replay safety; replay protection must come from the central tool
+  semantics map, not one-off loop heuristics. Replay identity must resolve a
+  semantics-derived protected resource/effect fingerprint rather than relying
+  on raw argument equality alone, and replay suppression must be surfaced
+  unchanged through canonical diagnostics and operator RCA rather than
+  inferred later from side effects that did not happen
+- procedural uncertainty is not allowed to stop at “retrieve or don’t
+  retrieve”; when a turn produces a novel procedural success, failure, or
+  mixed outcome, distillation has to preserve that result with reusable
+  outcome semantics so later applied-learning retrieval can reuse what worked
+  and avoid what already failed. Those facts are not allowed to stay buried
+  in trace metadata or memory rows alone: canonical RCA must record both the
+  pre-inference applied-learning decision and the post-turn reuse-capture
+  outcome in chronological order, and the operator-facing decision flow must
+  expose that learning lane as a first-class part of the same integrated RCA
+  narrative rather than leaving it buried in detail mode
+- once the pipeline has already injected `[Retrieved Evidence]`, `[Gaps]`, and
+  a memory index for the current turn, that injected evidence is the first
+  memory authority for the turn. Prompt guidance is not allowed to tell the
+  model to re-search memory unconditionally “even if injected memories are
+  present”; follow-up `recall_memory` / `search_memories` calls are gap-filling
+  hydration steps only when the injected evidence or index is insufficient for
+  the task
+- bounded multi-artifact note/document/file authoring is still focused
+  authoring. A small explicit set of artifact writes with exact content and
+  linking is not allowed to become `complex` specialist work just because it is
+  no longer a literal single-file turn; task synthesis and envelope policy must
+  preserve direct execution plus artifact-proof requirements for that class
+- source-backed focused authoring must preserve authoritative source-read
+  capability on the same central semantics map as artifact writes. A
+  prompt-named input artifact such as `requirements.txt` is not allowed to
+  degrade into “unknown tool semantics” or memory-only correction paths; the
+  focused authoring surface must recognize `read_file`-style source reads as a
+  first-class bounded authoring tool
+- source-backed exact-content authoring is still authoring, not generic code
+  work. If the prompt already names a bounded set of expected output artifacts,
+  task synthesis is not allowed to upcast the turn into the heavy/delegated
+  code path just because the artifacts are JSON/Markdown or the user mentions
+  a source file and workflow language
+- focused inspection turns must emit one structured inspection-evidence
+  artifact shared by the loop, verifier, and RCA; text-only file listings or
+  glob output are not sufficient architecture truth for deciding whether a
+  read-only call actually narrowed the task
+- inspection-shaped questions and imperative inspection requests must reuse one
+  shared detector and one focused-inspection envelope; the phrasing difference
+  is not allowed to create divergent retrieval or tool-surface policy, and
+  path-shaped summary/list/project questions must be covered by the same
+  authority rather than falling back to generic question handling
+- focused inspection turns must also reuse one target-resolution seam:
+  explicit paths and resolvable allowlisted aliases become authoritative
+  inspection hints before inference; unresolved targets become precise
+  clarification requirements instead of soft refusal or guessed policy denial
+- explicit path-clarification follow-ups (`the vault in question is at /path`)
+  stay on that same focused-inspection seam once the target noun + path are
+  present; they do not drop back into generic question routing
+- alias-driven inventory questions (`projects in my code folder`, `files in my
+  workspace folder`) stay on that same seam once the alias resolves to an
+  allowlisted inspection target
+- authoring turns reuse the same target-resolution authority for destination
+  folders and vaults: a configured default vault stays on `obsidian_write`,
+  while other allowlisted destinations are surfaced as resolved absolute write
+  targets for `write_file`/`edit_file`
+- inspection-backed report authoring is a bounded execution class: once a turn
+  combines a concrete inspection target with a requested written report or
+  inventory artifact, it stays on a focused analysis+authoring surface instead
+  of widening into generic creative/default routing
+- inside that focused analysis+authoring surface, project-directory reports
+  prefer structured inventory / shell evidence over repeated extension-globbing
+  heuristics, and they do not commit placeholder-heavy partial reports before
+  requested fields are gathered or explicitly proven unavailable
+- write-tool metadata must describe the real confinement contract: relative
+  paths resolve under the workspace, absolute paths are allowed when they fall
+  under an allowlisted destination
+- focused tool profiles are only as good as the central semantics table they
+  consume; first-class inspection tools like `search_files` are not allowed to
+  fall out of bounded policy because they were left semantically unclassified
+- large code-root reporting uses a first-class project-inventory inspection
+  tool when available, rather than depending on brittle shell loops to derive
+  project roots, languages, timestamps, and git direction
+- request compaction must preserve assistant tool-call messages and their
+  matching tool-result messages as one atomic exchange; a compacted request is
+  not allowed to retain a `tool_call_id` without the corresponding tool reply,
+  and the same atomicity rule applies to the pipeline-owned pre-inference
+  compactor that mutates session history before retries or later inference
+- loop-owned tool execution context must thread the same authoritative runtime
+  dependencies that live tools require (store, workspace, allowlist, channel);
+  DB-backed tools are not allowed to fail only because the live loop omitted
+  the store while direct tool tests passed
+- artifact-authoring turns may finalize with a concise completion confirmation
+  when authoritative write evidence exists; the verifier is not allowed to
+  demand that the assistant restate the artifact's internal schema in chat, and
+  chat-level subgoal coverage is not allowed to outweigh proven artifact
+  creation on that turn class when the requested parts are internal to the
+  artifact itself; mixed-output turns still owe chat-level coverage for any
+  non-artifact deliverables
+- advisory watchdog events like `stage_liveness_warning` remain RCA-visible but
+  do not by themselves downgrade a turn that ultimately completed successfully
+- read-only inspection turns may report discovered filenames and paths from
+  authoritative inspection evidence without triggering authored-artifact claim
+  checks; `artifact_set_overclaim` belongs to output-contract / mutation turns
+- direct `execute_directly` turns are not allowed to terminate on promissory
+  future-action scaffolding such as `let me check...` when no tool call or
+  authoritative evidence was produced; the direct-execution seam must treat
+  that class like placeholder output and continue or fail honestly instead of
+  presenting it as completion
+- `get_runtime_context` must expose the effective sandbox/path rules the tools
+  will actually enforce; prompt guidance is not allowed to advertise broader
+  “security policy” visibility than the runtime tool truly provides
+- the selected tool surface is one authority consumed twice: the prompt-layer
+  tool roster/instructions and the execution loop must both obey the same
+  bounded set. Out-of-surface tool calls are framework violations, not
+  permission to fall back to the global registry
+- artifact names like `runbook`, `policy`, or `spec` do not by themselves
+  imply authority-layer mutation. Canonical-memory / policy-store mutation must
+  be triggered by explicit persistence semantics, not generic file-authoring
+  requests
+- prompt-declared source artifacts become protected read-only resources on the
+  turn. Artifact-writing tools are not allowed to overwrite a source artifact
+  just because the model misused a write tool where a read tool was required
+- source-backed authoring turns must pin an authoritative artifact-read tool on
+  the focused tool surface. The system is not allowed to make source-read proof
+  optional by leaving `read_file`-style tools out of the selected roster
+- focused inspection authority must resolve allowed-root aliases such as `~`
+  and “home folder” through the same target-resolution seam used for absolute
+  paths and named folders. Those aliases are not allowed to degrade into
+  lightweight conversation turns that promise future inspection without
+  executing it
+- focused scheduling authority must distinguish explicit scheduling from
+  shorthand continuity. “Schedule a cron job every 5 minutes” is a known
+  direct scheduling procedure and must not widen into applied-learning
+  retrieval, while shorthand like “create the quiet ticker now” must pull the
+  previously defined alias from session continuity and still stay on the same
+  focused scheduling envelope
+- verifier retry is not allowed to be a generic rewrite request when the
+  verifier has already identified a concrete missing evidence seam. Findings
+  like `source_artifact_unread` must become structured corrective guidance,
+  and that corrective path must prefer authoritative source reads over
+  `recall_memory` / `search_memories` churn until the missing source proof is
+  satisfied
+- malformed or provider-skewed structured tool I/O is not allowed to leak
+  straight into tool implementations or session history. One central
+  normalization factory must own ordered tool-call argument normalization
+  before policy/execution and tool-result normalization before the observation
+  re-enters the model context. “No transform needed” is a valid outcome of
+  that same pipeline; it is not a bypass. Any repair, partial-fidelity
+  salvage, or normalization failure must be preserved as canonical RCA
+  evidence instead of disappearing into per-tool parsing code
+- provider-facing tool message serialization is part of that same authority.
+  Ollama/OpenRouter/OpenAI/Anthropic-specific tool result or tool call message
+  shapes are not allowed to live as ad hoc client-side special cases outside
+  the normalization seam. The same central authority must also emit raw
+  provider request/response envelopes into trace evidence so operators can
+  compare what we sent and what we got back against vendor documentation
+- rebuildable derived SQLite storage is not allowed to become a caller-local
+  concern. If corruption is confined to observability tables or FTS internals,
+  one database-owned repair path must detect it, back up the damaged files,
+  rebuild the affected derived structures from authoritative state, and retry
+  the interrupted operation once. If corruption reaches authoritative tables,
+  the store must fail loudly instead of silently degrading trust
+- direct execution turns are not allowed to drift into a successful read-only
+  research loop. After a small amount of legitimate exploration, repeated
+  successful runtime-context, workspace, capability, task-inspection, or
+  memory-read calls with no artifact write, execution step, delegation, or
+  other real progress must terminate on one central semantics-driven rule, and
+  canonical RCA must show the blocked tool, the exploration streak, and
+  `exploratory_tool_churn` instead of forcing operators to infer the loop from
+  repeated tool rows
+- exact-content artifact proof is write-boundary truth, not verifier
+  guesswork. File/note/document-writing tools must emit one typed
+  artifact-proof payload containing path, bytes, content hash, and
+  exact-content evidence when safely representable. Session history must
+  preserve that payload as tool-result metadata, and guard/verifier/RCA
+  consumers must project that same typed proof forward instead of reparsing
+  human-readable output strings. On direct authoring turns, proven artifact
+  writes are primary post-execution evidence; stale retrieval gaps or
+  contradictions are not allowed to override that proof and degrade a turn
+  that has already established exact artifact truth
+- expected exact artifact specs are prompt-boundary truth for bounded
+  authoring. If the user explicitly names one to three artifacts and says they
+  should contain exact content, the pipeline must parse that expectation once,
+  including equivalent directive forms such as `containing exactly` and `with
+  content`, resolve relative artifact names against any explicit container
+  directory in the prompt, reuse it for turn sizing and decomposition, and
+  compare it directly against typed write proof. Embedded artifact bodies are
+  not subtasks, and trailing post-write/reporting directives are not part of
+  the artifact body. Exact-content mismatch remains execution-critical after
+  progress; it is not a narrative-only verifier concern that can be suppressed
+- artifact proof must also govern actual and claimed file sets. If the answer
+  claims an artifact path that neither appears in the expected set nor in
+  typed write proof, or if the runtime writes an extra artifact outside the
+  expected set, verification must fail as an artifact-set violation.
+  Required-file conformance is not sufficient if the response or tool path
+  invents extra files
+- prompt-boundary artifact parsing must also separate source/input artifacts
+  from expected outputs, so verifier claim checks do not punish truthful
+  references to files the operator explicitly said to read
+- verifier-triggered rewrites are still subject to verification. A revised
+  answer produced after verifier retry must be re-verified before finalization,
+  and an exhausted retry must degrade to an honest verification-grounded
+  response instead of promoting a still-unverified success claim
+- learning/reuse capture must classify outcome from the final turn
+  disposition and verifier result, not from tool success alone. A degraded
+  turn with successful writes is mixed-result experience, not success-grade
+  procedural knowledge
+- lifecycle policy is not allowed to stop at admission filters; `niche` and
+  `under_scrutiny` models must be actively demoted on ordinary operator-facing
+  light/standard turns unless the request shape actually matches the niche
+- routing explanation is not allowed to stop at “winner” plus raw candidate
+  set; the persisted routing artifact must distinguish hard exclusions,
+  soft-demotion reasons, and missing capability evidence so the UI can say
+  “this newly installed model was ignored because it has not been exercised
+  for this task class yet” instead of leaving operators to guess. That
+  distinction must be durable in the canonical `routing_chain_built` artifact
+  itself, not only in lower-level trace annotations that the UI has to
+  reconstruct later
+- capability evidence is not allowed to use a different model-identity space
+  from routing and policy. Baselines, imported exercise rows, live intent
+  observations, and recommendation callouts must all normalize onto the same
+  canonical model key so the system cannot record TOOL_USE evidence under one
+  name and tell operators the model is “unexercised” under another. Bare
+  routed names, direct provider-qualified names, and nested execution-provider
+  specs must resolve as aliases of the same exercised model when they point at
+  the same runtime target
+- assistant message history and pending tool execution state must not share one
+  mutable tool-call slice. Historical `tool_calls` are immutable provider/RCA
+  truth; pending-call state is a mutable execution ledger. Consuming one tool
+  result is not allowed to rewrite the recorded assistant tool-call plan that
+  gets replayed to the provider on the next inference pass
+- execution provider truth is not allowed to diverge from routing truth.
+  RouteTarget provider/model identity must survive request formatting through
+  one authoritative execution-spec seam, including nested provider-qualified
+  downstream model namespaces such as `openrouter/openai/gpt-4o-mini`.
+  The system is not allowed to select `openrouter` and later reinterpret the
+  same target as direct `openai` because one code path joined the spec
+  differently
+- trace listings must preserve operator-usable turn identity: full turn ids
+  remain directly copyable from the observability table, and truncation is
+  allowed only as a presentation choice layered on top of the authoritative id
+- repeated `routing_chain_built` events are not all the same phenomenon. The
+  RCA projection must distinguish a normal post-tool routing follow-up from
+  same-route retry churn, verifier/guard retries, or fallback widening so the
+  operator does not mistake ordinary tool finalization for a broken turn
+- placeholder assistant scaffolding such as `[assistant message]` or
+  `[agent message]` must be dropped at the loop boundary so it cannot enter
+  history, retries, RCA, or operator-visible output
+- operator RCA on desktop is expected to read left-to-right as one bounded
+  decision flow: macro mode uses compact blocks plus one dense top status
+  banner, while turn conclusion and health may move to a separate bottom
+  banner when the header would otherwise become crowded. Verbose text belongs
+  in a true floating tooltip layer or explicit detail mode. Macro nodes should
+  expose only one concise signal each, with duration as the default visible
+  value and routing as the deliberate exception where the selected model is
+  the more useful signal. The surface must size against the real usable
+  main-pane width rather than raw viewport width so persistent chrome like the
+  sidebar is accounted for. If it still outgrows that space, it must expose an
+  intentional horizontal scroll container inside that pane rather than
+  overflowing invisibly. Detail mode must remain chronological rather than
+  grouped-by-type so RCA preserves causal order; category labels may annotate
+  the timeline, but they must not force operators to reconstruct event
+  sequence manually. Repeat execution must be visible on the flow itself:
+  any section that executes more than once carries a repeat marker, and detail
+  mode preserves per-attempt sequence plus the causal bridge between success,
+  guard or verifier intervention, retry, same-route reuse or fallback, and
+  final outcome. The conclusion banner must be a real interpretation of those
+  facts, not a statement that telemetry was collected. The UI is not allowed to
+  make operators reconstruct those facts from logs or database rows, and stale
+  trace-only fallback overlays must be torn down when the active session or
+  expanded turn changes. Flow blocks should also carry immediate severity
+  coloring from the same RCA evidence: green for clean, yellow for concern, red
+  for broken. The dense top banner uses that same severity language and its
+  thresholds are not ad hoc: degraded status is concern/yellow, latency above
+  one second is concern/yellow, latency above one minute is broken/red, and
+  `high` or `critical` pressure is broken/red. Its `Health` value is the
+  aggregate of the category outcomes shown in the flow, not a separate
+  invisible calculation. Every chip in that banner must also provide a
+  hover/focus explanation of what the value means so operators are not forced
+  to understand internal shorthand like `degraded` or `swap 78.8%` by tribal
+  knowledge.
+- behavior hardening uses canonical RCA as the intake and closure substrate:
+  repeated firsthand failures and operator reports become one-entry-per-failure
+  roadmap items, and fixes are not complete until RCA, regressions, and
+  operator-facing explanation all agree on the corrected behavior
+- direct execution prompts must parse semantic work and output-shape directives
+  separately. `return only the number`, `reply on one line`, and similar clauses
+  are response-shape constraints, not extra semantic subgoals.
+- formatting-only directives must stop at the normalization seam. They are not
+  allowed to reappear later as durable unresolved executive questions that
+  poison continuity verification.
+- continuity and recall turns must treat durable session history as
+  first-class evidence. A prompt that asks what the user told the agent earlier
+  in the same session is not allowed to degrade into generic memory-search gaps
+  when the needed facts are already present in session history.
+- once continuity evidence exists in the current session, generic retrieval
+  gaps must not outrank it during verification.
+- scheduling is a focused execution seam. Requests to create or describe a cron
+  schedule must pin the authoritative scheduling tool plus only minimal support
+  tools; they are not allowed to widen into general exploratory tool surfaces.
+- sandbox allowlist checks must compare canonical path identity rather than raw
+  string case so the same real path is not alternately allowed and denied across
+  layers; that includes future child paths under symlinked roots, where the
+  nearest existing ancestor must own canonical identity for authorization.
+- direct filesystem inspection is a focused execution seam. Count/list/find/scan
+  turns over files or directories must pin the authoritative inspection tools
+  (`glob_files`, `list_directory`, `read_file`, runtime context) instead of
+  relying on default semantic pruning to surface them by chance.
+- filesystem tool schemas and descriptions must reflect the real sandbox
+  contract: workspace-relative paths and absolute allowed paths are both valid
+  when policy allows them.
+- explicit acknowledgement directives are shortcut-class work. A user request
+  to acknowledge in one sentence and wait should be satisfied by the shortcut
+  layer rather than left to open-ended model phrasing.
+- tool execution truth is execution-owned: when the loop runs a tool, the tool
+  audit trail and RCA counters must be written from that same execution event,
+  not reconstructed later from session history
+- onboarding/personality interview behavior must be defined once and reused:
+  prompt, opening copy, and fallback path must all preserve the same contract
+  of archetype priming before the interview, agent name as the first explicit
+  question, and repeated differently-phrased probes to resolve ambiguous
+  behavior preferences; referenced identities may seed provisional trait
+  assumptions, but those assumptions must be made explicit and confirmed
+- persistent-artifact creation/update turns must privilege artifact-writing
+  tools and keep authority-write tools off the surface unless the turn is
+  explicitly about policy/spec ingestion; success claims like “created note”
+  or “saved file” are only valid when matching artifact-writing evidence
+  exists
+- textured themes are allowed to decorate shell and card surfaces, but
+  text-bearing operational surfaces such as tables, inspectors, and dense
+  lists must terminate onto opaque surface tokens before text is rendered.
+  The UI is not allowed to place readable text directly over body/surface
+  textures and call that “theme styling”; legibility beats decoration
 
 ## 1. C4 Level 1: Architecture Context
 
@@ -179,7 +577,81 @@ C4Component
     Rel(appstate, runtime, "Owns")
 ```
 
-## 6. Supplementary Rule View — Security Claim And Sandbox Ownership
+## 6. Supplementary Rule View — Operational Inventory Tools
+
+Delegation-critical inventory such as subagent roster and skill availability
+must be available on the live runtime tool surface. They are not allowed to
+exist only as admin routes, dashboard summaries, or prompt-side snapshots.
+
+```mermaid
+flowchart LR
+    store["Authoritative Store\n(sub_agents, skills)"]
+    runtime["Runtime Tool Registry"]
+    prune["Tool Pruning / Request Assembly"]
+    orchestrator["Orchestrator"]
+    admin["Admin / Dashboard"]
+
+    store --> runtime
+    store --> admin
+    runtime --> prune --> orchestrator
+```
+
+## 6.5 Supplementary Rule View — Capability Truth Ownership
+
+Capability truth must be singular. The system is not allowed to show an
+enabled skill in the UI, miss it in capability fit, omit it from the live
+runtime matcher, and still tell the model it might exist. One authoritative
+inventory must drive every downstream seam, and any config-gated capability
+must degrade visibly and consistently when its runtime precondition is absent.
+
+```mermaid
+flowchart LR
+    store["Authoritative Skill Inventory\n(DB rows + source paths + enabled state)"]
+    loader["Runtime Skill Loader\n(live matcher + prompt inventory)"]
+    cfg["Runtime Config Preconditions\n(vault path, allowed paths, feature flags)"]
+    tools["Live Tool Registry"]
+    synthesis["Task Synthesis / Capability Fit"]
+    prompt["Prompt Guidance"]
+    ui["Operator UI / Skills Surface"]
+
+    store --> loader
+    store --> synthesis
+    store --> ui
+    cfg --> loader
+    cfg --> tools
+    loader --> prompt
+    loader --> tools
+    tools --> synthesis
+    tools --> prompt
+    tools --> ui
+```
+
+## 7. Supplementary Rule View — Delegation And Orchestration Ownership
+
+Delegation is not allowed to devolve into a prompt-only trick. The orchestrator
+may ask the runtime to orchestrate subagents, but the orchestration contract
+must write the same durable lifecycle artifacts the runtime already exposes for
+task inspection and retry. Subagent work still returns upward to the
+orchestrator; the orchestration surface never reports directly to the operator.
+
+```mermaid
+flowchart LR
+    orchestrator["Orchestrator"]
+    tool["orchestrate-subagents\nruntime tool"]
+    control["Orchestration control plane\n(authoritative owner)"]
+    tasks["tasks / task_events /\nagent_delegation_outcomes"]
+    workers["Subagents"]
+    report["Orchestrator evidence review\nand operator-facing synthesis"]
+
+    orchestrator --> tool --> control
+    control --> tasks
+    control --> workers
+    workers --> tasks
+    tasks --> report
+    report --> orchestrator
+```
+
+## 8. Supplementary Rule View — Security Claim And Sandbox Ownership
 
 This view captures a runtime seam that was easy to misunderstand during parity
 work: claim resolution is pipeline-owned, while sandbox enforcement is shared
@@ -278,7 +750,50 @@ flowchart LR
     t1 --> shared --> t2
 ```
 
-## 8. Supplementary Rule View — Channel Ingress Ownership
+## 9. Supplementary Rule View — Host Resource Snapshot Ownership
+
+Host resource state is not allowed to live as an ad hoc side metric or a
+manual operator guess. Benchmark validity and turn RCA both depend on one
+shared resource-sampling seam that feeds durable benchmark artifacts and the
+canonical turn diagnostics artifact.
+
+```mermaid
+flowchart LR
+    sampler["Host Resource Sampler\nCPU / memory / swap / process RSS"]
+    benchmark["Benchmark Persistence\nbaseline_runs + exercise_results"]
+    rca["Canonical Turn Diagnostics\nturn_diagnostics + event details"]
+    ui["Operator RCA / benchmark UI"]
+
+    sampler --> benchmark
+    sampler --> rca
+    benchmark --> ui
+    rca --> ui
+```
+
+## 10. Supplementary Rule View — MCP SSE Validation Ownership
+
+This view captures the rule behind `PAR-008`: SSE readiness claims must come
+from one central validation harness and evidence artifact, not from scattered
+fixture tests, checklist prose, or connector folklore. The same rule requires
+one shared config-to-runtime conversion seam so auth/header semantics cannot
+drift between daemon startup, route tests, and validation tooling.
+
+```mermaid
+flowchart LR
+    target["Named SSE Validation Target\n(url, optional headers,\nexpected server/tool assertions)"]
+    config["Shared MCP Config Conversion\n(core config -> runtime config)"]
+    harness["Central SSE Validation Harness"]
+    transport["MCP SSE Transport\n(GET stream + endpoint discovery\n+ auth-bearing POST JSON-RPC)"]
+    evidence["Validation Evidence Artifact\n(server identity, tool count,\ncall result, failure details)"]
+    checklist["Release Checklist / System 08"]
+    operator["Operator Confidence Claim"]
+
+    target --> config --> harness --> transport
+    transport --> evidence
+    evidence --> checklist --> operator
+```
+
+## 11. Supplementary Rule View — Channel Ingress Ownership
 
 Webhook-capable channels follow the same thin-connector rule more strictly than
 before: the route owns HTTP framing and pipeline dispatch, while the adapter
@@ -297,7 +812,7 @@ flowchart LR
     http --> verify --> normalize --> bridge --> pipeline
 ```
 
-## 8.5 Supplementary Rule View — Extension Runtime Ownership
+## 11.5 Supplementary Rule View — Extension Runtime Ownership
 
 Plugin administration and plugin runtime are not the same thing. Install/search
 surfaces may write plugin files or inspect catalogs, but the live runtime must
@@ -324,7 +839,7 @@ flowchart LR
     registry --> runtime
 ```
 
-## 9. Supplementary Rule View — Request Construction Ownership
+## 11. Supplementary Rule View — Request Construction Ownership
 
 This view captures the validated v1.0.6 ownership rule for the inference
 artifact. Tool selection, memory preparation, checkpoint restore, and prompt
@@ -348,7 +863,7 @@ flowchart LR
     note1["Latest user message survives verbatim"]
     note2["Prompt-layer tool roster matches structured tool defs"]
     note3["Empty compacted history messages are dropped before inference"]
-    note4["Prompt compression is disabled for v1.0.6\nafter failed history-bearing soak"]
+    note4["Prompt compression is benchmark-only in v1.0.7\nafter failed history-bearing soak"]
 
     builder -.-> note1
     builder -.-> note2
@@ -363,7 +878,129 @@ must be written from turn-owned evidence first, then promoted through explicit
 consolidation seams. Reflection is not allowed to invent durable state from
 weak proxies when structured turn artifacts already exist.
 
-## 11. Supplementary Rule View — Observability Route Ownership
+## 11. Supplementary Rule View — Model Policy And Routing Ownership
+
+This view captures the v1.0.7 routing rule: policy filters come before ranking.
+Model lifecycle state and role eligibility are architecture controls, not
+tuning hints. Policy is resolved centrally from configured defaults plus
+persisted operator overrides before any live or benchmark path can proceed.
+
+```mermaid
+flowchart LR
+    operator["Operator Preferences\n(locality, cost, privacy, explicit policy)"]
+    benchmarks["Benchmark Evidence\n(latency, quality, pass rate, incidents)"]
+    config["Configured Policy Defaults\nstate + reasons + evidence\nrole eligibility"]
+    persisted["Persisted Policy Overrides\noperator-managed model state"]
+    resolver["Central Policy Resolver\nnormalize model identity\nmerge defaults + overrides"]
+    targets["Configured Model Targets"]
+    filter["Eligibility Filter\nstate + role"]
+    benchfilter["Benchmark Eligibility Filter"]
+    metascore["Metascore / Task-Fit Ranking"]
+    selected["Selected Live Candidate"]
+    manual["Manual / Benchmark Use"]
+
+    operator --> persisted
+    benchmarks --> persisted
+    config --> resolver
+    persisted --> resolver
+    targets --> filter
+    resolver --> filter
+    resolver --> benchfilter
+    filter --> metascore
+    metascore --> selected
+    benchfilter --> manual
+
+    note1["disabled / benchmark_only never enter live routing"]
+    note2["orchestrator vs subagent eligibility is decided before ranking"]
+    note3["ranking chooses among viable candidates; it does not override policy"]
+    note4["benchmark selection shares the same policy seam"]
+
+    filter -.-> note1
+    filter -.-> note2
+    metascore -.-> note3
+    benchfilter -.-> note4
+```
+
+## 12. Supplementary Rule View — Orchestrator / Subagent Control Hierarchy
+
+This view captures the v1.0.7 control-flow rule: operators never talk directly
+to subagents, and subagents never report directly to operators.
+
+```mermaid
+flowchart LR
+    operator["Operator"]
+    orchestrator["Orchestrator"]
+    subagent["Subagent / Cron Worker"]
+    evidence["Bounded Work Result\ncompleted work + evidence + gaps"]
+    presentation["Operator-Facing Synthesis\nanalysis + repackaging"]
+
+    operator --> orchestrator
+    orchestrator --> subagent
+    subagent --> evidence --> orchestrator
+    orchestrator --> presentation --> operator
+```
+
+## 13. Supplementary Rule View — Delegated Task Lifecycle Ownership
+
+This view captures the v1.0.7 rule for delegated work: task lifecycle state is
+owned by one runtime repository and surfaced through orchestrator-facing tools,
+not reconstructed from connector routes or subagent status sidecars.
+
+```mermaid
+flowchart LR
+    orchestrator["Orchestrator"]
+    tools["Runtime Tools\nlist-open-tasks\ntask-status\nretry-task"]
+    repo["Delegated Task Repository\n(tasks + task_events + outcomes)"]
+    subagent["Subagent"]
+    operator["Operator"]
+
+    orchestrator --> tools --> repo
+    subagent --> repo
+    repo --> tools --> orchestrator
+    orchestrator --> operator
+```
+
+## 14. Supplementary Rule View — Subagent Composition Ownership
+
+This view captures the v1.0.7 rule for worker creation: subagent composition is
+owned by one runtime repository and may be invoked only by the orchestrator.
+
+```mermaid
+flowchart LR
+    orchestrator["Orchestrator"]
+    compose["Runtime Tool\ncompose-subagent"]
+    repo["Subagent Composition Repository\n(sub_agents)"]
+    subagent["Subagent"]
+    operator["Operator"]
+
+    orchestrator --> compose --> repo
+    subagent -. denied .-> compose
+    repo --> compose --> orchestrator --> operator
+```
+
+## 15. Supplementary Rule View — Skill Composition Ownership
+
+This view captures the v1.0.7 rule for skill creation and update: skill
+composition is owned by one runtime repository that writes both the durable
+skill artifact and the authoritative `skills` row, and only the orchestrator
+may invoke it directly.
+
+```mermaid
+flowchart LR
+    orchestrator["Orchestrator"]
+    compose["Runtime Tool\ncompose-skill"]
+    repo["Skill Composition Repository\n(filesystem artifact + skills row)"]
+    route["Catalog / Admin Install Route"]
+    subagent["Subagent"]
+    operator["Operator"]
+
+    orchestrator --> compose --> repo
+    route --> repo
+    subagent -. denied .-> compose
+    repo --> compose --> orchestrator --> operator
+```
+
+## 13. Supplementary Rule View — Observability Route Ownership
 
 This view captures the final v1.0.6 route-family contract for trace surfaces.
 
@@ -379,6 +1016,94 @@ flowchart LR
     observability --> handlers
     ws --> handlers
     release --> handlers
+```
+
+## 14. Supplementary Rule View — Operator RCA Flow Ownership
+
+The operator-facing flow view is not allowed to degrade into a thin wrapper
+around raw trace rows. The canonical `turn_diagnostics` artifact is the
+authoritative RCA surface, and the UI must present it as a decision narrative:
+
+- macro by default
+- detailed only on explicit operator demand
+- grouped by decision seam instead of raw event order
+- desktop-first left-to-right comprehension rather than a disguised vertical log
+- persisted summary narratives must already be interpretive conclusions derived
+  from the turn facts, not placeholders that merely say diagnostics exist
+
+```mermaid
+flowchart LR
+    diag["Canonical turn_diagnostics\nsummary + events + recommendations"]
+    flow["/api/traces/{turn}/flow\nstage timing / structural flow"]
+    ui["Operator Flow View\nmacro RCA narrative + detailed drilldown"]
+    macro["Macro View\nTask · Envelope · Routing · Execution · Recovery · Outcome"]
+    detail["Detailed View\ncategorized event stream + raw evidence"]
+    operator["Operator"]
+
+    diag --> ui
+    flow --> ui
+    ui --> macro
+    ui --> detail
+    macro --> operator
+    detail --> operator
+```
+
+## 15. Supplementary Rule View — Verifier Evidence Ownership
+
+This view captures the active v1.0.7 verifier-depth rule: contradiction and
+proof evaluation must consume the same typed evidence artifact produced by
+retrieval/context assembly. The verifier is not allowed to reconstruct that
+state later from lossy rendered text or a boolean-only contradiction flag.
+
+```mermaid
+flowchart LR
+    retrieval["Stage 8.5 Retrieval / Context Assembly"]
+    typed["Typed Verification Evidence\nEvidenceItems\nContradictions\nExecutive State"]
+    session["Session Artifact Boundary"]
+    verifier["Verifier / Claim Audits"]
+    issues["Verification Issues\nmissing proof / contradiction handling"]
+    trace["Turn Diagnostics / Trace"]
+
+    retrieval --> typed --> session --> verifier
+    verifier --> issues
+    verifier --> trace
+
+    note1["Contradictions are structured artifacts,\nnot only a boolean summary"]
+    note2["Proof obligations are evaluated per claim"]
+    note3["RCA and future ML use the same verifier artifact"]
+
+    typed -.-> note1
+    verifier -.-> note2
+    trace -.-> note3
+```
+
+## 16. Supplementary Rule View — Retrieval Fusion Ownership
+
+Fusion is now an explicit retrieval-stage concern, not a side effect spread
+across router weights and reranker adjustments. The rule is:
+
+- tier retrieval produces raw candidates with provenance
+- fusion combines route weight, provenance, freshness, authority, and
+  corroboration into the first unified retrieval-quality score
+- optional LLM reranking may run after fusion as a bounded semantic scorer
+- deterministic reranking still owns the final narrowing / collapse protection
+  and remains the fallback path when LLM reranking does not run cleanly
+
+```mermaid
+flowchart LR
+    decompose["Query Decomposition"]
+    route["Retrieval Router"]
+    tiers["Tier Retrieval\nsemantic / episodic / procedural / relationship"]
+    fusion["Fusion Stage\nroute weight + provenance + freshness + authority + corroboration"]
+    llmrerank["Optional LLM Rerank\nbounded semantic scoring"]
+    rerank["Deterministic Reranker\nthresholding / narrowing / collapse protection"]
+    assemble["Context Assembly"]
+    trace["RCA / ML Surfaces"]
+
+    decompose --> route --> tiers --> fusion --> llmrerank --> rerank --> assemble
+    fusion --> trace
+    llmrerank --> trace
+    rerank --> trace
 ```
 
 ```mermaid
@@ -485,6 +1210,10 @@ flowchart LR
   cron, channel, or CLI changes.
 - Use the pipeline component diagram when deciding whether behavior belongs in
   the factory.
+- Exercise/baseline prompt selection belongs to the shared exercise factory:
+  connectors may choose models, iterations, and an optional canonical intent
+  filter, but they must not define ad hoc prompt subsets or capability slices
+  outside the matrix owned by `internal/llm`.
 - Use the capability diagram when evaluating stage dependencies and service-bag
   creep.
 - Use the supporting diagrams when validating streaming parity, debugging

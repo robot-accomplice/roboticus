@@ -3,6 +3,8 @@ package pipeline
 import (
 	"strings"
 	"testing"
+
+	"roboticus/internal/session"
 )
 
 func TestExtractClaims_SplitsSentencesAndClassifiesCertainty(t *testing.T) {
@@ -79,6 +81,18 @@ func TestVerifyResponse_FailsUnresolvedContradictedClaim(t *testing.T) {
 		UserPrompt:        "Which refund window applies?",
 		HasContradictions: true,
 		PolicySensitive:   true,
+		Contradictions: []session.ContradictionEvidence{
+			{
+				Kind:           "value_conflict",
+				Topic:          "refund window",
+				Summary:        "refund window evidence disagrees",
+				SharedKeywords: []string{"refund", "window"},
+				EvidenceItems: []string{
+					"Refund policy v1 specified a 30-day refund window",
+					"Refund policy v2 specified a 60-day refund window",
+				},
+			},
+		},
 		EvidenceItems: []string{
 			"Refund policy v1 specified a 30-day refund window",
 			"Refund policy v2 specified a 60-day refund window",
@@ -102,6 +116,18 @@ func TestVerifyResponse_PassesWhenAbsoluteClaimAcknowledgesConflict(t *testing.T
 	ctx := VerificationContext{
 		UserPrompt:        "Which refund window applies?",
 		HasContradictions: true,
+		Contradictions: []session.ContradictionEvidence{
+			{
+				Kind:           "value_conflict",
+				Topic:          "refund window",
+				Summary:        "refund window evidence disagrees",
+				SharedKeywords: []string{"refund", "window"},
+				EvidenceItems: []string{
+					"Refund policy v1 specified a 30-day refund window",
+					"Refund policy v2 specified a 60-day refund window",
+				},
+			},
+		},
 		EvidenceItems: []string{
 			"Refund policy v1 specified a 30-day refund window",
 			"Refund policy v2 specified a 60-day refund window",
@@ -170,6 +196,36 @@ func TestVerifyResponse_FailsProofObligationOnFinancialIntent(t *testing.T) {
 	}
 	if !hasIssue(result, "proof_obligation_unmet") {
 		t.Fatalf("expected proof_obligation_unmet issue, got %+v", result.Issues)
+	}
+}
+
+func TestVerifyResponse_ClaimAuditCarriesMissingProofRequirements(t *testing.T) {
+	ctx := VerificationContext{
+		UserPrompt:      "Is the refund flow compliant with the current policy?",
+		PolicySensitive: true,
+		EvidenceItems: []string{
+			"Shipping carrier list updated last quarter",
+		},
+	}
+
+	response := "The refund flow definitely complies with every policy requirement."
+	result := VerifyResponse(response, ctx)
+
+	if result.Passed {
+		t.Fatalf("expected proof-style verifier failure, got pass")
+	}
+	if !hasIssue(result, "proof_obligation_unmet") {
+		t.Fatalf("expected proof_obligation_unmet issue, got %+v", result.Issues)
+	}
+	if len(result.ClaimAudits) == 0 {
+		t.Fatal("expected claim audits")
+	}
+	audit := result.ClaimAudits[0]
+	if len(audit.ProofRequired) == 0 {
+		t.Fatalf("expected proof requirements on claim audit, got %+v", audit)
+	}
+	if len(audit.MissingProof) == 0 {
+		t.Fatalf("expected missing proof details on claim audit, got %+v", audit)
 	}
 }
 

@@ -3,6 +3,8 @@ package pipeline
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/rs/zerolog/log"
@@ -42,6 +44,78 @@ func SkillRegistryNamesFromDB(store *db.Store) map[string]struct{} {
 		names[strings.ToLower(name)] = struct{}{}
 	}
 	return names
+}
+
+// SkillCapabilityLexiconFromDB collects capability-bearing enabled skill text
+// from the authoritative DB inventory. Name and description are both included
+// so capability-fit logic can match installed concepts like "obsidian" and
+// "vault" from an `obsidian-vault` skill instead of pretending they are
+// missing because the skill name contains punctuation.
+func SkillCapabilityLexiconFromDB(store *db.Store) []string {
+	if store == nil {
+		return nil
+	}
+
+	rows, err := store.QueryContext(context.Background(),
+		`SELECT name, COALESCE(description, ''), COALESCE(source_path, '') FROM skills WHERE enabled = 1`)
+	if err != nil {
+		log.Warn().Err(err).Msg("pipeline: failed to query capability lexicon from DB")
+		return nil
+	}
+	defer func() { _ = rows.Close() }()
+
+	var corpus []string
+	for rows.Next() {
+		var name, description, sourcePath string
+		if err := rows.Scan(&name, &description, &sourcePath); err != nil {
+			continue
+		}
+		sourcePath = strings.TrimSpace(sourcePath)
+		if sourcePath != "" && !fileExists(sourcePath) {
+			log.Debug().Str("skill", name).Str("path", sourcePath).Msg("pipeline: omitting enabled skill with missing source path from capability lexicon")
+			continue
+		}
+		corpus = append(corpus, strings.TrimSpace(name), strings.TrimSpace(description))
+		if sourcePath != "" {
+			corpus = append(corpus, filepath.Base(filepath.Dir(sourcePath)))
+		}
+	}
+	return corpus
+}
+
+// EnabledSkillSourcePathsFromDB returns concrete skill source files for enabled
+// skills that still have a loadable on-disk artifact.
+func EnabledSkillSourcePathsFromDB(store *db.Store) []string {
+	if store == nil {
+		return nil
+	}
+	rows, err := store.QueryContext(context.Background(),
+		`SELECT COALESCE(source_path, '') FROM skills WHERE enabled = 1 AND COALESCE(source_path, '') <> ''`)
+	if err != nil {
+		log.Warn().Err(err).Msg("pipeline: failed to query skill source paths from DB")
+		return nil
+	}
+	defer func() { _ = rows.Close() }()
+
+	var paths []string
+	for rows.Next() {
+		var path string
+		if err := rows.Scan(&path); err != nil {
+			continue
+		}
+		if fileExists(path) {
+			paths = append(paths, path)
+		}
+	}
+	return paths
+}
+
+func fileExists(path string) bool {
+	if strings.TrimSpace(path) == "" {
+		return false
+	}
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
 }
 
 // ParseSkillsJSON parses a JSON skills array (from a subagent's skills_json

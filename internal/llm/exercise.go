@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -72,6 +73,16 @@ func ParseIntentClass(s string) IntentClass {
 	}
 }
 
+// ParseIntentClassStrict converts a string label to an IntentClass and rejects
+// unknown values instead of silently falling back to EXECUTION.
+func ParseIntentClassStrict(s string) (IntentClass, error) {
+	intent := ParseIntentClass(s)
+	if !IsValidIntentClass(intent) || !strings.EqualFold(intent.String(), strings.TrimSpace(s)) {
+		return IntentExecution, fmt.Errorf("unknown intent class %q", s)
+	}
+	return intent, nil
+}
+
 // AllIntentClasses returns all defined intent classes in order.
 func AllIntentClasses() []IntentClass {
 	return []IntentClass{
@@ -79,6 +90,17 @@ func AllIntentClasses() []IntentClass {
 		IntentConversation, IntentMemoryRecall, IntentToolUse,
 		IntentCoding,
 	}
+}
+
+// IsValidIntentClass reports whether intent is part of the canonical exercise
+// taxonomy.
+func IsValidIntentClass(intent IntentClass) bool {
+	for _, candidate := range AllIntentClasses() {
+		if candidate == intent {
+			return true
+		}
+	}
+	return false
 }
 
 // ComplexityLevel defines exercise difficulty.
@@ -780,7 +802,10 @@ func (iq *IntentQualityTracker) SeedIntentBaselines(baselines []IntentBaseline) 
 	seeded := 0
 	for _, b := range baselines {
 		// Check if this (model, intentClass) cell already has observations.
-		key := IntentClassKey{Model: b.Model, IntentClass: b.IntentClass}
+		key := canonicalIntentClassKey(b.Model, b.IntentClass)
+		if key.Model == "" || key.IntentClass == "" {
+			continue
+		}
 		iq.mu.RLock()
 		rb, exists := iq.intents[key]
 		hasData := exists && rb.count > 0
@@ -789,7 +814,16 @@ func (iq *IntentQualityTracker) SeedIntentBaselines(baselines []IntentBaseline) 
 		if hasData {
 			continue
 		}
-		iq.RecordWithIntent(b.Model, b.IntentClass, b.Quality)
+		quality := b.Quality
+		if quality < 0 {
+			quality = 0
+		}
+		if quality > 1 {
+			quality = 1
+		}
+		iq.mu.Lock()
+		iq.priors[key] = quality
+		iq.mu.Unlock()
 		seeded++
 	}
 	return seeded

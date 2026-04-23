@@ -102,15 +102,17 @@ type StdioTransport struct {
 	// from the FRONT (we keep the most recent stderr because that's
 	// what's diagnostic at the moment of failure, not the
 	// prologue).
-	stderrMu  sync.Mutex
-	stderrBuf []byte
+	stderrMu   sync.Mutex
+	stderrBuf  []byte
+	stderrDone chan struct{}
 
 	// Child exit state. waitErr captures the result of cmd.Wait()
 	// so failure paths can include "exit status N" alongside the
 	// captured stderr. exited becomes true once Wait has returned.
-	waitMu  sync.RWMutex
-	exited  bool
-	waitErr error
+	waitMu   sync.RWMutex
+	exited   bool
+	waitErr  error
+	waitDone chan struct{}
 }
 
 // NewStdioTransport spawns a subprocess and connects via JSON-RPC over stdio.
@@ -144,9 +146,11 @@ func NewStdioTransport(command string, args []string, env map[string]string) (*S
 	}
 
 	t := &StdioTransport{
-		cmd:    cmd,
-		stdin:  stdin,
-		stdout: bufio.NewReader(stdout),
+		cmd:        cmd,
+		stdin:      stdin,
+		stdout:     bufio.NewReader(stdout),
+		stderrDone: make(chan struct{}),
+		waitDone:   make(chan struct{}),
 	}
 
 	// Start the stderr-collection goroutine. Reads until the pipe
@@ -168,7 +172,10 @@ func NewStdioTransport(command string, args []string, env map[string]string) (*S
 // its own goroutine for the life of the child process. Returns when
 // the stderr pipe closes (child exit, explicit close, or pipe error).
 func (t *StdioTransport) collectStderr(pipe io.ReadCloser) {
-	defer func() { _ = pipe.Close() }()
+	defer func() {
+		_ = pipe.Close()
+		close(t.stderrDone)
+	}()
 	chunk := make([]byte, 4096)
 	for {
 		n, err := pipe.Read(chunk)
@@ -202,6 +209,7 @@ func (t *StdioTransport) watchExit() {
 	t.waitErr = err
 	t.exited = true
 	t.waitMu.Unlock()
+	close(t.waitDone)
 }
 
 // ChildDiagnostic returns a human-readable summary of the child's
@@ -338,28 +346,31 @@ func ConnectStdio(ctx context.Context, name, command string, args []string, env 
 }
 
 // waitForStderrDrain pauses briefly to let the stderr-collection
-// goroutine catch up after the child process has been killed/closed.
-// Without this small wait, the diagnostic returned by
-// ChildDiagnostic() can be empty even when the child wrote real
-// error text just before exiting — collectStderr's Read returns EOF
-// immediately on Close but the bytes already in the pipe buffer may
-// not have been appended yet.
+// goroutine and child-exit observer complete after the child process
+// has been killed/closed. Without this wait, ChildDiagnostic() can
+// miss either the final stderr tail or the final exit state on slower
+// runners.
 //
-// Polls until stderr buffer stops growing OR timeout elapses,
-// whichever comes first. The poll interval is short (10ms) so a
-// quickly-flushing child doesn't pay the full timeout.
+// This function intentionally waits on transport-owned completion
+// signals, not a buffer-length stability heuristic. Heuristics allowed
+// premature returns on Linux CI, dropping the actionable stderr tail
+// from large child-failure diagnostics.
 func waitForStderrDrain(t *StdioTransport, timeout time.Duration) {
-	deadline := time.Now().Add(timeout)
-	prevLen := -1
-	for time.Now().Before(deadline) {
-		t.stderrMu.Lock()
-		curLen := len(t.stderrBuf)
-		t.stderrMu.Unlock()
-		if curLen == prevLen && curLen > 0 {
-			return // stable
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	stderrDone := false
+	waitDone := false
+
+	for !stderrDone || !waitDone {
+		select {
+		case <-t.stderrDone:
+			stderrDone = true
+		case <-t.waitDone:
+			waitDone = true
+		case <-timer.C:
+			return
 		}
-		prevLen = curLen
-		time.Sleep(10 * time.Millisecond)
 	}
 }
 

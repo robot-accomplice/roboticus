@@ -265,7 +265,7 @@ const stageLivenessProbeInterval = 10 * time.Second
 // recovery. This keeps the watchdog out of the hot path and out of
 // the recovery decisions (which are already nuanced — a cold-start
 // LLM is "slow" but not "stuck").
-func (p *Pipeline) runStageWatchdog(ctx context.Context, tr *TraceRecorder, done <-chan struct{}) {
+func (p *Pipeline) runStageWatchdog(ctx context.Context, tr *TraceRecorder, dr *TurnDiagnosticsRecorder, done <-chan struct{}) {
 	if tr == nil {
 		return
 	}
@@ -299,10 +299,33 @@ func (p *Pipeline) runStageWatchdog(ctx context.Context, tr *TraceRecorder, done
 			// interval has elapsed. Prevents both spam (every
 			// probe) and silence (only on transitions).
 			if cs.Name != lastLoggedSpan || time.Since(lastLogTime) >= stageLivenessProbeInterval {
+				live := LivenessSnapshot{
+					Scope:    "stage",
+					Phase:    "orchestration_wait",
+					Message:  "pipeline stage exceeded the liveness threshold",
+					Severity: "error",
+					Details: map[string]any{
+						"stage":          cs.Name,
+						"running_for_ms": cs.Duration.Milliseconds(),
+					},
+				}
+				if dr != nil {
+					live = dr.LivenessSnapshot(cs.Name, cs.Duration)
+				}
 				log.Warn().
 					Str("stage", cs.Name).
+					Str("scope", live.Scope).
+					Str("phase", live.Phase).
 					Dur("running_for", cs.Duration).
-					Msg("pipeline stage running longer than expected — possible cold-start latency or hang")
+					Msg(live.Message)
+				if dr != nil {
+					dr.RecordEvent("stage_liveness_warning", "error",
+						live.Message,
+						"The system detected that this turn is stalled and recorded where the delay is happening.",
+						live.Details,
+					)
+					p.storeTurnDiagnostics(ctx, dr)
+				}
 				lastLoggedSpan = cs.Name
 				lastLogTime = time.Now()
 			}
@@ -344,6 +367,7 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 		input: input,
 		start: time.Now(),
 		tr:    NewTraceRecorder(),
+		dr:    NewTurnDiagnosticsRecorder("", "", cfg.ChannelLabel),
 	}
 	log.Info().Str("channel", pc.cfg.ChannelLabel).Str("agent", pc.input.AgentID).Msg("pipeline started")
 	p.dashNotify("agent_working", map[string]string{
@@ -366,7 +390,7 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config, input Input) (*Outcome, 
 	// cheap (one RWMutex.RLock + tiny snapshot copy) so the
 	// instrumentation has no measurable steady-state cost.
 	watchdogDone := make(chan struct{})
-	go p.runStageWatchdog(ctx, pc.tr, watchdogDone)
+	go p.runStageWatchdog(ctx, pc.tr, pc.dr, watchdogDone)
 	defer close(watchdogDone)
 
 	// Stages 1-2: validation + injection defense.
@@ -478,47 +502,40 @@ func (p *Pipeline) buildGuardContext(session *Session) *GuardContext {
 		ctx.Intents = append(ctx.Intents, "delegation")
 	}
 
-	// Extract user prompt (last user message).
+	// Extract user prompt (last user message) and preserve temporal atomicity for
+	// cross-turn guards: previous/prior assistant history must exclude assistant
+	// content already emitted inside the current turn, while current-turn tool
+	// results remain visible for truth/execution guards.
 	msgs := session.Messages()
+	lastUserIdx := -1
 	for i := len(msgs) - 1; i >= 0; i-- {
 		if msgs[i].Role == "user" {
+			lastUserIdx = i
 			ctx.UserPrompt = msgs[i].Content
 			break
 		}
 	}
 
-	// Extract previous assistant message.
-	ctx.PreviousAssistant = session.LastAssistantContent()
-
-	// Collect all prior assistant messages.
-	for _, m := range msgs {
-		if m.Role == "assistant" {
-			ctx.PriorAssistantMessages = append(ctx.PriorAssistantMessages, m.Content)
-		}
-	}
-
-	// Collect tool results from the current turn (messages after the last user message).
-	lastUserIdx := -1
-	for i := len(msgs) - 1; i >= 0; i-- {
-		if msgs[i].Role == "user" {
-			lastUserIdx = i
-			break
-		}
-	}
+	priorAssistantLimit := len(msgs)
 	if lastUserIdx >= 0 {
-		for i := lastUserIdx + 1; i < len(msgs); i++ {
-			if msgs[i].Role == "tool" {
-				ctx.ToolResults = append(ctx.ToolResults, ToolResultEntry{
-					ToolName: msgs[i].Name,
-					Output:   msgs[i].Content,
-				})
-				if strings.Contains(msgs[i].Name, "delegat") || strings.Contains(msgs[i].Name, "subagent") {
-					ctx.DelegationProvenance.SubagentTaskStarted = true
-					ctx.DelegationProvenance.SubagentTaskCompleted = true
-					if strings.TrimSpace(msgs[i].Content) != "" {
-						ctx.DelegationProvenance.SubagentResultAttached = true
-					}
-				}
+		priorAssistantLimit = lastUserIdx
+	}
+
+	for i := 0; i < priorAssistantLimit; i++ {
+		if msgs[i].Role != "assistant" {
+			continue
+		}
+		ctx.PriorAssistantMessages = append(ctx.PriorAssistantMessages, msgs[i].Content)
+		ctx.PreviousAssistant = msgs[i].Content
+	}
+
+	ctx.ToolResults = currentTurnToolResults(session)
+	for _, tr := range ctx.ToolResults {
+		if strings.Contains(tr.ToolName, "delegat") || strings.Contains(tr.ToolName, "subagent") {
+			ctx.DelegationProvenance.SubagentTaskStarted = true
+			ctx.DelegationProvenance.SubagentTaskCompleted = true
+			if strings.TrimSpace(tr.Output) != "" {
+				ctx.DelegationProvenance.SubagentResultAttached = true
 			}
 		}
 	}
@@ -556,17 +573,17 @@ func (p *Pipeline) embeddingClient() *llm.EmbeddingClient {
 
 // storeTrace persists a pipeline trace to the database (best-effort).
 // If outcome is provided, also persists react_trace_json and inference_params_json.
-func (p *Pipeline) storeTrace(ctx context.Context, tr *TraceRecorder, sessionID, msgID, channel string) {
-	p.storeTraceWithArtifacts(ctx, tr, sessionID, msgID, channel, nil)
+func (p *Pipeline) storeTrace(ctx context.Context, tr *TraceRecorder, sessionID, turnID, channel string) {
+	p.storeTraceWithArtifacts(ctx, tr, sessionID, turnID, channel, nil)
 }
 
 // storeTraceWithArtifacts persists a pipeline trace along with optional
 // ReactTrace and InferenceParams artifacts from the inference stage.
-func (p *Pipeline) storeTraceWithArtifacts(ctx context.Context, tr *TraceRecorder, sessionID, msgID, channel string, outcome *Outcome) {
+func (p *Pipeline) storeTraceWithArtifacts(ctx context.Context, tr *TraceRecorder, sessionID, turnID, channel string, outcome *Outcome) {
 	if p.store == nil {
 		return
 	}
-	trace := tr.Finish(msgID, channel)
+	trace := tr.Finish(turnID, channel)
 
 	var reactJSON, paramsJSON *string
 	if outcome != nil {
@@ -585,6 +602,6 @@ func (p *Pipeline) storeTraceWithArtifacts(ctx context.Context, tr *TraceRecorde
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		db.NewID(), trace.TurnID, sessionID, trace.Channel, trace.TotalMs, trace.StagesJSON(), reactJSON, paramsJSON)
 	if err != nil {
-		log.Warn().Err(err).Str("session", sessionID).Str("turn", msgID).Msg("failed to store pipeline trace")
+		log.Warn().Err(err).Str("session", sessionID).Str("turn", turnID).Msg("failed to store pipeline trace")
 	}
 }

@@ -59,14 +59,19 @@ func TestMarshalAnthropic(t *testing.T) {
 	}
 }
 
-func TestMarshalOllama_UsesOpenAIFormat(t *testing.T) {
-	// FormatOllama now routes to OpenAI-compatible format (Rust parity).
-	// Temperature is top-level, not in "options".
+func TestMarshalOllama_UsesOllamaToolMessageContract(t *testing.T) {
 	c := &Client{provider: &Provider{Format: FormatOllama}}
 	temp := 0.7
 	req := &Request{
-		Model:       "llama3",
-		Messages:    []Message{{Role: "user", Content: "hello"}},
+		Model: "llama3",
+		Messages: []Message{
+			{Role: "user", Content: "hello"},
+			{Role: "assistant", ToolCalls: []ToolCall{{
+				ID: "call_1", Type: "function",
+				Function: ToolCallFunc{Name: "search", Arguments: `{"query":"hello"}`},
+			}}},
+			{Role: "tool", ToolCallID: "call_1", Name: "search", Content: "done"},
+		},
 		Temperature: &temp,
 	}
 	data, err := c.marshalRequest(req)
@@ -80,6 +85,20 @@ func TestMarshalOllama_UsesOpenAIFormat(t *testing.T) {
 	}
 	if _, hasOptions := raw["options"]; hasOptions {
 		t.Error("should not have 'options' field — using OpenAI format")
+	}
+	msgs := raw["messages"].([]any)
+	assistant := msgs[1].(map[string]any)
+	toolCalls := assistant["tool_calls"].([]any)
+	function := toolCalls[0].(map[string]any)["function"].(map[string]any)
+	if _, ok := function["arguments"].(map[string]any); !ok {
+		t.Fatalf("ollama tool call arguments = %T, want object", function["arguments"])
+	}
+	toolMsg := msgs[2].(map[string]any)
+	if toolMsg["tool_name"] != "search" {
+		t.Fatalf("tool_name = %v, want search", toolMsg["tool_name"])
+	}
+	if _, exists := toolMsg["tool_call_id"]; exists {
+		t.Fatalf("tool_call_id should not be present for ollama tool messages: %v", toolMsg["tool_call_id"])
 	}
 }
 

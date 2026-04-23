@@ -1,6 +1,7 @@
 package core
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -69,6 +70,30 @@ func ParseTOMLBlocks(content string) map[string]string {
 	return blocks
 }
 
+// InterviewOpeningInstruction returns the kickoff instruction for the LLM.
+func InterviewOpeningInstruction(agentName string) string {
+	if strings.TrimSpace(agentName) != "" {
+		return fmt.Sprintf(
+			"Begin the personality interview. Start with brief pre-interview guidance asking the operator to picture the kind of assistant they want, including a character or archetype if useful. Then ask the first questions, with the first explicit question being whether the agent's name should be %q or something else.",
+			strings.TrimSpace(agentName),
+		)
+	}
+	return "Begin the personality interview. Start with brief pre-interview guidance asking the operator to picture the kind of assistant they want, including a character or archetype if useful. Then ask the first questions, with the first explicit question being the agent's name."
+}
+
+// InterviewOpeningFallback returns a deterministic non-LLM opening that
+// preserves the same interview contract as the prompt.
+func InterviewOpeningFallback(agentName string) string {
+	nameQuestion := "1. What should the agent be called?"
+	if strings.TrimSpace(agentName) != "" {
+		nameQuestion = fmt.Sprintf("1. Should the agent be called %q, or do you want a different name?", strings.TrimSpace(agentName))
+	}
+	return "Before we start, picture the kind of assistant you actually want. It can help to think of a character from a book, film, or television show, or any other concrete archetype that behaves the way you want your agent to behave.\n\n" +
+		nameQuestion + "\n" +
+		"2. Who or what is the closest reference identity or archetype for this agent?\n" +
+		"3. What traits from that reference should the agent copy, and which ones should it avoid?"
+}
+
 // InterviewSystemPrompt returns the system prompt for conducting personality interviews.
 func InterviewSystemPrompt() string {
 	return `You are conducting a personality interview to configure an AI agent's identity, voice, and operating parameters.
@@ -87,11 +112,16 @@ Your goal is to learn about the operator and generate configuration files that d
 8. **Integrations & Workflow** — Which platforms? Data flow? Preferred model providers?
 
 ## Interview Rules
-- Ask 2-3 questions per turn, conversationally
-- Mark each question with its category
-- Track which categories have been covered
-- After 5+ categories are covered, offer to generate the configuration
-- Be conversational, not interrogative
+- Before the first questions, briefly ask the operator to picture the kind of assistant they want, including a character from a book, film, or television show, or another concrete archetype that captures the desired behavior.
+- The first explicit interview question must always be the agent's name. If the caller already supplied a proposed name, ask whether that should be the name or whether they want a different one.
+- Early in the interview, ask for the reference identity or archetype the operator wants to model.
+- When the operator supplies a reference identity, infer the likely behavioral traits associated with it and use them as provisional defaults. State those traits explicitly as assumptions, and ask the operator to confirm, reject, or refine them.
+- Ask 3-4 concise questions per turn when gathering core behavior requirements.
+- Ask some high-value behavior questions more than once in different wording when the answer is vague, contradictory, or especially important to autonomy, boundaries, tone, or escalation style.
+- Mark each question with its category.
+- Track which categories have been covered.
+- After 5+ categories are covered and key behavior ambiguities are resolved, offer to generate the configuration.
+- Be conversational, but comprehensive enough to converge on durable behavior rather than a shallow vibe.
 
 ## Output Files (generated at the end)
 1. **OS.toml** — Agent identity, voice settings, prompt_text

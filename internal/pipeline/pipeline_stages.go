@@ -2,7 +2,9 @@ package pipeline
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -31,17 +33,56 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 	ctx = core.WithSessionID(ctx, session.ID)
 	ctx = core.WithTurnID(ctx, turnID)
 	ctx = core.WithChannelLabel(ctx, cfg.ChannelLabel)
+	dr := concreteDiagnosticsRecorderFromContext(ctx)
+	policy := turnEnvelopePolicyFromContext(ctx)
 
 	// Compact context window before inference to stay within token budget.
 	if msgs := session.Messages(); len(msgs) > 0 {
-		compacted := CompactContext(msgs, defaultTokenBudget)
+		budget := defaultTokenBudget
+		if policy.ContextBudget > 0 {
+			budget = policy.ContextBudget
+		}
+		compacted := CompactContext(msgs, budget)
 		if len(compacted) < len(msgs) {
 			session.SetMessages(compacted)
 			log.Trace().
 				Int("before", len(msgs)).
 				Int("after", len(compacted)).
+				Str("turn_weight", string(policy.Weight)).
 				Msg("context compacted before inference")
 		}
+	}
+	if dr != nil {
+		msgCount := len(session.Messages())
+		toolCount := len(session.SelectedToolDefs())
+		approxTokens := approximateSessionTokens(session)
+		pressure := classifyContextPressure(approxTokens, toolCount)
+		dr.SetSummaryField("turn_id", turnID)
+		dr.SetSummaryField("session_id", session.ID)
+		dr.SetSummaryField("channel", cfg.ChannelLabel)
+		dr.SetSummaryField("request_messages", msgCount)
+		dr.SetSummaryField("request_tools", toolCount)
+		dr.SetSummaryField("request_approx_tokens", approxTokens)
+		dr.SetSummaryField("context_pressure", pressure)
+		dr.SetSummaryField("user_narrative", "")
+		dr.SetSummaryField("operator_narrative", "")
+		dr.RecordEvent("context_pressure_assessed", "ok",
+			"context pressure assessed before inference",
+			"Checked request size and tool/context pressure before asking the model.",
+			map[string]any{
+				"messages":            msgCount,
+				"tools":               toolCount,
+				"approx_tokens":       approxTokens,
+				"context_pressure":    pressure,
+				"turn_weight":         string(policy.Weight),
+				"turn_policy_reason":  policy.Reason,
+				"task_intent":         session.TaskIntent(),
+				"task_complexity":     session.TaskComplexity(),
+				"task_planned_action": session.TaskPlannedAction(),
+			},
+		)
+		p.storeTurnDiagnostics(ctx, dr)
+		ctx = llm.WithInferenceObserver(ctx, dr)
 	}
 
 	// Thread model override into context for the LLM service to read.
@@ -58,6 +99,9 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 	finalGuardResult := ApplyResult{}
 	guardRetried := false
 	activeGuards := p.guardsForPreset(cfg.GuardSet)
+	if cfg.NoEscalate {
+		activeGuards = nil
+	}
 
 	// Guard chain with full context and retry support. The helper owns the live
 	// guard-triggered retry path even when no guards are configured, so there is
@@ -69,7 +113,7 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 		liveRetryPolicy.ErrorOnExhaust = false
 		guardRun, guardErr := retryWithGuardsDetailed(ctx, p.executor, session, activeGuards, liveRetryPolicy, func() *GuardContext {
 			return p.buildGuardContext(session)
-		})
+		}, decideGuardRetryAfterProgress)
 		if guardErr != nil {
 			return nil, core.WrapError(core.ErrLLM, "inference failed", guardErr)
 		}
@@ -78,6 +122,33 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 		result = guardRun.Content
 		turns = guardRun.Turns
 		guardRetried = guardRun.GuardRetried
+		if dr != nil && guardRetried {
+			dr.IncrementSummaryCounter("guard_retry_count", 1)
+			dr.RecordEvent("guard_retry_scheduled", "error",
+				"guard chain requested a retry",
+				"The first answer violated a guard, so the system tried again.",
+				map[string]any{
+					"violations":   guardRun.InitialGuardResult.Violations,
+					"retry_reason": guardRun.InitialGuardResult.RetryReason,
+				},
+			)
+			p.storeTurnDiagnostics(ctx, dr)
+		}
+		if dr != nil && guardRun.RetrySuppressed {
+			progress := executionProgressFromGuardContext(p.buildGuardContext(session))
+			dr.RecordEvent("guard_retry_suppressed", "ok",
+				"guard retry suppressed after substantive execution progress",
+				"The initial answer had already made real tool-backed progress, so the system recorded the guard concern without reusing the route again.",
+				map[string]any{
+					"violations":         guardRun.InitialGuardResult.Violations,
+					"retry_reason":       guardRun.InitialGuardResult.RetryReason,
+					"suppression_reason": guardRun.RetrySuppressReason,
+					"successful_tools":   progress.SuccessfulToolResults,
+					"artifact_writes":    progress.SuccessfulArtifactWrites,
+				},
+			)
+			p.storeTurnDiagnostics(ctx, dr)
+		}
 		guardDur := time.Since(guardStart).Milliseconds()
 		if activeGuards != nil {
 			log.Debug().
@@ -120,19 +191,53 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 	// Lightweight verifier pass: if the answer ignores clear evidence gaps,
 	// contradictions, or multi-part coverage, request one revision before we
 	// persist the assistant message.
-	verifyCtx := BuildVerificationContext(session)
-	verifyCtx.CertaintyClassifier = p.certaintyClass
-	verifyResult := VerifyResponse(result, verifyCtx)
-	AnnotateVerifierTrace(tr, verifyResult)
-	if !verifyResult.Passed {
+	verifyCtx, verifyResult, verifySummary := p.verifyAssistantResult(session, result, tr)
+	verifyRetryDisposition := decideVerifierRetryAfterProgress(verifyResult, verifyCtx, executionProgressFromGuardContext(p.buildGuardContext(session)))
+	if !verifyResult.Passed && verifyRetryDisposition.Allow {
+		retryPlan := buildVerifierRetryPlan(verifyResult, verifyCtx, session.SelectedToolDefs())
+		policy = p.maybeExpandTurnEnvelope(ctx, session, policy, verifyResult, dr)
+		if len(retryPlan.ToolDefs) > 0 && len(retryPlan.ToolDefs) != len(session.SelectedToolDefs()) {
+			session.SetSelectedToolDefs(retryPlan.ToolDefs)
+		}
+		if dr != nil {
+			dr.IncrementSummaryCounter("verifier_retry_count", 1)
+			dr.RecordEvent("verifier_retry_scheduled", "error",
+				"verifier requested a retry",
+				"The first answer did not meet verification requirements, so the system tried again.",
+				map[string]any{
+					"issues":            verifyResult.RetryMessage(),
+					"issue_codes":       verifySummary.IssueCodes,
+					"turn_weight":       string(policy.Weight),
+					"contested_claims":  verifySummary.ContestedCount,
+					"proof_gap_claims":  verifySummary.ProofGapCount,
+					"reconciled_claims": verifySummary.ReconciledCount,
+					"correction_plan":   formatVerifierRetryCorrectionSummary(retryPlan),
+				},
+			)
+			p.storeTurnDiagnostics(ctx, dr)
+		}
 		log.Debug().
 			Str("session", session.ID).
 			Str("issues", verifyResult.RetryMessage()).
 			Msg("verifier requested retry")
-		session.AddSystemMessage(verifyResult.RetryMessage())
+		session.AddSystemMessage(retryPlan.Message)
 		retryContent, retryTurns, retryErr := p.executor.RunLoop(ctx, session)
 		if retryErr != nil {
 			log.Debug().Err(retryErr).Msg("verifier retry inference failed, using pre-verifier result")
+			if dr != nil {
+				dr.RecordEvent("verifier_retry_failed", "error",
+					"verifier retry failed before a valid final answer was produced",
+					"The system attempted a verifier-requested rewrite, but the retry itself failed, so the final answer was downgraded to an honest verification-grounded response.",
+					map[string]any{
+						"issues":      verifyResult.RetryMessage(),
+						"issue_codes": verifySummary.IssueCodes,
+						"reason":      retryErr.Error(),
+					},
+				)
+				p.storeTurnDiagnostics(ctx, dr)
+			}
+			result = verifierFinalizationMessage(verifyResult)
+			session.AddAssistantMessage(result, nil)
 		} else {
 			turns += retryTurns
 			if activeGuards != nil {
@@ -140,8 +245,49 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 				finalGuardResult = activeGuards.ApplyFullWithContext(retryContent, guardCtx)
 				retryContent = finalGuardResult.Content
 			}
-			result = retryContent
+			_, retryVerifyResult, retryVerifySummary := p.verifyAssistantResult(session, retryContent, tr)
+			if !retryVerifyResult.Passed {
+				if dr != nil {
+					dr.RecordEvent("verifier_retry_rechecked", "error",
+						"verifier retry still failed final verification",
+						"The revised answer was checked again before finalization and still did not satisfy verification requirements, so the final operator-facing response was downgraded to an honest verification-grounded statement.",
+						map[string]any{
+							"issues":      retryVerifyResult.RetryMessage(),
+							"issue_codes": retryVerifySummary.IssueCodes,
+						},
+					)
+					p.storeTurnDiagnostics(ctx, dr)
+				}
+				result = verifierFinalizationMessage(retryVerifyResult)
+				session.AddAssistantMessage(result, nil)
+			} else {
+				if dr != nil {
+					dr.RecordEvent("verifier_retry_rechecked", "ok",
+						"verifier retry passed final verification",
+						"The revised answer was re-verified before finalization and satisfied the verification requirements.",
+						map[string]any{
+							"issue_codes": retryVerifySummary.IssueCodes,
+						},
+					)
+					p.storeTurnDiagnostics(ctx, dr)
+				}
+				result = retryContent
+			}
 		}
+	} else if !verifyResult.Passed && dr != nil {
+		progress := executionProgressFromGuardContext(p.buildGuardContext(session))
+		dr.RecordEvent("verifier_retry_suppressed", "ok",
+			"verifier retry suppressed after substantive execution progress",
+			"The answer already completed real tool-backed work, so the remaining verifier findings were recorded as concerns instead of triggering another model attempt.",
+			map[string]any{
+				"issues":             verifyResult.RetryMessage(),
+				"issue_codes":        verifySummary.IssueCodes,
+				"suppression_reason": verifyRetryDisposition.Reason,
+				"successful_tools":   progress.SuccessfulToolResults,
+				"artifact_writes":    progress.SuccessfulArtifactWrites,
+			},
+		)
+		p.storeTurnDiagnostics(ctx, dr)
 	}
 
 	// Store assistant response with topic tag (matching Rust: append_message_with_topic).
@@ -192,6 +338,17 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 	if len(finalGuardResult.Violations) > 0 {
 		params.GuardViolations = append([]string(nil), finalGuardResult.Violations...)
 	}
+	if dr != nil {
+		dr.RecordEvent("response_finalized", "ok",
+			"final response selected for the turn",
+			"The system finalized an answer for this turn.",
+			map[string]any{
+				"react_turns":      turns,
+				"guard_violations": params.GuardViolations,
+			},
+		)
+		p.storeTurnDiagnostics(ctx, dr)
+	}
 
 	return &Outcome{
 		SessionID:       session.ID,
@@ -200,6 +357,136 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 		ReactTurns:      turns,
 		inferenceParams: params,
 	}, nil
+}
+
+func concreteDiagnosticsRecorderFromContext(ctx context.Context) *TurnDiagnosticsRecorder {
+	if ctx == nil {
+		return nil
+	}
+	v := ctx.Value(diagnosticsRecorderKey{})
+	if v == nil {
+		return nil
+	}
+	dr, _ := v.(*TurnDiagnosticsRecorder)
+	return dr
+}
+
+func (p *Pipeline) verifyAssistantResult(session *Session, content string, tr *TraceRecorder) (VerificationContext, VerificationResult, VerifierSummary) {
+	verifyCtx := BuildVerificationContext(session)
+	verifyCtx.CertaintyClassifier = p.certaintyClass
+	verifyResult := VerifyResponse(content, verifyCtx)
+	AnnotateVerifierTrace(tr, verifyResult)
+	return verifyCtx, verifyResult, SummarizeVerification(verifyResult)
+}
+
+type diagnosticsRecorderKey struct{}
+
+func WithDiagnosticsRecorder(ctx context.Context, dr *TurnDiagnosticsRecorder) context.Context {
+	if dr == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, diagnosticsRecorderKey{}, dr)
+}
+
+type turnEnvelopePolicyKey struct{}
+
+func WithTurnEnvelopePolicy(ctx context.Context, policy TurnEnvelopePolicy) context.Context {
+	return context.WithValue(ctx, turnEnvelopePolicyKey{}, policy)
+}
+
+func turnEnvelopePolicyFromContext(ctx context.Context) TurnEnvelopePolicy {
+	if ctx == nil {
+		return TurnEnvelopePolicy{}
+	}
+	v := ctx.Value(turnEnvelopePolicyKey{})
+	if v == nil {
+		return TurnEnvelopePolicy{}
+	}
+	policy, _ := v.(TurnEnvelopePolicy)
+	return policy
+}
+
+func (p *Pipeline) maybeExpandTurnEnvelope(ctx context.Context, session *Session, policy TurnEnvelopePolicy, verifyResult VerificationResult, dr *TurnDiagnosticsRecorder) TurnEnvelopePolicy {
+	if !policy.AllowRetryExpansion || policy.Weight != TurnWeightLight || session == nil {
+		return policy
+	}
+	if verifyResult.HasIssue("off_topic_social_turn") {
+		if dr != nil {
+			dr.RecordEvent("turn_envelope_kept_light", "ok",
+				"turn envelope stayed minimal for social-turn retry",
+				"The system kept the lightweight envelope because widening context would reinforce the off-topic operational drift.",
+				map[string]any{
+					"weight":            string(policy.Weight),
+					"blocking_issue":    "off_topic_social_turn",
+					"allow_expansion":   policy.AllowRetryExpansion,
+					"lightweight_tools": policy.LightweightToolSurface,
+				},
+			)
+			p.storeTurnDiagnostics(ctx, dr)
+		}
+		return policy
+	}
+	expanded := policy.Expanded()
+	if p.retriever != nil && session.MemoryContext() == "" {
+		query := latestUserMessageContentForPipeline(session)
+		if query != "" {
+			mem := p.retriever.Retrieve(ctx, session.ID, query, 1024)
+			if mem != "" {
+				session.SetMemoryContext(mem)
+			}
+		}
+	}
+	if _, err := expanded.applyToolPolicy(ctx, session, p.pruner); err != nil {
+		log.Debug().Err(err).Str("session", session.ID).Msg("turn envelope expansion tool policy failed")
+	}
+	if dr != nil {
+		dr.RecordEvent("turn_envelope_expanded", "ok",
+			"turn envelope widened for retry",
+			"The system widened context and tool access before retrying.",
+			map[string]any{
+				"from_weight": string(policy.Weight),
+				"to_weight":   string(expanded.Weight),
+				"reason":      expanded.Reason,
+			},
+		)
+		p.storeTurnDiagnostics(ctx, dr)
+	}
+	return expanded
+}
+
+func latestUserMessageContentForPipeline(session *Session) string {
+	if session == nil {
+		return ""
+	}
+	msgs := session.Messages()
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == "user" {
+			return msgs[i].Content
+		}
+	}
+	return ""
+}
+
+func approximateSessionTokens(session *Session) int {
+	if session == nil {
+		return 0
+	}
+	totalChars := 0
+	for _, m := range session.Messages() {
+		totalChars += len(m.Content)
+	}
+	return int(math.Ceil(float64(totalChars) / 4.0))
+}
+
+func classifyContextPressure(tokens, tools int) string {
+	switch {
+	case tokens >= 8000 || tools >= 15:
+		return "high"
+	case tokens >= 5000 || tools >= 8:
+		return "medium"
+	default:
+		return "low"
+	}
 }
 
 // prepareStreamInference sets up streaming inference via the StreamPreparer interface.
@@ -346,7 +633,11 @@ func (p *Pipeline) BuildAndPrepareInference(ctx context.Context, cfg Config, ses
 // injects retrieval context as system notes, persists a context snapshot,
 // and optionally compresses the prompt to fit the context budget.
 // Matches Rust's prepare_for_inference().
-func (p *Pipeline) PrepareForInference(ctx context.Context, session *Session, memoryBlock string, budgetTier int) {
+func (p *Pipeline) PrepareForInference(ctx context.Context, session *Session, memoryBlock string, budgetTier int, policy TurnEnvelopePolicy) {
+	if session != nil && policy.Weight == TurnWeightLight && session.TaskIntent() == "conversational" {
+		session.AddSystemMessage("[Conversation Mode]\nReply briefly and naturally to a lightweight social or colloquial greeting. Do not mention sandbox state, workspace paths, vault access, memory state, or runtime status unless the user explicitly asks about them.")
+	}
+
 	// 1. Inject memory retrieval context as a system note.
 	// This was already done in the memory retrieval stage (session.SetMemoryContext),
 	// but we ensure it's present in the messages.
@@ -367,10 +658,13 @@ func (p *Pipeline) PrepareForInference(ctx context.Context, session *Session, me
 	// 2. Context compaction: trim to fit budget tier.
 	if msgs := session.Messages(); len(msgs) > 0 {
 		// Resolve budget from config tier — no more hardcoded values.
-		budget := defaultTokenBudget
-		cfg := Config{BudgetTier: budgetTier}
-		if resolved := cfg.ResolveBudget(); resolved > 0 {
-			budget = resolved
+		budget := policy.ContextBudget
+		if budget <= 0 {
+			budget = defaultTokenBudget
+			cfg := Config{BudgetTier: budgetTier}
+			if resolved := cfg.ResolveBudget(); resolved > 0 {
+				budget = resolved
+			}
 		}
 		compacted := CompactContext(msgs, budget)
 		if len(compacted) < len(msgs) {
@@ -468,6 +762,20 @@ func (p *Pipeline) resolveSession(ctx context.Context, cfg Config, input Input) 
 func (p *Pipeline) loadSession(ctx context.Context, input Input) (*Session, error) {
 	sess := NewSession(input.SessionID, input.AgentID, input.AgentName)
 	p.applyRuntimeSessionContext(sess, input)
+
+	var existingID string
+	err := p.store.QueryRowContext(ctx,
+		`SELECT id FROM sessions WHERE id = ? LIMIT 1`,
+		input.SessionID,
+	).Scan(&existingID)
+	switch err {
+	case nil:
+		// continue
+	case sql.ErrNoRows:
+		return nil, core.NewError(core.ErrNotFound, "session not found")
+	default:
+		return nil, core.WrapError(core.ErrDatabase, "failed to verify session", err)
+	}
 
 	rows, err := p.store.QueryContext(ctx,
 		`SELECT role, content FROM session_messages WHERE session_id = ? ORDER BY created_at ASC LIMIT 50`,

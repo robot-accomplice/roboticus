@@ -173,6 +173,33 @@ func TestIntentQualityTracker_Clamping(t *testing.T) {
 	}
 }
 
+func TestIntentQualityTracker_CanonicalizesModelKeysAndKeepsPriorsSeparateFromObservations(t *testing.T) {
+	iq := NewIntentQualityTracker(10)
+	if seeded := iq.SeedIntentBaselines([]IntentBaseline{{
+		Model:       "openai/gpt-4o-mini",
+		IntentClass: "TOOL_USE",
+		Quality:     0.60,
+	}}); seeded != 1 {
+		t.Fatalf("seeded = %d, want 1", seeded)
+	}
+
+	if got := iq.ObservationCountForIntent("openrouter/openai/gpt-4o-mini", "TOOL_USE"); got != 0 {
+		t.Fatalf("baseline priors must not count as observations, got %d", got)
+	}
+	if got := iq.EstimatedQualityForIntent("openrouter/openai/gpt-4o-mini", "TOOL_USE"); math.Abs(got-0.60) > 1e-9 {
+		t.Fatalf("prior quality = %f, want 0.60", got)
+	}
+
+	iq.RecordWithIntent("openrouter/openai/gpt-4o-mini", "TOOL_USE", 0.82)
+
+	if got := iq.ObservationCountForIntent("openai/gpt-4o-mini", "tool_use"); got != 1 {
+		t.Fatalf("canonicalized observation count = %d, want 1", got)
+	}
+	if got := iq.EstimatedQualityForIntent("openai/gpt-4o-mini", "TOOL_USE"); math.Abs(got-0.82) > 1e-9 {
+		t.Fatalf("observed quality = %f, want 0.82", got)
+	}
+}
+
 // ─── 4. Cascade utility formula ───
 
 func TestCascadeOptimizer_HighSuccessRatePrefersCascade(t *testing.T) {

@@ -16,6 +16,7 @@ package memory
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/rs/zerolog/log"
@@ -147,7 +148,8 @@ func AssembleContext(
 	ac.FreshnessRisks = detectFreshnessRisks(evidence)
 
 	// Contradictions: detect conflicting evidence.
-	ac.Contradictions = detectContradictions(evidence)
+	contradictionArtifact := detectStructuredContradictions(evidence)
+	ac.Contradictions = renderContradictions(contradictionArtifact)
 
 	gapCount := strings.Count(ac.Gaps, "\n")
 	freshnessCount := strings.Count(ac.FreshnessRisks, "\n")
@@ -164,7 +166,7 @@ func AssembleContext(
 	// instead of parsing the rendered output (see v1.0.6 P2-C).
 	// execState was already loaded above — pass it through instead of
 	// re-querying (v1.0.6 self-audit P2-I).
-	ac.EvidenceArtifact = buildVerificationEvidenceFromAssembly(ac, evidence, execState)
+	ac.EvidenceArtifact = buildVerificationEvidenceFromAssembly(ac, evidence, contradictionArtifact, execState)
 
 	return ac
 }
@@ -180,6 +182,7 @@ func AssembleContext(
 func buildVerificationEvidenceFromAssembly(
 	ac *AssembledContext,
 	evidence []Evidence,
+	contradictions []session.ContradictionEvidence,
 	execState *ExecutiveState,
 ) *session.VerificationEvidence {
 	ve := &session.VerificationEvidence{
@@ -187,6 +190,7 @@ func buildVerificationEvidenceFromAssembly(
 		HasGaps:           strings.TrimSpace(ac.Gaps) != "",
 		HasFreshnessRisks: strings.TrimSpace(ac.FreshnessRisks) != "",
 		HasContradictions: strings.TrimSpace(ac.Contradictions) != "",
+		Contradictions:    append([]session.ContradictionEvidence(nil), contradictions...),
 	}
 
 	// Canonical evidence: any single evidence row with the canonical
@@ -334,28 +338,54 @@ func detectFreshnessRisks(evidence []Evidence) string {
 	return strings.Join(risks, "\n")
 }
 
-// detectContradictions finds evidence pairs that might conflict.
-// v1.0.5: simple heuristic — flags entries from the same tier with
-// very different scores (one highly relevant, one barely relevant).
-// v1.1.0+: LLM-based semantic contradiction detection.
-func detectContradictions(evidence []Evidence) string {
+// detectStructuredContradictions finds contradiction signals that the verifier
+// can reason about later. It prefers explicit pair conflicts (same topic,
+// incompatible discriminator values) and falls back to the older score-spread
+// heuristic only when there is no stronger semantic signal for that tier.
+func detectStructuredContradictions(evidence []Evidence) []session.ContradictionEvidence {
 	if len(evidence) < 2 {
-		return ""
+		return nil
 	}
 
-	// Group by tier.
+	var contradictions []session.ContradictionEvidence
+	seen := make(map[string]struct{})
+
+	for i := 0; i < len(evidence); i++ {
+		for j := i + 1; j < len(evidence); j++ {
+			shared := contradictionSharedKeywords(evidence[i].Content, evidence[j].Content)
+			if len(shared) < 2 {
+				continue
+			}
+			if !contradictionHasConflictingDiscriminator(evidence[i].Content, evidence[j].Content) {
+				continue
+			}
+			topic := strings.Join(shared[:min(3, len(shared))], ", ")
+			key := "value_conflict|" + topic
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			contradictions = append(contradictions, session.ContradictionEvidence{
+				Kind:           "value_conflict",
+				Topic:          topic,
+				Summary:        fmt.Sprintf("%s evidence disagrees across retrieved items", topic),
+				SharedKeywords: append([]string(nil), shared...),
+				EvidenceItems: []string{
+					truncateForArtifact(evidence[i].Content, 160),
+					truncateForArtifact(evidence[j].Content, 160),
+				},
+			})
+		}
+	}
+
 	byTier := make(map[MemoryTier][]Evidence)
 	for _, e := range evidence {
 		byTier[e.SourceTier] = append(byTier[e.SourceTier], e)
 	}
-
-	var contradictions []string
 	for tier, entries := range byTier {
-		if len(entries) < 2 {
+		if len(entries) < 3 {
 			continue
 		}
-		// If the score spread within a tier is very high, the entries
-		// might be in tension (one strongly matches, one barely matches).
 		maxScore := entries[0].Score
 		minScore := entries[0].Score
 		for _, e := range entries[1:] {
@@ -367,14 +397,126 @@ func detectContradictions(evidence []Evidence) string {
 			}
 		}
 		spread := maxScore - minScore
-		if spread > 0.5 && len(entries) >= 3 {
-			contradictions = append(contradictions,
-				fmt.Sprintf("- %s tier: high score spread (%.2f) — evidence may be inconsistent", tier, spread))
+		if spread <= 0.5 {
+			continue
 		}
+		key := "score_spread|" + tier.String()
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		items := make([]string, 0, min(3, len(entries)))
+		for _, e := range entries[:min(3, len(entries))] {
+			items = append(items, truncateForArtifact(e.Content, 160))
+		}
+		contradictions = append(contradictions, session.ContradictionEvidence{
+			Kind:          "score_spread",
+			Topic:         tier.String(),
+			Summary:       fmt.Sprintf("%s tier: high score spread (%.2f) — evidence may be inconsistent", tier, spread),
+			EvidenceItems: items,
+		})
 	}
 
+	return contradictions
+}
+
+func renderContradictions(contradictions []session.ContradictionEvidence) string {
 	if len(contradictions) == 0 {
 		return ""
 	}
-	return strings.Join(contradictions, "\n")
+	lines := make([]string, 0, len(contradictions))
+	for _, contradiction := range contradictions {
+		summary := strings.TrimSpace(contradiction.Summary)
+		if summary == "" {
+			continue
+		}
+		lines = append(lines, "- "+summary)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func contradictionSharedKeywords(left, right string) []string {
+	leftSet := contradictionKeywordSet(left)
+	rightSet := contradictionKeywordSet(right)
+	var shared []string
+	for kw := range leftSet {
+		if _, ok := rightSet[kw]; ok {
+			shared = append(shared, kw)
+		}
+	}
+	sort.Strings(shared)
+	return shared
+}
+
+func contradictionKeywordSet(text string) map[string]struct{} {
+	stop := map[string]struct{}{
+		"the": {}, "and": {}, "for": {}, "with": {}, "that": {}, "this": {},
+		"from": {}, "into": {}, "what": {}, "when": {}, "where": {}, "which": {},
+		"why": {}, "how": {}, "version": {}, "specified": {}, "current": {},
+		"policy": {}, "source": {}, "evidence": {},
+	}
+	out := make(map[string]struct{})
+	for _, token := range strings.Fields(strings.ToLower(text)) {
+		token = strings.Trim(token, ".,:;!?()[]{}\"'")
+		if len(token) < 4 {
+			continue
+		}
+		if _, skip := stop[token]; skip {
+			continue
+		}
+		out[token] = struct{}{}
+	}
+	return out
+}
+
+func contradictionHasConflictingDiscriminator(left, right string) bool {
+	leftTokens := contradictionDiscriminatorTokens(left)
+	rightTokens := contradictionDiscriminatorTokens(right)
+	if len(leftTokens) == 0 || len(rightTokens) == 0 {
+		return false
+	}
+	if strings.Join(leftTokens, "|") == strings.Join(rightTokens, "|") {
+		return false
+	}
+	return true
+}
+
+func contradictionDiscriminatorTokens(text string) []string {
+	var out []string
+	for _, token := range strings.Fields(strings.ToLower(text)) {
+		token = strings.Trim(token, ".,:;!?()[]{}\"'")
+		if token == "" {
+			continue
+		}
+		if contradictionLooksNumeric(token) || contradictionLooksVersion(token) {
+			out = append(out, token)
+		}
+	}
+	return out
+}
+
+func contradictionLooksNumeric(token string) bool {
+	if token == "" {
+		return false
+	}
+	for _, r := range token {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func contradictionLooksVersion(token string) bool {
+	if strings.HasPrefix(token, "v") && len(token) > 1 && contradictionLooksNumeric(token[1:]) {
+		return true
+	}
+	return strings.Contains(token, "version")
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

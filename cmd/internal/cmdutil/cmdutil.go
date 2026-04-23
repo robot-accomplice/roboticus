@@ -28,7 +28,7 @@ func APIBaseURL() string {
 	if port == 0 {
 		port = core.DefaultServerPort
 	}
-	return fmt.Sprintf("http://127.0.0.1:%d", port)
+	return fmt.Sprintf("http://localhost:%d", port)
 }
 
 // APIGet performs a GET request to the local API.

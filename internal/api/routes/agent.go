@@ -49,6 +49,7 @@ func AgentMessage(p pipeline.Runner, agentName string, bus ...EventPublisher) ht
 			ChatID:        req.GroupID,
 			ModelOverride: req.Model,
 			NoCache:       req.NoCache,
+			NoEscalate:    req.NoEscalate,
 		}
 
 		outcome, err := pipeline.RunPipeline(r.Context(), p, pipeline.PresetAPI(), input)
@@ -104,11 +105,13 @@ func AgentMessageStream(p pipeline.Runner, llmSvc *llm.Service, agentName string
 		}
 
 		input := pipeline.Input{
-			Content:   req.Content,
-			SessionID: req.SessionID,
-			AgentID:   req.AgentID,
-			AgentName: agentName,
-			Platform:  "api",
+			Content:    req.Content,
+			SessionID:  req.SessionID,
+			AgentID:    req.AgentID,
+			AgentName:  agentName,
+			Platform:   "api",
+			NoCache:    req.NoCache,
+			NoEscalate: req.NoEscalate,
 		}
 
 		// Run pipeline: validates input, resolves session, runs injection defense,

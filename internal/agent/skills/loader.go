@@ -97,6 +97,31 @@ func (sl *Loader) LoadFromDir(dir string) []*Skill {
 	return skills
 }
 
+// LoadFromPaths loads a list of concrete skill files, skipping invalid or
+// missing entries without aborting the entire batch.
+func (sl *Loader) LoadFromPaths(paths []string) []*Skill {
+	var skills []*Skill
+	seen := make(map[string]struct{}, len(paths))
+	for _, raw := range paths {
+		path := strings.TrimSpace(raw)
+		if path == "" {
+			continue
+		}
+		if _, dup := seen[path]; dup {
+			continue
+		}
+		seen[path] = struct{}{}
+
+		skill, err := sl.loadFile(path)
+		if err != nil {
+			log.Debug().Err(err).Str("path", path).Msg("skipping skill path")
+			continue
+		}
+		skills = append(skills, skill)
+	}
+	return skills
+}
+
 // loadFile loads a single skill file.
 func (sl *Loader) loadFile(path string) (*Skill, error) {
 	ext := strings.ToLower(filepath.Ext(path))

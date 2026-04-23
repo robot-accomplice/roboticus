@@ -262,9 +262,21 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 	}
 
 	llmSvc, err := llm.NewService(llm.ServiceConfig{
-		Providers:     providers,
-		Primary:       cfg.Models.Primary,
-		Fallbacks:     cfg.Models.Fallback,
+		Providers: providers,
+		Primary:   cfg.Models.Primary,
+		Fallbacks: cfg.Models.Fallback,
+		Policies:  llm.EffectiveModelPolicies(context.Background(), store, cfg.Models.Policy),
+		RoleEligibility: func() map[string]llm.RoleEligibility {
+			out := make(map[string]llm.RoleEligibility, len(cfg.Models.RoleEligibility))
+			for model, eligibility := range cfg.Models.RoleEligibility {
+				out[model] = llm.RoleEligibility{
+					Orchestrator: eligibility.Orchestrator,
+					Subagent:     eligibility.Subagent,
+					Reason:       eligibility.Reason,
+				}
+			}
+			return out
+		}(),
 		BGWorker:      bgWorker,
 		ErrBus:        errBus,
 		ToolBlocklist: cfg.Models.ToolBlocklist,
@@ -297,10 +309,14 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 	// Filesystem tools.
 	tools.Register(&agenttools.ReadFileTool{})
 	tools.Register(&agenttools.WriteFileTool{})
+	if cfg.Obsidian.Enabled && strings.TrimSpace(cfg.Obsidian.VaultPath) != "" {
+		tools.Register(&agenttools.ObsidianWriteTool{VaultPath: cfg.Obsidian.VaultPath})
+	}
 	tools.Register(&agenttools.EditFileTool{})
 	tools.Register(&agenttools.ListDirectoryTool{})
 	tools.Register(&agenttools.SearchFilesTool{})
 	tools.Register(&agenttools.GlobFilesTool{})
+	tools.Register(&agenttools.ProjectInventoryTool{})
 
 	// Scheduling.
 	tools.Register(&agenttools.CronTool{})
@@ -322,6 +338,14 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 	// Channel and subagent introspection.
 	tools.Register(&agenttools.ChannelHealthTool{})
 	tools.Register(&agenttools.SubagentStatusTool{})
+	tools.Register(&agenttools.SubagentRosterTool{})
+	tools.Register(&agenttools.AvailableSkillsTool{})
+	tools.Register(agenttools.NewComposeSkillTool(cfg.Skills.Directory))
+	tools.Register(&agenttools.ComposeSubagentTool{})
+	tools.Register(&agenttools.OrchestrateSubagentsTool{})
+	tools.Register(&agenttools.TaskStatusTool{})
+	tools.Register(&agenttools.ListOpenTasksTool{})
+	tools.Register(&agenttools.RetryTaskTool{})
 
 	// Data tools (hippocampus).
 	tools.Register(&agenttools.CreateTableTool{})
@@ -353,7 +377,19 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 			Relationship: cfg.Memory.RelationshipBudget / 100.0,
 		},
 	}, store)
-	retriever := memory.NewRetriever(memory.DefaultRetrievalConfig(), memory.TierBudget{
+	retrievalCfg := memory.DefaultRetrievalConfig()
+	retrievalCfg.HybridWeight = cfg.Memory.HybridWeightOverride
+	retrievalCfg.EpisodicHalfLife = cfg.Memory.DecayHalfLifeDays
+	retrievalCfg.Reranker.MinScore = cfg.Memory.RerankerMinScore
+	retrievalCfg.Reranker.AuthorityBoost = cfg.Memory.RerankerAuthorityBoost
+	retrievalCfg.Reranker.RecencyPenalty = cfg.Memory.RerankerRecencyPenalty
+	retrievalCfg.Reranker.CollapseSpread = cfg.Memory.RerankerCollapseSpread
+	retrievalCfg.LLMReranker.Enabled = cfg.Memory.LLMRerankerEnabled
+	retrievalCfg.LLMReranker.MinCandidates = cfg.Memory.LLMRerankerMinCandidates
+	retrievalCfg.LLMReranker.MaxCandidates = cfg.Memory.LLMRerankerMaxCandidates
+	retrievalCfg.LLMReranker.KeepTop = cfg.Memory.LLMRerankerKeepTop
+	retrievalCfg.LLMReranker.Model = strings.TrimSpace(cfg.Memory.LLMRerankerModel)
+	retriever := memory.NewRetriever(retrievalCfg, memory.TierBudget{
 		Working:      cfg.Memory.WorkingBudget / 100.0,
 		Episodic:     cfg.Memory.EpisodicBudget / 100.0,
 		Semantic:     cfg.Memory.SemanticBudget / 100.0,
@@ -371,6 +407,7 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 		loadedSkills = skillLoader.LoadFromDir(cfg.Skills.Directory)
 		log.Info().Int("count", len(loadedSkills)).Str("dir", cfg.Skills.Directory).Msg("loaded skills")
 	}
+	loadedSkills = mergeLoadedSkills(loadedSkills, skillLoader.LoadFromPaths(pipeline.EnabledSkillSourcePathsFromDB(store)))
 	skillMatcher := skills.NewMatcher(loadedSkills)
 
 	// Load personality files from workspace.
@@ -421,7 +458,9 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 	}
 	if len(loadedSkills) > 0 {
 		bootStep(7, steps, "Skills loaded")
-		bootDetail("dir", cfg.Skills.Directory)
+		if cfg.Skills.Directory != "" {
+			bootDetail("dir", cfg.Skills.Directory)
+		}
 		bootDetail("count", fmt.Sprintf("%d", len(loadedSkills)))
 	} else if cfg.Skills.Directory != "" {
 		bootStepWarn(7, steps, fmt.Sprintf("Skills directory not found: %s", cfg.Skills.Directory))
@@ -558,6 +597,8 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 	// Wire embedding client into the memory manager so that newly stored
 	// episodic and semantic memories are embedded at ingestion time.
 	memMgr.SetEmbeddingClient(embedClient)
+	retriever.SetEmbeddingClient(embedClient)
+	retriever.SetCompleter(llmSvc)
 	// Wire session summary promotion: when a session is archived,
 	// promote its top working memory entries to semantic memory.
 	mgr := memMgr // capture for closure
@@ -598,6 +639,7 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 			budgetCfg:       &cfg.ContextBudget,
 			cacheCfg:        &cfg.Cache,
 			maxTurnDuration: time.Duration(cfg.Agent.AutonomyMaxTurnDurationSecs) * time.Second,
+			toolRecorder:    &toolCallRecorderAdapter{store: store},
 		},
 		Ingestor: &ingestorAdapter{m: memMgr},
 		Refiner:  &nicknameAdapter{llm: llmSvc, store: store},
@@ -774,7 +816,7 @@ func buildPluginRegistry(cfg *core.Config) (*plugin.Registry, error) {
 func (d *Daemon) Start(s service.Service) error {
 	// Final boot step: HTTP server starting (Rust parity: serve.rs step 12).
 	bootStep(12, 12, "HTTP server starting")
-	bindAddr := fmt.Sprintf("127.0.0.1:%d", d.cfg.Server.Port)
+	bindAddr := fmt.Sprintf("localhost:%d", d.cfg.Server.Port)
 	bootDetail("bind", bindAddr)
 	bootDetail("dashboard", fmt.Sprintf("http://localhost:%d", d.cfg.Server.Port))
 
@@ -1047,3 +1089,38 @@ func Status(cfg *core.Config) (string, error) {
 
 // Router returns the channel router for adapter registration.
 func (d *Daemon) Router() *channel.Router { return d.router }
+
+func mergeLoadedSkills(base, extra []*skills.Skill) []*skills.Skill {
+	if len(extra) == 0 {
+		return base
+	}
+	merged := append([]*skills.Skill{}, base...)
+	seen := make(map[string]struct{}, len(merged))
+	for _, skill := range merged {
+		if skill == nil {
+			continue
+		}
+		key := strings.TrimSpace(skill.SourcePath)
+		if key == "" {
+			key = strings.ToLower(strings.TrimSpace(skill.Name()))
+		}
+		if key != "" {
+			seen[key] = struct{}{}
+		}
+	}
+	for _, skill := range extra {
+		if skill == nil {
+			continue
+		}
+		key := strings.TrimSpace(skill.SourcePath)
+		if key == "" {
+			key = strings.ToLower(strings.TrimSpace(skill.Name()))
+		}
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
+		merged = append(merged, skill)
+	}
+	return merged
+}

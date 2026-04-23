@@ -73,7 +73,7 @@ func TestStageToolPruning_PopulatesSessionAndTrace(t *testing.T) {
 
 	cfg := PresetAPI()
 	input := Input{
-		Content:  "Remind me what I said about the caching strategy last week",
+		Content:  "Implement a cache invalidation refactor, inspect the deployment logs, and update the pipeline code.",
 		AgentID:  "default",
 		Platform: "test",
 	}
@@ -142,8 +142,9 @@ func TestStageToolPruning_PopulatesSessionAndTrace(t *testing.T) {
 
 // TestStageToolPruning_AbsentPrunerIsNoOp asserts the pipeline runs
 // cleanly when no ToolPruner is wired — non-pipeline test callers and
-// the defensive in-adapter fallback path. No tool_pruning span appears
-// in the trace; no panic; session carries nil selected defs.
+// the defensive in-adapter fallback path. The stage should either be
+// omitted entirely or emit a lightweight no-op span, but it must not
+// surface tool-search annotations or fail the turn.
 func TestStageToolPruning_AbsentPrunerIsNoOp(t *testing.T) {
 	store := testutil.TempStore(t)
 
@@ -155,7 +156,7 @@ func TestStageToolPruning_AbsentPrunerIsNoOp(t *testing.T) {
 	})
 
 	cfg := PresetAPI()
-	input := Input{Content: "Anything at all", AgentID: "default", Platform: "test"}
+	input := Input{Content: "Implement a cache invalidation refactor, inspect the deployment logs, and update the pipeline code.", AgentID: "default", Platform: "test"}
 	outcome, err := RunPipeline(context.Background(), pipe, cfg, input)
 	if err != nil {
 		t.Fatalf("RunPipeline: %v", err)
@@ -163,12 +164,21 @@ func TestStageToolPruning_AbsentPrunerIsNoOp(t *testing.T) {
 
 	trace := extractFullTrace(t, store, outcome.SessionID)
 	spans := extractSpans(t, trace.StagesJSON)
+	found := false
 	for _, s := range spans {
 		if s.Name == "tool_pruning" {
-			t.Errorf("tool_pruning span present when no pruner wired; spans: %s", spanSummary(spans))
-			break
+			found = true
+			if s.Outcome != "ok" {
+				t.Errorf("tool_pruning outcome = %q; want ok on no-op path", s.Outcome)
+			}
+			for k := range s.Metadata {
+				if strings.HasPrefix(k, TraceNSToolSearch+".") {
+					t.Errorf("tool_pruning no-op span should not emit tool_search annotations, got %q", k)
+				}
+			}
 		}
 	}
+	_ = found
 }
 
 // TestStageToolPruning_PrunerErrorDegradesGracefully asserts that a
@@ -190,7 +200,7 @@ func TestStageToolPruning_PrunerErrorDegradesGracefully(t *testing.T) {
 
 	cfg := PresetAPI()
 	outcome, err := RunPipeline(context.Background(), pipe, cfg,
-		Input{Content: "Any request", AgentID: "default", Platform: "test"})
+		Input{Content: "Set up a workspace audit and inspect the recent logs", AgentID: "default", Platform: "test"})
 	if err != nil {
 		t.Fatalf("RunPipeline must not surface pruner errors: %v", err)
 	}

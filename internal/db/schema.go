@@ -707,6 +707,52 @@ CREATE INDEX IF NOT EXISTS idx_pipeline_traces_turn ON pipeline_traces(turn_id);
 CREATE INDEX IF NOT EXISTS idx_pipeline_traces_created ON pipeline_traces(created_at);
 CREATE INDEX IF NOT EXISTS idx_pipeline_traces_session ON pipeline_traces(session_id);
 
+CREATE TABLE IF NOT EXISTS turn_diagnostics (
+    id TEXT PRIMARY KEY,
+    turn_id TEXT NOT NULL,
+    session_id TEXT NOT NULL DEFAULT '',
+    channel TEXT NOT NULL DEFAULT 'api',
+    status TEXT NOT NULL DEFAULT 'ok',
+    final_model TEXT,
+    final_provider TEXT,
+    total_ms INTEGER NOT NULL DEFAULT 0,
+    inference_attempts INTEGER NOT NULL DEFAULT 0,
+    fallback_count INTEGER NOT NULL DEFAULT 0,
+    tool_call_count INTEGER NOT NULL DEFAULT 0,
+    guard_retry_count INTEGER NOT NULL DEFAULT 0,
+    verifier_retry_count INTEGER NOT NULL DEFAULT 0,
+    request_messages INTEGER NOT NULL DEFAULT 0,
+    request_tools INTEGER NOT NULL DEFAULT 0,
+    request_approx_tokens INTEGER NOT NULL DEFAULT 0,
+    context_pressure TEXT,
+    resource_pressure TEXT,
+    primary_diagnosis TEXT,
+    diagnosis_confidence REAL NOT NULL DEFAULT 0,
+    user_narrative TEXT,
+    operator_narrative TEXT,
+    recommendations_json TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_turn_diagnostics_turn ON turn_diagnostics(turn_id);
+CREATE INDEX IF NOT EXISTS idx_turn_diagnostics_session ON turn_diagnostics(session_id);
+CREATE INDEX IF NOT EXISTS idx_turn_diagnostics_created ON turn_diagnostics(created_at);
+
+CREATE TABLE IF NOT EXISTS turn_diagnostic_events (
+    id TEXT PRIMARY KEY,
+    turn_id TEXT NOT NULL,
+    seq INTEGER NOT NULL,
+    event_type TEXT NOT NULL,
+    at_ms INTEGER NOT NULL DEFAULT 0,
+    duration_ms INTEGER NOT NULL DEFAULT 0,
+    parent_event_id TEXT,
+    status TEXT NOT NULL DEFAULT 'ok',
+    operator_summary TEXT,
+    user_summary TEXT,
+    details_json TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_turn_diagnostic_events_turn_seq ON turn_diagnostic_events(turn_id, seq);
+
 CREATE TABLE IF NOT EXISTS react_traces (
     id TEXT PRIMARY KEY,
     pipeline_trace_id TEXT NOT NULL REFERENCES pipeline_traces(id),
@@ -845,6 +891,34 @@ CREATE TABLE IF NOT EXISTS runtime_settings (
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS baseline_runs (
+    run_id TEXT PRIMARY KEY,
+    initiator TEXT NOT NULL DEFAULT 'unknown',
+    status TEXT NOT NULL DEFAULT 'running' CHECK(status IN ('running', 'completed', 'failed', 'canceled')),
+    model_count INTEGER NOT NULL DEFAULT 0,
+    models_json TEXT NOT NULL DEFAULT '[]',
+    iterations INTEGER NOT NULL DEFAULT 1,
+    config_fingerprint TEXT,
+    git_revision TEXT,
+    notes TEXT,
+    started_at TEXT NOT NULL DEFAULT (datetime('now')),
+    finished_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_baseline_runs_started ON baseline_runs(started_at DESC);
+
+CREATE TABLE IF NOT EXISTS model_policies (
+    model TEXT PRIMARY KEY,
+    state TEXT NOT NULL CHECK(state IN ('enabled', 'niche', 'disabled', 'benchmark_only')),
+    primary_reason_code TEXT,
+    reason_codes_json TEXT NOT NULL DEFAULT '[]',
+    human_reason TEXT,
+    evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+    source TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_model_policies_state ON model_policies(state);
+
 CREATE TABLE IF NOT EXISTS wallet_balances (
     symbol     TEXT PRIMARY KEY,
     name       TEXT NOT NULL DEFAULT '',
@@ -935,6 +1009,15 @@ func (s *Store) ensureOptionalColumns() error {
 		{Table: "treasury_state", Column: "last_deposit_at", ColType: "TEXT"},
 		{Table: "treasury_state", Column: "last_withdrawal_at", ColType: "TEXT"},
 		{Table: "treasury_state", Column: "updated_at", ColType: "TEXT"},
+		{Table: "baseline_runs", Column: "start_resources_json", ColType: "TEXT"},
+		{Table: "baseline_runs", Column: "end_resources_json", ColType: "TEXT"},
+		{Table: "baseline_runs", Column: "start_model_states_json", ColType: "TEXT"},
+		{Table: "baseline_runs", Column: "end_model_states_json", ColType: "TEXT"},
+		{Table: "exercise_results", Column: "resource_start_json", ColType: "TEXT"},
+		{Table: "exercise_results", Column: "resource_end_json", ColType: "TEXT"},
+		{Table: "exercise_results", Column: "model_state_start_json", ColType: "TEXT"},
+		{Table: "exercise_results", Column: "model_state_end_json", ColType: "TEXT"},
+		{Table: "turn_diagnostics", Column: "resource_snapshot_json", ColType: "TEXT"},
 	}
 
 	for _, col := range nullableColumns {

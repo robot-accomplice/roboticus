@@ -269,7 +269,7 @@ func TestMCPCmd_SubcommandRegistration(t *testing.T) {
 	for _, sub := range cmd.Commands() {
 		subcommands[sub.Name()] = true
 	}
-	for _, name := range []string{"list", "connect", "disconnect"} {
+	for _, name := range []string{"list", "connect", "disconnect", "validate-sse"} {
 		if !subcommands[name] {
 			t.Errorf("mcp command missing subcommand %q", name)
 		}

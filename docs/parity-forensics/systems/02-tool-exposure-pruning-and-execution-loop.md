@@ -3,9 +3,9 @@
 ## Status
 
 - Owner: parity-forensics program
-- Audit status: `validated`
-- Last updated: 2026-04-19
-- Related release: v1.0.6
+- Audit status: `reopened`
+- Last updated: 2026-04-20
+- Related release: v1.0.7
 
 ## Why This System Matters
 
@@ -109,8 +109,8 @@ Parity is not satisfied unless tests prove:
 
 | ID | Priority | Concern | Rust behavior | Go behavior | Classification | Status | Evidence |
 |----|----------|---------|---------------|-------------|----------------|--------|----------|
-| SYS-02-001 | P0 | Live tool surface historically unbounded | Rust prunes before request assembly with top-k + token budget | Go committed path bulk-injected all tool defs until current remediation | Missing Functionality | Active remediation | Rust: `context_builder.rs:242-250`; Go: `internal/daemon/daemon_adapters.go` |
-| SYS-02-002 | P1 | Duplicate pruning implementations | One canonical `tool_search.rs` | Go carried at least two plausible pruning implementations | Degradation | Active remediation | `internal/agent/tool_search.go`, `internal/agent/tools/tool_search.go` |
+| SYS-02-001 | P0 | Live tool surface historically unbounded | Rust prunes before request assembly with top-k + token budget | The live request path now uses the bounded selected tool surface produced by the pipeline pruning stage instead of the full registry | Missing functionality remediated | Closed | Rust: `context_builder.rs:242-250`; Go: `internal/pipeline/pipeline_run_stages.go`, `internal/daemon/daemon_adapters.go` |
+| SYS-02-002 | P1 | Duplicate pruning implementations | One canonical `tool_search.rs` | Go removed the older duplicate paths and now has one authoritative pruning owner feeding the live request surface | Degradation remediated | Closed | `internal/agent/tools/tool_search.go`, `internal/agent/tools/prune.go`, related pruning tests |
 | SYS-02-003 | P1 | Trace contract must match Rust telemetry surface | Rust writes `tool_search.candidates_considered`, `selected`, `pruned`, `token_savings`, `top_scores`, `embedding_status` | Go now emits that telemetry from the pipeline pruning stage that writes the session-owned selected tool defs, and runtime-facing tests prove the trace keys and selected tool surface stay aligned | Missing functionality remediated | Closed | `internal/pipeline/tool_pruning_stage_test.go` |
 | SYS-02-004 | P1 | Loop-scoped reuse of selected tools | Rust request passes the selected tool set forward after pruning | Go now has direct runtime proof that `buildAgentContext(...).BuildRequest(...)` reuses the same selected tool surface across later loop turns instead of recomputing from the registry | Missing functionality remediated | Closed | `internal/daemon/daemon_adapters_test.go::TestBuildAgentContext_ReusesSelectedToolSurfaceAcrossLoopTurns` |
 | SYS-02-005 | P2 | Always-include semantics are broader than a simple Rust-defaults comparison | Rust has both a crate-level `SearchConfig::default()` pin set (`memory_store`, `delegate`) and a richer runtime operational-tool pin set in pipeline pruning | Go intentionally keeps a Go-native analogue that pins memory recall/search and runtime introspection surfaces. v1.0.6 accepts that as a synthesis target rather than forcing Rust's narrower fixture defaults or blindly recreating dead Rust names | Accepted synthesis | Closed | `internal/agent/tools/tool_search.go`, `internal/agent/tools/prune.go` |
@@ -179,7 +179,7 @@ Acceptance bar for closure:
 
 ## Final Disposition
 
-System 02 is closed for v1.0.6.
+System 02 is validated for v1.0.7.
 
 - The authoritative pruning owner is the pipeline tool-pruning stage plus the
   `internal/agent/tools/tool_search.go` ranking implementation.
@@ -187,8 +187,108 @@ System 02 is closed for v1.0.6.
   than recomputed from the registry on later turns.
 - The prompt roster, structured request tool defs, and trace telemetry now
   describe the same selected surface.
-- Missing Rust operational pinned tools are not being backfilled in this
-  release. They are explicitly deferred where no Go-native analogue exists.
+- The v1.0.7 operational-family split is now closed: roster/inventory,
+  skill composition, subagent composition, delegated task lifecycle, and
+  bounded multi-subagent orchestration all exist as explicit runtime tools
+  owned by one authoritative control plane each.
+
+## v1.0.7 Reopening
+
+System 02 was reopened for v1.0.7 because the old single deferral around
+missing Rust operational tool families was too coarse. That split has now been
+closed through the following roadmap items:
+
+- `PAR-002` — subagent roster and skill inventory parity
+- `PAR-003` — subagent composition parity
+- `PAR-004` — skill composition parity
+- `PAR-005` — delegated task lifecycle parity
+- `PAR-006` — multi-subagent orchestration parity
+
+v1.0.7 execution stance for `PAR-002`:
+
+- `get_subagent_status` and the prompt-level capability snapshot are not enough
+  on their own
+- roster and skill inventory need explicit live-path tools owned by the runtime
+  tool registry
+- those tools should read from the same authoritative store/runtime surfaces the
+  admin/UI views use, not from connector-local summaries
+- once they exist, they belong in the operational pin set rather than being
+  discoverable only through general introspection
+- `PAR-002` is now closed: `list-subagent-roster` and
+  `list-available-skills` are first-class live-path tools owned by the runtime
+  tool registry and backed directly by the authoritative store
+
+v1.0.7 execution stance for `PAR-005`:
+
+- delegated task lifecycle is not allowed to live only inside
+  `get_subagent_status` summaries, workspace-only routes, or orchestration-side
+  in-memory structures
+- the runtime tool surface needs explicit first-class lifecycle tools:
+  `task-status`, `retry-task`, and `list-open-tasks`
+- those tools must read and mutate one authoritative delegated-task repository
+  over `tasks`, `task_events`, and delegation outcomes instead of embedding
+  private SQL in each tool
+- `task-status` and `list-open-tasks` belong in the operational pin set because
+  orchestrators need them while deciding whether to delegate, retry, or report
+  on delegated work
+- `PAR-005` is now closed: `task-status`, `retry-task`, and `list-open-tasks`
+  are first-class live-path tools owned by the runtime registry and backed by
+  one shared delegated-task lifecycle repository
+
+v1.0.7 execution stance for `PAR-003`:
+
+- subagent composition is not allowed to remain an admin-only write path or a
+  prompt-side suggestion with no runtime tool contract
+- the live tool surface needs a first-class `compose-subagent` tool backed by
+  one authoritative subagent composition repository over `sub_agents`
+- composition must be orchestrator-only: subagents may not compose more
+  subagents directly
+- the tool should return a structured composition artifact so the orchestrator
+  can reason about what was created or updated before presenting anything to
+  the operator
+- `PAR-003` is now closed: `compose-subagent` exists on the live runtime path,
+  uses one shared subagent composition repository, and is rejected for
+  subagent callers
+
+v1.0.7 execution stance for `PAR-004`:
+
+- skill composition is not allowed to remain a catalog/install route concern
+  with a private file-writer and no runtime tool contract
+- the live tool surface needs a first-class `compose-skill` tool backed by one
+  authoritative skill composition repository that owns both:
+  - the durable skill artifact on disk
+  - the authoritative `skills` table row exposed to runtime/UI inventory
+- the admin/catalog install path must reuse that same repository instead of
+  keeping its own write path
+- skill composition must remain orchestrator-owned: subagents may inspect
+  skills, but they may not create or update them directly
+- the first closure target is instruction/structured skill composition through
+  the live runtime, not a separate ad hoc admin helper
+- `PAR-004` is now closed: `compose-skill` exists on the live runtime path,
+  writes both the durable skill artifact and authoritative `skills` row
+  through one shared repository, the catalog install path reuses that same
+  repository, and subagent callers are rejected
+
+v1.0.7 execution stance for `PAR-006`:
+
+- multi-subagent orchestration is not allowed to remain a prompt-side hint that
+  asks the loop to "execute subtasks" without an authoritative runtime
+  workflow artifact
+- the live tool surface needs a first-class `orchestrate-subagents` tool
+  backed by one orchestration control plane that records workflow state in the
+  same delegated-task lifecycle the runtime already exposes:
+  `tasks`, `task_events`, and `agent_delegation_outcomes`
+- the pipeline delegation stage must consume that same orchestration control
+  plane instead of maintaining a private prompt-only delegation contract
+- orchestration must stay bounded and orchestrator-owned:
+  subagents may not recursively orchestrate additional subagents
+- subagent work products remain evidence for the orchestrator; results are
+  never reported directly to the operator from the orchestration layer
+- `PAR-006` is now closed: `orchestrate-subagents` exists on the live runtime
+  path, writes workflow evidence into `tasks`, `task_events`, and
+  `agent_delegation_outcomes`, and the pipeline delegation stage now uses that
+  same control plane instead of maintaining a private prompt-only orchestration
+  contract
 
 ## Progress Log
 
@@ -206,6 +306,16 @@ System 02 is closed for v1.0.6.
   - pipeline-owned `stageToolPruning` (new) runs between cache-check and
     prepare-inference; calls `ToolPruner.PruneTools`; annotates trace
     under `tool_search.*` per Rust parity; writes selected defs onto
+- 2026-04-20: Closed `PAR-002` by restoring explicit live-path
+   `list-subagent-roster` and `list-available-skills` tools, registering them
+   in the daemon-owned tool surface, and pinning them in the operational
+   always-include set so roster/inventory inspection is no longer admin-only or
+   prompt-snapshot-only.
+- 2026-04-20: Closed `PAR-004` by restoring first-class live-path
+  `compose-skill`, moving skill writes onto one shared repository that owns
+  both the durable skill artifact and authoritative `skills` row, and making
+  the catalog install route reuse that same repository instead of a private
+  file-write helper.
     `session.Session.selectedToolDefs`
   - `internal/pipeline/trace_tool_search.go` + `AnnotateToolSearchTrace`
     emit the six Rust-parity keys plus Go's richer embedding-status

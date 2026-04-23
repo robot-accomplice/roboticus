@@ -2,7 +2,9 @@ package tools
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -33,19 +35,20 @@ func ResolvePath(path, workspace string, snapshot *ToolSandboxSnapshot) (string,
 	}
 
 	if filepath.IsAbs(path) {
-		cleanPath := filepath.Clean(path)
+		cleanPath := canonicalSandboxPath(path)
 		absWorkspace, err := filepath.Abs(workspace)
 		if err != nil {
 			return "", fmt.Errorf("invalid workspace: %w", err)
 		}
-		if (cleanPath == absWorkspace || strings.HasPrefix(cleanPath, absWorkspace+string(filepath.Separator))) &&
+		absWorkspace = canonicalSandboxPath(absWorkspace)
+		if pathWithinSandboxRoot(cleanPath, absWorkspace) &&
 			(snapshot == nil || len(snapshot.AllowedPaths) == 0) {
 			return cleanPath, nil
 		}
 		if snapshot != nil {
 			for _, allowed := range snapshot.AllowedPaths {
-				cleanAllowed := filepath.Clean(allowed)
-				if cleanPath == cleanAllowed || strings.HasPrefix(cleanPath, cleanAllowed+string(filepath.Separator)) {
+				cleanAllowed := canonicalSandboxPath(allowed)
+				if pathWithinSandboxRoot(cleanPath, cleanAllowed) {
 					return cleanPath, nil
 				}
 			}
@@ -91,7 +94,8 @@ func ValidatePath(path, workspace string, snapshot *ToolSandboxSnapshot) error {
 			if err != nil {
 				continue
 			}
-			if strings.HasPrefix(cleaned, absAP+string(filepath.Separator)) || cleaned == absAP {
+			absAP = canonicalSandboxPath(absAP)
+			if pathWithinSandboxRoot(cleaned, absAP) {
 				allowed = true
 				break
 			}
@@ -130,4 +134,65 @@ func NormalizeWorkspaceRelPath(path, workspace string) (string, error) {
 	}
 
 	return abs, nil
+}
+
+func canonicalSandboxPath(path string) string {
+	cleaned := filepath.Clean(path)
+	if abs, err := filepath.Abs(cleaned); err == nil {
+		cleaned = abs
+	}
+	cleaned = canonicalizeSandboxAncestor(cleaned)
+	return filepath.Clean(cleaned)
+}
+
+func canonicalizeSandboxAncestor(path string) string {
+	cleaned := filepath.Clean(path)
+	current := cleaned
+	var suffix []string
+	for {
+		if resolved, err := filepath.EvalSymlinks(current); err == nil {
+			canonical := filepath.Clean(resolved)
+			for i := len(suffix) - 1; i >= 0; i-- {
+				canonical = filepath.Join(canonical, suffix[i])
+			}
+			return canonical
+		} else if !os.IsNotExist(err) {
+			return cleaned
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return cleaned
+		}
+		suffix = append(suffix, filepath.Base(current))
+		current = parent
+	}
+}
+
+func pathWithinSandboxRoot(path, root string) bool {
+	path = canonicalSandboxPath(path)
+	root = canonicalSandboxPath(root)
+	if sameSandboxPath(path, root) {
+		return true
+	}
+	sepRoot := root + string(filepath.Separator)
+	if sandboxPathCaseInsensitive() {
+		return strings.HasPrefix(strings.ToLower(path), strings.ToLower(sepRoot))
+	}
+	return strings.HasPrefix(path, sepRoot)
+}
+
+func sameSandboxPath(a, b string) bool {
+	if sandboxPathCaseInsensitive() {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
+}
+
+func sandboxPathCaseInsensitive() bool {
+	switch runtime.GOOS {
+	case "darwin", "windows":
+		return true
+	default:
+		return false
+	}
 }

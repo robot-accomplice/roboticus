@@ -103,6 +103,21 @@ func TestQualityTracker_MultipleModels(t *testing.T) {
 	}
 }
 
+func TestQualityTracker_CanonicalizesProviderQualifiedModels(t *testing.T) {
+	qt := NewQualityTracker(10)
+	qt.Record("openrouter/openai/gpt-4o-mini", 0.7)
+	qt.Record("openai/gpt-4o-mini", 0.9)
+
+	got := qt.EstimatedQuality("openai/gpt-4o-mini")
+	want := 0.8
+	if diff := got - want; diff > 0.001 || diff < -0.001 {
+		t.Fatalf("EstimatedQuality = %f, want %f", got, want)
+	}
+	if count := qt.ObservationCount("openrouter/openai/gpt-4o-mini"); count != 2 {
+		t.Fatalf("ObservationCount = %d, want 2", count)
+	}
+}
+
 func TestQualityTracker_ConcurrentAccess(t *testing.T) {
 	qt := NewQualityTracker(100)
 
@@ -217,11 +232,12 @@ func TestQualityFromResponse(t *testing.T) {
 		want float64
 	}{
 		{"nil response", nil, 0},
-		{"zero tokens", &Response{Usage: Usage{OutputTokens: 0}, Content: ""}, 0},
-		{"50 tokens", &Response{Usage: Usage{OutputTokens: 50}}, 0.5},
-		{"100 tokens", &Response{Usage: Usage{OutputTokens: 100}}, 1.0},
-		{"200 tokens caps at 1", &Response{Usage: Usage{OutputTokens: 200}}, 1.0},
-		{"fallback to content length", &Response{Content: "a]b]c]d]"}, 0.02}, // 8 chars / 4 = 2 tokens, 2/100
+		{"zero tokens", &Response{Usage: Usage{OutputTokens: 0}, Content: ""}, 0.15},
+		{"50 tokens", &Response{Usage: Usage{OutputTokens: 50}}, 0.60},
+		{"100 tokens", &Response{Usage: Usage{OutputTokens: 100}}, 0.60},
+		{"200 tokens caps at 1", &Response{Usage: Usage{OutputTokens: 200}}, 0.60},
+		{"fallback to content length", &Response{Content: "a]b]c]d]"}, 0.35},
+		{"truncated response is penalized", &Response{Usage: Usage{OutputTokens: 60}, Content: "truncated", FinishReason: "length"}, 0.40},
 	}
 
 	for _, tt := range tests {

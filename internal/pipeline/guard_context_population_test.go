@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	agenttools "roboticus/internal/agent/tools"
 	"roboticus/internal/session"
 	"roboticus/testutil"
 )
@@ -52,6 +53,57 @@ func TestBuildGuardContext_PopulatesPipelineHintsAndStoreBackedFields(t *testing
 		!ctx.DelegationProvenance.SubagentTaskCompleted ||
 		!ctx.DelegationProvenance.SubagentResultAttached {
 		t.Fatalf("DelegationProvenance = %+v, want all true", ctx.DelegationProvenance)
+	}
+}
+
+func TestBuildGuardContext_UsesPriorTurnAssistantHistoryOnly(t *testing.T) {
+	store := testutil.TempStore(t)
+	pipe := New(PipelineDeps{
+		Store:    store,
+		BGWorker: testutil.BGWorker(t, 2),
+	})
+
+	sess := session.New("sess-2", "agent-1", "TestBot")
+	sess.AddUserMessage("old request")
+	sess.AddAssistantMessage("prior turn answer", nil)
+	sess.AddUserMessage("create the note now")
+	sess.AddToolResult("call-1", "obsidian_write", `{"path":"codex-live-test.md","status":"ok"}`, false)
+	sess.AddAssistantMessage("The note was created successfully.", nil)
+
+	ctx := pipe.buildGuardContext(sess)
+	if ctx == nil {
+		t.Fatal("buildGuardContext returned nil")
+	}
+	if ctx.UserPrompt != "create the note now" {
+		t.Fatalf("UserPrompt = %q, want latest user prompt", ctx.UserPrompt)
+	}
+	if ctx.PreviousAssistant != "prior turn answer" {
+		t.Fatalf("PreviousAssistant = %q, want prior-turn assistant only", ctx.PreviousAssistant)
+	}
+	if len(ctx.PriorAssistantMessages) != 1 || ctx.PriorAssistantMessages[0] != "prior turn answer" {
+		t.Fatalf("PriorAssistantMessages = %v, want only prior-turn assistant history", ctx.PriorAssistantMessages)
+	}
+	if len(ctx.ToolResults) != 1 || ctx.ToolResults[0].ToolName != "obsidian_write" {
+		t.Fatalf("ToolResults = %+v, want current-turn tool results preserved", ctx.ToolResults)
+	}
+}
+
+func TestBuildGuardContext_PreservesArtifactProofMetadata(t *testing.T) {
+	pipe := New(PipelineDeps{BGWorker: testutil.BGWorker(t, 1)})
+	sess := session.New("sess-3", "agent-1", "TestBot")
+	sess.AddUserMessage("write the file")
+	proof := agenttools.NewArtifactProof("workspace_file", "tmp/out.txt", "hello", false)
+	sess.AddToolResultWithMetadata("call-1", "write_file", proof.Output(), proof.Metadata(), false)
+
+	ctx := pipe.buildGuardContext(sess)
+	if len(ctx.ToolResults) != 1 {
+		t.Fatalf("tool results = %d, want 1", len(ctx.ToolResults))
+	}
+	if ctx.ToolResults[0].ArtifactProof == nil {
+		t.Fatal("expected artifact proof on tool result entry")
+	}
+	if ctx.ToolResults[0].ArtifactProof.Path != "tmp/out.txt" {
+		t.Fatalf("artifact path = %q", ctx.ToolResults[0].ArtifactProof.Path)
 	}
 }
 

@@ -36,7 +36,7 @@ jobs:
       TAG_NAME: ${{ github.ref_name }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Validate release notes and changelog
         run: |
@@ -55,7 +55,7 @@ jobs:
           }
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: ${{ env.GO_VERSION_FILE }}
 
@@ -105,10 +105,10 @@ jobs:
       TAG_NAME: ${{ github.ref_name }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: ${{ env.GO_VERSION_FILE }}
 
@@ -127,7 +127,7 @@ jobs:
           # Build the binary.
           BINARY_NAME="roboticus${SUFFIX}"
           go build -trimpath \
-            -ldflags="-s -w -X roboticus/cmd.version=${BUILD_VERSION} -X roboticus/internal/daemon.version=${BUILD_VERSION}" \
+            -ldflags="-s -w -X roboticus/cmd/internal/cmdutil.Version=${BUILD_VERSION} -X roboticus/internal/daemon.version=${BUILD_VERSION}" \
             -o "${BINARY_NAME}" .
 
           # Raw binary for update-in-place (roboticus update binary).
@@ -149,7 +149,7 @@ jobs:
           mv "${RAW_NAME}" "${ARCHIVE}" artifacts/
 
       - name: Upload binary artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: roboticus-${{ matrix.goos }}-${{ matrix.goarch }}
           path: artifacts/
@@ -166,12 +166,12 @@ jobs:
       TAG_NAME: ${{ github.ref_name }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0  # needed for changelog generation
 
       - name: Download all build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: dist/
           pattern: roboticus-*

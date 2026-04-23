@@ -12,6 +12,7 @@ import (
 
 	"roboticus/internal/core"
 	"roboticus/internal/db"
+	"roboticus/internal/hostresources"
 )
 
 // Service is the top-level LLM orchestrator. It composes caching, routing,
@@ -50,6 +51,8 @@ type ServiceConfig struct {
 	Providers       []Provider
 	Primary         string
 	Fallbacks       []string
+	Policies        map[string]ModelPolicy
+	RoleEligibility map[string]RoleEligibility
 	Cache           CacheConfig
 	Breaker         CircuitBreakerConfig
 	Router          RouterConfig
@@ -60,28 +63,24 @@ type ServiceConfig struct {
 	ToolAllowlist   []string               // force tool support (config override)
 }
 
+// RoleEligibility controls whether a model is eligible for orchestrator and/or
+// subagent routing.
+type RoleEligibility struct {
+	Orchestrator bool   `json:"orchestrator"`
+	Subagent     bool   `json:"subagent"`
+	Reason       string `json:"reason,omitempty"`
+}
+
 // NewService creates the LLM orchestrator.
 func NewService(cfg ServiceConfig, store *db.Store) (*Service, error) {
 	clients := make(map[string]*Client)
 	var targets []RouteTarget
 
-	// Build a map of provider → model name from primary + fallback specs.
-	// "ollama/qwen3.5:35b-a3b" → providerModels["ollama"] = "qwen3.5:35b-a3b"
-	providerModels := make(map[string]string)
-	if cfg.Primary != "" {
-		prov, model := splitModelSpec(cfg.Primary)
-		if model != "" {
-			providerModels[prov] = model
-		}
-	}
-	for _, fb := range cfg.Fallbacks {
-		prov, model := splitModelSpec(fb)
-		if model != "" {
-			if _, exists := providerModels[prov]; !exists {
-				providerModels[prov] = model
-			}
-		}
-	}
+	// Build the ordered routing target list directly from primary + fallbacks.
+	// We intentionally keep multiple models per provider so the router can make
+	// per-model local-vs-cloud choices instead of collapsing an entire provider
+	// onto its first configured model.
+	targetSpecs := orderedRoutingSpecs(cfg.Primary, cfg.Fallbacks)
 
 	for i := range cfg.Providers {
 		p := &cfg.Providers[i]
@@ -92,17 +91,27 @@ func NewService(cfg ServiceConfig, store *db.Store) (*Service, error) {
 		}
 		clients[p.Name] = client
 
-		// Only add routing targets for providers that appear in the primary
-		// or fallback specs. Matching Rust: ordered_models is built from
-		// primary + fallbacks only — providers not in that list are never
-		// routing candidates (they can still be reached via explicit
-		// "provider/model" requests).
-		if modelName, ok := providerModels[p.Name]; ok {
+		// Only add routing targets for explicitly ordered primary/fallback specs.
+		// Providers not named in that ordered list are never routing candidates,
+		// though they may still be reached via explicit "provider/model" requests.
+		for _, target := range targetSpecs[p.Name] {
+			orchestratorEligible, subagentEligible, eligibilityReason := inferRouteTargetEligibility(target, cfg.RoleEligibility)
+			policy := effectiveModelPolicy(target, cfg.Policies)
 			targets = append(targets, RouteTarget{
-				Model:    modelName,
-				Provider: p.Name,
-				IsLocal:  p.IsLocal,
-				Cost:     p.CostPerOutputTok,
+				Model:                target,
+				Provider:             p.Name,
+				Tier:                 inferRouteTargetTier(target),
+				IsLocal:              p.IsLocal,
+				Cost:                 p.CostPerOutputTok,
+				State:                policy.State,
+				PrimaryReasonCode:    policy.PrimaryReasonCode,
+				ReasonCodes:          append([]string(nil), policy.ReasonCodes...),
+				HumanReason:          policy.HumanReason,
+				EvidenceRefs:         append([]string(nil), policy.EvidenceRefs...),
+				PolicySource:         policy.Source,
+				OrchestratorEligible: orchestratorEligible,
+				SubagentEligible:     subagentEligible,
+				EligibilityReason:    eligibilityReason,
 			})
 		}
 	}
@@ -142,11 +151,13 @@ func NewService(cfg ServiceConfig, store *db.Store) (*Service, error) {
 		toolBlocklist:     cfg.ToolBlocklist,
 		toolAllowlist:     cfg.ToolAllowlist,
 	}
+	svc.router.SetToolSupportPolicy(cfg.ToolAllowlist, cfg.ToolBlocklist)
 
 	// Metascore routing is always enabled when the service has quality/latency
 	// tracking (which it always does). This ensures every code path that creates
 	// a Service — daemon, API server, tests — gets metascore routing without
 	// requiring explicit wiring at each call site.
+	svc.router.SetIntentQualityTracker(svc.intentQuality)
 	svc.router.EnableMetascoreRouting(svc.quality, svc.latency, nil, svc.breakers)
 
 	// Load persisted routing weights so spider-graph settings survive restarts.
@@ -155,6 +166,74 @@ func NewService(cfg ServiceConfig, store *db.Store) (*Service, error) {
 	}
 
 	return svc, nil
+}
+
+func orderedRoutingSpecs(primary string, fallbacks []string) map[string][]string {
+	specs := make(map[string][]string)
+	seen := make(map[string]struct{})
+
+	add := func(spec string) {
+		provider, model := splitModelSpec(spec)
+		if provider == "" || model == "" {
+			return
+		}
+		key := provider + "/" + model
+		if _, exists := seen[key]; exists {
+			return
+		}
+		seen[key] = struct{}{}
+		specs[provider] = append(specs[provider], model)
+	}
+
+	add(primary)
+	for _, fb := range fallbacks {
+		add(fb)
+	}
+	return specs
+}
+
+func inferRouteTargetEligibility(model string, overrides map[string]RoleEligibility) (bool, bool, string) {
+	if eligibility, ok := lookupRoleEligibilityOverride(overrides, model); ok {
+		return eligibility.Orchestrator, eligibility.Subagent, strings.TrimSpace(eligibility.Reason)
+	}
+	lower := strings.ToLower(strings.TrimSpace(model))
+	switch {
+	case lower == "":
+		return true, true, "unspecified_default"
+	case strings.Contains(lower, "coder") || strings.Contains(lower, "codestral") || strings.Contains(lower, "codegeex"):
+		return false, true, "coding_specialist_subagent_only"
+	case strings.Contains(lower, "embed") || strings.Contains(lower, "embedding") || strings.Contains(lower, "rerank") || strings.Contains(lower, "whisper"):
+		return false, false, "non_chat_model"
+	default:
+		return true, true, "generalist_default"
+	}
+}
+
+func lookupRoleEligibilityOverride(overrides map[string]RoleEligibility, model string) (RoleEligibility, bool) {
+	if len(overrides) == 0 {
+		return RoleEligibility{}, false
+	}
+	keys := []string{
+		strings.TrimSpace(model),
+		strings.ToLower(strings.TrimSpace(model)),
+	}
+	for _, key := range keys {
+		if eligibility, ok := overrides[key]; ok {
+			return eligibility, true
+		}
+	}
+	return RoleEligibility{}, false
+}
+
+func traceEnvelopeValue(raw []byte) (string, bool) {
+	if len(raw) == 0 {
+		return "", false
+	}
+	const maxEnvelopeBytes = 32768
+	if len(raw) <= maxEnvelopeBytes {
+		return string(raw), false
+	}
+	return string(raw[:maxEnvelopeBytes]), true
 }
 
 // loadPersistedRoutingWeights reads the user-configured routing profile from
@@ -227,7 +306,7 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 	// Route: select model if not explicitly set.
 	if req.Model == "" {
 		target := s.router.Select(req)
-		annotateRoutingDecision(ctx, s.router, req, target)
+		annotateRoutingDecision(ctx, s, req, target)
 		req.Model = ModelSpecForTarget(target)
 		s.recordModelSelectionFromRequest(ctx, req, req.Model, "routed")
 	}
@@ -318,6 +397,17 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 	var lastErr error
 
 	log.Debug().Int("chain_len", len(chain)).Str("model", req.Model).Msg("inference chain built")
+	if obs := inferenceObserverFromContext(ctx); obs != nil {
+		candidates := make([]string, 0, len(chain))
+		for _, pm := range chain {
+			candidates = append(candidates, pm.provider+"/"+pm.model)
+		}
+		obs.RecordEvent("routing_chain_built", "ok",
+			"inference chain built",
+			"The system assembled a model/provider fallback chain for this turn.",
+			s.routingChainEventDetails(req, candidates),
+		)
+	}
 
 	for _, pm := range chain {
 		client, ok := s.providers[pm.provider]
@@ -341,6 +431,57 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 		// Set the model for this provider.
 		inferReq := *req
 		inferReq.Model = pm.model
+		prepared, err := client.prepareRequest(&inferReq, false)
+		if err != nil {
+			lastErr = err
+			log.Warn().Err(err).Str("provider", pm.provider).Str("model", pm.model).Msg("provider request preparation failed, trying next")
+			if obs := inferenceObserverFromContext(ctx); obs != nil {
+				reasonCode, pressure := classifyInferenceError(err)
+				obs.RecordEvent("fallback_triggered", "error",
+					"fallback triggered before provider call",
+					"The system could not safely serialize the provider request, so it switched to another model.",
+					map[string]any{
+						"provider":    pm.provider,
+						"model":       pm.model,
+						"reason_code": reasonCode,
+					},
+				)
+				obs.IncrementSummaryCounter("fallback_count", 1)
+				obs.SetSummaryField("resource_pressure", pressure)
+			}
+			continue
+		}
+		obs := inferenceObserverFromContext(ctx)
+		parentEventID := ""
+		attemptStartResources := hostresources.Sample(ctx)
+		if obs != nil {
+			requestJSON, requestTruncated := traceEnvelopeValue(prepared.body)
+			details := map[string]any{
+				"provider":       pm.provider,
+				"model":          pm.model,
+				"tools":          len(inferReq.Tools),
+				"host_resources": attemptStartResources,
+			}
+			if requestJSON != "" {
+				details["provider_request_json"] = requestJSON
+				details["provider_request_truncated"] = requestTruncated
+			}
+			if prepared.messageNormalization.Transformer != "" {
+				details["tool_message_transformer"] = prepared.messageNormalization.Transformer
+				details["tool_message_disposition"] = string(prepared.messageNormalization.Disposition)
+				details["tool_message_fidelity"] = string(prepared.messageNormalization.Fidelity)
+				if strings.TrimSpace(prepared.messageNormalization.Reason) != "" {
+					details["tool_message_reason"] = prepared.messageNormalization.Reason
+				}
+			}
+			parentEventID = obs.RecordEvent("model_attempt_started", "running",
+				"starting inference attempt",
+				"The system is trying one candidate model for this turn.",
+				details,
+			)
+			obs.IncrementSummaryCounter("inference_attempts", 1)
+			obs.SetSummaryField("resource_snapshot", attemptStartResources)
+		}
 
 		log.Trace().
 			Str("provider", pm.provider).
@@ -350,9 +491,10 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 			Msg("sending inference request")
 
 		start := time.Now()
-		resp, err := client.Complete(ctx, &inferReq)
+		resp, rawResponse, err := client.completePrepared(ctx, prepared)
 		latencyMs := time.Since(start).Milliseconds()
 		if err != nil {
+			attemptEndResources := hostresources.Sample(ctx)
 			// Distinguish permanent errors from transient failures.
 			// Credit exhaustion permanently trips the breaker — 402 means
 			// the account genuinely can't pay.
@@ -369,6 +511,40 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 			}
 			lastErr = err
 			log.Warn().Err(err).Str("provider", pm.provider).Str("model", pm.model).Msg("provider failed, trying next")
+			if obs != nil {
+				reasonCode, pressure := classifyInferenceError(err)
+				responseJSON, responseTruncated := traceEnvelopeValue(rawResponse)
+				details := map[string]any{
+					"provider":       pm.provider,
+					"model":          pm.model,
+					"error":          err.Error(),
+					"reason_code":    reasonCode,
+					"host_resources": attemptEndResources,
+				}
+				if responseJSON != "" {
+					details["provider_response_json"] = responseJSON
+					details["provider_response_truncated"] = responseTruncated
+				}
+				obs.RecordTimedEvent("model_attempt_finished", "error",
+					"inference attempt failed",
+					"One model attempt failed, so the system will try another option.",
+					start, parentEventID, details,
+				)
+				obs.IncrementSummaryCounter("fallback_count", 1)
+				obs.SetSummaryField("resource_pressure", pressure)
+				obs.SetSummaryField("resource_snapshot", attemptEndResources)
+				obs.SetSummaryField("primary_diagnosis", inferPrimaryDiagnosis(reasonCode))
+				obs.SetSummaryField("diagnosis_confidence", 0.72)
+				obs.RecordEvent("fallback_triggered", "error",
+					"fallback triggered after provider/model failure",
+					"The system switched to another model because the previous one failed.",
+					map[string]any{
+						"provider":    pm.provider,
+						"model":       pm.model,
+						"reason_code": reasonCode,
+					},
+				)
+			}
 			continue
 		}
 
@@ -416,6 +592,31 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 		})
 
 		log.Debug().Str("provider", pm.provider).Str("model", resp.Model).Int("tokens_in", resp.Usage.InputTokens).Int("tokens_out", resp.Usage.OutputTokens).Int64("latency_ms", latencyMs).Msg("inference completed")
+		if obs != nil {
+			attemptEndResources := hostresources.Sample(ctx)
+			responseJSON, responseTruncated := traceEnvelopeValue(rawResponse)
+			details := map[string]any{
+				"provider":       pm.provider,
+				"model":          resp.Model,
+				"tokens_in":      resp.Usage.InputTokens,
+				"tokens_out":     resp.Usage.OutputTokens,
+				"latency_ms":     latencyMs,
+				"is_local":       resp.IsLocal,
+				"host_resources": attemptEndResources,
+			}
+			if responseJSON != "" {
+				details["provider_response_json"] = responseJSON
+				details["provider_response_truncated"] = responseTruncated
+			}
+			obs.RecordTimedEvent("model_attempt_finished", "ok",
+				"inference attempt succeeded",
+				"One model candidate completed successfully.",
+				start, parentEventID, details,
+			)
+			obs.SetSummaryField("resource_snapshot", attemptEndResources)
+			obs.SetSummaryField("final_model", resp.Model)
+			obs.SetSummaryField("final_provider", pm.provider)
+		}
 		return resp, nil
 	}
 
@@ -455,7 +656,7 @@ func (s *Service) Stream(ctx context.Context, req *Request) (<-chan StreamChunk,
 	// Route if needed.
 	if req.Model == "" {
 		target := s.router.Select(req)
-		annotateRoutingDecision(ctx, s.router, req, target)
+		annotateRoutingDecision(ctx, s, req, target)
 		req.Model = ModelSpecForTarget(target)
 		s.recordModelSelectionFromRequest(ctx, req, req.Model, "routed")
 	}
@@ -577,6 +778,9 @@ func (s *Service) SeedStartup(ctx context.Context, store *db.Store) {
 	}
 	if s.quality != nil {
 		s.quality.SeedFromHistory(ctx, store)
+	}
+	if s.intentQuality != nil {
+		s.intentQuality.SeedFromExerciseResults(ctx, store)
 	}
 	if s.latency != nil {
 		s.latency.SeedFromHistory(ctx, store)
@@ -755,18 +959,12 @@ func contains(slice []string, s string) bool {
 
 // ModelSpecForTarget formats a RouteTarget as a "provider/model" spec string.
 func ModelSpecForTarget(target RouteTarget) string {
-	if target.Provider != "" && target.Model != "" && !strings.Contains(target.Model, "/") {
-		return target.Provider + "/" + target.Model
-	}
-	if target.Model != "" {
-		return target.Model
-	}
-	return target.Provider
+	return executionModelSpec(target.Provider, target.Model)
 }
 
 // RecordModelSelection persists a model selection event to the database.
 // Matches Rust's record_model_selection_event.
-func (s *Service) RecordModelSelection(ctx context.Context, turnID, sessionID, agentID, channel, selectedModel, strategy, userExcerpt string) {
+func (s *Service) RecordModelSelection(ctx context.Context, turnID, sessionID, agentID, channel, selectedModel, strategy, userExcerpt string, candidates []string, metascoreJSON string, featuresJSON string) {
 	if s.store == nil {
 		return
 	}
@@ -776,8 +974,8 @@ func (s *Service) RecordModelSelection(ctx context.Context, turnID, sessionID, a
 		excerpt = excerpt[:200]
 	}
 	if _, err := s.store.ExecContext(ctx,
-		`INSERT INTO model_selection_events (id, turn_id, session_id, agent_id, channel, selected_model, strategy, primary_model, user_excerpt, candidates_json, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', datetime('now'))
+		`INSERT INTO model_selection_events (id, turn_id, session_id, agent_id, channel, selected_model, strategy, primary_model, user_excerpt, candidates_json, metascore_json, features_json, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
 		 ON CONFLICT(id) DO UPDATE SET
 		   session_id = excluded.session_id,
 		   agent_id = excluded.agent_id,
@@ -787,9 +985,11 @@ func (s *Service) RecordModelSelection(ctx context.Context, turnID, sessionID, a
 		   primary_model = excluded.primary_model,
 		   user_excerpt = excluded.user_excerpt,
 		   candidates_json = excluded.candidates_json,
+		   metascore_json = excluded.metascore_json,
+		   features_json = excluded.features_json,
 		   created_at = datetime('now')`,
 		fmt.Sprintf("mse-%s", turnID), turnID, sessionID, agentID, channel,
-		selectedModel, strategy, primary, excerpt,
+		selectedModel, strategy, primary, excerpt, mustJSON(candidates), nullIfEmpty(metascoreJSON), nullIfEmpty(featuresJSON),
 	); err != nil {
 		s.errBus.ReportIfErr(err, "llm", "record_selection_event", core.SevDebug)
 	}
@@ -805,7 +1005,71 @@ func (s *Service) recordModelSelectionFromRequest(ctx context.Context, req *Requ
 	if turnID == "" || sessionID == "" {
 		return
 	}
-	s.RecordModelSelection(ctx, turnID, sessionID, "", channel, selectedModel, strategy, lastUserExcerpt(req))
+	candidates := make([]string, 0, len(s.router.Targets()))
+	for _, rt := range filterTargetsForRole(s.router.Targets(), req) {
+		if model := ModelSpecForTarget(rt); model != "" {
+			candidates = append(candidates, model)
+		}
+	}
+	if len(candidates) == 0 {
+		for _, rt := range s.router.Targets() {
+			if model := ModelSpecForTarget(rt); model != "" {
+				candidates = append(candidates, model)
+			}
+		}
+	}
+	metascoreJSON, featuresJSON := s.routingEvidence(req, selectedModel)
+	s.RecordModelSelection(ctx, turnID, sessionID, "", channel, selectedModel, strategy, lastUserExcerpt(req), candidates, metascoreJSON, featuresJSON)
+}
+
+func (s *Service) routingEvidence(req *Request, selectedModel string) (string, string) {
+	if s == nil || s.router == nil || req == nil {
+		return "", ""
+	}
+	rows, features := s.routingAssessment(req, selectedModel)
+	return mustJSON(rows), mustJSON(features)
+}
+
+func routeTargetForProfile(targets []RouteTarget, profile ModelProfile) RouteTarget {
+	for _, target := range targets {
+		if target.Model == profile.Model && target.Provider == profile.Provider {
+			return target
+		}
+	}
+	return RouteTarget{Model: profile.Model, Provider: profile.Provider}
+}
+
+func routeTargetAssessmentForProfile(byModel map[string]RouteTargetAssessment, target RouteTarget, profile ModelProfile) RouteTargetAssessment {
+	keys := []string{
+		canonicalModelKey(ModelSpecForTarget(target)),
+		canonicalModelKey(target.Model),
+		canonicalModelKey(profile.Provider + "/" + profile.Model),
+		canonicalModelKey(profile.Model),
+	}
+	for _, key := range keys {
+		if key == "" {
+			continue
+		}
+		if assessment, ok := byModel[key]; ok {
+			return assessment
+		}
+	}
+	return RouteTargetAssessment{Target: target, Model: profile.Model, RoleEligible: routeTargetEligibleForRole(target, "orchestrator"), RequestEligible: routeTargetEligibleForRole(target, "orchestrator"), ToolCapable: true}
+}
+
+func mustJSON(v any) string {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+func nullIfEmpty(v string) any {
+	if strings.TrimSpace(v) == "" {
+		return nil
+	}
+	return v
 }
 
 func lastUserExcerpt(req *Request) string {
@@ -818,6 +1082,95 @@ func lastUserExcerpt(req *Request) string {
 		}
 	}
 	return ""
+}
+
+func inferRouteTargetTier(model string) ModelTier {
+	lower := strings.ToLower(model)
+
+	if strings.Contains(lower, "mini") || strings.Contains(lower, "small") {
+		return TierSmall
+	}
+	if strings.Contains(lower, "turbo") || strings.Contains(lower, "preview") || strings.Contains(lower, "frontier") {
+		return TierFrontier
+	}
+
+	// Handle MoE-style sizes such as 8x7b.
+	if size := extractMoEParameterCount(lower); size > 0 {
+		return tierForParameterCount(size)
+	}
+
+	var size int
+	if _, err := fmt.Sscanf(extractModelSizeToken(lower), "%d", &size); err == nil && size > 0 {
+		return tierForParameterCount(size)
+	}
+
+	switch {
+	case strings.Contains(lower, "gemma4"), strings.Contains(lower, "gpt-4"), strings.Contains(lower, "kimi-k2"):
+		return TierLarge
+	default:
+		return TierMedium
+	}
+}
+
+func extractModelSizeToken(model string) string {
+	for i := 0; i < len(model); i++ {
+		if model[i] < '0' || model[i] > '9' {
+			continue
+		}
+		j := i
+		for j < len(model) && model[j] >= '0' && model[j] <= '9' {
+			j++
+		}
+		if j < len(model) && model[j] == 'b' {
+			return model[i:j]
+		}
+	}
+	return ""
+}
+
+func extractMoEParameterCount(model string) int {
+	for i := 0; i < len(model); i++ {
+		if model[i] < '0' || model[i] > '9' {
+			continue
+		}
+		j := i
+		for j < len(model) && model[j] >= '0' && model[j] <= '9' {
+			j++
+		}
+		if j >= len(model) || model[j] != 'x' {
+			continue
+		}
+		k := j + 1
+		for k < len(model) && model[k] >= '0' && model[k] <= '9' {
+			k++
+		}
+		if k >= len(model) || model[k] != 'b' {
+			continue
+		}
+
+		var lhs, rhs int
+		if _, err := fmt.Sscanf(model[i:j], "%d", &lhs); err != nil {
+			continue
+		}
+		if _, err := fmt.Sscanf(model[j+1:k], "%d", &rhs); err != nil {
+			continue
+		}
+		return lhs * rhs
+	}
+	return 0
+}
+
+func tierForParameterCount(size int) ModelTier {
+	switch {
+	case size <= 8:
+		return TierSmall
+	case size <= 16:
+		return TierMedium
+	case size <= 40:
+		return TierLarge
+	default:
+		return TierFrontier
+	}
 }
 
 // ProviderStatus reports the health of each configured provider.
@@ -851,6 +1204,14 @@ func (s *Service) ForceOpenBreaker(providerName string) error {
 // Router returns the service's model router for external use (e.g., routing eval).
 func (s *Service) Router() *Router {
 	return s.router
+}
+
+// ApplyModelPolicies refreshes lifecycle-state policy on the live router.
+func (s *Service) ApplyModelPolicies(policies map[string]ModelPolicy) {
+	if s == nil || s.router == nil {
+		return
+	}
+	s.router.ApplyModelPolicies(policies)
 }
 
 // Primary returns the configured primary model name.

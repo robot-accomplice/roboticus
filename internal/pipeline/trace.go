@@ -179,6 +179,9 @@ func AnnotateVerifierTrace(tr *TraceRecorder, result VerificationResult) {
 	tr.Annotate(TraceNSVerifier+".unsupported_absolute_count", summary.UnsupportedAbs)
 	tr.Annotate(TraceNSVerifier+".coverage_ratio", summary.CoverageRatio)
 	tr.Annotate(TraceNSVerifier+".flagged_claims", summary.FlaggedClaims)
+	tr.Annotate(TraceNSVerifier+".contested_count", summary.ContestedCount)
+	tr.Annotate(TraceNSVerifier+".proof_gap_count", summary.ProofGapCount)
+	tr.Annotate(TraceNSVerifier+".reconciled_count", summary.ReconciledCount)
 	if len(result.ClaimAudits) > 0 {
 		if buf, err := json.Marshal(result.ClaimAudits); err == nil {
 			tr.Annotate(TraceNSVerifier+".claim_map_json", string(buf))
@@ -278,6 +281,7 @@ func AnnotatePerceptionTrace(tr *TraceRecorder, artifact PerceptionArtifact) {
 		tr.Annotate(TraceNSPerception+".required_tiers", artifact.RequiredMemoryTiers)
 	}
 	tr.Annotate(TraceNSPerception+".decomposition_needed", artifact.DecompositionNeeded)
+	tr.Annotate(TraceNSPerception+".procedural_uncertainty", artifact.ProceduralUncertainty)
 	tr.Annotate(TraceNSPerception+".freshness_required", artifact.FreshnessRequired)
 	tr.Annotate(TraceNSPerception+".confidence", artifact.Confidence)
 }
@@ -320,6 +324,8 @@ func AnnotateTaskStateTrace(tr *TraceRecorder, synthesis TaskSynthesis) {
 	tr.Annotate(TraceNSTaskState+".confidence", synthesis.Confidence)
 	tr.Annotate(TraceNSTaskState+".capability_fit", synthesis.CapabilityFit)
 	tr.Annotate(TraceNSTaskState+".retrieval_needed", synthesis.RetrievalNeeded)
+	tr.Annotate(TraceNSTaskState+".retrieval_reason", synthesis.RetrievalReason)
+	tr.Annotate(TraceNSTaskState+".procedural_uncertainty", synthesis.ProceduralUncertainty)
 	if len(synthesis.MissingSkills) > 0 {
 		tr.Annotate(TraceNSTaskState+".missing_skills", synthesis.MissingSkills)
 	}

@@ -28,6 +28,9 @@ type PromptConfig struct {
 	ToolNames         []string             // registered tool names for introspection block
 	ToolDescs         [][2]string          // (name, description) pairs for tool roster in prompt
 	CapabilitySummary string               // compact runtime-owned capability snapshot for introspection-shaped turns
+	InspectionTarget  string               // authoritative inspection-target hint for focused inspection turns
+	DestinationTarget string               // authoritative destination hint for focused filesystem authoring turns
+	ToolProfile       string               // pipeline-selected focused tool profile for the active turn
 	BudgetTier        int                  // 0=L0, 1=L1, 2=L2, 3=L3 — controls prompt compaction
 	Obsidian          *core.ObsidianConfig // optional Obsidian config for vault directive
 }
@@ -40,6 +43,7 @@ type PromptConfig struct {
 // sections so that downstream verification can detect tampered or forged
 // trust boundaries.
 func BuildSystemPrompt(cfg PromptConfig) string {
+	isSubagent := cfg.IsSubagent
 	// Collect sections in order; each section is the full text of that block.
 	var sections []string
 
@@ -56,17 +60,17 @@ func BuildSystemPrompt(cfg PromptConfig) string {
 
 	// 3. Personality/identity.
 	// Rust parity: prompt.rs lines 25-27 — personality is section 3 ("## Identity").
-	if cfg.Personality != "" {
+	if !isSubagent && cfg.Personality != "" {
 		sections = append(sections, "## Identity\n"+cfg.Personality+"\n")
 	}
 
 	// 3a. Operator context (OPERATOR.toml).
-	if cfg.Operator != "" {
+	if !isSubagent && cfg.Operator != "" {
 		sections = append(sections, "## Operator Context\n"+cfg.Operator+"\n")
 	}
 
 	// 3b. Active directives (DIRECTIVES.toml).
-	if cfg.Directives != "" {
+	if !isSubagent && cfg.Directives != "" {
 		sections = append(sections, "## Active Directives\n"+cfg.Directives+"\n")
 	}
 
@@ -98,6 +102,17 @@ func BuildSystemPrompt(cfg PromptConfig) string {
 		sections = append(sections, "## Capability Snapshot\n"+cfg.CapabilitySummary+"\n")
 	}
 
+	// 6b. Inspection-target hint for focused filesystem inspection turns.
+	if strings.TrimSpace(cfg.InspectionTarget) != "" {
+		sections = append(sections, "## Inspection Target\n"+cfg.InspectionTarget+"\n")
+	}
+	if strings.TrimSpace(cfg.DestinationTarget) != "" {
+		sections = append(sections, "## Destination Target\n"+cfg.DestinationTarget+"\n")
+	}
+	if strings.TrimSpace(cfg.ToolProfile) == "focused_analysis_authoring" {
+		sections = append(sections, buildAnalysisAuthoringBlock(cfg))
+	}
+
 	// 7. Safety (integrated into behavioral contract for L2+, explicit for L0/L1).
 	if cfg.BudgetTier <= 1 {
 		sections = append(sections,
@@ -120,12 +135,16 @@ func BuildSystemPrompt(cfg PromptConfig) string {
 	}
 
 	// 8. Orchestration block (subagents only).
-	if cfg.IsSubagent {
+	if isSubagent {
 		sections = append(sections,
 			"## Orchestration\n"+
 				"You are operating as a specialist subagent. "+
 				"Focus on your assigned subtask and return results concisely. "+
-				"Do not attempt to manage the overall workflow.\n")
+				"Report upward to the orchestrator layer, never directly to the operator. "+
+				"This reporting boundary still applies to scheduled or cron-triggered subagent work. "+
+				"Your work must be provable: only claim completion when backed by concrete tool output, artifacts, or observations from this run. "+
+				"Separate completed work, evidence, and remaining gaps or uncertainty. "+
+				"Do not narrate intended work as finished, and do not attempt to manage the overall workflow.\n")
 	}
 
 	// 9. Operational introspection — tiered (Rust parity).
@@ -184,6 +203,7 @@ func buildToolUseBlock(cfg PromptConfig) string {
 	if len(cfg.ToolDescs) == 0 && len(cfg.ToolNames) == 0 {
 		return ""
 	}
+	hasBash := promptHasTool(cfg.ToolNames, "bash")
 
 	var sb strings.Builder
 	sb.WriteString("---\n## Tool Use\n")
@@ -195,9 +215,13 @@ func buildToolUseBlock(cfg PromptConfig) string {
 	sb.WriteString("**Important**: You are an autonomous agent with real tool execution capabilities. ")
 	sb.WriteString("When a user asks you to do something that can be accomplished with your tools, ")
 	sb.WriteString("USE THEM. Do not say \"I cannot\" or \"I don't have the ability to\" — if a tool ")
-	sb.WriteString("exists that can accomplish the task, invoke it. You have a real workspace, real ")
-	sb.WriteString("shell access, and real integrations. Act on requests; do not merely describe ")
-	sb.WriteString("what the user could do themselves.\n\n")
+	sb.WriteString("exists that can accomplish the task, invoke it. You have a real workspace")
+	if hasBash {
+		sb.WriteString(", real shell access,")
+	} else {
+		sb.WriteString(",")
+	}
+	sb.WriteString(" and real integrations. Act on requests; do not merely describe what the user could do themselves.\n\n")
 	sb.WriteString("### Available Tools\n")
 
 	if len(cfg.ToolDescs) > 0 {
@@ -249,10 +273,9 @@ func buildBehavioralContract(tier int) string {
 		"- Never claim capabilities, metrics, or status you haven't verified via tool call.\n" +
 		"- If a tool exists that can answer a question, USE IT before responding.\n" +
 		"- 'I don't have access to' is only valid AFTER a tool call fails.\n" +
-		"- Never say 'I don't have memories' without first calling recall_memory.\n" +
-		"- **Memory recall rule**: When asked about a specific topic, person, or past event, your injected " +
-		"memories may not cover it. ALWAYS call recall_memory to search before answering. " +
-		"If recall_memory returns nothing, say so honestly — never fabricate memories or " +
+		"- Never say 'I don't have memories' when current-turn retrieved evidence or follow-up memory tools could answer the question. Use the injected evidence first; if it is insufficient, call recall_memory or search_memories before answering.\n" +
+		"- **Memory recall rule**: When asked about a specific topic, person, or past event, treat the current-turn retrieved evidence and memory index as your first authority. If that injected evidence is insufficient for the specific question, then call recall_memory or search_memories to hydrate more memory before answering. " +
+		"If follow-up memory retrieval returns nothing, say so honestly — never fabricate memories or " +
 		"synthesize vague 'themes' from context. Specifics (dates, names, facts) or an honest " +
 		"'I don't have memories about that' — never anything in between.\n\n" +
 		"### Behavioral Self-Awareness\n" +
@@ -269,18 +292,18 @@ func buildOperationalIntrospection(cfg PromptConfig) string {
 		// Compact (~60 tokens).
 		return "---\n## Introspection\n" +
 			"For tasks (not conversation): inspect runtime/memory/tools before acting. " +
-			"Use `get_runtime_context` for paths and policy. Prefer inspection over speculation.\n" +
+			"Use `get_runtime_context` for workspace paths and effective path constraints. Prefer inspection over speculation.\n" +
 			"---\n"
 	}
 	// Full (~200 tokens).
 	var sb strings.Builder
 	sb.WriteString("---\n## Operational Introspection\n")
 	sb.WriteString("Before acting on any task (not casual conversation):\n")
-	sb.WriteString("1. Check memory: when asked about a specific topic, person, or past event, ALWAYS call `recall_memory` to search — even if injected memories are present. Injected memories are a sample, not the full store.\n")
+	sb.WriteString("1. Check memory: if the pipeline already injected current-turn retrieved evidence or a memory index, use that first. Only call `recall_memory` or `search_memories` when the injected evidence is insufficient for the specific topic, person, or past event.\n")
 	sb.WriteString("2. Check data: if the user asks about stored data, query the database before saying it doesn't exist.\n")
 	sb.WriteString("3. Check filesystem: for file/repo tasks, use `list_directory` or `search_files` before guessing paths.\n")
 	sb.WriteString("4. Check tools: inspect your tool roster before claiming a capability is unavailable.\n")
-	sb.WriteString("5. Check runtime: use `get_runtime_context` for workspace paths, allowed paths, and security policy.\n")
+	sb.WriteString("5. Check runtime: use `get_runtime_context` for workspace paths, allowed paths, protected read-only inputs, and effective path constraints.\n")
 	if len(cfg.ToolNames) > 0 {
 		fmt.Fprintf(&sb, "\nYou have %d tools: %s.\n", len(cfg.ToolNames), strings.Join(cfg.ToolNames, ", "))
 	}
@@ -296,6 +319,7 @@ func buildOperationalIntrospection(cfg PromptConfig) string {
 // Includes operational guidance for tool use, workspace policy, and attribution.
 func buildRuntimeMetadataBlock(cfg PromptConfig) string {
 	var sb strings.Builder
+	hasBash := promptHasTool(cfg.ToolNames, "bash")
 	sb.WriteString("## Runtime Context\n")
 	fmt.Fprintf(&sb, "- Local time: %s\n", time.Now().Format(time.RFC3339))
 	if cfg.Model != "" {
@@ -308,9 +332,16 @@ func buildRuntimeMetadataBlock(cfg PromptConfig) string {
 		fmt.Fprintf(&sb, "- Agent version: %s\n", cfg.Version)
 	}
 	sb.WriteString("\n### Tool Operations\n")
-	sb.WriteString("- File tools default to the workspace root. Use relative paths unless the user specifies absolute.\n")
-	sb.WriteString("- `bash` executes in the workspace root. Check `get_runtime_context` for allowed paths.\n")
-	sb.WriteString("- When reporting tool output, attribute it: 'The bash command returned...' not 'I found...'\n")
+	sb.WriteString("- File tools default to the workspace root. Use relative paths unless the user specifies an absolute destination that falls under an allowed path.\n")
+	if promptHasTool(cfg.ToolNames, "write_file") || promptHasTool(cfg.ToolNames, "edit_file") {
+		sb.WriteString("- `write_file` and `edit_file` may target either workspace-relative paths or absolute paths that fall under an allowed destination from `get_runtime_context` or the destination-target hint.\n")
+	}
+	if hasBash {
+		sb.WriteString("- `bash` executes in the workspace root. Check `get_runtime_context` for effective path constraints before using absolute paths.\n")
+		sb.WriteString("- When reporting tool output, attribute it: 'The bash command returned...' not 'I found...'\n")
+	} else {
+		sb.WriteString("- When reporting tool output, attribute it to the tool that produced it instead of implying direct inspection.\n")
+	}
 	sb.WriteString("- If a tool returns an error, report the error clearly — don't hide failures.\n")
 	// v1.0.6: attempt-then-report directive. The behavioral soak found
 	// the agent preemptively refusing to operate on paths outside its
@@ -347,6 +378,38 @@ func buildRuntimeMetadataBlock(cfg PromptConfig) string {
 	return sb.String()
 }
 
+func buildAnalysisAuthoringBlock(cfg PromptConfig) string {
+	var sb strings.Builder
+	sb.WriteString("## Analysis + Authoring Contract\n")
+	sb.WriteString("- This turn requires you to inspect a concrete filesystem target, derive facts, and then write a report artifact.\n")
+	sb.WriteString("- Gather every requested field before writing. Do not fill required columns with `--`, `Unknown`, or placeholders unless a tool call has already established that the value cannot be determined.\n")
+	sb.WriteString("- If the inspection target is a container directory, work across its child projects instead of collapsing the report to the current repository.\n")
+	if promptHasTool(cfg.ToolNames, "inventory_projects") {
+		sb.WriteString("- Prefer `inventory_projects` for project-root reports when it is available; use ad hoc shell commands only to fill metadata that the dedicated inventory tool did not provide.\n")
+	}
+	if promptHasTool(cfg.ToolNames, "bash") {
+		sb.WriteString("- Use `bash` when filesystem or git metadata is most naturally derived from shell commands.\n")
+		sb.WriteString("- For project-directory reports, prefer one structured `bash` inventory pass over repeated extension-specific globbing. Use shell commands to derive project roots, edit timestamps, and remote git direction when those fields are requested.\n")
+		sb.WriteString("- For `projects in <directory>` requests, treat the immediate child directories of the inspection target as candidate project roots unless the user explicitly asks for recursive nested projects. Do not recurse every nested directory looking for repositories.\n")
+	}
+	sb.WriteString("- Do not commit the report until the requested metadata has been gathered or specific gaps have been proven by tool results.\n")
+	sb.WriteString("- Do not ask for permission to proceed when the task and destination are already fully specified.\n")
+	return sb.String()
+}
+
+func promptHasTool(toolNames []string, want string) bool {
+	want = strings.TrimSpace(strings.ToLower(want))
+	if want == "" {
+		return false
+	}
+	for _, name := range toolNames {
+		if strings.TrimSpace(strings.ToLower(name)) == want {
+			return true
+		}
+	}
+	return false
+}
+
 // buildObsidianDirective conditionally injects an Obsidian preferred-destination
 // block if Obsidian integration is enabled in config. Tells the agent to
 // prefer writing notes/knowledge to the vault path when appropriate.
@@ -356,7 +419,8 @@ func buildObsidianDirective(cfg PromptConfig) string {
 	}
 	return fmt.Sprintf("## Obsidian Integration\n"+
 		"An Obsidian vault is configured at: %s\n"+
-		"When saving notes, research, or knowledge artifacts, prefer writing "+
-		"to this vault using Markdown format compatible with Obsidian.\n",
+		"Use the explicit `obsidian_write` tool to create or update notes in this vault. "+
+		"When saving notes, research, or knowledge artifacts, prefer that tool over generic "+
+		"workspace file tools so vault documents stay rooted in the configured Obsidian path.\n",
 		cfg.Obsidian.VaultPath)
 }

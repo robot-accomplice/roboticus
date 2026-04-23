@@ -196,6 +196,131 @@ func TestGetTraceFlow_NotFound(t *testing.T) {
 	}
 }
 
+func TestGetTurnDiagnostics_HappyPath(t *testing.T) {
+	store := testutil.TempStore(t)
+	_, _ = store.ExecContext(bgCtx, `INSERT INTO sessions (id, agent_id, scope_key) VALUES ('s1', 'a1', 'test')`)
+	_, _ = store.ExecContext(bgCtx, `INSERT INTO turns (id, session_id) VALUES ('t1', 's1')`)
+	_, _ = store.ExecContext(bgCtx,
+		`INSERT INTO turn_diagnostics (
+			id, turn_id, session_id, channel, status, final_model, final_provider, total_ms,
+			inference_attempts, fallback_count, tool_call_count, guard_retry_count, verifier_retry_count,
+			request_messages, request_tools, request_approx_tokens, context_pressure, resource_pressure, resource_snapshot_json,
+			primary_diagnosis, diagnosis_confidence, user_narrative, operator_narrative, recommendations_json
+		) VALUES (
+			'd1', 't1', 's1', 'telegram', 'degraded', 'phi4-mini:latest', 'ollama', 8123,
+			3, 1, 0, 1, 1, 5, 0, 1100, 'low', 'high', '{"cpu_percent":92.5,"memory_available_bytes":2147483648}',
+			'local_model_resource_instability', 0.91, 'The turn was slow and degraded.',
+			'First attempt stalled on a local model.', '[{"kind":"model_policy","reason_code":"latency_nonviable"}]'
+		)`)
+	_, _ = store.ExecContext(bgCtx,
+		`INSERT INTO turn_diagnostic_events (
+			id, turn_id, seq, event_type, at_ms, duration_ms, parent_event_id, status, operator_summary, user_summary, details_json
+		) VALUES (
+			'e1', 't1', 1, 'context_pressure_assessed', 12, 0, '', 'ok',
+			'Request was lightweight.', 'Lightweight path chosen.', '{"turn_weight":"light","request_tools":0}'
+		)`)
+
+	rec := chiRequest("GET", "/traces/{turn_id}/diagnostics", "/traces/t1/diagnostics", "", GetTurnDiagnostics(store))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	body := jsonBody(t, rec)
+	if body["artifact"] != "turn_diagnostics" {
+		t.Fatalf("artifact = %v, want turn_diagnostics", body["artifact"])
+	}
+	summary, ok := body["summary"].(map[string]any)
+	if !ok {
+		t.Fatalf("summary = %T, want object", body["summary"])
+	}
+	if summary["status"] != "degraded" {
+		t.Fatalf("status = %v, want degraded", summary["status"])
+	}
+	if summary["primary_diagnosis"] != "local_model_resource_instability" {
+		t.Fatalf("primary_diagnosis = %v", summary["primary_diagnosis"])
+	}
+	if summary["final_provider"] != "ollama" {
+		t.Fatalf("final_provider = %v, want ollama", summary["final_provider"])
+	}
+	resourceSnapshot, ok := summary["resource_snapshot"].(map[string]any)
+	if !ok {
+		t.Fatalf("resource_snapshot = %T, want object", summary["resource_snapshot"])
+	}
+	if resourceSnapshot["cpu_percent"].(float64) != 92.5 {
+		t.Fatalf("resource_snapshot.cpu_percent = %v, want 92.5", resourceSnapshot["cpu_percent"])
+	}
+	recs, ok := summary["recommendations"].([]any)
+	if !ok || len(recs) != 1 {
+		t.Fatalf("recommendations = %v, want 1 item", summary["recommendations"])
+	}
+	events, ok := body["events"].([]any)
+	if !ok || len(events) != 1 {
+		t.Fatalf("events = %v, want 1 item", body["events"])
+	}
+	event, ok := events[0].(map[string]any)
+	if !ok {
+		t.Fatalf("event = %T, want object", events[0])
+	}
+	if event["event_type"] != "context_pressure_assessed" {
+		t.Fatalf("event_type = %v", event["event_type"])
+	}
+}
+
+func TestGetTurnDiagnostics_DerivesInterpretiveNarrativesForLegacyRows(t *testing.T) {
+	store := testutil.TempStore(t)
+	_, _ = store.ExecContext(bgCtx, `INSERT INTO sessions (id, agent_id, scope_key) VALUES ('s2', 'a1', 'test')`)
+	_, _ = store.ExecContext(bgCtx, `INSERT INTO turns (id, session_id) VALUES ('t-derived', 's2')`)
+	_, _ = store.ExecContext(bgCtx,
+		`INSERT INTO turn_diagnostics (
+			id, turn_id, session_id, channel, status, final_model, final_provider, total_ms,
+			inference_attempts, fallback_count, tool_call_count, guard_retry_count, verifier_retry_count,
+			request_messages, request_tools, request_approx_tokens, context_pressure, resource_pressure, resource_snapshot_json,
+			primary_diagnosis, diagnosis_confidence, user_narrative, operator_narrative, recommendations_json
+		) VALUES (
+			'd-derived', 't-derived', 's2', 'api', 'degraded', 'kimi-k2-turbo-preview', 'moonshot', 57673,
+			2, 0, 0, 1, 0, 3, 0, 900, 'low', 'medium', '',
+			'guard_retry', 0.83, 'The system is collecting evidence about request size, retries, and model behavior for this turn.',
+			'Turn diagnostics active: request-shape, fallback, and provider-attempt facts are being recorded.', '[]'
+		)`)
+	_, _ = store.ExecContext(bgCtx,
+		`INSERT INTO turn_diagnostic_events (
+			id, turn_id, seq, event_type, at_ms, duration_ms, parent_event_id, status, operator_summary, user_summary, details_json
+		) VALUES
+			('e1', 't-derived', 1, 'model_attempt_started', 10, 0, '', 'running', '', '', '{"provider":"moonshot","model":"kimi-k2-turbo-preview"}'),
+			('e2', 't-derived', 2, 'model_attempt_finished', 1500, 1490, '', 'ok', '', '', '{"provider":"moonshot","model":"kimi-k2-turbo-preview"}'),
+			('e3', 't-derived', 3, 'guard_retry_scheduled', 1510, 0, '', 'error', '', '', '{"violations":["non_repetition_v2"],"retry_reason":"response repeats previous assistant message"}'),
+			('e4', 't-derived', 4, 'model_attempt_started', 1520, 0, '', 'running', '', '', '{"provider":"moonshot","model":"kimi-k2-turbo-preview"}'),
+			('e5', 't-derived', 5, 'model_attempt_finished', 3200, 1680, '', 'ok', '', '', '{"provider":"moonshot","model":"kimi-k2-turbo-preview"}')`)
+
+	rec := chiRequest("GET", "/traces/{turn_id}/diagnostics", "/traces/t-derived/diagnostics", "", GetTurnDiagnostics(store))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	body := jsonBody(t, rec)
+	summary, ok := body["summary"].(map[string]any)
+	if !ok {
+		t.Fatalf("summary = %T, want object", body["summary"])
+	}
+	userNarrative, _ := summary["user_narrative"].(string)
+	operatorNarrative, _ := summary["operator_narrative"].(string)
+	if strings.Contains(strings.ToLower(userNarrative), "collecting evidence") {
+		t.Fatalf("user_narrative stayed boilerplate: %q", userNarrative)
+	}
+	if !strings.Contains(userNarrative, "first attempt succeeded") {
+		t.Fatalf("user_narrative = %q, want derived interpretive conclusion", userNarrative)
+	}
+	if !strings.Contains(operatorNarrative, "guard=non_repetition_v2") {
+		t.Fatalf("operator_narrative = %q, want guard attribution", operatorNarrative)
+	}
+}
+
+func TestGetTurnDiagnostics_NotFound(t *testing.T) {
+	store := testutil.TempStore(t)
+	rec := chiRequest("GET", "/traces/{turn_id}/diagnostics", "/traces/nope/diagnostics", "", GetTurnDiagnostics(store))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+}
+
 // ===== turn_detail.go handlers =====
 
 func TestGetTurnContext_HappyPath(t *testing.T) {

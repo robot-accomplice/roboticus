@@ -24,9 +24,12 @@ func writeEpisodeSummary(t *testing.T, store *db.Store, summary *EpisodeSummary)
 
 func TestParseEpisodeSummary_PullsEnrichedFields(t *testing.T) {
 	summary := &EpisodeSummary{
-		Goal:          "deploy",
-		Outcome:       "success",
-		Learnings:     []string{"guard-triggered revision required before final answer"},
+		Goal:      "deploy",
+		Outcome:   "success",
+		Learnings: []string{"guard-triggered revision required before final answer"},
+		OutcomePatterns: []EpisodeOutcomePattern{
+			{Outcome: "success", Kind: "learning", Value: "guard-triggered revision required before final answer"},
+		},
 		FixPatterns:   []string{"shell: fail→success on retry"},
 		EvidenceRefs:  []string{"cache TTL 24h"},
 		ResultQuality: 0.9,
@@ -45,6 +48,9 @@ func TestParseEpisodeSummary_PullsEnrichedFields(t *testing.T) {
 	if len(fields.EvidenceRefs) != 1 || fields.EvidenceRefs[0] != "cache TTL 24h" {
 		t.Fatalf("expected evidence ref parsed, got %+v", fields.EvidenceRefs)
 	}
+	if len(fields.OutcomePatterns) != 1 || fields.OutcomePatterns[0].Kind != "learning" {
+		t.Fatalf("expected outcome pattern parsed, got %+v", fields.OutcomePatterns)
+	}
 	if !fields.HighQuality {
 		t.Fatal("expected success outcome to mark HighQuality")
 	}
@@ -52,9 +58,12 @@ func TestParseEpisodeSummary_PullsEnrichedFields(t *testing.T) {
 
 func TestParseEpisodeSummaryStructured_PrefersJSONPayload(t *testing.T) {
 	summary := &EpisodeSummary{
-		Goal:          "deploy",
-		Outcome:       "success",
-		Learnings:     []string{"guard-triggered revision required before final answer"},
+		Goal:      "deploy",
+		Outcome:   "success",
+		Learnings: []string{"guard-triggered revision required before final answer"},
+		OutcomePatterns: []EpisodeOutcomePattern{
+			{Outcome: "success", Kind: "learning", Value: "guard-triggered revision required before final answer"},
+		},
 		FixPatterns:   []string{"shell: fail→success on retry"},
 		EvidenceRefs:  []string{"cache TTL 24h"},
 		ResultQuality: 0.9,
@@ -69,6 +78,54 @@ func TestParseEpisodeSummaryStructured_PrefersJSONPayload(t *testing.T) {
 	}
 	if !fields.HighQuality {
 		t.Fatal("expected JSON quality to mark HighQuality")
+	}
+}
+
+func TestPhaseEpisodeDistillation_PromotesReusableOutcomeSemantics(t *testing.T) {
+	store := testutil.TempStore(t)
+	ctx := context.Background()
+
+	for i := 0; i < 3; i++ {
+		writeEpisodeSummary(t, store, &EpisodeSummary{
+			Goal:    "publish release note",
+			Outcome: "success",
+			OutcomePatterns: []EpisodeOutcomePattern{
+				{Outcome: "success", Kind: "learning", Value: "obsidian_write succeeded for release-note publication"},
+			},
+			ResultQuality: 0.9,
+		})
+		writeEpisodeSummary(t, store, &EpisodeSummary{
+			Goal:    "publish release note",
+			Outcome: "failure",
+			OutcomePatterns: []EpisodeOutcomePattern{
+				{Outcome: "failure", Kind: "error_mode", Value: "permission denied writing outside workspace"},
+			},
+			ResultQuality: 0.2,
+		})
+		writeEpisodeSummary(t, store, &EpisodeSummary{
+			Goal:    "publish release note",
+			Outcome: "partial",
+			OutcomePatterns: []EpisodeOutcomePattern{
+				{Outcome: "partial", Kind: "failed_hypothesis", Value: "correction: the first vault path was wrong"},
+			},
+			ResultQuality: 0.55,
+		})
+	}
+
+	pipeline := &ConsolidationPipeline{}
+	promoted := pipeline.phaseEpisodeDistillation(ctx, store)
+	if promoted == 0 {
+		t.Fatal("expected promoted artifacts")
+	}
+
+	var count int
+	if err := store.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM semantic_memory WHERE category = 'procedural_outcome'`,
+	).Scan(&count); err != nil {
+		t.Fatalf("count procedural_outcome rows: %v", err)
+	}
+	if count != 3 {
+		t.Fatalf("expected 3 procedural_outcome rows, got %d", count)
 	}
 }
 
@@ -216,5 +273,81 @@ func TestPhaseEpisodeDistillation_IgnoresLowQualityEpisodes(t *testing.T) {
 	).Scan(&count)
 	if count != 0 {
 		t.Fatalf("expected failure-outcome episodes to be skipped, got %d rows", count)
+	}
+}
+
+func TestPhaseEpisodeDistillation_PinsAcceptedPromotionBreadth(t *testing.T) {
+	store := testutil.TempStore(t)
+	ctx := context.Background()
+
+	// Three high-quality episodes repeating the learning/evidence/relation
+	// signals, and two repeating the fix pattern. This should promote exactly
+	// the accepted breadth:
+	//   - episode_learning (support >= 3)
+	//   - learned_fact     (support >= 3)
+	//   - fix_pattern      (support >= 2)
+	//   - one canonical knowledge_fact relation (support >= 3)
+	for i := 0; i < 3; i++ {
+		summary := &EpisodeSummary{
+			Goal:         "release orchestration",
+			Outcome:      "success",
+			Learnings:    []string{"verify rollout state before summarizing deployment health"},
+			EvidenceRefs: []string{"deployment health came from rollout controller status"},
+			Relations: []EpisodeRelation{
+				{Subject: "rollout controller", Relation: "depends_on", Object: "deployment health"},
+			},
+			ResultQuality: 0.92,
+		}
+		if i < 2 {
+			summary.FixPatterns = []string{"retry rollout-status read after controller warmup"}
+		}
+		writeEpisodeSummary(t, store, summary)
+	}
+
+	// Noise episodes that repeat some strings but are low quality must not widen
+	// the promotion surface or create extra promoted rows.
+	for i := 0; i < 3; i++ {
+		writeEpisodeSummary(t, store, &EpisodeSummary{
+			Goal:         "bad release run",
+			Outcome:      "failure",
+			Learnings:    []string{"verify rollout state before summarizing deployment health"},
+			EvidenceRefs: []string{"deployment health came from rollout controller status"},
+			FixPatterns:  []string{"retry rollout-status read after controller warmup"},
+			Relations: []EpisodeRelation{
+				{Subject: "rollout controller", Relation: "depends_on", Object: "deployment health"},
+			},
+			ResultQuality: 0.25,
+		})
+	}
+
+	pipeline := &ConsolidationPipeline{}
+	promoted := pipeline.phaseEpisodeDistillation(ctx, store)
+	if promoted != 4 {
+		t.Fatalf("expected exactly 4 promoted artifacts, got %d", promoted)
+	}
+
+	var episodeLearning, learnedFact, fixPattern int
+	if err := store.QueryRowContext(ctx,
+		`SELECT
+			SUM(CASE WHEN category = 'episode_learning' THEN 1 ELSE 0 END),
+			SUM(CASE WHEN category = 'learned_fact' THEN 1 ELSE 0 END),
+			SUM(CASE WHEN category = 'fix_pattern' THEN 1 ELSE 0 END)
+		   FROM semantic_memory`,
+	).Scan(&episodeLearning, &learnedFact, &fixPattern); err != nil {
+		t.Fatalf("query semantic_memory breadth: %v", err)
+	}
+	if episodeLearning != 1 || learnedFact != 1 || fixPattern != 1 {
+		t.Fatalf("unexpected semantic breadth: episode_learning=%d learned_fact=%d fix_pattern=%d",
+			episodeLearning, learnedFact, fixPattern)
+	}
+
+	var facts int
+	if err := store.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM knowledge_facts WHERE relation = 'depends_on'`,
+	).Scan(&facts); err != nil {
+		t.Fatalf("query distilled relations: %v", err)
+	}
+	if facts != 1 {
+		t.Fatalf("expected exactly 1 distilled canonical relation, got %d", facts)
 	}
 }

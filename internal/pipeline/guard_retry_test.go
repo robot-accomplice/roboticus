@@ -155,7 +155,7 @@ func TestGuardRetryDetailed_RebuildsContextAcrossRetry(t *testing.T) {
 
 	result, err := retryWithGuardsDetailed(context.Background(), executor, sess, chain, DefaultRetryPolicy(), func() *GuardContext {
 		return (&Pipeline{}).buildGuardContext(sess)
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -170,5 +170,39 @@ func TestGuardRetryDetailed_RebuildsContextAcrossRetry(t *testing.T) {
 	}
 	if result.FinalGuardResult.RetryRequested || len(result.FinalGuardResult.Violations) != 0 {
 		t.Fatalf("final guard result = %+v, want clean pass after retry", result.FinalGuardResult)
+	}
+}
+
+type narrativeOnlyRetryGuard struct{}
+
+func (g *narrativeOnlyRetryGuard) Name() string { return "non_repetition_v2" }
+func (g *narrativeOnlyRetryGuard) Check(content string) GuardResult {
+	return GuardResult{Passed: false, Retry: true, Reason: "response repeats previous assistant message"}
+}
+
+func TestGuardRetryDetailed_SuppressesNarrativeOnlyRetryAfterExecutionProgress(t *testing.T) {
+	executor := &countingExecutor{results: []string{"Created the note."}}
+	chain := NewGuardChain(&narrativeOnlyRetryGuard{})
+	sess := NewSession("s", "a", "n")
+	sess.AddUserMessage("create the note")
+	sess.AddToolResult("call-1", "obsidian_write", "wrote 12 bytes", false)
+
+	result, err := retryWithGuardsDetailed(context.Background(), executor, sess, chain, DefaultRetryPolicy(), func() *GuardContext {
+		return (&Pipeline{}).buildGuardContext(sess)
+	}, decideGuardRetryAfterProgress)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.GuardRetried {
+		t.Fatal("GuardRetried = true, want false")
+	}
+	if !result.RetrySuppressed {
+		t.Fatal("RetrySuppressed = false, want true")
+	}
+	if executor.calls != 1 {
+		t.Fatalf("executor calls = %d, want 1", executor.calls)
+	}
+	if result.RetrySuppressReason == "" {
+		t.Fatal("RetrySuppressReason should explain why the retry was suppressed")
 	}
 }

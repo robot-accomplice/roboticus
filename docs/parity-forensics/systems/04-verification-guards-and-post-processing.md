@@ -168,7 +168,7 @@ The main architectural target here is clear:
 
 ## Final Disposition
 
-System 04 is closed for v1.0.6.
+System 04 is closed for v1.0.7.
 
 - Typed evidence is authoritative on the live verifier path.
 - Guard retry, early-return guard application, cache-hit guards, and guard
@@ -176,6 +176,30 @@ System 04 is closed for v1.0.6.
   variants.
 - Go's richer verifier/guard behavior is accepted where it remains grounded in
   the same live artifacts and does not introduce canned outcomes.
+- v1.0.7 closed the remaining verifier-depth seam by promoting contradictions
+  to structured verifier artifacts, adding per-claim proof diagnostics, and
+  surfacing contested/proof-gap counts directly in traces and retry guidance.
+
+## v1.0.7 Reopening
+
+System 04 was reopened for verifier depth, not for ownership hygiene. That
+slice is now closed:
+
+- `PAR-010` — verifier contradiction resolution — closed 2026-04-20
+- `PAR-011` — proof-style evidence audit depth — closed 2026-04-20
+
+The intended architecture for this closure is:
+
+- contradiction evidence must become a first-class verifier input, not a lossy
+  boolean derived from retrieval text
+- proof obligations must be represented per claim so operator-facing traces can
+  show what proof was required, what was satisfied, and what remained missing
+- claim-level contradiction handling and proof sufficiency must remain tied to
+  the same live verification artifacts rather than being re-derived later from
+  rendered text or post-hoc heuristics
+- operator-facing verifier telemetry must summarize contested-claim and
+  missing-proof counts directly, not force operators to infer them by parsing
+  raw claim-audit JSON
 
 ## Progress Log
 
@@ -221,3 +245,8 @@ System 04 is closed for v1.0.6.
   now resolves through `Pipeline.guardsForPreset(...)` and the centralized
   `GuardRegistry`; daemon/smoke/parity callers no longer inject a fixed full
   chain that masks `GuardSetCached` / `GuardSetStream` / `GuardSetNone`.
+- 2026-04-20: Started the v1.0.7 verifier-depth closure work. Structured
+  contradiction artifacts now enter the typed verification evidence path, and
+  claim audits are being extended with per-claim proof requirements and
+  missing-proof diagnostics instead of relying on a boolean contradiction flag
+  plus generic proof errors.

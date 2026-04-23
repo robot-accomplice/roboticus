@@ -59,6 +59,7 @@ type PerceptionArtifact struct {
 	RequiredMemoryTiers []string
 	DecompositionNeeded bool
 	FreshnessRequired   bool
+	ProceduralUncertainty bool
 	Confidence          float64
 }
 
@@ -70,9 +71,10 @@ func BuildPerception(content string, synthesis TaskSynthesis) PerceptionArtifact
 	lower := strings.ToLower(content)
 
 	art := PerceptionArtifact{
-		Intent:              synthesis.Intent,
-		DecompositionNeeded: synthesis.Complexity == "complex" || synthesis.Complexity == "specialist",
-		Confidence:          synthesis.Confidence,
+		Intent:                synthesis.Intent,
+		DecompositionNeeded:   synthesis.Complexity == "complex" || synthesis.Complexity == "specialist",
+		ProceduralUncertainty: synthesis.ProceduralUncertainty,
+		Confidence:            synthesis.Confidence,
 	}
 
 	art.Risk = classifyRisk(lower, synthesis)
@@ -135,14 +137,8 @@ func classifySourceOfTruth(lower string, synthesis TaskSynthesis) SourceOfTruth 
 	}
 
 	// Workflow / procedure / runbook queries: procedural memory.
-	proceduralMarkers := []string{
-		"how do i", "how to", "steps to", "procedure", "runbook",
-		"playbook", "workflow", "process for",
-	}
-	for _, marker := range proceduralMarkers {
-		if strings.Contains(lower, marker) {
-			return SourceProcedural
-		}
+	if hasProceduralLearningCue(lower) {
+		return SourceProcedural
 	}
 
 	// Dependency / impact / graph queries: relationship memory.
@@ -183,6 +179,9 @@ func classifySourceOfTruth(lower string, synthesis TaskSynthesis) SourceOfTruth 
 	// No retrieval needed for short conversational turns.
 	if !synthesis.RetrievalNeeded {
 		return SourceNone
+	}
+	if synthesis.ProceduralUncertainty {
+		return SourceProcedural
 	}
 	return SourceEpisodic
 }
@@ -234,6 +233,10 @@ func classifyRequiredTiers(art PerceptionArtifact, lower string) []string {
 	// reuse an existing workflow.
 	if art.DecompositionNeeded {
 		add("procedural")
+	}
+	if art.ProceduralUncertainty {
+		add("procedural")
+		add("episodic")
 	}
 
 	return tiers

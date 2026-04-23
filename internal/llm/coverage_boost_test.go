@@ -85,6 +85,8 @@ func TestModelSpecForTarget(t *testing.T) {
 	}{
 		{RouteTarget{Provider: "openai", Model: "gpt-4"}, "openai/gpt-4"},
 		{RouteTarget{Provider: "openai", Model: "openai/gpt-4"}, "openai/gpt-4"}, // already has slash
+		{RouteTarget{Provider: "openrouter", Model: "openai/gpt-4o-mini"}, "openrouter/openai/gpt-4o-mini"},
+		{RouteTarget{Provider: "openrouter", Model: "openrouter/openai/gpt-4o-mini"}, "openrouter/openai/gpt-4o-mini"},
 		{RouteTarget{Provider: "", Model: "gpt-4"}, "gpt-4"},
 		{RouteTarget{Provider: "openai", Model: ""}, "openai"},
 		{RouteTarget{Provider: "", Model: ""}, ""},
@@ -386,7 +388,7 @@ func TestQualityFromResponse_Extended(t *testing.T) {
 	// Test content-length fallback with large content.
 	resp := &Response{Content: strings.Repeat("x", 400), Usage: Usage{OutputTokens: 0}}
 	got := qualityFromResponse(resp)
-	if got < 0.9 || got > 1.1 {
+	if got < 0.55 || got > 0.65 {
 		t.Errorf("qualityFromResponse (content fallback) = %f", got)
 	}
 }

@@ -402,37 +402,26 @@ func ReplayDeadLetter(store *db.Store) http.HandlerFunc {
 // ListSubagents returns registered subagents.
 func ListSubagents(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		rows, err := db.NewRouteQueries(store).ListSubAgentsAdmin(r.Context())
+		rq := db.NewRouteQueries(store)
+		skillRows, err := rq.ListSkillNamesAndKinds(r.Context())
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to query subagents")
+			writeError(w, http.StatusInternalServerError, "failed to query subagent skills")
 			return
 		}
-		defer func() { _ = rows.Close() }()
+		defer func() { _ = skillRows.Close() }()
 
-		var agents []map[string]any
-		for rows.Next() {
-			var id, name, model, role, createdAt string
-			var displayName, description *string
+		allSkillNames := make([]string, 0)
+		for skillRows.Next() {
+			var name, kind string
 			var enabled bool
-			if err := rows.Scan(&id, &name, &displayName, &model, &role, &description, &enabled, &createdAt); err != nil {
-				writeError(w, http.StatusInternalServerError, "failed to read subagent row")
+			if err := skillRows.Scan(&name, &kind, &enabled); err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to read subagent skill row")
 				return
 			}
-			a := map[string]any{
-				"id": id, "name": name, "model": model,
-				"role": role, "enabled": enabled, "created_at": createdAt,
-			}
-			if displayName != nil {
-				a["display_name"] = *displayName
-			}
-			if description != nil {
-				a["description"] = *description
-			}
-			agents = append(agents, a)
+			allSkillNames = append(allSkillNames, name)
 		}
-		if agents == nil {
-			agents = []map[string]any{}
-		}
+
+		agents, _, _, _ := buildSubagentRosterCards(r.Context(), rq, allSkillNames, "orchestrator")
 		writeJSON(w, http.StatusOK, map[string]any{"agents": agents})
 	}
 }
@@ -450,13 +439,21 @@ func CreateSubagent(store *db.Store) http.HandlerFunc {
 			return
 		}
 		skillsJSON, _ := json.Marshal(req.Capabilities)
-		id := db.NewID()
-		repo := db.NewAgentsRepository(store)
-		if err := repo.Insert(r.Context(), id, req.Name, req.Model, string(skillsJSON), true); err != nil {
+		var fixedSkills []string
+		_ = json.Unmarshal(skillsJSON, &fixedSkills)
+		repo := db.NewSubagentCompositionRepository(store)
+		_, _, err := repo.Upsert(r.Context(), db.SubagentSpec{
+			Name:        req.Name,
+			Model:       req.Model,
+			Role:        "subagent",
+			FixedSkills: fixedSkills,
+			Enabled:     true,
+		})
+		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusCreated, map[string]string{"id": id})
+		writeJSON(w, http.StatusCreated, map[string]string{"name": req.Name})
 	}
 }
 

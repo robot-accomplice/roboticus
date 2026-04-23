@@ -25,7 +25,7 @@ func TestPrepareForInference_CompactsSessionMessagesInPlace(t *testing.T) {
 		t.Fatalf("test setup invalid: before=%d", before)
 	}
 
-	pipe.PrepareForInference(t.Context(), sess, "", 0)
+	pipe.PrepareForInference(t.Context(), sess, "", 0, TurnEnvelopePolicy{})
 
 	after := len(sess.Messages())
 	if after >= before {
@@ -98,5 +98,55 @@ func TestRunStandardInference_CompactsSessionMessagesInPlace(t *testing.T) {
 	}
 	if got := sess.Messages()[0].Role; got != "system" {
 		t.Fatalf("first compacted message role=%q, want system", got)
+	}
+}
+
+func TestPrepareForInference_AddsSocialTurnConversationModeInstruction(t *testing.T) {
+	pipe := New(PipelineDeps{})
+	sess := session.New("s-social", "agent-1", "TestBot")
+	sess.AddUserMessage("What's going on?")
+	sess.SetTaskVerificationHints("conversational", "simple", "execute_directly", nil)
+
+	pipe.PrepareForInference(t.Context(), sess, "", 0, TurnEnvelopePolicy{
+		Weight:                 TurnWeightLight,
+		LightweightToolSurface: true,
+	})
+
+	found := false
+	for _, msg := range sess.Messages() {
+		if msg.Role == "system" && strings.Contains(msg.Content, "[Conversation Mode]") {
+			found = true
+			if !strings.Contains(msg.Content, "Do not mention sandbox state") {
+				t.Fatalf("conversation mode note missing operational-status constraint: %q", msg.Content)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected conversation mode instruction to be injected")
+	}
+}
+
+func TestBuildDelegationReportingContract_RequiresEvidenceAndGapReporting(t *testing.T) {
+	msg := buildDelegationReportingContract("subagent ran ls and found 12 markdown files")
+	if !strings.Contains(msg, "[Delegation Reporting Contract]") {
+		t.Fatal("expected delegation reporting contract header")
+	}
+	if !strings.Contains(msg, "Treat delegated output as evidence") {
+		t.Fatal("expected delegated output to be framed as evidence")
+	}
+	if !strings.Contains(msg, "Subagents report to you; they do not report directly to the operator") {
+		t.Fatal("expected contract to enforce orchestrator-only operator reporting")
+	}
+	if !strings.Contains(msg, "cite the concrete evidence or artifacts") {
+		t.Fatal("expected contract to require concrete evidence or artifacts")
+	}
+	if !strings.Contains(msg, "remaining gaps, uncertainty, or unverified assumptions") {
+		t.Fatal("expected contract to require gap and uncertainty reporting")
+	}
+	if !strings.Contains(msg, "Do not claim the delegated task succeeded unless the attached result proves it") {
+		t.Fatal("expected contract to forbid unsupported delegated success claims")
+	}
+	if !strings.Contains(msg, "Repackage delegated results for the operator in clear operator-facing language") {
+		t.Fatal("expected contract to require operator-facing repackaging")
 	}
 }

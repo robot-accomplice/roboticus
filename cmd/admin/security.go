@@ -96,11 +96,11 @@ var securityAuditCmd = &cobra.Command{
 			fmt.Println("  [OK]   Provider API keys present")
 		}
 
-		// Check: bind address.
-		bind := cfg.Server.Bind
-		if bind == "" {
-			bind = "127.0.0.1"
-		}
+			// Check: bind address.
+			bind := cfg.Server.Bind
+			if bind == "" {
+				bind = "localhost"
+			}
 		ip := net.ParseIP(bind)
 		if ip != nil && !ip.IsLoopback() && bind != "0.0.0.0" {
 			fmt.Printf("  [OK]   Bind address: %s\n", bind)
