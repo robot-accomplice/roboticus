@@ -17,12 +17,20 @@ on:
   push:
     tags:
       - "v[0-9]*"
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Existing release tag to execute against (for example v1.0.7)"
+        required: true
+        type: string
 
 permissions:
   contents: write  # required to create GitHub Releases and upload assets
 
 env:
   GO_VERSION_FILE: go.mod
+  TAG_NAME: ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }}
+  CHECKOUT_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref }}
 
 jobs:
   # --------------------------------------------------------------------------
@@ -32,11 +40,11 @@ jobs:
   test:
     name: Pre-release Tests
     runs-on: ubuntu-latest
-    env:
-      TAG_NAME: ${{ github.ref_name }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
+        with:
+          ref: ${{ env.CHECKOUT_REF }}
 
       - name: Validate release notes and changelog
         run: |
@@ -101,11 +109,11 @@ jobs:
           - goos: windows
             goarch: amd64
             suffix: ".exe"
-    env:
-      TAG_NAME: ${{ github.ref_name }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
+        with:
+          ref: ${{ env.CHECKOUT_REF }}
 
       - name: Set up Go
         uses: actions/setup-go@v6
@@ -162,12 +170,11 @@ jobs:
     name: Publish Release
     needs: [build]
     runs-on: ubuntu-latest
-    env:
-      TAG_NAME: ${{ github.ref_name }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
         with:
+          ref: ${{ env.CHECKOUT_REF }}
           fetch-depth: 0  # needed for changelog generation
 
       - name: Download all build artifacts

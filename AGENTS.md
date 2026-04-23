@@ -108,3 +108,6 @@ In particular:
 - `develop` is audited and green before PR to `main`
 - tag creation happens only after merge to `main`
 - release monitoring includes artifacts, site sync, fingerprinting, and install verification
+- the release workflow must also be replayable for an existing tag through one
+  canonical dispatch path; do not invent manual artifact publication when the
+  audited workflow can be rerun instead
