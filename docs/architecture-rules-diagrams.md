@@ -38,6 +38,14 @@ This file follows the same C4 conventions used elsewhere in the repo:
   CLI version is stamped into `cmd/internal/cmdutil.Version`, daemon banner
   version into `internal/daemon.version`, and CI/release/local helper build
   paths are not allowed to drift from that contract
+- release publication and downstream release notifications must derive from one
+  explicit tag authority under both tag-push and manual rerun paths; critical
+  release control flow is not allowed to depend on opaque third-party action
+  context for tag identity, prerelease state, dispatch payload semantics, or
+  success/failure reporting
+- CI/release security-tool installation must be pinned and replayable; active
+  workflows are not allowed to float `@latest` for critical scanners whose
+  behavior can silently change between releases
 - route handlers may share connector-local helpers, but policy/exercise/export
   admin surfaces are not allowed to collapse into one monolithic route file
 - unified pipeline-path enforcement follows the whole connector surface for a

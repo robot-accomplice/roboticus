@@ -2,7 +2,9 @@
 # Roboticus Release Pipeline
 # ============================================================================
 # Triggered by pushing a version tag: v2025.04.02, v2025.04.02.1, etc.
-# Builds cross-platform binaries, generates checksums, creates GitHub Release.
+# Builds cross-platform binaries, generates checksums, creates/updates the
+# GitHub Release, verifies the published release object, and reports the final
+# release outcome.
 #
 # Versioning: YYYY.MM.DD[.N]
 #   v2025.04.02   — first release of the day
@@ -12,31 +14,42 @@
 # ============================================================================
 
 name: Release
+run-name: "Release / ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }}"
 
 on:
   push:
     tags:
       - "v[0-9]*"
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Existing release tag to execute against (for example v1.0.7)"
+        required: true
+        type: string
+
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }}
+  cancel-in-progress: false
 
 permissions:
-  contents: write  # required to create GitHub Releases and upload assets
+  contents: write
 
 env:
   GO_VERSION_FILE: go.mod
+  TAG_NAME: ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }}
+  CHECKOUT_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref }}
+  IS_PRERELEASE: ${{ contains(github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name, '-rc') }}
 
 jobs:
-  # --------------------------------------------------------------------------
-  # Gate: Run tests before building release artifacts.
-  # Prevents shipping a broken tag.
-  # --------------------------------------------------------------------------
   test:
     name: Pre-release Tests
     runs-on: ubuntu-latest
-    env:
-      TAG_NAME: ${{ github.ref_name }}
+    timeout-minutes: 45
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
+        with:
+          ref: ${{ env.CHECKOUT_REF }}
 
       - name: Validate release notes and changelog
         run: |
@@ -63,9 +76,6 @@ jobs:
         run: go vet ./...
 
       - name: Run tests with race detector
-        # Keep the release gate aligned with CI. v1.0.6 proved that a stale
-        # 300s cap can fail the release pipeline even when the release branch's
-        # current validated test posture needs materially more headroom.
         run: go test -race -timeout 20m ./...
 
       - name: Run smoke test
@@ -74,14 +84,11 @@ jobs:
       - name: Run architecture tests
         run: go test -v -run TestArchitecture ./internal/api/
 
-  # --------------------------------------------------------------------------
-  # Build: Cross-compile for all target platforms.
-  # Uses a matrix to produce one artifact per GOOS/GOARCH pair.
-  # --------------------------------------------------------------------------
   build:
     name: Build (${{ matrix.goos }}/${{ matrix.goarch }})
     needs: [test]
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
       fail-fast: true
       matrix:
@@ -101,11 +108,11 @@ jobs:
           - goos: windows
             goarch: amd64
             suffix: ".exe"
-    env:
-      TAG_NAME: ${{ github.ref_name }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
+        with:
+          ref: ${{ env.CHECKOUT_REF }}
 
       - name: Set up Go
         uses: actions/setup-go@v6
@@ -124,18 +131,14 @@ jobs:
           SUFFIX: ${{ matrix.suffix }}
           BUILD_VERSION: ${{ steps.version.outputs.version }}
         run: |
-          # Build the binary.
           BINARY_NAME="roboticus${SUFFIX}"
           go build -trimpath \
             -ldflags="-s -w -X roboticus/cmd/internal/cmdutil.Version=${BUILD_VERSION} -X roboticus/internal/daemon.version=${BUILD_VERSION}" \
             -o "${BINARY_NAME}" .
 
-          # Raw binary for update-in-place (roboticus update binary).
           RAW_NAME="roboticus-${GOOS}-${GOARCH}${SUFFIX}"
           cp "${BINARY_NAME}" "${RAW_NAME}"
 
-          # Archive for site installer (roboticus-VERSION-OS-ARCH.tar.gz/zip).
-          # Use Go-native names to match site installer's arch mapping.
           ARCH_NAME="${GOARCH}"
           OS_NAME="${GOOS}"
           if [ "${GOOS}" = "windows" ]; then
@@ -145,6 +148,7 @@ jobs:
             ARCHIVE="roboticus-${BUILD_VERSION}-${OS_NAME}-${ARCH_NAME}.tar.gz"
             tar czf "${ARCHIVE}" "${BINARY_NAME}"
           fi
+
           mkdir -p artifacts
           mv "${RAW_NAME}" "${ARCHIVE}" artifacts/
 
@@ -155,20 +159,17 @@ jobs:
           path: artifacts/
           retention-days: 7
 
-  # --------------------------------------------------------------------------
-  # Release: Collect all binaries, generate checksums, publish GitHub Release.
-  # --------------------------------------------------------------------------
   release:
     name: Publish Release
     needs: [build]
     runs-on: ubuntu-latest
-    env:
-      TAG_NAME: ${{ github.ref_name }}
+    timeout-minutes: 20
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
         with:
-          fetch-depth: 0  # needed for changelog generation
+          ref: ${{ env.CHECKOUT_REF }}
+          fetch-depth: 0
 
       - name: Download all build artifacts
         uses: actions/download-artifact@v8
@@ -189,13 +190,11 @@ jobs:
       - name: Generate changelog from commits
         id: changelog
         run: |
-          # Find the previous tag for changelog diff.
           PREV_TAG=$(git tag --sort=-v:refname | grep -E '^v[0-9]' | head -2 | tail -1)
           if [ -z "${PREV_TAG}" ] || [ "${PREV_TAG}" = "${TAG_NAME}" ]; then
             echo "body=Initial release." >> "$GITHUB_OUTPUT"
           else
             CHANGES=$(git log "${PREV_TAG}..${TAG_NAME}" --pretty=format:"- %s (%h)" --no-merges | head -50)
-            # Write multiline output safely via delimiter.
             {
               echo "body<<CHANGELOG_EOF"
               echo "## Changes since ${PREV_TAG}"
@@ -206,19 +205,53 @@ jobs:
             } >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          name: "Roboticus ${{ github.ref_name }}"
-          body: ${{ steps.changelog.outputs.body }}
-          draft: false
-          prerelease: ${{ contains(github.ref_name, '-rc') }}
-          files: |
-            dist/roboticus-*
-            dist/SHA256SUMS.txt
-            scripts/install.sh
-            scripts/install.ps1
-          fail_on_unmatched_files: false
+      - name: Publish or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          title="Roboticus ${TAG_NAME}"
+          notes_file="$(mktemp)"
+          printf '%s\n' "${{ steps.changelog.outputs.body }}" > "${notes_file}"
+
+          if gh release view "${TAG_NAME}" >/dev/null 2>&1; then
+            if [ "${IS_PRERELEASE}" = "true" ]; then
+              gh release edit "${TAG_NAME}" \
+                --verify-tag \
+                --title "${title}" \
+                --notes-file "${notes_file}" \
+                --prerelease
+            else
+              gh release edit "${TAG_NAME}" \
+                --verify-tag \
+                --title "${title}" \
+                --notes-file "${notes_file}" \
+                --latest
+            fi
+          else
+            if [ "${IS_PRERELEASE}" = "true" ]; then
+              gh release create "${TAG_NAME}" \
+                --verify-tag \
+                --title "${title}" \
+                --notes-file "${notes_file}" \
+                --prerelease \
+                --latest=false
+            else
+              gh release create "${TAG_NAME}" \
+                --verify-tag \
+                --title "${title}" \
+                --notes-file "${notes_file}" \
+                --latest
+            fi
+          fi
+
+          gh release upload "${TAG_NAME}" \
+            dist/roboticus-* \
+            dist/SHA256SUMS.txt \
+            scripts/install.sh \
+            scripts/install.ps1 \
+            --clobber
 
       - name: Verify live release object and assets
         env:
@@ -227,18 +260,20 @@ jobs:
           set -euo pipefail
 
           release_json=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG_NAME}")
-          latest_json=$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest")
-
           actual_tag=$(printf '%s' "$release_json" | jq -r '.tag_name')
-          latest_tag=$(printf '%s' "$latest_json" | jq -r '.tag_name')
           [ "$actual_tag" = "$TAG_NAME" ] || {
             echo "release tag mismatch: expected $TAG_NAME got $actual_tag" >&2
             exit 1
           }
-          [ "$latest_tag" = "$TAG_NAME" ] || {
-            echo "latest release mismatch: expected $TAG_NAME got $latest_tag" >&2
-            exit 1
-          }
+
+          if [ "${IS_PRERELEASE}" != "true" ]; then
+            latest_json=$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest")
+            latest_tag=$(printf '%s' "$latest_json" | jq -r '.tag_name')
+            [ "$latest_tag" = "$TAG_NAME" ] || {
+              echo "latest release mismatch: expected $TAG_NAME got $latest_tag" >&2
+              exit 1
+            }
+          fi
 
           asset_names=$(printf '%s' "$release_json" | jq -r '.assets[].name' | sort)
           printf '%s\n' "$asset_names"
@@ -271,14 +306,241 @@ jobs:
           echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
 
       - name: Trigger roboticus.ai release sync
-        if: ${{ !contains(github.ref_name, '-rc') }}
-        uses: peter-evans/repository-dispatch@v3
-        with:
-          token: ${{ secrets.ROBOTICUS_SITE_DISPATCH_TOKEN }}
-          repository: robot-accomplice/ironclad-site
-          event-type: release-sync
-          client-payload: |
-            {
-              "version": "${{ steps.site_meta.outputs.version }}",
-              "date": "${{ steps.site_meta.outputs.date }}"
-            }
+        if: ${{ env.IS_PRERELEASE != 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.ROBOTICUS_SITE_DISPATCH_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh api \
+            --method POST \
+            -H "Accept: application/vnd.github+json" \
+            "repos/robot-accomplice/ironclad-site/dispatches" \
+            -f event_type=release-sync \
+            -F client_payload[version]='${{ steps.site_meta.outputs.version }}' \
+            -F client_payload[date]='${{ steps.site_meta.outputs.date }}'
+
+  notify:
+    name: Release Report
+    needs: [test, build, release]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Determine stage status
+        id: stage_status
+        env:
+          TEST_RESULT: ${{ needs.test.result }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          RELEASE_RESULT: ${{ needs.release.result }}
+        run: |
+          if [ "${TEST_RESULT}" = "success" ] && \
+             [ "${BUILD_RESULT}" = "success" ] && \
+             [ "${RELEASE_RESULT}" = "success" ]; then
+            echo "workflow_outcome=success" >> "$GITHUB_OUTPUT"
+          else
+            echo "workflow_outcome=failure" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Self-evaluate release truth
+        id: audit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TEST_RESULT: ${{ needs.test.result }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          RELEASE_RESULT: ${{ needs.release.result }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          tag = os.environ["TAG_NAME"]
+          is_prerelease = os.environ.get("IS_PRERELEASE") == "true"
+          stage_results = {
+              "test": os.environ["TEST_RESULT"],
+              "build": os.environ["BUILD_RESULT"],
+              "release": os.environ["RELEASE_RESULT"],
+          }
+          required_assets = [
+              "SHA256SUMS.txt",
+              "install.sh",
+              "install.ps1",
+              "roboticus-linux-amd64",
+              "roboticus-linux-arm64",
+              "roboticus-darwin-amd64",
+              "roboticus-darwin-arm64",
+              "roboticus-windows-amd64.exe",
+              f"roboticus-{tag[1:]}-linux-amd64.tar.gz",
+              f"roboticus-{tag[1:]}-linux-arm64.tar.gz",
+              f"roboticus-{tag[1:]}-darwin-amd64.tar.gz",
+              f"roboticus-{tag[1:]}-darwin-arm64.tar.gz",
+              f"roboticus-{tag[1:]}-windows-amd64.zip",
+          ]
+
+          outcome = "success"
+          findings = []
+          release_url = f"https://github.com/{repo}/releases/tag/{tag}"
+
+          for stage, result in stage_results.items():
+              if result != "success":
+                  outcome = "failure"
+                  findings.append(f"stage {stage}={result}")
+
+          release_json = None
+          if outcome == "success":
+              try:
+                  release_json = json.loads(
+                      subprocess.check_output(
+                          ["gh", "api", f"repos/{repo}/releases/tags/{tag}"],
+                          text=True,
+                      )
+                  )
+                  release_url = release_json.get("html_url") or release_url
+              except subprocess.CalledProcessError:
+                  outcome = "failure"
+                  findings.append(f"release object for {tag} is missing")
+
+          if release_json is not None:
+              if release_json.get("tag_name") != tag:
+                  outcome = "failure"
+                  findings.append(
+                      f"release tag mismatch: {release_json.get('tag_name')} != {tag}"
+                  )
+
+              assets = sorted(asset["name"] for asset in release_json.get("assets", []))
+              missing = [name for name in required_assets if name not in assets]
+              if missing:
+                  outcome = "failure"
+                  findings.append("missing assets: " + ", ".join(missing))
+
+              if not is_prerelease:
+                  try:
+                      latest = json.loads(
+                          subprocess.check_output(
+                              ["gh", "api", f"repos/{repo}/releases/latest"],
+                              text=True,
+                          )
+                      )
+                      if latest.get("tag_name") != tag:
+                          outcome = "failure"
+                          findings.append(
+                              f"latest release mismatch: {latest.get('tag_name')} != {tag}"
+                          )
+                  except subprocess.CalledProcessError:
+                      outcome = "failure"
+                      findings.append("latest release lookup failed")
+
+          summary = (
+              "All required release stages executed and the published release object matches the requested tag."
+              if outcome == "success"
+              else "; ".join(findings)
+          )
+
+          out = Path(os.environ["GITHUB_OUTPUT"])
+          with out.open("a", encoding="utf-8") as fh:
+              fh.write(f"audit_outcome={outcome}\n")
+              fh.write(f"release_url={release_url}\n")
+              fh.write("audit_summary<<AUDIT_EOF\n")
+              fh.write(summary + "\n")
+              fh.write("AUDIT_EOF\n")
+          PY
+
+      - name: Send release report email
+        if: always()
+        env:
+          SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          RELEASE_NOTIFY_EMAIL: ${{ secrets.RELEASE_NOTIFY_EMAIL }}
+          RELEASE_FROM_EMAIL: ${{ secrets.RELEASE_FROM_EMAIL }}
+          TEST_RESULT: ${{ needs.test.result }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          RELEASE_RESULT: ${{ needs.release.result }}
+          AUDIT_OUTCOME: ${{ steps.audit.outputs.audit_outcome }}
+          AUDIT_SUMMARY: ${{ steps.audit.outputs.audit_summary }}
+          RELEASE_URL: ${{ steps.audit.outputs.release_url }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import smtplib
+          from email.message import EmailMessage
+
+          server = os.environ.get("SMTP_SERVER", "").strip()
+          to_addr = os.environ.get("RELEASE_NOTIFY_EMAIL", "").strip()
+          if not server or not to_addr:
+              raise SystemExit("SMTP or recipient not configured for release notification")
+
+          tag = os.environ["TAG_NAME"]
+          outcome = os.environ.get("AUDIT_OUTCOME", "failure")
+          emoji = "✅" if outcome == "success" else "❌"
+          release_url = os.environ.get("RELEASE_URL", "")
+          workflow_url = f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
+          sender = os.environ.get("RELEASE_FROM_EMAIL", "").strip() or "Roboticus CI <ci@roboticus.ai>"
+          port = int((os.environ.get("SMTP_PORT") or "587").strip())
+          username = os.environ.get("SMTP_USERNAME", "").strip()
+          password = os.environ.get("SMTP_PASSWORD", "")
+
+          html = f"""
+          <html><body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: #24292f;">
+          <h2>{emoji} Roboticus {tag} release {outcome}</h2>
+          <p>{os.environ.get('AUDIT_SUMMARY', '').strip()}</p>
+          <table style="border-collapse: collapse;">
+            <tr><td style="padding: 6px 10px; border: 1px solid #d0d7de;"><strong>Pre-release Tests</strong></td><td style="padding: 6px 10px; border: 1px solid #d0d7de;">{os.environ.get('TEST_RESULT')}</td></tr>
+            <tr><td style="padding: 6px 10px; border: 1px solid #d0d7de;"><strong>Build Matrix</strong></td><td style="padding: 6px 10px; border: 1px solid #d0d7de;">{os.environ.get('BUILD_RESULT')}</td></tr>
+            <tr><td style="padding: 6px 10px; border: 1px solid #d0d7de;"><strong>Publish Release</strong></td><td style="padding: 6px 10px; border: 1px solid #d0d7de;">{os.environ.get('RELEASE_RESULT')}</td></tr>
+            <tr><td style="padding: 6px 10px; border: 1px solid #d0d7de;"><strong>Self-Evaluation</strong></td><td style="padding: 6px 10px; border: 1px solid #d0d7de;">{outcome}</td></tr>
+          </table>
+          <p><a href="{release_url}">View Release</a> · <a href="{workflow_url}">View Workflow Run</a></p>
+          </body></html>
+          """
+
+          msg = EmailMessage()
+          msg["Subject"] = f"{emoji} Roboticus {tag} release {outcome}"
+          msg["From"] = sender
+          msg["To"] = to_addr
+          msg.set_content(os.environ.get("AUDIT_SUMMARY", "").strip())
+          msg.add_alternative(html, subtype="html")
+
+          if port == 465:
+              smtp = smtplib.SMTP_SSL(server, port, timeout=30)
+          else:
+              smtp = smtplib.SMTP(server, port, timeout=30)
+          try:
+              smtp.ehlo()
+              if port != 465:
+                  smtp.starttls()
+                  smtp.ehlo()
+              if username:
+                  smtp.login(username, password)
+              smtp.send_message(msg)
+          finally:
+              smtp.quit()
+          PY
+
+      - name: Post workflow summary
+        env:
+          TEST_RESULT: ${{ needs.test.result }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          RELEASE_RESULT: ${{ needs.release.result }}
+          AUDIT_OUTCOME: ${{ steps.audit.outputs.audit_outcome }}
+          AUDIT_SUMMARY: ${{ steps.audit.outputs.audit_summary }}
+          RELEASE_URL: ${{ steps.audit.outputs.release_url }}
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          ## Release report for ${TAG_NAME}
+
+          | Stage | Result |
+          |-------|--------|
+          | Pre-release Tests | ${TEST_RESULT} |
+          | Build Matrix | ${BUILD_RESULT} |
+          | Publish Release | ${RELEASE_RESULT} |
+          | Self-Evaluation | ${AUDIT_OUTCOME} |
+
+          ${AUDIT_SUMMARY}
+
+          - [Release](${RELEASE_URL})
+          - [Workflow Run](https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})
+          EOF
