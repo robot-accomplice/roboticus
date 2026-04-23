@@ -200,6 +200,11 @@ older architecture docs had left too generic:
   toolchain. The module-declared Go version is part of release truth and must
   be raised immediately when the active CI standard-library line is flagged by
   `govulncheck`.
+- **MCP stdio diagnostics must wait on collector completion, not buffer
+  heuristics.** Startup failure reporting is not allowed to poll stderr-buffer
+  length and infer that the final diagnostic tail has landed. The transport
+  must own an explicit stderr-collector completion signal so slower CI runners
+  cannot lose the actionable tail of a real child-process failure.
 - **Focused profiles must derive from one complete tool-semantics map.** A
   bounded turn policy is not allowed to silently drop a legitimate inspection or
   read tool because that tool was never classified in the central semantics map.

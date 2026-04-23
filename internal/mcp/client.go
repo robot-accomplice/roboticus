@@ -104,6 +104,7 @@ type StdioTransport struct {
 	// prologue).
 	stderrMu  sync.Mutex
 	stderrBuf []byte
+	stderrDone chan struct{}
 
 	// Child exit state. waitErr captures the result of cmd.Wait()
 	// so failure paths can include "exit status N" alongside the
@@ -111,6 +112,7 @@ type StdioTransport struct {
 	waitMu  sync.RWMutex
 	exited  bool
 	waitErr error
+	waitDone chan struct{}
 }
 
 // NewStdioTransport spawns a subprocess and connects via JSON-RPC over stdio.
@@ -144,9 +146,11 @@ func NewStdioTransport(command string, args []string, env map[string]string) (*S
 	}
 
 	t := &StdioTransport{
-		cmd:    cmd,
-		stdin:  stdin,
-		stdout: bufio.NewReader(stdout),
+		cmd:        cmd,
+		stdin:      stdin,
+		stdout:     bufio.NewReader(stdout),
+		stderrDone: make(chan struct{}),
+		waitDone:   make(chan struct{}),
 	}
 
 	// Start the stderr-collection goroutine. Reads until the pipe
@@ -168,7 +172,10 @@ func NewStdioTransport(command string, args []string, env map[string]string) (*S
 // its own goroutine for the life of the child process. Returns when
 // the stderr pipe closes (child exit, explicit close, or pipe error).
 func (t *StdioTransport) collectStderr(pipe io.ReadCloser) {
-	defer func() { _ = pipe.Close() }()
+	defer func() {
+		_ = pipe.Close()
+		close(t.stderrDone)
+	}()
 	chunk := make([]byte, 4096)
 	for {
 		n, err := pipe.Read(chunk)
@@ -202,6 +209,7 @@ func (t *StdioTransport) watchExit() {
 	t.waitErr = err
 	t.exited = true
 	t.waitMu.Unlock()
+	close(t.waitDone)
 }
 
 // ChildDiagnostic returns a human-readable summary of the child's
@@ -345,13 +353,34 @@ func ConnectStdio(ctx context.Context, name, command string, args []string, env 
 // immediately on Close but the bytes already in the pipe buffer may
 // not have been appended yet.
 //
-// Polls until stderr buffer stops growing OR timeout elapses,
-// whichever comes first. The poll interval is short (10ms) so a
-// quickly-flushing child doesn't pay the full timeout.
+// If stderr collection and exit observation have already completed,
+// returns immediately. Otherwise, for still-running children, polls until the
+// buffer stops growing OR timeout elapses, whichever comes first. The poll
+// interval is short (10ms) so a quickly-flushing child doesn't pay the full
+// timeout.
 func waitForStderrDrain(t *StdioTransport, timeout time.Duration) {
+	select {
+	case <-t.stderrDone:
+		select {
+		case <-t.waitDone:
+			return
+		default:
+		}
+	default:
+	}
+
 	deadline := time.Now().Add(timeout)
 	prevLen := -1
 	for time.Now().Before(deadline) {
+		select {
+		case <-t.stderrDone:
+			select {
+			case <-t.waitDone:
+				return
+			default:
+			}
+		default:
+		}
 		t.stderrMu.Lock()
 		curLen := len(t.stderrBuf)
 		t.stderrMu.Unlock()
