@@ -2,10 +2,12 @@ package channel
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 )
 
 var mdLinkRe = regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`)
+var whatsappBoldRe = regexp.MustCompile(`\*\*([^*\n]+)\*\*`)
 
 // Formatter converts LLM Markdown output into platform-native syntax.
 type Formatter interface {
@@ -426,52 +428,46 @@ func whatsappConvertLine(line string) string {
 		return "*" + strings.TrimSpace(rest) + "*"
 	}
 
-	// Inline conversions via character parsing.
-	chars := []rune(trimmed)
-	n := len(chars)
-	var b strings.Builder
-	b.Grow(n * 2)
-	i := 0
-
-	for i < n {
-		// Inline code: `code` → ```code``` (WhatsApp monospace).
-		if chars[i] == '`' && i+1 < n {
-			if end, ok := findClosing(chars, i+1, '`'); ok {
-				code := string(chars[i+1 : end])
-				b.WriteString("```")
-				b.WriteString(code)
-				b.WriteString("```")
-				i = end + 1
-				continue
-			}
-		}
-
-		// Bold: **text** → *text*.
-		if i+1 < n && chars[i] == '*' && chars[i+1] == '*' {
-			if end, ok := findDoubleClosing(chars, i+2, '*'); ok {
-				inner := string(chars[i+2 : end])
-				b.WriteByte('*')
-				b.WriteString(inner)
-				b.WriteByte('*')
-				i = end + 2
-				continue
-			}
-		}
-
-		// Markdown link: [text](url) → url (bare link).
-		if chars[i] == '[' {
-			if _, url, endPos, ok := parseMarkdownLink(chars, i); ok {
-				b.WriteString(url)
-				i = endPos
-				continue
-			}
-		}
-
-		b.WriteRune(chars[i])
-		i++
+	withCodeTokens, restoreCode := protectWhatsAppCodeSpans(trimmed)
+	converted := mdLinkRe.ReplaceAllString(withCodeTokens, "$2")
+	converted = whatsappBoldRe.ReplaceAllString(converted, "*$1*")
+	if restoreCode != nil {
+		converted = restoreCode.Replace(converted)
 	}
+	return converted
+}
 
-	return b.String()
+func protectWhatsAppCodeSpans(text string) (string, *strings.Replacer) {
+	if !strings.ContainsRune(text, '`') {
+		return text, nil
+	}
+	var (
+		b            strings.Builder
+		replacements []string
+	)
+	b.Grow(len(text))
+	for i := 0; i < len(text); {
+		if text[i] != '`' {
+			b.WriteByte(text[i])
+			i++
+			continue
+		}
+		relEnd := strings.IndexByte(text[i+1:], '`')
+		if relEnd < 0 {
+			b.WriteByte(text[i])
+			i++
+			continue
+		}
+		code := text[i+1 : i+1+relEnd]
+		token := "\x00WA_CODE_" + strconv.Itoa(len(replacements)/2) + "\x00"
+		b.WriteString(token)
+		replacements = append(replacements, token, "```"+code+"```")
+		i += relEnd + 2
+	}
+	if len(replacements) == 0 {
+		return text, nil
+	}
+	return b.String(), strings.NewReplacer(replacements...)
 }
 
 // --- Signal Formatter ---
