@@ -102,16 +102,16 @@ type StdioTransport struct {
 	// from the FRONT (we keep the most recent stderr because that's
 	// what's diagnostic at the moment of failure, not the
 	// prologue).
-	stderrMu  sync.Mutex
-	stderrBuf []byte
+	stderrMu   sync.Mutex
+	stderrBuf  []byte
 	stderrDone chan struct{}
 
 	// Child exit state. waitErr captures the result of cmd.Wait()
 	// so failure paths can include "exit status N" alongside the
 	// captured stderr. exited becomes true once Wait has returned.
-	waitMu  sync.RWMutex
-	exited  bool
-	waitErr error
+	waitMu   sync.RWMutex
+	exited   bool
+	waitErr  error
 	waitDone chan struct{}
 }
 
@@ -362,7 +362,7 @@ func waitForStderrDrain(t *StdioTransport, timeout time.Duration) {
 	stderrDone := false
 	waitDone := false
 
-	for !(stderrDone && waitDone) {
+	for !stderrDone || !waitDone {
 		select {
 		case <-t.stderrDone:
 			stderrDone = true
