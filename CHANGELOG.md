@@ -4,6 +4,36 @@ All notable changes to Roboticus are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.7] - 2026-04-23
+
+### Changed
+
+- Turned `v1.0.7` into an explicit behavior-hardening release with canonical
+  RCA, focused tool surfaces, stricter artifact/source proof, and cleaner
+  retry/replay boundaries instead of continuing to treat repeated agent
+  failures as isolated bugs.
+- Tightened model/routing truth so lifecycle policy, intent-scoped exercise,
+  tool-use evidence, and observed provider/model identity now line up across
+  routing, execution, benchmarks, and operator diagnostics.
+- Hardened the release/deployment control plane by making release procedure
+  explicit, fixing version stamping, removing deprecated Node 20 workflow
+  actions, and aligning the declared Go security floor with the toolchain CI
+  actually needs.
+
+### Fixed
+
+- Removed several framework-owned false negatives around tool use and authoring
+  by adding central tool-I/O normalization, exact artifact proof, source-read
+  protection, replay suppression, and authoritative verifier rechecks before
+  finalization.
+- Fixed multiple observability/RCA truth seams so turn diagnostics, trace flow,
+  host-resource evidence, learning/reuse capture, and operator UI all report
+  the same causal story instead of drifting into stale fallback or trace-only
+  views.
+- Closed release-branch and post-merge CI defects uncovered during the
+  ceremony, including Linux-specific MCP stderr diagnostics, brittle shell test
+  fixtures, unstable pipeline tests, and vulnerable/stale workflow dependencies.
+
 ## [1.0.0] - 2026-04-11
 
 ### Theme: The Go Rewrite
