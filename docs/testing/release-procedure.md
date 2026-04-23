@@ -67,6 +67,9 @@ After tagging and release creation, actively verify:
 4. site synchronization completed against the intended release metadata
 5. the published binary reports the intended version, not `dev`
 6. install / upgrade paths still work against the published release
+7. if the initial tag push did not enqueue release execution, the canonical
+   release workflow can be manually dispatched against the existing tag without
+   changing release content or creating a new tag
 
 ## Failure Rules
 
@@ -74,6 +77,10 @@ After tagging and release creation, actively verify:
 - If `develop` audit fails, stop and fix `develop` before opening `main` PR.
 - If release artifacts, fingerprinting, or site sync are wrong, the release is
   not complete even if merges and tags succeeded.
+- If the tag exists but the release workflow did not enqueue, do not invent a
+  manual artifact side channel first. Use the canonical release workflow's
+  explicit rerun/dispatch path against the existing tag so release execution
+  stays on one audited seam.
 
 ## Operator Reminder
 

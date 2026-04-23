@@ -200,6 +200,13 @@ older architecture docs had left too generic:
   toolchain. The module-declared Go version is part of release truth and must
   be raised immediately when the active CI standard-library line is flagged by
   `govulncheck`.
+- **Release execution must be replayable after a valid tag exists.** The
+  release pipeline is not allowed to depend solely on the initial tag-push
+  event when GitHub can legitimately drop or ignore a rerun after tag repair or
+  deleted/recreated tags. The release workflow must expose one explicit,
+  operator-invokable rerun seam for an existing tag so artifact publication,
+  checksums, and installer assets can be completed without inventing manual
+  side-channel publishing or retagging tricks.
 - **MCP stdio diagnostics must wait on collector completion, not buffer
   heuristics.** Startup failure reporting is not allowed to poll stderr-buffer
   length and infer that the final diagnostic tail has landed. The transport
