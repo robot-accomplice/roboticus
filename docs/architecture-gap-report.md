@@ -194,6 +194,12 @@ older architecture docs had left too generic:
   release gate. Workflow hygiene is part of release truth; noisy deprecation
   warnings must be removed by upgrading or inlining those action paths before
   the ceremony is considered clean.
+- **Release security gates must run on the same patched toolchain the repo
+  declares.** CI security checks are not allowed to rely on a vulnerable Go
+  patch line while local development silently passes on a newer auto-selected
+  toolchain. The module-declared Go version is part of release truth and must
+  be raised immediately when the active CI standard-library line is flagged by
+  `govulncheck`.
 - **Focused profiles must derive from one complete tool-semantics map.** A
   bounded turn policy is not allowed to silently drop a legitimate inspection or
   read tool because that tool was never classified in the central semantics map.
