@@ -371,7 +371,8 @@ Blocking commands for feature-complete releases:
 | R-REL-06 | Public installer scripts install the Go-based runtime without changing the operator contract unexpectedly | installer smoke on Unix + Windows | L3/L4 |
 | R-REL-07 | Release-shaped CI/release/local helper builds stamp the CLI version into `cmd/internal/cmdutil.Version` and the daemon banner into `internal/daemon.version`, so built binaries do not report `dev` after release packaging | static build-contract tests + release gate | L2/L4 |
 | R-REL-08 | The repository-declared Go toolchain floor tracks the patched standard-library version required by the security gate, so CI `govulncheck` cannot fail on a vulnerable stdlib while local development silently passes on a newer auto-selected toolchain | `go test ./...` + `govulncheck ./...` in CI/release gate | L4 |
-| R-REL-08 | CI/release workflows use Node 24-capable GitHub Action majors, so release-branch jobs do not carry known Node 20 deprecation warnings | workflow review gate | L4 |
+| R-REL-09 | CI/release workflows use Node 24-capable GitHub Action majors, so release-branch jobs do not carry known Node 20 deprecation warnings | workflow review gate | L4 |
+| R-REL-10 | MCP stdio diagnostic regressions must use deterministic in-process helper children rather than shell pipelines so CI validates transport behavior, not runner-specific `/bin/sh` semantics | `go test ./internal/mcp -run 'Test(ConnectStdio_FailureSurfacesChildStderr|StdioTransport_ChildDiagnosticHandlesLargeStderr|StdioTransport_ChildDiagnosticEmptyOnSuccessfulRun|ConnectStdio_ContextDeadlineCancelsHungInitialize)$' -count=1` | L4 |
 
 ### R-AGENT: Agentic Retrieval Architecture (v1.0.5)
 

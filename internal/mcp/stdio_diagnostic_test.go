@@ -10,11 +10,59 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
+	"io"
+	"os"
 	"strings"
 	"testing"
 	"time"
 )
+
+const (
+	mcpHelperProcessEnv = "ROBOTICUS_MCP_HELPER_PROCESS"
+	mcpHelperModeEnv    = "ROBOTICUS_MCP_HELPER_MODE"
+)
+
+func mcpHelperCommand(t *testing.T, mode string) (string, []string, map[string]string) {
+	t.Helper()
+	return os.Args[0], []string{"-test.run=TestMCPHelperProcess"}, map[string]string{
+		mcpHelperProcessEnv: "1",
+		mcpHelperModeEnv:    mode,
+	}
+}
+
+func TestMCPHelperProcess(t *testing.T) {
+	if os.Getenv(mcpHelperProcessEnv) != "1" {
+		return
+	}
+
+	switch os.Getenv(mcpHelperModeEnv) {
+	case "broken-stderr-exit42":
+		_ = writeAll(os.Stderr, []byte("DEPENDENCY_NOT_FOUND fixture marker\n"))
+		os.Exit(42)
+	case "stderr-flood-exit1":
+		payload := append(bytes.Repeat([]byte("A"), 32768), []byte("TAIL_MARKER_OF_STDERR_FLOOD")...)
+		_ = writeAll(os.Stderr, payload)
+		os.Exit(1)
+	case "clean-sleep", "hung-initialize":
+		time.Sleep(30 * time.Second)
+		os.Exit(0)
+	default:
+		os.Exit(2)
+	}
+}
+
+func writeAll(w io.Writer, b []byte) error {
+	for len(b) > 0 {
+		n, err := w.Write(b)
+		if err != nil {
+			return err
+		}
+		b = b[n:]
+	}
+	return nil
+}
 
 // TestConnectStdio_FailureSurfacesChildStderr is the headline
 // MCP-checklist-item-4 regression. We spawn a child that writes a
@@ -22,10 +70,9 @@ import (
 // ConnectStdio should surface that stderr in the returned error so
 // an operator can act on it without re-running anything.
 //
-// The child uses `sh -c` to combine stderr-write + exit so we don't
-// have to ship a fixture binary. The stderr text "DEPENDENCY_NOT_FOUND
-// fixture marker" is intentionally distinctive so the assertion can
-// match it precisely without false positives from other test output.
+// The child uses the current test binary as an in-process helper so
+// the fixture is deterministic across CI runners instead of depending
+// on shell/pipeline semantics.
 func TestConnectStdio_FailureSurfacesChildStderr(t *testing.T) {
 	if testing.Short() {
 		t.Skip("subprocess test skipped under -short")
@@ -38,12 +85,13 @@ func TestConnectStdio_FailureSurfacesChildStderr(t *testing.T) {
 	// without responding); the diagnostic plumbing must surface the
 	// stderr marker AND the non-zero exit.
 	const stderrMarker = "DEPENDENCY_NOT_FOUND fixture marker"
+	command, args, env := mcpHelperCommand(t, "broken-stderr-exit42")
 	_, err := ConnectStdio(
 		ctx,
 		"test-broken-stdio",
-		"sh",
-		[]string{"-c", "echo '" + stderrMarker + "' >&2; exit 42"},
-		nil,
+		command,
+		args,
+		env,
 	)
 	if err == nil {
 		t.Fatalf("expected ConnectStdio to fail; got nil")
@@ -84,7 +132,8 @@ func TestStdioTransport_ChildDiagnosticEmptyOnSuccessfulRun(t *testing.T) {
 
 	// Use `sleep 30` as a stand-in for a well-behaved child: alive
 	// for the duration of the test, no stderr.
-	transport, err := NewStdioTransport("sleep", []string{"30"}, nil)
+	command, args, env := mcpHelperCommand(t, "clean-sleep")
+	transport, err := NewStdioTransport(command, args, env)
 	if err != nil {
 		t.Fatalf("NewStdioTransport: %v", err)
 	}
@@ -118,9 +167,8 @@ func TestStdioTransport_ChildDiagnosticHandlesLargeStderr(t *testing.T) {
 	// last bytes are a recognizable marker that MUST survive
 	// truncation. The prologue ('A' bytes) MUST be dropped.
 	const tailMarker = "TAIL_MARKER_OF_STDERR_FLOOD"
-	cmd := "head -c 32768 /dev/zero | tr '\\0' 'A' >&2; printf '" + tailMarker + "' >&2; exit 1"
-
-	transport, err := NewStdioTransport("sh", []string{"-c", cmd}, nil)
+	command, args, env := mcpHelperCommand(t, "stderr-flood-exit1")
+	transport, err := NewStdioTransport(command, args, env)
 	if err != nil {
 		t.Fatalf("NewStdioTransport: %v", err)
 	}
@@ -186,7 +234,8 @@ func TestConnectStdio_ContextDeadlineCancelsHungInitialize(t *testing.T) {
 	defer cancel()
 
 	start := time.Now()
-	_, err := ConnectStdio(ctx, "test-hung-stdio", "sh", []string{"-c", "sleep 30"}, nil)
+	command, args, env := mcpHelperCommand(t, "hung-initialize")
+	_, err := ConnectStdio(ctx, "test-hung-stdio", command, args, env)
 	if err == nil {
 		t.Fatal("expected ConnectStdio to fail on context deadline")
 	}
