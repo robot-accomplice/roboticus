@@ -149,6 +149,17 @@ This file follows the same C4 conventions used elsewhere in the repo:
 - capability truth must converge before inference; DB skill inventory, runtime
   skill loading, tool registration, prompt guidance, and UI are not allowed to
   disagree about whether a capability is actually live
+- capability denials must be evidence-backed. The pipeline is not allowed to
+  tell the operator a path, web/image surface, or filesystem action is
+  unavailable unless that conclusion is derived from the active tool surface,
+  sandbox policy, network policy, or provider capability state and is visible
+  in RCA
+- allowed-path reasoning must be subtree-aware: if an allowed root has already
+  admitted `/a/b`, then `/a/b/c` is readable by default unless a narrower deny
+  rule, mode distinction, or policy guard says otherwise
+- user correction turns must update the active task interpretation before
+  response generation. Corrections such as "section, not session" are not
+  license to invent unrelated server/config work
 - cross-turn guards must preserve temporal atomicity; `PreviousAssistant` and
   prior assistant history must exclude assistant content already emitted in the
   current turn, or a successful tool-backed completion can be misclassified as
@@ -187,6 +198,15 @@ This file follows the same C4 conventions used elsewhere in the repo:
   outcome in chronological order, and the operator-facing decision flow must
   expose that learning lane as a first-class part of the same integrated RCA
   narrative rather than leaving it buried in detail mode
+- memory-persistence intake over an allowed subtree must enter a bounded
+  inspect/evaluate/persist contract. The agent is not allowed to ask for a new
+  allowlist entry for a descendant of an already allowed vault root, and it is
+  not allowed to wholesale persist vault content without candidate selection,
+  evidence, and decay/relevance policy
+- promissory execution language creates a liveness obligation. If the agent
+  says it will "test", "check", "verify", or equivalent, the same turn must
+  produce an observable tool attempt, progress heartbeat, timeout diagnostic,
+  or explicit failure instead of disappearing behind an unreported action
 - once the pipeline has already injected `[Retrieved Evidence]`, `[Gaps]`, and
   a memory index for the current turn, that injected evidence is the first
   memory authority for the turn. Prompt guidance is not allowed to tell the
