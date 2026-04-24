@@ -108,6 +108,27 @@ In particular:
 - `develop` is audited and green before PR to `main`
 - tag creation happens only after merge to `main`
 - release monitoring includes artifacts, site sync, fingerprinting, and install verification
+
+Late-cycle release fixes follow an additional hard rule:
+
+- before pushing any release-blocker fix, rerun the exact failing local gate,
+  plus formatting/lint and directly affected package tests
+- if the fix changes the release path after a branch has already advanced, the
+  release resumes from the correct earlier gate; do not "sneak" fixes forward
+  on a later branch to save time
+- repeated expensive PR churn caused by missing local preflight is itself a
+  process defect
 - the release workflow must also be replayable for an existing tag through one
   canonical dispatch path; do not invent manual artifact publication when the
   audited workflow can be rerun instead
+- release publication must use one explicit tag authority across create/edit,
+  asset upload, prerelease gating, and site sync; hidden action context is not
+  acceptable release control flow
+- active CI/release workflow control flow must prefer explicit first-party CLI
+  or API calls over opaque third-party actions where release truth depends on
+  tag identity, dispatch semantics, or publication state
+- security tooling installed inside CI/release workflows must be pinned to an
+  explicit version; `@latest` is not acceptable in release-critical automation
+- the release workflow must self-evaluate the published release object and send
+  a success/failure report instead of treating a green publish step as
+  sufficient proof that the release actually completed correctly

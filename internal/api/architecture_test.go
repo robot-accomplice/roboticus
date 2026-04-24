@@ -171,6 +171,7 @@ func TestArchitecture_ConnectorFilesInvokeRunPipeline(t *testing.T) {
 		"routing_admin": {
 			filepath.Join("routes", "routing_admin.go"),
 			filepath.Join("routes", "routing_admin_exercise.go"),
+			filepath.Join("routes", "routing_admin_exercise_sender.go"),
 			filepath.Join("routes", "routing_admin_dataset.go"),
 			filepath.Join("routes", "routing_admin_scores.go"),
 		},

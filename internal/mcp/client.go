@@ -133,17 +133,21 @@ func NewStdioTransport(command string, args []string, env map[string]string) (*S
 	}
 	// v1.0.6: capture stderr instead of letting the child write into
 	// the parent's terminal (or worse, /dev/null when the parent is a
-	// daemon). Without this pipe, every "initialize failed: EOF"
-	// reported back to the operator hides the actual reason — Python
-	// traceback, missing dependency, version mismatch, etc.
-	stderrPipe, err := cmd.StderrPipe()
+	// daemon). Use an explicit os.Pipe instead of Cmd.StderrPipe because
+	// cmd.Wait is observed concurrently and the StderrPipe contract forbids
+	// calling Wait before all reads complete.
+	stderrReader, stderrWriter, err := os.Pipe()
 	if err != nil {
 		return nil, fmt.Errorf("mcp stdio: stderr pipe: %w", err)
 	}
+	cmd.Stderr = stderrWriter
 
 	if err := cmd.Start(); err != nil {
+		_ = stderrReader.Close()
+		_ = stderrWriter.Close()
 		return nil, fmt.Errorf("mcp stdio: start: %w", err)
 	}
+	_ = stderrWriter.Close()
 
 	t := &StdioTransport{
 		cmd:        cmd,
@@ -157,7 +161,7 @@ func NewStdioTransport(command string, args []string, env map[string]string) (*S
 	// closes (which happens when the child exits or its stderr is
 	// closed). The goroutine takes the stderr lock only when writing,
 	// so reads from ChildDiagnostic don't block stderr collection.
-	go t.collectStderr(stderrPipe)
+	go t.collectStderr(stderrReader)
 
 	// Start a watcher that calls cmd.Wait() so the child gets reaped
 	// promptly and we can record its exit state. Without the Wait,

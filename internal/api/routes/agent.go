@@ -1,10 +1,12 @@
 package routes
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog/log"
 
@@ -42,6 +44,7 @@ func AgentMessage(p pipeline.Runner, agentName string, bus ...EventPublisher) ht
 		input := pipeline.Input{
 			Content:       req.Content,
 			SessionID:     req.SessionID,
+			TurnID:        req.TurnID,
 			AgentID:       req.AgentID,
 			AgentName:     agentName,
 			Platform:      platform,
@@ -52,7 +55,20 @@ func AgentMessage(p pipeline.Runner, agentName string, bus ...EventPublisher) ht
 			NoEscalate:    req.NoEscalate,
 		}
 
-		outcome, err := pipeline.RunPipeline(r.Context(), p, pipeline.PresetAPI(), input)
+		runCtx := r.Context()
+		if req.ExecutionTimeoutMs > 0 {
+			timeout := time.Duration(req.ExecutionTimeoutMs) * time.Millisecond
+			if timeout > 0 {
+				var cancel context.CancelFunc
+				runCtx, cancel = context.WithTimeout(context.Background(), timeout)
+				defer cancel()
+			}
+		}
+		if req.ModelCallTimeoutMs > 0 {
+			runCtx = core.WithModelCallTimeout(runCtx, time.Duration(req.ModelCallTimeoutMs)*time.Millisecond)
+		}
+
+		outcome, err := pipeline.RunPipeline(runCtx, p, pipeline.PresetAPI(), input)
 		if err != nil {
 			writeError(w, core.HTTPStatusForError(err), err.Error())
 			return
@@ -72,6 +88,7 @@ func AgentMessage(p pipeline.Runner, agentName string, bus ...EventPublisher) ht
 		resp := agentMessageResponse{
 			SessionID:          outcome.SessionID,
 			MessageID:          outcome.MessageID,
+			TurnID:             outcome.TurnID,
 			Content:            outcome.Content,
 			Model:              outcome.Model,
 			TokensIn:           outcome.TokensIn,
@@ -107,6 +124,7 @@ func AgentMessageStream(p pipeline.Runner, llmSvc *llm.Service, agentName string
 		input := pipeline.Input{
 			Content:    req.Content,
 			SessionID:  req.SessionID,
+			TurnID:     req.TurnID,
 			AgentID:    req.AgentID,
 			AgentName:  agentName,
 			Platform:   "api",

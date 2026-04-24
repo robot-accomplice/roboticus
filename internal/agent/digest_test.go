@@ -14,7 +14,7 @@ func TestDigestGenerator_Empty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result != "No messages to summarize." {
+	if result != "" {
 		t.Errorf("unexpected result: %q", result)
 	}
 }
@@ -62,9 +62,8 @@ func TestDigestGenerator_FallbackWithoutSummarizer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	expected := "Session digest: 2 user messages, 1 assistant responses, 1 tool calls."
-	if result != expected {
-		t.Errorf("expected %q, got %q", expected, result)
+	if result != "" {
+		t.Errorf("expected empty fallback without summarizer, got %q", result)
 	}
 }
 

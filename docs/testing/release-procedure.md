@@ -21,6 +21,29 @@ release branch:
 
 If any of those are still open, stop. The ceremony has not started yet.
 
+## Preflight Rules
+
+Before pushing any release-branch change, release-blocker fix, or promotion-fix
+branch that is intended to advance the release, run the relevant local preflight
+first. "Relevant" does not mean "whatever seems close enough." It means the
+exact gate class that failed or is about to be exercised:
+
+- if CI failed in a specific package/job, rerun that exact local command first
+- if a late-cycle code change touches a release-gated surface, rerun the
+  narrowest exact gate for that surface and any directly affected package-level
+  test/lint checks before pushing
+- if a release workflow/tag gate failed, rerun the exact local validation that
+  corresponds to that gate before pushing the fix
+
+Minimum hygiene before pushing a release fix:
+
+1. formatting passes on every changed source file
+2. lint passes on every changed code surface
+3. the exact failing gate command is rerun locally and passes
+4. the directly affected package or subsystem tests are rerun locally and pass
+
+If those are not done, do not push.
+
 ## Required Order
 
 Always use this order:
@@ -70,6 +93,17 @@ After tagging and release creation, actively verify:
 7. if the initial tag push did not enqueue release execution, the canonical
    release workflow can be manually dispatched against the existing tag without
    changing release content or creating a new tag
+8. rerun publication derives release name, tag, prerelease gating, asset upload,
+   and site-sync behavior from the explicit requested tag, not implicit branch
+   or ref-name context
+9. active release notifications and publication steps use explicit first-party
+   CLI/API calls where critical control flow is involved; do not depend on
+   third-party action context for tag authority or dispatch semantics
+10. security/vulnerability tooling used in CI is pinned to an explicit version;
+    do not float `latest` in release-critical workflow paths
+11. the release workflow performs a post-publication self-evaluation against the
+    live release object and emits a success/failure report instead of assuming a
+    green publish step proves end-to-end release correctness
 
 ## Failure Rules
 
@@ -77,10 +111,20 @@ After tagging and release creation, actively verify:
 - If `develop` audit fails, stop and fix `develop` before opening `main` PR.
 - If release artifacts, fingerprinting, or site sync are wrong, the release is
   not complete even if merges and tags succeeded.
-- If the tag exists but the release workflow did not enqueue, do not invent a
-  manual artifact side channel first. Use the canonical release workflow's
-  explicit rerun/dispatch path against the existing tag so release execution
-  stays on one audited seam.
+- If a late-cycle fix lands after a release branch or promotion PR has already
+  been exercised, the release path resets to the appropriate earlier gate. Do
+  not hand-wave that as "just one more small fix." Re-run the exact required
+  branch/CI sequence from the branch where the fix truly belongs.
+- If a tag-triggered or release-workflow failure exposes a missing release
+  input (`CHANGELOG`, release notes, version metadata, workflow assumptions,
+  etc.), treat that as a release-process defect. Delete the premature tag if
+  necessary, land the fix on `develop` first, and promote forward again.
+- Expensive PR churn is itself a release defect. The goal is to catch release
+  blockers before push by replaying the exact local gate, not to discover them
+  one PR at a time in GitHub Actions.
+- If the self-evaluation report says the published release is incomplete or
+  inconsistent, the release is not complete even if all upstream jobs were
+  green.
 
 ## Operator Reminder
 

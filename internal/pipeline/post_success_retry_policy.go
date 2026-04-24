@@ -89,9 +89,6 @@ func decideVerifierRetryAfterProgress(result VerificationResult, ctx Verificatio
 	if !progress.HasSubstantiveExecutionProgress() {
 		return RetryDisposition{Allow: true}
 	}
-	if ctx.PlannedAction != "execute_directly" {
-		return RetryDisposition{Allow: true}
-	}
 
 	for _, issue := range result.Issues {
 		if verifierRetryRemainsBlockingAfterProgress(issue.Code) {

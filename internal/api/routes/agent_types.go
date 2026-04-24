@@ -3,23 +3,27 @@ package routes
 // agentMessageRequest is the JSON body for POST /api/agent/message.
 // Fields align with the Rust reference request schema.
 type agentMessageRequest struct {
-	Content   string `json:"content"`
-	SessionID string `json:"session_id,omitempty"`
-	AgentID   string `json:"agent_id,omitempty"`
-	Model     string `json:"model,omitempty"`
-	Channel   string `json:"channel,omitempty"`
-	SenderID  string `json:"sender_id,omitempty"`
-	PeerID    string `json:"peer_id,omitempty"`
-	GroupID   string `json:"group_id,omitempty"`
-	IsGroup   bool   `json:"is_group,omitempty"`
-	NoCache   bool   `json:"no_cache,omitempty"`
-	NoEscalate bool  `json:"no_escalate,omitempty"`
+	Content            string `json:"content"`
+	SessionID          string `json:"session_id,omitempty"`
+	TurnID             string `json:"turn_id,omitempty"`
+	AgentID            string `json:"agent_id,omitempty"`
+	Model              string `json:"model,omitempty"`
+	Channel            string `json:"channel,omitempty"`
+	SenderID           string `json:"sender_id,omitempty"`
+	PeerID             string `json:"peer_id,omitempty"`
+	GroupID            string `json:"group_id,omitempty"`
+	IsGroup            bool   `json:"is_group,omitempty"`
+	NoCache            bool   `json:"no_cache,omitempty"`
+	NoEscalate         bool   `json:"no_escalate,omitempty"`
+	ExecutionTimeoutMs int64  `json:"execution_timeout_ms,omitempty"`
+	ModelCallTimeoutMs int64  `json:"model_call_timeout_ms,omitempty"`
 }
 
 // agentMessageResponse wraps the pipeline Outcome with Rust-parity response fields.
 type agentMessageResponse struct {
 	SessionID          string  `json:"session_id"`
 	MessageID          string  `json:"message_id"`
+	TurnID             string  `json:"turn_id,omitempty"`
 	Content            string  `json:"content"`
 	Model              string  `json:"model,omitempty"`
 	TokensIn           int     `json:"tokens_in,omitempty"`

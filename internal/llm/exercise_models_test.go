@@ -20,10 +20,10 @@ type fakeSender struct {
 	model     string   // captured: should stay consistent per call
 }
 
-func (f *fakeSender) promptSender(ctx context.Context, model, content string, timeout time.Duration) (string, int64, error) {
+func (f *fakeSender) promptSender(ctx context.Context, model, content string, timeout time.Duration) (PromptDispatch, error) {
 	f.prompts = append(f.prompts, content)
 	f.model = model
-	return f.response, f.latencyMs, f.err
+	return PromptDispatch{ResponseText: f.response, LatencyMs: f.latencyMs}, f.err
 }
 
 func (f *fakeSender) warmupSender(ctx context.Context, model string, timeout time.Duration) WarmupResult {
@@ -76,9 +76,9 @@ func TestExerciseModels_Rejects_EmptyInputs(t *testing.T) {
 
 func TestExerciseModels_FiltersToSingleIntent(t *testing.T) {
 	calls := 0
-	promptSender := func(ctx context.Context, model, content string, timeout time.Duration) (string, int64, error) {
+	promptSender := func(ctx context.Context, model, content string, timeout time.Duration) (PromptDispatch, error) {
 		calls++
-		return "ok", 1, nil
+		return PromptDispatch{ResponseText: "ok", LatencyMs: 1}, nil
 	}
 	warmupSender := func(ctx context.Context, model string, timeout time.Duration) WarmupResult {
 		return WarmupResult{LatencyMs: 1}
@@ -127,13 +127,13 @@ func TestExerciseModels_DispatchesWarmupThenMatrix(t *testing.T) {
 		callLog = append(callLog, "warmup:"+model)
 		return WarmupResult{LatencyMs: 50}
 	}
-	promptSender := func(ctx context.Context, model, content string, timeout time.Duration) (string, int64, error) {
+	promptSender := func(ctx context.Context, model, content string, timeout time.Duration) (PromptDispatch, error) {
 		snippet := content
 		if len(snippet) > 10 {
 			snippet = snippet[:10]
 		}
 		callLog = append(callLog, "prompt:"+model+":"+snippet)
-		return "ok response", 100, nil
+		return PromptDispatch{ResponseText: "ok response", LatencyMs: 100}, nil
 	}
 
 	req := ExerciseRequest{
@@ -186,9 +186,9 @@ func TestExerciseModels_DispatchesWarmupThenMatrix(t *testing.T) {
 // off-by-one shapes.
 func TestExerciseModels_IterationsMultiplier(t *testing.T) {
 	calls := 0
-	promptSender := func(ctx context.Context, model, content string, timeout time.Duration) (string, int64, error) {
+	promptSender := func(ctx context.Context, model, content string, timeout time.Duration) (PromptDispatch, error) {
 		calls++
-		return "ok", 1, nil
+		return PromptDispatch{ResponseText: "ok", LatencyMs: 1}, nil
 	}
 	warmupSender := func(ctx context.Context, model string, timeout time.Duration) WarmupResult {
 		return WarmupResult{LatencyMs: 1}
@@ -223,8 +223,8 @@ func TestExerciseModels_SkipsWarmupForCloudModels(t *testing.T) {
 		warmupCalls++
 		return WarmupResult{LatencyMs: 1}
 	}
-	promptSender := func(ctx context.Context, model, content string, timeout time.Duration) (string, int64, error) {
-		return "ok", 1, nil
+	promptSender := func(ctx context.Context, model, content string, timeout time.Duration) (PromptDispatch, error) {
+		return PromptDispatch{ResponseText: "ok", LatencyMs: 1}, nil
 	}
 
 	req := ExerciseRequest{
@@ -251,8 +251,8 @@ func TestExerciseModels_SkipsWarmupForCloudModels(t *testing.T) {
 // and is passed through to the OnPrompt callback, NOT returned as an
 // orchestrator-level error. Individual call failures are DATA.
 func TestExerciseModels_CapturesTransportErrors(t *testing.T) {
-	promptSender := func(ctx context.Context, model, content string, timeout time.Duration) (string, int64, error) {
-		return "", 0, errString("simulated transport failure")
+	promptSender := func(ctx context.Context, model, content string, timeout time.Duration) (PromptDispatch, error) {
+		return PromptDispatch{}, errString("simulated transport failure")
 	}
 	warmupSender := func(ctx context.Context, model string, timeout time.Duration) WarmupResult {
 		return WarmupResult{LatencyMs: 1}
@@ -292,11 +292,80 @@ func TestExerciseModels_CapturesTransportErrors(t *testing.T) {
 	if seenErrs != len(ExerciseMatrix) {
 		t.Fatalf("OnPrompt saw %d errors; want %d", seenErrs, len(ExerciseMatrix))
 	}
+	if mr.AvgQuality != 0 {
+		t.Fatalf("avg quality = %.2f; want 0 when every prompt failed", mr.AvgQuality)
+	}
+	for _, q := range mr.IntentQuality {
+		if q != 0 {
+			t.Fatalf("intent quality = %.2f; want 0 when that intent only failed", q)
+		}
+	}
+}
+
+func TestExerciseModels_AveragesIncludeFailedRowsAsZeroQuality(t *testing.T) {
+	prompts := []ExercisePrompt{
+		{Prompt: "What is 2 + 2?", Intent: IntentToolUse, Complexity: ComplexityTrivial, ScoringContract: ExerciseScoringContract{
+			Mode:                  ScoringModeDirectFact,
+			Concision:             ConcisionPrefer,
+			ToolExpectation:       ToolExpectationContraindicated,
+			SemanticHints:         []string{"4", "four"},
+			SemanticHintThreshold: 1,
+		}},
+		{Prompt: "Say hello.", Intent: IntentDelegation, Complexity: ComplexityTrivial, ScoringContract: ExerciseScoringContract{
+			Mode:                  ScoringModeConversational,
+			Concision:             ConcisionPrefer,
+			ToolExpectation:       ToolExpectationContraindicated,
+			SemanticHints:         []string{"hello", "hi", "hey", "greetings"},
+			SemanticHintThreshold: 1,
+		}},
+	}
+	sendCount := 0
+	req := ExerciseRequest{
+		Models:       []string{"test-model"},
+		IntentFilter: nil,
+		Iterations:   1,
+		SendPrompt: func(ctx context.Context, model, content string, timeout time.Duration) (PromptDispatch, error) {
+			sendCount++
+			if sendCount == 1 {
+				return PromptDispatch{ResponseText: "4", LatencyMs: 1}, nil
+			}
+			return PromptDispatch{LatencyMs: 1}, errString("simulated failure")
+		},
+		SendWarmup: func(ctx context.Context, model string, timeout time.Duration) WarmupResult {
+			return WarmupResult{LatencyMs: 1}
+		},
+		IsLocal:      func(string) bool { return false },
+		ModelTimeout: func(string) time.Duration { return time.Second },
+	}
+
+	original := ExerciseMatrix
+	ExerciseMatrix = prompts
+	defer func() { ExerciseMatrix = original }()
+
+	report, err := ExerciseModels(context.Background(), req)
+	if err != nil {
+		t.Fatalf("ExerciseModels: %v", err)
+	}
+	if len(report.Models) != 1 {
+		t.Fatalf("models = %d; want 1", len(report.Models))
+	}
+	got := report.Models[0]
+	wantFirst := ScoreExerciseResponse(prompts[0], "4")
+	wantAvg := wantFirst / 2.0
+	if got.AvgQuality != wantAvg {
+		t.Fatalf("avg quality = %.4f; want %.4f", got.AvgQuality, wantAvg)
+	}
+	if got.IntentQuality[IntentToolUse.String()] != wantFirst {
+		t.Fatalf("tool-use quality = %.4f; want %.4f", got.IntentQuality[IntentToolUse.String()], wantFirst)
+	}
+	if got.IntentQuality[IntentDelegation.String()] != 0 {
+		t.Fatalf("delegation quality = %.4f; want 0 for failed-only intent", got.IntentQuality[IntentDelegation.String()])
+	}
 }
 
 func TestExerciseModels_CapturesModelStateSnapshots(t *testing.T) {
-	promptSender := func(ctx context.Context, model, content string, timeout time.Duration) (string, int64, error) {
-		return "ok", 1, nil
+	promptSender := func(ctx context.Context, model, content string, timeout time.Duration) (PromptDispatch, error) {
+		return PromptDispatch{ResponseText: "ok", LatencyMs: 1}, nil
 	}
 	warmupSender := func(ctx context.Context, model string, timeout time.Duration) WarmupResult {
 		return WarmupResult{LatencyMs: 1}
@@ -340,6 +409,122 @@ func TestExerciseModels_CapturesModelStateSnapshots(t *testing.T) {
 	}
 }
 
+func TestExerciseModels_UsesModelAttributableLatencyForScorecards(t *testing.T) {
+	promptSender := func(ctx context.Context, model, content string, timeout time.Duration) (PromptDispatch, error) {
+		return PromptDispatch{
+			ResponseText: "4",
+			LatencyMs:    1_000,
+			PhaseTimings: &ExercisePhaseTimings{
+				TotalMs:             1_000,
+				ModelInferenceMs:    250,
+				ToolExecutionMs:     100,
+				FrameworkOverheadMs: 650,
+			},
+		}, nil
+	}
+	warmupSender := func(ctx context.Context, model string, timeout time.Duration) WarmupResult {
+		return WarmupResult{LatencyMs: 1}
+	}
+
+	intent := IntentToolUse
+	var seen PromptOutcome
+	report, err := ExerciseModels(context.Background(), ExerciseRequest{
+		Models:       []string{"m"},
+		IntentFilter: &intent,
+		Iterations:   1,
+		SendPrompt:   promptSender,
+		SendWarmup:   warmupSender,
+		OnPrompt: func(o PromptOutcome) {
+			seen = o
+		},
+		IsLocal:      func(string) bool { return false },
+		ModelTimeout: func(string) time.Duration { return time.Second },
+	})
+	if err != nil {
+		t.Fatalf("ExerciseModels: %v", err)
+	}
+	got := report.Models[0]
+	latencies := got.Latencies[intent.String()]
+	if len(latencies) != 5 {
+		t.Fatalf("model-attributable latency count = %d, want 5: %v", len(latencies), latencies)
+	}
+	for _, latency := range latencies {
+		if latency != 250 {
+			t.Fatalf("model-attributable latency = %v, want every observation to be 250", latencies)
+		}
+	}
+	if seen.LatencyMs != 1_000 {
+		t.Fatalf("prompt outcome turn latency = %d, want 1000", seen.LatencyMs)
+	}
+	if seen.ModelLatencyMs != 250 {
+		t.Fatalf("prompt outcome model latency = %d, want 250", seen.ModelLatencyMs)
+	}
+	if seen.OutcomeClass != ExerciseOutcomeCleanPass {
+		t.Fatalf("prompt outcome class = %q, want clean_pass", seen.OutcomeClass)
+	}
+	phase := got.PhaseLatencies["TOTAL_PIPELINE"]
+	if len(phase) != 5 {
+		t.Fatalf("phase total latency count = %d, want 5: %v", len(phase), phase)
+	}
+	for _, latency := range phase {
+		if latency != 1_000 {
+			t.Fatalf("phase total latency = %v, want every observation to be 1000", phase)
+		}
+	}
+}
+
+func TestExerciseModels_ClassifiesTimeoutAndSlowPass(t *testing.T) {
+	prompts := []ExercisePrompt{
+		{Prompt: "Say hello.", Intent: IntentConversation, Complexity: ComplexitySimple, ScoringContract: ExerciseScoringContract{
+			Mode:                  ScoringModeConversational,
+			Concision:             ConcisionPrefer,
+			ToolExpectation:       ToolExpectationContraindicated,
+			SemanticHints:         []string{"hello"},
+			SemanticHintThreshold: 1,
+		}},
+		{Prompt: "What is 2 + 2?", Intent: IntentToolUse, Complexity: ComplexitySimple, ScoringContract: ExerciseScoringContract{
+			Mode:                  ScoringModeDirectFact,
+			Concision:             ConcisionPrefer,
+			ToolExpectation:       ToolExpectationContraindicated,
+			SemanticHints:         []string{"4"},
+			SemanticHintThreshold: 1,
+		}},
+	}
+	original := ExerciseMatrix
+	ExerciseMatrix = prompts
+	defer func() { ExerciseMatrix = original }()
+
+	var classes []ExerciseOutcomeClass
+	call := 0
+	_, err := ExerciseModels(context.Background(), ExerciseRequest{
+		Models:     []string{"m"},
+		Iterations: 1,
+		SendPrompt: func(ctx context.Context, model, content string, timeout time.Duration) (PromptDispatch, error) {
+			call++
+			if call == 1 {
+				return PromptDispatch{ResponseText: "hello", LatencyMs: 900}, nil
+			}
+			return PromptDispatch{LatencyMs: 1000}, context.DeadlineExceeded
+		},
+		SendWarmup:   func(context.Context, string, time.Duration) WarmupResult { return WarmupResult{LatencyMs: 1} },
+		OnPrompt:     func(o PromptOutcome) { classes = append(classes, o.OutcomeClass) },
+		IsLocal:      func(string) bool { return false },
+		ModelTimeout: func(string) time.Duration { return time.Second },
+	})
+	if err != nil {
+		t.Fatalf("ExerciseModels: %v", err)
+	}
+	if len(classes) != 2 {
+		t.Fatalf("classes = %v, want 2 observations", classes)
+	}
+	if classes[0] != ExerciseOutcomeSlowPass {
+		t.Fatalf("first class = %q, want slow_pass", classes[0])
+	}
+	if classes[1] != ExerciseOutcomeProviderTimeout {
+		t.Fatalf("second class = %q, want provider_timeout", classes[1])
+	}
+}
+
 // TestExerciseModels_ContextCancellation confirms ctx cancel propagates
 // through the orchestrator and returns whatever partial data accrued.
 // Callers can use this for Ctrl-C behavior during long baseline runs.
@@ -347,12 +532,12 @@ func TestExerciseModels_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	callCount := 0
-	promptSender := func(ctx context.Context, model, content string, timeout time.Duration) (string, int64, error) {
+	promptSender := func(ctx context.Context, model, content string, timeout time.Duration) (PromptDispatch, error) {
 		callCount++
 		if callCount == 2 {
 			cancel()
 		}
-		return "ok", 1, nil
+		return PromptDispatch{ResponseText: "ok", LatencyMs: 1}, nil
 	}
 	warmupSender := func(ctx context.Context, model string, timeout time.Duration) WarmupResult {
 		return WarmupResult{LatencyMs: 1}

@@ -3,82 +3,102 @@ package db
 import (
 	"context"
 	"testing"
-
-	"roboticus/internal/hostresources"
-	"roboticus/internal/modelstate"
 )
 
-func TestBaselineRuns_PersistAndList(t *testing.T) {
-	store := testStore(t)
+func TestExerciseScorecard_IncludesModelAttributableLatency(t *testing.T) {
+	store := testTempStore(t)
 	ctx := context.Background()
 
 	if err := InsertBaselineRun(ctx, store, BaselineRunRow{
-		RunID:             "run-1",
-		Initiator:         "cli",
-		Status:            "running",
-		ModelCount:        2,
-		Models:            []string{"ollama/gemma4", "ollama/phi4-mini:latest"},
-		Iterations:        2,
-		ConfigFingerprint: "cfg",
-		GitRevision:       "deadbeef",
-		StartResources: &hostresources.Snapshot{
-			CollectedAt:          "2026-04-20T18:00:00Z",
-			CPUPercent:           41.5,
-			MemoryAvailableBytes: 12_000_000_000,
-		},
-		StartModelStates: []modelstate.Snapshot{{
-			CollectedAt:        "2026-04-20T18:00:00Z",
-			Model:              "ollama/gemma4",
-			Provider:           "ollama",
-			ProviderConfigured: true,
-			ProviderReachable:  true,
-			ModelAvailable:     true,
-			ModelLoaded:        true,
-			StateClass:         "ready",
-		}},
+		RunID:      "run-latency",
+		Initiator:  "test",
+		Status:     "completed",
+		ModelCount: 1,
+		Models:     []string{"model-a"},
+		Iterations: 1,
 	}); err != nil {
 		t.Fatalf("InsertBaselineRun: %v", err)
 	}
-	if err := CompleteBaselineRun(ctx, store, "run-1", "completed", "ok", &hostresources.Snapshot{
-		CollectedAt:          "2026-04-20T18:10:00Z",
-		CPUPercent:           88.1,
-		MemoryAvailableBytes: 4_000_000_000,
-	}, []modelstate.Snapshot{{
-		CollectedAt:        "2026-04-20T18:10:00Z",
-		Model:              "ollama/gemma4",
-		Provider:           "ollama",
-		ProviderConfigured: true,
-		ProviderReachable:  true,
-		ModelAvailable:     true,
-		ModelLoaded:        false,
-		StateClass:         "installed_not_loaded",
-	}}); err != nil {
-		t.Fatalf("CompleteBaselineRun: %v", err)
+	if err := InsertExerciseResult(ctx, store, ExerciseResultRow{
+		ID:           "row-1",
+		RunID:        "run-latency",
+		Model:        "model-a",
+		IntentClass:  "EXECUTION",
+		Complexity:   "trivial",
+		Prompt:       "p1",
+		Content:      "ok",
+		Quality:      0.9,
+		LatencyMs:    1000,
+		PhaseTimings: `{"total_ms":1000,"model_inference_ms":250}`,
+		Passed:       true,
+	}); err != nil {
+		t.Fatalf("InsertExerciseResult row-1: %v", err)
+	}
+	if err := InsertExerciseResult(ctx, store, ExerciseResultRow{
+		ID:           "row-2",
+		RunID:        "run-latency",
+		Model:        "model-a",
+		IntentClass:  "EXECUTION",
+		Complexity:   "simple",
+		Prompt:       "p2",
+		Content:      "ok",
+		Quality:      0.7,
+		LatencyMs:    2000,
+		PhaseTimings: `{"total_ms":2000,"model_inference_ms":750}`,
+		Passed:       true,
+	}); err != nil {
+		t.Fatalf("InsertExerciseResult row-2: %v", err)
 	}
 
-	runs := ListBaselineRuns(ctx, store, 10)
-	if len(runs) != 1 {
-		t.Fatalf("runs = %d, want 1", len(runs))
+	entries := ExerciseScorecard(ctx, store)
+	if len(entries) != 1 {
+		t.Fatalf("scorecard entries = %d, want 1: %#v", len(entries), entries)
 	}
-	if runs[0].RunID != "run-1" {
-		t.Fatalf("run_id = %q, want run-1", runs[0].RunID)
+	if entries[0].AvgLatencyMs != 500 {
+		t.Fatalf("avg latency = %d, want model-attributable 500", entries[0].AvgLatencyMs)
 	}
-	if runs[0].Status != "completed" {
-		t.Fatalf("status = %q, want completed", runs[0].Status)
+}
+
+func TestExerciseScorecard_PartialIntentRunPreservesOtherIntentEvidence(t *testing.T) {
+	store := testTempStore(t)
+	ctx := context.Background()
+
+	for _, runID := range []string{"run-full", "run-delegation"} {
+		if err := InsertBaselineRun(ctx, store, BaselineRunRow{
+			RunID:      runID,
+			Initiator:  "test",
+			Status:     "completed",
+			ModelCount: 1,
+			Models:     []string{"model-a"},
+			Iterations: 1,
+		}); err != nil {
+			t.Fatalf("InsertBaselineRun %s: %v", runID, err)
+		}
 	}
-	if len(runs[0].Models) != 2 {
-		t.Fatalf("models = %d, want 2", len(runs[0].Models))
+
+	rows := []ExerciseResultRow{
+		{ID: "row-full-exec", RunID: "run-full", Model: "model-a", IntentClass: "EXECUTION", Complexity: "trivial", Prompt: "p", Content: "exec", Quality: 0.9, LatencyMs: 100, Passed: true},
+		{ID: "row-full-deleg", RunID: "run-full", Model: "model-a", IntentClass: "DELEGATION", Complexity: "trivial", Prompt: "p", Content: "deleg-old", Quality: 0.5, LatencyMs: 200, Passed: true},
+		{ID: "row-new-deleg", RunID: "run-delegation", Model: "model-a", IntentClass: "DELEGATION", Complexity: "trivial", Prompt: "p", Content: "deleg-new", Quality: 0.8, LatencyMs: 300, Passed: true},
 	}
-	if runs[0].StartResources == nil || runs[0].EndResources == nil {
-		t.Fatalf("expected start/end resource snapshots to round-trip")
+	for _, row := range rows {
+		if err := InsertExerciseResult(ctx, store, row); err != nil {
+			t.Fatalf("InsertExerciseResult %s: %v", row.ID, err)
+		}
 	}
-	if runs[0].StartResources.MemoryAvailableBytes != 12_000_000_000 {
-		t.Fatalf("start resources memory_available_bytes = %d", runs[0].StartResources.MemoryAvailableBytes)
+
+	entries := ExerciseScorecard(ctx, store)
+	if len(entries) != 2 {
+		t.Fatalf("scorecard entries = %d, want 2: %#v", len(entries), entries)
 	}
-	if len(runs[0].StartModelStates) != 1 || len(runs[0].EndModelStates) != 1 {
-		t.Fatalf("expected model state snapshots to round-trip: %+v", runs[0])
+	qualities := map[string]float64{}
+	for _, entry := range entries {
+		qualities[entry.IntentClass] = entry.AvgQuality
 	}
-	if runs[0].EndModelStates[0].StateClass != "installed_not_loaded" {
-		t.Fatalf("end model state = %q, want installed_not_loaded", runs[0].EndModelStates[0].StateClass)
+	if qualities["EXECUTION"] != 0.9 {
+		t.Fatalf("execution quality = %.2f, want historical 0.90", qualities["EXECUTION"])
+	}
+	if qualities["DELEGATION"] != 0.8 {
+		t.Fatalf("delegation quality = %.2f, want fresh 0.80", qualities["DELEGATION"])
 	}
 }

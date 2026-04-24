@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"time"
 )
 
 // Provider represents an LLM API endpoint (OpenAI, Anthropic, Ollama, Google, etc).
@@ -157,6 +158,10 @@ type Request struct {
 	// heuristic reconstruction from assembled request shape. Not sent to the
 	// provider.
 	TaskComplexity string `json:"-"`
+	// ModelCallTimeout bounds one provider/model HTTP inference call. It resets
+	// for each Complete call, including post-tool and reflection calls, and is
+	// distinct from whole-turn or CLI wait budgets. Not sent to the provider.
+	ModelCallTimeout time.Duration `json:"-"`
 }
 
 // Response is a provider-agnostic inference response.

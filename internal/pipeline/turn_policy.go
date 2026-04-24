@@ -23,6 +23,7 @@ const (
 	ToolProfileDefault                  ToolProfile = "default"
 	ToolProfileFocusedAuthoring         ToolProfile = "focused_authoring"
 	ToolProfileFocusedAnalysisAuthoring ToolProfile = "focused_analysis_authoring"
+	ToolProfileFocusedSourceCode        ToolProfile = "focused_source_code"
 	ToolProfileFocusedInspection        ToolProfile = "focused_inspection"
 	ToolProfileFocusedScheduling        ToolProfile = "focused_scheduling"
 )
@@ -50,6 +51,18 @@ func DeriveTurnEnvelopePolicy(content string, synthesis TaskSynthesis, sessionTu
 	requiresAnalysisAuthoring := looksLikeInspectionBackedArtifactAuthoring(content)
 
 	switch {
+	case synthesis.Intent == "code" &&
+		synthesis.PlannedAction == "execute_directly" &&
+		looksLikeSourceBackedCodeTask(content):
+		return TurnEnvelopePolicy{
+			Weight:              TurnWeightStandard,
+			ContextBudget:       3072,
+			AllowRetrieval:      synthesis.RetrievalNeeded,
+			MaxTools:            8,
+			AllowRetryExpansion: true,
+			ToolProfile:         ToolProfileFocusedSourceCode,
+			Reason:              "source-backed code surgery should stay on a repo-grounded focused execution envelope",
+		}
 	case synthesis.Complexity == "complex" || synthesis.Intent == "code":
 		return TurnEnvelopePolicy{
 			Weight:              TurnWeightHeavy,
@@ -100,6 +113,16 @@ func DeriveTurnEnvelopePolicy(content string, synthesis TaskSynthesis, sessionTu
 			AllowRetrieval:      true,
 			AllowRetryExpansion: false,
 			Reason:              "multi-step task requires the full adaptive envelope",
+		}
+	case synthesis.Intent == "question" &&
+		looksLikeDerivableDirectFactQuestion(content):
+		return TurnEnvelopePolicy{
+			Weight:                 TurnWeightLight,
+			ContextBudget:          1536,
+			AllowRetrieval:         false,
+			LightweightToolSurface: true,
+			AllowRetryExpansion:    true,
+			Reason:                 "derivable direct-fact questions should stay on a minimal no-retrieval envelope",
 		}
 	case synthesis.Complexity == "simple" &&
 		(synthesis.Intent == "conversational" || synthesis.Intent == "general") &&
@@ -264,6 +287,24 @@ func toolPriorityForPolicy(name string, policy TurnEnvelopePolicy) int {
 			return 8
 		}
 	}
+	if policy.ToolProfile == ToolProfileFocusedSourceCode {
+		switch agenttools.OperationClassForName(name) {
+		case agenttools.OperationArtifactRead:
+			return 0
+		case agenttools.OperationWorkspaceInspect:
+			return 1
+		case agenttools.OperationArtifactWrite:
+			return 2
+		case agenttools.OperationRuntimeContextRead:
+			return 3
+		case agenttools.OperationExecution:
+			return 4
+		case agenttools.OperationMemoryRead:
+			return 5
+		default:
+			return 6
+		}
+	}
 	if policy.ToolProfile == ToolProfileFocusedScheduling {
 		switch agenttools.OperationClassForName(name) {
 		case agenttools.OperationScheduling:
@@ -326,6 +367,17 @@ func toolProfileForTurn(requireArtifactWrite, allowAuthorityMutation bool) ToolP
 
 func toolAllowedForPolicy(name string, policy TurnEnvelopePolicy) bool {
 	switch policy.ToolProfile {
+	case ToolProfileFocusedSourceCode:
+		switch agenttools.OperationClassForName(name) {
+		case agenttools.OperationArtifactRead, agenttools.OperationWorkspaceInspect,
+			agenttools.OperationArtifactWrite, agenttools.OperationRuntimeContextRead,
+			agenttools.OperationExecution:
+			return true
+		case agenttools.OperationMemoryRead:
+			return policy.AllowRetrieval
+		default:
+			return false
+		}
 	case ToolProfileFocusedAnalysisAuthoring:
 		switch agenttools.OperationClassForName(name) {
 		case agenttools.OperationWorkspaceInspect, agenttools.OperationArtifactRead,

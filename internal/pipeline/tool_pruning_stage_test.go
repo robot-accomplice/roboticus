@@ -73,7 +73,7 @@ func TestStageToolPruning_PopulatesSessionAndTrace(t *testing.T) {
 
 	cfg := PresetAPI()
 	input := Input{
-		Content:  "Implement a cache invalidation refactor, inspect the deployment logs, and update the pipeline code.",
+		Content:  "Inspect the deployment logs, summarize the warnings, and report what changed in the latest rollout.",
 		AgentID:  "default",
 		Platform: "test",
 	}
@@ -156,7 +156,7 @@ func TestStageToolPruning_AbsentPrunerIsNoOp(t *testing.T) {
 	})
 
 	cfg := PresetAPI()
-	input := Input{Content: "Implement a cache invalidation refactor, inspect the deployment logs, and update the pipeline code.", AgentID: "default", Platform: "test"}
+	input := Input{Content: "Inspect the deployment logs, summarize the warnings, and report what changed in the latest rollout.", AgentID: "default", Platform: "test"}
 	outcome, err := RunPipeline(context.Background(), pipe, cfg, input)
 	if err != nil {
 		t.Fatalf("RunPipeline: %v", err)

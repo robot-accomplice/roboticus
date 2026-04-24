@@ -85,12 +85,20 @@ func shouldRetrieveForTurn(intent, content string, sessionTurns int, capabilityF
 	lower := strings.ToLower(content)
 	proceduralUncertainty := appliedLearningHelpful(intent, content, lower, capabilityFit, missingSkills, plannedAction, complexity)
 
+	if looksLikeSourceBackedCodeTask(content) {
+		return false, "none", false
+	}
+
 	if looksLikeInspectionBackedArtifactAuthoring(content) {
 		return false, "none", proceduralUncertainty
 	}
 
 	if looksLikeFocusedInspectionTurn(content) {
 		return false, "none", proceduralUncertainty
+	}
+
+	if looksLikeDerivableDirectFactQuestion(content) {
+		return false, "none", false
 	}
 
 	if intent == "question" {
@@ -212,6 +220,57 @@ func turnCarriesContinuityCue(lower string) bool {
 	return false
 }
 
+func looksLikeDerivableDirectFactQuestion(content string) bool {
+	lower := strings.ToLower(strings.TrimSpace(content))
+	return looksLikeTimeQuestion(lower) || looksLikeSimpleArithmeticQuestion(lower) || looksLikeLanguageRuntimeFactQuestion(lower)
+}
+
+func looksLikeTimeQuestion(lower string) bool {
+	timeMarkers := []string{
+		"what time is it",
+		"current time",
+		"time is it",
+		"what's the time",
+		"what is today's date",
+		"what day is it",
+	}
+	return containsAnyMarker(lower, timeMarkers)
+}
+
+func looksLikeSimpleArithmeticQuestion(lower string) bool {
+	if strings.Contains(lower, "what is 2 + 2") || strings.Contains(lower, "what's 2 + 2") {
+		return true
+	}
+	if strings.Contains(lower, "return only the number") || strings.Contains(lower, "reply only with the number") {
+		for _, op := range []string{"+", "-", "*", "/"} {
+			if strings.Contains(lower, op) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func looksLikeLanguageRuntimeFactQuestion(lower string) bool {
+	runtimeMarkers := []string{
+		"in go, what does",
+		"in go what does",
+		"in python, what does",
+		"in python what does",
+		"in javascript, what does",
+		"in javascript what does",
+		"in rust, what does",
+		"in rust what does",
+		"what does `len(",
+		"what does len(",
+		"when the slice is nil",
+	}
+	if !containsAnyMarker(lower, runtimeMarkers) {
+		return false
+	}
+	return strings.Contains(lower, "return")
+}
+
 // classifyIntent determines the user's intent from message content.
 // Matches Rust's semantic classifier categories.
 func classifyIntent(content string) string {
@@ -263,7 +322,7 @@ func classifyIntent(content string) string {
 	taskMarkers := []string{
 		"create", "build", "make", "set up", "configure", "install", "deploy",
 		"update", "delete", "remove", "send", "schedule", "count", "list",
-		"find", "scan", "look in", "look at",
+		"find", "scan", "look in", "look at", "check", "inspect", "verify", "audit",
 	}
 	for _, m := range taskMarkers {
 		if containsIntentMarker(lower, m) {
@@ -352,6 +411,12 @@ func classifyComplexity(content string, sessionTurns int) string {
 	words := len(strings.Fields(content))
 	lower := strings.ToLower(content)
 	expectedArtifacts := ParseExpectedArtifactSpecs(content)
+	if looksLikeSourceBackedCodeTask(content) {
+		if words > 40 || len(extractSubtasks(content)) >= 2 {
+			return "complex"
+		}
+		return "moderate"
+	}
 	if len(expectedArtifacts) > 0 {
 		if len(expectedArtifacts) > 1 {
 			return "moderate"

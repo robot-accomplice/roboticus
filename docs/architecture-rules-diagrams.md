@@ -38,6 +38,14 @@ This file follows the same C4 conventions used elsewhere in the repo:
   CLI version is stamped into `cmd/internal/cmdutil.Version`, daemon banner
   version into `internal/daemon.version`, and CI/release/local helper build
   paths are not allowed to drift from that contract
+- release publication and downstream release notifications must derive from one
+  explicit tag authority under both tag-push and manual rerun paths; critical
+  release control flow is not allowed to depend on opaque third-party action
+  context for tag identity, prerelease state, dispatch payload semantics, or
+  success/failure reporting
+- CI/release security-tool installation must be pinned and replayable; active
+  workflows are not allowed to float `@latest` for critical scanners whose
+  behavior can silently change between releases
 - route handlers may share connector-local helpers, but policy/exercise/export
   admin surfaces are not allowed to collapse into one monolithic route file
 - unified pipeline-path enforcement follows the whole connector surface for a
@@ -50,6 +58,73 @@ This file follows the same C4 conventions used elsewhere in the repo:
 - benchmark validity also requires provider/model runtime-state snapshots on
   the same benchmark seams, so empty or failed exercise rows can be attributed
   to capability weakness vs missing/unloaded/unreachable model state
+- benchmark scoring truth starts from the prompt contract, not generic
+  verbosity or marker density; concise direct answers are not allowed to score
+  poorly just because they omit irrelevant execution/delegation language
+- historical benchmark rows must remain rescorable when prompt identity and raw
+  response content are persisted; scoring-regime changes are not allowed to
+  force blind reruns by default
+- benchmark aggregate quality must keep one explicit denominator contract:
+  summary and scorecard views are not allowed to silently disagree about
+  whether failures counted as zeroes or were excluded from an average
+- partial benchmark exercise runs update only the exercised model/intent slice;
+  comparison rows must preserve untouched historical intent evidence and
+  recompute aggregate quality/latency from the merged scorecard instead of
+  replacing the whole model row
+- model comparison rows expose evidence coverage, because one observed intent
+  slice is not the same evidentiary basis as a full seven-intent benchmark
+- benchmark phase timing is first-class evidence: retrieval, think, execute,
+  observe, reflect, validate, retry, and total wall-clock timing must be
+  reportable strongly enough to distinguish model latency from framework/tool
+  latency
+- benchmark scorecard latency is model-attributable: comparison tables and
+  per-intent latency summaries use composite model inference time, while
+  whole-turn/pipeline latency remains RCA context only
+- benchmark telemetry fetch is allowed a bounded settling window after a turn
+  completes; scorecards are not allowed to drop phase timing silently just
+  because trace/diagnostic persistence became visible slightly after the main
+  response returned
+- benchmark exercise timeout policy must be prompt-aware: trivial/direct rows
+  and complex multi-step `T-E-O-R` rows are not allowed to share one flat
+  cloud timeout, and the benchmark client's wait budget must remain distinct
+  from the server-side execution budget
+- benchmark model-call timeout is a per-inference-call budget, not a whole-row
+  stopwatch. If a task requires think, tool observation, and reflection calls,
+  the model/provider timer resets after each completed inference while total row
+  wall-clock remains separately reported
+- exploratory baseline ceilings and release-gate latency SLOs are separate
+  contracts: baseline timeouts classify observability limits, while release
+  gates may enforce product latency thresholds
+- exercise rows persist an explicit outcome class such as clean pass, slow
+  pass, provider timeout, transport/API failure, empty response, or
+  quality-gate failure; pass/fail alone is not RCA truth
+- benchmark exercise rows persist canonical `turn_id` for every new prompt
+  result so RCA, trace views, and scorecards join on one authoritative turn
+  identity instead of timestamp/proximity heuristics
+- benchmark/RCA callers may establish `turn_id` before execution and pass it
+  into the pipeline; canonical identity is a correlation input, not something
+  inferred only from successful pipeline output
+- after authoritative tool observation, empty reflection is not a valid final
+  answer: the loop must finalize from observed evidence or return a real error
+- verifier retry suppression after execution progress requires non-empty final
+  content; a suppressed retry may preserve a weak task-specific answer, but it
+  must not persist a blank assistant message under an `ok` turn
+- CLI/API benchmark connectors treat non-2xx problem-details `detail` payloads
+  as errors so failed turns cannot become blank successful dispatches
+- once a benchmark/live turn has a canonical `turn_id`, trace and diagnostic
+  persistence use a detached bounded persistence context rather than the raw
+  client/request context; client cancellation is not allowed to erase RCA
+  artifacts for an already-started turn
+- coding prompts that request runnable artifacts are not allowed to be graded
+  primarily by prose quality; artifact parse/typecheck/compile and bounded
+  input/output correctness precede explanation/style in the active benchmark
+  architecture
+- source-backed code surgery is not generic heavy code work. Refactor/fix/debug
+  turns over the current repository must use a repo-grounded focused profile
+  that anchors on the actual source root, prioritizes authoritative source
+  reads and bounded inspection over repo-inventory theater, treats productive
+  read/list/glob steps as progress, and keeps retrieval neutral unless
+  continuity/evidence cues are explicit
 - session resolution must not continue on a phantom explicit `session_id`;
   body-scoped session ids either resolve to a durable `sessions` row or fail
   cleanly as not found before message persistence begins
@@ -119,6 +194,46 @@ This file follows the same C4 conventions used elsewhere in the repo:
   present”; follow-up `recall_memory` / `search_memories` calls are gap-filling
   hydration steps only when the injected evidence or index is insufficient for
   the task
+- the official execution architecture is `R-TEOR-R`:
+  retrieval-memory `R` -> `Think -> Execute -> Observe -> Reflect` -> retention-memory `R`
+- the leading `R` is retrieval memory: prior evidence, contradictions, and
+  confidence modifiers that matter before the turn acts
+- `TEOR` is the live execution core
+- the trailing `R` is retention memory: reinforcement, decay, and learning
+  hygiene after reflection has decided what the turn actually proved
+- post-observation reasoning is the `R` in `TEOR`, not another generic
+  execution-think pass. After successful tool-backed observation, the default
+  posture is preserve-and-interpret: interpret observed results, validate task
+  sufficiency, refine operator presentation, and only escalate back into
+  execution when the reflect phase explicitly identifies a remaining execution
+  gap. Provider/protocol-specific structured-output requirements are not
+  allowed to destroy an already-successful execution path during reflection
+- the reflective `R` must consume a canonical `TOTOF` artifact, not a universal
+  raw transcript:
+  - `T`: user task
+  - `O`: authoritative observed results
+  - `T`: key tool outcomes
+  - `O`: unresolved gaps or contradictions
+  - `F`: bounded instruction to interpret and finalize
+- provider/model-specific reflection adapters may render `TOTOF` differently,
+  but the canonical reflective state must remain stable across providers and
+  thinking-mode combinations
+- reflective `R` may continue execution only through an explicit continuation
+  decision. That signal may be textual (`CONTINUE_EXECUTION ...`) or
+  structural (tool calls returned from the reflect request instead of a final
+  answer). Neither form is allowed to be flattened into final operator prose
+- reflection continuation is not allowed to fall back to ordinary session
+  replay. The framework must derive a canonical continuation artifact from the
+  current `TOTOF` state plus the explicit remaining-work reason and render
+  that provider-safely for the active model/runtime, rather than appending a
+  prose system note and reopening generic `think` semantics over raw assistant
+  and tool-call history
+- once reflective `R` has finalized a turn after successful `E/O`, later
+  validation is not allowed to reopen ordinary inference with raw session
+  replay. Post-reflection correction must either preserve the reflected answer
+  and record remaining concerns, or use a reflection-scoped correction path
+  that consumes canonical reflection state instead of replaying assistant
+  tool-call transcript history
 - bounded multi-artifact note/document/file authoring is still focused
   authoring. A small explicit set of artifact writes with exact content and
   linking is not allowed to become `complex` specialist work just because it is
@@ -135,10 +250,27 @@ This file follows the same C4 conventions used elsewhere in the repo:
   task synthesis is not allowed to upcast the turn into the heavy/delegated
   code path just because the artifacts are JSON/Markdown or the user mentions
   a source file and workflow language
+- concise imperative operational checks are still task turns. Prompts like
+  `check the health of all integrations` or `verify the current runtime status`
+  are not allowed to fall into the conversational/minimal-tool envelope just
+  because they are short and omit legacy task-marker verbs such as `list` or
+  `find`
 - focused inspection turns must emit one structured inspection-evidence
   artifact shared by the loop, verifier, and RCA; text-only file listings or
   glob output are not sufficient architecture truth for deciding whether a
   read-only call actually narrowed the task
+- focused analysis/report-authoring turns must reuse that same progress seam.
+  If a bounded `execute_directly` turn is collecting named source evidence for
+  a requested report, note, or artifact, the loop is not allowed to classify
+  successful list/read/query steps as exploratory churn merely because the turn
+  has not written the final artifact yet. `focused_analysis_authoring` and
+  `focused_inspection` must agree on what counts as narrowing progress
+- validation must preserve derivable-answer neutrality. If a prompt is
+  arithmetic, current-time lookup, or another in-turn-computable direct fact,
+  the mere presence of unrelated retrieved evidence is not allowed to trigger
+  `unsupported_subgoal` against a correct concise answer. Evidence-backed turns
+  and derivable turns are different validation classes even when they share one
+  request envelope
 - inspection-shaped questions and imperative inspection requests must reuse one
   shared detector and one focused-inspection envelope; the phrasing difference
   is not allowed to create divergent retrieval or tool-surface policy, and
@@ -249,6 +381,11 @@ This file follows the same C4 conventions used elsewhere in the repo:
   the normalization seam. The same central authority must also emit raw
   provider request/response envelopes into trace evidence so operators can
   compare what we sent and what we got back against vendor documentation
+- post-observation reflection must not be treated as “second attempt” logic in
+  RCA or policy. The architecture seam is mode-shifted reasoning after
+  observation, not a retry of pre-execution planning. RCA must distinguish
+  execution success followed by reflection/protocol failure from genuine model
+  inability to answer
 - rebuildable derived SQLite storage is not allowed to become a caller-local
   concern. If corruption is confined to observability tables or FTS internals,
   one database-owned repair path must detect it, back up the damaged files,
@@ -263,6 +400,12 @@ This file follows the same C4 conventions used elsewhere in the repo:
   canonical RCA must show the blocked tool, the exploration streak, and
   `exploratory_tool_churn` instead of forcing operators to infer the loop from
   repeated tool rows
+- bounded multi-step `execute_directly` turns are not the same thing as
+  exploratory research loops. If the operator asked for a bounded report,
+  inventory, inspection, or read-then-summarize task, then productive
+  narrowing/read/query steps toward that explicit deliverable count as real
+  progress and must reset the churn detector even when no artifact has been
+  written yet
 - exact-content artifact proof is write-boundary truth, not verifier
   guesswork. File/note/document-writing tools must emit one typed
   artifact-proof payload containing path, bytes, content hash, and
@@ -390,6 +533,11 @@ This file follows the same C4 conventions used elsewhere in the repo:
   when the needed facts are already present in session history.
 - once continuity evidence exists in the current session, generic retrieval
   gaps must not outrank it during verification.
+- memory retrieval is a confidence modifier, not a universal proof gate.
+  Contradictory memory lowers confidence, absent or irrelevant memory stays
+  neutral, and reinforcing memory raises confidence. Missing memory tiers are
+  not allowed to trigger verifier failure by themselves, especially for
+  derivable or in-turn-computable answers.
 - scheduling is a focused execution seam. Requests to create or describe a cron
   schedule must pin the authoritative scheduling tool plus only minimal support
   tools; they are not allowed to widen into general exploratory tool surfaces.

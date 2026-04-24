@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"roboticus/internal/session"
 	"roboticus/testutil"
 )
 
@@ -59,6 +60,9 @@ func TestAssembleContext_DetectsGaps(t *testing.T) {
 	if ac.Gaps == "" {
 		t.Error("gaps should be detected when tiers are missing")
 	}
+	if ac.GapKind != session.MemoryGapMissingTiers {
+		t.Fatalf("expected missing-tier gap kind, got %q", ac.GapKind)
+	}
 	if !strings.Contains(ac.Gaps, "No past experiences") {
 		t.Error("should flag missing episodic tier")
 	}
@@ -90,6 +94,9 @@ func TestAssembleContext_EmptyEvidence(t *testing.T) {
 	}
 	if !strings.Contains(ac.Gaps, "No evidence retrieved") {
 		t.Error("should flag that no evidence was retrieved at all")
+	}
+	if ac.GapKind != session.MemoryGapNoEvidence {
+		t.Fatalf("expected no-evidence gap kind, got %q", ac.GapKind)
 	}
 }
 

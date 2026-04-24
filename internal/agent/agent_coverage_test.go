@@ -86,6 +86,7 @@ func TestLoopState_String(t *testing.T) {
 		{StateActing, "acting"},
 		{StateObserving, "observing"},
 		{StatePersisting, "persisting"},
+		{StateReflecting, "reflecting"},
 		{StateIdle, "idle"},
 		{StateDone, "done"},
 		{LoopState(99), "unknown(99)"},

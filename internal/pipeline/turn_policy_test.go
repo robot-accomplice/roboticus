@@ -238,6 +238,44 @@ func TestDeriveTurnEnvelopePolicy_PathProjectListingUsesFocusedInspectionEnvelop
 	}
 }
 
+func TestDeriveTurnEnvelopePolicy_SourceBackedCodeUsesFocusedSourceCodeEnvelope(t *testing.T) {
+	prompt := "Refactor the configuration parser to support hot-reload with validation, rollback on failure, and emit structured change events."
+	synthesis := SynthesizeTaskState(prompt, 1, nil)
+	policy := DeriveTurnEnvelopePolicy(prompt, synthesis, 1)
+
+	if synthesis.Intent != "code" {
+		t.Fatalf("intent = %q, want code", synthesis.Intent)
+	}
+	if policy.ToolProfile != ToolProfileFocusedSourceCode {
+		t.Fatalf("tool profile = %q, want %q", policy.ToolProfile, ToolProfileFocusedSourceCode)
+	}
+	if policy.AllowRetrieval {
+		t.Fatal("source-backed code envelope should keep retrieval neutral by default")
+	}
+	if policy.MaxTools != 8 {
+		t.Fatalf("max tools = %d, want 8", policy.MaxTools)
+	}
+}
+
+func TestDeriveTurnEnvelopePolicy_DerivableQuestionUsesMinimalEnvelope(t *testing.T) {
+	prompt := "What is 2 + 2?"
+	synthesis := SynthesizeTaskState(prompt, 1, nil)
+	policy := DeriveTurnEnvelopePolicy(prompt, synthesis, 1)
+
+	if synthesis.Intent != "question" {
+		t.Fatalf("intent = %q, want question", synthesis.Intent)
+	}
+	if !policy.LightweightToolSurface {
+		t.Fatal("derivable direct-fact question should use lightweight tool surface")
+	}
+	if policy.AllowRetrieval {
+		t.Fatal("derivable direct-fact question should not allow retrieval")
+	}
+	if policy.Weight != TurnWeightLight {
+		t.Fatalf("weight = %q, want %q", policy.Weight, TurnWeightLight)
+	}
+}
+
 func TestDeriveTurnEnvelopePolicy_TildeDistributionUsesFocusedInspectionEnvelope(t *testing.T) {
 	prompt := "give me the file distribution in the folder ~"
 	synthesis := SynthesizeTaskState(prompt, 1, nil)

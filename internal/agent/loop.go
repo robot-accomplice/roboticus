@@ -29,6 +29,7 @@ const (
 	StateActing                      // Executing a tool call
 	StateObserving                   // Processing tool results
 	StatePersisting                  // Saving state (memory, context)
+	StateReflecting                  // Interpreting observed results without reopening tools
 	StateIdle                        // No progress detected
 	StateDone                        // Terminal state
 )
@@ -43,6 +44,8 @@ func (s LoopState) String() string {
 		return "observing"
 	case StatePersisting:
 		return "persisting"
+	case StateReflecting:
+		return "reflecting"
 	case StateIdle:
 		return "idle"
 	case StateDone:
@@ -60,9 +63,17 @@ const (
 	ActionAct                   // Invoke a tool
 	ActionObserve               // Process observation
 	ActionPersist               // Save state
+	ActionReflect               // Interpret observed results without tools
 	ActionNoOp                  // Nothing useful happened
 	ActionFinish                // Terminate loop
 )
+
+const (
+	reflectContinuePrefix = "CONTINUE_EXECUTION"
+)
+
+const reflectInstruction = "Post-observation reflection mode: tools are disabled. You are receiving a canonical TOTOF artifact: task, authoritative observed results, key tool outcomes, open issues, and a bounded finalization instruction. Interpret the artifact, finalize directly when the observed results are sufficient, and only if more execution is strictly required start the first line with CONTINUE_EXECUTION and then briefly explain what remains to be done."
+const continuationInstruction = "Post-observation continuation mode: you are resuming execution from a canonical continuation artifact rather than raw session replay. Use the authoritative observations, tool outcomes, and explicit remaining-work summary to decide the next bounded execution step. Continue execution only as far as needed to close the named remaining work, then return to observation/reflection."
 
 // LoopConfig controls the ReAct loop behavior.
 type LoopConfig struct {
@@ -133,8 +144,10 @@ type ReactTraceEntry struct {
 	Source        string `json:"source"` // "builtin", "plugin", "mcp"
 }
 
-// Loop implements the ReAct state machine. It coordinates the agent's
-// think → act → observe cycle with loop/idle detection and turn limits.
+// Loop implements the live TEOR core inside the broader R-TEOR-R model:
+// retrieval memory happens before the loop is entered, this loop owns
+// Think -> Execute -> Observe -> Reflect, and retention memory happens after
+// reflection decides what the turn actually proved.
 type Loop struct {
 	mu     sync.Mutex
 	config LoopConfig
@@ -248,9 +261,6 @@ func (l *Loop) Run(ctx context.Context, session *Session) (string, error) {
 			l.terminate("wall-clock deadline exceeded")
 			log.Warn().Str("session", session.ID).Dur("limit", loopDuration).Msg("ReAct loop hit wall-clock deadline")
 			content := session.LastAssistantContent()
-			if content == "" {
-				content = "I stopped this turn after reaching the autonomy duration limit. Here's what I accomplished so far."
-			}
 			return content, nil
 		}
 
@@ -289,9 +299,6 @@ func (l *Loop) Run(ctx context.Context, session *Session) (string, error) {
 				if errors.Is(err, ErrMaxTurns) {
 					l.terminate("max turns exceeded")
 					content := session.LastAssistantContent()
-					if content == "" {
-						content = "I stopped after reaching the maximum number of turns."
-					}
 					return content, err
 				}
 				l.terminate(fmt.Sprintf("thinking error: %v", err))
@@ -314,7 +321,20 @@ func (l *Loop) Run(ctx context.Context, session *Session) (string, error) {
 
 		case StatePersisting:
 			l.persist(ctx, session)
-			l.transition(ActionThink)
+			l.transition(ActionReflect)
+
+		case StateReflecting:
+			action, err := l.reflect(ctx, session)
+			if err != nil {
+				if errors.Is(err, ErrMaxTurns) {
+					l.terminate("max turns exceeded")
+					content := session.LastAssistantContent()
+					return content, err
+				}
+				l.terminate(fmt.Sprintf("reflection error: %v", err))
+				return "", err
+			}
+			l.transition(action)
 
 		case StateIdle:
 			l.terminate("idle: no progress")
@@ -338,12 +358,14 @@ func (l *Loop) synthesizeFromToolResults(session *Session) string {
 		}
 	}
 	if len(toolResults) == 0 {
-		return "I completed the requested actions but wasn't able to generate a summary."
+		return session.LastAssistantContent()
 	}
 	var sb strings.Builder
-	sb.WriteString("Here's what I found:\n\n")
 	for _, r := range toolResults {
-		sb.WriteString("- " + r + "\n")
+		if sb.Len() > 0 {
+			sb.WriteString("\n")
+		}
+		sb.WriteString(r)
 	}
 	return sb.String()
 }
@@ -363,7 +385,7 @@ func (l *Loop) think(ctx context.Context, session *Session) (Action, error) {
 	prevState := l.state
 	// Only increment turnCount on actual transitions TO thinking state,
 	// not on every think() call — prevents 2-3x inflation (#41).
-	if prevState == StateThinking {
+	if prevState == StateThinking || prevState == StateReflecting {
 		l.turnCount++
 	}
 	turn := l.turnCount
@@ -377,7 +399,13 @@ func (l *Loop) think(ctx context.Context, session *Session) (Action, error) {
 	}
 
 	// Build context-aware request.
-	req := l.context.BuildRequest(session)
+	continuation := session.ConsumeContinuationArtifact()
+	var req *llm.Request
+	if continuation != nil {
+		req = l.context.BuildRequestWithMessages(session, continuation.Messages())
+	} else {
+		req = l.context.BuildRequest(session)
+	}
 
 	// v1.0.6: turn-by-turn instrumentation. Pre-v1.0.6 these log
 	// lines existed at DEBUG level without content snippets, so an
@@ -456,7 +484,7 @@ func (l *Loop) think(ctx context.Context, session *Session) (Action, error) {
 		if nonTerminalFiller {
 			return ActionFinish, nil
 		}
-		session.AddAssistantMessage(resp.Content, nil)
+		session.AddAssistantMessageWithPhase(resp.Content, nil, "think")
 		return ActionFinish, nil
 	}
 	if nonTerminalFiller {
@@ -475,7 +503,7 @@ func (l *Loop) think(ctx context.Context, session *Session) (Action, error) {
 		if nonTerminalFiller {
 			content = ""
 		}
-		session.AddAssistantMessage(content, resp.ToolCalls)
+		session.AddAssistantMessageWithPhase(content, resp.ToolCalls, "think")
 		return ActionAct, nil
 	}
 
@@ -486,9 +514,115 @@ func (l *Loop) think(ctx context.Context, session *Session) (Action, error) {
 	}
 
 	// Add assistant response to session history.
-	session.AddAssistantMessage(resp.Content, nil)
+	session.AddAssistantMessageWithPhase(resp.Content, nil, "think")
 
 	// No tool calls — this is a final response.
+	return ActionFinish, nil
+}
+
+func (l *Loop) reflect(ctx context.Context, session *Session) (Action, error) {
+	l.mu.Lock()
+	prevState := l.state
+	if prevState == StateReflecting {
+		l.turnCount++
+	}
+	turn := l.turnCount
+	maxTurns := l.config.MaxTurns
+	l.mu.Unlock()
+
+	if turn > maxTurns {
+		log.Warn().Str("session", session.ID).Int("max_turns", maxTurns).Msg("ReAct loop hit max turn limit during reflection")
+		return ActionFinish, core.NewError(ErrMaxTurns, fmt.Sprintf("exceeded max turns (%d)", maxTurns))
+	}
+
+	totof := session.BuildTOTOF(reflectInstruction)
+	req := &llm.Request{
+		Messages:       totof.Messages(),
+		IntentClass:    llmIntentClassForSession(session),
+		AgentRole:      session.AgentRole(),
+		TurnWeight:     session.TurnWeight(),
+		TaskIntent:     session.TaskIntent(),
+		TaskComplexity: session.TaskComplexity(),
+	}
+
+	lastUserSnippet := lastRoleSnippet(req.Messages, "user", 200)
+	log.Info().
+		Int("turn", turn).
+		Str("session", session.ID).
+		Int("messages", len(req.Messages)).
+		Int("totof_observations", len(totof.AuthoritativeObservedResult)).
+		Int("totof_open_issues", len(totof.OpenIssues)).
+		Str("model", req.Model).
+		Str("last_user", lastUserSnippet).
+		Msg("agent loop: sending reflection request")
+
+	resp, err := l.llm.Complete(ctx, req)
+	if err != nil {
+		return ActionFinish, core.WrapError(core.ErrLLM, "reflection failed", err)
+	}
+
+	resp.Content = SanitizeModelOutput(resp.Content, nil, l.injection)
+	respSnippet := resp.Content
+	if len(respSnippet) > 200 {
+		respSnippet = respSnippet[:200] + "…"
+	}
+	log.Info().
+		Int("turn", turn).
+		Str("session", session.ID).
+		Int("tool_calls", len(resp.ToolCalls)).
+		Int("content_len", len(resp.Content)).
+		Str("finish_reason", resp.FinishReason).
+		Str("model", resp.Model).
+		Str("content_preview", respSnippet).
+		Msg("agent loop: reflection response received")
+
+	trimmed := strings.TrimSpace(resp.Content)
+	if strings.HasPrefix(trimmed, reflectContinuePrefix) {
+		remainder := strings.TrimSpace(strings.TrimPrefix(trimmed, reflectContinuePrefix))
+		artifact := session.BuildContinuationArtifact(remainder, continuationInstruction)
+		session.SetContinuationArtifact(&artifact)
+		if obs := llm.InferenceObserverFromContext(ctx); obs != nil {
+			obs.RecordEvent("reflection_continues_execution", "warning",
+				"post-observation reflection requested more execution",
+				"The framework finished one execution cycle, reflected on the observed results, and explicitly decided that more execution was still required.",
+				map[string]any{
+					"reason": remainder,
+				},
+			)
+		}
+		return ActionThink, nil
+	}
+
+	if len(resp.ToolCalls) > 0 {
+		remainder := trimmed
+		artifact := session.BuildContinuationArtifact(remainder, continuationInstruction)
+		session.SetContinuationArtifact(&artifact)
+		if obs := llm.InferenceObserverFromContext(ctx); obs != nil {
+			obs.RecordEvent("reflection_continues_execution", "warning",
+				"post-observation reflection requested more execution",
+				"The post-observation reflection phase returned tool calls instead of a final answer, so the framework treated the response as an explicit request to continue execution.",
+				map[string]any{
+					"tool_call_count": len(resp.ToolCalls),
+					"source":          "tool_calls",
+					"reason":          remainder,
+				},
+			)
+		}
+		session.AddAssistantMessageWithPhase(resp.Content, resp.ToolCalls, "reflect")
+		return ActionAct, nil
+	}
+
+	if trimmed == "" {
+		if toolResultCount(session) > 0 {
+			content := strings.TrimSpace(l.synthesizeFromToolResults(session))
+			if content != "" {
+				session.AddAssistantMessageWithPhase(content, nil, "reflect")
+			}
+		}
+		return ActionFinish, nil
+	}
+
+	session.AddAssistantMessageWithPhase(resp.Content, nil, "reflect")
 	return ActionFinish, nil
 }
 
@@ -886,6 +1020,9 @@ func (l *Loop) transition(action Action) {
 		l.state = StateObserving
 	case ActionPersist:
 		l.state = StatePersisting
+	case ActionReflect:
+		l.noOpCount = 0
+		l.state = StateReflecting
 	case ActionNoOp:
 		l.noOpCount++
 		if l.noOpCount >= l.config.IdleThreshold {
@@ -1101,7 +1238,7 @@ func inspectionEvidenceCountsAsProgress(session *Session, toolName string, resul
 	if session == nil || result == nil {
 		return false
 	}
-	if strings.TrimSpace(session.TurnToolProfile()) != "focused_inspection" {
+	if !turnProfileCountsReadOnlyEvidenceAsProgress(session.TurnToolProfile()) {
 		return false
 	}
 	switch agenttools.OperationClassForName(toolName) {
@@ -1115,6 +1252,15 @@ func inspectionEvidenceCountsAsProgress(session *Session, toolName string, resul
 		}
 	}
 	return false
+}
+
+func turnProfileCountsReadOnlyEvidenceAsProgress(profile string) bool {
+	switch strings.TrimSpace(profile) {
+	case "focused_inspection", "focused_analysis_authoring", "focused_source_code":
+		return true
+	default:
+		return false
+	}
 }
 
 func (l *Loop) resetReadOnlyExploration() {

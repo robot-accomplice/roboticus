@@ -158,8 +158,15 @@ func (cb *ContextBuilder) AppendSystemNote(note string) {
 // BuildRequest constructs an LLM request from session state, applying
 // context budgeting and compaction as needed.
 func (cb *ContextBuilder) BuildRequest(session *Session) *llm.Request {
+	return cb.buildRequestFromMessages(session, session.Messages())
+}
+
+func (cb *ContextBuilder) BuildRequestWithMessages(session *Session, messages []llm.Message) *llm.Request {
+	return cb.buildRequestFromMessages(session, messages)
+}
+
+func (cb *ContextBuilder) buildRequestFromMessages(session *Session, messages []llm.Message) *llm.Request {
 	budget := cb.config.effectiveBudget()
-	messages := session.Messages()
 
 	// Always include system prompt.
 	var result []llm.Message

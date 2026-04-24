@@ -32,6 +32,7 @@ type baselineRunStartRequest struct {
 }
 
 type baselineRunResultRequest struct {
+	TurnID          string          `json:"turn_id,omitempty"`
 	Model           string          `json:"model"`
 	IntentClass     string          `json:"intent_class"`
 	Complexity      string          `json:"complexity"`
@@ -39,7 +40,9 @@ type baselineRunResultRequest struct {
 	Content         string          `json:"content,omitempty"`
 	Quality         float64         `json:"quality"`
 	LatencyMs       int64           `json:"latency_ms"`
+	PhaseTimings    json.RawMessage `json:"phase_timings,omitempty"`
 	Passed          bool            `json:"passed"`
+	ResultClass     string          `json:"result_class,omitempty"`
 	ErrorMsg        string          `json:"error_msg,omitempty"`
 	ResourceStart   json.RawMessage `json:"resource_start,omitempty"`
 	ResourceEnd     json.RawMessage `json:"resource_end,omitempty"`
@@ -121,6 +124,7 @@ func AppendExerciseRunResult(store *db.Store) http.HandlerFunc {
 		if err := db.InsertExerciseResult(r.Context(), store, db.ExerciseResultRow{
 			ID:              db.NewID(),
 			RunID:           runID,
+			TurnID:          req.TurnID,
 			Model:           req.Model,
 			IntentClass:     req.IntentClass,
 			Complexity:      req.Complexity,
@@ -128,7 +132,9 @@ func AppendExerciseRunResult(store *db.Store) http.HandlerFunc {
 			Content:         req.Content,
 			Quality:         req.Quality,
 			LatencyMs:       req.LatencyMs,
+			PhaseTimings:    strings.TrimSpace(string(req.PhaseTimings)),
 			Passed:          req.Passed,
+			ResultClass:     req.ResultClass,
 			ErrorMsg:        req.ErrorMsg,
 			ResourceStart:   hostresources.FromJSON(string(req.ResourceStart)),
 			ResourceEnd:     hostresources.FromJSON(string(req.ResourceEnd)),
@@ -262,14 +268,17 @@ func ExerciseModel(p pipeline.Runner, store *db.Store, cfg *core.Config, agentNa
 		}()
 
 		type promptResult struct {
-			Intent     string  `json:"intent"`
-			Complexity string  `json:"complexity"`
-			Prompt     string  `json:"prompt"`
-			Content    string  `json:"content,omitempty"`
-			Quality    float64 `json:"quality"`
-			LatencyMs  int64   `json:"latency_ms"`
-			Passed     bool    `json:"passed"`
-			Error      string  `json:"error,omitempty"`
+			Intent       string                    `json:"intent"`
+			Complexity   string                    `json:"complexity"`
+			Prompt       string                    `json:"prompt"`
+			Content      string                    `json:"content,omitempty"`
+			Quality      float64                   `json:"quality"`
+			LatencyMs    int64                     `json:"latency_ms"`
+			TurnID       string                    `json:"turn_id,omitempty"`
+			PhaseTimings *llm.ExercisePhaseTimings `json:"phase_timings,omitempty"`
+			Passed       bool                      `json:"passed"`
+			ResultClass  string                    `json:"result_class,omitempty"`
+			Error        string                    `json:"error,omitempty"`
 		}
 		promptCapacity := len(llm.ExerciseMatrix)
 		if intentFilter != nil {
@@ -284,13 +293,16 @@ func ExerciseModel(p pipeline.Runner, store *db.Store, cfg *core.Config, agentNa
 
 		onPrompt := func(o llm.PromptOutcome) {
 			pr := promptResult{
-				Intent:     o.Prompt.Intent.String(),
-				Complexity: o.Prompt.Complexity.String(),
-				Prompt:     o.Prompt.Prompt,
-				Content:    o.Content,
-				Quality:    o.Quality,
-				LatencyMs:  o.LatencyMs,
-				Passed:     o.Passed,
+				Intent:       o.Prompt.Intent.String(),
+				Complexity:   o.Prompt.Complexity.String(),
+				Prompt:       o.Prompt.Prompt,
+				Content:      o.Content,
+				Quality:      o.Quality,
+				LatencyMs:    o.LatencyMs,
+				TurnID:       o.TurnID,
+				PhaseTimings: o.PhaseTimings,
+				Passed:       o.Passed,
+				ResultClass:  string(o.OutcomeClass),
 			}
 			if o.Err != nil {
 				pr.Error = o.Err.Error()
@@ -306,6 +318,7 @@ func ExerciseModel(p pipeline.Runner, store *db.Store, cfg *core.Config, agentNa
 			_ = db.InsertExerciseResult(context.Background(), store, db.ExerciseResultRow{
 				ID:              db.NewID(),
 				RunID:           runID,
+				TurnID:          o.TurnID,
 				Model:           req.Model,
 				IntentClass:     o.Prompt.Intent.String(),
 				Complexity:      o.Prompt.Complexity.String(),
@@ -313,7 +326,9 @@ func ExerciseModel(p pipeline.Runner, store *db.Store, cfg *core.Config, agentNa
 				Content:         o.Content,
 				Quality:         o.Quality,
 				LatencyMs:       o.LatencyMs,
+				PhaseTimings:    marshalExercisePhaseTimings(o.PhaseTimings),
 				Passed:          o.Passed,
+				ResultClass:     string(o.OutcomeClass),
 				ErrorMsg:        errMsg,
 				ResourceStart:   o.ResourceStart,
 				ResourceEnd:     o.ResourceEnd,
@@ -326,8 +341,8 @@ func ExerciseModel(p pipeline.Runner, store *db.Store, cfg *core.Config, agentNa
 			Models:       []string{req.Model},
 			IntentFilter: intentFilter,
 			Iterations:   req.Iterations,
-			SendPrompt:   pipelineExercisePromptSender(p, agentName),
-			SendWarmup:   pipelineExerciseWarmupSender(p, agentName),
+			SendPrompt:   pipelineExercisePromptSender(p, store, agentName),
+			SendWarmup:   pipelineExerciseWarmupSender(p, store, agentName),
 			OnPrompt:     onPrompt,
 			SampleModelState: func(ctx context.Context, model string) *modelstate.Snapshot {
 				snapshot := modelstate.Sample(ctx, cfg, model)
@@ -365,50 +380,92 @@ func ExerciseModel(p pipeline.Runner, store *db.Store, cfg *core.Config, agentNa
 	}
 }
 
-func pipelineExercisePromptSender(p pipeline.Runner, agentName string) llm.ModelSender {
-	return func(ctx context.Context, model, content string, timeout time.Duration) (string, int64, error) {
-		callCtx, cancel := context.WithTimeout(ctx, timeout)
-		defer cancel()
-		start := time.Now()
-		outcome, err := pipeline.RunPipeline(callCtx, p, pipeline.PresetAPI(), pipeline.Input{
-			Content:       content,
-			AgentID:       "default",
-			AgentName:     agentName,
-			Platform:      "api",
-			ModelOverride: model,
-			NoCache:       true,
-			NoEscalate:    true,
-		})
-		latencyMs := time.Since(start).Milliseconds()
-		if err != nil {
-			return "", latencyMs, err
-		}
-		return outcome.Content, latencyMs, nil
-	}
-}
-
-func pipelineExerciseWarmupSender(p pipeline.Runner, agentName string) llm.WarmupSender {
-	sendPrompt := pipelineExercisePromptSender(p, agentName)
-	return func(ctx context.Context, model string, timeout time.Duration) llm.WarmupResult {
-		_, latencyMs, err := sendPrompt(ctx, model, llm.WarmupPrompt, timeout)
-		res := llm.WarmupResult{LatencyMs: latencyMs}
-		if err != nil {
-			if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-				res.TimedOut = true
-			} else {
-				res.Err = err
-			}
-		}
-		return res
-	}
-}
-
 // GetExerciseStatus returns which models have existing exercise data and how many results.
 func GetExerciseStatus(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		counts := db.ExerciseResultCountByModel(r.Context(), store)
 		writeJSON(w, http.StatusOK, map[string]any{
 			"models": counts,
+		})
+	}
+}
+
+// RescoreExerciseResults recomputes persisted exercise quality/pass values
+// using the current scoring regime. It exists so benchmark-rubric changes do
+// not force blind reruns when raw prompt/response artifacts are already stored.
+func RescoreExerciseResults(store *db.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Models []string `json:"models,omitempty"`
+			RunID  string   `json:"run_id,omitempty"`
+			DryRun bool     `json:"dry_run,omitempty"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+
+		rows := db.ListExerciseResultsForRescore(r.Context(), store, req.Models, strings.TrimSpace(req.RunID))
+		if rows == nil {
+			rows = []db.ExerciseResultRow{}
+		}
+
+		updated := 0
+		passFlips := 0
+		qualityChanged := 0
+		var previews []map[string]any
+
+		for _, row := range rows {
+			intent, err := llm.ParseIntentClassStrict(row.IntentClass)
+			if err != nil {
+				continue
+			}
+			complexity, err := llm.ParseComplexityLevel(row.Complexity)
+			if err != nil {
+				continue
+			}
+			prompt := llm.ResolveExercisePrompt(row.Prompt, intent, complexity)
+			newQuality := llm.ScoreExerciseResponse(prompt, row.Content)
+			newPassed := newQuality >= 0.3 && row.ErrorMsg == ""
+
+			if newQuality != row.Quality {
+				qualityChanged++
+			}
+			if newPassed != row.Passed {
+				passFlips++
+			}
+			if !req.DryRun && (newQuality != row.Quality || newPassed != row.Passed) {
+				if err := db.UpdateExerciseResultScore(r.Context(), store, row.ID, newQuality, newPassed); err != nil {
+					writeError(w, http.StatusInternalServerError, "failed to update rescored exercise result")
+					return
+				}
+				updated++
+			}
+
+			if len(previews) < 10 && (newQuality != row.Quality || newPassed != row.Passed) {
+				previews = append(previews, map[string]any{
+					"id":          row.ID,
+					"run_id":      row.RunID,
+					"model":       row.Model,
+					"prompt":      row.Prompt,
+					"old_quality": row.Quality,
+					"new_quality": newQuality,
+					"old_passed":  row.Passed,
+					"new_passed":  newPassed,
+				})
+			}
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{
+			"total_rows":      len(rows),
+			"quality_changed": qualityChanged,
+			"pass_flips":      passFlips,
+			"updated":         updated,
+			"dry_run":         req.DryRun,
+			"preview_changes": previews,
+			"scoring_regime":  "prompt_contract_v1",
+			"filtered_models": req.Models,
+			"filtered_run_id": strings.TrimSpace(req.RunID),
 		})
 	}
 }

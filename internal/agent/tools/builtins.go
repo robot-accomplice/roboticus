@@ -235,11 +235,11 @@ func (t *ObsidianWriteTool) Execute(_ context.Context, params string, tctx *Cont
 // EditFileTool replaces text in an existing file.
 type EditFileTool struct{}
 
-func (t *EditFileTool) Name() string        { return "edit_file" }
+func (t *EditFileTool) Name() string { return "edit_file" }
 func (t *EditFileTool) Description() string {
 	return "Replace text in an existing workspace-relative file or in a file at an absolute path inside allowed_paths."
 }
-func (t *EditFileTool) Risk() RiskLevel     { return RiskCaution }
+func (t *EditFileTool) Risk() RiskLevel { return RiskCaution }
 func (t *EditFileTool) ParameterSchema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Workspace-relative path or absolute allowed path"},"old_text":{"type":"string","description":"Text to find"},"new_text":{"type":"string","description":"Replacement text"},"replace_all":{"type":"boolean","default":false}},"required":["path","old_text","new_text"]}`)
 }

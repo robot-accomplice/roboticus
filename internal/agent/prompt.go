@@ -112,6 +112,9 @@ func BuildSystemPrompt(cfg PromptConfig) string {
 	if strings.TrimSpace(cfg.ToolProfile) == "focused_analysis_authoring" {
 		sections = append(sections, buildAnalysisAuthoringBlock(cfg))
 	}
+	if strings.TrimSpace(cfg.ToolProfile) == "focused_source_code" {
+		sections = append(sections, buildSourceBackedCodeBlock(cfg))
+	}
 
 	// 7. Safety (integrated into behavioral contract for L2+, explicit for L0/L1).
 	if cfg.BudgetTier <= 1 {
@@ -394,6 +397,17 @@ func buildAnalysisAuthoringBlock(cfg PromptConfig) string {
 	}
 	sb.WriteString("- Do not commit the report until the requested metadata has been gathered or specific gaps have been proven by tool results.\n")
 	sb.WriteString("- Do not ask for permission to proceed when the task and destination are already fully specified.\n")
+	return sb.String()
+}
+
+func buildSourceBackedCodeBlock(cfg PromptConfig) string {
+	var sb strings.Builder
+	sb.WriteString("## Source-Backed Code Contract\n")
+	sb.WriteString("- This turn is about inspecting and modifying the current codebase, not inventing a detached greenfield design.\n")
+	sb.WriteString("- Start from the resolved repository root and locate authoritative source files before proposing or applying a refactor.\n")
+	sb.WriteString("- Prefer list_directory, glob_files, and read_file over broad repo inventory or speculative summaries when the current repository is already known.\n")
+	sb.WriteString("- Treat bounded source discovery as progress: locating the relevant files and reading them is part of the job, not exploratory churn.\n")
+	sb.WriteString("- Do not broaden the search to parent code directories unless direct inspection of the resolved repository root has proved insufficient.\n")
 	return sb.String()
 }
 

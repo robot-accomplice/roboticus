@@ -80,16 +80,22 @@ func TestCliPromptSender_SetsNoEscalate(t *testing.T) {
 		if body["no_escalate"] != true {
 			t.Fatalf("no_escalate = %#v, want true", body["no_escalate"])
 		}
+		if body["turn_id"] == "" {
+			t.Fatal("turn_id should be established before benchmark execution")
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"content": "ok"})
 	}))
 	defer cleanup()
 
-	content, _, err := cliPromptSender(context.Background(), "ollama/gemma3:12b", "test prompt", 5*time.Second)
+	dispatch, err := cliPromptSender(context.Background(), "ollama/gemma3:12b", "test prompt", 5*time.Second)
 	if err != nil {
 		t.Fatalf("cliPromptSender: %v", err)
 	}
-	if content != "ok" {
-		t.Fatalf("content = %q, want ok", content)
+	if dispatch.ResponseText != "ok" {
+		t.Fatalf("content = %q, want ok", dispatch.ResponseText)
+	}
+	if dispatch.TurnID == "" {
+		t.Fatal("dispatch turn id should be preserved even when response omits it")
 	}
 }
 
@@ -152,6 +158,9 @@ func TestExerciseRunLifecycleHelpers(t *testing.T) {
 			if body["model"] != "ollama/gemma4" {
 				t.Fatalf("model = %#v, want ollama/gemma4", body["model"])
 			}
+			if body["result_class"] != "clean_pass" {
+				t.Fatalf("result_class = %#v, want clean_pass", body["result_class"])
+			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
 		case r.Method == http.MethodPost && r.URL.Path == "/api/models/exercise/runs/run-123/complete":
 			sawComplete = true
@@ -183,10 +192,11 @@ func TestExerciseRunLifecycleHelpers(t *testing.T) {
 			Intent:     llm.IntentConversation,
 			Complexity: llm.ComplexitySimple,
 		},
-		Content:   "hello",
-		Quality:   0.9,
-		LatencyMs: 1234,
-		Passed:    true,
+		Content:      "hello",
+		Quality:      0.9,
+		LatencyMs:    1234,
+		Passed:       true,
+		OutcomeClass: llm.ExerciseOutcomeCleanPass,
 	})
 	if err != nil {
 		t.Fatalf("appendExerciseRunResult: %v", err)
@@ -225,5 +235,112 @@ func TestCurrentGitRevision_TrimsOutput(t *testing.T) {
 	rev := currentGitRevision()
 	if strings.Contains(rev, "\n") {
 		t.Fatalf("git revision contains newline: %q", rev)
+	}
+}
+
+func TestBuildComparisonRows_MergesHistoricalScorecardEntriesWithFreshResults(t *testing.T) {
+	cleanup := testhelp.SetupMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/models/exercise/scorecard" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"entries": []any{
+				map[string]any{
+					"model":          "moonshot/kimi-k2.6",
+					"intent_class":   "CONVERSATION",
+					"avg_quality":    0.72,
+					"avg_latency_ms": 20000,
+					"count":          5,
+				},
+				map[string]any{
+					"model":          "moonshot/kimi-k2.6",
+					"intent_class":   "CODING",
+					"avg_quality":    0.65,
+					"avg_latency_ms": 30000,
+					"count":          5,
+				},
+				map[string]any{
+					"model":          "anthropic/claude-opus-4.1",
+					"intent_class":   "CONVERSATION",
+					"avg_quality":    0.91,
+					"avg_latency_ms": 12000,
+					"count":          5,
+				},
+				map[string]any{
+					"model":          "anthropic/claude-opus-4.1",
+					"intent_class":   "CODING",
+					"avg_quality":    0.89,
+					"avg_latency_ms": 8000,
+					"count":          5,
+				},
+			},
+		})
+	}))
+	defer cleanup()
+
+	report := llm.ExerciseReport{
+		Models: []llm.ModelExerciseResult{
+			{
+				Model: "moonshot/kimi-k2.6",
+				IntentQuality: map[string]float64{
+					"CONVERSATION": 0.84,
+				},
+				Latencies: map[string][]int64{
+					"CONVERSATION": {2800, 8500},
+				},
+			},
+		},
+	}
+
+	rows := buildComparisonRows(report, nil)
+	if len(rows) != 2 {
+		t.Fatalf("comparison rows = %d, want 2", len(rows))
+	}
+
+	var sawFresh bool
+	var sawHistorical bool
+	for _, row := range rows {
+		switch row.Model {
+		case "moonshot/kimi-k2.6":
+			sawFresh = true
+			if !row.Exercised {
+				t.Fatalf("fresh row should be marked exercised")
+			}
+			if row.Intent["CONVERSATION"] != 0.84 {
+				t.Fatalf("fresh conversation quality = %.2f, want 0.84", row.Intent["CONVERSATION"])
+			}
+			if row.Intent["CODING"] != 0.65 {
+				t.Fatalf("historical coding quality was not preserved: %.2f, want 0.65", row.Intent["CODING"])
+			}
+			if row.AvgQuality != 0.7042857142857143 {
+				t.Fatalf("merged avg quality = %.4f, want 0.7043", row.AvgQuality)
+			}
+			if row.AvgLatencyMs != 23042 {
+				t.Fatalf("merged avg latency = %d, want 23042", row.AvgLatencyMs)
+			}
+			if row.ObservedIntents != 2 {
+				t.Fatalf("merged evidence coverage = %d, want 2", row.ObservedIntents)
+			}
+		case "anthropic/claude-opus-4.1":
+			sawHistorical = true
+			if row.Exercised {
+				t.Fatalf("historical row must not be marked exercised")
+			}
+			if row.Intent["CONVERSATION"] != 0.91 {
+				t.Fatalf("historical conversation quality = %.2f, want 0.91", row.Intent["CONVERSATION"])
+			}
+			if row.Intent["CODING"] != 0.89 {
+				t.Fatalf("historical coding quality = %.2f, want 0.89", row.Intent["CODING"])
+			}
+			if row.AvgLatencyMs != 10000 {
+				t.Fatalf("historical avg latency = %d, want 10000", row.AvgLatencyMs)
+			}
+			if row.ObservedIntents != 2 {
+				t.Fatalf("historical evidence coverage = %d, want 2", row.ObservedIntents)
+			}
+		}
+	}
+	if !sawFresh || !sawHistorical {
+		t.Fatalf("expected both fresh and historical models, sawFresh=%v sawHistorical=%v", sawFresh, sawHistorical)
 	}
 }
