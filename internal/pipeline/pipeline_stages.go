@@ -193,6 +193,12 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 	// persist the assistant message.
 	verifyCtx, verifyResult, verifySummary := p.verifyAssistantResult(session, result, tr)
 	verifyRetryDisposition := decideVerifierRetryAfterProgress(verifyResult, verifyCtx, executionProgressFromGuardContext(p.buildGuardContext(session)))
+	if !verifyResult.Passed && session.LastAssistantPhase() == "reflect" {
+		verifyRetryDisposition = RetryDisposition{
+			Allow:  false,
+			Reason: "turn already completed reflective finalization after successful execution; generic verifier retry would violate the R-TEOR-R boundary",
+		}
+	}
 	if !verifyResult.Passed && verifyRetryDisposition.Allow {
 		retryPlan := buildVerifierRetryPlan(verifyResult, verifyCtx, session.SelectedToolDefs())
 		policy = p.maybeExpandTurnEnvelope(ctx, session, policy, verifyResult, dr)
@@ -227,7 +233,7 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 			if dr != nil {
 				dr.RecordEvent("verifier_retry_failed", "error",
 					"verifier retry failed before a valid final answer was produced",
-					"The system attempted a verifier-requested rewrite, but the retry itself failed, so the final answer was downgraded to an honest verification-grounded response.",
+					"The system attempted a verifier-requested rewrite, but the retry itself failed, so the best available task-specific response was preserved and the verification failure stayed in diagnostics.",
 					map[string]any{
 						"issues":      verifyResult.RetryMessage(),
 						"issue_codes": verifySummary.IssueCodes,
@@ -236,7 +242,8 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 				)
 				p.storeTurnDiagnostics(ctx, dr)
 			}
-			result = verifierFinalizationMessage(verifyResult)
+			// Preserve the original task-specific answer instead of replacing it
+			// with framework-authored canned failure prose.
 			session.AddAssistantMessage(result, nil)
 		} else {
 			turns += retryTurns
@@ -250,7 +257,7 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 				if dr != nil {
 					dr.RecordEvent("verifier_retry_rechecked", "error",
 						"verifier retry still failed final verification",
-						"The revised answer was checked again before finalization and still did not satisfy verification requirements, so the final operator-facing response was downgraded to an honest verification-grounded statement.",
+						"The revised answer was checked again before finalization and still did not satisfy verification requirements, so the revised task-specific answer was preserved and the remaining verification concerns stayed in diagnostics.",
 						map[string]any{
 							"issues":      retryVerifyResult.RetryMessage(),
 							"issue_codes": retryVerifySummary.IssueCodes,
@@ -258,7 +265,7 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 					)
 					p.storeTurnDiagnostics(ctx, dr)
 				}
-				result = verifierFinalizationMessage(retryVerifyResult)
+				result = retryContent
 				session.AddAssistantMessage(result, nil)
 			} else {
 				if dr != nil {
@@ -288,6 +295,20 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 			},
 		)
 		p.storeTurnDiagnostics(ctx, dr)
+	}
+
+	if strings.TrimSpace(result) == "" {
+		if observed := synthesizePipelineResultFromToolObservations(session); observed != "" {
+			result = observed
+			if dr != nil {
+				dr.RecordEvent("response_synthesized_from_observation", "warning",
+					"blank final response replaced with observed tool evidence",
+					"The model produced no final prose after tool-backed execution, so the pipeline preserved the authoritative observed tool output instead of storing an empty assistant message.",
+					map[string]any{"content_len": len(result)},
+				)
+				p.storeTurnDiagnostics(ctx, dr)
+			}
+		}
 	}
 
 	// Store assistant response with topic tag (matching Rust: append_message_with_topic).
@@ -353,6 +374,7 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 	return &Outcome{
 		SessionID:       session.ID,
 		MessageID:       msgID,
+		TurnID:          turnID,
 		Content:         result,
 		ReactTurns:      turns,
 		inferenceParams: params,
@@ -893,4 +915,36 @@ func (p *Pipeline) tryShortcut(ctx context.Context, session *Session, content st
 		SessionID: session.ID,
 		Content:   result.Content,
 	}
+}
+
+func synthesizePipelineResultFromToolObservations(session *Session) string {
+	if session == nil {
+		return ""
+	}
+	msgs := session.Messages()
+	var toolResults []string
+	for i := len(msgs) - 1; i >= 0 && len(toolResults) < 5; i-- {
+		if msgs[i].Role != "tool" {
+			continue
+		}
+		content := strings.TrimSpace(msgs[i].Content)
+		if content == "" {
+			continue
+		}
+		if len(content) > 200 {
+			content = content[:200] + "..."
+		}
+		toolResults = append(toolResults, content)
+	}
+	if len(toolResults) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	for _, result := range toolResults {
+		if sb.Len() > 0 {
+			sb.WriteString("\n")
+		}
+		sb.WriteString(result)
+	}
+	return sb.String()
 }

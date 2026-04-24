@@ -56,6 +56,23 @@ func TestDecideVerifierRetryAfterProgress_SuppressesNarrativeOnlyIssues(t *testi
 	}
 }
 
+func TestDecideVerifierRetryAfterProgress_SuppressesNarrativeOnlyIssuesAfterProgressEvenWhenPlannedActionIsNotExecuteDirectly(t *testing.T) {
+	progress := ExecutionProgress{SuccessfulToolResults: 1}
+	ctx := VerificationContext{PlannedAction: "consult_memory"}
+	result := VerificationResult{
+		Passed: false,
+		Issues: []VerificationIssue{{Code: "unsupported_certainty"}},
+	}
+
+	disposition := decideVerifierRetryAfterProgress(result, ctx, progress)
+	if disposition.Allow {
+		t.Fatal("Allow = true, want false")
+	}
+	if disposition.Reason == "" {
+		t.Fatal("Reason should explain the suppression")
+	}
+}
+
 func TestDecideVerifierRetryAfterProgress_AllowsExecutionCriticalIssues(t *testing.T) {
 	progress := ExecutionProgress{SuccessfulToolResults: 1, SuccessfulArtifactWrites: 1}
 	ctx := VerificationContext{PlannedAction: "execute_directly"}

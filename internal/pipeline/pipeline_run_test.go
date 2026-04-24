@@ -109,6 +109,26 @@ func (e *unexpectedArtifactWriteRetryExecutor) RunLoop(_ context.Context, sessio
 	}
 }
 
+type reflectFinalizationExecutor struct {
+	calls int
+}
+
+func (e *reflectFinalizationExecutor) RunLoop(_ context.Context, session *Session) (string, int, error) {
+	e.calls++
+	proof := agenttools.NewInspectionProof("file_glob", "glob_files", ".", 1).WithPattern("*.yml")
+	session.AddToolResultWithMetadata("call-1", "glob_files", "tmp/config.yml", proof.Metadata(), false)
+	content := "The active model settings are configured in tmp/config.yml."
+	session.AddAssistantMessageWithPhase(content, nil, "reflect")
+	return content, 1, nil
+}
+
+type emptyAfterToolProgressExecutor struct{}
+
+func (e *emptyAfterToolProgressExecutor) RunLoop(_ context.Context, session *Session) (string, int, error) {
+	session.AddToolResult("call-1", "get_runtime_context", "runtime context captured", false)
+	return "", 1, nil
+}
+
 // stubRetriever is a minimal MemoryRetriever for pipeline tests.
 type stubRetriever struct {
 	result string
@@ -179,6 +199,33 @@ func TestPipeline_Run_SimpleMessage(t *testing.T) {
 	// Just verify the pipeline completed successfully.
 }
 
+func TestPipeline_Run_UsesCallerSuppliedTurnID(t *testing.T) {
+	store := testutil.TempStore(t)
+	pipe := New(PipelineDeps{
+		Store:    store,
+		Executor: &stubExecutor{},
+		Guards:   DefaultGuardChain(),
+	})
+
+	const turnID = "turn-caller-supplied"
+	outcome, err := pipe.Run(context.Background(), PresetAPI(), Input{
+		Content: "Hello with caller identity",
+		TurnID:  turnID,
+		AgentID: "test-agent",
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if outcome.TurnID != turnID {
+		t.Fatalf("outcome turn id = %q, want %q", outcome.TurnID, turnID)
+	}
+
+	var stored string
+	if err := store.QueryRowContext(context.Background(), `SELECT id FROM turns WHERE id = ?`, turnID).Scan(&stored); err != nil {
+		t.Fatalf("query caller-supplied turn: %v", err)
+	}
+}
+
 func TestPipeline_Run_EmptyInput(t *testing.T) {
 	store := testutil.TempStore(t)
 	pipe := New(PipelineDeps{Store: store})
@@ -244,7 +291,7 @@ func TestPipeline_Run_VerifierRequestsRevisionOnEvidenceGaps(t *testing.T) {
 		Store:     store,
 		Executor:  exec,
 		Guards:    DefaultGuardChain(),
-		Retriever: &stubRetriever{result: "[Active Memory]\n\n[Retrieved Evidence]\n1. [semantic, 0.90] deployment policy\n\n[Gaps]\n- No past experiences found for this query"},
+		Retriever: &stubRetriever{result: "[Active Memory]\n\n[Gaps]\n- No evidence retrieved from any tier"},
 	})
 
 	cfg := PresetAPI()
@@ -367,14 +414,8 @@ func TestPipeline_Run_VerifierRetryRechecksFinalArtifactClaims(t *testing.T) {
 	if exec.calls != 2 {
 		t.Fatalf("expected verifier to trigger exactly one retry, got %d calls", exec.calls)
 	}
-	if strings.Contains(strings.ToLower(outcome.Content), "containing exactly hello") {
-		t.Fatalf("final content overclaimed exact success: %q", outcome.Content)
-	}
-	if !strings.Contains(strings.ToLower(outcome.Content), "final verification still failed") {
-		t.Fatalf("expected verification-grounded fallback response, got %q", outcome.Content)
-	}
-	if !strings.Contains(strings.ToLower(outcome.Content), "tmp/out.txt") {
-		t.Fatalf("expected fallback response to preserve failing artifact path, got %q", outcome.Content)
+	if outcome.Content != "I wrote tmp/out.txt containing exactly hello." {
+		t.Fatalf("expected best available retry content to be preserved, got %q", outcome.Content)
 	}
 
 	var turnID string
@@ -435,11 +476,8 @@ func TestPipeline_Run_VerifierRetryRechecksExtraArtifactClaims(t *testing.T) {
 	if exec.calls != 2 {
 		t.Fatalf("expected verifier to trigger exactly one retry, got %d calls", exec.calls)
 	}
-	if strings.Contains(strings.ToLower(outcome.Content), "gamma.txt") && !strings.Contains(strings.ToLower(outcome.Content), "final verification still failed") {
-		t.Fatalf("final content preserved invented extra artifact claim: %q", outcome.Content)
-	}
-	if !strings.Contains(strings.ToLower(outcome.Content), "final verification still failed") {
-		t.Fatalf("expected verification-grounded fallback response, got %q", outcome.Content)
+	if outcome.Content != "I created alpha.txt, beta.txt, and gamma.txt." {
+		t.Fatalf("expected best available retry content to be preserved, got %q", outcome.Content)
 	}
 
 	var turnID string
@@ -489,8 +527,8 @@ func TestPipeline_Run_VerifierRetryRechecksUnexpectedArtifactWrites(t *testing.T
 	if exec.calls != 2 {
 		t.Fatalf("expected verifier to trigger exactly one retry, got %d calls", exec.calls)
 	}
-	if !strings.Contains(strings.ToLower(outcome.Content), "final verification still failed") {
-		t.Fatalf("expected verification-grounded fallback response, got %q", outcome.Content)
+	if outcome.Content != "I created alpha.txt, beta.txt, and gamma.txt." {
+		t.Fatalf("expected best available retry content to be preserved, got %q", outcome.Content)
 	}
 
 	var turnID string
@@ -512,9 +550,116 @@ func TestPipeline_Run_VerifierRetryRechecksUnexpectedArtifactWrites(t *testing.T
 	}
 }
 
+func TestPipeline_Run_SuppressesGenericVerifierRetryAfterReflectiveFinalization(t *testing.T) {
+	store := testutil.TempStore(t)
+	exec := &reflectFinalizationExecutor{}
+
+	pipe := New(PipelineDeps{
+		Store:    store,
+		Executor: exec,
+		Guards:   DefaultGuardChain(),
+	})
+
+	cfg := PresetAPI()
+	cfg.GuardSet = GuardSetNone
+	cfg.DecompositionGate = false
+	cfg.DelegatedExecution = false
+	cfg.PostTurnIngest = false
+	cfg.NicknameRefinement = false
+	cfg.TaskOperatingState = "test"
+
+	outcome, err := pipe.Run(context.Background(), cfg, Input{
+		Content: "Read tmp/config.yml and summarize the model settings.",
+		AgentID: "test-agent",
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if exec.calls != 1 {
+		t.Fatalf("expected reflective finalization to suppress generic verifier retry, got %d calls", exec.calls)
+	}
+	if outcome.Content != "The active model settings are configured in tmp/config.yml." {
+		t.Fatalf("unexpected outcome content: %q", outcome.Content)
+	}
+
+	var turnID string
+	if err := store.QueryRowContext(context.Background(),
+		`SELECT id FROM turns WHERE session_id = ? ORDER BY created_at DESC LIMIT 1`, outcome.SessionID,
+	).Scan(&turnID); err != nil {
+		t.Fatalf("query turn id: %v", err)
+	}
+
+	var details sql.NullString
+	if err := store.QueryRowContext(context.Background(),
+		`SELECT details_json FROM turn_diagnostic_events WHERE turn_id = ? AND event_type = ?`,
+		turnID, "verifier_retry_suppressed",
+	).Scan(&details); err != nil {
+		t.Fatalf("query verifier suppression details: %v", err)
+	}
+	if !strings.Contains(details.String, "R-TEOR-R boundary") {
+		t.Fatalf("verifier suppression details = %q, want R-TEOR-R boundary reason", details.String)
+	}
+}
+
+func TestPipeline_Run_SuppressedVerifierRetryDoesNotStoreBlankAfterToolProgress(t *testing.T) {
+	store := testutil.TempStore(t)
+	exec := &emptyAfterToolProgressExecutor{}
+
+	pipe := New(PipelineDeps{
+		Store:    store,
+		Executor: exec,
+		Guards:   DefaultGuardChain(),
+	})
+
+	cfg := PresetAPI()
+	cfg.GuardSet = GuardSetNone
+	cfg.DecompositionGate = false
+	cfg.DelegatedExecution = false
+	cfg.PostTurnIngest = false
+	cfg.NicknameRefinement = false
+	cfg.TaskOperatingState = "test"
+
+	outcome, err := pipe.Run(context.Background(), cfg, Input{
+		Content: "Create a scheduled task that runs a health check every hour and stores the results.",
+		AgentID: "test-agent",
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if strings.TrimSpace(outcome.Content) == "" {
+		t.Fatal("outcome content is blank after tool-backed progress")
+	}
+	if !strings.Contains(outcome.Content, "runtime context captured") {
+		t.Fatalf("outcome content = %q, want observed tool evidence", outcome.Content)
+	}
+
+	var stored string
+	if err := store.QueryRowContext(context.Background(),
+		`SELECT content FROM session_messages WHERE session_id = ? AND role = 'assistant' ORDER BY created_at DESC LIMIT 1`, outcome.SessionID,
+	).Scan(&stored); err != nil {
+		t.Fatalf("query stored assistant message: %v", err)
+	}
+	if strings.TrimSpace(stored) == "" {
+		t.Fatal("stored assistant message is blank after tool-backed progress")
+	}
+
+	var synthesized int
+	if err := store.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM turn_diagnostic_events WHERE event_type = 'response_synthesized_from_observation'`,
+	).Scan(&synthesized); err != nil {
+		t.Fatalf("query synthesized event: %v", err)
+	}
+	if synthesized != 1 {
+		t.Fatalf("response_synthesized_from_observation events = %d, want 1", synthesized)
+	}
+}
+
 func TestPipeline_Run_Shortcut(t *testing.T) {
 	store := testutil.TempStore(t)
-	pipe := New(PipelineDeps{Store: store})
+	pipe := New(PipelineDeps{
+		Store:    store,
+		Executor: &stubExecutor{response: "normal inference"},
+	})
 	cfg := PresetAPI()
 
 	input := Input{
@@ -526,16 +671,19 @@ func TestPipeline_Run_Shortcut(t *testing.T) {
 		t.Fatalf("run: %v", err)
 	}
 	if outcome == nil {
-		t.Fatal("shortcut should produce outcome")
+		t.Fatal("run should produce outcome")
 	}
-	if outcome.Content == "" {
-		t.Error("shortcut should have content")
+	if outcome.Content != "normal inference" {
+		t.Fatalf("expected acknowledgement to flow through normal inference, got %q", outcome.Content)
 	}
 }
 
 func TestRunPipeline_Wrapper(t *testing.T) {
 	store := testutil.TempStore(t)
-	pipe := New(PipelineDeps{Store: store})
+	pipe := New(PipelineDeps{
+		Store:    store,
+		Executor: &stubExecutor{response: "wrapper inference"},
+	})
 	cfg := PresetAPI()
 
 	outcome, err := RunPipeline(context.Background(), pipe, cfg, Input{
@@ -547,6 +695,9 @@ func TestRunPipeline_Wrapper(t *testing.T) {
 	}
 	if outcome == nil {
 		t.Fatal("should produce outcome")
+	}
+	if outcome.Content != "wrapper inference" {
+		t.Fatalf("expected disabled acknowledgement shortcut to fall through to executor, got %q", outcome.Content)
 	}
 }
 

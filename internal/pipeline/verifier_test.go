@@ -11,8 +11,9 @@ import (
 
 func TestVerifyResponse_FailsUnsupportedCertaintyOnGaps(t *testing.T) {
 	ctx := VerificationContext{
-		UserPrompt: "What caused the deployment failure?",
-		HasGaps:    true,
+		UserPrompt:    "What caused the deployment failure?",
+		HasGaps:       true,
+		MemoryGapKind: session.MemoryGapNoEvidence,
 	}
 
 	result := VerifyResponse("The deployment failed because the canary rollout was misconfigured.", ctx)
@@ -23,8 +24,9 @@ func TestVerifyResponse_FailsUnsupportedCertaintyOnGaps(t *testing.T) {
 
 func TestVerifyResponse_AllowsUncertainLanguageOnGaps(t *testing.T) {
 	ctx := VerificationContext{
-		UserPrompt: "What caused the deployment failure?",
-		HasGaps:    true,
+		UserPrompt:    "What caused the deployment failure?",
+		HasGaps:       true,
+		MemoryGapKind: session.MemoryGapNoEvidence,
 	}
 
 	result := VerifyResponse("Based on the available evidence, I'm not certain yet. We need more data from the deployment logs.", ctx)
@@ -35,8 +37,9 @@ func TestVerifyResponse_AllowsUncertainLanguageOnGaps(t *testing.T) {
 
 func TestVerifyResponse_AllowsGeopoliticalUncertaintyLanguageOnGaps(t *testing.T) {
 	ctx := VerificationContext{
-		UserPrompt: "What's the geopolitical situation?",
-		HasGaps:    true,
+		UserPrompt:    "What's the geopolitical situation?",
+		HasGaps:       true,
+		MemoryGapKind: session.MemoryGapNoEvidence,
 	}
 
 	result := VerifyResponse("I don't have up-to-date information on the current geopolitical situation. For accurate insights, it's best to refer to reliable current reporting.", ctx)
@@ -218,12 +221,79 @@ func TestVerifyResponse_PassesWhenAffectedSystemsAnswerIsCautiousAndPartiallySup
 		EvidenceItems: []string{
 			"Billing service cache invalidation failed after deploy",
 		},
-		HasGaps: true,
+		HasGaps:       true,
+		MemoryGapKind: session.MemoryGapNoEvidence,
 	}
 
 	result := VerifyResponse("The root cause was a stale billing cache. The available evidence confirms impact to billing, but ledger still needs verification.", ctx)
 	if !result.Passed {
 		t.Fatalf("expected cautious partial-entity answer to pass, got %+v", result.Issues)
+	}
+}
+
+func TestVerifyResponse_PassesWhenOnlyMissingMemoryTiersRemain(t *testing.T) {
+	ctx := VerificationContext{
+		UserPrompt:    "In Go, what does len(slice) return when the slice is nil?",
+		Intent:        "code",
+		PlannedAction: "execute_directly",
+		HasEvidence:   true,
+		HasGaps:       true,
+		MemoryGapKind: session.MemoryGapMissingTiers,
+	}
+
+	result := VerifyResponse("len on a nil slice returns 0 in Go.", ctx)
+	if !result.Passed {
+		t.Fatalf("expected missing-tier gaps to stay neutral, got %+v", result.Issues)
+	}
+}
+
+func TestVerifyResponse_PassesDerivableQuestionWithoutMemoryEvidence(t *testing.T) {
+	ctx := VerificationContext{
+		UserPrompt:    "What is 2 + 2?",
+		Intent:        "question",
+		PlannedAction: "execute_directly",
+		HasGaps:       true,
+		MemoryGapKind: session.MemoryGapNoEvidence,
+	}
+
+	result := VerifyResponse("4", ctx)
+	if !result.Passed {
+		t.Fatalf("expected derivable no-evidence question to remain neutral, got %+v", result.Issues)
+	}
+}
+
+func TestVerifyResponse_PassesDerivableQuestionWithIrrelevantEvidencePresent(t *testing.T) {
+	ctx := VerificationContext{
+		UserPrompt:    "What is 2 + 2?",
+		Intent:        "question",
+		PlannedAction: "execute_directly",
+		Subgoals:      []string{"what is 2 + 2"},
+		EvidenceItems: []string{
+			"Working memory count: 1",
+			"Episodic memory count: 4178",
+		},
+	}
+
+	result := VerifyResponse("4", ctx)
+	if !result.Passed {
+		t.Fatalf("expected derivable direct-fact answer to stay evidence-neutral, got %+v", result.Issues)
+	}
+}
+
+func TestVerifyResponse_PassesDerivableLanguageFactWithIrrelevantEvidencePresent(t *testing.T) {
+	ctx := VerificationContext{
+		UserPrompt:    "In Go, what does `len(slice)` return when the slice is nil?",
+		PlannedAction: "execute_directly",
+		Subgoals:      []string{"in go, what does len(slice) return when the slice is nil"},
+		EvidenceItems: []string{
+			"Working memory count: 1",
+			"Semantic memory count: 2266",
+		},
+	}
+
+	result := VerifyResponse("`len` returns 0 for a nil slice.", ctx)
+	if !result.Passed {
+		t.Fatalf("expected derivable language/runtime fact to stay evidence-neutral, got %+v", result.Issues)
 	}
 }
 
@@ -532,11 +602,14 @@ func TestVerifyResponse_AllowsInspectionListingWithoutArtifactContract(t *testin
 
 func TestVerifyResponse_AllowsCodeFolderInspectionListingWithInspectionEvidence(t *testing.T) {
 	ctx := VerificationContext{
-		UserPrompt:        "What are the ten most recently updated projects in my code folder?",
-		Intent:            "task",
-		PlannedAction:     "execute_directly",
-		InspectionProofs:  []agenttools.InspectionProof{agenttools.NewInspectionProof("directory_listing", "list_directory", "/Users/jmachen/code", 10)},
-		ToolResults:       []ToolResultEntry{{ToolName: "list_directory", Output: "claude/\nroboticus/\nroboticus-site/\n", Inspection: func() *agenttools.InspectionProof { p := agenttools.NewInspectionProof("directory_listing", "list_directory", "/Users/jmachen/code", 3); return &p }()}},
+		UserPrompt:       "What are the ten most recently updated projects in my code folder?",
+		Intent:           "task",
+		PlannedAction:    "execute_directly",
+		InspectionProofs: []agenttools.InspectionProof{agenttools.NewInspectionProof("directory_listing", "list_directory", "/Users/jmachen/code", 10)},
+		ToolResults: []ToolResultEntry{{ToolName: "list_directory", Output: "claude/\nroboticus/\nroboticus-site/\n", Inspection: func() *agenttools.InspectionProof {
+			p := agenttools.NewInspectionProof("directory_listing", "list_directory", "/Users/jmachen/code", 3)
+			return &p
+		}()}},
 	}
 	result := VerifyResponse("The ten most recently updated projects include `claude/`, `roboticus/`, and `roboticus-site/`.", ctx)
 	if result.HasIssue("artifact_set_overclaim") {
@@ -752,7 +825,7 @@ func TestVerifyResponse_PassesWhenAnsweredSubgoalsAreEvidenceSupported(t *testin
 
 func TestVerifyResponse_PassesConciseArtifactBackedReportCompletion(t *testing.T) {
 	ctx := VerificationContext{
-		UserPrompt: "Generate a report on all development projects in my code directory including project path, project name, project languages, project first edit date, project last edit date, and whether the project is out of date with the remote origin repo and in which direction. Order it by last edit date descending and write the report as a new document to my obsidian vault on my desktop.",
+		UserPrompt:    "Generate a report on all development projects in my code directory including project path, project name, project languages, project first edit date, project last edit date, and whether the project is out of date with the remote origin repo and in which direction. Order it by last edit date descending and write the report as a new document to my obsidian vault on my desktop.",
 		PlannedAction: "execute_directly",
 		Subgoals: []string{
 			"project path",
@@ -787,7 +860,7 @@ func TestVerifyResponse_PassesConciseArtifactBackedReportCompletion(t *testing.T
 
 func TestVerifyResponse_MixedOutputTurnStillRequiresChatCoverage(t *testing.T) {
 	ctx := VerificationContext{
-		UserPrompt: "Generate a report on all development projects in my code directory, write it to my desktop vault, and also summarize the top three most recently updated projects here in chat.",
+		UserPrompt:    "Generate a report on all development projects in my code directory, write it to my desktop vault, and also summarize the top three most recently updated projects here in chat.",
 		PlannedAction: "execute_directly",
 		Subgoals: []string{
 			"project path",

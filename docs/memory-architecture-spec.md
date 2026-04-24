@@ -139,6 +139,18 @@ consolidated the distinction.
    authoritative evidence rows and surfaced with the `canonical=true`
    qualifier by the retrieval assembler.
 
+1a. **Memory influences confidence triadically.** Retrieval output is not a
+   universal proof gate. Memory may:
+   - **contradict** the current conclusion (`-1`, confidence-lowering)
+   - be **neutral** because it is absent, irrelevant, or the answer is
+     derivable in-turn (`0`)
+   - **reinforce** the current conclusion (`+1`, confidence-raising)
+
+   Absence of memory hits does not by itself mean the answer lacks required
+   support. This matters especially for arithmetic, current runtime
+   inspection, direct code reasoning, and other mutable/derivable results that
+   should not be expected to pre-exist in long-term memory.
+
 2. **Six-Store Memory System (v1.0.6).** Five persistent tiers (Working,
    Episodic, Semantic, Procedural, Relationship) plus a distilled knowledge
    store (Knowledge Facts, v1.0.6):

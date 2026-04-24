@@ -34,11 +34,14 @@ func TestBuildVerificationContext_PrefersTypedEvidence(t *testing.T) {
 	// Typed artifact: says yes on everything the string-parse would
 	// have said no on.
 	sess.SetVerificationEvidence(&session.VerificationEvidence{
-		HasEvidence:          true,
-		HasGaps:              true,
-		HasFreshnessRisks:    true,
-		HasContradictions:    true,
-		HasCanonicalEvidence: true,
+		HasEvidence:               true,
+		HasGaps:                   true,
+		HasFreshnessRisks:         true,
+		HasContradictions:         true,
+		HasCanonicalEvidence:      true,
+		MemoryGapKind:             session.MemoryGapMissingTiers,
+		MissingMemoryTiers:        []string{"procedural"},
+		MemoryConfidenceInfluence: session.MemoryConfidenceContradicts,
 		Contradictions: []session.ContradictionEvidence{
 			{Kind: "value_conflict", Topic: "refund window", Summary: "refund window evidence disagrees"},
 		},
@@ -53,6 +56,12 @@ func TestBuildVerificationContext_PrefersTypedEvidence(t *testing.T) {
 	if !vctx.HasEvidence || !vctx.HasGaps || !vctx.HasFreshnessRisk ||
 		!vctx.HasContradictions || !vctx.HasCanonicalEvidence {
 		t.Fatalf("verifier should have picked up all flags from typed artifact; got %+v", vctx)
+	}
+	if vctx.MemoryGapKind != session.MemoryGapMissingTiers {
+		t.Fatalf("MemoryGapKind = %q; want missing_tiers", vctx.MemoryGapKind)
+	}
+	if vctx.MemoryConfidence != session.MemoryConfidenceContradicts {
+		t.Fatalf("MemoryConfidence = %d; want contradiction", vctx.MemoryConfidence)
 	}
 	if len(vctx.EvidenceItems) != 2 {
 		t.Fatalf("EvidenceItems len = %d; want 2", len(vctx.EvidenceItems))

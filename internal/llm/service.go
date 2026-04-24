@@ -431,6 +431,9 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 		// Set the model for this provider.
 		inferReq := *req
 		inferReq.Model = pm.model
+		if inferReq.ModelCallTimeout <= 0 {
+			inferReq.ModelCallTimeout = core.ModelCallTimeoutFromCtx(ctx)
+		}
 		prepared, err := client.prepareRequest(&inferReq, false)
 		if err != nil {
 			lastErr = err
@@ -491,7 +494,7 @@ func (s *Service) completeWithFallback(ctx context.Context, req *Request) (*Resp
 			Msg("sending inference request")
 
 		start := time.Now()
-		resp, rawResponse, err := client.completePrepared(ctx, prepared)
+		resp, rawResponse, err := client.completePrepared(ctx, prepared, inferReq.ModelCallTimeout)
 		latencyMs := time.Since(start).Milliseconds()
 		if err != nil {
 			attemptEndResources := hostresources.Sample(ctx)

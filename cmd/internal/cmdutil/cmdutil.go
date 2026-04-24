@@ -51,10 +51,7 @@ func APIGet(path string) (map[string]any, error) {
 	}
 
 	if resp.StatusCode >= 400 {
-		if msg, ok := data["error"]; ok {
-			return nil, fmt.Errorf("API error: %v", msg)
-		}
-		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+		return nil, apiStatusError(resp.StatusCode, data)
 	}
 
 	return data, nil
@@ -81,9 +78,7 @@ func APIPostSlow(path string, payload map[string]any, timeout time.Duration) (ma
 	}
 
 	if resp.StatusCode >= 400 {
-		if msg, ok := data["error"]; ok {
-			return nil, fmt.Errorf("API error: %v", msg)
-		}
+		return nil, apiStatusError(resp.StatusCode, data)
 	}
 
 	return data, nil
@@ -110,12 +105,23 @@ func APIPost(path string, payload map[string]any) (map[string]any, error) {
 	}
 
 	if resp.StatusCode >= 400 {
-		if msg, ok := data["error"]; ok {
-			return nil, fmt.Errorf("API error: %v", msg)
-		}
+		return nil, apiStatusError(resp.StatusCode, data)
 	}
 
 	return data, nil
+}
+
+func apiStatusError(status int, data map[string]any) error {
+	if msg, ok := data["error"]; ok && strings.TrimSpace(fmt.Sprint(msg)) != "" {
+		return fmt.Errorf("API error: %v", msg)
+	}
+	if detail, ok := data["detail"]; ok && strings.TrimSpace(fmt.Sprint(detail)) != "" {
+		return fmt.Errorf("API error: %v", detail)
+	}
+	if title, ok := data["title"]; ok && strings.TrimSpace(fmt.Sprint(title)) != "" {
+		return fmt.Errorf("HTTP %d: %v", status, title)
+	}
+	return fmt.Errorf("HTTP %d", status)
 }
 
 // APIPut performs a PUT request with JSON body.

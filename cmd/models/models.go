@@ -19,6 +19,7 @@ import (
 
 	"roboticus/cmd/internal/cmdutil"
 	"roboticus/internal/core"
+	"roboticus/internal/db"
 	"roboticus/internal/llm"
 	"roboticus/internal/modelstate"
 )
@@ -67,7 +68,12 @@ func appendExerciseRunResult(runID string, o llm.PromptOutcome) error {
 	if o.Err != nil {
 		errMsg = o.Err.Error()
 	}
+	var phaseTimings any
+	if o.PhaseTimings != nil {
+		phaseTimings = o.PhaseTimings
+	}
 	_, err := cmdutil.APIPost("/api/models/exercise/runs/"+runID+"/results", map[string]any{
+		"turn_id":           o.TurnID,
 		"model":             o.Model,
 		"intent_class":      o.Prompt.Intent.String(),
 		"complexity":        o.Prompt.Complexity.String(),
@@ -75,7 +81,9 @@ func appendExerciseRunResult(runID string, o llm.PromptOutcome) error {
 		"content":           o.Content,
 		"quality":           o.Quality,
 		"latency_ms":        o.LatencyMs,
+		"phase_timings":     phaseTimings,
 		"passed":            o.Passed,
+		"result_class":      string(o.OutcomeClass),
 		"error_msg":         errMsg,
 		"resource_start":    o.ResourceStart,
 		"resource_end":      o.ResourceEnd,
@@ -693,22 +701,45 @@ func hasExistingData(existing map[string]any, model string) bool {
 
 // cliPromptSender is the CLI-side llm.ModelSender: dispatches one
 // scored prompt through the pipeline via /api/agent/message.
-func cliPromptSender(ctx context.Context, model, content string, timeout time.Duration) (string, int64, error) {
-	body := map[string]any{"content": content, "no_cache": true, "no_escalate": true}
+func cliPromptSender(ctx context.Context, model, content string, timeout time.Duration) (llm.PromptDispatch, error) {
+	const clientTimeoutCushion = 15 * time.Second
+
+	turnID := db.NewID()
+	body := map[string]any{
+		"content":               content,
+		"turn_id":               turnID,
+		"no_cache":              true,
+		"no_escalate":           true,
+		"execution_timeout_ms":  llm.ExerciseTurnTimeout(timeout).Milliseconds(),
+		"model_call_timeout_ms": timeout.Milliseconds(),
+	}
 	if model != "" {
 		body["model"] = model
 	}
 	start := time.Now()
-	resp, err := cmdutil.APIPostSlow("/api/agent/message", body, timeout)
+	resp, err := cmdutil.APIPostSlow("/api/agent/message", body, llm.ExerciseTurnTimeout(timeout)+clientTimeoutCushion)
 	latencyMs := time.Since(start).Milliseconds()
 	if err != nil {
-		return "", latencyMs, err
+		return llm.PromptDispatch{
+			LatencyMs:    latencyMs,
+			TurnID:       turnID,
+			PhaseTimings: fetchExercisePhaseTimings(turnID),
+		}, err
 	}
 	contentStr := fmt.Sprintf("%v", resp["content"])
 	if contentStr == "<nil>" {
 		contentStr = ""
 	}
-	return contentStr, latencyMs, nil
+	dispatch := llm.PromptDispatch{
+		ResponseText: contentStr,
+		LatencyMs:    latencyMs,
+		TurnID:       turnID,
+	}
+	if turnID, _ := resp["turn_id"].(string); turnID != "" {
+		dispatch.TurnID = turnID
+		dispatch.PhaseTimings = fetchExercisePhaseTimings(turnID)
+	}
+	return dispatch, nil
 }
 
 // cliWarmupSender returns a WarmupSender bound to the current config
@@ -737,6 +768,75 @@ func cliWarmupSender(config map[string]any) llm.WarmupSender {
 	}
 }
 
+func fetchExercisePhaseTimings(turnID string) *llm.ExercisePhaseTimings {
+	if strings.TrimSpace(turnID) == "" {
+		return nil
+	}
+	for attempt := 0; attempt < 6; attempt++ {
+		diag, err := cmdutil.APIGet("/api/traces/" + turnID + "/diagnostics")
+		if err != nil {
+			if attempt < 5 {
+				time.Sleep(250 * time.Millisecond)
+				continue
+			}
+			return nil
+		}
+		summary, _ := diag["summary"].(map[string]any)
+		events, _ := diag["events"].([]any)
+		telemetry := &llm.ExercisePhaseTimings{
+			TotalMs:                int64(toFloat(summary["total_ms"])),
+			InferenceAttempts:      int(toFloat(summary["inference_attempts"])),
+			ToolCallCount:          int(toFloat(summary["tool_call_count"])),
+			GuardRetryCount:        int(toFloat(summary["guard_retry_count"])),
+			VerifierRetryCount:     int(toFloat(summary["verifier_retry_count"])),
+			ReplaySuppressionCount: int(toFloat(summary["replay_suppression_count"])),
+			StageMs:                make(map[string]int64),
+		}
+		for _, raw := range events {
+			event, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			eventType, _ := event["event_type"].(string)
+			duration := int64(toFloat(event["duration_ms"]))
+			switch eventType {
+			case "model_attempt_finished":
+				telemetry.ModelInferenceMs += duration
+			case "tool_call_finished":
+				telemetry.ToolExecutionMs += duration
+			}
+		}
+		if flow, err := cmdutil.APIGet("/api/traces/" + turnID + "/flow"); err == nil {
+			if stages, ok := flow["stages"].([]any); ok {
+				for _, raw := range stages {
+					stage, ok := raw.(map[string]any)
+					if !ok {
+						continue
+					}
+					name, _ := stage["name"].(string)
+					if name == "" {
+						continue
+					}
+					telemetry.StageMs[strings.ToUpper(name)] = int64(toFloat(stage["duration_ms"]))
+				}
+			}
+		}
+		telemetry.FrameworkOverheadMs = telemetry.TotalMs - telemetry.ModelInferenceMs - telemetry.ToolExecutionMs
+		if telemetry.FrameworkOverheadMs < 0 {
+			telemetry.FrameworkOverheadMs = 0
+		}
+		if telemetry.TotalMs == 0 && telemetry.ModelInferenceMs == 0 && telemetry.ToolExecutionMs == 0 && len(telemetry.StageMs) == 0 {
+			if attempt < 5 {
+				time.Sleep(250 * time.Millisecond)
+				continue
+			}
+			return nil
+		}
+		return telemetry
+	}
+	return nil
+}
+
 // renderPromptPrefix is the OnBeforePromptFn callback. Prints the
 // "[N/M] INTENT:Cx ... " prefix line (no newline) and starts a
 // renderPromptProgress is the OnPromptFn callback that streams a
@@ -750,24 +850,46 @@ func cliWarmupSender(config map[string]any) llm.WarmupSender {
 // core.RunWithSpinner) so every code path gets the same feedback
 // uniformly — not just the CLI path.
 func renderPromptProgress(o llm.PromptOutcome) {
+	latencyLabel := formatPromptLatency(o)
 	switch {
 	case o.Err != nil:
-		fmt.Printf("FAIL  %v\n", o.Err)
+		fmt.Printf("FAIL  %s  %v\n", formatOutcomeClass(o.OutcomeClass), o.Err)
 	case !o.Passed && strings.TrimSpace(o.Content) == "":
-		fmt.Printf("FAIL  empty response  %.1fs%s\n", float64(o.LatencyMs)/1000.0, formatModelStateSummary(o.ModelStateEnd))
+		fmt.Printf("FAIL  %s  %s%s\n", formatOutcomeClass(o.OutcomeClass), latencyLabel, formatModelStateSummary(o.ModelStateEnd))
 	case !o.Passed:
 		preview := strings.TrimSpace(o.Content)
 		if len(preview) > 50 {
 			preview = preview[:50] + "..."
 		}
-		fmt.Printf("FAIL  quality gate  %.1fs: %s%s\n", float64(o.LatencyMs)/1000.0, preview, formatModelStateSummary(o.ModelStateEnd))
+		fmt.Printf("FAIL  %s  %s: %s%s\n", formatOutcomeClass(o.OutcomeClass), latencyLabel, preview, formatModelStateSummary(o.ModelStateEnd))
 	default:
 		preview := o.Content
 		if len(preview) > 50 {
 			preview = preview[:50] + "..."
 		}
-		fmt.Printf("PASS  Q=%.2f  %.1fs: %s\n", o.Quality, float64(o.LatencyMs)/1000.0, preview)
+		label := ""
+		if o.OutcomeClass == llm.ExerciseOutcomeSlowPass {
+			label = "  slow"
+		}
+		fmt.Printf("PASS%s  Q=%.2f  %s: %s\n", label, o.Quality, latencyLabel, preview)
 	}
+}
+
+func formatOutcomeClass(class llm.ExerciseOutcomeClass) string {
+	if class == "" {
+		return "unknown"
+	}
+	return strings.ReplaceAll(string(class), "_", " ")
+}
+
+func formatPromptLatency(o llm.PromptOutcome) string {
+	if o.ModelLatencyMs > 0 && o.LatencyMs > 0 && o.ModelLatencyMs != o.LatencyMs {
+		return fmt.Sprintf("%.1fs model (%.1fs turn)", float64(o.ModelLatencyMs)/1000.0, float64(o.LatencyMs)/1000.0)
+	}
+	if o.ModelLatencyMs > 0 {
+		return fmt.Sprintf("%.1fs model", float64(o.ModelLatencyMs)/1000.0)
+	}
+	return fmt.Sprintf("%.1fs turn", float64(o.LatencyMs)/1000.0)
 }
 
 func formatModelStateSummary(snapshot *modelstate.Snapshot) string {
@@ -798,10 +920,12 @@ func formatModelStateSummary(snapshot *modelstate.Snapshot) string {
 // operators can see their fresh-run results against the historical
 // baseline of other configured models.
 func renderExerciseReport(report llm.ExerciseReport, config map[string]any, minQuality float64) {
-	intents := []string{"EXECUTION", "DELEGATION", "INTROSPECTION", "CONVERSATION", "MEMORY_RECALL", "TOOL_USE", "CODING"}
+	intents := canonicalExerciseIntents
+	freshModelLatency := make(map[string]int64, len(report.Models))
 
 	// Per-model detailed scorecards for the freshly-exercised models.
 	for _, r := range report.Models {
+		freshModelLatency[r.Model] = avgLatencyMs(r.Latencies)
 		status := "PASS"
 		if r.Fail > 0 && r.Pass == 0 {
 			status = "FAIL"
@@ -818,6 +942,7 @@ func renderExerciseReport(report llm.ExerciseReport, config map[string]any, minQ
 			fmt.Printf("      %-16s %s %.2f\n", intent, qualityBar(q), q)
 		}
 		printLatencyScorecard(r.Latencies)
+		printPhaseLatencyScorecard(r.PhaseLatencies)
 
 		if baseline, ok := llm.LookupBaseline(r.Model); ok {
 			fmt.Printf("    Baseline profile: Eff=%.2f Cost=%.2f Avail=%.2f Loc=%.1f Conf=%.1f Spd=%.2f\n",
@@ -845,10 +970,15 @@ func renderExerciseReport(report llm.ExerciseReport, config map[string]any, minQ
 	rows := buildComparisonRows(report, config)
 	if len(rows) > 0 {
 		fmt.Printf("\n  Model Comparison (ranked by quality; ★ = exercised this run):\n\n")
-		fmt.Printf("  %-5s  %-30s  %-15s  %5s  %5s  %5s  %5s  %5s  %5s  %5s  %s\n",
-			"RANK", "MODEL", "QUALITY", "EXEC", "DELEG", "INTRO", "CONV", "MEMRC", "TOOLS", "CODE", "AVG MS")
-		fmt.Println("  " + strings.Repeat("─", 118))
+		fmt.Printf("  %-5s  %-30s  %-15s  %-5s  %5s  %5s  %5s  %5s  %5s  %5s  %5s  %s\n",
+			"RANK", "MODEL", "QUALITY", "EVID", "EXEC", "DELEG", "INTRO", "CONV", "MEMRC", "TOOLS", "CODE", "MODEL AVG MS")
+		fmt.Println("  " + strings.Repeat("─", 125))
 		for i, row := range rows {
+			if row.Exercised && row.AvgLatencyMs == 0 {
+				if avg, ok := freshModelLatency[row.Model]; ok {
+					row.AvgLatencyMs = avg
+				}
+			}
 			label := row.Model
 			prefix := "  "
 			if row.Exercised {
@@ -857,8 +987,10 @@ func renderExerciseReport(report llm.ExerciseReport, config map[string]any, minQ
 			if len(label) > 30 {
 				label = label[:27] + "..."
 			}
-			fmt.Printf("%s#%-3d  %-30s  %s %3.0f%%  %4.0f%%  %4.0f%%  %4.0f%%  %4.0f%%  %4.0f%%  %4.0f%%  %4.0f%%  %5dms\n",
+			evidence := fmt.Sprintf("%d/%d", row.ObservedIntents, len(canonicalExerciseIntents))
+			fmt.Printf("%s#%-3d  %-30s  %s %3.0f%%  %-5s  %4.0f%%  %4.0f%%  %4.0f%%  %4.0f%%  %4.0f%%  %4.0f%%  %4.0f%%  %5dms\n",
 				prefix, i+1, label, qualityBar(row.AvgQuality), row.AvgQuality*100,
+				evidence,
 				row.Intent["EXECUTION"]*100, row.Intent["DELEGATION"]*100, row.Intent["INTROSPECTION"]*100,
 				row.Intent["CONVERSATION"]*100, row.Intent["MEMORY_RECALL"]*100, row.Intent["TOOL_USE"]*100,
 				row.Intent["CODING"]*100,
@@ -906,74 +1038,112 @@ func renderExerciseReport(report llm.ExerciseReport, config map[string]any, minQ
 	}
 }
 
+var canonicalExerciseIntents = []string{"EXECUTION", "DELEGATION", "INTROSPECTION", "CONVERSATION", "MEMORY_RECALL", "TOOL_USE", "CODING"}
+
 // comparisonRow is the merged view of one model in the comparison
-// table: fresh data wins over historical for the exercised set.
+// table. Fresh data wins per exercised intent, not per whole model,
+// so partial reruns do not erase historical scores for untouched
+// intents.
 type comparisonRow struct {
-	Model        string
-	Exercised    bool // true if in the current ExerciseReport
-	AvgQuality   float64
-	Intent       map[string]float64
-	AvgLatencyMs int64
+	Model           string
+	Exercised       bool // true if in the current ExerciseReport
+	AvgQuality      float64
+	Intent          map[string]float64
+	AvgLatencyMs    int64
+	ObservedIntents int
+
+	intentCounts    map[string]int64
+	intentLatencyMs map[string]int64
 }
 
 // buildComparisonRows fetches the historical scorecard and overlays
 // the fresh ExerciseReport data so the final table shows every
-// configured model's scores with the exercised ones highlighted.
+// previously exercised model's scores with the exercised ones highlighted.
 // Falls open on scorecard fetch failure — we'd rather show the
 // fresh-only rows than no comparison at all.
 func buildComparisonRows(report llm.ExerciseReport, config map[string]any) []comparisonRow {
 	byModel := make(map[string]comparisonRow)
 
-	// Start with historical scorecard data for all known models.
+	// Start with historical scorecard data for all known models. The API returns
+	// per-intent "entries", so the CLI reconstructs per-model rows here.
 	if data, err := cmdutil.APIGet("/api/models/exercise/scorecard"); err == nil {
-		if rows, ok := data["rows"].([]any); ok {
-			for _, raw := range rows {
-				row, ok := raw.(map[string]any)
+		if entries, ok := data["entries"].([]any); ok {
+			type aggregate struct {
+				intents         map[string]float64
+				intentCounts    map[string]int64
+				intentLatencyMs map[string]int64
+			}
+			aggregates := make(map[string]*aggregate)
+			for _, raw := range entries {
+				entry, ok := raw.(map[string]any)
 				if !ok {
 					continue
 				}
-				model, _ := row["model"].(string)
+				model, _ := entry["model"].(string)
 				if model == "" {
 					continue
 				}
-				cr := comparisonRow{
-					Model:        model,
-					AvgQuality:   toFloat(row["avg_quality"]),
-					Intent:       make(map[string]float64),
-					AvgLatencyMs: int64(toFloat(row["avg_latency_ms"])),
-				}
-				if intents, ok := row["intent_quality"].(map[string]any); ok {
-					for k, v := range intents {
-						cr.Intent[k] = toFloat(v)
+				agg := aggregates[model]
+				if agg == nil {
+					agg = &aggregate{
+						intents:         make(map[string]float64),
+						intentCounts:    make(map[string]int64),
+						intentLatencyMs: make(map[string]int64),
 					}
+					aggregates[model] = agg
 				}
+				intentClass, _ := entry["intent_class"].(string)
+				avgQuality := toFloat(entry["avg_quality"])
+				count := toFloat(entry["count"])
+				if intentClass != "" {
+					agg.intents[intentClass] = avgQuality
+					if count <= 0 {
+						count = 1
+					}
+					agg.intentCounts[intentClass] = int64(count)
+					agg.intentLatencyMs[intentClass] = int64(toFloat(entry["avg_latency_ms"]))
+				}
+			}
+			for model, agg := range aggregates {
+				cr := comparisonRow{
+					Model:           model,
+					Intent:          agg.intents,
+					intentCounts:    agg.intentCounts,
+					intentLatencyMs: agg.intentLatencyMs,
+				}
+				recomputeComparisonAggregate(&cr)
 				byModel[model] = cr
 			}
 		}
 	}
 
-	// Overlay fresh exercise results — fresh data wins.
+	// Overlay fresh exercise results per intent — fresh slices win only for the
+	// intents they exercised, preserving historical evidence for other intents.
 	for _, r := range report.Models {
-		cr := comparisonRow{
-			Model:      r.Model,
-			Exercised:  true,
-			AvgQuality: r.AvgQuality,
-			Intent:     make(map[string]float64, len(r.IntentQuality)),
+		cr := byModel[r.Model]
+		if cr.Model == "" {
+			cr.Model = r.Model
 		}
-		for k, v := range r.IntentQuality {
-			cr.Intent[k] = v
+		cr.Exercised = true
+		ensureComparisonMaps(&cr)
+		freshIntents := make(map[string]struct{}, len(r.IntentQuality)+len(r.Latencies))
+		for intent := range r.IntentQuality {
+			freshIntents[intent] = struct{}{}
 		}
-		var totalLat int64
-		var latCount int64
-		for _, lats := range r.Latencies {
-			for _, l := range lats {
-				totalLat += l
-				latCount++
+		for intent := range r.Latencies {
+			freshIntents[intent] = struct{}{}
+		}
+		for intent := range freshIntents {
+			latencies := r.Latencies[intent]
+			count := int64(len(latencies))
+			if count <= 0 {
+				count = 1
 			}
+			cr.Intent[intent] = r.IntentQuality[intent]
+			cr.intentCounts[intent] = count
+			cr.intentLatencyMs[intent] = avgInt64(latencies)
 		}
-		if latCount > 0 {
-			cr.AvgLatencyMs = totalLat / latCount
-		}
+		recomputeComparisonAggregate(&cr)
 		byModel[r.Model] = cr
 	}
 
@@ -990,6 +1160,70 @@ func buildComparisonRows(report llm.ExerciseReport, config map[string]any) []com
 		}
 	}
 	return rows
+}
+
+func ensureComparisonMaps(cr *comparisonRow) {
+	if cr.Intent == nil {
+		cr.Intent = make(map[string]float64)
+	}
+	if cr.intentCounts == nil {
+		cr.intentCounts = make(map[string]int64)
+	}
+	if cr.intentLatencyMs == nil {
+		cr.intentLatencyMs = make(map[string]int64)
+	}
+}
+
+func recomputeComparisonAggregate(cr *comparisonRow) {
+	ensureComparisonMaps(cr)
+	var qualitySum float64
+	var latencySum int64
+	var countSum int64
+	observed := 0
+	for intent, quality := range cr.Intent {
+		count := cr.intentCounts[intent]
+		if count <= 0 {
+			count = 1
+		}
+		observed++
+		qualitySum += quality * float64(count)
+		latencySum += cr.intentLatencyMs[intent] * count
+		countSum += count
+	}
+	cr.ObservedIntents = observed
+	if countSum == 0 {
+		cr.AvgQuality = 0
+		cr.AvgLatencyMs = 0
+		return
+	}
+	cr.AvgQuality = qualitySum / float64(countSum)
+	cr.AvgLatencyMs = latencySum / countSum
+}
+
+func avgInt64(values []int64) int64 {
+	if len(values) == 0 {
+		return 0
+	}
+	var total int64
+	for _, v := range values {
+		total += v
+	}
+	return total / int64(len(values))
+}
+
+func avgLatencyMs(byIntent map[string][]int64) int64 {
+	var totalLat int64
+	var latCount int64
+	for _, lats := range byIntent {
+		for _, l := range lats {
+			totalLat += l
+			latCount++
+		}
+	}
+	if latCount == 0 {
+		return 0
+	}
+	return totalLat / latCount
 }
 
 var modelsSuggestCmd = &cobra.Command{
@@ -1290,6 +1524,74 @@ var modelsResetCmd = &cobra.Command{
 	},
 }
 
+var modelsRescoreCmd = &cobra.Command{
+	Use:   "rescore [model...]",
+	Short: "Rescore persisted exercise rows using the current benchmark rubric",
+	Long: `Recompute quality/pass values for persisted exercise rows using the
+current scoring regime. This exists so benchmark-rubric changes do not force
+blind reruns when raw prompt/response artifacts are already stored.
+
+Examples:
+  roboticus models rescore --dry-run
+  roboticus models rescore moonshot/kimi-k2.6
+  roboticus models rescore --run-id <run_id>`,
+	Args: cobra.ArbitraryArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		runID, _ := cmd.Flags().GetString("run-id")
+		dryRun, _ := cmd.Flags().GetBool("dry-run")
+
+		body := map[string]any{
+			"dry_run": dryRun,
+		}
+		if len(args) > 0 {
+			body["models"] = args
+		}
+		if strings.TrimSpace(runID) != "" {
+			body["run_id"] = strings.TrimSpace(runID)
+		}
+
+		data, err := cmdutil.APIPost("/api/models/exercise/rescore", body)
+		if err != nil {
+			return err
+		}
+
+		totalRows := int(toFloat(data["total_rows"]))
+		qualityChanged := int(toFloat(data["quality_changed"]))
+		passFlips := int(toFloat(data["pass_flips"]))
+		updated := int(toFloat(data["updated"]))
+		regime, _ := data["scoring_regime"].(string)
+		if regime == "" {
+			regime = "current"
+		}
+
+		fmt.Printf("Rescored %d persisted exercise row(s) under %s.\n", totalRows, regime)
+		if dryRun {
+			fmt.Printf("Dry run only — %d quality change(s), %d pass flip(s), 0 rows updated.\n", qualityChanged, passFlips)
+		} else {
+			fmt.Printf("%d quality change(s), %d pass flip(s), %d row(s) updated.\n", qualityChanged, passFlips, updated)
+		}
+
+		if preview, ok := data["preview_changes"].([]any); ok && len(preview) > 0 {
+			fmt.Println()
+			fmt.Println("Sample changes:")
+			for _, raw := range preview {
+				entry, _ := raw.(map[string]any)
+				model, _ := entry["model"].(string)
+				prompt, _ := entry["prompt"].(string)
+				oldQuality := toFloat(entry["old_quality"])
+				newQuality := toFloat(entry["new_quality"])
+				oldPassed, _ := entry["old_passed"].(bool)
+				newPassed, _ := entry["new_passed"].(bool)
+				if len(prompt) > 72 {
+					prompt = prompt[:72] + "..."
+				}
+				fmt.Printf("  %-36s  %.2f -> %.2f  %v -> %v  %s\n", model, oldQuality, newQuality, oldPassed, newPassed, prompt)
+			}
+		}
+		return nil
+	},
+}
+
 func init() {
 	// Consolidated exercise command (v1.0.6). Formerly split into
 	// `exercise` and `baseline`; see the command Long description
@@ -1299,9 +1601,12 @@ func init() {
 	modelsExerciseCmd.Flags().Float64("min-quality", 0, "Minimum quality threshold (0.0-1.0) — flag models below this for removal")
 	modelsExerciseCmd.Flags().Bool("new-only", false, "Only exercise models with no existing baseline data (ignored when explicit args are given)")
 	modelsExerciseCmd.Flags().Bool("flush", false, "Flush ALL existing quality observations before exercising (preserves the old `baseline` command's reset-first semantics)")
+	modelsRescoreCmd.Flags().String("run-id", "", "Only rescore persisted exercise rows from one run")
+	modelsRescoreCmd.Flags().Bool("dry-run", false, "Preview rescoring changes without updating persisted rows")
 }
 
-// printLatencyScorecard prints a per-intent-class latency table (Avg/P50/P95).
+// printLatencyScorecard prints per-intent model-attributable latency
+// (Avg/P50/P95). Whole-turn timing remains in Phase Timing/RCA output.
 // Matches the Rust reference's exercise_single_model_iterations() output.
 func printLatencyScorecard(latencies map[string][]int64) {
 	if len(latencies) == 0 {
@@ -1309,6 +1614,7 @@ func printLatencyScorecard(latencies map[string][]int64) {
 	}
 
 	fmt.Println()
+	fmt.Println("    Model Latency by Intent:")
 	fmt.Println("    ┌──────────────────┬────────┬────────┬────────┐")
 	fmt.Println("    │ Intent Class     │  Avg   │  P50   │  P95   │")
 	fmt.Println("    ├──────────────────┼────────┼────────┼────────┤")
@@ -1362,6 +1668,55 @@ func printLatencyScorecard(latencies map[string][]int64) {
 		fmt.Printf("    │ ALL              │ %5.1fs │ %5.1fs │ %5.1fs │\n", avg, p50, p95)
 	}
 	fmt.Println("    └──────────────────┴────────┴────────┴────────┘")
+}
+
+func printPhaseLatencyScorecard(latencies map[string][]int64) {
+	if len(latencies) == 0 {
+		return
+	}
+	order := []string{"MODEL_INFERENCE", "TOOL_EXECUTION", "FRAMEWORK_OVERHEAD", "TOTAL_PIPELINE"}
+	labels := map[string]string{
+		"MODEL_INFERENCE":    "Model Inference",
+		"TOOL_EXECUTION":     "Tool Execution",
+		"FRAMEWORK_OVERHEAD": "Framework Overhead",
+		"TOTAL_PIPELINE":     "Total Pipeline",
+	}
+
+	anyRows := false
+	for _, key := range order {
+		if len(latencies[key]) > 0 {
+			anyRows = true
+			break
+		}
+	}
+	if !anyRows {
+		return
+	}
+
+	fmt.Println()
+	fmt.Println("    Phase Timing:")
+	fmt.Println("    ┌────────────────────┬────────┬────────┬────────┐")
+	fmt.Println("    │ Phase              │  Avg   │  P50   │  P95   │")
+	fmt.Println("    ├────────────────────┼────────┼────────┼────────┤")
+	for _, key := range order {
+		times := latencies[key]
+		if len(times) == 0 {
+			continue
+		}
+		sorted := make([]int64, len(times))
+		copy(sorted, times)
+		sortInt64s(sorted)
+
+		avg := float64(sumInt64s(sorted)) / float64(len(sorted)) / 1000.0
+		p50 := float64(sorted[len(sorted)/2]) / 1000.0
+		p95idx := int(float64(len(sorted)) * 0.95)
+		if p95idx >= len(sorted) {
+			p95idx = len(sorted) - 1
+		}
+		p95 := float64(sorted[p95idx]) / 1000.0
+		fmt.Printf("    │ %-18s │ %5.1fs │ %5.1fs │ %5.1fs │\n", labels[key], avg, p50, p95)
+	}
+	fmt.Println("    └────────────────────┴────────┴────────┴────────┘")
 }
 
 func sortInt64s(s []int64) {
@@ -1431,5 +1786,5 @@ func qualityBar(q float64) string {
 // Returns ("", input) if no slash present.
 func init() {
 	modelsCmd.AddCommand(modelsListCmd, modelsDiagnosticsCmd, modelsScanCmd,
-		modelsExerciseCmd, modelsSuggestCmd, modelsResetCmd)
+		modelsExerciseCmd, modelsSuggestCmd, modelsResetCmd, modelsRescoreCmd)
 }

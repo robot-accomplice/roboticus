@@ -29,6 +29,21 @@ import (
 	"strings"
 )
 
+type MemoryGapKind string
+
+const (
+	MemoryGapNone         MemoryGapKind = ""
+	MemoryGapMissingTiers MemoryGapKind = "missing_tiers"
+	MemoryGapNoEvidence   MemoryGapKind = "no_evidence"
+	MemoryGapLegacy       MemoryGapKind = "legacy_unknown"
+)
+
+const (
+	MemoryConfidenceContradicts = -1
+	MemoryConfidenceNeutral     = 0
+	MemoryConfidenceReinforces  = 1
+)
+
 // VerificationEvidence is the typed view of memory-retrieval output
 // that verifier.BuildVerificationContext consumes. Every field is a
 // boolean or a slice of short strings — no nested structure, no
@@ -47,6 +62,19 @@ type VerificationEvidence struct {
 	HasFreshnessRisks    bool
 	HasContradictions    bool
 	HasCanonicalEvidence bool
+
+	// MemoryGapKind distinguishes "no retrieved evidence at all" from
+	// "some evidence exists, but not every memory tier returned a hit".
+	// The latter must not be treated as proof failure by default.
+	MemoryGapKind MemoryGapKind
+	// MissingMemoryTiers preserves which tiers were absent when gap
+	// detection ran. This is informational unless policy explicitly
+	// decides a given tier was required for the task.
+	MissingMemoryTiers []string
+	// MemoryConfidenceInfluence captures the retrieval signal as a
+	// trinary confidence modifier: contradiction lowers confidence,
+	// absence/irrelevance is neutral, and reinforcing evidence raises it.
+	MemoryConfidenceInfluence int
 
 	// Contradictions carries structured contradiction signals derived from the
 	// retrieval assembly. This is the authoritative verifier input for
@@ -124,7 +152,53 @@ func deriveVerificationEvidenceFromMemoryContext(memoryContext string) *Verifica
 		VerifiedConclusions:  verificationExecutiveSection(memoryContext, "Verified conclusions"),
 		StoppingCriteria:     verificationExecutiveSection(memoryContext, "Stopping criteria"),
 	}
+	ve.MemoryGapKind, ve.MissingMemoryTiers = deriveMemoryGapKind(memoryContext)
+	ve.MemoryConfidenceInfluence = deriveMemoryConfidenceInfluence(ve)
 	return ve
+}
+
+func deriveMemoryGapKind(memoryContext string) (MemoryGapKind, []string) {
+	items := verificationSectionItems(memoryContext, "[Gaps]")
+	if len(items) == 0 {
+		return MemoryGapNone, nil
+	}
+	var tiers []string
+	kind := MemoryGapLegacy
+	for _, item := range items {
+		lower := strings.ToLower(item)
+		switch {
+		case strings.Contains(lower, "no evidence retrieved from any tier"):
+			kind = MemoryGapNoEvidence
+		case strings.Contains(lower, "past experiences") || strings.Contains(lower, "missing episodic"):
+			tiers = append(tiers, "episodic")
+		case strings.Contains(lower, "factual/policy knowledge") || strings.Contains(lower, "missing semantic"):
+			tiers = append(tiers, "semantic")
+		case strings.Contains(lower, "procedures") || strings.Contains(lower, "workflows") || strings.Contains(lower, "missing procedural"):
+			tiers = append(tiers, "procedural")
+		case strings.Contains(lower, "relationship") || strings.Contains(lower, "entity") || strings.Contains(lower, "missing relationship"):
+			tiers = append(tiers, "relationship")
+		}
+	}
+	if kind == MemoryGapNoEvidence {
+		return kind, []string{"episodic", "semantic", "procedural", "relationship"}
+	}
+	if len(tiers) > 0 {
+		return MemoryGapMissingTiers, tiers
+	}
+	return kind, nil
+}
+
+func deriveMemoryConfidenceInfluence(ve *VerificationEvidence) int {
+	if ve == nil {
+		return MemoryConfidenceNeutral
+	}
+	if ve.HasContradictions {
+		return MemoryConfidenceContradicts
+	}
+	if ve.HasEvidence {
+		return MemoryConfidenceReinforces
+	}
+	return MemoryConfidenceNeutral
 }
 
 func verificationExecutiveSection(memoryContext, label string) []string {

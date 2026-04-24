@@ -1,6 +1,9 @@
 package core
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 type ctxKey int
 
@@ -10,6 +13,7 @@ const (
 	ctxKeyTurnID
 	ctxKeyChannelLabel
 	ctxKeyNoEscalate
+	ctxKeyModelCallTimeout
 )
 
 // WithModelOverride attaches a model override to the context.
@@ -76,4 +80,21 @@ func NoEscalateFromCtx(ctx context.Context) bool {
 		return v
 	}
 	return false
+}
+
+// WithModelCallTimeout attaches the per-inference-call model/provider timeout
+// to the context. This is intentionally distinct from any whole-turn deadline.
+func WithModelCallTimeout(ctx context.Context, timeout time.Duration) context.Context {
+	if timeout <= 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, ctxKeyModelCallTimeout, timeout)
+}
+
+// ModelCallTimeoutFromCtx extracts the per-inference-call timeout, if present.
+func ModelCallTimeoutFromCtx(ctx context.Context) time.Duration {
+	if v, ok := ctx.Value(ctxKeyModelCallTimeout).(time.Duration); ok {
+		return v
+	}
+	return 0
 }

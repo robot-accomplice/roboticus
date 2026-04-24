@@ -233,6 +233,24 @@ func TestBuildSystemPrompt_FocusedAnalysisAuthoringContract(t *testing.T) {
 	}
 }
 
+func TestBuildSystemPrompt_FocusedSourceCodeContract(t *testing.T) {
+	cfg := PromptConfig{
+		AgentName:        "Bot",
+		ToolProfile:      "focused_source_code",
+		InspectionTarget: "This turn requests source-backed code work in the current repository root /Users/jmachen/code/roboticus-v1.0.8-verifier.",
+	}
+	prompt := BuildSystemPrompt(cfg)
+	if !strings.Contains(prompt, "## Source-Backed Code Contract") {
+		t.Fatal("prompt should include source-backed code contract")
+	}
+	if !strings.Contains(prompt, "Prefer list_directory, glob_files, and read_file") {
+		t.Fatal("prompt should steer source-backed code turns toward authoritative source reads")
+	}
+	if !strings.Contains(prompt, "Do not broaden the search to parent code directories") {
+		t.Fatal("prompt should discourage broad parent-directory inventory")
+	}
+}
+
 func TestBuildSystemPrompt_OmitsBashGuidanceWhenBashIsNotSelected(t *testing.T) {
 	cfg := PromptConfig{
 		AgentName: "Bot",

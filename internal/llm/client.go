@@ -38,6 +38,7 @@ type PaymentHandler interface {
 type Client struct {
 	provider       *Provider
 	httpClient     core.HTTPDoer
+	defaultTimeout time.Duration
 	apiKey         string
 	paymentHandler PaymentHandler
 }
@@ -70,27 +71,23 @@ func NewClient(p *Provider) (*Client, error) {
 		// when some providers are unconfigured.
 	}
 
-	// Per-provider HTTP timeout. Local models (Ollama, llama.cpp) need much
-	// longer timeouts due to cold starts and limited hardware.
-	// Priority: explicit TimeoutSecs > IsLocal default (300s) > cloud default (120s).
-	providerTimeout := 120 * time.Second
-	if p.TimeoutSecs > 0 {
-		providerTimeout = time.Duration(p.TimeoutSecs) * time.Second
-	} else if p.IsLocal {
-		providerTimeout = 300 * time.Second
-	}
+	providerTimeout := defaultProviderTimeout(p)
 
 	return &Client{
 		provider: p,
 		httpClient: &http.Client{
-			Timeout: providerTimeout,
+			// Per-call deadlines are carried by the request context. A fixed
+			// http.Client timeout would silently override longer baseline
+			// model-call budgets.
+			Timeout: 0,
 			Transport: &http.Transport{
 				DialContext:         (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
 				MaxIdleConnsPerHost: 10,
 				IdleConnTimeout:     90 * time.Second,
 			},
 		},
-		apiKey: apiKey,
+		defaultTimeout: providerTimeout,
+		apiKey:         apiKey,
 	}, nil
 }
 
@@ -103,9 +100,10 @@ func NewClientWithHTTP(p *Provider, httpClient core.HTTPDoer) (*Client, error) {
 		apiKey = KeyResolver(p.Name + "_api_key")
 	}
 	return &Client{
-		provider:   p,
-		httpClient: httpClient,
-		apiKey:     apiKey,
+		provider:       p,
+		httpClient:     httpClient,
+		defaultTimeout: defaultProviderTimeout(p),
+		apiKey:         apiKey,
 	}, nil
 }
 
@@ -121,8 +119,21 @@ func (c *Client) Complete(ctx context.Context, req *Request) (*Response, error) 
 	if err != nil {
 		return nil, err
 	}
-	resp, _, err := c.completePrepared(ctx, prepared)
+	resp, _, err := c.completePrepared(ctx, prepared, req.ModelCallTimeout)
 	return resp, err
+}
+
+func defaultProviderTimeout(p *Provider) time.Duration {
+	if p == nil {
+		return 120 * time.Second
+	}
+	if p.TimeoutSecs > 0 {
+		return time.Duration(p.TimeoutSecs) * time.Second
+	}
+	if p.IsLocal {
+		return 300 * time.Second
+	}
+	return 120 * time.Second
 }
 
 func (c *Client) prepareRequest(req *Request, stream bool) (*preparedRequest, error) {
@@ -155,7 +166,15 @@ func (c *Client) prepareRequest(req *Request, stream bool) (*preparedRequest, er
 	return &preparedRequest{body: body, messageNormalization: meta}, nil
 }
 
-func (c *Client) completePrepared(ctx context.Context, prepared *preparedRequest) (*Response, []byte, error) {
+func (c *Client) completePrepared(ctx context.Context, prepared *preparedRequest, timeout time.Duration) (*Response, []byte, error) {
+	if timeout <= 0 {
+		timeout = c.defaultTimeout
+	}
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
 	url := c.chatURL()
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(prepared.body))
 	if err != nil {

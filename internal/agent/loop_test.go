@@ -37,6 +37,33 @@ func (m *mockCompleter) Stream(_ context.Context, _ *llm.Request) (<-chan llm.St
 	return ch, errs
 }
 
+type requestCapturingCompleter struct {
+	responses []*llm.Response
+	requests  []*llm.Request
+	callIdx   int
+}
+
+func (m *requestCapturingCompleter) Complete(_ context.Context, req *llm.Request) (*llm.Response, error) {
+	reqCopy := *req
+	reqCopy.Messages = append([]llm.Message(nil), req.Messages...)
+	reqCopy.Tools = append([]llm.ToolDef(nil), req.Tools...)
+	m.requests = append(m.requests, &reqCopy)
+	if m.callIdx >= len(m.responses) {
+		return &llm.Response{Content: "done"}, nil
+	}
+	resp := m.responses[m.callIdx]
+	m.callIdx++
+	return resp, nil
+}
+
+func (m *requestCapturingCompleter) Stream(_ context.Context, _ *llm.Request) (<-chan llm.StreamChunk, <-chan error) {
+	ch := make(chan llm.StreamChunk)
+	errs := make(chan error)
+	close(ch)
+	close(errs)
+	return ch, errs
+}
+
 type observerEvent struct {
 	eventType string
 	status    string
@@ -141,6 +168,25 @@ func (t *inspectionEvidenceTool) Execute(_ context.Context, _ string, _ *agentto
 	t.calls++
 	proof := agenttools.NewInspectionProof("file_glob", t.name, ".", t.count).WithPattern("*.md")
 	return &agenttools.Result{Output: t.output, Metadata: proof.Metadata(), Source: "builtin"}, nil
+}
+
+type artifactReadEvidenceTool struct {
+	name    string
+	calls   int
+	path    string
+	content string
+}
+
+func (t *artifactReadEvidenceTool) Name() string               { return t.name }
+func (t *artifactReadEvidenceTool) Description() string        { return "artifact read evidence tool" }
+func (t *artifactReadEvidenceTool) Risk() agenttools.RiskLevel { return agenttools.RiskSafe }
+func (t *artifactReadEvidenceTool) ParameterSchema() json.RawMessage {
+	return json.RawMessage(`{"type":"object"}`)
+}
+func (t *artifactReadEvidenceTool) Execute(_ context.Context, _ string, _ *agenttools.Context) (*agenttools.Result, error) {
+	t.calls++
+	proof := agenttools.NewArtifactReadProof("workspace_file", t.path, t.content)
+	return &agenttools.Result{Output: t.content, Metadata: proof.Metadata(), Source: "builtin"}, nil
 }
 
 type structuredArgsTool struct {
@@ -351,6 +397,215 @@ func TestLoop_ContextCancellation(t *testing.T) {
 	}
 }
 
+func TestLoop_TEORReflectDisablesToolsAfterObservation(t *testing.T) {
+	contextBuilder := NewContextBuilder(DefaultContextConfig())
+	contextBuilder.SetTools([]llm.ToolDef{{
+		Type: "function",
+		Function: llm.ToolFuncDef{
+			Name:        "echo",
+			Description: "echo test tool",
+			Parameters:  json.RawMessage(`{"type":"object"}`),
+		},
+	}})
+
+	mock := &requestCapturingCompleter{
+		responses: []*llm.Response{
+			{
+				ToolCalls: []llm.ToolCall{{
+					ID:   "call-1",
+					Type: "function",
+					Function: llm.ToolCallFunc{
+						Name:      "echo",
+						Arguments: `{"message":"test"}`,
+					},
+				}},
+			},
+			{Content: "The tool returned hello."},
+		},
+	}
+	reg := NewToolRegistry()
+	reg.Register(&testTool{})
+	loop := NewLoop(DefaultLoopConfig(), LoopDeps{
+		LLM:     mock,
+		Tools:   reg,
+		Context: contextBuilder,
+	})
+
+	session := NewSession("sess-teor-1", "agent-1", "TestBot")
+	session.AddUserMessage("run the tool and tell me what happened")
+
+	result, err := loop.Run(context.Background(), session)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "The tool returned hello." {
+		t.Fatalf("result = %q, want final reflected answer", result)
+	}
+	if len(mock.requests) != 2 {
+		t.Fatalf("requests = %d, want 2", len(mock.requests))
+	}
+	if len(mock.requests[0].Tools) == 0 {
+		t.Fatal("initial think request unexpectedly had no tools")
+	}
+	if len(mock.requests[1].Tools) != 0 {
+		t.Fatalf("reflect request tools = %d, want 0", len(mock.requests[1].Tools))
+	}
+	foundReflectInstruction := false
+	foundTOTOFTask := false
+	for _, msg := range mock.requests[1].Messages {
+		if msg.Role == "system" && strings.Contains(msg.Content, "Post-observation reflection mode") {
+			foundReflectInstruction = true
+		}
+		if msg.Role == "user" && strings.Contains(msg.Content, "TASK") && strings.Contains(msg.Content, "KEY TOOL OUTCOMES") {
+			foundTOTOFTask = true
+		}
+		if len(msg.ToolCalls) > 0 {
+			t.Fatalf("reflect request should not replay tool calls, found %d", len(msg.ToolCalls))
+		}
+	}
+	if !foundReflectInstruction {
+		t.Fatal("reflect request missing reflection contract system message")
+	}
+	if !foundTOTOFTask {
+		t.Fatal("reflect request missing TOTOF payload")
+	}
+}
+
+func TestLoop_TEORReflectEmptyFinalizesFromObservedToolEvidence(t *testing.T) {
+	contextBuilder := NewContextBuilder(DefaultContextConfig())
+	contextBuilder.SetTools([]llm.ToolDef{{
+		Type: "function",
+		Function: llm.ToolFuncDef{
+			Name:        "echo",
+			Description: "echo test tool",
+			Parameters:  json.RawMessage(`{"type":"object"}`),
+		},
+	}})
+
+	mock := &requestCapturingCompleter{
+		responses: []*llm.Response{
+			{
+				ToolCalls: []llm.ToolCall{{
+					ID:   "call-1",
+					Type: "function",
+					Function: llm.ToolCallFunc{
+						Name:      "echo",
+						Arguments: `{"message":"test"}`,
+					},
+				}},
+			},
+			{Content: ""},
+		},
+	}
+	reg := NewToolRegistry()
+	reg.Register(&testTool{})
+	loop := NewLoop(DefaultLoopConfig(), LoopDeps{
+		LLM:     mock,
+		Tools:   reg,
+		Context: contextBuilder,
+	})
+
+	session := NewSession("sess-teor-empty-reflect", "agent-1", "TestBot")
+	session.AddUserMessage("run the tool and summarize the result")
+
+	result, err := loop.Run(context.Background(), session)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.TrimSpace(result) != "hello" {
+		t.Fatalf("result = %q, want observed tool evidence", result)
+	}
+	if session.LastAssistantContent() != "hello" {
+		t.Fatalf("last assistant = %q, want observed tool evidence", session.LastAssistantContent())
+	}
+	if session.LastAssistantPhase() != "reflect" {
+		t.Fatalf("last assistant phase = %q, want reflect", session.LastAssistantPhase())
+	}
+}
+
+func TestLoop_TEORReflectMayExplicitlyReopenExecution(t *testing.T) {
+	contextBuilder := NewContextBuilder(DefaultContextConfig())
+	contextBuilder.SetTools([]llm.ToolDef{{
+		Type: "function",
+		Function: llm.ToolFuncDef{
+			Name:        "echo",
+			Description: "echo test tool",
+			Parameters:  json.RawMessage(`{"type":"object"}`),
+		},
+	}})
+
+	mock := &requestCapturingCompleter{
+		responses: []*llm.Response{
+			{
+				ToolCalls: []llm.ToolCall{{
+					ID:   "call-1",
+					Type: "function",
+					Function: llm.ToolCallFunc{
+						Name:      "echo",
+						Arguments: `{"message":"test"}`,
+					},
+				}},
+			},
+			{Content: "CONTINUE_EXECUTION\nNeed one more execution step to finish the task."},
+			{Content: "Done after explicit continuation."},
+		},
+	}
+	reg := NewToolRegistry()
+	reg.Register(&testTool{})
+	loop := NewLoop(DefaultLoopConfig(), LoopDeps{
+		LLM:     mock,
+		Tools:   reg,
+		Context: contextBuilder,
+	})
+
+	session := NewSession("sess-teor-2", "agent-1", "TestBot")
+	session.AddUserMessage("perform the task completely")
+
+	result, err := loop.Run(context.Background(), session)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "Done after explicit continuation." {
+		t.Fatalf("result = %q, want continued final answer", result)
+	}
+	if len(mock.requests) != 3 {
+		t.Fatalf("requests = %d, want 3", len(mock.requests))
+	}
+	if len(mock.requests[1].Tools) != 0 {
+		t.Fatalf("reflect request tools = %d, want 0", len(mock.requests[1].Tools))
+	}
+	for _, msg := range mock.requests[1].Messages {
+		if len(msg.ToolCalls) > 0 {
+			t.Fatalf("reflect request should not replay tool calls, found %d", len(msg.ToolCalls))
+		}
+	}
+	if len(mock.requests[2].Tools) == 0 {
+		t.Fatal("post-reflection think request unexpectedly had no tools")
+	}
+	foundContinuationInstruction := false
+	foundRemainingWork := false
+	for _, msg := range mock.requests[2].Messages {
+		if msg.Role == "system" && strings.Contains(msg.Content, "Post-observation continuation mode") {
+			foundContinuationInstruction = true
+		}
+		if msg.Role == "user" && strings.Contains(msg.Content, "REMAINING WORK") {
+			foundRemainingWork = true
+		}
+		if len(msg.ToolCalls) > 0 {
+			t.Fatalf("post-reflection continuation request should not replay tool calls, found %d", len(msg.ToolCalls))
+		}
+	}
+	if !foundContinuationInstruction {
+		t.Fatal("post-reflection continuation request missing continuation contract system message")
+	}
+	if !foundRemainingWork {
+		t.Fatal("post-reflection continuation request missing canonical continuation payload")
+	}
+	if got := session.LastAssistantContent(); got != "Done after explicit continuation." {
+		t.Fatalf("last assistant content = %q, want continued final answer", got)
+	}
+}
+
 func TestLoop_SuppressesPlaceholderContentForToolCalls(t *testing.T) {
 	mock := &mockCompleter{
 		responses: []*llm.Response{
@@ -427,8 +682,8 @@ func TestLoop_TerminatesSameRouteNoProgressChurn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result == "" {
-		t.Fatal("expected synthesized termination content")
+	if result != "" {
+		t.Fatalf("expected no fabricated termination content, got %q", result)
 	}
 	if got := loop.DoneReason(); got != "loop terminated: same-route no-progress churn" {
 		t.Fatalf("done reason = %q", got)
@@ -1231,5 +1486,70 @@ func TestLoop_FocusedInspectionEvidenceDoesNotCountAsExploratoryChurn(t *testing
 	}
 	if got := loop.DoneReason(); got != "" {
 		t.Fatalf("done reason = %q, want empty", got)
+	}
+}
+
+func TestLoop_FocusedAnalysisAuthoringEvidenceDoesNotCountAsExploratoryChurn(t *testing.T) {
+	mock := &mockCompleter{
+		responses: []*llm.Response{
+			{
+				Model:    "gpt-4o-mini",
+				Provider: "openai",
+				ToolCalls: []llm.ToolCall{{
+					ID:   "call-1",
+					Type: "function",
+					Function: llm.ToolCallFunc{
+						Name:      "glob_files",
+						Arguments: `{"path":".","pattern":"*.md"}`,
+					},
+				}},
+			},
+			{
+				Model:    "gpt-4o-mini",
+				Provider: "openai",
+				ToolCalls: []llm.ToolCall{{
+					ID:   "call-2",
+					Type: "function",
+					Function: llm.ToolCallFunc{
+						Name:      "read_file",
+						Arguments: `{"path":"report.md"}`,
+					},
+				}},
+			},
+			{Content: "Wrote the requested summary from the inspected source evidence."},
+		},
+	}
+	reg := NewToolRegistry()
+	reg.Register(&inspectionEvidenceTool{name: "glob_files", count: 3, output: "report.md\nnotes.md\nplan.md"})
+	reg.Register(&artifactReadEvidenceTool{name: "read_file", path: "report.md", content: "# Report\n- finding"})
+
+	cfg := DefaultLoopConfig()
+	cfg.MaxReadOnlyExploration = 1
+	loop := NewLoop(cfg, LoopDeps{
+		LLM:     mock,
+		Tools:   reg,
+		Context: NewContextBuilder(DefaultContextConfig()),
+	})
+
+	session := NewSession("sess-1", "agent-1", "TestBot")
+	session.AddUserMessage("Find the latest report inputs, read the most relevant file, and summarize it in a concise note.")
+	session.SetTaskVerificationHints("task", "simple", "execute_directly", nil)
+	session.SetTurnEnvelopePolicy("standard", "focused_analysis_authoring", "test")
+
+	result, err := loop.Run(context.Background(), session)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result, "requested summary") {
+		t.Fatalf("result = %q, want focused analysis authoring completion", result)
+	}
+	if got := loop.DoneReason(); got != "" {
+		t.Fatalf("done reason = %q, want empty", got)
+	}
+}
+
+func TestTurnProfileCountsReadOnlyEvidenceAsProgress_FocusedSourceCode(t *testing.T) {
+	if !turnProfileCountsReadOnlyEvidenceAsProgress("focused_source_code") {
+		t.Fatal("focused source code profile should count bounded read-only evidence as progress")
 	}
 }

@@ -44,16 +44,16 @@ func (r RiskLevel) String() string {
 
 // Context provides runtime information to tool execution.
 type Context struct {
-	SessionID    string
-	AgentID      string
-	AgentName    string
-	Workspace    string
-	AllowedPaths []string
-	Channel      string
+	SessionID              string
+	AgentID                string
+	AgentName              string
+	Workspace              string
+	AllowedPaths           []string
+	Channel                string
 	ProtectedReadOnlyPaths []string
-	Store        *db.Store          // database access; may be nil in tests
-	FS           FileSystem         // file operations; nil defaults to OSFileSystem
-	Runner       core.ProcessRunner // subprocess execution; nil defaults to OSProcessRunner
+	Store                  *db.Store          // database access; may be nil in tests
+	FS                     FileSystem         // file operations; nil defaults to OSFileSystem
+	Runner                 core.ProcessRunner // subprocess execution; nil defaults to OSProcessRunner
 
 	// MemoryBudgets holds configured budget percentages per tier (e.g., "working" -> 30).
 	MemoryBudgets map[string]float64

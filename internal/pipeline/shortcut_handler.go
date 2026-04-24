@@ -10,7 +10,6 @@
 package pipeline
 
 import (
-	"fmt"
 	"strings"
 )
 
@@ -68,41 +67,19 @@ var acknowledgements = []string{
 }
 
 func (a *AcknowledgementShortcut) TryMatch(content string, ctx *ShortcutContext) *ShortcutMatch {
-	// Never match on correction turns — sarcastic "sure" / "right" etc.
-	if ctx != nil && ctx.CorrectionTurn {
-		return nil
-	}
-	// Never match on delegated turns — delegation deserves full inference.
-	if ctx != nil && ctx.DelegationProvenance {
-		return nil
-	}
-
-	lower := strings.TrimSpace(strings.ToLower(content))
-	for _, ack := range acknowledgements {
-		if lower == ack {
-			return &ShortcutMatch{Confidence: 0.95, Handler: "acknowledgement"}
-		}
-	}
 	return nil
 }
 
 func (a *AcknowledgementShortcut) Respond(_ string, _ *ShortcutContext) string {
-	return "Acknowledged. Let me know if you need anything else."
+	return ""
 }
 
 func (a *DirectedAcknowledgementShortcut) TryMatch(content string, ctx *ShortcutContext) *ShortcutMatch {
-	if ctx != nil && (ctx.CorrectionTurn || ctx.DelegationProvenance) {
-		return nil
-	}
-	lower := strings.TrimSpace(strings.ToLower(content))
-	if strings.Contains(lower, "acknowledge this request") {
-		return &ShortcutMatch{Confidence: 0.98, Handler: "directed_acknowledgement"}
-	}
 	return nil
 }
 
 func (a *DirectedAcknowledgementShortcut) Respond(_ string, _ *ShortcutContext) string {
-	return "Acknowledged; awaiting your next instruction."
+	return ""
 }
 
 // ── IdentityShortcut ──────────────────────────────────────────────────────
@@ -111,19 +88,11 @@ func (a *DirectedAcknowledgementShortcut) Respond(_ string, _ *ShortcutContext) 
 type IdentityShortcut struct{}
 
 func (i *IdentityShortcut) TryMatch(content string, _ *ShortcutContext) *ShortcutMatch {
-	lower := strings.TrimSpace(strings.ToLower(content))
-	if lower == "who are you" || lower == "who are you?" || lower == "what are you?" || lower == "what are you" {
-		return &ShortcutMatch{Confidence: 0.99, Handler: "identity"}
-	}
 	return nil
 }
 
 func (i *IdentityShortcut) Respond(_ string, ctx *ShortcutContext) string {
-	name := "an autonomous AI agent"
-	if ctx != nil && ctx.AgentName != "" {
-		name = ctx.AgentName
-	}
-	return fmt.Sprintf("I am %s, an autonomous AI agent.", name)
+	return ""
 }
 
 // ── HelpShortcut ──────────────────────────────────────────────────────────
@@ -132,19 +101,11 @@ func (i *IdentityShortcut) Respond(_ string, ctx *ShortcutContext) string {
 type HelpShortcut struct{}
 
 func (h *HelpShortcut) TryMatch(content string, _ *ShortcutContext) *ShortcutMatch {
-	lower := strings.TrimSpace(strings.ToLower(content))
-	if lower == "help" || lower == "/help" {
-		return &ShortcutMatch{Confidence: 0.99, Handler: "help"}
-	}
 	return nil
 }
 
 func (h *HelpShortcut) Respond(_ string, ctx *ShortcutContext) string {
-	name := "This agent"
-	if ctx != nil && ctx.AgentName != "" {
-		name = ctx.AgentName
-	}
-	return fmt.Sprintf("%s can help with:\n- General conversation and reasoning\n- File operations and code tasks\n- Web search and information retrieval\n- Scheduling and reminders\n- Financial operations\n\nJust describe what you need.", name)
+	return ""
 }
 
 // ── IntrospectionShortcut ────────────────────────────────────────────────
@@ -187,11 +148,17 @@ func (i *IntrospectionShortcut) Respond(_ string, ctx *ShortcutContext) string {
 func DefaultShortcutHandlers() []ShortcutHandler {
 	return []ShortcutHandler{
 		&IntrospectionShortcut{},
-		&DirectedAcknowledgementShortcut{},
-		&IdentityShortcut{},
-		&HelpShortcut{},
-		&AcknowledgementShortcut{},
 	}
+}
+
+func isAcknowledgementLike(content string) bool {
+	lower := strings.TrimSpace(strings.ToLower(content))
+	for _, ack := range acknowledgements {
+		if lower == ack {
+			return true
+		}
+	}
+	return false
 }
 
 // ── DispatchShortcut ──────────────────────────────────────────────────────

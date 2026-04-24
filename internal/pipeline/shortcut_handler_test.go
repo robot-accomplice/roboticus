@@ -5,13 +5,9 @@ import (
 )
 
 func TestAcknowledgementShortcut_BasicMatches(t *testing.T) {
-	handler := &AcknowledgementShortcut{}
-	ctx := &ShortcutContext{}
-
 	for _, input := range []string{"ok", "thanks", "got it", "ty", "cool", "np"} {
-		m := handler.TryMatch(input, ctx)
-		if m == nil {
-			t.Errorf("expected match for %q", input)
+		if !isAcknowledgementLike(input) {
+			t.Errorf("expected acknowledgement classifier to catch %q", input)
 		}
 	}
 }
@@ -41,12 +37,12 @@ func TestDirectedAcknowledgementShortcut_MatchesExplicitAcknowledgementRequest(t
 	ctx := &ShortcutContext{}
 
 	m := handler.TryMatch("Good evening Duncan. Acknowledge this request in one sentence, then wait.", ctx)
-	if m == nil {
-		t.Fatal("expected match for explicit acknowledgement directive")
+	if m != nil {
+		t.Fatal("directed acknowledgement shortcut should be disabled")
 	}
 	resp := handler.Respond("", ctx)
-	if resp != "Acknowledged; awaiting your next instruction." {
-		t.Fatalf("unexpected response: %q", resp)
+	if resp != "" {
+		t.Fatalf("expected empty response from disabled shortcut, got %q", resp)
 	}
 }
 
@@ -56,8 +52,8 @@ func TestIdentityShortcut_Matches(t *testing.T) {
 
 	for _, input := range []string{"who are you", "who are you?", "what are you?"} {
 		m := handler.TryMatch(input, ctx)
-		if m == nil {
-			t.Errorf("expected match for %q", input)
+		if m != nil {
+			t.Errorf("identity shortcut should be disabled for %q", input)
 		}
 	}
 
@@ -72,8 +68,8 @@ func TestHelpShortcut_Matches(t *testing.T) {
 
 	for _, input := range []string{"help", "/help"} {
 		m := handler.TryMatch(input, nil)
-		if m == nil {
-			t.Errorf("expected match for %q", input)
+		if m != nil {
+			t.Errorf("help shortcut should be disabled for %q", input)
 		}
 	}
 }
@@ -104,13 +100,9 @@ func TestIntrospectionShortcut_DoesNotMatchWithoutSummary(t *testing.T) {
 func TestDispatchShortcut_PicksHighestConfidence(t *testing.T) {
 	handlers := DefaultShortcutHandlers()
 
-	// Identity has higher confidence (0.99) than acknowledgement (0.95).
 	result := DispatchShortcut(handlers, "who are you", &ShortcutContext{AgentName: "Bot"})
-	if result == nil {
-		t.Fatal("expected a match")
-	}
-	if result.Handler != "identity" {
-		t.Errorf("expected identity handler, got %s", result.Handler)
+	if result != nil {
+		t.Fatalf("expected no match for disabled canned shortcut, got %+v", result)
 	}
 }
 

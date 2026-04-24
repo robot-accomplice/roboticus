@@ -16,9 +16,11 @@ func (p *Pipeline) appendTurnDiagnosticEvent(ctx context.Context, turnID, eventT
 	if p.store == nil || strings.TrimSpace(turnID) == "" {
 		return
 	}
+	persistCtx, cancel := p.persistenceContext()
+	defer cancel()
 
 	var atMs int64
-	err := p.store.QueryRowContext(ctx,
+	err := p.store.QueryRowContext(persistCtx,
 		`SELECT COALESCE(total_ms, 0)
 		   FROM turn_diagnostics
 		  WHERE turn_id = ?
@@ -33,7 +35,7 @@ func (p *Pipeline) appendTurnDiagnosticEvent(ctx context.Context, turnID, eventT
 	}
 
 	var nextSeq int
-	if err := p.store.QueryRowContext(ctx,
+	if err := p.store.QueryRowContext(persistCtx,
 		`SELECT COALESCE(MAX(seq), 0) + 1
 		   FROM turn_diagnostic_events
 		  WHERE turn_id = ?`,
@@ -44,7 +46,7 @@ func (p *Pipeline) appendTurnDiagnosticEvent(ctx context.Context, turnID, eventT
 	}
 
 	var lastAtMs sql.NullInt64
-	if err := p.store.QueryRowContext(ctx,
+	if err := p.store.QueryRowContext(persistCtx,
 		`SELECT MAX(at_ms)
 		   FROM turn_diagnostic_events
 		  WHERE turn_id = ?`,
@@ -60,7 +62,7 @@ func (p *Pipeline) appendTurnDiagnosticEvent(ctx context.Context, turnID, eventT
 		}
 	}
 
-	if _, err := p.store.ExecContext(ctx,
+	if _, err := p.store.ExecContext(persistCtx,
 		`INSERT INTO turn_diagnostic_events (
 			id, turn_id, seq, event_type, at_ms, duration_ms, parent_event_id, status,
 			operator_summary, user_summary, details_json
@@ -75,6 +77,8 @@ func (p *Pipeline) storeTurnDiagnostics(ctx context.Context, dr *TurnDiagnostics
 	if p.store == nil || dr == nil {
 		return
 	}
+	persistCtx, cancel := p.persistenceContext()
+	defer cancel()
 
 	summary, events, ok := dr.SnapshotForFlush("")
 	if !ok {
@@ -89,13 +93,13 @@ func (p *Pipeline) storeTurnDiagnostics(ctx context.Context, dr *TurnDiagnostics
 	summary = DeriveInterpretiveDiagnosticsSummary(summary, events)
 
 	var existingID string
-	err := p.store.QueryRowContext(ctx,
+	err := p.store.QueryRowContext(persistCtx,
 		`SELECT id FROM turn_diagnostics WHERE turn_id = ? LIMIT 1`,
 		summary.TurnID,
 	).Scan(&existingID)
 	switch err {
 	case nil:
-		_, err = p.store.ExecContext(ctx,
+		_, err = p.store.ExecContext(persistCtx,
 			`UPDATE turn_diagnostics SET
 				session_id = ?, channel = ?, status = ?, final_model = ?, final_provider = ?, total_ms = ?,
 				inference_attempts = ?, fallback_count = ?, tool_call_count = ?, guard_retry_count = ?, verifier_retry_count = ?, replay_suppression_count = ?,
@@ -109,7 +113,7 @@ func (p *Pipeline) storeTurnDiagnostics(ctx context.Context, dr *TurnDiagnostics
 			summary.TurnID,
 		)
 	case sql.ErrNoRows:
-		_, err = p.store.ExecContext(ctx,
+		_, err = p.store.ExecContext(persistCtx,
 			`INSERT INTO turn_diagnostics (
 				id, turn_id, session_id, channel, status, final_model, final_provider, total_ms,
 				inference_attempts, fallback_count, tool_call_count, guard_retry_count, verifier_retry_count, replay_suppression_count,
@@ -138,7 +142,7 @@ func (p *Pipeline) storeTurnDiagnostics(ctx context.Context, dr *TurnDiagnostics
 				detailsJSON = string(buf)
 			}
 		}
-		_, err := p.store.ExecContext(ctx,
+		_, err := p.store.ExecContext(persistCtx,
 			`INSERT INTO turn_diagnostic_events (
 				id, turn_id, seq, event_type, at_ms, duration_ms, parent_event_id, status,
 				operator_summary, user_summary, details_json

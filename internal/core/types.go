@@ -58,10 +58,11 @@ func (s SurvivalTier) String() string {
 
 // AgentState represents the current state of the ReAct loop.
 //
-// NOTE: Go intentionally uses 6 ReAct loop states (Idle/Thinking/Acting/Observing/
-// Persisting/Done) while the Rust reference uses 5 lifecycle states (Setup/Waking/
-// Running/Sleeping/Dead). This divergence is by design: Go models the inner ReAct
-// state machine, Rust models the outer agent lifecycle. Both are valid views.
+// NOTE: Go intentionally uses 7 ReAct loop states (Idle/Thinking/Acting/Observing/
+// Persisting/Reflecting/Done) while the Rust reference uses 5 lifecycle states
+// (Setup/Waking/Running/Sleeping/Dead). This divergence is by design: Go models
+// the inner ReAct state machine, Rust models the outer agent lifecycle. Both are
+// valid views.
 type AgentState int
 
 const (
@@ -70,6 +71,7 @@ const (
 	AgentStateActing
 	AgentStateObserving
 	AgentStatePersisting
+	AgentStateReflecting
 	AgentStateDone
 )
 
@@ -85,6 +87,8 @@ func (s AgentState) String() string {
 		return "observing"
 	case AgentStatePersisting:
 		return "persisting"
+	case AgentStateReflecting:
+		return "reflecting"
 	case AgentStateDone:
 		return "done"
 	default:
