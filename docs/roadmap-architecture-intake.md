@@ -234,6 +234,26 @@ Implication:
 - theme/profile systems need stable manifest APIs rather than hard-coded UI
   assumptions
 
+### 13. Vault Capability Truth + Execution Liveness (`v1.0.8 intake`)
+
+Why it matters:
+- vault access and memory-persistence requests sit at the intersection of
+  sandbox policy, tool capability truth, retrieval, and learning
+- false access denials are as damaging as overclaims: they convince the
+  operator the system cannot use a path it has already observed
+- promised checks that vanish without a result are control-flow failures, not
+  merely conversational rough edges
+
+Implication:
+- allowed-path resolution must be subtree-aware and inspectable through RCA
+- capability denials must cite the exact missing runtime surface rather than a
+  generic "current sandbox" limitation
+- correction turns must update task state before response generation
+- memory-persistence intake over allowed vault content needs a bounded
+  inspect/evaluate/persist contract
+- promissory execution language must create a liveness obligation: tool
+  attempt, progress heartbeat, timeout, or explicit failure
+
 ## Current Recommendations For Roboticus
 
 These architectural rules should guide work starting now:
@@ -253,6 +273,8 @@ These architectural rules should guide work starting now:
    - typed external CLI skills
    - multimodal/speech provider routing
    - modular operator UX
+7. Treat capability denials and path refusals as RCA-visible decisions, not
+   conversational impressions.
 
 ## Concrete Near-Term Planning Set
 
@@ -266,6 +288,8 @@ architecture immediately, it would be:
 5. `1.26` + `2.19` routing profiles / spider graph / metascore explainability
 6. `1.6` + `2.21` multimodal + voice abstractions
 7. TUI parity contract if Roboticus plans to claim it
+8. Vault capability truth and execution-liveness hardening for memory
+   persistence workflows
 
 These items should be treated as **architecture-shaping**, even if we do not
 implement them in the next sprint.
