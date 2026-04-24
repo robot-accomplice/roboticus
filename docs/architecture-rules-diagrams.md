@@ -43,6 +43,10 @@ This file follows the same C4 conventions used elsewhere in the repo:
   release control flow is not allowed to depend on opaque third-party action
   context for tag identity, prerelease state, dispatch payload semantics, or
   success/failure reporting
+- release-critical cross-repository site sync uses the shared
+  `SITE_DISPATCH_PAT` secret contract; optional release notifications must
+  skip cleanly when SMTP or Discord secrets are absent and must not turn a
+  complete artifact publication into a false release failure
 - CI/release security-tool installation must be pinned and replayable; active
   workflows are not allowed to float `@latest` for critical scanners whose
   behavior can silently change between releases
@@ -149,6 +153,17 @@ This file follows the same C4 conventions used elsewhere in the repo:
 - capability truth must converge before inference; DB skill inventory, runtime
   skill loading, tool registration, prompt guidance, and UI are not allowed to
   disagree about whether a capability is actually live
+- capability denials must be evidence-backed. The pipeline is not allowed to
+  tell the operator a path, web/image surface, or filesystem action is
+  unavailable unless that conclusion is derived from the active tool surface,
+  sandbox policy, network policy, or provider capability state and is visible
+  in RCA
+- allowed-path reasoning must be subtree-aware: if an allowed root has already
+  admitted `/a/b`, then `/a/b/c` is readable by default unless a narrower deny
+  rule, mode distinction, or policy guard says otherwise
+- user correction turns must update the active task interpretation before
+  response generation. Corrections such as "section, not session" are not
+  license to invent unrelated server/config work
 - cross-turn guards must preserve temporal atomicity; `PreviousAssistant` and
   prior assistant history must exclude assistant content already emitted in the
   current turn, or a successful tool-backed completion can be misclassified as
@@ -187,6 +202,15 @@ This file follows the same C4 conventions used elsewhere in the repo:
   outcome in chronological order, and the operator-facing decision flow must
   expose that learning lane as a first-class part of the same integrated RCA
   narrative rather than leaving it buried in detail mode
+- memory-persistence intake over an allowed subtree must enter a bounded
+  inspect/evaluate/persist contract. The agent is not allowed to ask for a new
+  allowlist entry for a descendant of an already allowed vault root, and it is
+  not allowed to wholesale persist vault content without candidate selection,
+  evidence, and decay/relevance policy
+- promissory execution language creates a liveness obligation. If the agent
+  says it will "test", "check", "verify", or equivalent, the same turn must
+  produce an observable tool attempt, progress heartbeat, timeout diagnostic,
+  or explicit failure instead of disappearing behind an unreported action
 - once the pipeline has already injected `[Retrieved Evidence]`, `[Gaps]`, and
   a memory index for the current turn, that injected evidence is the first
   memory authority for the turn. Prompt guidance is not allowed to tell the
@@ -852,15 +876,17 @@ flowchart LR
     gate["Tag-gated release checks"]
     ghrel["GitHub Release object\nassets + SHA256SUMS.txt"]
     latest["GitHub releases/latest"]
-    dispatch["Site sync trigger"]
+    dispatch["Site sync trigger\nSITE_DISPATCH_PAT"]
     sitesync["roboticus.ai release-sync"]
-    deploy["Production deploy"]
+    deploy["Production deploy\nworkflow_dispatch or direct deploy"]
+    notify["Best-effort notifications\nSMTP / Discord optional"]
     installers["/install.sh + /install.ps1"]
     upgrade["roboticus update/upgrade"]
     operator["Operator install / upgrade"]
 
     tag --> gate --> ghrel --> latest
     ghrel --> dispatch --> sitesync --> deploy
+    ghrel -.-> notify
     sitesync --> installers
     latest --> installers
     latest --> upgrade
@@ -873,6 +899,8 @@ flowchart LR
     %%   not maintained as a divergent site-local fork.
     %% - Site sync may not depend on source-tree paths that are not part
     %%   of the tagged release contract.
+    %% - Missing notification secrets may skip notifications, but missing
+    %%   site dispatch credentials are a release-control-plane failure.
 ```
 
 ## 8. Supplementary Rule View — Streaming Is Not A Separate Product

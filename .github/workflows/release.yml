@@ -6,6 +6,18 @@
 # GitHub Release, verifies the published release object, and reports the final
 # release outcome.
 #
+# Required release secrets:
+#   SITE_DISPATCH_PAT       PAT with access to robot-accomplice/roboticus-site
+#
+# Optional notification secrets; notifications are skipped if not configured:
+#   SMTP_SERVER
+#   SMTP_PORT
+#   SMTP_USERNAME
+#   SMTP_PASSWORD
+#   RELEASE_NOTIFY_EMAIL
+#   RELEASE_FROM_EMAIL
+#   DISCORD_RELEASE_WEBHOOK
+#
 # Versioning: YYYY.MM.DD[.N]
 #   v2025.04.02   — first release of the day
 #   v2025.04.02.1 — same-day patch
@@ -308,13 +320,13 @@ jobs:
       - name: Trigger roboticus.ai release sync
         if: ${{ env.IS_PRERELEASE != 'true' }}
         env:
-          GH_TOKEN: ${{ secrets.ROBOTICUS_SITE_DISPATCH_TOKEN }}
+          GH_TOKEN: ${{ secrets.SITE_DISPATCH_PAT }}
         run: |
           set -euo pipefail
           gh api \
             --method POST \
             -H "Accept: application/vnd.github+json" \
-            "repos/robot-accomplice/ironclad-site/dispatches" \
+            "repos/robot-accomplice/roboticus-site/dispatches" \
             -f event_type=release-sync \
             -F client_payload[version]='${{ steps.site_meta.outputs.version }}' \
             -F client_payload[date]='${{ steps.site_meta.outputs.date }}'
@@ -448,7 +460,7 @@ jobs:
           PY
 
       - name: Send release report email
-        if: always()
+        if: env.SMTP_SERVER != '' && env.RELEASE_NOTIFY_EMAIL != ''
         env:
           SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
@@ -519,6 +531,51 @@ jobs:
           finally:
               smtp.quit()
           PY
+
+      - name: Send Discord release report
+        if: env.DISCORD_WEBHOOK != ''
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_RELEASE_WEBHOOK }}
+          TEST_RESULT: ${{ needs.test.result }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          RELEASE_RESULT: ${{ needs.release.result }}
+          AUDIT_OUTCOME: ${{ steps.audit.outputs.audit_outcome }}
+          AUDIT_SUMMARY: ${{ steps.audit.outputs.audit_summary }}
+          RELEASE_URL: ${{ steps.audit.outputs.release_url }}
+        run: |
+          set -euo pipefail
+          color=$( [ "${AUDIT_OUTCOME}" = "success" ] && echo "3066993" || echo "15158332" )
+          emoji=$( [ "${AUDIT_OUTCOME}" = "success" ] && echo "✅" || echo "❌" )
+          payload=$(jq -n \
+            --arg title "${emoji} Roboticus ${TAG_NAME} release ${AUDIT_OUTCOME}" \
+            --arg desc "${AUDIT_SUMMARY}" \
+            --arg url "${RELEASE_URL}" \
+            --arg run_url "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --arg test "${TEST_RESULT}" \
+            --arg build "${BUILD_RESULT}" \
+            --arg release "${RELEASE_RESULT}" \
+            --arg audit "${AUDIT_OUTCOME}" \
+            --argjson color "$color" \
+            '{
+              embeds: [{
+                title: $title,
+                description: $desc,
+                color: $color,
+                url: $url,
+                fields: [
+                  { name: "Pre-release Tests", value: $test, inline: true },
+                  { name: "Build Matrix", value: $build, inline: true },
+                  { name: "Publish Release", value: $release, inline: true },
+                  { name: "Self-Evaluation", value: $audit, inline: true }
+                ],
+                footer: { text: $run_url },
+                timestamp: (now | todate)
+              }]
+            }')
+
+          curl -fsSL -H "Content-Type: application/json" \
+            -d "$payload" \
+            "$DISCORD_WEBHOOK"
 
       - name: Post workflow summary
         env:
