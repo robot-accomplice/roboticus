@@ -22,6 +22,13 @@ older architecture docs had left too generic:
   user message, align prompt-layer tool guidance with the structured tool list,
   and drop empty compacted history before inference. Baseline/exercise now uses
   that same runtime request path rather than a direct-LLM bypass.
+- **Workflow control-plane seams are now part of architecture truth.** Release
+  publication, repository-dispatch notifications, prerelease gating, security
+  tool installation, and release-completion reporting are not allowed to depend
+  on hidden third-party action context or floating tool versions. Active
+  workflows must derive one explicit tag authority for reruns, pin critical CLI
+  tooling, and self-evaluate the published release object instead of treating a
+  green publish step as sufficient proof.
 - **Low-level utility ownership is sharper.** Storage-layer repositories are not
   allowed to depend on `internal/agent/*` helpers for generic concerns like
   content hashing. Shared primitives such as hashing, normalization, and ID
@@ -432,6 +439,13 @@ older architecture docs had left too generic:
   release gate. Workflow hygiene is part of release truth; noisy deprecation
   warnings must be removed by upgrading or inlining those action paths before
   the ceremony is considered clean.
+- **Release publication must not rely on hidden action context.** A rerunnable
+  release path is not allowed to assume that a third-party release action will
+  infer the right tag, prerelease state, release title, or dispatch payload
+  from `github.ref_name` when the workflow is dispatched manually. Publication,
+  asset upload, prerelease/site-sync gating, and operator notification must all
+  derive from one explicit `TAG_NAME` authority or dispatch-mode reruns will
+  silently drift or fail after the build work has already completed.
 - **Release security gates must run on the same patched toolchain the repo
   declares.** CI security checks are not allowed to rely on a vulnerable Go
   patch line while local development silently passes on a newer auto-selected

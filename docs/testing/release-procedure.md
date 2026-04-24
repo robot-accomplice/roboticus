@@ -90,6 +90,20 @@ After tagging and release creation, actively verify:
 4. site synchronization completed against the intended release metadata
 5. the published binary reports the intended version, not `dev`
 6. install / upgrade paths still work against the published release
+7. if the initial tag push did not enqueue release execution, the canonical
+   release workflow can be manually dispatched against the existing tag without
+   changing release content or creating a new tag
+8. rerun publication derives release name, tag, prerelease gating, asset upload,
+   and site-sync behavior from the explicit requested tag, not implicit branch
+   or ref-name context
+9. active release notifications and publication steps use explicit first-party
+   CLI/API calls where critical control flow is involved; do not depend on
+   third-party action context for tag authority or dispatch semantics
+10. security/vulnerability tooling used in CI is pinned to an explicit version;
+    do not float `latest` in release-critical workflow paths
+11. the release workflow performs a post-publication self-evaluation against the
+    live release object and emits a success/failure report instead of assuming a
+    green publish step proves end-to-end release correctness
 
 ## Failure Rules
 
@@ -108,6 +122,9 @@ After tagging and release creation, actively verify:
 - Expensive PR churn is itself a release defect. The goal is to catch release
   blockers before push by replaying the exact local gate, not to discover them
   one PR at a time in GitHub Actions.
+- If the self-evaluation report says the published release is incomplete or
+  inconsistent, the release is not complete even if all upstream jobs were
+  green.
 
 ## Operator Reminder
 

@@ -8,6 +8,7 @@
 # ============================================================================
 
 name: CI
+run-name: "CI / ${{ github.event_name }} / ${{ github.head_ref || github.ref_name }}"
 
 on:
   push:
@@ -25,6 +26,7 @@ permissions:
 
 env:
   GO_VERSION_FILE: go.mod
+  GOVULNCHECK_VERSION: v1.3.0
 
 jobs:
   # --------------------------------------------------------------------------
@@ -34,6 +36,7 @@ jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -59,6 +62,7 @@ jobs:
     name: Test (${{ matrix.os }})
     needs: [lint]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -72,7 +76,8 @@ jobs:
         with:
           go-version-file: ${{ env.GO_VERSION_FILE }}
 
-      - name: Run unit tests with race detector
+      - name: Run unit tests with race detector and coverage
+        if: matrix.os == 'ubuntu-latest'
         # -timeout bumped from 300s -> 20m in v1.0.6: race detector adds
         # 2-10x overhead per package, and the test surface grew (agentic
         # retrieval, memory consolidation, executive state, knowledge graph).
@@ -80,6 +85,10 @@ jobs:
         # was exceeded by internal/db alone. 20m gives headroom to surface
         # real test failures instead of spurious timeouts.
         run: go test -race -coverprofile=coverage.out -covermode=atomic -timeout 20m ./...
+
+      - name: Run unit tests with race detector
+        if: matrix.os == 'macos-latest'
+        run: go test -race -timeout 20m ./...
 
       - name: Upload coverage report
         if: matrix.os == 'ubuntu-latest'
@@ -97,6 +106,7 @@ jobs:
     name: Integration (Smoke)
     needs: [lint]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -117,6 +127,7 @@ jobs:
     name: Fuzz
     needs: [lint]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -158,6 +169,7 @@ jobs:
     name: Soak/Fuzz
     needs: [lint]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       SOAK_ROUNDS: "2"
       FUZZ_SECONDS: "20"
@@ -181,6 +193,7 @@ jobs:
     name: Architecture
     needs: [lint]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -202,6 +215,7 @@ jobs:
     name: Build
     needs: [test, test-integration, fuzz, soak-fuzz, architecture]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     env:
       COMMIT_SHA: ${{ github.sha }}
     steps:
@@ -238,8 +252,9 @@ jobs:
   # --------------------------------------------------------------------------
   security:
     name: Security (govulncheck)
-    needs: [test, test-integration, fuzz, soak-fuzz, architecture]
+    needs: [lint]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -250,7 +265,7 @@ jobs:
           go-version-file: ${{ env.GO_VERSION_FILE }}
 
       - name: Install govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+        run: go install golang.org/x/vuln/cmd/govulncheck@${{ env.GOVULNCHECK_VERSION }}
 
       - name: Run govulncheck
         run: govulncheck ./...
