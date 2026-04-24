@@ -1082,6 +1082,13 @@ older architecture docs had left too generic:
   attached assets, `releases/latest`, site sync, and public installer scripts
   together define the live distribution contract. The `v1.0.6` failure showed
   that this seam must be treated as architecture, not release clerical work.
+- **Release side-channel credentials must be named and optionality-scoped.**
+  Cross-repository site dispatch is release-critical and must use the same
+  `SITE_DISPATCH_PAT` secret contract as the Rust release workflow. Operator
+  notifications are not release-critical distribution state; SMTP and Discord
+  notifications must be skipped when their secrets are absent rather than
+  failing an otherwise valid release. The release workflow summary remains the
+  mandatory fallback report.
 - **Persistent-artifact authorship and authority-layer mutation must stay distinct.**
   A turn that is trying to create or update an enduring operator-visible
   artifact (for example a vault note, document, or workspace file) is not
@@ -1122,7 +1129,7 @@ they are not the release-driving backlog anymore.
 | **Agentic Retrieval Architecture (v1.0.5/v1.0.6)** | **Core runtime architecture materially wired** | **cleanup + follow-on gaps remain** |
 | **Working Memory Persistence (v1.0.5)** | **Shutdown/startup** | **0** |
 | **Post-Turn Reflection (v1.0.5)** | **Episode summaries** | **0** |
-| **Release Control Plane (v1.0.7 hardening)** | **Now treated as architecture** | **was drifting in v1.0.6** |
+| **Release Control Plane (v1.0.7 hardening)** | **Now treated as architecture; site dispatch uses `SITE_DISPATCH_PAT`; notification absence is non-blocking** | **site deploy dispatch must stay compatible with site workflow triggers** |
 | **Verifier/Critic (v1.0.7)** | **Claim-level verifier with structured contradiction + proof diagnostics** | **0** |
 
 ### v1.0.6 Agentic Architecture Layers
@@ -1187,6 +1194,11 @@ source tag looks.
 4. site sync must copy canonical installer scripts from the tagged source repo
 5. site sync must not assume absent release-tree directories are mandatory
 6. public site content must not advertise unsupported fallback installs
+7. source release workflow must use `SITE_DISPATCH_PAT` for the release-critical
+   cross-repo dispatch, matching the Rust release contract
+8. release notifications must be best-effort unless explicitly configured;
+   missing SMTP/Discord secrets are not proof that published artifacts are
+   incomplete
 
 ---
 

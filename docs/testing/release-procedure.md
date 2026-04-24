@@ -99,6 +99,10 @@ After tagging and release creation, actively verify:
 9. active release notifications and publication steps use explicit first-party
    CLI/API calls where critical control flow is involved; do not depend on
    third-party action context for tag authority or dispatch semantics
+   - source-to-site release dispatch uses `SITE_DISPATCH_PAT`, matching the
+     Rust release workflow secret contract
+   - SMTP and Discord notification secrets are optional; when absent, the
+     workflow summary is the authoritative notification fallback
 10. security/vulnerability tooling used in CI is pinned to an explicit version;
     do not float `latest` in release-critical workflow paths
 11. the release workflow performs a post-publication self-evaluation against the
@@ -111,6 +115,9 @@ After tagging and release creation, actively verify:
 - If `develop` audit fails, stop and fix `develop` before opening `main` PR.
 - If release artifacts, fingerprinting, or site sync are wrong, the release is
   not complete even if merges and tags succeeded.
+- If release notifications fail solely because optional SMTP/Discord secrets are
+  absent, that is a notification-configuration defect, not proof that release
+  artifacts are incomplete. The workflow must still emit the summary report.
 - If a late-cycle fix lands after a release branch or promotion PR has already
   been exercised, the release path resets to the appropriate earlier gate. Do
   not hand-wave that as "just one more small fix." Re-run the exact required

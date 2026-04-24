@@ -43,6 +43,10 @@ This file follows the same C4 conventions used elsewhere in the repo:
   release control flow is not allowed to depend on opaque third-party action
   context for tag identity, prerelease state, dispatch payload semantics, or
   success/failure reporting
+- release-critical cross-repository site sync uses the shared
+  `SITE_DISPATCH_PAT` secret contract; optional release notifications must
+  skip cleanly when SMTP or Discord secrets are absent and must not turn a
+  complete artifact publication into a false release failure
 - CI/release security-tool installation must be pinned and replayable; active
   workflows are not allowed to float `@latest` for critical scanners whose
   behavior can silently change between releases
@@ -872,15 +876,17 @@ flowchart LR
     gate["Tag-gated release checks"]
     ghrel["GitHub Release object\nassets + SHA256SUMS.txt"]
     latest["GitHub releases/latest"]
-    dispatch["Site sync trigger"]
+    dispatch["Site sync trigger\nSITE_DISPATCH_PAT"]
     sitesync["roboticus.ai release-sync"]
-    deploy["Production deploy"]
+    deploy["Production deploy\nworkflow_dispatch or direct deploy"]
+    notify["Best-effort notifications\nSMTP / Discord optional"]
     installers["/install.sh + /install.ps1"]
     upgrade["roboticus update/upgrade"]
     operator["Operator install / upgrade"]
 
     tag --> gate --> ghrel --> latest
     ghrel --> dispatch --> sitesync --> deploy
+    ghrel -.-> notify
     sitesync --> installers
     latest --> installers
     latest --> upgrade
@@ -893,6 +899,8 @@ flowchart LR
     %%   not maintained as a divergent site-local fork.
     %% - Site sync may not depend on source-tree paths that are not part
     %%   of the tagged release contract.
+    %% - Missing notification secrets may skip notifications, but missing
+    %%   site dispatch credentials are a release-control-plane failure.
 ```
 
 ## 8. Supplementary Rule View — Streaming Is Not A Separate Product
