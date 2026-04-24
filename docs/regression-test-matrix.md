@@ -201,6 +201,12 @@ Blocking commands for feature-complete releases:
 | R-TOOLS-05 | Config-protection and action-verification guards block forbidden or fabricated behavior | guard tests + behavior tests | L1/L2/L4 |
 | R-TOOLS-06 | Per-call MCP timeout fails only the timed-out call: the transport stays open, late responses are dropped, and a follow-on call can still succeed on the same connection | `internal/mcp/client_test.go` | L1/L2 |
 
+### R-REL: Release Execution
+
+| ID | Regression Class | Required Coverage | Layer |
+| --- | --- | --- | --- |
+| R-REL-01 | Release execution can be replayed explicitly for an existing tag through the canonical workflow path instead of depending solely on the original tag-push event | workflow validation plus tag-bound dispatch proof | L4 |
+
 ### R-AN: Analysis And Recommendations
 
 | ID | Regression Class | Required Coverage | Layer |
