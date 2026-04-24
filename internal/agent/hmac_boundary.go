@@ -82,7 +82,7 @@ func SanitizeModelOutput(content string, secret []byte, injection *InjectionDete
 	if injection != nil {
 		score := injection.ScanOutput(content)
 		if score.IsBlocked() {
-			return "[Response blocked by output safety filter]"
+			return ""
 		}
 	}
 

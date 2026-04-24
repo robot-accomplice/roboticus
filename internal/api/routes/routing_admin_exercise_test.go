@@ -263,7 +263,7 @@ func TestExerciseRunLifecycleRoutes_PersistHistory(t *testing.T) {
 	}
 
 	appendResult := AppendExerciseRunResult(store)
-	req = httptest.NewRequest(http.MethodPost, "/api/models/exercise/runs/"+runID+"/results", strings.NewReader(`{"model":"ollama/gemma4","intent_class":"CONVERSATION","complexity":"simple","prompt":"Say hello.","content":"hello","quality":0.9,"latency_ms":1234,"passed":true}`))
+	req = httptest.NewRequest(http.MethodPost, "/api/models/exercise/runs/"+runID+"/results", strings.NewReader(`{"turn_id":"turn-hello","model":"ollama/gemma4","intent_class":"CONVERSATION","complexity":"simple","prompt":"Say hello.","content":"hello","quality":0.9,"latency_ms":1234,"passed":true,"result_class":"clean_pass"}`))
 	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, func() *chi.Context {
 		routeCtx := chi.NewRouteContext()
 		routeCtx.URLParams.Add("runID", runID)
@@ -273,6 +273,17 @@ func TestExerciseRunLifecycleRoutes_PersistHistory(t *testing.T) {
 	appendResult.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("append status = %d, want 200", rec.Code)
+	}
+	var persistedTurnID, persistedResultClass string
+	row := store.QueryRowContext(context.Background(), `SELECT COALESCE(turn_id, ''), COALESCE(result_class, '') FROM exercise_results WHERE run_id = ? LIMIT 1`, runID)
+	if err := row.Scan(&persistedTurnID, &persistedResultClass); err != nil {
+		t.Fatalf("scan persisted result identity: %v", err)
+	}
+	if persistedTurnID != "turn-hello" {
+		t.Fatalf("exercise_results.turn_id = %q, want turn-hello", persistedTurnID)
+	}
+	if persistedResultClass != "clean_pass" {
+		t.Fatalf("exercise_results.result_class = %q, want clean_pass", persistedResultClass)
 	}
 
 	complete := CompleteExerciseRun(store, &core.Config{Providers: map[string]core.ProviderConfig{

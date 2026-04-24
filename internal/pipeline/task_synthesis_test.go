@@ -139,6 +139,16 @@ func TestSynthesizeTaskState_CountPromptIsTaskNotConversation(t *testing.T) {
 	}
 }
 
+func TestSynthesizeTaskState_OperationalCheckPromptIsTaskNotConversation(t *testing.T) {
+	result := SynthesizeTaskState("Check the health of all integrations.", 1, nil)
+	if result.Intent != "task" {
+		t.Fatalf("intent = %q, want task", result.Intent)
+	}
+	if result.PlannedAction != "execute_directly" {
+		t.Fatalf("planned action = %q, want execute_directly", result.PlannedAction)
+	}
+}
+
 func TestSynthesizeTaskState_InspectionQuestionUsesFocusedTaskPath(t *testing.T) {
 	result := SynthesizeTaskState("What's in your vault right now?", 1, nil)
 	if result.Intent != "task" {
@@ -216,6 +226,33 @@ func TestSynthesizeTaskState_InspectionBackedReportAuthoringIsTaskNotCreative(t 
 	}
 	if result.RetrievalNeeded {
 		t.Fatal("inspection-backed report authoring should not widen into retrieval by default")
+	}
+}
+
+func TestSynthesizeTaskState_SourceBackedCodeTaskUsesNeutralRetrieval(t *testing.T) {
+	prompt := "Refactor the configuration parser to support hot-reload with validation, rollback on failure, and emit structured change events."
+	result := SynthesizeTaskState(prompt, 1, nil)
+	if result.Intent != "code" {
+		t.Fatalf("intent = %q, want code", result.Intent)
+	}
+	if result.Complexity != "moderate" {
+		t.Fatalf("complexity = %q, want moderate", result.Complexity)
+	}
+	if result.RetrievalNeeded {
+		t.Fatal("source-backed code refactor should not widen into retrieval by default")
+	}
+}
+
+func TestSynthesizeTaskState_DerivableDirectFactQuestionUsesNeutralRetrieval(t *testing.T) {
+	result := SynthesizeTaskState("What is 2 + 2?", 1, nil)
+	if result.Intent != "question" {
+		t.Fatalf("intent = %q, want question", result.Intent)
+	}
+	if result.RetrievalNeeded {
+		t.Fatal("derivable direct-fact question should not require retrieval")
+	}
+	if result.RetrievalReason != "none" {
+		t.Fatalf("retrieval reason = %q, want none", result.RetrievalReason)
 	}
 }
 

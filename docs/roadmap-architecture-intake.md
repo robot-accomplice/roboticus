@@ -160,7 +160,7 @@ Must preserve:
 ### 7. TUI Parity Contract
 
 Roboticus source:
-- `ROADMAP.md`, Subroutine P — TUI
+- public roadmap / operator-surface commitments
 
 Why it matters:
 - if Roboticus adopts TUI parity as a product promise, web-only ad hoc APIs
@@ -180,7 +180,7 @@ Must preserve:
 These are slightly farther out but still important enough to influence current
 design choices.
 
-### 8. Skills Catalog / Registry / Forge (`2.14`, `2.22`, `P.10`)
+### 8. Skills Catalog / Registry / Forge (`2.14`, `P.10`)
 
 Why it matters:
 - pushes us toward signed manifests, dependency metadata, trust scoring, and
@@ -189,7 +189,22 @@ Why it matters:
 Implication:
 - skills need stable metadata schemas and registry-aware lifecycle boundaries
 
-### 9. Agent Delegation / Workflow Graphs (`P.6`, `P.12`, `3.3`)
+### 9. Compliance-Grade Audit Export + Optional Anchoring (`2.22` + private roadmap)
+
+Why it matters:
+- enterprise auditability is not just another export format; it creates a new
+  durability, cryptographic-integrity, and key-management seam
+- the ignored private roadmap currently frames this as "Compliance Vault," but
+  the public roadmap needs the decomposed technical shape rather than SKU copy
+
+Implication:
+- audit export, customer-managed encryption, validator tooling, and optional
+  external anchoring should be treated as separate layers, not one vague
+  blockchain feature
+- provenance and audit events should remain reusable core surfaces so later
+  compliance packaging does not fork runtime truth
+
+### 10. Agent Delegation / Workflow Graphs (`P.6`, `P.12`, `3.3`)
 
 Why it matters:
 - moves orchestration from linear delegation toward graph/state workflows
@@ -200,7 +215,7 @@ Implication:
 - pipeline traces should preserve enough provenance to support future workflow
   visualization
 
-### 10. Service Revenue / Treasury Intelligence (`2.5`, `2.18`, `2.20`)
+### 11. Service Revenue / Treasury Intelligence (`2.5`, `2.18`, `2.20`)
 
 Why it matters:
 - financial features become platform features, not isolated wallet helpers
@@ -209,7 +224,7 @@ Implication:
 - service catalog, payments, settlement, treasury state, and risk analytics
   should be distinct domains with explicit boundaries
 
-### 11. Dashboard Modularization / Theme Marketplace (`2.27`, `2.28`, `2.29`)
+### 12. Dashboard Modularization / Theme Marketplace (`2.27`, `2.28`, `2.29`)
 
 Why it matters:
 - current monolithic dashboard patterns become a drag on every operator feature

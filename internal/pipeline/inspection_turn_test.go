@@ -151,3 +151,24 @@ func TestResolveFilesystemDestination_DesktopVaultAlias(t *testing.T) {
 		t.Fatal("desktop vault should not be treated as configured default vault")
 	}
 }
+
+func TestResolveSourceCodeTarget_CurrentRepoRoot(t *testing.T) {
+	content := "Refactor the configuration parser to support hot-reload with validation, rollback on failure, and emit structured change events."
+	if !looksLikeSourceBackedCodeTask(content) {
+		t.Fatal("source-backed refactor prompt should be detected")
+	}
+	resolution := ResolveSourceCodeTarget(
+		content,
+		"/Users/jmachen/code/roboticus-v1.0.8-verifier",
+		[]string{
+			"/Users/jmachen/Desktop/My Vault",
+			"/Users/jmachen/code",
+		},
+	)
+	if resolution.ResolvedRoot != "/Users/jmachen/code/roboticus-v1.0.8-verifier" {
+		t.Fatalf("resolved root = %q", resolution.ResolvedRoot)
+	}
+	if resolution.PromptSummary == "" {
+		t.Fatal("source-backed code target should produce a prompt summary")
+	}
+}

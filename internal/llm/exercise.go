@@ -3,6 +3,9 @@ package llm
 import (
 	"context"
 	"fmt"
+	"go/parser"
+	"go/token"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -132,11 +135,81 @@ func (c ComplexityLevel) String() string {
 	}
 }
 
+func ParseComplexityLevel(raw string) (ComplexityLevel, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "trivial":
+		return ComplexityTrivial, nil
+	case "simple":
+		return ComplexitySimple, nil
+	case "moderate":
+		return ComplexityModerate, nil
+	case "complex":
+		return ComplexityComplex, nil
+	case "expert":
+		return ComplexityExpert, nil
+	default:
+		return ComplexityTrivial, fmt.Errorf("unknown complexity level %q", raw)
+	}
+}
+
 // ExercisePrompt is a single synthetic prompt in the exercise matrix.
 type ExercisePrompt struct {
-	Prompt     string
-	Intent     IntentClass
-	Complexity ComplexityLevel
+	Prompt          string
+	Intent          IntentClass
+	Complexity      ComplexityLevel
+	ScoringContract ExerciseScoringContract
+}
+
+type ExerciseScoringMode string
+
+const (
+	ScoringModeGeneric        ExerciseScoringMode = ""
+	ScoringModeDirectAnswer   ExerciseScoringMode = "direct_answer"
+	ScoringModeConversational ExerciseScoringMode = "conversational"
+	ScoringModeDirectFact     ExerciseScoringMode = "direct_fact"
+)
+
+type ExerciseConcisionPolicy string
+
+const (
+	ConcisionNeutral ExerciseConcisionPolicy = ""
+	ConcisionPrefer  ExerciseConcisionPolicy = "prefer"
+)
+
+type ExerciseToolExpectation string
+
+const (
+	ToolExpectationOptional        ExerciseToolExpectation = ""
+	ToolExpectationRequired        ExerciseToolExpectation = "required"
+	ToolExpectationContraindicated ExerciseToolExpectation = "contraindicated"
+)
+
+type ExerciseArtifactExpectation string
+
+const (
+	ArtifactExpectationNone         ExerciseArtifactExpectation = ""
+	ArtifactExpectationCodeRequired ExerciseArtifactExpectation = "code_required"
+)
+
+type ExerciseArtifactEvaluator string
+
+const (
+	ArtifactEvaluatorNone          ExerciseArtifactEvaluator = ""
+	ArtifactEvaluatorReverseString ExerciseArtifactEvaluator = "reverse_string"
+)
+
+// ExerciseScoringContract carries prompt-specific grading expectations without
+// forcing exact wording. It exists to keep concise contract-satisfying answers
+// from being penalized by generic verbosity or keyword heuristics.
+type ExerciseScoringContract struct {
+	Mode                  ExerciseScoringMode
+	Concision             ExerciseConcisionPolicy
+	ToolExpectation       ExerciseToolExpectation
+	ArtifactExpectation   ExerciseArtifactExpectation
+	ArtifactLanguageHint  string
+	ArtifactEvaluator     ExerciseArtifactEvaluator
+	SemanticHints         []string
+	SemanticHintThreshold int
 }
 
 // ExerciseMatrix contains 35 synthetic prompts: 5 complexity levels × 7
@@ -147,13 +220,43 @@ type ExercisePrompt struct {
 // enum docstring for rationale.
 var ExerciseMatrix = []ExercisePrompt{
 	// ── Trivial (complexity ~0.1) ──────────────────────────────
-	{Prompt: "What time is it?", Intent: IntentExecution, Complexity: ComplexityTrivial},
-	{Prompt: "Say hello.", Intent: IntentDelegation, Complexity: ComplexityTrivial},
+	{Prompt: "What time is it?", Intent: IntentExecution, Complexity: ComplexityTrivial, ScoringContract: ExerciseScoringContract{
+		Mode:                  ScoringModeDirectAnswer,
+		Concision:             ConcisionPrefer,
+		ToolExpectation:       ToolExpectationContraindicated,
+		SemanticHints:         []string{":", "am", "pm", "utc"},
+		SemanticHintThreshold: 1,
+	}},
+	{Prompt: "Say hello.", Intent: IntentDelegation, Complexity: ComplexityTrivial, ScoringContract: ExerciseScoringContract{
+		Mode:                  ScoringModeConversational,
+		Concision:             ConcisionPrefer,
+		ToolExpectation:       ToolExpectationContraindicated,
+		SemanticHints:         []string{"hello", "hi", "hey", "greetings"},
+		SemanticHintThreshold: 1,
+	}},
 	{Prompt: "When should you refuse a request instead of attempting it?", Intent: IntentIntrospection, Complexity: ComplexityTrivial},
-	{Prompt: "Thanks!", Intent: IntentConversation, Complexity: ComplexityTrivial},
+	{Prompt: "Thanks!", Intent: IntentConversation, Complexity: ComplexityTrivial, ScoringContract: ExerciseScoringContract{
+		Mode:                  ScoringModeConversational,
+		Concision:             ConcisionPrefer,
+		ToolExpectation:       ToolExpectationContraindicated,
+		SemanticHints:         []string{"welcome", "glad", "happy", "anytime", "no problem"},
+		SemanticHintThreshold: 1,
+	}},
 	{Prompt: "Do you have any memories stored?", Intent: IntentMemoryRecall, Complexity: ComplexityTrivial},
-	{Prompt: "What is 2 + 2?", Intent: IntentToolUse, Complexity: ComplexityTrivial}, // Should NOT use tools — pure reasoning
-	{Prompt: "In Go, what does `len(slice)` return when the slice is nil?", Intent: IntentCoding, Complexity: ComplexityTrivial},
+	{Prompt: "What is 2 + 2?", Intent: IntentToolUse, Complexity: ComplexityTrivial, ScoringContract: ExerciseScoringContract{
+		Mode:                  ScoringModeDirectFact,
+		Concision:             ConcisionPrefer,
+		ToolExpectation:       ToolExpectationContraindicated,
+		SemanticHints:         []string{"4", "four"},
+		SemanticHintThreshold: 1,
+	}}, // Should NOT use tools — pure reasoning
+	{Prompt: "In Go, what does `len(slice)` return when the slice is nil?", Intent: IntentCoding, Complexity: ComplexityTrivial, ScoringContract: ExerciseScoringContract{
+		Mode:                  ScoringModeDirectFact,
+		Concision:             ConcisionPrefer,
+		ToolExpectation:       ToolExpectationContraindicated,
+		SemanticHints:         []string{"0", "zero"},
+		SemanticHintThreshold: 1,
+	}},
 
 	// ── Simple (complexity ~0.3) ───────────────────────────────
 	{Prompt: "List the files in the workspace directory.", Intent: IntentExecution, Complexity: ComplexitySimple},
@@ -162,7 +265,10 @@ var ExerciseMatrix = []ExercisePrompt{
 	{Prompt: "Explain what you can do in one sentence.", Intent: IntentConversation, Complexity: ComplexitySimple},
 	{Prompt: "What do you remember about our last conversation?", Intent: IntentMemoryRecall, Complexity: ComplexitySimple},
 	{Prompt: "Show me the contents of the README file.", Intent: IntentToolUse, Complexity: ComplexitySimple}, // Should use read_file
-	{Prompt: "Write a function in any language that reverses a string in-place and explain one edge case to watch for.", Intent: IntentCoding, Complexity: ComplexitySimple},
+	{Prompt: "Write a function in any language that reverses a string in-place and explain one edge case to watch for.", Intent: IntentCoding, Complexity: ComplexitySimple, ScoringContract: ExerciseScoringContract{
+		ArtifactExpectation: ArtifactExpectationCodeRequired,
+		ArtifactEvaluator:   ArtifactEvaluatorReverseString,
+	}},
 
 	// ── Moderate (complexity ~0.5) ─────────────────────────────
 	{Prompt: "Read the main configuration file and summarize the model settings.", Intent: IntentExecution, Complexity: ComplexityModerate},
@@ -189,7 +295,27 @@ var ExerciseMatrix = []ExercisePrompt{
 	{Prompt: "Design a capability-based security model for a multi-tenant agent platform where each tenant has different trust levels, tool access policies, and cost budgets, considering both the authorization and audit requirements.", Intent: IntentConversation, Complexity: ComplexityExpert},
 	{Prompt: "Cross-reference your episodic and semantic memories about the infrastructure migration project, then search for any related relationship data about the people involved. Compile a timeline of what happened, who was involved, and what decisions were made.", Intent: IntentMemoryRecall, Complexity: ComplexityExpert},
 	{Prompt: "Query the sessions database for the last 10 conversations, analyze the tool call patterns in each, cross-reference with the inference costs table to calculate per-tool cost efficiency, and write a report to the workspace.", Intent: IntentToolUse, Complexity: ComplexityExpert}, // Should chain query_table + bash + write_file
-	{Prompt: "Design a memory-bounded LRU cache in Go with O(1) Get and Put, eviction callbacks, and safe concurrent access. Describe the data structures you'd use and write the core Put method.", Intent: IntentCoding, Complexity: ComplexityExpert},
+	{Prompt: "Design a memory-bounded LRU cache in Go with O(1) Get and Put, eviction callbacks, and safe concurrent access. Describe the data structures you'd use and write the core Put method.", Intent: IntentCoding, Complexity: ComplexityExpert, ScoringContract: ExerciseScoringContract{
+		ArtifactExpectation:  ArtifactExpectationCodeRequired,
+		ArtifactLanguageHint: "go",
+	}},
+}
+
+// ResolveExercisePrompt returns the canonical exercise prompt definition when
+// the persisted row matches one in the matrix, preserving any scoring contract
+// attached to that prompt. If no exact matrix row matches, it falls back to the
+// provided fields so historical rescoring still works for custom rows.
+func ResolveExercisePrompt(rawPrompt string, intent IntentClass, complexity ComplexityLevel) ExercisePrompt {
+	for _, p := range ExerciseMatrix {
+		if p.Prompt == rawPrompt && p.Intent == intent && p.Complexity == complexity {
+			return p
+		}
+	}
+	return ExercisePrompt{
+		Prompt:     rawPrompt,
+		Intent:     intent,
+		Complexity: complexity,
+	}
 }
 
 // ModelBaseline holds pre-computed scores for a common model across all 6
@@ -440,8 +566,9 @@ func RunExercise(ctx context.Context, completer Completer, model string, prompts
 }
 
 // ScoreExerciseResponse computes a quality score for an exercise response.
-// Combines length adequacy (40%), intent relevance (30%), and structural
-// quality (30%) into a single 0-1 score.
+// If a prompt carries an explicit scoring contract, contract satisfaction is
+// the primary signal and generic intent/style heuristics are secondary.
+// Otherwise the legacy generic heuristic remains the fallback.
 func ScoreExerciseResponse(prompt ExercisePrompt, content string) float64 {
 	if content == "" {
 		return 0.0
@@ -450,10 +577,6 @@ func ScoreExerciseResponse(prompt ExercisePrompt, content string) float64 {
 	lower := strings.ToLower(content)
 	length := len(content)
 
-	// Dimension 1: Length adequacy (0-1) — does the response meet the
-	// minimum length expectation for this complexity level?
-	lengthScore := scoreLengthAdequacy(length, prompt.Complexity)
-
 	// Dimension 2: Intent relevance (0-1) — does the response demonstrate
 	// behavior appropriate for the intent class?
 	relevanceScore := scoreIntentRelevance(lower, prompt.Intent)
@@ -461,8 +584,20 @@ func ScoreExerciseResponse(prompt ExercisePrompt, content string) float64 {
 	// Dimension 3: Structural quality (0-1) — coherence markers.
 	structureScore := scoreStructure(lower, length)
 
-	// Weighted combination.
-	score := 0.4*lengthScore + 0.3*relevanceScore + 0.3*structureScore
+	score := 0.0
+	if hasExplicitScoringContract(prompt.ScoringContract) {
+		contractScore := scorePromptContract(prompt, lower, length)
+		score = 0.7*contractScore + 0.15*relevanceScore + 0.15*structureScore
+	} else {
+		// Legacy fallback for prompts that do not yet declare a contract.
+		lengthScore := scoreLengthAdequacy(length, prompt.Complexity)
+		score = 0.4*lengthScore + 0.3*relevanceScore + 0.3*structureScore
+	}
+
+	if prompt.Intent == IntentCoding && prompt.ScoringContract.ArtifactExpectation == ArtifactExpectationCodeRequired {
+		artifactScore := scoreCodingArtifact(prompt, content)
+		score = 0.55*artifactScore + 0.45*score
+	}
 
 	// Memory recall: apply confabulation penalty at top level.
 	// A fluent, well-structured fabrication should still score poorly.
@@ -484,6 +619,245 @@ func ScoreExerciseResponse(prompt ExercisePrompt, content string) float64 {
 	}
 
 	return score
+}
+
+func hasExplicitScoringContract(c ExerciseScoringContract) bool {
+	return c.Mode != "" || c.Concision != "" || c.ToolExpectation != "" ||
+		c.ArtifactExpectation != "" || c.ArtifactLanguageHint != "" ||
+		c.ArtifactEvaluator != "" || len(c.SemanticHints) > 0
+}
+
+func scorePromptContract(prompt ExercisePrompt, lower string, length int) float64 {
+	contract := prompt.ScoringContract
+	score := 0.4
+
+	if len(contract.SemanticHints) > 0 {
+		threshold := contract.SemanticHintThreshold
+		if threshold <= 0 {
+			threshold = 1
+		}
+		score += 0.3 * markerScore(lower, contract.SemanticHints, threshold)
+	}
+
+	switch contract.Mode {
+	case ScoringModeDirectAnswer, ScoringModeDirectFact:
+		if shortFormResponse(length, lower) {
+			score += 0.15
+		}
+		if contract.Mode == ScoringModeDirectFact && length <= 32 {
+			score += 0.05
+		}
+	case ScoringModeConversational:
+		if shortFormResponse(length, lower) {
+			score += 0.1
+		}
+		if strings.ContainsAny(lower, "!?") {
+			score += 0.05
+		}
+	}
+
+	switch contract.ToolExpectation {
+	case ToolExpectationRequired:
+		score += 0.15 * markerScore(lower, []string{
+			"tool", "result", "output", "query", "file", "command", "read_file",
+			"query_table", "bash", "search_memories",
+		}, 1)
+	case ToolExpectationContraindicated:
+		if containsAny(lower, []string{
+			"read_file", "query_table", "bash", "tool_call", "search_memories",
+			"recall_memory", "command output",
+		}) {
+			score -= 0.25
+		} else {
+			score += 0.1
+		}
+	}
+
+	if contract.Concision == ConcisionPrefer {
+		switch {
+		case length <= preferredConcisionCeiling(prompt.Complexity):
+			score += 0.15
+		case length <= 2*preferredConcisionCeiling(prompt.Complexity):
+			score += 0.05
+		default:
+			score -= 0.1
+		}
+	}
+
+	if score < 0 {
+		score = 0
+	}
+	if score > 1 {
+		score = 1
+	}
+	return score
+}
+
+func preferredConcisionCeiling(complexity ComplexityLevel) int {
+	switch complexity {
+	case ComplexityTrivial:
+		return 96
+	case ComplexitySimple:
+		return 160
+	default:
+		return 240
+	}
+}
+
+func shortFormResponse(length int, lower string) bool {
+	sentences := strings.Count(lower, ".") + strings.Count(lower, "!") + strings.Count(lower, "?")
+	return length <= 180 && sentences <= 3
+}
+
+func containsAny(lower string, markers []string) bool {
+	for _, m := range markers {
+		if strings.Contains(lower, m) {
+			return true
+		}
+	}
+	return false
+}
+
+type extractedCodeArtifact struct {
+	Language string
+	Code     string
+	Fenced   bool
+}
+
+var fencedCodeRE = regexp.MustCompile("(?s)```([A-Za-z0-9_+-]*)\\s*\\n(.*?)```")
+
+func extractPrimaryCodeArtifact(content string) extractedCodeArtifact {
+	matches := fencedCodeRE.FindAllStringSubmatch(content, -1)
+	best := extractedCodeArtifact{}
+	for _, match := range matches {
+		if len(match) < 3 {
+			continue
+		}
+		code := strings.TrimSpace(match[2])
+		if len(code) <= len(best.Code) {
+			continue
+		}
+		best = extractedCodeArtifact{
+			Language: strings.ToLower(strings.TrimSpace(match[1])),
+			Code:     code,
+			Fenced:   true,
+		}
+	}
+	if best.Code != "" {
+		return best
+	}
+	lower := strings.ToLower(content)
+	if containsAny(lower, []string{"func ", "def ", "function ", "=>", "class ", "package "}) {
+		return extractedCodeArtifact{Code: strings.TrimSpace(content)}
+	}
+	return extractedCodeArtifact{}
+}
+
+func scoreCodingArtifact(prompt ExercisePrompt, content string) float64 {
+	artifact := extractPrimaryCodeArtifact(content)
+	if artifact.Code == "" {
+		return 0.1
+	}
+	language := strings.TrimSpace(strings.ToLower(artifact.Language))
+	if language == "" {
+		language = strings.TrimSpace(strings.ToLower(prompt.ScoringContract.ArtifactLanguageHint))
+	}
+	extractionScore := 0.75
+	if artifact.Fenced {
+		extractionScore = 1.0
+	}
+	syntaxScore := scoreCodeSyntax(language, artifact.Code)
+	semanticScore := scoreCodeSemantics(prompt.ScoringContract.ArtifactEvaluator, language, artifact.Code)
+	score := 0.2*extractionScore + 0.35*syntaxScore + 0.45*semanticScore
+	if score > 1 {
+		return 1
+	}
+	return score
+}
+
+func scoreCodeSyntax(language, code string) float64 {
+	code = strings.TrimSpace(code)
+	if code == "" {
+		return 0
+	}
+	switch language {
+	case "go", "golang":
+		src := code
+		if !strings.Contains(src, "package ") {
+			src = "package main\n\n" + src
+		}
+		if _, err := parser.ParseFile(token.NewFileSet(), "artifact.go", src, parser.AllErrors); err == nil {
+			return 1.0
+		}
+		return 0.2
+	default:
+		score := 0.35
+		if balancedDelimiters(code) {
+			score += 0.25
+		}
+		if containsAny(strings.ToLower(code), []string{"return", "func ", "def ", "function ", "=>", "for ", "if "}) {
+			score += 0.2
+		}
+		if strings.Contains(code, "\n") {
+			score += 0.2
+		}
+		if score > 1 {
+			return 1
+		}
+		return score
+	}
+}
+
+func scoreCodeSemantics(evaluator ExerciseArtifactEvaluator, language, code string) float64 {
+	lower := strings.ToLower(code)
+	switch evaluator {
+	case ArtifactEvaluatorReverseString:
+		switch language {
+		case "python":
+			if containsAny(lower, []string{"[::-1]", "reversed(", "join(reversed("}) {
+				return 1.0
+			}
+		case "javascript", "js", "typescript", "ts":
+			if containsAny(lower, []string{".split('')", ".split(\"\")", ".reverse()", ".join('')", ".join(\"\")"}) {
+				return 1.0
+			}
+		case "rust":
+			if containsAny(lower, []string{"chars().rev().collect()", ".chars()", ".rev()", ".collect()"}) {
+				return 1.0
+			}
+		case "go", "golang":
+			if containsAny(lower, []string{"[]rune", "for i, j :=", "i < j", "runes[i], runes[j] = runes[j], runes[i]"}) {
+				return 1.0
+			}
+		default:
+			if containsAny(lower, []string{"reverse", "rev", "swap"}) {
+				return 0.65
+			}
+		}
+		return 0.2
+	default:
+		if containsAny(lower, []string{"func ", "def ", "function ", "return"}) {
+			return 0.7
+		}
+		return 0.4
+	}
+}
+
+func balancedDelimiters(code string) bool {
+	pairs := map[rune]rune{')': '(', ']': '[', '}': '{'}
+	stack := make([]rune, 0, len(code))
+	for _, ch := range code {
+		switch ch {
+		case '(', '[', '{':
+			stack = append(stack, ch)
+		case ')', ']', '}':
+			if len(stack) == 0 || stack[len(stack)-1] != pairs[ch] {
+				return false
+			}
+			stack = stack[:len(stack)-1]
+		}
+	}
+	return len(stack) == 0
 }
 
 // scoreLengthAdequacy scores response length relative to complexity expectations.

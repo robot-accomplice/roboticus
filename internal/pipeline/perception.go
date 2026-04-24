@@ -53,14 +53,14 @@ const (
 
 // PerceptionArtifact is the unified perception output.
 type PerceptionArtifact struct {
-	Intent              string
-	Risk                RiskLevel
-	SourceOfTruth       SourceOfTruth
-	RequiredMemoryTiers []string
-	DecompositionNeeded bool
-	FreshnessRequired   bool
+	Intent                string
+	Risk                  RiskLevel
+	SourceOfTruth         SourceOfTruth
+	RequiredMemoryTiers   []string
+	DecompositionNeeded   bool
+	FreshnessRequired     bool
 	ProceduralUncertainty bool
-	Confidence          float64
+	Confidence            float64
 }
 
 // BuildPerception produces a PerceptionArtifact from the raw user content

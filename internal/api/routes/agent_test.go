@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"roboticus/internal/core"
 	"roboticus/internal/llm"
@@ -75,9 +76,11 @@ func TestHealth_WithStore(t *testing.T) {
 
 type captureRunner struct {
 	input pipeline.Input
+	ctx   context.Context
 }
 
-func (c *captureRunner) Run(_ context.Context, _ pipeline.Config, input pipeline.Input) (*pipeline.Outcome, error) {
+func (c *captureRunner) Run(ctx context.Context, _ pipeline.Config, input pipeline.Input) (*pipeline.Outcome, error) {
+	c.ctx = ctx
 	c.input = input
 	return &pipeline.Outcome{
 		SessionID: "s1",
@@ -139,5 +142,64 @@ func TestAgentMessage_Returns404ForMissingSession(t *testing.T) {
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestAgentMessage_UsesDetachedExecutionTimeoutBudget(t *testing.T) {
+	runner := &captureRunner{}
+	handler := AgentMessage(runner, "Duncan")
+
+	body, err := json.Marshal(map[string]any{
+		"content":              "test",
+		"execution_timeout_ms": 180000,
+	})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	req := httptest.NewRequest("POST", "/api/agent/message", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if runner.ctx == nil {
+		t.Fatal("expected runner context to be captured")
+	}
+	deadline, ok := runner.ctx.Deadline()
+	if !ok {
+		t.Fatal("expected detached execution timeout deadline")
+	}
+	remaining := time.Until(deadline)
+	if remaining < 175*time.Second || remaining > 180*time.Second {
+		t.Fatalf("remaining deadline = %v, want approximately 180s", remaining)
+	}
+}
+
+func TestAgentMessage_AttachesPerModelCallTimeout(t *testing.T) {
+	runner := &captureRunner{}
+	handler := AgentMessage(runner, "Duncan")
+
+	body, err := json.Marshal(map[string]any{
+		"content":               "test",
+		"model_call_timeout_ms": 240000,
+	})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	req := httptest.NewRequest("POST", "/api/agent/message", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if got := core.ModelCallTimeoutFromCtx(runner.ctx); got != 240*time.Second {
+		t.Fatalf("model call timeout = %v, want 240s", got)
+	}
+	if _, ok := runner.ctx.Deadline(); ok {
+		t.Fatal("model call timeout must not create a whole-turn deadline by itself")
 	}
 }

@@ -13,6 +13,12 @@ func TestSetMemoryContext_DerivesVerificationEvidence(t *testing.T) {
 	if !ve.HasEvidence || !ve.HasGaps || !ve.HasCanonicalEvidence {
 		t.Fatalf("expected derived section flags, got %+v", ve)
 	}
+	if ve.MemoryGapKind != MemoryGapMissingTiers {
+		t.Fatalf("expected missing-tier gap kind, got %+v", ve.MemoryGapKind)
+	}
+	if ve.MemoryConfidenceInfluence != MemoryConfidenceReinforces {
+		t.Fatalf("expected reinforcing memory confidence, got %d", ve.MemoryConfidenceInfluence)
+	}
 	if len(ve.EvidenceItems) != 1 || ve.EvidenceItems[0] != "deploy doc" {
 		t.Fatalf("unexpected derived evidence items: %+v", ve.EvidenceItems)
 	}
@@ -58,5 +64,8 @@ func TestSetMemoryContext_DerivesStructuredContradictionItems(t *testing.T) {
 	}
 	if ve.Contradictions[0].Summary != "refund window evidence disagrees across retrieved items" {
 		t.Fatalf("unexpected contradiction summary: %+v", ve.Contradictions[0])
+	}
+	if ve.MemoryConfidenceInfluence != MemoryConfidenceContradicts {
+		t.Fatalf("expected contradiction to lower memory confidence, got %d", ve.MemoryConfidenceInfluence)
 	}
 }

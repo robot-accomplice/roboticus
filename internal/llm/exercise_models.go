@@ -27,6 +27,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"roboticus/internal/core"
@@ -34,16 +35,51 @@ import (
 	"roboticus/internal/modelstate"
 )
 
+type ExerciseOutcomeClass string
+
+const (
+	ExerciseOutcomeCleanPass          ExerciseOutcomeClass = "clean_pass"
+	ExerciseOutcomeSlowPass           ExerciseOutcomeClass = "slow_pass"
+	ExerciseOutcomeProviderTimeout    ExerciseOutcomeClass = "provider_timeout"
+	ExerciseOutcomeTransportError     ExerciseOutcomeClass = "transport_error"
+	ExerciseOutcomeEmptyResponse      ExerciseOutcomeClass = "empty_response"
+	ExerciseOutcomeQualityGateFailure ExerciseOutcomeClass = "quality_gate_failure"
+)
+
 // ModelSender is the pluggable transport for dispatching a single
-// scored-prompt call against a model. Returns the response content,
-// observed latency in milliseconds, and any transport error. The
-// concrete implementation decides whether the call goes through the
-// pipeline (CLI baseline flow) or directly to the LLM; the
-// orchestrator doesn't care.
+// scored-prompt call against a model. It returns the response content,
+// observed latency, optional turn/phase telemetry, and any transport
+// error. The concrete implementation decides whether the call goes through
+// the pipeline (CLI baseline flow) or directly to the LLM; the orchestrator
+// doesn't care.
 //
 // Implementations MUST honor ctx cancellation. Callers rely on this
 // for clean Ctrl-C behavior during long baseline runs.
-type ModelSender func(ctx context.Context, model, content string, timeout time.Duration) (response string, latencyMs int64, err error)
+type ModelSender func(ctx context.Context, model, content string, timeout time.Duration) (PromptDispatch, error)
+
+// ExercisePhaseTimings captures prompt-level latency attribution. It is kept
+// deliberately simple: model inference, tool execution, and residual framework
+// overhead, plus optional per-stage timings for deeper RCA.
+type ExercisePhaseTimings struct {
+	TotalMs                int64            `json:"total_ms"`
+	ModelInferenceMs       int64            `json:"model_inference_ms"`
+	ToolExecutionMs        int64            `json:"tool_execution_ms"`
+	FrameworkOverheadMs    int64            `json:"framework_overhead_ms"`
+	InferenceAttempts      int              `json:"inference_attempts,omitempty"`
+	ToolCallCount          int              `json:"tool_call_count,omitempty"`
+	GuardRetryCount        int              `json:"guard_retry_count,omitempty"`
+	VerifierRetryCount     int              `json:"verifier_retry_count,omitempty"`
+	ReplaySuppressionCount int              `json:"replay_suppression_count,omitempty"`
+	StageMs                map[string]int64 `json:"stage_ms,omitempty"`
+}
+
+// PromptDispatch is the transport result for one exercised prompt.
+type PromptDispatch struct {
+	ResponseText string
+	LatencyMs    int64
+	TurnID       string
+	PhaseTimings *ExercisePhaseTimings
+}
 
 // PromptOutcome is the per-prompt result surfaced to the OnPromptFn
 // callback. Carries enough context for the caller to render progress
@@ -57,11 +93,17 @@ type PromptOutcome struct {
 	Model           string
 	Iteration       int // 1-based iteration number
 	TotalIterations int
+	// LatencyMs is whole prompt dispatch latency. ModelLatencyMs is the
+	// model-attributable portion used by benchmark scorecards.
 	LatencyMs       int64
+	ModelLatencyMs  int64
+	TurnID          string
 	Content         string  // response text (empty on err)
 	Quality         float64 // 0 when Passed=false
 	Passed          bool    // true iff response non-empty AND no error
-	Err             error   // transport error, nil on success
+	OutcomeClass    ExerciseOutcomeClass
+	Err             error // transport error, nil on success
+	PhaseTimings    *ExercisePhaseTimings
 	ResourceStart   *hostresources.Snapshot
 	ResourceEnd     *hostresources.Snapshot
 	ModelStateStart *modelstate.Snapshot
@@ -148,8 +190,9 @@ type ModelExerciseResult struct {
 
 	// Per-intent breakdown. IntentQuality values are already-averaged
 	// over the model's iterations × matrix-entries-for-that-intent.
-	IntentQuality map[string]float64
-	Latencies     map[string][]int64 // intent → every observation, in ms
+	IntentQuality  map[string]float64
+	Latencies      map[string][]int64 // intent → model-attributable observations, in ms
+	PhaseLatencies map[string][]int64 // phase key → every observation, in ms
 }
 
 // ExerciseReport is the final aggregated outcome of an ExerciseModels
@@ -217,9 +260,10 @@ func ExerciseModels(ctx context.Context, req ExerciseRequest) (ExerciseReport, e
 
 		modelTimeout := req.ModelTimeout(model)
 		mr := ModelExerciseResult{
-			Model:         model,
-			IntentQuality: make(map[string]float64),
-			Latencies:     make(map[string][]int64),
+			Model:          model,
+			IntentQuality:  make(map[string]float64),
+			Latencies:      make(map[string][]int64),
+			PhaseLatencies: make(map[string][]int64),
 		}
 
 		// Warm-up BEFORE the scored matrix. Fires once per model;
@@ -229,8 +273,10 @@ func ExerciseModels(ctx context.Context, req ExerciseRequest) (ExerciseReport, e
 
 		totalPrompts := len(prompts) * req.Iterations
 
-		// Aggregation accumulators. Per-intent sums and counts so the
-		// final average isn't biased by intent-class sample-size imbalance.
+		// Aggregation accumulators. Quality averages must use the same
+		// denominator semantics as persisted scorecards: every scored row counts,
+		// and failed rows contribute zero quality instead of disappearing from the
+		// average.
 		intentSums := make(map[string]float64)
 		intentCounts := make(map[string]int)
 		var qualitySum float64
@@ -263,8 +309,7 @@ func ExerciseModels(ctx context.Context, req ExerciseRequest) (ExerciseReport, e
 				// logged output stays clean.
 				prefix := fmt.Sprintf("    [%d/%d] %s:C%d ... ", promptNum, totalPrompts, ep.Intent.String(), ep.Complexity)
 				var (
-					content         string
-					latencyMs       int64
+					dispatch        PromptDispatch
 					err             error
 					modelStateStart *modelstate.Snapshot
 					modelStateEnd   *modelstate.Snapshot
@@ -274,8 +319,9 @@ func ExerciseModels(ctx context.Context, req ExerciseRequest) (ExerciseReport, e
 				}
 				resourceStart := hostresources.Sample(ctx)
 				start := time.Now()
+				promptTimeout := ExercisePromptTimeout(modelTimeout, ep)
 				core.RunWithSpinner(req.Progress, prefix, func() {
-					content, latencyMs, err = req.SendPrompt(ctx, model, ep.Prompt, modelTimeout)
+					dispatch, err = req.SendPrompt(ctx, model, ep.Prompt, promptTimeout)
 				})
 				resourceEnd := hostresources.Sample(ctx)
 				if req.SampleModelState != nil {
@@ -285,12 +331,16 @@ func ExerciseModels(ctx context.Context, req ExerciseRequest) (ExerciseReport, e
 				// doesn't track its own timing; fall back to our
 				// start-based measurement so callers always see a
 				// reasonable number.
-				if latencyMs == 0 {
-					latencyMs = time.Since(start).Milliseconds()
+				if dispatch.LatencyMs == 0 {
+					dispatch.LatencyMs = time.Since(start).Milliseconds()
 				}
+				modelLatencyMs := modelAttributableLatencyMs(dispatch)
 
 				intent := ep.Intent.String()
-				mr.Latencies[intent] = append(mr.Latencies[intent], latencyMs)
+				mr.Latencies[intent] = append(mr.Latencies[intent], modelLatencyMs)
+				qualityCount++
+				intentCounts[intent]++
+				appendPhaseLatencies(mr.PhaseLatencies, dispatch.PhaseTimings)
 
 				outcome := PromptOutcome{
 					PromptIndex:     promptNum,
@@ -299,7 +349,10 @@ func ExerciseModels(ctx context.Context, req ExerciseRequest) (ExerciseReport, e
 					Model:           model,
 					Iteration:       iter,
 					TotalIterations: req.Iterations,
-					LatencyMs:       latencyMs,
+					LatencyMs:       dispatch.LatencyMs,
+					ModelLatencyMs:  modelLatencyMs,
+					TurnID:          dispatch.TurnID,
+					PhaseTimings:    dispatch.PhaseTimings,
 					ResourceStart:   &resourceStart,
 					ResourceEnd:     &resourceEnd,
 					ModelStateStart: modelStateStart,
@@ -310,21 +363,22 @@ func ExerciseModels(ctx context.Context, req ExerciseRequest) (ExerciseReport, e
 				case err != nil:
 					mr.Fail++
 					outcome.Err = err
-				case content == "":
+					outcome.OutcomeClass = classifyExerciseFailure(err)
+				case dispatch.ResponseText == "":
 					mr.Fail++
+					outcome.OutcomeClass = ExerciseOutcomeEmptyResponse
 					// Distinct failure mode from transport error —
 					// caller can differentiate via outcome.Err==nil
 					// && !outcome.Passed.
 				default:
 					mr.Pass++
-					quality := ScoreExerciseResponse(ep, content)
+					quality := ScoreExerciseResponse(ep, dispatch.ResponseText)
 					qualitySum += quality
-					qualityCount++
 					intentSums[intent] += quality
-					intentCounts[intent]++
-					outcome.Content = content
+					outcome.Content = dispatch.ResponseText
 					outcome.Quality = quality
 					outcome.Passed = true
+					outcome.OutcomeClass = classifyExercisePass(modelLatencyMs, promptTimeout)
 				}
 
 				if req.OnPrompt != nil {
@@ -348,6 +402,40 @@ func ExerciseModels(ctx context.Context, req ExerciseRequest) (ExerciseReport, e
 	return report, nil
 }
 
+func modelAttributableLatencyMs(dispatch PromptDispatch) int64 {
+	if dispatch.PhaseTimings != nil && dispatch.PhaseTimings.ModelInferenceMs > 0 {
+		return dispatch.PhaseTimings.ModelInferenceMs
+	}
+	return dispatch.LatencyMs
+}
+
+func classifyExercisePass(modelLatencyMs int64, promptTimeout time.Duration) ExerciseOutcomeClass {
+	if promptTimeout > 0 && modelLatencyMs > 0 {
+		threshold := int64(float64(promptTimeout.Milliseconds()) * 0.80)
+		if threshold > 0 && modelLatencyMs >= threshold {
+			return ExerciseOutcomeSlowPass
+		}
+	}
+	return ExerciseOutcomeCleanPass
+}
+
+func classifyExerciseFailure(err error) ExerciseOutcomeClass {
+	if err == nil {
+		return ExerciseOutcomeQualityGateFailure
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return ExerciseOutcomeProviderTimeout
+	}
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "timeout") ||
+		strings.Contains(msg, "deadline exceeded") ||
+		strings.Contains(msg, "client.timeout") ||
+		strings.Contains(msg, "awaiting headers") {
+		return ExerciseOutcomeProviderTimeout
+	}
+	return ExerciseOutcomeTransportError
+}
+
 func filterExerciseMatrix(intent IntentClass) []ExercisePrompt {
 	filtered := make([]ExercisePrompt, 0, len(ExerciseMatrix))
 	for _, prompt := range ExerciseMatrix {
@@ -356,4 +444,16 @@ func filterExerciseMatrix(intent IntentClass) []ExercisePrompt {
 		}
 	}
 	return filtered
+}
+
+func appendPhaseLatencies(target map[string][]int64, timings *ExercisePhaseTimings) {
+	if target == nil || timings == nil {
+		return
+	}
+	target["MODEL_INFERENCE"] = append(target["MODEL_INFERENCE"], timings.ModelInferenceMs)
+	target["TOOL_EXECUTION"] = append(target["TOOL_EXECUTION"], timings.ToolExecutionMs)
+	target["FRAMEWORK_OVERHEAD"] = append(target["FRAMEWORK_OVERHEAD"], timings.FrameworkOverheadMs)
+	if timings.TotalMs > 0 {
+		target["TOTAL_PIPELINE"] = append(target["TOTAL_PIPELINE"], timings.TotalMs)
+	}
 }

@@ -108,3 +108,13 @@ In particular:
 - `develop` is audited and green before PR to `main`
 - tag creation happens only after merge to `main`
 - release monitoring includes artifacts, site sync, fingerprinting, and install verification
+
+Late-cycle release fixes follow an additional hard rule:
+
+- before pushing any release-blocker fix, rerun the exact failing local gate,
+  plus formatting/lint and directly affected package tests
+- if the fix changes the release path after a branch has already advanced, the
+  release resumes from the correct earlier gate; do not "sneak" fixes forward
+  on a later branch to save time
+- repeated expensive PR churn caused by missing local preflight is itself a
+  process defect

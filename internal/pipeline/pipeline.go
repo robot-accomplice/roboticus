@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"os"
 	"strings"
 	"time"
 
@@ -11,6 +12,8 @@ import (
 	"roboticus/internal/db"
 	"roboticus/internal/llm"
 )
+
+const persistenceFlushTimeout = 5 * time.Second
 
 // Outcome represents the result of a pipeline run.
 type Outcome struct {
@@ -51,6 +54,7 @@ type Outcome struct {
 type Input struct {
 	Content       string
 	SessionID     string // empty for auto-resolution
+	TurnID        string // optional caller-supplied correlation identity
 	AgentID       string
 	AgentName     string
 	Platform      string // channel platform name
@@ -120,6 +124,7 @@ type Pipeline struct {
 	dashboard        DashboardNotifier
 	capabilities     CapabilitySummarizer
 	workspace        string   // agent workspace root — propagated to sessions for tool sandbox
+	currentRoot      string   // current repository / process working directory for source-backed code turns
 	allowedPaths     []string // extra paths outside workspace that tools may access
 	cacheTTL         time.Duration
 	checkpointPolicy CheckpointPolicy
@@ -171,6 +176,10 @@ func New(deps PipelineDeps) *Pipeline {
 		IntervalTurns: checkpointIntervalTurns,
 	}
 	cacheTTL := llm.DefaultCacheConfig().TTL
+	currentRoot := ""
+	if wd, err := os.Getwd(); err == nil {
+		currentRoot = wd
+	}
 	if deps.CacheTTL > 0 {
 		cacheTTL = deps.CacheTTL
 	}
@@ -204,6 +213,7 @@ func New(deps PipelineDeps) *Pipeline {
 		capabilities:     deps.Capabilities,
 		botCmds:          NewBotCommandHandler(deps.LLM, deps.Store),
 		workspace:        deps.Workspace,
+		currentRoot:      currentRoot,
 		allowedPaths:     deps.AllowedPaths,
 		cacheTTL:         cacheTTL,
 		checkpointPolicy: cp,
@@ -583,6 +593,8 @@ func (p *Pipeline) storeTraceWithArtifacts(ctx context.Context, tr *TraceRecorde
 	if p.store == nil {
 		return
 	}
+	persistCtx, cancel := p.persistenceContext()
+	defer cancel()
 	trace := tr.Finish(turnID, channel)
 
 	var reactJSON, paramsJSON *string
@@ -597,11 +609,15 @@ func (p *Pipeline) storeTraceWithArtifacts(ctx context.Context, tr *TraceRecorde
 		}
 	}
 
-	_, err := p.store.ExecContext(ctx,
+	_, err := p.store.ExecContext(persistCtx,
 		`INSERT INTO pipeline_traces (id, turn_id, session_id, channel, total_ms, stages_json, react_trace_json, inference_params_json)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		db.NewID(), trace.TurnID, sessionID, trace.Channel, trace.TotalMs, trace.StagesJSON(), reactJSON, paramsJSON)
 	if err != nil {
 		log.Warn().Err(err).Str("session", sessionID).Str("turn", turnID).Msg("failed to store pipeline trace")
 	}
+}
+
+func (p *Pipeline) persistenceContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), persistenceFlushTimeout)
 }

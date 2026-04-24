@@ -51,10 +51,10 @@ func TestParityRoadmap_HasUniqueEntriesAndClosureFields(t *testing.T) {
 
 	seen := map[string]struct{}{}
 	allowedStatuses := map[string]struct{}{
-		"not started":                  {},
-		"in progress":                  {},
-		"blocked":                      {},
-		"closed":                       {},
+		"not started":                     {},
+		"in progress":                     {},
+		"blocked":                         {},
+		"closed":                          {},
 		"explicitly deferred by operator": {},
 	}
 

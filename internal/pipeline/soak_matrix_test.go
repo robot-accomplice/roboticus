@@ -57,9 +57,8 @@ func TestSoakMatrix_KnownFailureModes(t *testing.T) {
 			}(),
 			wantErr: false,
 			assertOutcome: func(t *testing.T, o *Outcome) {
-				if !strings.Contains(strings.ToLower(o.Content), "acknowledged") &&
-					!strings.Contains(strings.ToLower(o.Content), "let me know") {
-					t.Errorf("shortcut for 'ok' should produce acknowledgement, got %q", o.Content)
+				if o.Content != "soak ok" {
+					t.Errorf("disabled acknowledgement shortcut should fall through to inference, got %q", o.Content)
 				}
 			},
 			controllingPath: "pipeline_stages.go:tryShortcut",
@@ -74,8 +73,8 @@ func TestSoakMatrix_KnownFailureModes(t *testing.T) {
 			}(),
 			wantErr: false,
 			assertOutcome: func(t *testing.T, o *Outcome) {
-				if o.Content == "" {
-					t.Error("shortcut for 'thanks' should produce content")
+				if o.Content != "soak ok" {
+					t.Errorf("disabled thanks shortcut should fall through to inference, got %q", o.Content)
 				}
 			},
 			controllingPath: "pipeline_stages.go:tryShortcut",
@@ -137,8 +136,8 @@ func TestSoakMatrix_KnownFailureModes(t *testing.T) {
 			}(),
 			wantErr: false,
 			assertOutcome: func(t *testing.T, o *Outcome) {
-				if !strings.Contains(o.Content, "autonomous AI agent") {
-					t.Errorf("who-are-you shortcut should identify as agent, got %q", o.Content)
+				if strings.TrimSpace(o.Content) == "" {
+					t.Errorf("who-are-you path should still produce content, got %q", o.Content)
 				}
 			},
 			controllingPath: "pipeline_stages.go:tryShortcut",

@@ -32,6 +32,7 @@ func TestAgentStateString(t *testing.T) {
 		{AgentStateActing, "acting"},
 		{AgentStateObserving, "observing"},
 		{AgentStatePersisting, "persisting"},
+		{AgentStateReflecting, "reflecting"},
 		{AgentStateDone, "done"},
 	}
 	for _, tt := range tests {

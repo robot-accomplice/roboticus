@@ -89,9 +89,7 @@ func (p *Pipeline) checkCacheByFingerprint(ctx context.Context, content, fp stri
 	}
 
 	// Acknowledgement guard: reject if cached response is just an acknowledgement.
-	ackCtx := &ShortcutContext{}
-	ackHandler := &AcknowledgementShortcut{}
-	if ackHandler.TryMatch(cached, ackCtx) != nil {
+	if isAcknowledgementLike(cached) {
 		log.Debug().Str("prompt_hash", fp).Msg("cache hit rejected: acknowledgement response")
 		return nil
 	}
@@ -133,9 +131,7 @@ func (p *Pipeline) StoreInCacheForSession(ctx context.Context, sess *Session, cf
 	}
 
 	// Don't cache acknowledgement-like responses.
-	ackCtx := &ShortcutContext{}
-	ackHandler := &AcknowledgementShortcut{}
-	if ackHandler.TryMatch(response, ackCtx) != nil {
+	if isAcknowledgementLike(response) {
 		return
 	}
 

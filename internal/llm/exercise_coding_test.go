@@ -80,3 +80,40 @@ func TestScoreCoding_PenalizesShortTrivia(t *testing.T) {
 		t.Fatalf("score gap between short(%.2f) and full(%.2f) is only %.2f; need >= 0.15 to meaningfully differentiate coding quality", shortScore, fullScore, fullScore-shortScore)
 	}
 }
+
+func TestScoreCoding_ArtifactBearingPromptPrefersRunnableArtifact(t *testing.T) {
+	prompt := ResolveExercisePrompt(
+		"Write a function in any language that reverses a string in-place and explain one edge case to watch for.",
+		IntentCoding,
+		ComplexitySimple,
+	)
+
+	proseOnly := "Use a loop to swap characters from both ends toward the center. Watch out for Unicode."
+	goArtifact := "```go\nfunc reverseString(s string) string {\n\trunes := []rune(s)\n\tfor i, j := 0, len(runes)-1; i < j; i, j = i+1, j-1 {\n\t\trunes[i], runes[j] = runes[j], runes[i]\n\t}\n\treturn string(runes)\n}\n```\nEdge case: Unicode combining characters."
+
+	proseScore := ScoreExerciseResponse(prompt, proseOnly)
+	artifactScore := ScoreExerciseResponse(prompt, goArtifact)
+	if artifactScore <= proseScore {
+		t.Fatalf("artifact-bearing answer (%.2f) should outscore prose-only answer (%.2f)", artifactScore, proseScore)
+	}
+	if artifactScore < 0.7 {
+		t.Fatalf("artifact-bearing answer scored %.2f; want >= 0.70", artifactScore)
+	}
+}
+
+func TestScoreCoding_ArtifactBearingPromptPenalizesBrokenGoSyntax(t *testing.T) {
+	prompt := ResolveExercisePrompt(
+		"Design a memory-bounded LRU cache in Go with O(1) Get and Put, eviction callbacks, and safe concurrent access. Describe the data structures you'd use and write the core Put method.",
+		IntentCoding,
+		ComplexityExpert,
+	)
+
+	broken := "```go\nfunc (c *Cache) Put(key string, value string) {\n\tif c.items[key] == nil {\n\t\tc.items[key] = value\n```\nUse a map and linked list."
+	valid := "```go\nfunc (c *Cache) Put(key string, value string) {\n\tif elem, ok := c.items[key]; ok {\n\t\tent := elem.Value.(*entry)\n\t\tent.value = value\n\t\tc.order.MoveToFront(elem)\n\t\treturn\n\t}\n\tent := &entry{key: key, value: value}\n\telem := c.order.PushFront(ent)\n\tc.items[key] = elem\n}\n```\nUse a map plus doubly linked list."
+
+	brokenScore := ScoreExerciseResponse(prompt, broken)
+	validScore := ScoreExerciseResponse(prompt, valid)
+	if validScore <= brokenScore {
+		t.Fatalf("valid Go artifact (%.2f) should outscore broken artifact (%.2f)", validScore, brokenScore)
+	}
+}

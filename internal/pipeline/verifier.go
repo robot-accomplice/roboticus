@@ -78,6 +78,9 @@ type VerificationContext struct {
 	HasFreshnessRisk     bool
 	HasContradictions    bool
 	HasCanonicalEvidence bool
+	MemoryGapKind        sessionpkg.MemoryGapKind
+	MissingMemoryTiers   []string
+	MemoryConfidence     int
 	PolicySensitive      bool
 	RequiresFreshness    bool
 	RequiresActionPlan   bool
@@ -142,6 +145,9 @@ func BuildVerificationContext(session *Session) VerificationContext {
 		ctx.HasFreshnessRisk = ve.HasFreshnessRisks
 		ctx.HasContradictions = ve.HasContradictions
 		ctx.HasCanonicalEvidence = ve.HasCanonicalEvidence
+		ctx.MemoryGapKind = ve.MemoryGapKind
+		ctx.MissingMemoryTiers = append([]string(nil), ve.MissingMemoryTiers...)
+		ctx.MemoryConfidence = ve.MemoryConfidenceInfluence
 		ctx.Contradictions = append([]sessionpkg.ContradictionEvidence(nil), ve.Contradictions...)
 		ctx.EvidenceItems = append([]string(nil), ve.EvidenceItems...)
 		ctx.UnresolvedQuestions = append([]string(nil), ve.UnresolvedQuestions...)
@@ -169,6 +175,9 @@ func BuildVerificationContext(session *Session) VerificationContext {
 			ctx.HasEvidence = true
 			ctx.HasCanonicalEvidence = true
 			ctx.HasGaps = false
+			ctx.MemoryGapKind = sessionpkg.MemoryGapNone
+			ctx.MissingMemoryTiers = nil
+			ctx.MemoryConfidence = sessionpkg.MemoryConfidenceReinforces
 		}
 	}
 
@@ -236,7 +245,7 @@ func VerifyResponse(content string, ctx VerificationContext) VerificationResult 
 		})
 	}
 
-	if ctx.HasGaps && !artifactProofPrimary && !containsAny(lowerContent,
+	if verificationRequiresGapAwareUncertainty(ctx) && !artifactProofPrimary && !containsAny(lowerContent,
 		"don't know", "do not know", "unclear", "not enough", "insufficient",
 		"need more", "based on the available", "from the available", "available evidence",
 		"i'm not certain", "needs verification", "requires verification",
@@ -340,6 +349,9 @@ func VerifyResponse(content string, ctx VerificationContext) VerificationResult 
 			if !verificationGoalCovered(goal, lowerContent) {
 				continue
 			}
+			if verificationGoalEvidenceIsOptional(goal, ctx) {
+				continue
+			}
 			if verificationGoalAllowsPlanInference(goal) {
 				continue
 			}
@@ -383,6 +395,54 @@ func VerifyResponse(content string, ctx VerificationContext) VerificationResult 
 	verifyExecutiveState(lowerContent, ctx, &result)
 
 	return result
+}
+
+func verificationRequiresGapAwareUncertainty(ctx VerificationContext) bool {
+	if !ctx.HasGaps {
+		return false
+	}
+	switch ctx.MemoryGapKind {
+	case sessionpkg.MemoryGapMissingTiers:
+		return false
+	case sessionpkg.MemoryGapNoEvidence:
+		return !verificationPromptIsDerivable(ctx)
+	case sessionpkg.MemoryGapLegacy:
+		return true
+	default:
+		return !verificationPromptIsDerivable(ctx)
+	}
+}
+
+func verificationPromptIsDerivable(ctx VerificationContext) bool {
+	if strings.TrimSpace(ctx.PlannedAction) != "" && ctx.PlannedAction != "execute_directly" {
+		return false
+	}
+	if ctx.Intent == "code" {
+		return true
+	}
+	lower := strings.ToLower(ctx.UserPrompt)
+	if verificationLooksTimeQuestion(lower) {
+		return true
+	}
+	if verificationLooksSimpleArithmetic(lower) {
+		return true
+	}
+	if verificationLooksLanguageRuntimeFact(lower) {
+		return true
+	}
+	return false
+}
+
+func verificationLooksTimeQuestion(lower string) bool {
+	return looksLikeTimeQuestion(lower)
+}
+
+func verificationLooksSimpleArithmetic(lower string) bool {
+	return looksLikeSimpleArithmeticQuestion(lower)
+}
+
+func verificationLooksLanguageRuntimeFact(lower string) bool {
+	return looksLikeLanguageRuntimeFactQuestion(lower)
 }
 
 func verificationAllowsArtifactBackedCompletion(ctx VerificationContext) bool {
@@ -736,6 +796,22 @@ func verificationGoalSupportedByEvidence(goal, response string, evidenceItems []
 	return responseMatches >= 2
 }
 
+func verificationGoalEvidenceIsOptional(goal string, ctx VerificationContext) bool {
+	if !verificationPromptIsDerivable(ctx) {
+		return false
+	}
+	if verificationGoalAllowsPlanInference(goal) {
+		return false
+	}
+	if ctx.RequiresFreshness || ctx.PolicySensitive || ctx.RequiresActionPlan {
+		return false
+	}
+	if len(ctx.ToolResults) > 0 || len(ctx.ArtifactProofs) > 0 || len(ctx.SourceArtifactProofs) > 0 || len(ctx.InspectionProofs) > 0 {
+		return false
+	}
+	return true
+}
+
 func verificationGoalAllowsPlanInference(goal string) bool {
 	lower := strings.ToLower(goal)
 	return containsAny(lower,
@@ -948,16 +1024,4 @@ func (vr VerificationResult) RetryMessage() string {
 	}
 	return "Your previous response failed verification: " + strings.Join(parts, "; ") +
 		". Revise the answer so it matches the available evidence, covers each requested part, and acknowledges uncertainty where needed."
-}
-
-func verifierFinalizationMessage(vr VerificationResult) string {
-	if vr.Passed || len(vr.Issues) == 0 {
-		return ""
-	}
-	var parts []string
-	for _, issue := range vr.Issues {
-		parts = append(parts, issue.Detail)
-	}
-	return "I can't honestly claim success because the final verification still failed. Remaining issues: " +
-		strings.Join(parts, "; ") + "."
 }

@@ -525,12 +525,8 @@ func TestTryShortcut_WhoAreYou(t *testing.T) {
 
 	for _, input := range []string{"who are you", "who are you?", "what are you?"} {
 		result := pipe.tryShortcut(context.Background(), sess, input, false, "test")
-		if result == nil {
-			t.Errorf("tryShortcut(%q) should match", input)
-			continue
-		}
-		if result.Content == "" {
-			t.Errorf("tryShortcut(%q) content empty", input)
+		if result != nil {
+			t.Errorf("tryShortcut(%q) should not match disabled canned shortcut", input)
 		}
 	}
 }
@@ -542,8 +538,8 @@ func TestTryShortcut_Acknowledgments(t *testing.T) {
 	acks := []string{"ok", "okay", "thanks", "thank you", "got it", "understood", "k", "ty"}
 	for _, ack := range acks {
 		result := pipe.tryShortcut(context.Background(), sess, ack, false, "test")
-		if result == nil {
-			t.Errorf("tryShortcut(%q) should match acknowledgment", ack)
+		if result != nil {
+			t.Errorf("tryShortcut(%q) should not match disabled acknowledgement shortcut", ack)
 		}
 	}
 }
@@ -554,8 +550,8 @@ func TestTryShortcut_Help(t *testing.T) {
 
 	for _, h := range []string{"help", "/help"} {
 		result := pipe.tryShortcut(context.Background(), sess, h, false, "test")
-		if result == nil {
-			t.Errorf("tryShortcut(%q) should match help", h)
+		if result != nil {
+			t.Errorf("tryShortcut(%q) should not match disabled help shortcut", h)
 		}
 	}
 }
@@ -664,6 +660,27 @@ func TestStoreTrace_PersistsAuthoritativeTurnID(t *testing.T) {
 	}
 	if got != "turn-123" {
 		t.Fatalf("pipeline_traces.turn_id = %q, want %q", got, "turn-123")
+	}
+}
+
+func TestStoreTrace_PersistsWhenCallerContextCanceled(t *testing.T) {
+	store := testutil.TempStore(t)
+	pipe := &Pipeline{store: store}
+	tr := NewTraceRecorder()
+	tr.BeginSpan("test")
+	tr.EndSpan("ok")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	pipe.storeTrace(ctx, tr, "s1", "turn-canceled", "api")
+
+	var got string
+	if err := store.QueryRowContext(context.Background(), `SELECT turn_id FROM pipeline_traces ORDER BY created_at DESC LIMIT 1`).Scan(&got); err != nil {
+		t.Fatalf("select pipeline trace turn_id: %v", err)
+	}
+	if got != "turn-canceled" {
+		t.Fatalf("pipeline_traces.turn_id = %q, want %q", got, "turn-canceled")
 	}
 }
 

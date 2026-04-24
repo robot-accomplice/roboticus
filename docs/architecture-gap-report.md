@@ -76,6 +76,214 @@ older architecture docs had left too generic:
   When the verifier has canonical continuity evidence from the current session,
   stale `[Gaps]` markers from unrelated retrieval are not allowed to force
   degraded uncertainty language on otherwise well-supported recall answers.
+- **Memory absence must not masquerade as evidence failure.**
+  Retrieval assembly and verifier policy are not allowed to treat an empty
+  episodic / semantic / procedural / relationship tier as proof that the answer
+  lacks required support. Memory influence must be triadic: contradiction lowers
+  confidence, irrelevant/absent memory is neutral, and reinforcing memory raises
+  confidence. Derivable results such as arithmetic, current runtime inspection,
+  and direct code reasoning stay neutral when prior memory is absent.
+- **Post-observation reasoning must not collapse back into generic execution
+  inference.** Once a turn has produced authoritative tool-backed evidence, the
+  next phase is not a fresh execution attempt. It is a narrower reflection seam:
+  interpret what happened, validate whether the observed result satisfies the
+  task, refine operator presentation, and decide explicitly whether any further
+  execution is justified. Successful execution is not allowed to be erased by a
+  later open-ended inference pass, provider/protocol mismatch, or generic retry
+  path. When reflection does need another model call, that call must operate
+  under the reflect contract rather than silently reopening the whole
+  think/execute loop.
+- **Reflection must consume canonical `TOTOF` state, not provider-fragile raw
+  replay.** The reflective `R` in `R-TEOR-R` must receive:
+  - task
+  - authoritative observed results
+  - tool outcomes
+  - open issues
+  - bounded finalization instruction
+  Provider/model adapters may render that state differently depending on
+  transcript/tool-call semantics and thinking-mode behavior, but the canonical
+  reflection input is not allowed to depend on replaying the raw assistant
+  tool-call transcript verbatim.
+- **Reflection continuation must remain explicit.** If reflective `R` decides
+  more execution is required, that decision must be explicit rather than
+  implied by generic loop re-entry. The explicit signal may be textual
+  (`CONTINUE_EXECUTION ...`) or structural (a reflect response that returns
+  tool calls). Both are continuation signals, not final operator output.
+- **Post-reflection validation is not allowed to reopen generic inference.**
+  Once the trailing reflective `R` has produced a final operator answer after
+  successful `E/O`, any remaining validation or verifier concerns must either:
+  - be recorded as diagnostic concerns without another model call, or
+  - be handled by a reflection-scoped correction path that consumes canonical
+    reflection state rather than raw assistant/tool-call replay.
+  The pipeline is not allowed to take a successful reflective finalization,
+  append a generic verifier retry prompt, and send the whole session history
+  back through ordinary inference semantics. That violates the `R-TEOR-R`
+  boundary, reintroduces provider-fragile transcript state after successful
+  execution, and lets a late protocol failure erase a turn that had already
+  completed its real work.
+- **Reflection continuation must not fall back to raw session replay.**
+  When the reflective `R` explicitly determines that more execution is
+  required, the continuation step is not allowed to append a prose system note
+  and jump back into ordinary `think` semantics over the full session history.
+  Reflection continuation must consume a canonical continuation artifact derived
+  from the same `TOTOF` state plus the explicit remaining-work reason, and
+  provider/model adapters must render that artifact safely for the active
+  thinking/tool-call mode. Otherwise a successful `E/O/R` cycle can still be
+  lost when continuation inherits provider-fragile assistant/tool-call replay.
+- **Benchmark scoring must become prompt-contract-aware.** Exercise scoring is
+  not allowed to treat verbosity, generic structure, or intent-marker density
+  as the primary truth source. The canonical scoring seam must evaluate the
+  prompt's actual success contract first:
+  - what kind of answer the prompt asked for
+  - whether concision is desired, neutral, or harmful
+  - whether tool use is required, optional, or contraindicated
+  - whether format strictness is semantic or merely stylistic
+  Generic relevance/structure heuristics may survive only as secondary
+  evidence when the prompt contract leaves ambiguity. Short, exact,
+  task-satisfying answers such as time, arithmetic, greeting, and direct-fact
+  prompts are not allowed to score poorly just because they omit irrelevant
+  execution/delegation markers or refuse to pad themselves with prose.
+- **Historical benchmark artifacts must be rescorable.** Because
+  `exercise_results` persists prompt identity and raw response content, scoring
+  changes are not allowed to force blind reruns by default. The benchmark seam
+  must support rescoring historical rows when artifacts are complete, while
+  still labeling pre-change and post-change scorecards as different scoring
+  regimes so cross-run comparisons remain honest.
+- **Benchmark aggregate semantics must be explicit and consistent.** Live CLI
+  summaries, persisted scorecards, and RCA views are not allowed to disagree
+  silently about whether failures contribute zeroes, whether per-intent
+  averages exclude invalid rows, or which denominator produced the displayed
+  overall score. Aggregate quality truth must be computed once or labeled
+  unambiguously at every presentation seam.
+- **Partial intent exercise runs are scorecard patches, not replacement
+  scorecards.** When an operator runs `models exercise --intent TOOL_USE` or
+  any other intent slice, the fresh rows update only that model/intent slice in
+  the comparison view. Untouched historical intent scores for the same model
+  must remain visible, and overall quality/latency must be recomputed from the
+  merged per-intent evidence. A partial rerun is not allowed to erase the
+  model's prior `EXECUTION`, `CODING`, `MEMORY_RECALL`, or other intent
+  evidence merely because those prompts were not exercised in the current
+  command.
+- **Model comparison rows must expose evidence coverage.** A model with one
+  observed intent is not comparable to a model with seven observed intents
+  unless the table says so. Comparison views must display how many canonical
+  intent classes are backed by exercise evidence and must not present sparse
+  one-slice averages as equally evidenced full-model rankings.
+- **Benchmark phase telemetry is first-class architecture truth.** Total wall
+  clock alone is not enough to diagnose exercise behavior. The benchmark seam
+  must persist and report timing for the major `R-TEOR-R` and validation
+  phases strongly enough to answer whether latency came from model inference,
+  tool execution, reflection, validation, retry overhead, or the surrounding
+  daemon/runtime.
+- **Baseline latency reporting must be model-attributable.** Baselines exist to
+  compare model behavior, assign metascores, and route otherwise untracked
+  models. Scorecard and comparison latency must therefore use composite model
+  inference time: the sum of all model/provider calls required for a prompt
+  row. Whole-turn latency, tool latency, API transport, persistence,
+  scheduling, and harness overhead remain mandatory RCA telemetry, but they
+  must not be used as the headline benchmark latency or as model metascore
+  input.
+- **Benchmark liveness budgets must be prompt-aware, and operator wait is not
+  execution authority.** A flat exercise request timeout (for example `120s`
+  for every cloud row) is not allowed to serve simultaneously as:
+  - the operator/CLI wait budget
+  - the server-side execution budget
+  - the per-provider/model HTTP call budget
+  - the persistence budget for RCA artifacts
+  Complex `T-E-O-R` rows such as bounded delegation, multi-step inspection, or
+  source-backed code surgery need a longer authoritative execution budget than
+  trivial/direct rows, and the benchmark client must be allowed a bounded
+  cushion beyond that so the server can return a truthful terminal result
+  instead of being canceled mid-turn by its own observer.
+- **Benchmark model-call budgets reset per inference call.** Baselining exists
+  to observe model behavior, not to penalize a model for wrapper latency or for
+  a task legitimately requiring multiple `R-TEOR-R` inference calls. The
+  timeout applied to the model/provider must be a per-call ceiling that resets
+  after each successful model response, including post-tool reflection and
+  finalization calls. Whole-turn and CLI ceilings may still exist to prevent
+  runaway benchmark rows, but they must be reported separately from model
+  inference latency and must not be confused with the per-call provider budget.
+- **Exploratory baselines and release gates have different timeout semantics.**
+  Exploratory baselining should use a high but finite ceiling so slow valid
+  behavior is observed and RCA artifacts are preserved. Release gates may apply
+  stricter latency SLOs, but they must classify slow-valid rows differently
+  from empty provider timeouts, pipeline failures, verifier defects, and scoring
+  defects.
+- **Exercise rows must persist row-level outcome class.** `passed=false` is not
+  an RCA diagnosis. Benchmark persistence must distinguish at least clean pass,
+  slow pass, provider timeout, transport/API failure, empty response, and
+  quality-gate failure so scorecards can separate model behavior from harness
+  failure and release-gate policy.
+- **Benchmark telemetry collection must tolerate trace/diagnostic visibility
+  lag.** A just-finished exercise turn is not allowed to lose phase timings
+  merely because the CLI asks for `/api/traces/{turn_id}/diagnostics` a few
+  milliseconds before the canonical trace/diagnostic rows are visible. The
+  exercise connector must use a bounded retry/settling window for telemetry
+  fetch so persistence timing does not silently erase phase evidence from the
+  scorecard.
+- **Benchmark exercise rows must persist canonical turn identity.** Prompt,
+  model, quality, and timing are not enough for RCA-grade benchmark truth.
+  Each `exercise_results` row must persist the authoritative `turn_id` that
+  produced it so scorecards, trace views, verifier diagnostics, and tool/event
+  RCA can join without timestamp guesswork. Historical rows may remain blank,
+  but new rows are not allowed to drop canonical turn identity.
+- **Turn identity is an input correlation contract, not a success artifact.**
+  Benchmark and RCA callers that need deterministic joins must be allowed to
+  establish a `turn_id` before execution starts and pass it through the
+  connector into the pipeline. Failure paths are the highest-value RCA cases;
+  they are not allowed to lose identity merely because no successful outcome
+  object was returned.
+- **Observed evidence must outrank empty reflection.** After tool execution or
+  other authoritative observation, a blank reflective response is not a valid
+  terminal answer. The loop may finalize from observed tool/result evidence,
+  or it may return a real error, but it must not persist an empty assistant
+  response after work was actually performed.
+- **Verifier retry suppression requires non-empty final content.** Suppressing
+  a verifier retry after substantive execution progress is only valid when the
+  pipeline has a task-specific answer to preserve. If the current result is
+  blank, retry suppression must either finalize from observed evidence or
+  surface a real failure; it is not allowed to store an empty assistant message
+  under an `ok` turn.
+- **Problem-details API failures are real CLI failures.** CLI benchmark callers
+  must treat RFC 9457 `detail` responses from local API endpoints as errors.
+  A non-2xx problem response is not allowed to degrade into an empty benchmark
+  answer with a blank `error_msg`.
+- **RCA persistence is not allowed to die with the client socket.** Once a turn
+  has begun and a canonical `turn_id` exists, trace and diagnostic persistence
+  must use a detached bounded persistence context rather than the raw request
+  context. Client disconnect, CLI timeout, or benchmark cancellation may still
+  terminate live execution, but they are not allowed to erase the forensic
+  evidence needed to explain what happened.
+- **Coding evaluation must graduate from prose scoring to artifact truth.**
+  For prompts that ask for runnable code, the benchmark is not allowed to stop
+  at “sounds code-aware.” The active release seam must extract the submitted
+  artifact, attempt parse / typecheck / compile where feasible, and run bounded
+  input/output correctness checks before explanation/style heuristics are
+  allowed to influence the coding score. Richer multi-language semantic
+  evaluators remain roadmap work, but artifact correctness is now active
+  benchmark architecture rather than deferred aspiration.
+- **Source-backed code execution is its own focused class.** Prompts such as
+  `refactor the configuration parser`, `fix the failing cache implementation`,
+  or other current-repository code surgery are not allowed to fall into the
+  generic heavy `intent=code` envelope that encourages broad repo inventory,
+  memory widening, and unauthoritative glob churn. When the work is clearly
+  about inspecting and modifying the current codebase, the pipeline must:
+  - anchor the turn on the actual current source root rather than a generic
+    allowlisted parent like `/users/jmachen/code`
+  - prioritize authoritative source reads and bounded repo inspection before
+    speculative inventory/reporting tools
+  - treat productive read/list/glob steps as convergence progress for that
+    profile instead of exploratory churn
+  - keep retrieval neutral unless continuity/evidence requirements are explicit
+  Source-backed code refactors are repository-grounded execution, not generic
+  “heavy code” work.
+- **High-lift semantic evaluators remain deferred roadmap work.** Richer
+  evaluators that inspect tool traces, structured outputs, and prompt-class
+  semantic contracts more deeply are valid benchmark architecture pressure,
+  but they are not part of the current implementation slice. The present work
+  is limited to the medium-lift seam: prompt contract metadata plus a
+  contract-first scorer. The larger semantic-evaluator program must stay
+  explicitly on the roadmap rather than smuggled into the active patch scope.
 - **Filesystem allowlists must compare canonical path identity, not raw string
   case.** Absolute-path authorization is not allowed to reject a real allowed
   path just because one layer sees a symlinked alias such as `/var/...` while
@@ -110,6 +318,13 @@ older architecture docs had left too generic:
   resolve common operator path aliases such as `~`, “home folder”, and other
   allowed-root shorthands instead of silently downgrading them into
   conversational turns.
+- **Imperative operational checks are tasks, not conversation.**
+  Short imperative prompts such as `check the health of all integrations`,
+  `inspect the runtime`, or `verify the current status` are not allowed to
+  fall through to the conversational fallback merely because they are concise
+  and do not start with `list`/`count`/`find`. Task synthesis must recognize
+  operational check verbs as bounded execution work so the turn still receives
+  the authoritative inspection/runtime tool surface it needs.
 - **Focused inspection turns require structured evidence, not text-only output.**
   `glob_files`, `list_directory`, and other bounded inspection tools are not
   allowed to leave the loop, verifier, and RCA guessing from free-form text
@@ -117,6 +332,29 @@ older architecture docs had left too generic:
   must emit one shared typed evidence artifact (scope, count, emptiness) so
   direct-execution inspection turns can distinguish useful progress from
   dead-end exploration on one central seam.
+- **Bounded multi-step direct execution must not be mistaken for churn.**
+  Once task synthesis chooses `execute_directly` for a bounded inspection,
+  analysis, or report-authoring turn, the loop is not allowed to treat every
+  successful read-only step as exploratory churn merely because the turn has
+  not written an artifact yet. Productive evidence gathering such as listing a
+  directory, narrowing files by time, reading the requested top-N artifacts, or
+  querying the required database rows must count as execution progress when it
+  is moving toward an explicitly requested bounded deliverable. Churn
+  termination is only valid when the loop is wandering or repeating without
+  narrowing the task, not when it is completing the bounded evidence-gathering
+  path the operator actually asked for. In particular, the loop is not allowed
+  to reserve progress credit only for `focused_inspection` while treating
+  `focused_analysis_authoring` turns as generic wandering; bounded report and
+  artifact-authoring turns that are gathering named evidence for a requested
+  deliverable must share the same progress semantics as focused inspection.
+- **Derivable direct-fact answers must stay evidence-neutral in validation.**
+  The validator is not allowed to reinterpret “some evidence exists in the
+  turn” as “every answered subgoal must be supported by that evidence” for
+  derivable or in-turn-computable prompts such as arithmetic, current-time
+  answers, or direct language/runtime facts. When a prompt is derivable, the
+  absence of matching retrieved evidence is neutral, not contra-indicating, and
+  `unsupported_subgoal` must not reopen a correct direct answer into retry
+  churn.
 - **Focused scheduling turns must separate known procedure from continuity.**
   Creating or listing cron jobs is not inherently “procedurally uncertain”
   once the focused scheduling surface exists. Explicit scheduling requests must

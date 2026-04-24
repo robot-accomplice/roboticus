@@ -49,6 +49,56 @@ func ExerciseModelTimeout(cfg *core.Config, model string) time.Duration {
 	return exerciseCloudTimeout
 }
 
+// ExercisePromptTimeout resolves the authoritative execution budget for one
+// exercise row. The per-model timeout remains the base policy, but complex
+// TEOR rows need a longer server-side budget than trivial/direct rows.
+func ExercisePromptTimeout(base time.Duration, prompt ExercisePrompt) time.Duration {
+	if base <= 0 {
+		base = exerciseCloudTimeout
+	}
+
+	switch prompt.Complexity {
+	case ComplexityTrivial:
+		if base < 90*time.Second {
+			return base
+		}
+		return 90 * time.Second
+	case ComplexitySimple:
+		return base
+	case ComplexityModerate:
+		return scaleDuration(base, 3, 2)
+	case ComplexityComplex:
+		return scaleDuration(base, 2, 1)
+	case ComplexityExpert:
+		return scaleDuration(base, 5, 2)
+	default:
+		return base
+	}
+}
+
+// ExerciseTurnTimeout is the finite whole-row ceiling for exploratory
+// baselines. It is intentionally separate from the per-call model timeout:
+// multi-step R-TEOR-R rows may spend more total wall-clock than any single
+// model invocation while still remaining bounded.
+func ExerciseTurnTimeout(modelCallTimeout time.Duration) time.Duration {
+	if modelCallTimeout <= 0 {
+		modelCallTimeout = exerciseCloudTimeout
+	}
+	turnTimeout := scaleDuration(modelCallTimeout, 3, 1)
+	const maxBaselineTurnTimeout = 15 * time.Minute
+	if turnTimeout > maxBaselineTurnTimeout {
+		return maxBaselineTurnTimeout
+	}
+	return turnTimeout
+}
+
+func scaleDuration(base time.Duration, num, denom int64) time.Duration {
+	if base <= 0 || num <= 0 || denom <= 0 {
+		return base
+	}
+	return time.Duration((int64(base) * num) / denom)
+}
+
 func exerciseModelProvider(model string) string {
 	provider, _, ok := strings.Cut(model, "/")
 	if !ok {

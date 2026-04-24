@@ -56,6 +56,32 @@ func TestStoreTurnDiagnostics_PersistsRecorderOnce(t *testing.T) {
 	}
 }
 
+func TestStoreTurnDiagnostics_PersistsEvenWhenCallerContextCanceled(t *testing.T) {
+	store := testutil.TempStore(t)
+	pipe := New(PipelineDeps{Store: store})
+	dr := NewTurnDiagnosticsRecorder("sess-cancel", "turn-cancel", "api")
+	dr.RecordEvent("fallback_triggered", "error",
+		"primary model failed and fallback was used",
+		"The system had to switch models for this turn.",
+		map[string]any{"reason_code": "provider_timeout"},
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	pipe.storeTurnDiagnostics(ctx, dr)
+
+	var summaryCount int
+	if err := store.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM turn_diagnostics WHERE turn_id = ?`, "turn-cancel",
+	).Scan(&summaryCount); err != nil {
+		t.Fatalf("count turn_diagnostics: %v", err)
+	}
+	if summaryCount != 1 {
+		t.Fatalf("turn_diagnostics rows = %d, want 1", summaryCount)
+	}
+}
+
 func TestPipelineRun_PersistsTaskSynthesisDecisionFacts(t *testing.T) {
 	store := testutil.TempStore(t)
 	exec := &sequencedExecutor{responses: []string{
@@ -578,7 +604,7 @@ func TestPipelineRun_PersistsVerifierDiagnosticsAgainstTurnRecord(t *testing.T) 
 		Store:     store,
 		Executor:  exec,
 		Guards:    DefaultGuardChain(),
-		Retriever: &stubRetriever{result: "[Active Memory]\n\n[Retrieved Evidence]\n1. [semantic, 0.90] deployment policy\n\n[Gaps]\n- No past experiences found for this query"},
+		Retriever: &stubRetriever{result: "[Active Memory]\n\n[Gaps]\n- No evidence retrieved from any tier"},
 	})
 
 	cfg := PresetAPI()

@@ -281,6 +281,7 @@ func NewServer(ctx context.Context, cfg ServerConfig, state *AppState) *http.Ser
 		r.Post("/api/models/exercise/runs/{runID}/results", routes.AppendExerciseRunResult(state.Store))
 		r.Post("/api/models/exercise/runs/{runID}/complete", routes.CompleteExerciseRun(state.Store, state.Config))
 		r.Get("/api/models/exercise/status", routes.GetExerciseStatus(state.Store))
+		r.Post("/api/models/exercise/rescore", routes.RescoreExerciseResults(state.Store))
 		r.Get("/api/models/exercise/scorecard", routes.GetExerciseScorecard(state.Store))
 		r.Post("/api/models/routing-eval", routes.RunRoutingEval(state.LLM))
 

@@ -200,7 +200,10 @@ func (p *Pipeline) stageMessageStorage(ctx context.Context, pc *pipelineContext)
 // ── Stage 6: Turn creation ─────────────────────────────────────────────
 
 func (p *Pipeline) stageTurnCreation(ctx context.Context, pc *pipelineContext) {
-	pc.turnID = db.NewID()
+	pc.turnID = strings.TrimSpace(pc.input.TurnID)
+	if pc.turnID == "" {
+		pc.turnID = db.NewID()
+	}
 	_, turnErr := p.store.ExecContext(ctx,
 		`INSERT INTO turns (id, session_id) VALUES (?, ?)`,
 		pc.turnID, pc.session.ID,
@@ -277,6 +280,7 @@ func (p *Pipeline) stageDecomposition(ctx context.Context, pc *pipelineContext) 
 	if pc.session != nil {
 		artifactContract := ParseArtifactPromptContract(pc.content)
 		inspectionTarget := ResolveInspectionTarget(pc.content, p.workspace, p.allowedPaths)
+		sourceCodeTarget := ResolveSourceCodeTarget(pc.content, p.currentRoot, p.allowedPaths)
 		destinationTarget := ResolveFilesystemDestination(pc.content, p.workspace, p.allowedPaths, filepath.Join(p.workspace, "Vault"))
 		verificationSubgoalsHint = normalizeSemanticSubgoals(verificationSubgoalsHint)
 		pc.session.SetTaskVerificationHints(
@@ -286,7 +290,11 @@ func (p *Pipeline) stageDecomposition(ctx context.Context, pc *pipelineContext) 
 			verificationSubgoalsHint,
 		)
 		pc.session.SetSourceArtifacts(artifactContract.SourceInputs)
-		pc.session.SetInspectionTargetSummary(inspectionTarget.PromptSummary)
+		inspectionSummary := inspectionTarget.PromptSummary
+		if strings.TrimSpace(inspectionSummary) == "" {
+			inspectionSummary = sourceCodeTarget.PromptSummary
+		}
+		pc.session.SetInspectionTargetSummary(inspectionSummary)
 		pc.session.SetDestinationTargetSummary(destinationTarget.PromptSummary)
 
 		// Build and stash the unified perception artifact (Milestone 2)
@@ -984,8 +992,7 @@ func (p *Pipeline) stagePostInference(ctx context.Context, pc *pipelineContext, 
 
 	// Empty response guard.
 	if outcome != nil && strings.TrimSpace(outcome.Content) == "" {
-		outcome.Content = "I wasn't able to formulate a response right now. Could you try again?"
-		log.Warn().Str("session", pc.session.ID).Msg("pipeline produced empty content — injected fallback")
+		log.Warn().Str("session", pc.session.ID).Msg("pipeline produced empty content")
 	}
 
 	p.storeTraceWithArtifacts(ctx, pc.tr, pc.session.ID, pc.turnID, pc.cfg.ChannelLabel, outcome)

@@ -21,6 +21,11 @@ type FilesystemDestinationResolution struct {
 	ClarificationRequired bool
 }
 
+type SourceCodeTargetResolution struct {
+	ResolvedRoot  string
+	PromptSummary string
+}
+
 // looksLikeFocusedInspectionTurn detects bounded workspace/filesystem
 // inspection regardless of whether the operator phrased it imperatively
 // ("count the files") or interrogatively ("what's in the vault").
@@ -344,10 +349,45 @@ func looksLikeInspectionBackedArtifactAuthoring(content string) bool {
 		"code folder", "code directory", "workspace", "vault", "folder", "directory",
 		"remote origin", "origin repo", "git",
 	}
-		targetBacked := looksLikeFocusedInspectionTurn(content) ||
-			containsAnyMarker(lower, []string{"code folder", "code directory", "workspace", "desktop vault", "desktop"}) ||
-			len(extractInspectionPathCandidates(content)) > 0
+	targetBacked := looksLikeFocusedInspectionTurn(content) ||
+		containsAnyMarker(lower, []string{"code folder", "code directory", "workspace", "desktop vault", "desktop"}) ||
+		len(extractInspectionPathCandidates(content)) > 0
 	return targetBacked && containsAnyMarker(lower, reportMarkers) && containsAnyMarker(lower, sourceMarkers)
+}
+
+func looksLikeSourceBackedCodeTask(content string) bool {
+	lower := strings.ToLower(strings.TrimSpace(content))
+	if lower == "" {
+		return false
+	}
+	actionMarkers := []string{
+		"refactor", "fix", "debug", "modify", "update", "extend",
+		"rewrite", "migrate", "optimize", "support hot-reload",
+		"add support", "rollback on failure", "emit structured change events",
+	}
+	targetMarkers := []string{
+		"parser", "implementation", "codebase", "repository", "repo",
+		"module", "function", "service", "handler", "pipeline",
+		"config", "configuration", "current repository", "current codebase",
+	}
+	return containsAnyMarker(lower, actionMarkers) && containsAnyMarker(lower, targetMarkers)
+}
+
+func ResolveSourceCodeTarget(content, currentRoot string, allowedPaths []string) SourceCodeTargetResolution {
+	if !looksLikeSourceBackedCodeTask(content) {
+		return SourceCodeTargetResolution{}
+	}
+	if currentRoot == "" {
+		return SourceCodeTargetResolution{}
+	}
+	if _, ok := qualifyInspectionPath(currentRoot, "", allowedPaths); !ok {
+		return SourceCodeTargetResolution{}
+	}
+	root := filepath.Clean(currentRoot)
+	return SourceCodeTargetResolution{
+		ResolvedRoot:  root,
+		PromptSummary: fmt.Sprintf("This turn requests source-backed code work in the current repository root %s. Start there. Use list_directory, glob_files, and read_file to locate authoritative source files before proposing or applying a refactor. Prefer the current repository over broad parent-directory inventory unless direct inspection of this root proves insufficient.", root),
+	}
 }
 
 func buildDestinationSummary(root string, configuredVault bool) string {

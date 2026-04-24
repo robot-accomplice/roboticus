@@ -53,9 +53,9 @@ func TestNonRepetitionGuardV2_Unique(t *testing.T) {
 func TestNonRepetitionGuardV2_AllowsLightweightSocialVariation(t *testing.T) {
 	g := &NonRepetitionGuardV2{}
 	ctx := &GuardContext{
-		UserPrompt:         "What's going on, Duncan?",
-		Intents:            []string{"conversational"},
-		PreviousAssistant:  "Not much—just here, ready when you need me.",
+		UserPrompt:        "What's going on, Duncan?",
+		Intents:           []string{"conversational"},
+		PreviousAssistant: "Not much—just here, ready when you need me.",
 		PriorAssistantMessages: []string{
 			"Not much—just here, ready when you need me.",
 		},

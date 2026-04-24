@@ -18,16 +18,16 @@ import (
 var quickCheckTreePattern = regexp.MustCompile(`Tree (\d+) page`)
 
 var repairableDerivedObjects = map[string]struct{}{
-	"pipeline_traces":                         {},
-	"react_traces":                            {},
-	"turn_diagnostic_events":                  {},
+	"pipeline_traces":                           {},
+	"react_traces":                              {},
+	"turn_diagnostic_events":                    {},
 	"sqlite_autoindex_turn_diagnostic_events_1": {},
-	"memory_fts":                              {},
-	"memory_fts_data":                         {},
-	"memory_fts_idx":                          {},
-	"memory_fts_docsize":                      {},
-	"memory_fts_content":                      {},
-	"memory_fts_config":                       {},
+	"memory_fts":                                {},
+	"memory_fts_data":                           {},
+	"memory_fts_idx":                            {},
+	"memory_fts_docsize":                        {},
+	"memory_fts_content":                        {},
+	"memory_fts_config":                         {},
 }
 
 type derivedRepairAssessment struct {

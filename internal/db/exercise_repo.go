@@ -3,6 +3,8 @@ package db
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
 
 	"github.com/rs/zerolog/log"
 
@@ -34,6 +36,7 @@ type BaselineRunRow struct {
 type ExerciseResultRow struct {
 	ID              string                  `json:"id"`
 	RunID           string                  `json:"run_id"`
+	TurnID          string                  `json:"turn_id,omitempty"`
 	Model           string                  `json:"model"`
 	IntentClass     string                  `json:"intent_class"`
 	Complexity      string                  `json:"complexity"`
@@ -41,7 +44,9 @@ type ExerciseResultRow struct {
 	Content         string                  `json:"content,omitempty"`
 	Quality         float64                 `json:"quality"`
 	LatencyMs       int64                   `json:"latency_ms"`
+	PhaseTimings    string                  `json:"phase_timings_json,omitempty"`
 	Passed          bool                    `json:"passed"`
+	ResultClass     string                  `json:"result_class,omitempty"`
 	ErrorMsg        string                  `json:"error_msg,omitempty"`
 	CreatedAt       string                  `json:"created_at"`
 	ResourceStart   *hostresources.Snapshot `json:"resource_start,omitempty"`
@@ -168,10 +173,10 @@ func InsertExerciseResult(ctx context.Context, store *Store, row ExerciseResultR
 	modelStateStartJSON := modelstate.Marshal(row.ModelStateStart)
 	modelStateEndJSON := modelstate.Marshal(row.ModelStateEnd)
 	_, err := store.ExecContext(ctx,
-		`INSERT INTO exercise_results (id, run_id, model, intent_class, complexity, prompt, content, quality, latency_ms, passed, error_msg, resource_start_json, resource_end_json, model_state_start_json, model_state_end_json)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''))`,
-		row.ID, row.RunID, row.Model, row.IntentClass, row.Complexity,
-		row.Prompt, row.Content, row.Quality, row.LatencyMs, passed, row.ErrorMsg, resourceStartJSON, resourceEndJSON, modelStateStartJSON, modelStateEndJSON,
+		`INSERT INTO exercise_results (id, run_id, turn_id, model, intent_class, complexity, prompt, content, quality, latency_ms, phase_timings_json, passed, result_class, error_msg, resource_start_json, resource_end_json, model_state_start_json, model_state_end_json)
+		 VALUES (?, ?, NULLIF(?, ''), ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), ?, NULLIF(?, ''), ?, NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''))`,
+		row.ID, row.RunID, row.TurnID, row.Model, row.IntentClass, row.Complexity,
+		row.Prompt, row.Content, row.Quality, row.LatencyMs, row.PhaseTimings, passed, row.ResultClass, row.ErrorMsg, resourceStartJSON, resourceEndJSON, modelStateStartJSON, modelStateEndJSON,
 	)
 	if err != nil {
 		log.Warn().Err(err).Str("model", row.Model).Msg("exercise: failed to persist result")
@@ -220,27 +225,43 @@ func ExerciseResultCountByModel(ctx context.Context, store *Store) map[string]in
 
 // ExerciseScorecardEntry holds per-model per-intent average quality.
 type ExerciseScorecardEntry struct {
-	Model       string  `json:"model"`
-	IntentClass string  `json:"intent_class"`
-	AvgQuality  float64 `json:"avg_quality"`
-	Count       int     `json:"count"`
+	Model        string  `json:"model"`
+	IntentClass  string  `json:"intent_class"`
+	AvgQuality   float64 `json:"avg_quality"`
+	AvgLatencyMs int64   `json:"avg_latency_ms"`
+	Count        int     `json:"count"`
 }
 
 // ExerciseScorecard returns per-model per-intent average quality from the
-// latest run for each model. Results are suitable for rendering a quality
-// matrix (models x intent classes).
+// latest run that exercised each specific model+intent slice. A partial
+// intent rerun updates that intent without erasing historical evidence for
+// the model's other intents.
 func ExerciseScorecard(ctx context.Context, store *Store) []ExerciseScorecardEntry {
-	// For each model, pick the latest run_id then aggregate by intent.
 	rows, err := store.QueryContext(ctx,
-		`WITH latest_runs AS (
-		   SELECT model, run_id
-		   FROM exercise_results
-		   GROUP BY model
-		   HAVING created_at = MAX(created_at)
+		`WITH latest_intent_runs AS (
+		   SELECT model, intent_class, run_id
+		   FROM (
+		     SELECT model, intent_class, run_id,
+		            ROW_NUMBER() OVER (
+		              PARTITION BY model, intent_class
+		              ORDER BY created_at DESC, rowid DESC
+		            ) AS rn
+		     FROM exercise_results
+		   )
+		   WHERE rn = 1
 		 )
-		 SELECT e.model, e.intent_class, AVG(e.quality), COUNT(*)
+		 SELECT e.model, e.intent_class, AVG(e.quality),
+		        CAST(AVG(CASE
+		          WHEN json_valid(COALESCE(e.phase_timings_json, ''))
+		            THEN COALESCE(NULLIF(json_extract(e.phase_timings_json, '$.model_inference_ms'), 0), e.latency_ms)
+		          ELSE e.latency_ms
+		        END) AS INTEGER),
+		        COUNT(*)
 		 FROM exercise_results e
-		 INNER JOIN latest_runs lr ON e.model = lr.model AND e.run_id = lr.run_id
+		 INNER JOIN latest_intent_runs lr
+		         ON e.model = lr.model
+		        AND e.intent_class = lr.intent_class
+		        AND e.run_id = lr.run_id
 		 GROUP BY e.model, e.intent_class
 		 ORDER BY e.model, e.intent_class`)
 	if err != nil {
@@ -252,7 +273,7 @@ func ExerciseScorecard(ctx context.Context, store *Store) []ExerciseScorecardEnt
 	var entries []ExerciseScorecardEntry
 	for rows.Next() {
 		var e ExerciseScorecardEntry
-		if err := rows.Scan(&e.Model, &e.IntentClass, &e.AvgQuality, &e.Count); err == nil {
+		if err := rows.Scan(&e.Model, &e.IntentClass, &e.AvgQuality, &e.AvgLatencyMs, &e.Count); err == nil {
 			entries = append(entries, e)
 		}
 	}
@@ -270,7 +291,7 @@ func LatestExerciseResults(ctx context.Context, store *Store, model string) []Ex
 	}
 
 	rows, err := store.QueryContext(ctx,
-		`SELECT id, run_id, model, intent_class, complexity, prompt, content, quality, latency_ms, passed, COALESCE(error_msg, ''), created_at,
+		`SELECT id, run_id, COALESCE(turn_id, ''), model, intent_class, complexity, prompt, content, quality, latency_ms, passed, COALESCE(error_msg, ''), created_at,
 		        COALESCE(resource_start_json, ''), COALESCE(resource_end_json, ''),
 		        COALESCE(model_state_start_json, ''), COALESCE(model_state_end_json, '')
 		 FROM exercise_results WHERE run_id = ? ORDER BY rowid`, runID)
@@ -285,7 +306,7 @@ func LatestExerciseResults(ctx context.Context, store *Store, model string) []Ex
 		var passed int
 		var resourceStartRaw, resourceEndRaw string
 		var modelStateStartRaw, modelStateEndRaw string
-		if err := rows.Scan(&r.ID, &r.RunID, &r.Model, &r.IntentClass, &r.Complexity,
+		if err := rows.Scan(&r.ID, &r.RunID, &r.TurnID, &r.Model, &r.IntentClass, &r.Complexity,
 			&r.Prompt, &r.Content, &r.Quality, &r.LatencyMs, &passed, &r.ErrorMsg, &r.CreatedAt,
 			&resourceStartRaw, &resourceEndRaw, &modelStateStartRaw, &modelStateEndRaw); err == nil {
 			r.Passed = passed == 1
@@ -297,4 +318,79 @@ func LatestExerciseResults(ctx context.Context, store *Store, model string) []Ex
 		}
 	}
 	return results
+}
+
+// ListExerciseResultsForRescore returns persisted exercise rows eligible for
+// rescoring. When models is empty, all models are included. When runID is
+// non-empty, results are limited to that run.
+func ListExerciseResultsForRescore(ctx context.Context, store *Store, models []string, runID string) []ExerciseResultRow {
+	query := `SELECT id, run_id, COALESCE(turn_id, ''), model, intent_class, complexity, prompt, content, quality, latency_ms, passed, COALESCE(error_msg, ''), created_at,
+	        COALESCE(resource_start_json, ''), COALESCE(resource_end_json, ''),
+	        COALESCE(model_state_start_json, ''), COALESCE(model_state_end_json, '')
+	 FROM exercise_results`
+	var (
+		where []string
+		args  []any
+	)
+	if runID != "" {
+		where = append(where, "run_id = ?")
+		args = append(args, runID)
+	}
+	if len(models) > 0 {
+		placeholders := make([]string, 0, len(models))
+		for _, model := range models {
+			placeholders = append(placeholders, "?")
+			args = append(args, model)
+		}
+		where = append(where, fmt.Sprintf("model IN (%s)", strings.Join(placeholders, ",")))
+	}
+	if len(where) > 0 {
+		query += " WHERE " + strings.Join(where, " AND ")
+	}
+	query += " ORDER BY created_at DESC, rowid DESC"
+
+	rows, err := store.QueryContext(ctx, query, args...)
+	if err != nil {
+		log.Warn().Err(err).Msg("exercise: rescore query failed")
+		return nil
+	}
+	defer func() { _ = rows.Close() }()
+
+	var results []ExerciseResultRow
+	for rows.Next() {
+		var r ExerciseResultRow
+		var passed int
+		var resourceStartRaw, resourceEndRaw string
+		var modelStateStartRaw, modelStateEndRaw string
+		if err := rows.Scan(&r.ID, &r.RunID, &r.TurnID, &r.Model, &r.IntentClass, &r.Complexity,
+			&r.Prompt, &r.Content, &r.Quality, &r.LatencyMs, &passed, &r.ErrorMsg, &r.CreatedAt,
+			&resourceStartRaw, &resourceEndRaw, &modelStateStartRaw, &modelStateEndRaw); err == nil {
+			r.Passed = passed == 1
+			r.ResourceStart = hostresources.FromJSON(resourceStartRaw)
+			r.ResourceEnd = hostresources.FromJSON(resourceEndRaw)
+			r.ModelStateStart = modelstate.FromJSON(modelStateStartRaw)
+			r.ModelStateEnd = modelstate.FromJSON(modelStateEndRaw)
+			results = append(results, r)
+		}
+	}
+	return results
+}
+
+// UpdateExerciseResultScore updates the persisted quality/pass classification
+// for a single exercise row after rescoring.
+func UpdateExerciseResultScore(ctx context.Context, store *Store, id string, quality float64, passed bool) error {
+	passedInt := 0
+	if passed {
+		passedInt = 1
+	}
+	_, err := store.ExecContext(ctx,
+		`UPDATE exercise_results
+		    SET quality = ?, passed = ?
+		  WHERE id = ?`,
+		quality, passedInt, id,
+	)
+	if err != nil {
+		log.Warn().Err(err).Str("id", id).Msg("exercise: failed to update rescored result")
+	}
+	return err
 }

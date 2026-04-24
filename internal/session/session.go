@@ -69,7 +69,9 @@ type Session struct {
 	// non-nil slice means "pipeline ran but produced no tools," which
 	// the consumer MAY treat as authoritative or MAY fall back — the
 	// authoritative behavior is owned by the consumer.
-	selectedToolDefs []llm.ToolDef
+	selectedToolDefs   []llm.ToolDef
+	lastAssistantPhase string
+	continuation       *ContinuationArtifact
 
 	// v1.0.6 hippocampus table summary for the current turn.
 	// Populated by the pipeline's hippocampus stage (see
@@ -100,6 +102,24 @@ func New(id, agentID, agentName string) *Session {
 
 // Messages returns the full message history.
 func (s *Session) Messages() []llm.Message { return s.messages }
+
+// ContinuationArtifact returns the one-shot provider-agnostic continuation
+// payload prepared by the reflective R, if any.
+func (s *Session) ContinuationArtifact() *ContinuationArtifact { return s.continuation }
+
+// SetContinuationArtifact stores the one-shot continuation payload that the
+// next think request should consume instead of raw session replay.
+func (s *Session) SetContinuationArtifact(artifact *ContinuationArtifact) {
+	s.continuation = artifact
+}
+
+// ConsumeContinuationArtifact returns the prepared continuation payload and
+// clears it from the session.
+func (s *Session) ConsumeContinuationArtifact() *ContinuationArtifact {
+	artifact := s.continuation
+	s.continuation = nil
+	return artifact
+}
 
 // SetMessages replaces the full message history.
 // The caller owns the replacement slice and should treat it as immutable after
@@ -265,12 +285,19 @@ func (s *Session) HippocampusSummary() string { return s.hippocampusSummary }
 
 // AddAssistantMessage appends an assistant message with optional tool calls.
 func (s *Session) AddAssistantMessage(content string, toolCalls []llm.ToolCall) {
+	s.AddAssistantMessageWithPhase(content, toolCalls, "")
+}
+
+// AddAssistantMessageWithPhase appends an assistant message and records which
+// execution phase produced it when the caller knows that provenance.
+func (s *Session) AddAssistantMessageWithPhase(content string, toolCalls []llm.ToolCall, phase string) {
 	historyToolCalls := append([]llm.ToolCall(nil), toolCalls...)
 	pendingToolCalls := append([]llm.ToolCall(nil), toolCalls...)
 	s.messages = append(s.messages, llm.Message{
 		Role: "assistant", Content: content, ToolCalls: historyToolCalls,
 	})
 	s.pendingCalls = pendingToolCalls
+	s.lastAssistantPhase = phase
 }
 
 // AddToolResult appends a tool result message.
@@ -311,6 +338,11 @@ func (s *Session) LastAssistantContent() string {
 	}
 	return ""
 }
+
+// LastAssistantPhase returns the execution phase that produced the most recent
+// assistant message when known. Empty string means the provenance was not
+// recorded by the caller.
+func (s *Session) LastAssistantPhase() string { return s.lastAssistantPhase }
 
 // TurnCount returns the number of user messages (conversation turns).
 func (s *Session) TurnCount() int {

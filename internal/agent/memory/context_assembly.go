@@ -40,6 +40,8 @@ type AssembledContext struct {
 	Evidence       string // ranked retrieval results with provenance
 	FreshnessRisks string // stale evidence or recency caveats
 	Gaps           string // detected information gaps
+	GapKind        session.MemoryGapKind
+	MissingTiers   []string
 	Contradictions string // conflicting evidence
 
 	// EvidenceArtifact is the typed sibling of the rendered text
@@ -141,8 +143,11 @@ func AssembleContext(
 		ac.Evidence = b.String()
 	}
 
-	// Gaps: detect which tiers returned no results.
-	ac.Gaps = detectGaps(evidence)
+	// Gaps: detect which tiers returned no results and preserve their semantics.
+	gapAssessment := detectGaps(evidence)
+	ac.Gaps = gapAssessment.Rendered
+	ac.GapKind = gapAssessment.Kind
+	ac.MissingTiers = append([]string(nil), gapAssessment.MissingTiers...)
 
 	// Freshness: explicitly call out stale supporting evidence.
 	ac.FreshnessRisks = detectFreshnessRisks(evidence)
@@ -186,11 +191,14 @@ func buildVerificationEvidenceFromAssembly(
 	execState *ExecutiveState,
 ) *session.VerificationEvidence {
 	ve := &session.VerificationEvidence{
-		HasEvidence:       strings.TrimSpace(ac.Evidence) != "",
-		HasGaps:           strings.TrimSpace(ac.Gaps) != "",
-		HasFreshnessRisks: strings.TrimSpace(ac.FreshnessRisks) != "",
-		HasContradictions: strings.TrimSpace(ac.Contradictions) != "",
-		Contradictions:    append([]session.ContradictionEvidence(nil), contradictions...),
+		HasEvidence:               strings.TrimSpace(ac.Evidence) != "",
+		HasGaps:                   strings.TrimSpace(ac.Gaps) != "",
+		HasFreshnessRisks:         strings.TrimSpace(ac.FreshnessRisks) != "",
+		HasContradictions:         strings.TrimSpace(ac.Contradictions) != "",
+		MemoryGapKind:             ac.GapKind,
+		MissingMemoryTiers:        append([]string(nil), ac.MissingTiers...),
+		Contradictions:            append([]session.ContradictionEvidence(nil), contradictions...),
+		MemoryConfidenceInfluence: session.MemoryConfidenceNeutral,
 	}
 
 	// Canonical evidence: any single evidence row with the canonical
@@ -202,6 +210,11 @@ func buildVerificationEvidenceFromAssembly(
 			ve.HasCanonicalEvidence = true
 			break
 		}
+	}
+	if len(contradictions) > 0 {
+		ve.MemoryConfidenceInfluence = session.MemoryConfidenceContradicts
+	} else if len(evidence) > 0 {
+		ve.MemoryConfidenceInfluence = session.MemoryConfidenceReinforces
 	}
 
 	// Evidence items: flatten each evidence row into a short bullet
@@ -278,10 +291,20 @@ func renderExecutiveStateBlock(state *ExecutiveState) string {
 	return "Executive State:\n" + block
 }
 
+type gapAssessment struct {
+	Rendered     string
+	Kind         session.MemoryGapKind
+	MissingTiers []string
+}
+
 // detectGaps identifies which memory tiers were queried but returned no results.
-func detectGaps(evidence []Evidence) string {
+func detectGaps(evidence []Evidence) gapAssessment {
 	if len(evidence) == 0 {
-		return "- No evidence retrieved from any tier"
+		return gapAssessment{
+			Rendered:     "- No evidence retrieved from any tier",
+			Kind:         session.MemoryGapNoEvidence,
+			MissingTiers: []string{"episodic", "semantic", "procedural", "relationship"},
+		}
 	}
 
 	tiersPresent := make(map[MemoryTier]bool)
@@ -292,24 +315,31 @@ func detectGaps(evidence []Evidence) string {
 	var gaps []string
 	expectedTiers := []struct {
 		tier MemoryTier
+		name string
 		desc string
 	}{
-		{TierEpisodic, "No past experiences found for this query"},
-		{TierSemantic, "No factual/policy knowledge found for this query"},
-		{TierProcedural, "No relevant procedures or workflows found"},
-		{TierRelationship, "No relationship/entity data found"},
+		{TierEpisodic, "episodic", "No past experiences found for this query"},
+		{TierSemantic, "semantic", "No factual/policy knowledge found for this query"},
+		{TierProcedural, "procedural", "No relevant procedures or workflows found"},
+		{TierRelationship, "relationship", "No relationship/entity data found"},
 	}
 
+	var missingTiers []string
 	for _, et := range expectedTiers {
 		if !tiersPresent[et.tier] {
 			gaps = append(gaps, "- "+et.desc)
+			missingTiers = append(missingTiers, et.name)
 		}
 	}
 
 	if len(gaps) == 0 {
-		return ""
+		return gapAssessment{}
 	}
-	return strings.Join(gaps, "\n")
+	return gapAssessment{
+		Rendered:     strings.Join(gaps, "\n"),
+		Kind:         session.MemoryGapMissingTiers,
+		MissingTiers: missingTiers,
+	}
 }
 
 func detectFreshnessRisks(evidence []Evidence) string {
