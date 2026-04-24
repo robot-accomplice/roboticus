@@ -17,14 +17,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Trigger goboticus parity audit
-        uses: peter-evans/repository-dispatch@v3
-        with:
-          token: ${{ secrets.ROBOTICUS_DISPATCH_TOKEN }}
-          repository: robot-accomplice/goboticus
-          event-type: roboticus-release
-          client-payload: |
-            {
-              "tag": "${{ github.ref_name }}",
-              "release_name": "${{ github.event.release.name || github.ref_name }}",
-              "sha": "${{ github.sha }}"
-            }
+        env:
+          GH_TOKEN: ${{ secrets.ROBOTICUS_DISPATCH_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh api \
+            --method POST \
+            -H "Accept: application/vnd.github+json" \
+            repos/robot-accomplice/goboticus/dispatches \
+            -f event_type=roboticus-release \
+            -F client_payload[tag]='${{ github.ref_name }}' \
+            -F client_payload[release_name]='${{ github.event.release.name || github.ref_name }}' \
+            -F client_payload[sha]='${{ github.sha }}'
