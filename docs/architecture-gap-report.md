@@ -221,6 +221,24 @@ older architecture docs had left too generic:
   slow pass, provider timeout, transport/API failure, empty response, and
   quality-gate failure so scorecards can separate model behavior from harness
   failure and release-gate policy.
+- **Benchmark comparison evidence must exclude invalid transport cohorts.**
+  Rows that failed before an evaluable model response path, including API
+  transport failures and provider/model-call timeouts, are validity and
+  availability evidence. They must stay persisted for RCA, host/provider
+  diagnosis, and operator incident review, but they must not be counted as
+  exercised efficacy coverage, must not overwrite older valid intent evidence,
+  and must not appear as `7/7` observed quality evidence with all-zero scores.
+  Empty model responses and prompt-contract quality failures are different:
+  those are evaluable model behavior and may still contribute zero quality.
+- **Benchmark progress rendering must not stream raw model artifacts.** The CLI
+  progress row is an operator telemetry surface, not a transcript renderer.
+  Multiline answers, fenced code blocks, tabs, carriage returns, ANSI/control
+  sequences, and Markdown fence delimiters from the model response must be
+  neutralized into a bounded single-line preview before they are printed next
+  to `[N/M] INTENT:Cx ...`. The raw response remains mandatory persisted
+  evidence for rescoring and RCA, but it is not allowed to corrupt the live
+  benchmark row structure or make the next prompt appear inside the previous
+  model's answer.
 - **Benchmark telemetry collection must tolerate trace/diagnostic visibility
   lag.** A just-finished exercise turn is not allowed to lose phase timings
   merely because the CLI asks for `/api/traces/{turn_id}/diagnostics` a few

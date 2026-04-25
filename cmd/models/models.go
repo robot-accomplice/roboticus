@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/spf13/cobra"
 
@@ -853,26 +854,73 @@ func renderPromptProgress(o llm.PromptOutcome) {
 	latencyLabel := formatPromptLatency(o)
 	switch {
 	case o.Err != nil:
-		fmt.Printf("FAIL  %s  %v\n", formatOutcomeClass(o.OutcomeClass), o.Err)
+		fmt.Printf("FAIL  %s  %s\n", formatOutcomeClass(o.OutcomeClass), formatExercisePreview(o.Err.Error(), 80))
 	case !o.Passed && strings.TrimSpace(o.Content) == "":
 		fmt.Printf("FAIL  %s  %s%s\n", formatOutcomeClass(o.OutcomeClass), latencyLabel, formatModelStateSummary(o.ModelStateEnd))
 	case !o.Passed:
-		preview := strings.TrimSpace(o.Content)
-		if len(preview) > 50 {
-			preview = preview[:50] + "..."
-		}
+		preview := formatExercisePreview(o.Content, 50)
 		fmt.Printf("FAIL  %s  %s: %s%s\n", formatOutcomeClass(o.OutcomeClass), latencyLabel, preview, formatModelStateSummary(o.ModelStateEnd))
 	default:
-		preview := o.Content
-		if len(preview) > 50 {
-			preview = preview[:50] + "..."
-		}
+		preview := formatExercisePreview(o.Content, 50)
 		label := ""
 		if o.OutcomeClass == llm.ExerciseOutcomeSlowPass {
 			label = "  slow"
 		}
 		fmt.Printf("PASS%s  Q=%.2f  %s: %s\n", label, o.Quality, latencyLabel, preview)
 	}
+}
+
+func formatExercisePreview(content string, maxRunes int) string {
+	preview := strings.TrimSpace(stripANSIEscapeSequences(content))
+	if preview == "" {
+		return ""
+	}
+	var b strings.Builder
+	for _, r := range preview {
+		switch {
+		case r == '\n' || r == '\r' || r == '\t':
+			b.WriteByte(' ')
+		case r == '`':
+			b.WriteByte('\'')
+		case unicode.IsControl(r):
+			b.WriteByte(' ')
+		default:
+			b.WriteRune(r)
+		}
+	}
+	preview = strings.Join(strings.Fields(b.String()), " ")
+	if preview == "" || maxRunes <= 0 {
+		return preview
+	}
+	count := 0
+	for idx := range preview {
+		if count == maxRunes {
+			return strings.TrimSpace(preview[:idx]) + "..."
+		}
+		count++
+	}
+	return preview
+}
+
+func stripANSIEscapeSequences(content string) string {
+	var b strings.Builder
+	for i := 0; i < len(content); i++ {
+		if content[i] != 0x1b {
+			b.WriteByte(content[i])
+			continue
+		}
+		if i+1 < len(content) && content[i+1] == '[' {
+			i += 2
+			for i < len(content) {
+				c := content[i]
+				if c >= 0x40 && c <= 0x7e {
+					break
+				}
+				i++
+			}
+		}
+	}
+	return b.String()
 }
 
 func formatOutcomeClass(class llm.ExerciseOutcomeClass) string {
@@ -1126,11 +1174,8 @@ func buildComparisonRows(report llm.ExerciseReport, config map[string]any) []com
 		}
 		cr.Exercised = true
 		ensureComparisonMaps(&cr)
-		freshIntents := make(map[string]struct{}, len(r.IntentQuality)+len(r.Latencies))
+		freshIntents := make(map[string]struct{}, len(r.IntentQuality))
 		for intent := range r.IntentQuality {
-			freshIntents[intent] = struct{}{}
-		}
-		for intent := range r.Latencies {
 			freshIntents[intent] = struct{}{}
 		}
 		for intent := range freshIntents {

@@ -247,6 +247,7 @@ func ExerciseScorecard(ctx context.Context, store *Store) []ExerciseScorecardEnt
 		              ORDER BY created_at DESC, rowid DESC
 		            ) AS rn
 		     FROM exercise_results
+		     WHERE COALESCE(result_class, '') NOT IN ('transport_error', 'provider_timeout')
 		   )
 		   WHERE rn = 1
 		 )
@@ -262,6 +263,7 @@ func ExerciseScorecard(ctx context.Context, store *Store) []ExerciseScorecardEnt
 		         ON e.model = lr.model
 		        AND e.intent_class = lr.intent_class
 		        AND e.run_id = lr.run_id
+		 WHERE COALESCE(e.result_class, '') NOT IN ('transport_error', 'provider_timeout')
 		 GROUP BY e.model, e.intent_class
 		 ORDER BY e.model, e.intent_class`)
 	if err != nil {

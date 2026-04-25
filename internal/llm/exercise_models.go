@@ -338,8 +338,6 @@ func ExerciseModels(ctx context.Context, req ExerciseRequest) (ExerciseReport, e
 
 				intent := ep.Intent.String()
 				mr.Latencies[intent] = append(mr.Latencies[intent], modelLatencyMs)
-				qualityCount++
-				intentCounts[intent]++
 				appendPhaseLatencies(mr.PhaseLatencies, dispatch.PhaseTimings)
 
 				outcome := PromptOutcome{
@@ -373,12 +371,19 @@ func ExerciseModels(ctx context.Context, req ExerciseRequest) (ExerciseReport, e
 				default:
 					mr.Pass++
 					quality := ScoreExerciseResponse(ep, dispatch.ResponseText)
-					qualitySum += quality
-					intentSums[intent] += quality
 					outcome.Content = dispatch.ResponseText
 					outcome.Quality = quality
 					outcome.Passed = true
 					outcome.OutcomeClass = classifyExercisePass(modelLatencyMs, promptTimeout)
+				}
+
+				if exerciseOutcomeCountsAsEfficacyEvidence(outcome.OutcomeClass) {
+					qualityCount++
+					intentCounts[intent]++
+					if outcome.Passed {
+						qualitySum += outcome.Quality
+						intentSums[intent] += outcome.Quality
+					}
 				}
 
 				if req.OnPrompt != nil {
@@ -434,6 +439,15 @@ func classifyExerciseFailure(err error) ExerciseOutcomeClass {
 		return ExerciseOutcomeProviderTimeout
 	}
 	return ExerciseOutcomeTransportError
+}
+
+func exerciseOutcomeCountsAsEfficacyEvidence(class ExerciseOutcomeClass) bool {
+	switch class {
+	case ExerciseOutcomeTransportError, ExerciseOutcomeProviderTimeout:
+		return false
+	default:
+		return true
+	}
 }
 
 func filterExerciseMatrix(intent IntentClass) []ExercisePrompt {

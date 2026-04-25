@@ -295,14 +295,12 @@ func TestExerciseModels_CapturesTransportErrors(t *testing.T) {
 	if mr.AvgQuality != 0 {
 		t.Fatalf("avg quality = %.2f; want 0 when every prompt failed", mr.AvgQuality)
 	}
-	for _, q := range mr.IntentQuality {
-		if q != 0 {
-			t.Fatalf("intent quality = %.2f; want 0 when that intent only failed", q)
-		}
+	if len(mr.IntentQuality) != 0 {
+		t.Fatalf("transport failures should not count as efficacy evidence: %#v", mr.IntentQuality)
 	}
 }
 
-func TestExerciseModels_AveragesIncludeFailedRowsAsZeroQuality(t *testing.T) {
+func TestExerciseModels_EmptyResponsesCountAsZeroQualityEvidence(t *testing.T) {
 	prompts := []ExercisePrompt{
 		{Prompt: "What is 2 + 2?", Intent: IntentToolUse, Complexity: ComplexityTrivial, ScoringContract: ExerciseScoringContract{
 			Mode:                  ScoringModeDirectFact,
@@ -329,7 +327,7 @@ func TestExerciseModels_AveragesIncludeFailedRowsAsZeroQuality(t *testing.T) {
 			if sendCount == 1 {
 				return PromptDispatch{ResponseText: "4", LatencyMs: 1}, nil
 			}
-			return PromptDispatch{LatencyMs: 1}, errString("simulated failure")
+			return PromptDispatch{LatencyMs: 1}, nil
 		},
 		SendWarmup: func(ctx context.Context, model string, timeout time.Duration) WarmupResult {
 			return WarmupResult{LatencyMs: 1}
@@ -359,7 +357,46 @@ func TestExerciseModels_AveragesIncludeFailedRowsAsZeroQuality(t *testing.T) {
 		t.Fatalf("tool-use quality = %.4f; want %.4f", got.IntentQuality[IntentToolUse.String()], wantFirst)
 	}
 	if got.IntentQuality[IntentDelegation.String()] != 0 {
-		t.Fatalf("delegation quality = %.4f; want 0 for failed-only intent", got.IntentQuality[IntentDelegation.String()])
+		t.Fatalf("delegation quality = %.4f; want 0 for empty-response intent", got.IntentQuality[IntentDelegation.String()])
+	}
+}
+
+func TestExerciseModels_TransportErrorsAreValidityOnlyEvidence(t *testing.T) {
+	prompts := []ExercisePrompt{
+		{Prompt: "Say hello.", Intent: IntentConversation, Complexity: ComplexityTrivial, ScoringContract: ExerciseScoringContract{
+			Mode:                  ScoringModeConversational,
+			Concision:             ConcisionPrefer,
+			ToolExpectation:       ToolExpectationContraindicated,
+			SemanticHints:         []string{"hello"},
+			SemanticHintThreshold: 1,
+		}},
+	}
+	original := ExerciseMatrix
+	ExerciseMatrix = prompts
+	defer func() { ExerciseMatrix = original }()
+
+	report, err := ExerciseModels(context.Background(), ExerciseRequest{
+		Models:     []string{"broken-model"},
+		Iterations: 1,
+		SendPrompt: func(ctx context.Context, model, content string, timeout time.Duration) (PromptDispatch, error) {
+			return PromptDispatch{LatencyMs: 123}, errString("API error: internal error")
+		},
+		SendWarmup:   func(context.Context, string, time.Duration) WarmupResult { return WarmupResult{LatencyMs: 1} },
+		IsLocal:      func(string) bool { return false },
+		ModelTimeout: func(string) time.Duration { return time.Second },
+	})
+	if err != nil {
+		t.Fatalf("ExerciseModels: %v", err)
+	}
+	got := report.Models[0]
+	if got.Fail != 1 || got.Pass != 0 {
+		t.Fatalf("pass/fail = %d/%d, want 0/1", got.Pass, got.Fail)
+	}
+	if len(got.IntentQuality) != 0 {
+		t.Fatalf("transport failure should not create intent efficacy evidence: %#v", got.IntentQuality)
+	}
+	if len(got.Latencies[IntentConversation.String()]) != 1 {
+		t.Fatalf("validity-only latency should remain available for RCA: %#v", got.Latencies)
 	}
 }
 

@@ -102,6 +102,16 @@ This file follows the same C4 conventions used elsewhere in the repo:
 - exercise rows persist an explicit outcome class such as clean pass, slow
   pass, provider timeout, transport/API failure, empty response, or
   quality-gate failure; pass/fail alone is not RCA truth
+- benchmark efficacy scorecards must distinguish evaluable model behavior from
+  benchmark validity incidents: transport/API failures and provider timeouts
+  remain persisted RCA evidence, but they are not allowed to count as exercised
+  efficacy coverage or overwrite prior per-intent model evidence in comparison
+  tables
+- benchmark progress rows are operator telemetry, not artifact transport:
+  untrusted model text rendered inline by the CLI must be reduced to a bounded
+  single-line preview with control sequences, line breaks, tabs, and Markdown
+  fence delimiters neutralized; full raw content belongs in persisted exercise
+  artifacts and RCA joins, never in the live progress row
 - benchmark exercise rows persist canonical `turn_id` for every new prompt
   result so RCA, trace views, and scorecards join on one authoritative turn
   identity instead of timestamp/proximity heuristics

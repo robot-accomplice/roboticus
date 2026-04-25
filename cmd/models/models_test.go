@@ -238,6 +238,24 @@ func TestCurrentGitRevision_TrimsOutput(t *testing.T) {
 	}
 }
 
+func TestFormatExercisePreviewSingleLineSafe(t *testing.T) {
+	raw := "\x1b[31m**C**\x1b[0m\n\n```c\nvoid reverse(char *s) {\n\tif (!s) return;\r\n}\n```"
+
+	preview := formatExercisePreview(raw, 80)
+
+	for _, forbidden := range []string{"\n", "\r", "\t", "\x1b", "```"} {
+		if strings.Contains(preview, forbidden) {
+			t.Fatalf("preview contains forbidden sequence %q: %q", forbidden, preview)
+		}
+	}
+	if !strings.Contains(preview, "void reverse") {
+		t.Fatalf("preview lost useful content: %q", preview)
+	}
+	if len([]rune(preview)) > 83 {
+		t.Fatalf("preview was not bounded: %d runes in %q", len([]rune(preview)), preview)
+	}
+}
+
 func TestBuildComparisonRows_MergesHistoricalScorecardEntriesWithFreshResults(t *testing.T) {
 	cleanup := testhelp.SetupMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/api/models/exercise/scorecard" {
@@ -342,5 +360,55 @@ func TestBuildComparisonRows_MergesHistoricalScorecardEntriesWithFreshResults(t 
 	}
 	if !sawFresh || !sawHistorical {
 		t.Fatalf("expected both fresh and historical models, sawFresh=%v sawHistorical=%v", sawFresh, sawHistorical)
+	}
+}
+
+func TestBuildComparisonRows_DoesNotOverwriteHistoricalEvidenceWithValidityOnlyFreshRun(t *testing.T) {
+	cleanup := testhelp.SetupMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/models/exercise/scorecard" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"entries": []any{
+				map[string]any{
+					"model":          "ollama/phi4-mini:latest",
+					"intent_class":   "TOOL_USE",
+					"avg_quality":    0.83,
+					"avg_latency_ms": 1200,
+					"count":          5,
+				},
+			},
+		})
+	}))
+	defer cleanup()
+
+	report := llm.ExerciseReport{
+		Models: []llm.ModelExerciseResult{
+			{
+				Model:         "ollama/phi4-mini:latest",
+				IntentQuality: map[string]float64{},
+				Latencies: map[string][]int64{
+					"TOOL_USE": {12, 13, 14, 15, 16},
+				},
+			},
+		},
+	}
+
+	rows := buildComparisonRows(report, nil)
+	if len(rows) != 1 {
+		t.Fatalf("comparison rows = %d, want 1", len(rows))
+	}
+	row := rows[0]
+	if !row.Exercised {
+		t.Fatal("fresh validity-only run should still be marked exercised")
+	}
+	if row.Intent["TOOL_USE"] != 0.83 {
+		t.Fatalf("tool-use quality = %.2f, want historical evidence preserved", row.Intent["TOOL_USE"])
+	}
+	if row.ObservedIntents != 1 {
+		t.Fatalf("observed intents = %d, want historical 1", row.ObservedIntents)
+	}
+	if row.AvgLatencyMs != 1200 {
+		t.Fatalf("avg latency = %d, want historical latency preserved", row.AvgLatencyMs)
 	}
 }
