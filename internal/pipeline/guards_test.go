@@ -32,6 +32,15 @@ func TestSystemPromptLeakGuard(t *testing.T) {
 	if result.Passed {
 		t.Error("system prompt leak should not pass")
 	}
+	if !result.Retry {
+		t.Error("system prompt leak should request scoped retry instead of canned rewrite")
+	}
+	if result.Content != "" {
+		t.Fatalf("system prompt leak guard returned canned content: %q", result.Content)
+	}
+	if result.ContractEvent.ContractID != "system_prompt_leak" {
+		t.Fatalf("contract id = %q, want system_prompt_leak", result.ContractEvent.ContractID)
+	}
 }
 
 func TestInternalMarkerGuard(t *testing.T) {
@@ -78,6 +87,12 @@ func TestContentClassificationGuard(t *testing.T) {
 	}
 	if result.Retry {
 		t.Error("harmful content should not request retry")
+	}
+	if !result.Blocked {
+		t.Error("harmful content should be structurally blocked")
+	}
+	if result.Content != "" {
+		t.Fatalf("content classification guard returned canned content: %q", result.Content)
 	}
 }
 

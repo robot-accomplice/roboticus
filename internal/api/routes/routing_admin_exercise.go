@@ -203,6 +203,8 @@ func ExerciseModel(p pipeline.Runner, store *db.Store, cfg *core.Config, agentNa
 			RunID       string `json:"run_id,omitempty"`
 			Iterations  int    `json:"iterations,omitempty"`
 			IntentClass string `json:"intent_class,omitempty"`
+			PromptRow   string `json:"prompt_row,omitempty"`
+			WarmupMode  string `json:"warmup_mode,omitempty"`
 			Force       bool   `json:"force,omitempty"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -220,6 +222,15 @@ func ExerciseModel(p pipeline.Runner, store *db.Store, cfg *core.Config, agentNa
 		if req.Iterations < 1 {
 			req.Iterations = 1
 		}
+		req.PromptRow = strings.ToUpper(strings.TrimSpace(req.PromptRow))
+		warmupMode := llm.ExerciseWarmupMode(strings.ToLower(strings.TrimSpace(req.WarmupMode)))
+		if warmupMode == "" {
+			warmupMode = llm.ExerciseWarmupAuto
+		}
+		if warmupMode != llm.ExerciseWarmupAuto && warmupMode != llm.ExerciseWarmupSkip && warmupMode != llm.ExerciseWarmupForce {
+			writeError(w, http.StatusBadRequest, "invalid warmup_mode (want auto, skip, or force)")
+			return
+		}
 		var intentFilter *llm.IntentClass
 		if strings.TrimSpace(req.IntentClass) != "" {
 			intent, err := llm.ParseIntentClassStrict(req.IntentClass)
@@ -229,6 +240,17 @@ func ExerciseModel(p pipeline.Runner, store *db.Store, cfg *core.Config, agentNa
 			}
 			intentFilter = &intent
 			req.IntentClass = intent.String()
+		}
+		if req.PromptRow != "" {
+			rowIntent, _, err := llm.ParseExerciseRowSelector(req.PromptRow)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			if intentFilter != nil && rowIntent != *intentFilter {
+				writeError(w, http.StatusBadRequest, "prompt_row conflicts with intent_class")
+				return
+			}
 		}
 		if !req.Force {
 			blocked := benchmarkBlockedModels([]string{req.Model}, effectiveModelPolicies(r.Context(), store, cfg))
@@ -240,6 +262,12 @@ func ExerciseModel(p pipeline.Runner, store *db.Store, cfg *core.Config, agentNa
 		notes := ""
 		if req.IntentClass != "" {
 			notes = "intent filter: " + req.IntentClass
+		}
+		if req.PromptRow != "" {
+			notes = strings.TrimSpace(notes + " prompt filter: " + req.PromptRow)
+		}
+		if warmupMode != llm.ExerciseWarmupAuto {
+			notes = strings.TrimSpace(notes + " warmup: " + string(warmupMode))
 		}
 		if err := db.InsertBaselineRun(r.Context(), store, db.BaselineRunRow{
 			RunID:            runID,
@@ -288,6 +316,9 @@ func ExerciseModel(p pipeline.Runner, store *db.Store, cfg *core.Config, agentNa
 					promptCapacity++
 				}
 			}
+		}
+		if req.PromptRow != "" {
+			promptCapacity = 1
 		}
 		promptResults := make([]promptResult, 0, promptCapacity*req.Iterations)
 
@@ -340,6 +371,7 @@ func ExerciseModel(p pipeline.Runner, store *db.Store, cfg *core.Config, agentNa
 		report, err := llm.ExerciseModels(r.Context(), llm.ExerciseRequest{
 			Models:       []string{req.Model},
 			IntentFilter: intentFilter,
+			PromptFilter: req.PromptRow,
 			Iterations:   req.Iterations,
 			SendPrompt:   pipelineExercisePromptSender(p, store, agentName),
 			SendWarmup:   pipelineExerciseWarmupSender(p, store, agentName),
@@ -351,6 +383,7 @@ func ExerciseModel(p pipeline.Runner, store *db.Store, cfg *core.Config, agentNa
 				}
 				return &snapshot
 			},
+			WarmupMode:   warmupMode,
 			IsLocal:      func(model string) bool { return llm.ExerciseModelIsLocal(cfg, model) },
 			ModelTimeout: func(model string) time.Duration { return llm.ExerciseModelTimeout(cfg, model) },
 		})
@@ -369,6 +402,8 @@ func ExerciseModel(p pipeline.Runner, store *db.Store, cfg *core.Config, agentNa
 			"run_id":         runID,
 			"iterations":     req.Iterations,
 			"intent_class":   req.IntentClass,
+			"prompt_row":     req.PromptRow,
+			"warmup_mode":    string(warmupMode),
 			"total":          len(promptResults),
 			"pass":           modelResult.Pass,
 			"fail":           modelResult.Fail,
@@ -386,86 +421,6 @@ func GetExerciseStatus(store *db.Store) http.HandlerFunc {
 		counts := db.ExerciseResultCountByModel(r.Context(), store)
 		writeJSON(w, http.StatusOK, map[string]any{
 			"models": counts,
-		})
-	}
-}
-
-// RescoreExerciseResults recomputes persisted exercise quality/pass values
-// using the current scoring regime. It exists so benchmark-rubric changes do
-// not force blind reruns when raw prompt/response artifacts are already stored.
-func RescoreExerciseResults(store *db.Store) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			Models []string `json:"models,omitempty"`
-			RunID  string   `json:"run_id,omitempty"`
-			DryRun bool     `json:"dry_run,omitempty"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid JSON body")
-			return
-		}
-
-		rows := db.ListExerciseResultsForRescore(r.Context(), store, req.Models, strings.TrimSpace(req.RunID))
-		if rows == nil {
-			rows = []db.ExerciseResultRow{}
-		}
-
-		updated := 0
-		passFlips := 0
-		qualityChanged := 0
-		var previews []map[string]any
-
-		for _, row := range rows {
-			intent, err := llm.ParseIntentClassStrict(row.IntentClass)
-			if err != nil {
-				continue
-			}
-			complexity, err := llm.ParseComplexityLevel(row.Complexity)
-			if err != nil {
-				continue
-			}
-			prompt := llm.ResolveExercisePrompt(row.Prompt, intent, complexity)
-			newQuality := llm.ScoreExerciseResponse(prompt, row.Content)
-			newPassed := newQuality >= 0.3 && row.ErrorMsg == ""
-
-			if newQuality != row.Quality {
-				qualityChanged++
-			}
-			if newPassed != row.Passed {
-				passFlips++
-			}
-			if !req.DryRun && (newQuality != row.Quality || newPassed != row.Passed) {
-				if err := db.UpdateExerciseResultScore(r.Context(), store, row.ID, newQuality, newPassed); err != nil {
-					writeError(w, http.StatusInternalServerError, "failed to update rescored exercise result")
-					return
-				}
-				updated++
-			}
-
-			if len(previews) < 10 && (newQuality != row.Quality || newPassed != row.Passed) {
-				previews = append(previews, map[string]any{
-					"id":          row.ID,
-					"run_id":      row.RunID,
-					"model":       row.Model,
-					"prompt":      row.Prompt,
-					"old_quality": row.Quality,
-					"new_quality": newQuality,
-					"old_passed":  row.Passed,
-					"new_passed":  newPassed,
-				})
-			}
-		}
-
-		writeJSON(w, http.StatusOK, map[string]any{
-			"total_rows":      len(rows),
-			"quality_changed": qualityChanged,
-			"pass_flips":      passFlips,
-			"updated":         updated,
-			"dry_run":         req.DryRun,
-			"preview_changes": previews,
-			"scoring_regime":  "prompt_contract_v1",
-			"filtered_models": req.Models,
-			"filtered_run_id": strings.TrimSpace(req.RunID),
 		})
 	}
 }

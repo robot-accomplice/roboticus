@@ -115,6 +115,18 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 			return p.buildGuardContext(session)
 		}, decideGuardRetryAfterProgress)
 		if guardErr != nil {
+			if dr != nil && len(guardRun.FinalGuardResult.ContractEvents) > 0 {
+				dr.RecordEvent("guard_contract_evaluated", guardContractEventStatus(guardRun.FinalGuardResult.ContractEvents),
+					"guard contract violation blocked the response",
+					"The response violated a hard guard contract and was blocked without substituting canned prose.",
+					map[string]any{
+						"violations":      guardRun.FinalGuardResult.Violations,
+						"block_reason":    guardRun.FinalGuardResult.BlockReason,
+						"contract_events": guardContractEventDetails(guardRun.FinalGuardResult.ContractEvents, "blocked"),
+					},
+				)
+				p.storeTurnDiagnostics(ctx, dr)
+			}
 			return nil, core.WrapError(core.ErrLLM, "inference failed", guardErr)
 		}
 		guardResult := guardRun.InitialGuardResult
@@ -128,8 +140,20 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 				"guard chain requested a retry",
 				"The first answer violated a guard, so the system tried again.",
 				map[string]any{
-					"violations":   guardRun.InitialGuardResult.Violations,
-					"retry_reason": guardRun.InitialGuardResult.RetryReason,
+					"violations":      guardRun.InitialGuardResult.Violations,
+					"retry_reason":    guardRun.InitialGuardResult.RetryReason,
+					"contract_events": guardContractEventDetails(guardRun.InitialGuardResult.ContractEvents, "scheduled"),
+				},
+			)
+			p.storeTurnDiagnostics(ctx, dr)
+		}
+		if dr != nil && !guardRetried && len(guardRun.InitialGuardResult.ContractEvents) > 0 {
+			dr.RecordEvent("guard_contract_evaluated", guardContractEventStatus(guardRun.InitialGuardResult.ContractEvents),
+				"guard contract violation recorded without retry",
+				"The response violated a guard contract; the finding was recorded as structured RCA evidence without scheduling a retry.",
+				map[string]any{
+					"violations":      guardRun.InitialGuardResult.Violations,
+					"contract_events": guardContractEventDetails(guardRun.InitialGuardResult.ContractEvents, "recorded"),
 				},
 			)
 			p.storeTurnDiagnostics(ctx, dr)
@@ -145,6 +169,7 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 					"suppression_reason": guardRun.RetrySuppressReason,
 					"successful_tools":   progress.SuccessfulToolResults,
 					"artifact_writes":    progress.SuccessfulArtifactWrites,
+					"contract_events":    guardContractEventDetails(guardRun.InitialGuardResult.ContractEvents, "suppressed"),
 				},
 			)
 			p.storeTurnDiagnostics(ctx, dr)
@@ -199,6 +224,19 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 			Reason: "turn already completed reflective finalization after successful execution; generic verifier retry would violate the R-TEOR-R boundary",
 		}
 	}
+	if !verifyResult.Passed && !verifyRetryDisposition.Allow && dr != nil {
+		dr.RecordEvent("verifier_contract_evaluated", "warning",
+			"verifier contract finding recorded without retry",
+			"The answer had verifier concerns, but the retry policy preserved the best available task-specific response and recorded the finding as RCA evidence.",
+			map[string]any{
+				"issues":             verifyResult.RetryMessage(),
+				"issue_codes":        verifySummary.IssueCodes,
+				"suppression_reason": verifyRetryDisposition.Reason,
+				"contract_events":    verifierContractEventDetails(verifyResult, verifyRetryDisposition),
+			},
+		)
+		p.storeTurnDiagnostics(ctx, dr)
+	}
 	if !verifyResult.Passed && verifyRetryDisposition.Allow {
 		retryPlan := buildVerifierRetryPlan(verifyResult, verifyCtx, session.SelectedToolDefs())
 		policy = p.maybeExpandTurnEnvelope(ctx, session, policy, verifyResult, dr)
@@ -218,6 +256,7 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 					"proof_gap_claims":  verifySummary.ProofGapCount,
 					"reconciled_claims": verifySummary.ReconciledCount,
 					"correction_plan":   formatVerifierRetryCorrectionSummary(retryPlan),
+					"contract_events":   verifierContractEventDetails(verifyResult, verifyRetryDisposition),
 				},
 			)
 			p.storeTurnDiagnostics(ctx, dr)

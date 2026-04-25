@@ -442,28 +442,6 @@ func TestFlightRecorderRecordNewSteps(t *testing.T) {
 	}
 }
 
-// --- #81 Guard Fallback Templates Tests ---
-
-func TestGuardFallbackTemplates(t *testing.T) {
-	// Known guards should have templates.
-	known := []string{
-		"empty_response", "repetition", "system_prompt_leak",
-		"execution_truth", "financial_action_truth", "perspective",
-		"literary_quote_retry", "internal_protocol",
-	}
-	for _, name := range known {
-		tmpl := GetFallbackTemplate(name)
-		if tmpl == "" {
-			t.Errorf("expected fallback template for guard %q", name)
-		}
-	}
-
-	// Unknown guard returns empty.
-	if tmpl := GetFallbackTemplate("nonexistent_guard"); tmpl != "" {
-		t.Error("expected empty string for unknown guard")
-	}
-}
-
 // --- #71 Guard Pre-computation Tests ---
 
 func TestPrecomputeGuardScores(t *testing.T) {

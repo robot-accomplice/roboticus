@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -135,6 +136,9 @@ func (g *ExecutionTruthGuard) CheckWithContext(content string, ctx *GuardContext
 				relevant = true
 			}
 		}
+		if inspectionListingCoverageRequired(ctx.UserPrompt) {
+			relevant = true
+		}
 		if !relevant {
 			return GuardResult{Passed: true}
 		}
@@ -176,8 +180,20 @@ func (g *ExecutionTruthGuard) CheckWithContext(content string, ctx *GuardContext
 		}
 		lower := strings.ToLower(content)
 		denialPatterns := []string{
-			"i cannot", "i'm unable to", "i don't have the ability",
-			"i can't execute", "i cannot run",
+			"i'm unable to execute", "i am unable to execute",
+			"i don't have the ability",
+			"i do not have the ability",
+			"i can't execute", "i cannot execute",
+			"i can't run", "i cannot run",
+			"i don't have tools", "i do not have tools",
+			"i don't have access to tools", "i do not have access to tools",
+			"i don't have live web-search", "i do not have live web-search",
+			"i don't have web-search", "i do not have web-search",
+			"i don't have web search", "i do not have web search",
+			"i can't browse", "i cannot browse",
+			"i don't have access to the internet", "i do not have access to the internet",
+			"i don't have image-download tools", "i do not have image-download tools",
+			"outside my capabilities",
 		}
 		for _, denial := range denialPatterns {
 			if strings.Contains(lower, denial) {
@@ -199,6 +215,18 @@ func (g *ExecutionTruthGuard) CheckWithContext(content string, ctx *GuardContext
 				Passed: false,
 				Retry:  true,
 				Reason: "claimed persistent artifact creation without artifact-writing tool evidence",
+			}
+		}
+	}
+
+	// Check 2c: Inspection-backed listing/reporting turns must surface concrete
+	// observed entries, not only meta-claims that a list existed.
+	if inspectionListingCoverageRequired(ctx.UserPrompt) {
+		if entries := inspectionEvidenceEntries(ctx.ToolResults); len(entries) > 0 && !contentMentionsObservedInspectionEntry(content, entries) {
+			return GuardResult{
+				Passed: false,
+				Retry:  true,
+				Reason: "omitted concrete inspection results from final answer",
 			}
 		}
 	}
@@ -254,6 +282,71 @@ func hasSuccessfulArtifactWriteEvidence(results []ToolResultEntry) bool {
 			return true
 		}
 		return true
+	}
+	return false
+}
+
+func inspectionListingCoverageRequired(prompt string) bool {
+	lower := strings.ToLower(prompt)
+	actionMarkers := []string{"list", "report", "summarize", "summary", "top-level", "entries", "contents", "what is there", "what's there"}
+	targetMarkers := []string{"directory", "folder", "path", "vault", "files", "entries", "contents"}
+	return containsAnyMarker(lower, actionMarkers) && containsAnyMarker(lower, targetMarkers)
+}
+
+func inspectionEvidenceEntries(results []ToolResultEntry) []string {
+	entries := make([]string, 0, 8)
+	for _, tr := range results {
+		if !inspectionToolProvidesListing(tr.ToolName) || toolResultSignalsFailure(tr) {
+			continue
+		}
+		for _, line := range strings.Split(tr.Output, "\n") {
+			entry := normalizeInspectionEntry(line)
+			if entry == "" {
+				continue
+			}
+			entries = append(entries, entry)
+			if len(entries) >= 12 {
+				return entries
+			}
+		}
+	}
+	return entries
+}
+
+func inspectionToolProvidesListing(toolName string) bool {
+	name := strings.ToLower(toolName)
+	return strings.Contains(name, "glob") ||
+		strings.Contains(name, "list") ||
+		strings.Contains(name, "search") ||
+		strings.Contains(name, "inventory") ||
+		strings.Contains(name, "inspect")
+}
+
+func normalizeInspectionEntry(line string) string {
+	entry := strings.TrimSpace(line)
+	entry = strings.TrimPrefix(entry, "- ")
+	entry = strings.TrimPrefix(entry, "* ")
+	entry = strings.Trim(entry, "`'\" ")
+	if entry == "" || strings.HasPrefix(entry, "{") || strings.HasPrefix(entry, "[") {
+		return ""
+	}
+	entry = strings.TrimRight(entry, "/")
+	base := filepath.Base(entry)
+	if base == "." || base == string(filepath.Separator) {
+		return ""
+	}
+	return base
+}
+
+func contentMentionsObservedInspectionEntry(content string, entries []string) bool {
+	lower := strings.ToLower(content)
+	for _, entry := range entries {
+		if len(entry) < 3 {
+			continue
+		}
+		if strings.Contains(lower, strings.ToLower(entry)) {
+			return true
+		}
 	}
 	return false
 }
@@ -388,6 +481,13 @@ var filesystemDenialPatterns = []string{
 	"don't have access to your files",
 	"as an ai, i don't have access to your files",
 	"as an ai text-based interface, i'm not able to directly access",
+	"need the path added to the allowed list",
+	"need this path added to the allowed list",
+	"need it added to the allowed list",
+	"path added to the allowed list before i can",
+	"need the path added to allowed_paths",
+	"must be added to allowed_paths",
+	"needs to be added to allowed_paths",
 }
 
 func (g *FilesystemDenialGuard) Name() string { return "filesystem_denial" }

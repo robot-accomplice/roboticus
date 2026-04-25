@@ -82,6 +82,23 @@ func TestExecutionTruthGuard_DeniedCapability(t *testing.T) {
 	}
 }
 
+func TestExecutionTruthGuard_BlocksFalseGenericCapabilityDenialAfterToolEvidence(t *testing.T) {
+	g := &ExecutionTruthGuard{}
+	ctx := &GuardContext{
+		Intents: []string{"task"},
+		ToolResults: []ToolResultEntry{
+			{ToolName: "get_runtime_context", Output: "workspace=/Users/jmachen/code/roboticus; tools loaded"},
+		},
+	}
+	result := g.CheckWithContext("I don't have tools to inspect your workspace from here.", ctx)
+	if result.Passed {
+		t.Fatal("expected unsupported generic capability denial to be rejected after tool evidence")
+	}
+	if !result.Retry {
+		t.Fatalf("expected retry for unsupported capability denial, got %#v", result)
+	}
+}
+
 func TestExecutionTruthGuard_AllowsRealPolicyDenial(t *testing.T) {
 	g := &ExecutionTruthGuard{}
 	ctx := &GuardContext{
@@ -119,6 +136,35 @@ func TestFilesystemDenialGuard_RewritesFalseDenialWhenToolsRan(t *testing.T) {
 	}
 	if result.Retry && result.Content != "" {
 		t.Fatalf("expected retry-only or rewrite-only result, got both retry=%v content=%q", result.Retry, result.Content)
+	}
+}
+
+func TestFilesystemDenialGuard_BlocksFalseAllowlistChildPathClaim(t *testing.T) {
+	g := &FilesystemDenialGuard{}
+	ctx := &GuardContext{
+		ToolResults: []ToolResultEntry{
+			{ToolName: "get_runtime_context", Output: "allowed paths are roots; child paths inherit access"},
+		},
+	}
+	result := g.CheckWithContext("I'll still need the path added to the allowed list before I can open it.", ctx)
+	if result.Passed {
+		t.Fatal("expected false allowlist child-path claim to be blocked")
+	}
+	if !result.Retry {
+		t.Fatalf("false allowlist child-path claim should trigger retry, got %#v", result)
+	}
+}
+
+func TestFilesystemDenialGuard_AllowsActualAllowlistDenial(t *testing.T) {
+	g := &FilesystemDenialGuard{}
+	ctx := &GuardContext{
+		ToolResults: []ToolResultEntry{
+			{ToolName: "read_file", Output: "error: path \"/tmp/private\" not in allowed paths"},
+		},
+	}
+	result := g.CheckWithContext("That path must be added to allowed_paths before I can read it.", ctx)
+	if !result.Passed {
+		t.Fatalf("expected pass for real allowlist denial, got reason: %s", result.Reason)
 	}
 }
 
@@ -165,6 +211,39 @@ func TestExecutionTruthGuard_AllowsArtifactClaimWithArtifactWriteEvidence(t *tes
 	result := g.CheckWithContext("I've successfully created the Obsidian note codex-live-test.md.", ctx)
 	if !result.Passed {
 		t.Fatalf("artifact write evidence should pass, got reason: %s", result.Reason)
+	}
+}
+
+func TestExecutionTruthGuard_RejectsInspectionListingMetaAnswerWithoutObservedEntries(t *testing.T) {
+	g := &ExecutionTruthGuard{}
+	ctx := &GuardContext{
+		UserPrompt: "Inspect /Users/jmachen/Desktop/My Vault/Duncan and report the top-level entries.",
+		Intents:    []string{"question"},
+		ToolResults: []ToolResultEntry{
+			{ToolName: "glob_files", Output: "../../Desktop/My Vault/Duncan/Content\n../../Desktop/My Vault/Duncan/Research\n../../Desktop/My Vault/Duncan/inbox.md"},
+		},
+	}
+	result := g.CheckWithContext("The authoritative observed results show a clear list of top-level entries. The inspection is complete.", ctx)
+	if result.Passed {
+		t.Fatal("expected meta-only inspection answer to be rejected")
+	}
+	if !result.Retry {
+		t.Fatalf("expected retry for omitted inspection entries, got %#v", result)
+	}
+}
+
+func TestExecutionTruthGuard_AllowsInspectionListingWithObservedEntries(t *testing.T) {
+	g := &ExecutionTruthGuard{}
+	ctx := &GuardContext{
+		UserPrompt: "Inspect /Users/jmachen/Desktop/My Vault/Duncan and report the top-level entries.",
+		Intents:    []string{"task"},
+		ToolResults: []ToolResultEntry{
+			{ToolName: "glob_files", Output: "../../Desktop/My Vault/Duncan/Content\n../../Desktop/My Vault/Duncan/Research\n../../Desktop/My Vault/Duncan/inbox.md"},
+		},
+	}
+	result := g.CheckWithContext("Top-level entries include Content, Research, and inbox.md.", ctx)
+	if !result.Passed {
+		t.Fatalf("expected concrete inspection answer to pass, got reason: %s", result.Reason)
 	}
 }
 

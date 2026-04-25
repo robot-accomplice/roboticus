@@ -36,6 +36,20 @@ func TestTaskDeferralGuard_IntrospectionWithDeferral(t *testing.T) {
 	}
 }
 
+func TestTaskDeferralGuard_RuntimeContextWithTestAssumptionDeferral(t *testing.T) {
+	g := &TaskDeferralGuard{}
+	ctx := &GuardContext{
+		ToolResults: []ToolResultEntry{{ToolName: "get_runtime_context", Output: `{"workspace":"/tmp/workspace"}`}},
+	}
+	result := g.CheckWithContext("Let me test that assumption right now.", ctx)
+	if result.Passed {
+		t.Fatal("should reject promissory final answer after runtime-context-only evidence")
+	}
+	if !result.Retry {
+		t.Fatalf("expected retry for promissory final answer, got %#v", result)
+	}
+}
+
 func TestTaskDeferralGuard_RealToolUse(t *testing.T) {
 	g := &TaskDeferralGuard{}
 	ctx := &GuardContext{

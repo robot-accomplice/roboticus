@@ -115,6 +115,67 @@ func TestExerciseModels_FiltersToSingleIntent(t *testing.T) {
 	}
 }
 
+func TestExerciseModels_FiltersToExactPromptRow(t *testing.T) {
+	var dispatched []string
+	req := ExerciseRequest{
+		Models:       []string{"m"},
+		PromptFilter: "TOOL_USE:C2",
+		Iterations:   1,
+		SendPrompt: func(ctx context.Context, model, content string, timeout time.Duration) (PromptDispatch, error) {
+			dispatched = append(dispatched, content)
+			return PromptDispatch{ResponseText: "4", LatencyMs: 1}, nil
+		},
+		SendWarmup:   func(context.Context, string, time.Duration) WarmupResult { return WarmupResult{LatencyMs: 1} },
+		IsLocal:      func(string) bool { return false },
+		ModelTimeout: func(string) time.Duration { return time.Second },
+	}
+
+	report, err := ExerciseModels(context.Background(), req)
+	if err != nil {
+		t.Fatalf("ExerciseModels: %v", err)
+	}
+	if len(dispatched) != 1 {
+		t.Fatalf("dispatched prompts = %d, want 1", len(dispatched))
+	}
+	want := "Look up how many sessions were created today by querying the database."
+	if dispatched[0] != want {
+		t.Fatalf("dispatched prompt = %q, want %q", dispatched[0], want)
+	}
+	if got := report.Models[0].Pass + report.Models[0].Fail; got != 1 {
+		t.Fatalf("scored rows = %d, want 1", got)
+	}
+}
+
+func TestExerciseModels_WarmupSkipBypassesLocalWarmup(t *testing.T) {
+	warmups := 0
+	req := ExerciseRequest{
+		Models:       []string{"local-model"},
+		PromptFilter: "TOOL_USE:C0",
+		Iterations:   1,
+		SendPrompt: func(ctx context.Context, model, content string, timeout time.Duration) (PromptDispatch, error) {
+			return PromptDispatch{ResponseText: "4", LatencyMs: 1}, nil
+		},
+		SendWarmup: func(context.Context, string, time.Duration) WarmupResult {
+			warmups++
+			return WarmupResult{LatencyMs: 1}
+		},
+		WarmupMode:   ExerciseWarmupSkip,
+		IsLocal:      func(string) bool { return true },
+		ModelTimeout: func(string) time.Duration { return time.Second },
+	}
+
+	report, err := ExerciseModels(context.Background(), req)
+	if err != nil {
+		t.Fatalf("ExerciseModels: %v", err)
+	}
+	if warmups != 0 {
+		t.Fatalf("warmup calls = %d, want 0", warmups)
+	}
+	if !report.Models[0].Warmup.Skipped {
+		t.Fatalf("warmup should be marked skipped")
+	}
+}
+
 // TestExerciseModels_DispatchesWarmupThenMatrix is the core orchestration
 // invariant: for each model, warm-up runs first, then the scored matrix
 // runs N iterations × matrix-length times. No interleaving, no
@@ -361,6 +422,61 @@ func TestExerciseModels_EmptyResponsesCountAsZeroQualityEvidence(t *testing.T) {
 	}
 }
 
+func TestExerciseModels_LowQualityRowsFailButRemainEfficacyEvidence(t *testing.T) {
+	prompts := []ExercisePrompt{
+		{Prompt: "What is 2 + 2?", Intent: IntentToolUse, Complexity: ComplexityTrivial, ScoringContract: ExerciseScoringContract{
+			Mode:                  ScoringModeDirectFact,
+			Concision:             ConcisionPrefer,
+			ToolExpectation:       ToolExpectationContraindicated,
+			SemanticHints:         []string{"4", "four"},
+			SemanticHintThreshold: 1,
+		}},
+	}
+	original := ExerciseMatrix
+	ExerciseMatrix = prompts
+	defer func() { ExerciseMatrix = original }()
+
+	lowQualityResponse := "tool_call tool_call tool_call: this response intentionally avoids the requested answer and keeps expanding with irrelevant procedural language instead of returning the fact. It is verbose enough to violate the concise direct-fact contract and contains prohibited tool-call wording."
+	var seen PromptOutcome
+	report, err := ExerciseModels(context.Background(), ExerciseRequest{
+		Models:     []string{"test-model"},
+		Iterations: 1,
+		SendPrompt: func(ctx context.Context, model, content string, timeout time.Duration) (PromptDispatch, error) {
+			return PromptDispatch{ResponseText: lowQualityResponse, LatencyMs: 1}, nil
+		},
+		SendWarmup:   func(context.Context, string, time.Duration) WarmupResult { return WarmupResult{LatencyMs: 1} },
+		IsLocal:      func(string) bool { return false },
+		ModelTimeout: func(string) time.Duration { return time.Second },
+		OnPrompt: func(o PromptOutcome) {
+			seen = o
+		},
+	})
+	if err != nil {
+		t.Fatalf("ExerciseModels: %v", err)
+	}
+
+	got := report.Models[0]
+	wantQuality := ScoreExerciseResponse(prompts[0], lowQualityResponse)
+	if wantQuality >= DefaultExercisePassQualityFloor {
+		t.Fatalf("test fixture scored %.2f; need below %.2f", wantQuality, DefaultExercisePassQualityFloor)
+	}
+	if got.Pass != 0 || got.Fail != 1 {
+		t.Fatalf("pass/fail = %d/%d, want 0/1", got.Pass, got.Fail)
+	}
+	if seen.Passed {
+		t.Fatalf("low-quality outcome was marked passed")
+	}
+	if seen.OutcomeClass != ExerciseOutcomeQualityGateFailure {
+		t.Fatalf("outcome class = %q, want %q", seen.OutcomeClass, ExerciseOutcomeQualityGateFailure)
+	}
+	if got.AvgQuality != wantQuality {
+		t.Fatalf("avg quality = %.4f; want preserved low-quality score %.4f", got.AvgQuality, wantQuality)
+	}
+	if got.IntentQuality[IntentToolUse.String()] != wantQuality {
+		t.Fatalf("intent quality = %.4f; want %.4f", got.IntentQuality[IntentToolUse.String()], wantQuality)
+	}
+}
+
 func TestExerciseModels_TransportErrorsAreValidityOnlyEvidence(t *testing.T) {
 	prompts := []ExercisePrompt{
 		{Prompt: "Say hello.", Intent: IntentConversation, Complexity: ComplexityTrivial, ScoringContract: ExerciseScoringContract{
@@ -447,6 +563,19 @@ func TestExerciseModels_CapturesModelStateSnapshots(t *testing.T) {
 }
 
 func TestExerciseModels_UsesModelAttributableLatencyForScorecards(t *testing.T) {
+	prompts := []ExercisePrompt{
+		{Prompt: "What is 2 + 2?", Intent: IntentToolUse, Complexity: ComplexityTrivial, ScoringContract: ExerciseScoringContract{
+			Mode:                  ScoringModeDirectFact,
+			Concision:             ConcisionPrefer,
+			ToolExpectation:       ToolExpectationContraindicated,
+			SemanticHints:         []string{"4", "four"},
+			SemanticHintThreshold: 1,
+		}},
+	}
+	original := ExerciseMatrix
+	ExerciseMatrix = prompts
+	defer func() { ExerciseMatrix = original }()
+
 	promptSender := func(ctx context.Context, model, content string, timeout time.Duration) (PromptDispatch, error) {
 		return PromptDispatch{
 			ResponseText: "4",
@@ -482,8 +611,8 @@ func TestExerciseModels_UsesModelAttributableLatencyForScorecards(t *testing.T) 
 	}
 	got := report.Models[0]
 	latencies := got.Latencies[intent.String()]
-	if len(latencies) != 5 {
-		t.Fatalf("model-attributable latency count = %d, want 5: %v", len(latencies), latencies)
+	if len(latencies) != 1 {
+		t.Fatalf("model-attributable latency count = %d, want 1: %v", len(latencies), latencies)
 	}
 	for _, latency := range latencies {
 		if latency != 250 {
@@ -500,8 +629,8 @@ func TestExerciseModels_UsesModelAttributableLatencyForScorecards(t *testing.T) 
 		t.Fatalf("prompt outcome class = %q, want clean_pass", seen.OutcomeClass)
 	}
 	phase := got.PhaseLatencies["TOTAL_PIPELINE"]
-	if len(phase) != 5 {
-		t.Fatalf("phase total latency count = %d, want 5: %v", len(phase), phase)
+	if len(phase) != 1 {
+		t.Fatalf("phase total latency count = %d, want 1: %v", len(phase), phase)
 	}
 	for _, latency := range phase {
 		if latency != 1_000 {

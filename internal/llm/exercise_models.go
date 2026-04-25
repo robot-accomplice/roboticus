@@ -42,8 +42,17 @@ const (
 	ExerciseOutcomeSlowPass           ExerciseOutcomeClass = "slow_pass"
 	ExerciseOutcomeProviderTimeout    ExerciseOutcomeClass = "provider_timeout"
 	ExerciseOutcomeTransportError     ExerciseOutcomeClass = "transport_error"
+	ExerciseOutcomeValidityAmbiguous  ExerciseOutcomeClass = "validity_ambiguous"
 	ExerciseOutcomeEmptyResponse      ExerciseOutcomeClass = "empty_response"
 	ExerciseOutcomeQualityGateFailure ExerciseOutcomeClass = "quality_gate_failure"
+)
+
+type ExerciseWarmupMode string
+
+const (
+	ExerciseWarmupAuto  ExerciseWarmupMode = "auto"
+	ExerciseWarmupSkip  ExerciseWarmupMode = "skip"
+	ExerciseWarmupForce ExerciseWarmupMode = "force"
 )
 
 // ModelSender is the pluggable transport for dispatching a single
@@ -99,8 +108,8 @@ type PromptOutcome struct {
 	ModelLatencyMs  int64
 	TurnID          string
 	Content         string  // response text (empty on err)
-	Quality         float64 // 0 when Passed=false
-	Passed          bool    // true iff response non-empty AND no error
+	Quality         float64 // measured quality for evaluable rows
+	Passed          bool    // true iff response is evaluable and meets the pass-quality floor
 	OutcomeClass    ExerciseOutcomeClass
 	Err             error // transport error, nil on success
 	PhaseTimings    *ExercisePhaseTimings
@@ -131,6 +140,10 @@ type ExerciseRequest struct {
 	// not drift into ad hoc prompt subsets.
 	IntentFilter *IntentClass
 
+	// PromptFilter optionally narrows the canonical ExerciseMatrix to one exact
+	// row in the form INTENT:Cn, for RCA-grade scope diagnosis.
+	PromptFilter string
+
 	// Iterations is the number of passes each model makes through
 	// ExerciseMatrix. Values < 1 are coerced to 1.
 	Iterations int
@@ -156,6 +169,11 @@ type ExerciseRequest struct {
 	// Nil is treated as io.Discard. Independent from OnPrompt
 	// because warm-up is a pre-scoring phase, not a scored prompt.
 	Progress io.Writer
+
+	// WarmupMode controls whether local warm-up is applied. Empty means auto:
+	// local models warm, cloud models skip. Skip bypasses warm-up even for
+	// local models; force warms every model.
+	WarmupMode ExerciseWarmupMode
 
 	// SampleModelState captures provider/model runtime state for the exact model
 	// under test. It is optional but strongly recommended for benchmarks so
@@ -233,6 +251,12 @@ func ExerciseModels(ctx context.Context, req ExerciseRequest) (ExerciseReport, e
 	if req.IntentFilter != nil && !IsValidIntentClass(*req.IntentFilter) {
 		return ExerciseReport{}, fmt.Errorf("ExerciseModels: invalid IntentFilter %d", *req.IntentFilter)
 	}
+	if req.WarmupMode == "" {
+		req.WarmupMode = ExerciseWarmupAuto
+	}
+	if req.WarmupMode != ExerciseWarmupAuto && req.WarmupMode != ExerciseWarmupSkip && req.WarmupMode != ExerciseWarmupForce {
+		return ExerciseReport{}, fmt.Errorf("ExerciseModels: invalid WarmupMode %q", req.WarmupMode)
+	}
 	if req.Iterations < 1 {
 		req.Iterations = 1
 	}
@@ -247,8 +271,15 @@ func ExerciseModels(ctx context.Context, req ExerciseRequest) (ExerciseReport, e
 	if req.IntentFilter != nil {
 		prompts = filterExerciseMatrix(*req.IntentFilter)
 	}
+	if strings.TrimSpace(req.PromptFilter) != "" {
+		filtered, err := filterExerciseMatrixRow(prompts, req.PromptFilter)
+		if err != nil {
+			return ExerciseReport{}, err
+		}
+		prompts = filtered
+	}
 	if len(prompts) == 0 {
-		return ExerciseReport{}, errors.New("ExerciseModels: no prompts matched the requested intent filter")
+		return ExerciseReport{}, errors.New("ExerciseModels: no prompts matched the requested filter")
 	}
 
 	report := ExerciseReport{}
@@ -269,14 +300,23 @@ func ExerciseModels(ctx context.Context, req ExerciseRequest) (ExerciseReport, e
 		// Warm-up BEFORE the scored matrix. Fires once per model;
 		// all iterations share the warmed model. See warmup_stage.go
 		// for the per-phase rationale.
-		mr.Warmup = RunWarmupStage(ctx, req.Progress, model, req.IsLocal(model), modelTimeout, req.SendWarmup)
-
+		warmLocal := req.IsLocal(model)
+		if req.WarmupMode == ExerciseWarmupSkip {
+			mr.Warmup = WarmupStageResult{Skipped: true}
+			_, _ = fmt.Fprintln(req.Progress, "    Warm-up: skipped (--warmup skip)")
+			_, _ = fmt.Fprintln(req.Progress)
+		} else {
+			if req.WarmupMode == ExerciseWarmupForce {
+				warmLocal = true
+			}
+			mr.Warmup = RunWarmupStage(ctx, req.Progress, model, warmLocal, modelTimeout, req.SendWarmup)
+		}
 		totalPrompts := len(prompts) * req.Iterations
 
 		// Aggregation accumulators. Quality averages must use the same
-		// denominator semantics as persisted scorecards: every scored row counts,
-		// and failed rows contribute zero quality instead of disappearing from the
-		// average.
+		// denominator semantics as persisted scorecards: every evaluable scored
+		// row counts. Quality-gate failures retain their measured quality instead
+		// of disappearing from the average or collapsing to zero.
 		intentSums := make(map[string]float64)
 		intentCounts := make(map[string]int)
 		var qualitySum float64
@@ -369,21 +409,24 @@ func ExerciseModels(ctx context.Context, req ExerciseRequest) (ExerciseReport, e
 					// caller can differentiate via outcome.Err==nil
 					// && !outcome.Passed.
 				default:
-					mr.Pass++
 					quality := ScoreExerciseResponse(ep, dispatch.ResponseText)
 					outcome.Content = dispatch.ResponseText
 					outcome.Quality = quality
-					outcome.Passed = true
-					outcome.OutcomeClass = classifyExercisePass(modelLatencyMs, promptTimeout)
+					outcome.Passed = quality >= DefaultExercisePassQualityFloor
+					if outcome.Passed {
+						mr.Pass++
+						outcome.OutcomeClass = classifyExercisePass(modelLatencyMs, promptTimeout)
+					} else {
+						mr.Fail++
+						outcome.OutcomeClass = ExerciseOutcomeQualityGateFailure
+					}
 				}
 
 				if exerciseOutcomeCountsAsEfficacyEvidence(outcome.OutcomeClass) {
 					qualityCount++
 					intentCounts[intent]++
-					if outcome.Passed {
-						qualitySum += outcome.Quality
-						intentSums[intent] += outcome.Quality
-					}
+					qualitySum += outcome.Quality
+					intentSums[intent] += outcome.Quality
 				}
 
 				if req.OnPrompt != nil {
@@ -443,7 +486,7 @@ func classifyExerciseFailure(err error) ExerciseOutcomeClass {
 
 func exerciseOutcomeCountsAsEfficacyEvidence(class ExerciseOutcomeClass) bool {
 	switch class {
-	case ExerciseOutcomeTransportError, ExerciseOutcomeProviderTimeout:
+	case ExerciseOutcomeTransportError, ExerciseOutcomeProviderTimeout, ExerciseOutcomeValidityAmbiguous:
 		return false
 	default:
 		return true
@@ -458,6 +501,19 @@ func filterExerciseMatrix(intent IntentClass) []ExercisePrompt {
 		}
 	}
 	return filtered
+}
+
+func filterExerciseMatrixRow(prompts []ExercisePrompt, selector string) ([]ExercisePrompt, error) {
+	intent, complexity, err := ParseExerciseRowSelector(selector)
+	if err != nil {
+		return nil, err
+	}
+	for _, prompt := range prompts {
+		if prompt.Intent == intent && prompt.Complexity == complexity {
+			return []ExercisePrompt{prompt}, nil
+		}
+	}
+	return nil, fmt.Errorf("ExerciseModels: no prompt matched row selector %s", strings.ToUpper(strings.TrimSpace(selector)))
 }
 
 func appendPhaseLatencies(target map[string][]int64, timings *ExercisePhaseTimings) {

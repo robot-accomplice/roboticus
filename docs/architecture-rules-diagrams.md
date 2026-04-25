@@ -54,6 +54,9 @@ This file follows the same C4 conventions used elsewhere in the repo:
   admin surfaces are not allowed to collapse into one monolithic route file
 - unified pipeline-path enforcement follows the whole connector surface for a
   route family, not one legacy filename after a bounded split
+- benchmark route sub-surfaces such as exercise execution, historical rescore,
+  scorecard reads, and RCA classification stay split into bounded connector
+  files; rescore is not allowed to bloat the main exercise route handler file
 - verification coverage, executive-plan growth, and retry guidance must all
   consume one canonical subgoal set; the framework is not allowed to count the
   whole prompt and its conjunction-split parts as separate requested goals
@@ -65,12 +68,23 @@ This file follows the same C4 conventions used elsewhere in the repo:
 - benchmark scoring truth starts from the prompt contract, not generic
   verbosity or marker density; concise direct answers are not allowed to score
   poorly just because they omit irrelevant execution/delegation language
+- required-tool benchmark prompts require observed evidence or explicit blocked
+  evidence; legitimate negative results can satisfy lookup prompts, but access
+  failures or configuration/tool failures that block the requested work are RCA
+  evidence, not successful tool-use evidence
+- action-oriented execution/delegation benchmark prompts must distinguish
+  completed work from blocked or hypothetical work; blocked prose remains RCA
+  evidence but cannot be scored as a clean completion pass
 - historical benchmark rows must remain rescorable when prompt identity and raw
   response content are persisted; scoring-regime changes are not allowed to
   force blind reruns by default
 - benchmark aggregate quality must keep one explicit denominator contract:
   summary and scorecard views are not allowed to silently disagree about
   whether failures counted as zeroes or were excluded from an average
+- benchmark pass/fail has a default evaluable-quality floor of `0.50`; rows
+  below that floor are quality-gate failures, but their measured quality still
+  contributes to aggregate efficacy because they are model behavior evidence,
+  not validity incidents
 - partial benchmark exercise runs update only the exercised model/intent slice;
   comparison rows must preserve untouched historical intent evidence and
   recompute aggregate quality/latency from the merged scorecard instead of
@@ -92,6 +106,13 @@ This file follows the same C4 conventions used elsewhere in the repo:
   and complex multi-step `T-E-O-R` rows are not allowed to share one flat
   cloud timeout, and the benchmark client's wait budget must remain distinct
   from the server-side execution budget
+- benchmark scope diagnosis must support exact canonical row replay
+  (`INTENT:Cn`) through the shared exercise orchestrator, not just broad intent
+  slices, so RCA can isolate one suspect inference without re-running unrelated
+  prompts
+- benchmark warm-up policy must be explicit operator input. Normal baselines
+  include local warm-up, but scope diagnosis may bypass warm-up when the
+  question is scoring/classification rather than cold-start behavior.
 - benchmark model-call timeout is a per-inference-call budget, not a whole-row
   stopwatch. If a task requires think, tool observation, and reflection calls,
   the model/provider timer resets after each completed inference while total row
@@ -107,6 +128,9 @@ This file follows the same C4 conventions used elsewhere in the repo:
   remain persisted RCA evidence, but they are not allowed to count as exercised
   efficacy coverage or overwrite prior per-intent model evidence in comparison
   tables
+- legacy unclassified blank zero rows are validity-ambiguous and must not be
+  resurrected as all-zero efficacy coverage; explicit `empty_response` rows may
+  still count as model behavior evidence
 - benchmark progress rows are operator telemetry, not artifact transport:
   untrusted model text rendered inline by the CLI must be reduced to a bounded
   single-line preview with control sequences, line breaks, tabs, and Markdown
@@ -120,6 +144,25 @@ This file follows the same C4 conventions used elsewhere in the repo:
   inferred only from successful pipeline output
 - after authoritative tool observation, empty reflection is not a valid final
   answer: the loop must finalize from observed evidence or return a real error
+- guard exhaustion is not a license to synthesize deterministic user-facing
+  fallback prose; exhausted guards return structured failure evidence, retry
+  through scoped corrective guidance, or preserve authoritative observed
+  evidence
+- Agent Behavioral Contracts are an active v1.0.8 evaluation path for replacing
+  ad hoc guardrail methodology with explicit precondition, invariant,
+  governance, recovery, satisfaction, and drift evidence where that improves
+  measured reliability
+- guard and verifier findings must emit contract-shaped RCA evidence before
+  they ask for retry or rewrite behavior. The first implementation seam is
+  structured event details on `turn_diagnostic_events`, not a broad operator
+  DSL or a new persistence table. Required fields are contract id/group,
+  phase, hard/soft/neutral severity, precondition state, violation state,
+  recovery action, recovery attempt/window, recovery outcome, and confidence
+  effect.
+- canned user-facing guard rewrites are forbidden. A hard guard may block,
+  retry with scoped corrective guidance, or preserve useful observed evidence
+  with a structured violation, but it may not synthesize fixed prose as the
+  operator answer.
 - verifier retry suppression after execution progress requires non-empty final
   content; a suppressed retry may preserve a weak task-specific answer, but it
   must not persist a blank assistant message under an `ok` turn
@@ -130,9 +173,14 @@ This file follows the same C4 conventions used elsewhere in the repo:
   client/request context; client cancellation is not allowed to erase RCA
   artifacts for an already-started turn
 - coding prompts that request runnable artifacts are not allowed to be graded
-  primarily by prose quality; artifact parse/typecheck/compile and bounded
-  input/output correctness precede explanation/style in the active benchmark
-  architecture
+  primarily by prose quality; artifact parse/typecheck/compile precedes
+  explanation/style, and bounded input/output execution should be universally
+  available through a shared sandboxed evaluator seam. Generic scoring helpers
+  may call that seam, but they must not own ad hoc execution policy.
+- the initial executable coding evaluators are contract-bound: reverse-string
+  Go and Python artifact rows may run through temporary bounded harnesses
+  because the prompt defines deterministic input/output cases. Wider evaluator
+  support must add an explicit contract and tests before use.
 - source-backed code surgery is not generic heavy code work. Refactor/fix/debug
   turns over the current repository must use a repo-grounded focused profile
   that anchors on the actual source root, prioritizes authoritative source
@@ -176,6 +224,11 @@ This file follows the same C4 conventions used elsewhere in the repo:
   unavailable unless that conclusion is derived from the active tool surface,
   sandbox policy, network policy, or provider capability state and is visible
   in RCA
+- generic capability denial is not a safe fallback. If the turn has successful
+  runtime/tool evidence, reflection may report a bounded missing capability
+  only when a concrete policy, sandbox, network, provider, or tool error proves
+  that limitation; otherwise the guard seam must retry or degrade the answer
+  as unsupported capability denial
 - allowed-path reasoning must be subtree-aware: if an allowed root has already
   admitted `/a/b`, then `/a/b/c` is readable by default unless a narrower deny
   rule, mode distinction, or policy guard says otherwise
@@ -370,6 +423,10 @@ This file follows the same C4 conventions used elsewhere in the repo:
 - read-only inspection turns may report discovered filenames and paths from
   authoritative inspection evidence without triggering authored-artifact claim
   checks; `artifact_set_overclaim` belongs to output-contract / mutation turns
+- read-only inspection turns that are asked to list, report, or summarize
+  concrete entries must carry at least some observed entries into the final
+  answer. Reflection is not allowed to replace authoritative inspection output
+  with meta-claims that a list existed
 - direct `execute_directly` turns are not allowed to terminate on promissory
   future-action scaffolding such as `let me check...` when no tool call or
   authoritative evidence was produced; the direct-execution seam must treat

@@ -55,6 +55,12 @@ older architecture docs had left too generic:
   instead of leaked business flow. Architecture enforcement must follow that
   connector surface rather than pinning the unified pipeline-path requirement
   to one historical filename after the split.
+- **Benchmark route sub-surfaces stay bounded.** Exercise execution,
+  historical rescore, scorecard reads, and RCA/classification views are distinct
+  connector surfaces even when they share persistence helpers. Rescore logic is
+  not allowed to accrete inside the main exercise route file merely because it
+  operates on exercise rows; bounded files are part of keeping the connector
+  layer honest.
 - **Verification coverage must derive one canonical subgoal set.** The verifier
   and executive-plan seam is not allowed to count both the unsplit whole prompt
   and the later conjunction-split parts as separate requested subgoals. Coverage,
@@ -137,6 +143,23 @@ older architecture docs had left too generic:
   provider/model adapters must render that artifact safely for the active
   thinking/tool-call mode. Otherwise a successful `E/O/R` cycle can still be
   lost when continuation inherits provider-fragile assistant/tool-call replay.
+- **Guard and verifier findings must become contract evidence, not prose
+  substitutions.** The ABC paper is useful because it exposes the weakness in
+  the current guard seam: `violations`, `retry`, and `reason` are insufficient
+  RCA evidence. v1.0.8 uses the existing canonical diagnostics event stream as
+  the first contract-event seam. Guard/verifier findings must carry contract
+  id/group, `R-TEOR-R` phase, hard/soft/neutral severity, precondition state,
+  violation state, recovery action, recovery attempt/window, outcome, and
+  confidence effect. This is intentionally not a broad DSL yet; it is a
+  diagnostic data model that lets RCA distinguish hard failure, recoverable
+  deviation, neutral non-events, and drift over time.
+- **Canned guard rewrites are an architecture violation.** A guard may strip
+  unsafe internal markers, request scoped recovery, block with structured
+  failure evidence, or preserve the best available observed answer with RCA
+  concerns. It may not replace the model's answer with fixed user-facing prose
+  authored inside the guard implementation. Operator-facing wording belongs to
+  the normal response path or an approved policy/refusal surface, not a hidden
+  fallback string.
 - **Benchmark scoring must become prompt-contract-aware.** Exercise scoring is
   not allowed to treat verbosity, generic structure, or intent-marker density
   as the primary truth source. The canonical scoring seam must evaluate the
@@ -150,6 +173,23 @@ older architecture docs had left too generic:
   task-satisfying answers such as time, arithmetic, greeting, and direct-fact
   prompts are not allowed to score poorly just because they omit irrelevant
   execution/delegation markers or refuse to pad themselves with prose.
+- **Required-tool benchmark prompts require observed evidence, not promises.**
+  For prompts whose contract says tool use is required, a response that only
+  says it will query, inspect, search, or check something is not successful
+  tool use. Scoring must prefer explicit observed results, tool-output
+  markers, or concrete file/database/session facts. Legitimate negative
+  results such as "no README exists" can satisfy a lookup prompt, but access
+  failures, missing allowlist configuration, or tool failures that prevent the
+  requested work are diagnostic failure evidence, not successful tool use.
+  Future-tense tool intent is useful RCA evidence, but it is a failed or
+  degraded prompt outcome, not a pass.
+- **Action benchmark prompts must not reward hypothetical completion.** For
+  execution/delegation prompts that ask the agent to create, write, schedule,
+  orchestrate, refactor, or otherwise perform work, an answer that says it
+  cannot complete the action and then describes what it would do is diagnostic
+  evidence, not successful task completion. Honest blockage should remain
+  visible in RCA, but the benchmark score must not present it as a clean model
+  efficacy pass.
 - **Historical benchmark artifacts must be rescorable.** Because
   `exercise_results` persists prompt identity and raw response content, scoring
   changes are not allowed to force blind reruns by default. The benchmark seam
@@ -216,6 +256,12 @@ older architecture docs had left too generic:
   stricter latency SLOs, but they must classify slow-valid rows differently
   from empty provider timeouts, pipeline failures, verifier defects, and scoring
   defects.
+- **Scope diagnosis requires exact row replay and explicit warm-up control.**
+  Intent slices are useful, but they are still too broad when investigating one
+  suspicious inference such as `TOOL_USE:C2`. The exercise orchestrator must
+  accept a canonical row selector and a warm-up policy so CLI/API callers can
+  replay one prompt without paying unrelated local cold-start cost unless that
+  cost is the diagnostic question.
 - **Exercise rows must persist row-level outcome class.** `passed=false` is not
   an RCA diagnosis. Benchmark persistence must distinguish at least clean pass,
   slow pass, provider timeout, transport/API failure, empty response, and
@@ -228,8 +274,15 @@ older architecture docs had left too generic:
   diagnosis, and operator incident review, but they must not be counted as
   exercised efficacy coverage, must not overwrite older valid intent evidence,
   and must not appear as `7/7` observed quality evidence with all-zero scores.
-  Empty model responses and prompt-contract quality failures are different:
-  those are evaluable model behavior and may still contribute zero quality.
+  Explicit empty model responses and prompt-contract quality failures are
+  different: those are evaluable model behavior. Legacy rows with blank
+  content, zero quality, failed status, no error, and no result class are not
+  explicit empty-response evidence; they are ambiguous pre-classification
+  failures and must not be resurrected as all-zero efficacy coverage. By
+  default, evaluable benchmark rows with quality below `0.50` are quality-gate
+  failures; they do not pass, but their actual measured quality still
+  contributes to aggregate efficacy so a `0.42` row remains a `0.42` signal
+  instead of disappearing or collapsing to zero.
 - **Benchmark progress rendering must not stream raw model artifacts.** The CLI
   progress row is an operator telemetry surface, not a transcript renderer.
   Multiline answers, fenced code blocks, tabs, carriage returns, ANSI/control
@@ -304,6 +357,21 @@ older architecture docs had left too generic:
   terminal answer. The loop may finalize from observed tool/result evidence,
   or it may return a real error, but it must not persist an empty assistant
   response after work was actually performed.
+- **Guard exhaustion must not synthesize canned prose.** When guard retries are
+  exhausted, the runtime may return a structured guard-exhausted error, retry
+  with scoped corrective guidance, or finalize from authoritative observed
+  evidence. It is not allowed to emit deterministic user-facing fallback prose
+  such as “let me try again” or “could you rephrase” as if it were the model's
+  task answer.
+- **Agent behavioral contracts are now an active guardrail replacement
+  candidate.** The ABC paper's framing of contracts as preconditions,
+  invariants, governance policies, and recovery mechanisms maps directly onto
+  the current guard/reflection/RCA pain point. v1.0.8 should evaluate whether
+  today's guardrail categories can be re-expressed as contract-shaped runtime
+  evidence with explicit hard/soft severity, recovery windows, satisfaction
+  probabilities, and drift metrics. The goal is not paper-driven feature creep;
+  it is to extract mechanisms that make agent and memory behavior measurably
+  more reliable and easier to diagnose.
 - **Verifier retry suppression requires non-empty final content.** Suppressing
   a verifier retry after substantive execution progress is only valid when the
   pipeline has a task-specific answer to preserve. If the current result is
@@ -323,11 +391,26 @@ older architecture docs had left too generic:
 - **Coding evaluation must graduate from prose scoring to artifact truth.**
   For prompts that ask for runnable code, the benchmark is not allowed to stop
   at “sounds code-aware.” The active release seam must extract the submitted
-  artifact, attempt parse / typecheck / compile where feasible, and run bounded
-  input/output correctness checks before explanation/style heuristics are
-  allowed to influence the coding score. Richer multi-language semantic
-  evaluators remain roadmap work, but artifact correctness is now active
-  benchmark architecture rather than deferred aspiration.
+  artifact and attempt parse / typecheck / compile where feasible before
+  explanation/style heuristics are allowed to influence the coding score.
+  Bounded input/output execution should be universally available through a
+  first-class sandboxed evaluation seam shared by benchmark scoring, RCA, and
+  future agent fitness checks. The prohibition is not on universal execution;
+  it is on hiding model-generated code execution inside generic scoring helpers
+  without sandbox ownership, resource limits, language/runtime policy, and
+  persisted evaluator evidence. Until that universal seam is in place, scoring
+  may use parse/typecheck/static functional checks but must report that it did
+  not execute input/output cases. Richer multi-language semantic evaluators
+  remain roadmap work, but artifact correctness is now active benchmark
+  architecture rather than deferred aspiration.
+- **The first executable coding evaluators are deliberately narrow.** v1.0.8
+  may execute reverse-string Go and Python artifact rows through bounded
+  temporary harnesses because that prompt has deterministic input/output
+  cases. Go currently covers `string -> string`; Python covers both
+  `string -> string` and single-list-argument in-place mutation variants. This
+  is not a general sandbox claim. Additional languages or problem shapes must
+  add evaluator contracts, timeout/resource policy, and regression coverage
+  instead of expanding ad hoc string heuristics.
 - **Source-backed code execution is its own focused class.** Prompts such as
   `refactor the configuration parser`, `fix the failing cache implementation`,
   or other current-repository code surgery are not allowed to fall into the

@@ -18,15 +18,35 @@ const (
 	GuardPass           GuardVerdict = iota // Content passed without modification
 	GuardRewritten                          // Content was rewritten by the guard
 	GuardRetryRequested                     // Guard requests a full re-inference
+	GuardBlocked                            // Guard blocks the response without synthesizing prose
 )
+
+// GuardContractEvent is the diagnostic contract fact emitted by guard checks.
+// It is intentionally data-only: user-facing prose belongs to normal response
+// generation, not hidden guard substitutions.
+type GuardContractEvent struct {
+	ContractID        string `json:"contract_id"`
+	ContractGroup     string `json:"contract_group"`
+	Phase             string `json:"phase"`
+	Severity          string `json:"severity"`
+	PreconditionState string `json:"precondition_state"`
+	ViolationState    string `json:"violation_state"`
+	RecoveryAction    string `json:"recovery_action"`
+	RecoveryAttempt   int    `json:"recovery_attempt,omitempty"`
+	RecoveryWindow    int    `json:"recovery_window,omitempty"`
+	RecoveryOutcome   string `json:"recovery_outcome,omitempty"`
+	ConfidenceEffect  string `json:"confidence_effect"`
+}
 
 // GuardResult holds the outcome of a guard check.
 type GuardResult struct {
-	Passed  bool
-	Content string       // modified content (same as input if unchanged)
-	Retry   bool         // request retry with modified prompt
-	Reason  string       // why the guard triggered
-	Verdict GuardVerdict // classification of the guard action (Wave 8, #72)
+	Passed        bool
+	Content       string             // modified content (same as input if unchanged)
+	Retry         bool               // request retry with modified prompt
+	Blocked       bool               // block response without substituting canned prose
+	Reason        string             // why the guard triggered
+	Verdict       GuardVerdict       // classification of the guard action (Wave 8, #72)
+	ContractEvent GuardContractEvent // structured RCA evidence for this finding
 }
 
 // GuardChain applies an ordered sequence of guards.
@@ -44,7 +64,10 @@ type ApplyResult struct {
 	Content        string
 	RetryRequested bool
 	RetryReason    string
+	Blocked        bool
+	BlockReason    string
 	Violations     []string
+	ContractEvents []GuardContractEvent
 }
 
 // Len returns the number of guards in the chain.
@@ -69,6 +92,100 @@ func (gc *GuardChain) GuardTypesForTest() []string {
 	return types
 }
 
+func newGuardContractEvent(id, group, phase, severity, precondition, violation, recovery, confidence string) GuardContractEvent {
+	return GuardContractEvent{
+		ContractID:        id,
+		ContractGroup:     group,
+		Phase:             phase,
+		Severity:          severity,
+		PreconditionState: precondition,
+		ViolationState:    violation,
+		RecoveryAction:    recovery,
+		RecoveryWindow:    1,
+		RecoveryOutcome:   "pending",
+		ConfidenceEffect:  confidence,
+	}
+}
+
+func buildGuardContractEvent(guardName string, gr GuardResult) GuardContractEvent {
+	event := gr.ContractEvent
+	if event.ContractID == "" {
+		event = defaultGuardContractEvent(guardName, gr)
+	}
+	if event.ContractID == "" {
+		event.ContractID = guardName
+	}
+	if event.ContractGroup == "" {
+		event.ContractGroup = "guard"
+	}
+	if event.Phase == "" {
+		event.Phase = "reflect"
+	}
+	if event.Severity == "" {
+		event.Severity = defaultGuardSeverity(guardName)
+	}
+	if event.PreconditionState == "" {
+		event.PreconditionState = "guard precondition was evaluated"
+	}
+	if event.ViolationState == "" {
+		event.ViolationState = gr.Reason
+	}
+	if event.RecoveryAction == "" {
+		event.RecoveryAction = defaultGuardRecoveryAction(gr)
+	}
+	if event.RecoveryWindow == 0 && event.RecoveryAction == "retry" {
+		event.RecoveryWindow = 1
+	}
+	if event.RecoveryOutcome == "" {
+		event.RecoveryOutcome = "pending"
+	}
+	if event.ConfidenceEffect == "" {
+		if event.Severity == "neutral" {
+			event.ConfidenceEffect = "0"
+		} else {
+			event.ConfidenceEffect = "-1"
+		}
+	}
+	return event
+}
+
+func defaultGuardContractEvent(guardName string, gr GuardResult) GuardContractEvent {
+	return GuardContractEvent{
+		ContractID:        guardName,
+		ContractGroup:     "guard",
+		Phase:             "reflect",
+		Severity:          defaultGuardSeverity(guardName),
+		PreconditionState: "assistant output must satisfy guard policy",
+		ViolationState:    gr.Reason,
+		RecoveryAction:    defaultGuardRecoveryAction(gr),
+		RecoveryWindow:    1,
+		RecoveryOutcome:   "pending",
+		ConfidenceEffect:  "-1",
+	}
+}
+
+func defaultGuardSeverity(guardName string) string {
+	switch guardName {
+	case "internal_marker", "repetition", "non_repetition_v2", "perspective", "literary_quote_retry":
+		return "soft"
+	default:
+		return "hard"
+	}
+}
+
+func defaultGuardRecoveryAction(gr GuardResult) string {
+	switch {
+	case gr.Blocked || gr.Verdict == GuardBlocked:
+		return "block"
+	case gr.Retry || gr.Verdict == GuardRetryRequested:
+		return "retry"
+	case gr.Content != "":
+		return "rewrite"
+	default:
+		return "record"
+	}
+}
+
 // Apply runs all guards on the content. Returns the final result.
 func (gc *GuardChain) Apply(content string) string {
 	result := gc.ApplyFull(content)
@@ -83,6 +200,13 @@ func (gc *GuardChain) ApplyFull(content string) ApplyResult {
 		gr := g.Check(content)
 		if !gr.Passed {
 			result.Violations = append(result.Violations, g.Name()+": "+gr.Reason)
+			result.ContractEvents = append(result.ContractEvents, buildGuardContractEvent(g.Name(), gr))
+			if gr.Blocked || gr.Verdict == GuardBlocked {
+				result.Blocked = true
+				result.BlockReason = gr.Reason
+				result.Content = ""
+				return result
+			}
 			if gr.Content != "" {
 				content = gr.Content
 				result.Content = content
@@ -108,6 +232,13 @@ func (gc *GuardChain) ApplyFrom(content string, fromIndex int) ApplyResult {
 		gr := g.Check(content)
 		if !gr.Passed {
 			result.Violations = append(result.Violations, g.Name()+": "+gr.Reason)
+			result.ContractEvents = append(result.ContractEvents, buildGuardContractEvent(g.Name(), gr))
+			if gr.Blocked || gr.Verdict == GuardBlocked {
+				result.Blocked = true
+				result.BlockReason = gr.Reason
+				result.Content = ""
+				return result
+			}
 			if gr.Content != "" {
 				content = gr.Content
 				result.Content = content
@@ -140,10 +271,11 @@ func (g *EmptyResponseGuard) Name() string { return "empty_response" }
 func (g *EmptyResponseGuard) Check(content string) GuardResult {
 	if strings.TrimSpace(content) == "" {
 		return GuardResult{
-			Passed:  false,
-			Retry:   true,
-			Reason:  "empty response",
-			Verdict: GuardRetryRequested,
+			Passed:        false,
+			Retry:         true,
+			Reason:        "empty response",
+			Verdict:       GuardRetryRequested,
+			ContractEvent: newGuardContractEvent("empty_response", "availability", "reflect", "hard", "response must contain usable content", "response was empty", "retry", "-1"),
 		}
 	}
 	return GuardResult{Passed: true, Content: content}
@@ -174,9 +306,11 @@ func (g *SystemPromptLeakGuard) Check(content string) GuardResult {
 	for _, marker := range g.markers {
 		if strings.Contains(lower, strings.ToLower(marker)) {
 			return GuardResult{
-				Passed:  false,
-				Content: "I can't share my system instructions. How else can I help you?",
-				Reason:  "system prompt leak detected",
+				Passed:        false,
+				Retry:         true,
+				Reason:        "system prompt leak detected",
+				Verdict:       GuardRetryRequested,
+				ContractEvent: newGuardContractEvent("system_prompt_leak", "security", "reflect", "hard", "system instructions must remain hidden", "system prompt marker appeared in model output", "retry", "-1"),
 			}
 		}
 	}
@@ -239,10 +373,12 @@ func (g *ContentClassificationGuard) Check(content string) GuardResult {
 	for _, pattern := range g.harmfulPatterns {
 		if strings.Contains(lower, pattern) {
 			return GuardResult{
-				Passed:  false,
-				Content: "I can't assist with that request. Please ask something else.",
-				Reason:  "harmful content detected",
-				Retry:   false,
+				Passed:        false,
+				Blocked:       true,
+				Reason:        "harmful content detected",
+				Retry:         false,
+				Verdict:       GuardBlocked,
+				ContractEvent: newGuardContractEvent("content_classification", "safety", "reflect", "hard", "assistant output must not contain harmful instruction content", "harmful content pattern appeared in model output", "block", "-1"),
 			}
 		}
 	}

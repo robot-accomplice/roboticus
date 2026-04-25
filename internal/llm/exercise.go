@@ -1,11 +1,19 @@
 package llm
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"go/ast"
 	"go/parser"
+	"go/printer"
 	"go/token"
+	"go/types"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -13,6 +21,12 @@ import (
 // IntentClass categorizes exercise prompts for per-dimension quality tracking.
 // Uses int enum — no string comparison bugs possible.
 type IntentClass int
+
+// DefaultExercisePassQualityFloor is the default quality threshold for an
+// evaluable benchmark row to count as passed. Operators may later expose a
+// configurable tolerance, but the runtime default must not call sub-.50 output
+// successful.
+const DefaultExercisePassQualityFloor = 0.50
 
 const (
 	IntentExecution IntentClass = iota
@@ -152,6 +166,29 @@ func ParseComplexityLevel(raw string) (ComplexityLevel, error) {
 	}
 }
 
+// ParseExerciseRowSelector parses a canonical benchmark row selector such as
+// TOOL_USE:C2. The Cn suffix maps directly to the benchmark complexity row.
+func ParseExerciseRowSelector(raw string) (IntentClass, ComplexityLevel, error) {
+	selector := strings.ToUpper(strings.TrimSpace(raw))
+	parts := strings.Split(selector, ":")
+	if len(parts) != 2 {
+		return IntentExecution, ComplexityTrivial, fmt.Errorf("invalid exercise row selector %q (want INTENT:Cn)", raw)
+	}
+	intent, err := ParseIntentClassStrict(parts[0])
+	if err != nil {
+		return IntentExecution, ComplexityTrivial, err
+	}
+	level := strings.TrimSpace(parts[1])
+	if !strings.HasPrefix(level, "C") || len(level) < 2 {
+		return IntentExecution, ComplexityTrivial, fmt.Errorf("invalid exercise row selector %q (want INTENT:Cn)", raw)
+	}
+	idx, err := strconv.Atoi(strings.TrimPrefix(level, "C"))
+	if err != nil || idx < int(ComplexityTrivial) || idx > int(ComplexityExpert) {
+		return IntentExecution, ComplexityTrivial, fmt.Errorf("invalid exercise row selector %q (complexity must be C0-C4)", raw)
+	}
+	return intent, ComplexityLevel(idx), nil
+}
+
 // ExercisePrompt is a single synthetic prompt in the exercise matrix.
 type ExercisePrompt struct {
 	Prompt          string
@@ -264,7 +301,9 @@ var ExerciseMatrix = []ExercisePrompt{
 	{Prompt: "What are your biggest limitations when handling complex multi-step tasks?", Intent: IntentIntrospection, Complexity: ComplexitySimple},
 	{Prompt: "Explain what you can do in one sentence.", Intent: IntentConversation, Complexity: ComplexitySimple},
 	{Prompt: "What do you remember about our last conversation?", Intent: IntentMemoryRecall, Complexity: ComplexitySimple},
-	{Prompt: "Show me the contents of the README file.", Intent: IntentToolUse, Complexity: ComplexitySimple}, // Should use read_file
+	{Prompt: "Show me the contents of the README file.", Intent: IntentToolUse, Complexity: ComplexitySimple, ScoringContract: ExerciseScoringContract{
+		ToolExpectation: ToolExpectationRequired,
+	}}, // Should use read_file
 	{Prompt: "Write a function in any language that reverses a string in-place and explain one edge case to watch for.", Intent: IntentCoding, Complexity: ComplexitySimple, ScoringContract: ExerciseScoringContract{
 		ArtifactExpectation: ArtifactExpectationCodeRequired,
 		ArtifactEvaluator:   ArtifactEvaluatorReverseString,
@@ -276,7 +315,9 @@ var ExerciseMatrix = []ExercisePrompt{
 	{Prompt: "How would you know if you were giving a wrong answer, and what would you do about it?", Intent: IntentIntrospection, Complexity: ComplexityModerate},
 	{Prompt: "Compare the advantages of local models versus cloud models for my use case.", Intent: IntentConversation, Complexity: ComplexityModerate},
 	{Prompt: "Search your memories for anything about the deployment project. What can you find?", Intent: IntentMemoryRecall, Complexity: ComplexityModerate},
-	{Prompt: "Look up how many sessions were created today by querying the database.", Intent: IntentToolUse, Complexity: ComplexityModerate}, // Should use query_table
+	{Prompt: "Look up how many sessions were created today by querying the database.", Intent: IntentToolUse, Complexity: ComplexityModerate, ScoringContract: ExerciseScoringContract{
+		ToolExpectation: ToolExpectationRequired,
+	}}, // Should use query_table
 	{Prompt: "Given the Go function `func Increment(x *int) { *x++ }`, what goes wrong if x is nil and how should it be fixed?", Intent: IntentCoding, Complexity: ComplexityModerate},
 
 	// ── Complex (complexity ~0.7) ──────────────────────────────
@@ -285,7 +326,9 @@ var ExerciseMatrix = []ExercisePrompt{
 	{Prompt: "Analyze your recent performance across different task types and suggest which model would handle each best.", Intent: IntentIntrospection, Complexity: ComplexityComplex},
 	{Prompt: "Explain the trade-offs between consistency and availability in distributed systems, with examples relevant to my setup.", Intent: IntentConversation, Complexity: ComplexityComplex},
 	{Prompt: "I told you something important about palm a few months ago. Use your search_memories tool to look it up and tell me what you find.", Intent: IntentMemoryRecall, Complexity: ComplexityComplex},
-	{Prompt: "Find all files in the workspace that were modified in the last 24 hours, read the 3 most recent, and summarize the changes.", Intent: IntentToolUse, Complexity: ComplexityComplex}, // Should chain bash + read_file
+	{Prompt: "Find all files in the workspace that were modified in the last 24 hours, read the 3 most recent, and summarize the changes.", Intent: IntentToolUse, Complexity: ComplexityComplex, ScoringContract: ExerciseScoringContract{
+		ToolExpectation: ToolExpectationRequired,
+	}}, // Should chain bash + read_file
 	{Prompt: "Review this Go method for race conditions: `func (c *Cache) Get(k string) string { v := c.data[k]; c.hits++; return v }`. Describe the hazard and propose a concrete fix.", Intent: IntentCoding, Complexity: ComplexityComplex},
 
 	// ── Expert (complexity ~0.9) ───────────────────────────────
@@ -294,7 +337,9 @@ var ExerciseMatrix = []ExercisePrompt{
 	{Prompt: "Evaluate your own decision-making process over the last 50 turns: where did you make correct tool choices, where did you waste tokens on unnecessary actions, and what patterns should the routing system learn from?", Intent: IntentIntrospection, Complexity: ComplexityExpert},
 	{Prompt: "Design a capability-based security model for a multi-tenant agent platform where each tenant has different trust levels, tool access policies, and cost budgets, considering both the authorization and audit requirements.", Intent: IntentConversation, Complexity: ComplexityExpert},
 	{Prompt: "Cross-reference your episodic and semantic memories about the infrastructure migration project, then search for any related relationship data about the people involved. Compile a timeline of what happened, who was involved, and what decisions were made.", Intent: IntentMemoryRecall, Complexity: ComplexityExpert},
-	{Prompt: "Query the sessions database for the last 10 conversations, analyze the tool call patterns in each, cross-reference with the inference costs table to calculate per-tool cost efficiency, and write a report to the workspace.", Intent: IntentToolUse, Complexity: ComplexityExpert}, // Should chain query_table + bash + write_file
+	{Prompt: "Query the sessions database for the last 10 conversations, analyze the tool call patterns in each, cross-reference with the inference costs table to calculate per-tool cost efficiency, and write a report to the workspace.", Intent: IntentToolUse, Complexity: ComplexityExpert, ScoringContract: ExerciseScoringContract{
+		ToolExpectation: ToolExpectationRequired,
+	}}, // Should chain query_table + bash + write_file
 	{Prompt: "Design a memory-bounded LRU cache in Go with O(1) Get and Put, eviction callbacks, and safe concurrent access. Describe the data structures you'd use and write the core Put method.", Intent: IntentCoding, Complexity: ComplexityExpert, ScoringContract: ExerciseScoringContract{
 		ArtifactExpectation:  ArtifactExpectationCodeRequired,
 		ArtifactLanguageHint: "go",
@@ -555,7 +600,7 @@ func RunExercise(ctx context.Context, completer Completer, model string, prompts
 
 		result.Content = resp.Content
 		result.Quality = ScoreExerciseResponse(p, resp.Content)
-		result.Passed = result.Quality >= 0.3 && result.Error == ""
+		result.Passed = result.Quality >= DefaultExercisePassQualityFloor && result.Error == ""
 		results = append(results, result)
 		if cb != nil {
 			cb(i, result)
@@ -596,7 +641,30 @@ func ScoreExerciseResponse(prompt ExercisePrompt, content string) float64 {
 
 	if prompt.Intent == IntentCoding && prompt.ScoringContract.ArtifactExpectation == ArtifactExpectationCodeRequired {
 		artifactScore := scoreCodingArtifact(prompt, content)
-		score = 0.55*artifactScore + 0.45*score
+		if prompt.ScoringContract.ArtifactEvaluator != ArtifactEvaluatorNone {
+			score = 0.85*artifactScore + 0.15*score
+		} else {
+			score = 0.55*artifactScore + 0.45*score
+		}
+	}
+
+	if prompt.ScoringContract.ToolExpectation == ToolExpectationRequired && !hasRequiredToolOutcomeEvidence(lower) {
+		if hasToolFailureNonCompletion(lower) {
+			return minFloat(score, 0.49)
+		}
+		if hasPromissoryToolIntent(lower) {
+			return minFloat(score, 0.35)
+		}
+		return minFloat(score, 0.49)
+	}
+	if prompt.ScoringContract.ToolExpectation == ToolExpectationRequired && hasToolFailureNonCompletion(lower) {
+		return minFloat(score, 0.49)
+	}
+
+	if actionPromptRequiresCompletion(prompt) && hasBlockedActionNonCompletion(lower) {
+		if hasDeclaredTaskFailure(lower) || !hasConcreteActionCompletionEvidence(lower) {
+			return minFloat(score, 0.49)
+		}
 	}
 
 	// Memory recall: apply confabulation penalty at top level.
@@ -658,10 +726,11 @@ func scorePromptContract(prompt ExercisePrompt, lower string, length int) float6
 
 	switch contract.ToolExpectation {
 	case ToolExpectationRequired:
-		score += 0.15 * markerScore(lower, []string{
-			"tool", "result", "output", "query", "file", "command", "read_file",
-			"query_table", "bash", "search_memories",
-		}, 1)
+		if hasRequiredToolOutcomeEvidence(lower) {
+			score += 0.2
+		} else if hasPromissoryToolIntent(lower) {
+			score -= 0.2
+		}
 	case ToolExpectationContraindicated:
 		if containsAny(lower, []string{
 			"read_file", "query_table", "bash", "tool_call", "search_memories",
@@ -691,6 +760,93 @@ func scorePromptContract(prompt ExercisePrompt, lower string, length int) float6
 		score = 1
 	}
 	return score
+}
+
+func hasRequiredToolOutcomeEvidence(lower string) bool {
+	if containsAny(lower, []string{
+		"observed result", "observed results", "tool output", "command output",
+		"query returned", "database returned", "read_file", "query_table",
+		"search_memories", "recall_memory", "found ", "found:", "no files",
+		"no sessions", "no readme", "not found", "unable to", "could not",
+		"couldn't", "failed", "permission denied", "access denied", "blocked",
+		"contents:", "modified files", "workspace contains", "the workspace",
+		"there were", "there are", "0 sessions", "1 session",
+	}) {
+		return true
+	}
+	return regexp.MustCompile(`\b[0-9]+\s+(sessions?|files?|conversations?|rows?|records?)\b`).MatchString(lower)
+}
+
+func hasToolFailureNonCompletion(lower string) bool {
+	return containsAny(lower, []string{
+		"unable to complete", "could not complete", "cannot complete",
+		"tool failed", "failed with the error", "failed with error",
+		"could not be accessed", "cannot be accessed", "permission denied",
+		"access denied", "allowed_paths", "without being able to",
+		"prevented me from", "configuration restriction",
+	})
+}
+
+func hasPromissoryToolIntent(lower string) bool {
+	return containsAny(lower, []string{
+		"i'll query", "i will query", "i'll check", "i will check",
+		"i'll search", "i will search", "i'll look", "i will look",
+		"let me query", "let me check", "let me search", "let me look",
+		"i can look that up", "i can query", "i can check",
+	})
+}
+
+func actionPromptRequiresCompletion(prompt ExercisePrompt) bool {
+	if prompt.Intent != IntentExecution && prompt.Intent != IntentDelegation {
+		return false
+	}
+	lowerPrompt := strings.ToLower(prompt.Prompt)
+	return containsAny(lowerPrompt, []string{
+		"create ", "write ", "orchestrate ", "refactor ", "generate ",
+		"scan ", "prioritize ", "store ", "emit ", "schedule", "scheduled task",
+	})
+}
+
+func hasBlockedActionNonCompletion(lower string) bool {
+	return containsAny(lower, []string{
+		"can't complete", "cannot complete", "could not complete",
+		"unable to complete", "i can't write", "i cannot write",
+		"i can't execute", "i cannot execute", "i don't have access",
+		"i do not have access", "current tool surface only", "only tools available",
+		"current tool surface doesn't include", "current tool surface does not include",
+		"doesn't include file-write", "does not include file-write",
+		"can't directly install", "cannot directly install",
+		"tool execution failed", "policy denied", "preventing access",
+		"filesystem discovery is blocked", "tools are disabled",
+		"cannot inspect", "can't inspect", "instead, i am finalizing",
+		"if those tools become available", "if tools become available",
+		"would need tools", "need tools that can", "to actually install",
+		"to finish this task i need", "i would do", "the task failed",
+		"task failed due", "failed due to", "causing the task to fail",
+	})
+}
+
+func hasDeclaredTaskFailure(lower string) bool {
+	return containsAny(lower, []string{
+		"the task failed", "task failed due", "failed due to",
+		"causing the task to fail",
+	})
+}
+
+func hasConcreteActionCompletionEvidence(lower string) bool {
+	return containsAny(lower, []string{
+		"created", "wrote", "stored", "installed", "scheduled", "registered",
+		"updated", "refactored", "generated", "saved", "emitted",
+		"tool output", "command output", "observed result", "observed results",
+		"completed successfully", "successfully created", "successfully wrote",
+	})
+}
+
+func minFloat(a, b float64) float64 {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func preferredConcisionCeiling(complexity ComplexityLevel) int {
@@ -769,6 +925,9 @@ func scoreCodingArtifact(prompt ExercisePrompt, content string) float64 {
 	syntaxScore := scoreCodeSyntax(language, artifact.Code)
 	semanticScore := scoreCodeSemantics(prompt.ScoringContract.ArtifactEvaluator, language, artifact.Code)
 	score := 0.2*extractionScore + 0.35*syntaxScore + 0.45*semanticScore
+	if prompt.ScoringContract.ArtifactEvaluator != ArtifactEvaluatorNone {
+		score = 0.15*extractionScore + 0.25*syntaxScore + 0.60*semanticScore
+	}
 	if score > 1 {
 		return 1
 	}
@@ -814,8 +973,15 @@ func scoreCodeSemantics(evaluator ExerciseArtifactEvaluator, language, code stri
 	case ArtifactEvaluatorReverseString:
 		switch language {
 		case "python":
-			if containsAny(lower, []string{"[::-1]", "reversed(", "join(reversed("}) {
+			executed, passed := evaluatePythonReverseStringIO(code)
+			if executed && passed {
 				return 1.0
+			}
+			if executed && !passed {
+				return 0.2
+			}
+			if containsAny(lower, []string{"[::-1]", "reversed(", "join(reversed("}) {
+				return 0.75
 			}
 		case "javascript", "js", "typescript", "ts":
 			if containsAny(lower, []string{".split('')", ".split(\"\")", ".reverse()", ".join('')", ".join(\"\")"}) {
@@ -826,9 +992,7 @@ func scoreCodeSemantics(evaluator ExerciseArtifactEvaluator, language, code stri
 				return 1.0
 			}
 		case "go", "golang":
-			if containsAny(lower, []string{"[]rune", "for i, j :=", "i < j", "runes[i], runes[j] = runes[j], runes[i]"}) {
-				return 1.0
-			}
+			return scoreGoReverseStringFunctional(code)
 		default:
 			if containsAny(lower, []string{"reverse", "rev", "swap"}) {
 				return 0.65
@@ -841,6 +1005,325 @@ func scoreCodeSemantics(evaluator ExerciseArtifactEvaluator, language, code stri
 		}
 		return 0.4
 	}
+}
+
+func scoreGoReverseStringFunctional(code string) float64 {
+	src := strings.TrimSpace(code)
+	if src == "" {
+		return 0
+	}
+	if !strings.Contains(src, "package ") {
+		src = "package main\n\n" + src
+	}
+
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "artifact.go", src, parser.AllErrors)
+	if err != nil {
+		return 0.1
+	}
+
+	executed, passed := evaluateGoReverseStringIO(src)
+	if executed && passed {
+		return 1.0
+	}
+
+	score := 0.0
+	if goArtifactTypeChecks(fset, file) {
+		score += 0.25
+	} else {
+		score += 0.05
+	}
+	if hasStringToStringFunction(file) {
+		score += 0.2
+	}
+
+	lower := strings.ToLower(src)
+	reversalSignals := 0
+	if containsAny(lower, []string{"[]rune", "[]byte"}) {
+		score += 0.15
+		reversalSignals++
+	}
+	if containsAny(lower, []string{"i < j", "i<j", "len(runes)-1", "len(bytes)-1"}) {
+		score += 0.15
+		reversalSignals++
+	}
+	if containsAny(lower, []string{
+		"runes[i], runes[j] = runes[j], runes[i]",
+		"bytes[i], bytes[j] = bytes[j], bytes[i]",
+	}) || hasTupleSwap(file) {
+		score += 0.2
+		reversalSignals++
+	}
+	if containsAny(lower, []string{"return string(runes)", "return string(bytes)"}) {
+		score += 0.05
+	}
+	if reversalSignals == 0 && score > 0.35 {
+		score = 0.35
+	}
+	if executed && !passed && score > 0.2 {
+		score = 0.2
+	}
+	if score > 1 {
+		return 1
+	}
+	return score
+}
+
+func evaluateGoReverseStringIO(src string) (bool, bool) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "artifact.go", src, parser.AllErrors)
+	if err != nil {
+		return false, false
+	}
+	fnName, fnSource, ok := extractGoStringToStringFunction(fset, file)
+	if !ok {
+		return false, false
+	}
+
+	dir, err := os.MkdirTemp("", "roboticus-code-eval-*")
+	if err != nil {
+		return false, false
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+
+	sourcePath := filepath.Join(dir, "artifact_test.go")
+	testSource := fmt.Sprintf(`package main
+
+import "testing"
+
+%s
+
+func TestReverseStringContract(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"", ""},
+		{"a", "a"},
+		{"ab", "ba"},
+		{"robot", "tobor"},
+		{"hello world", "dlrow olleh"},
+	}
+	for _, tc := range cases {
+		if got := %s(tc.in); got != tc.want {
+			t.Fatalf("%s(%%q) = %%q, want %%q", tc.in, got, tc.want)
+		}
+	}
+}
+`, fnSource, fnName, fnName)
+	if err := os.WriteFile(sourcePath, []byte(testSource), 0o600); err != nil {
+		return false, false
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "go", "test", ".")
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GO111MODULE=off")
+	if err := cmd.Run(); err != nil {
+		return true, false
+	}
+	return true, true
+}
+
+func extractGoStringToStringFunction(fset *token.FileSet, file *ast.File) (string, string, bool) {
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Recv != nil || fn.Name == nil || fn.Type == nil || fn.Body == nil {
+			continue
+		}
+		if !goFuncIsStringToString(fn) {
+			continue
+		}
+		var buf bytes.Buffer
+		if err := printer.Fprint(&buf, fset, fn); err != nil {
+			continue
+		}
+		return fn.Name.Name, buf.String(), true
+	}
+	return "", "", false
+}
+
+func evaluatePythonReverseStringIO(code string) (bool, bool) {
+	fnSource, fnName, callMode, ok := extractPythonSingleArgFunction(code)
+	if !ok {
+		return false, false
+	}
+	if containsAny(strings.ToLower(fnSource), []string{
+		"import ", "__", "open(", "exec(", "eval(", "compile(",
+		"globals(", "locals(", "subprocess", "os.", "sys.",
+	}) {
+		return false, false
+	}
+
+	dir, err := os.MkdirTemp("", "roboticus-python-eval-*")
+	if err != nil {
+		return false, false
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+
+	sourcePath := filepath.Join(dir, "artifact_eval.py")
+	var testSource string
+	if callMode == "list_in_place" {
+		testSource = fmt.Sprintf(`%s
+
+cases = [
+    ("", ""),
+    ("a", "a"),
+    ("ab", "ba"),
+    ("robot", "tobor"),
+    ("hello world", "dlrow olleh"),
+]
+for _inp, _want in cases:
+    _arg = list(_inp)
+    _ret = %s(_arg)
+    if _ret is None:
+        _got = "".join(_arg)
+    elif isinstance(_ret, list):
+        _got = "".join(_ret)
+    else:
+        _got = _ret
+    if _got != _want:
+        raise SystemExit(f"%s({_inp!r}) = {_got!r}, want {_want!r}")
+`, fnSource, fnName, fnName)
+	} else {
+		testSource = fmt.Sprintf(`%s
+
+cases = [
+    ("", ""),
+    ("a", "a"),
+    ("ab", "ba"),
+    ("robot", "tobor"),
+    ("hello world", "dlrow olleh"),
+]
+for _inp, _want in cases:
+    _got = %s(_inp)
+    if _got != _want:
+        raise SystemExit(f"%s({_inp!r}) = {_got!r}, want {_want!r}")
+`, fnSource, fnName, fnName)
+	}
+	if err := os.WriteFile(sourcePath, []byte(testSource), 0o600); err != nil {
+		return false, false
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "python3", sourcePath)
+	cmd.Dir = dir
+	if err := cmd.Run(); err != nil {
+		return true, false
+	}
+	return true, true
+}
+
+func extractPythonSingleArgFunction(code string) (string, string, string, bool) {
+	lines := strings.Split(strings.TrimSpace(code), "\n")
+	start := -1
+	name := ""
+	callMode := "string_return"
+	re := regexp.MustCompile(`^def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*[A-Za-z_][A-Za-z0-9_]*(?:\s*:\s*[^)]*)?\s*\)\s*(?:->\s*[^:]+)?\s*:`)
+	for i, line := range lines {
+		match := re.FindStringSubmatch(strings.TrimSpace(line))
+		if len(match) == 2 {
+			start = i
+			name = match[1]
+			defLower := strings.ToLower(line)
+			if strings.Contains(defLower, "list") || strings.Contains(defLower, "none") {
+				callMode = "list_in_place"
+			}
+			break
+		}
+	}
+	if start < 0 {
+		return "", "", "", false
+	}
+
+	block := []string{strings.TrimRight(lines[start], " \t")}
+	for _, line := range lines[start+1:] {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			block = append(block, "")
+			continue
+		}
+		if !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") {
+			break
+		}
+		block = append(block, strings.TrimRight(line, " \t"))
+	}
+	if len(block) < 2 {
+		return "", "", "", false
+	}
+	return strings.Join(block, "\n"), name, callMode, true
+}
+
+func goArtifactTypeChecks(fset *token.FileSet, file *ast.File) bool {
+	var typeErr error
+	conf := types.Config{
+		Error: func(err error) {
+			if typeErr == nil {
+				typeErr = err
+			}
+		},
+	}
+	_, err := conf.Check("artifact", fset, []*ast.File{file}, nil)
+	return err == nil && typeErr == nil
+}
+
+func hasStringToStringFunction(file *ast.File) bool {
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if ok && goFuncIsStringToString(fn) {
+			return true
+		}
+	}
+	return false
+}
+
+func goFuncIsStringToString(fn *ast.FuncDecl) bool {
+	if fn == nil || fn.Type == nil || fn.Type.Params == nil || fn.Type.Results == nil {
+		return false
+	}
+	if len(fn.Type.Params.List) != 1 || len(fn.Type.Results.List) != 1 {
+		return false
+	}
+	param, ok := fn.Type.Params.List[0].Type.(*ast.Ident)
+	if !ok || param.Name != "string" {
+		return false
+	}
+	result, ok := fn.Type.Results.List[0].Type.(*ast.Ident)
+	return ok && result.Name == "string"
+}
+
+func hasTupleSwap(file *ast.File) bool {
+	found := false
+	ast.Inspect(file, func(node ast.Node) bool {
+		assign, ok := node.(*ast.AssignStmt)
+		if !ok || len(assign.Lhs) != 2 || len(assign.Rhs) != 2 {
+			return true
+		}
+		leftA, leftAOK := assign.Lhs[0].(*ast.IndexExpr)
+		leftB, leftBOK := assign.Lhs[1].(*ast.IndexExpr)
+		rightA, rightAOK := assign.Rhs[0].(*ast.IndexExpr)
+		rightB, rightBOK := assign.Rhs[1].(*ast.IndexExpr)
+		if !leftAOK || !leftBOK || !rightAOK || !rightBOK {
+			return true
+		}
+		if astExprString(leftA.X) == astExprString(rightB.X) &&
+			astExprString(leftB.X) == astExprString(rightA.X) &&
+			astExprString(leftA.Index) == astExprString(rightB.Index) &&
+			astExprString(leftB.Index) == astExprString(rightA.Index) {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+func astExprString(expr ast.Expr) string {
+	var buf bytes.Buffer
+	_ = printer.Fprint(&buf, token.NewFileSet(), expr)
+	return buf.String()
 }
 
 func balancedDelimiters(code string) bool {

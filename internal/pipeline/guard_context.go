@@ -74,6 +74,7 @@ var policyOrSandboxDenialMarkers = []string{
 	"approval denied",
 	"approval required",
 	"absolute paths must be in allowed_paths list",
+	"not in allowed paths",
 	"home-directory shortcuts are not allowed",
 	"path escapes workspace boundary",
 	"path resolves outside workspace",
@@ -147,6 +148,13 @@ func (gc *GuardChain) ApplyFullWithContext(content string, ctx *GuardContext) Ap
 		}
 		if !gr.Passed {
 			result.Violations = append(result.Violations, g.Name())
+			result.ContractEvents = append(result.ContractEvents, buildGuardContractEvent(g.Name(), gr))
+			if gr.Blocked || gr.Verdict == GuardBlocked {
+				result.Blocked = true
+				result.BlockReason = gr.Reason
+				result.Content = ""
+				return result
+			}
 			if gr.Retry {
 				result.RetryRequested = true
 				result.RetryReason = gr.Reason

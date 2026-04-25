@@ -145,8 +145,8 @@ func TestExerciseRunLifecycleHelpers(t *testing.T) {
 			if body["initiator"] != "cli" {
 				t.Fatalf("initiator = %#v, want cli", body["initiator"])
 			}
-			if body["notes"] != "intent filter: TOOL_USE" {
-				t.Fatalf("notes = %#v, want intent filter note", body["notes"])
+			if body["notes"] != "intent filter: TOOL_USE prompt filter: TOOL_USE:C2 warmup: skip" {
+				t.Fatalf("notes = %#v, want combined filter/warmup note", body["notes"])
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"run_id": "run-123"})
 		case r.Method == http.MethodPost && r.URL.Path == "/api/models/exercise/runs/run-123/results":
@@ -178,7 +178,7 @@ func TestExerciseRunLifecycleHelpers(t *testing.T) {
 	}))
 	defer cleanup()
 
-	runID, err := startExerciseRun([]string{"ollama/gemma4"}, 1, map[string]any{"llm": map[string]any{"primary": "ollama/gemma4"}}, "TOOL_USE")
+	runID, err := startExerciseRun([]string{"ollama/gemma4"}, 1, map[string]any{"llm": map[string]any{"primary": "ollama/gemma4"}}, "TOOL_USE", "TOOL_USE:C2", "skip")
 	if err != nil {
 		t.Fatalf("startExerciseRun: %v", err)
 	}
@@ -226,7 +226,7 @@ func TestStartExerciseRun_OmitsNotesWithoutIntentFilter(t *testing.T) {
 	}))
 	defer cleanup()
 
-	if _, err := startExerciseRun([]string{"ollama/gemma4"}, 1, map[string]any{}, ""); err != nil {
+	if _, err := startExerciseRun([]string{"ollama/gemma4"}, 1, map[string]any{}, "", "", ""); err != nil {
 		t.Fatalf("startExerciseRun: %v", err)
 	}
 }
@@ -410,5 +410,45 @@ func TestBuildComparisonRows_DoesNotOverwriteHistoricalEvidenceWithValidityOnlyF
 	}
 	if row.AvgLatencyMs != 1200 {
 		t.Fatalf("avg latency = %d, want historical latency preserved", row.AvgLatencyMs)
+	}
+}
+
+func TestBuildComparisonRows_FreshValidityOnlyRunDoesNotCreateEvidenceCoverage(t *testing.T) {
+	cleanup := testhelp.SetupMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/models/exercise/scorecard" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"entries": []any{}})
+	}))
+	defer cleanup()
+
+	report := llm.ExerciseReport{
+		Models: []llm.ModelExerciseResult{
+			{
+				Model:         "ollama/qwen32b-tq",
+				IntentQuality: map[string]float64{},
+				Latencies: map[string][]int64{
+					"TOOL_USE": {6100},
+				},
+			},
+		},
+	}
+
+	rows := buildComparisonRows(report, nil)
+	if len(rows) != 1 {
+		t.Fatalf("comparison rows = %d, want exercised validity-only row", len(rows))
+	}
+	row := rows[0]
+	if !row.Exercised {
+		t.Fatal("fresh validity-only row should still be marked exercised")
+	}
+	if row.ObservedIntents != 0 {
+		t.Fatalf("observed intents = %d, want 0 for validity-only run", row.ObservedIntents)
+	}
+	if row.AvgQuality != 0 {
+		t.Fatalf("avg quality = %.2f, want 0 with no efficacy evidence", row.AvgQuality)
+	}
+	if len(row.Intent) != 0 {
+		t.Fatalf("intent evidence = %#v, want none", row.Intent)
 	}
 }

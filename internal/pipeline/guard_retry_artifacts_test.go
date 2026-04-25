@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"roboticus/internal/session"
@@ -182,6 +183,40 @@ func TestStandardInference_InferenceParamsCaptureAppliedGuardViolations(t *testi
 	}
 	if len(params.GuardViolations) != 1 || params.GuardViolations[0] != "rewrite_tracking" {
 		t.Fatalf("GuardViolations = %v, want [rewrite_tracking]", params.GuardViolations)
+	}
+
+	var turnID string
+	if err := store.QueryRowContext(context.Background(),
+		`SELECT id FROM turns WHERE session_id = ? ORDER BY created_at DESC LIMIT 1`, outcome.SessionID,
+	).Scan(&turnID); err != nil {
+		t.Fatalf("query turn id: %v", err)
+	}
+	var detailsJSON string
+	if err := store.QueryRowContext(context.Background(),
+		`SELECT COALESCE(details_json, '')
+		   FROM turn_diagnostic_events
+		  WHERE turn_id = ? AND event_type = 'guard_contract_evaluated'
+		  ORDER BY seq DESC LIMIT 1`, turnID,
+	).Scan(&detailsJSON); err != nil {
+		t.Fatalf("query guard contract event: %v", err)
+	}
+	var details map[string]any
+	if err := json.Unmarshal([]byte(detailsJSON), &details); err != nil {
+		t.Fatalf("unmarshal guard contract details: %v", err)
+	}
+	rawEvents, ok := details["contract_events"].([]any)
+	if !ok || len(rawEvents) != 1 {
+		t.Fatalf("contract_events = %#v, want one event", details["contract_events"])
+	}
+	event, ok := rawEvents[0].(map[string]any)
+	if !ok {
+		t.Fatalf("contract event type = %T, want object", rawEvents[0])
+	}
+	if event["contract_id"] != "rewrite_tracking" {
+		t.Fatalf("contract_id = %v, want rewrite_tracking", event["contract_id"])
+	}
+	if event["recovery_action"] != "rewrite" {
+		t.Fatalf("recovery_action = %v, want rewrite", event["recovery_action"])
 	}
 }
 

@@ -99,6 +99,13 @@ func retryWithGuardsResume(
 		}
 		if !gr.Passed {
 			result.Violations = append(result.Violations, g.Name())
+			result.ContractEvents = append(result.ContractEvents, buildGuardContractEvent(g.Name(), gr))
+			if gr.Blocked || gr.Verdict == GuardBlocked {
+				result.Blocked = true
+				result.BlockReason = gr.Reason
+				result.Content = ""
+				return result
+			}
 			if gr.Retry {
 				result.RetryRequested = true
 				result.RetryReason = gr.Reason
@@ -183,6 +190,9 @@ func retryWithGuardsDetailed(
 		run.FinalGuardResult = guardResult
 		run.Content = guardResult.Content
 
+		if guardResult.Blocked {
+			return run, core.NewError(core.ErrPolicy, guardResult.BlockReason)
+		}
 		if guards == nil || guards.Len() == 0 || !guardResult.RetryRequested {
 			return run, nil
 		}
