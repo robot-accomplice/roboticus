@@ -101,7 +101,22 @@ per_provider_timeout_seconds = 30
 
 ## `[providers.<name>]` — LLM Provider Configuration
 
-Each provider is configured as a named section. User-defined providers override bundled defaults.
+Provider metadata is intentionally configuration-owned. New providers that use
+an existing wire format should normally be added through `providers.toml` or
+the operator's local config, not through a binary update. Binary changes are
+reserved for new client protocols, authentication modes, streaming behavior,
+or provider-specific parsing semantics that cannot yet be expressed
+declaratively.
+
+`providers_file` points to the refreshable provider pack. It defaults to
+`~/.roboticus/providers.toml`. At runtime, precedence is:
+
+1. Provider entries in the operator's main `roboticus.toml`.
+2. Provider entries from `providers_file`.
+3. Embedded bundled provider defaults.
+
+Each provider is configured as a named section. Higher-precedence entries fill
+or override lower-precedence defaults.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -152,10 +167,24 @@ chat_path = "/chat/completions"
 ```
 
 DeepSeek is an OpenAI-compatible provider. Prefer provider-qualified model
-names such as `deepseek/deepseek-v4-pro` or `deepseek/deepseek-v4-flash` in
-`[models]`. The legacy aliases `deepseek-chat` and `deepseek-reasoner` remain
-available through DeepSeek for compatibility until their published deprecation
-date.
+names in `[models]`:
+
+| Model | Status | Notes |
+|-------|--------|-------|
+| `deepseek/deepseek-v4-flash` | Current | Non-thinking compatibility target for deprecated `deepseek-chat`. |
+| `deepseek/deepseek-v4-pro` | Current | Higher-capability model; DeepSeek examples show it with thinking enabled. |
+| `deepseek/deepseek-chat` | Deprecated 2026-07-24 | Compatibility alias for `deepseek-v4-flash` non-thinking mode. |
+| `deepseek/deepseek-reasoner` | Deprecated 2026-07-24 | Compatibility alias for `deepseek-v4-flash` thinking mode. |
+
+Provider/model availability and deprecation status should be refreshed through
+the provider pack when possible. The main config should only pin a specific
+model when the operator intentionally chooses it for routing.
+
+Provider compatibility quirks are also provider metadata. If an ostensibly
+OpenAI-compatible provider consistently varies from the shared contract, such
+as returning text tool-call JSON that needs bounded truncation repair, that
+behavior should be documented in the provider profile and surfaced in RCA
+rather than silently embedded as a model-specific code path.
 
 The setup wizard supports the bundled cloud provider set directly: OpenAI,
 Anthropic, Google, Moonshot, OpenRouter, and DeepSeek. Local-host onboarding is

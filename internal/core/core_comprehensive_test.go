@@ -653,6 +653,50 @@ func TestMergeBundledProviders_UserOverride(t *testing.T) {
 	}
 }
 
+func TestMergeProviderPackFromFile_PrecedesBundledDefaults(t *testing.T) {
+	dir := t.TempDir()
+	pack := filepath.Join(dir, "providers.toml")
+	if err := os.WriteFile(pack, []byte(`
+[providers.deepseek]
+url = "https://pack.deepseek.test"
+tier = "T3"
+format = "openai"
+chat_path = "/chat/completions"
+api_key_ref = "deepseek_api_key"
+
+[providers.example]
+url = "https://example.test"
+tier = "T3"
+format = "openai"
+chat_path = "/v1/chat/completions"
+`), 0o600); err != nil {
+		t.Fatalf("write provider pack: %v", err)
+	}
+
+	cfg := DefaultConfig()
+	cfg.Providers = map[string]ProviderConfig{
+		"deepseek": {URL: "https://operator.deepseek.test"},
+	}
+
+	if err := cfg.MergeProviderPackFromFile(pack); err != nil {
+		t.Fatalf("MergeProviderPackFromFile: %v", err)
+	}
+	cfg.MergeBundledProviders()
+
+	if cfg.Providers["deepseek"].URL != "https://operator.deepseek.test" {
+		t.Fatal("operator provider URL should win over provider pack and bundled defaults")
+	}
+	if cfg.Providers["deepseek"].ChatPath != "/chat/completions" {
+		t.Fatal("provider pack should fill missing operator provider fields")
+	}
+	if cfg.Providers["example"].URL != "https://example.test" {
+		t.Fatal("provider pack should add providers absent from operator config")
+	}
+	if _, ok := cfg.Providers["openai"]; !ok {
+		t.Fatal("bundled providers should remain final fallback")
+	}
+}
+
 func TestMergeBundledProviders_NilProviders(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Providers = nil

@@ -517,10 +517,17 @@ This file follows the same C4 conventions used elsewhere in the repo:
   same target as direct `openai` because one code path joined the spec
   differently
 - provider onboarding must use the narrowest existing wire-format seam. A
-  provider with OpenAI-compatible chat completions is added as bundled provider
-  metadata (`url`, `chat_path`, `format`, key reference, cost/locality facts),
-  not as a bespoke client, unless its request/response contract cannot be
-  represented by the existing adapter.
+  provider with OpenAI-compatible chat completions is added as refreshable
+  provider-pack metadata (`url`, `chat_path`, `format`, key reference,
+  cost/locality facts), not as a bespoke client, unless its request/response
+  contract cannot be represented by the existing adapter. Embedded bundled
+  providers are fallback bootstrap data; `providers.toml` is the preferred
+  provider update channel.
+- provider compatibility quirks are owned by the same provider-profile seam.
+  If an implementation claims an existing standard but consistently varies in
+  parsing-sensitive behavior, such as malformed text tool-call JSON that needs
+  bounded brace repair, the quirk belongs in declarative provider metadata and
+  RCA evidence instead of scattered model-name conditionals.
 - provider key identity is canonical configuration, not UI folklore. The
   operator-facing key-management API, setup wizard, daemon key resolver, and
   status surfaces must converge on the Rust-compatible `<provider>_api_key`

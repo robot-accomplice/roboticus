@@ -62,7 +62,8 @@ func DefaultConfig() Config {
 				EscalationLatencyBudgetMs: 3000,
 			},
 		},
-		Providers: make(map[string]ProviderConfig),
+		Providers:     make(map[string]ProviderConfig),
+		ProvidersFile: filepath.Join(dataDir, "providers.toml"),
 		Memory: MemoryConfig{
 			WorkingBudget:            30,
 			EpisodicBudget:           25,

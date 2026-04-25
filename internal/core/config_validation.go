@@ -176,6 +176,7 @@ func (c *Config) Validate() error {
 func (c *Config) NormalizePaths() {
 	c.Database.Path = expandTilde(c.Database.Path)
 	c.Agent.Workspace = expandTilde(c.Agent.Workspace)
+	c.ProvidersFile = expandTilde(c.ProvidersFile)
 	c.Server.LogDir = expandTilde(c.Server.LogDir)
 	c.Skills.Directory = expandTilde(c.Skills.Directory)
 	c.Wallet.Path = expandTilde(c.Wallet.Path)

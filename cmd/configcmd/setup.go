@@ -131,7 +131,8 @@ func buildConfigTOML(name, provider, apiKey string) string {
 		sb.WriteString("auth_header = \"Authorization\"\n")
 		sb.WriteString("api_key_ref = \"openrouter_api_key\"\n")
 	case "deepseek":
-		sb.WriteString("primary = \"deepseek/deepseek-v4-pro\"\n\n")
+		sb.WriteString("# Provider/model drift belongs in providers.toml; pin the model you intend to route here.\n")
+		sb.WriteString("primary = \"deepseek/deepseek-v4-flash\"\n\n")
 		sb.WriteString("[providers.deepseek]\n")
 		sb.WriteString("url = \"https://api.deepseek.com\"\n")
 		sb.WriteString("tier = \"T3\"\n")

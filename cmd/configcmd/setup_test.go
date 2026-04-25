@@ -66,8 +66,8 @@ func TestBuildConfigTOML_NoAPIKey(t *testing.T) {
 
 func TestBuildConfigTOML_DeepSeek(t *testing.T) {
 	out := buildConfigTOML("Deep", "deepseek", "sk-deepseek")
-	if !strings.Contains(out, `primary = "deepseek/deepseek-v4-pro"`) {
-		t.Error("expected provider-qualified DeepSeek primary model")
+	if !strings.Contains(out, `primary = "deepseek/deepseek-v4-flash"`) {
+		t.Error("expected provider-qualified current DeepSeek primary model")
 	}
 	if !strings.Contains(out, `[providers.deepseek]`) {
 		t.Error("expected [providers.deepseek] section")

@@ -239,11 +239,23 @@ older architecture docs had left too generic:
   evidence for rescoring and RCA, but it is not allowed to corrupt the live
   benchmark row structure or make the next prompt appear inside the previous
   model's answer.
-- **Provider onboarding must stay metadata-driven when the wire contract fits.**
-  OpenAI-compatible providers such as DeepSeek belong in the bundled provider
-  metadata and shared OpenAI-compatible client path. Adding a bespoke client for
-  a provider that only changes base URL, chat path, model names, and key
-  reference would create an avoidable architectural fork.
+- **Provider onboarding must prefer refreshable provider-pack metadata over
+  binary changes.** Providers that fit an existing wire contract belong in
+  `providers.toml`, not hard-coded Go setup branches or bespoke clients. Binary
+  changes are justified only when a provider requires a new wire format,
+  authentication mechanism, streaming contract, tool-call shape, or runtime
+  capability that the declarative provider profile cannot express. Endpoint
+  URLs, chat paths, provider tiers, key references, cost hints, model-name
+  examples, deprecation notes, and compatibility aliases should be updateable
+  through the provider pack so provider drift does not force a Roboticus
+  release.
+- **Provider compatibility quirks need a declarative behavior profile.**
+  "OpenAI-compatible" is not precise enough for routing, tool parsing, and RCA:
+  implementations vary in tool-call JSON, argument encoding, response shape,
+  thinking-mode controls, and truncation failure modes. Known deviations such
+  as Kimi responses dropping a trailing `}` from JSON tool-call text should be
+  represented as provider-profile parsing/repair rules that are visible in
+  configuration and RCA, not hidden as model-specific conditionals.
 - **Provider key references must match the operator key-management seam.** Rust
   stores dashboard/API provider secrets under `<provider>_api_key`; older Go
   code stored them under `provider_key:<name>`. The Go path must converge on

@@ -58,11 +58,32 @@ func MarshalTOML(cfg *Config) ([]byte, error) {
 	return tomlMarshal(cfg)
 }
 
-// MergeBundledProviders adds default provider configs for well-known services.
-// User-defined providers take precedence — bundled configs are only inserted
-// if no provider with that name exists.
+// MergeBundledProviders adds embedded fallback provider configs for well-known
+// services. User-defined providers and provider-pack entries take precedence.
 func (c *Config) MergeBundledProviders() {
-	bundled := parseBundledProviders()
+	c.mergeProviderDefaults(parseBundledProviders())
+}
+
+// MergeProviderPackFromFile merges refreshable provider metadata from
+// providers.toml. Missing files are allowed: embedded bundled providers remain
+// the fallback for fresh installs or fully user-managed configurations.
+func (c *Config) MergeProviderPackFromFile(path string) error {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("read provider pack %s: %w", path, err)
+	}
+	c.mergeProviderDefaults(parseProvidersTOML(string(data)))
+	return nil
+}
+
+func (c *Config) mergeProviderDefaults(defaults map[string]ProviderConfig) {
 	if c.Providers == nil {
 		c.Providers = make(map[string]ProviderConfig)
 	}
@@ -72,7 +93,7 @@ func (c *Config) MergeBundledProviders() {
 		disabledSet[strings.ToLower(strings.TrimSpace(d))] = true
 	}
 
-	for name, bcfg := range bundled {
+	for name, bcfg := range defaults {
 		if disabledSet[strings.ToLower(name)] {
 			continue
 		}
@@ -105,14 +126,30 @@ func (c *Config) MergeBundledProviders() {
 
 // parseBundledProviders decodes the embedded bundled_providers.toml.
 func parseBundledProviders() map[string]ProviderConfig {
-	// Parse manually since we don't want a viper dependency here.
-	// The bundled file is simple enough for a lightweight parse.
+	return parseProvidersTOML(bundledProvidersTOML)
+}
+
+// parseProvidersTOML decodes the simple provider pack shape used by bundled
+// providers and registry-refreshable providers.toml.
+func parseProvidersTOML(data string) map[string]ProviderConfig {
+	var pack struct {
+		Providers map[string]ProviderConfig `toml:"providers"`
+	}
+	if err := tomlUnmarshal([]byte(data), &pack); err == nil && len(pack.Providers) > 0 {
+		return pack.Providers
+	} else if err != nil {
+		log.Warn().Err(err).Msg("config: provider pack TOML decode failed, trying legacy parser")
+	}
+	return parseProvidersTOMLLegacy(data)
+}
+
+func parseProvidersTOMLLegacy(data string) map[string]ProviderConfig {
 	result := make(map[string]ProviderConfig)
 
 	var current string     // e.g. "ollama"
 	var extraTarget string // non-empty when inside [providers.<name>.extra_headers]
 	var cfg ProviderConfig
-	for _, line := range strings.Split(bundledProvidersTOML, "\n") {
+	for _, line := range strings.Split(data, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
