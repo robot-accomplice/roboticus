@@ -562,7 +562,7 @@ func (t *RuntimeContextTool) ParameterSchema() json.RawMessage {
 }
 func (t *RuntimeContextTool) Execute(_ context.Context, _ string, tctx *Context) (*Result, error) {
 	relativeRule := "relative paths resolve inside the workspace root"
-	absoluteRule := "absolute paths must fall under an allowed path"
+	absoluteRule := "absolute paths must fall under an allowed path; allowed paths are roots, so child files and subdirectories inherit access unless a narrower policy denies them"
 	protected := "none"
 	if len(tctx.ProtectedReadOnlyPaths) > 0 {
 		protected = strings.Join(tctx.ProtectedReadOnlyPaths, ", ")

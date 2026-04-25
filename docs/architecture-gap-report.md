@@ -302,6 +302,19 @@ older architecture docs had left too generic:
   - keep retrieval neutral unless continuity/evidence requirements are explicit
   Source-backed code refactors are repository-grounded execution, not generic
   “heavy code” work.
+- **Allowed filesystem roots must be explained as roots, not exact files.**
+  The enforcement layer already treats descendants of an allowed root as
+  allowed, but model-facing runtime context must say that explicitly. When a
+  user points to a subdirectory of a previously observed allowed root, the
+  agent must attempt the filesystem tool and surface the real policy result;
+  it must not ask for the subdirectory to be separately allowlisted unless an
+  actual tool denial proves that narrower configuration is required.
+- **Referential execution follow-ups need prior-turn grounding.** A request
+  such as "examine it" after discussion of a vault subsection is task
+  continuation, not a fresh ambiguous chat turn. Short-followup expansion must
+  carry the previous assistant excerpt and instruct the model to resolve the
+  referent before acting, while still letting the policy/tool layer be the
+  final authority on whether the resolved path is accessible.
 - **High-lift semantic evaluators remain deferred roadmap work.** Richer
   evaluators that inspect tool traces, structured outputs, and prompt-class
   semantic contracts more deeply are valid benchmark architecture pressure,

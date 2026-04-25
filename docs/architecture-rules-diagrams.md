@@ -139,6 +139,14 @@ This file follows the same C4 conventions used elsewhere in the repo:
   reads and bounded inspection over repo-inventory theater, treats productive
   read/list/glob steps as progress, and keeps retrieval neutral unless
   continuity/evidence cues are explicit
+- runtime filesystem guidance must expose inherited allowed-root semantics:
+  allowed paths are roots, descendants inherit access unless a narrower deny or
+  read/write distinction applies, and the model must attempt the relevant tool
+  before claiming that an allowed subtree needs additional configuration
+- short referential execution follow-ups such as "examine it", "inspect that",
+  or "look there" must preserve the immediately prior assistant context so the
+  pipeline can resolve the referenced vault/folder/section instead of treating
+  the turn as a disconnected generic request
 - session resolution must not continue on a phantom explicit `session_id`;
   body-scoped session ids either resolve to a durable `sessions` row or fail
   cleanly as not found before message persistence begins

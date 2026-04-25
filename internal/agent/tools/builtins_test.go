@@ -438,6 +438,9 @@ func TestRuntimeContextTool(t *testing.T) {
 	if !strings.Contains(result.Output, "absolute paths must fall under an allowed path") {
 		t.Fatalf("runtime context should expose absolute-path constraint, got %q", result.Output)
 	}
+	if !strings.Contains(result.Output, "allowed paths are roots") {
+		t.Fatalf("runtime context should expose inherited allowed-root semantics, got %q", result.Output)
+	}
 	if !strings.Contains(result.Output, "requirements.txt") {
 		t.Fatalf("runtime context should expose protected read-only inputs, got %q", result.Output)
 	}

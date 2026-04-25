@@ -102,6 +102,29 @@ func TestContextualizeShortFollowup_ContradictionExpands(t *testing.T) {
 	}
 }
 
+func TestContextualizeShortFollowup_ReferentialExecutionTask(t *testing.T) {
+	sess := newTestSession("s-reference")
+	sess.AddUserMessage("Can you read my vault and give me an executive summary?")
+	sess.AddAssistantMessage("The observed vault contains a `Duncan/` directory inside `/Users/jmachen/Desktop/My Vault`, which the operator identified as the shared-knowledge section.", nil)
+
+	expanded, correction := ContextualizeShortFollowup(sess, "I want you to examine it")
+
+	if correction {
+		t.Fatal("referential execution follow-up should not be treated as correction")
+	}
+	for _, want := range []string{
+		"referential execution request",
+		"Duncan/",
+		"/Users/jmachen/Desktop/My Vault",
+		"child of an allowed path",
+		"attempt the relevant tool",
+	} {
+		if !strings.Contains(expanded, want) {
+			t.Fatalf("expanded follow-up missing %q: %q", want, expanded)
+		}
+	}
+}
+
 func TestContextualizeShortFollowup_NoHistory(t *testing.T) {
 	sess := newTestSession("s-empty")
 	expanded, correction := ContextualizeShortFollowup(sess, "sure")

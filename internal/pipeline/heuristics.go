@@ -38,6 +38,41 @@ func isShortFollowupForPreviousReply(content string) bool {
 	return false
 }
 
+func isShortReferentialExecutionFollowup(content string) bool {
+	lower := strings.TrimSpace(strings.ToLower(content))
+	if len(lower) > 96 {
+		return false
+	}
+	markers := []string{
+		"examine it",
+		"inspect it",
+		"scan it",
+		"read it",
+		"open it",
+		"look at it",
+		"look in it",
+		"check it",
+		"test that",
+		"test it",
+		"examine that",
+		"inspect that",
+		"scan that",
+		"read that",
+		"open that",
+		"look at that",
+		"look there",
+		"that folder",
+		"that directory",
+		"that section",
+	}
+	for _, m := range markers {
+		if lower == m || lower == m+"." || lower == m+" please" || strings.Contains(lower, m) {
+			return true
+		}
+	}
+	return false
+}
+
 // isShortReactiveSarcasm detects brief sarcastic reactions (≤32 chars).
 // Must be exact match or with trailing period/ellipsis.
 func isShortReactiveSarcasm(content string) bool {
@@ -88,8 +123,9 @@ func ContextualizeShortFollowup(session *Session, content string) (string, bool)
 	isSarcasm := isShortReactiveSarcasm(content)
 	isContradiction := isShortContradictionFollowup(content)
 	isFollowup := isShortFollowupForPreviousReply(content)
+	isReferentialExecution := isShortReferentialExecutionFollowup(content)
 
-	if !isSarcasm && !isContradiction && !isFollowup {
+	if !isSarcasm && !isContradiction && !isFollowup && !isReferentialExecution {
 		return content, false
 	}
 
@@ -127,6 +163,16 @@ func ContextualizeShortFollowup(session *Session, content string) (string, bool)
 				"Previous assistant reply excerpt:\n\"%s\"\n\nUser follow-up:\n%s",
 			excerpt, content,
 		), correction
+	}
+
+	if isReferentialExecution {
+		excerpt := truncateChars(previousAssistant, 360)
+		return fmt.Sprintf(
+			"User follow-up is a referential execution request. Resolve pronouns like 'it', 'that', or 'there' against the immediately previous assistant reply before acting. "+
+				"If the referenced target is a child of an allowed path, attempt the relevant tool instead of asking for separate configuration; the tool/policy result is authoritative.\n"+
+				"Previous assistant reply excerpt:\n\"%s\"\n\nUser request:\n%s",
+			excerpt, content,
+		), false
 	}
 
 	// Quote-back / source followup.

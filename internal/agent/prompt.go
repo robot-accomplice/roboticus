@@ -335,7 +335,7 @@ func buildRuntimeMetadataBlock(cfg PromptConfig) string {
 		fmt.Fprintf(&sb, "- Agent version: %s\n", cfg.Version)
 	}
 	sb.WriteString("\n### Tool Operations\n")
-	sb.WriteString("- File tools default to the workspace root. Use relative paths unless the user specifies an absolute destination that falls under an allowed path.\n")
+	sb.WriteString("- File tools default to the workspace root. Use relative paths unless the user specifies an absolute destination that falls under an allowed path. Allowed paths are roots: their child files and subdirectories inherit access unless a narrower policy denies them.\n")
 	if promptHasTool(cfg.ToolNames, "write_file") || promptHasTool(cfg.ToolNames, "edit_file") {
 		sb.WriteString("- `write_file` and `edit_file` may target either workspace-relative paths or absolute paths that fall under an allowed destination from `get_runtime_context` or the destination-target hint.\n")
 	}
