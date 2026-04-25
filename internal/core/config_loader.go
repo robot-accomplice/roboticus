@@ -92,6 +92,9 @@ func (c *Config) MergeBundledProviders() {
 			if existing.ChatPath == "" {
 				existing.ChatPath = bcfg.ChatPath
 			}
+			if existing.APIKeyRef == "" {
+				existing.APIKeyRef = bcfg.APIKeyRef
+			}
 			if !existing.IsLocal && bcfg.IsLocal {
 				existing.IsLocal = true
 			}
@@ -168,6 +171,8 @@ func parseBundledProviders() map[string]ProviderConfig {
 			cfg.ChatPath = val
 		case "api_key_env":
 			// Ignored — keys come from keystore, not env vars.
+		case "api_key_ref":
+			cfg.APIKeyRef = val
 		case "is_local":
 			cfg.IsLocal = val == "true"
 		case "auth_header":

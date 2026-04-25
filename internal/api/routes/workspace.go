@@ -249,7 +249,7 @@ func SetProviderKey(ks *core.Keystore) http.HandlerFunc {
 			writeError(w, http.StatusServiceUnavailable, "keystore not initialized")
 			return
 		}
-		if err := ks.Set("provider_key:"+provider, req.Key); err != nil {
+		if err := ks.Set(provider+"_api_key", req.Key); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -269,7 +269,9 @@ func DeleteProviderKey(ks *core.Keystore) http.HandlerFunc {
 			writeError(w, http.StatusServiceUnavailable, "keystore not initialized")
 			return
 		}
-		if err := ks.Delete("provider_key:" + provider); err != nil {
+		conventionalErr := ks.Delete(provider + "_api_key")
+		legacyErr := ks.Delete("provider_key:" + provider)
+		if conventionalErr != nil && legacyErr != nil {
 			writeError(w, http.StatusNotFound, "provider key not found")
 			return
 		}

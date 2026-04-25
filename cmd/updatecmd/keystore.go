@@ -40,7 +40,7 @@ var keystoreStatusCmd = &cobra.Command{
 		if hasKeys {
 			fmt.Println("\nKeystore status: accessible (provider keys configured)")
 		} else {
-			fmt.Println("\nKeystore status: no keys configured — use the dashboard to add API keys")
+			fmt.Println("\nKeystore status: no provider key refs configured — use `roboticus keystore set <provider>` to add API keys")
 		}
 
 		return nil
@@ -51,21 +51,18 @@ var keystoreListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List stored key names (not values)",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		cfg, err := cmdutil.LoadConfig()
+		ks, err := core.OpenKeystoreMachine()
 		if err != nil {
-			return fmt.Errorf("failed to load config: %w", err)
+			return err
 		}
 
 		fmt.Println("Stored Key Names:")
-		count := 0
-		for name, prov := range cfg.Providers {
-			if prov.APIKeyRef != "" {
-				fmt.Printf("  %s (ref: %s)\n", name, prov.APIKeyRef)
-				count++
-			}
+		names := ks.List()
+		for _, name := range names {
+			fmt.Printf("  %s\n", name)
 		}
 
-		if count == 0 {
+		if len(names) == 0 {
 			fmt.Println("  (none)")
 		}
 
@@ -93,16 +90,18 @@ var keystoreSetCmd = &cobra.Command{
 			}
 		}
 
-		data, err := cmdutil.APIPut("/api/providers/"+key+"/key", map[string]any{
-			"key": value,
-		})
+		ks, err := core.OpenKeystoreMachine()
 		if err != nil {
 			return err
 		}
-		fmt.Printf("Key %q set successfully.\n", key)
-		if data != nil {
-			cmdutil.PrintJSON(data)
+		secretName := providerKeystoreName(key)
+		if err := ks.Set(secretName, value); err != nil {
+			return err
 		}
+		if err := ks.Save(); err != nil {
+			return err
+		}
+		fmt.Printf("Key %q stored as %q.\n", key, secretName)
 		return nil
 	},
 }
@@ -113,26 +112,14 @@ var keystoreGetCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		key := args[0]
-		data, err := cmdutil.APIGet("/api/keystore/status")
+		ks, err := core.OpenKeystoreMachine()
 		if err != nil {
 			return err
 		}
-
-		// Look for the key in the status response.
-		if keys, ok := data["keys"].(map[string]any); ok {
-			if v, found := keys[key]; found {
-				fmt.Printf("%s: %v\n", key, v)
-				return nil
-			}
+		if localKeystoreHasProviderKey(ks, key) {
+			fmt.Printf("%s: configured\n", key)
+			return nil
 		}
-		// Also check providers map if present.
-		if providers, ok := data["providers"].(map[string]any); ok {
-			if v, found := providers[key]; found {
-				fmt.Printf("%s: %v\n", key, v)
-				return nil
-			}
-		}
-
 		fmt.Printf("%s: not found\n", key)
 		return nil
 	},
@@ -144,7 +131,20 @@ var keystoreRemoveCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		key := args[0]
-		if err := cmdutil.APIDelete("/api/providers/" + key + "/key"); err != nil {
+		ks, err := core.OpenKeystoreMachine()
+		if err != nil {
+			return err
+		}
+		removed := false
+		for _, name := range providerKeystoreNames(key) {
+			if err := ks.Delete(name); err == nil {
+				removed = true
+			}
+		}
+		if !removed {
+			return fmt.Errorf("key %q not found", key)
+		}
+		if err := ks.Save(); err != nil {
 			return err
 		}
 		fmt.Printf("Key %q removed.\n", key)
@@ -168,20 +168,54 @@ var keystoreImportCmd = &cobra.Command{
 			return fmt.Errorf("invalid JSON in %q: %w", path, err)
 		}
 
+		ks, err := core.OpenKeystoreMachine()
+		if err != nil {
+			return err
+		}
 		for key, value := range entries {
-			_, err := cmdutil.APIPut("/api/providers/"+key+"/key", map[string]any{
-				"key": value,
-			})
-			if err != nil {
+			secretName := providerKeystoreName(key)
+			if err := ks.Set(secretName, value); err != nil {
 				fmt.Fprintf(os.Stderr, "  failed to set %q: %v\n", key, err)
 				continue
 			}
-			fmt.Printf("  set %q\n", key)
+			fmt.Printf("  set %q as %q\n", key, secretName)
+		}
+		if err := ks.Save(); err != nil {
+			return err
 		}
 
 		fmt.Printf("Import complete (%d keys).\n", len(entries))
 		return nil
 	},
+}
+
+func providerKeystoreName(key string) string {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return key
+	}
+	if strings.HasSuffix(key, "_api_key") || strings.HasPrefix(key, "provider_key:") {
+		return key
+	}
+	return key + "_api_key"
+}
+
+func providerKeystoreNames(key string) []string {
+	name := providerKeystoreName(key)
+	names := []string{name}
+	if !strings.HasPrefix(key, "provider_key:") && !strings.HasSuffix(key, "_api_key") {
+		names = append(names, "provider_key:"+strings.TrimSpace(key))
+	}
+	return names
+}
+
+func localKeystoreHasProviderKey(ks *core.Keystore, key string) bool {
+	for _, name := range providerKeystoreNames(key) {
+		if ks.GetOrEmpty(name) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 var keystoreRekeyCmd = &cobra.Command{

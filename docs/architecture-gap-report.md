@@ -239,6 +239,35 @@ older architecture docs had left too generic:
   evidence for rescoring and RCA, but it is not allowed to corrupt the live
   benchmark row structure or make the next prompt appear inside the previous
   model's answer.
+- **Provider onboarding must stay metadata-driven when the wire contract fits.**
+  OpenAI-compatible providers such as DeepSeek belong in the bundled provider
+  metadata and shared OpenAI-compatible client path. Adding a bespoke client for
+  a provider that only changes base URL, chat path, model names, and key
+  reference would create an avoidable architectural fork.
+- **Provider key references must match the operator key-management seam.** Rust
+  stores dashboard/API provider secrets under `<provider>_api_key`; older Go
+  code stored them under `provider_key:<name>`. The Go path must converge on
+  the Rust-compatible name and retain read/delete compatibility for legacy
+  entries, otherwise status surfaces, setup snippets, and daemon request
+  authentication can disagree about whether a provider is configured.
+- **Local keystore CLI commands must not require a running daemon.** Provider
+  key writes are local secret-store mutations. Requiring
+  `roboticus keystore set <provider>` to call the HTTP API makes initial
+  provider setup impossible when the daemon is not already authenticated and
+  running. The CLI should update the encrypted keystore directly while the API
+  route remains the dashboard/remote-management path.
+- **CLI command topology is too flat for continued growth.** The current
+  top-level command surface mixes lifecycle, auth/secrets, model diagnostics,
+  channels, memory, scheduling, plugins, wallet, and maintenance as peers. That
+  shape was tolerable during parity catch-up, but it is now discoverability debt
+  and should be collapsed into intuitive operator categories with aliases kept
+  for backward compatibility.
+- **Ollama baseline all-zero cohorts are a release regression.** The benchmark
+  harness must distinguish unavailable/unloaded Ollama models, local-provider
+  transport errors, warm-up failures, and real model-quality failures without
+  collapsing multiple local models into misleading `0%` efficacy rows. This is
+  a v1.0.8 release blocker because baseline comparisons are now a primary RCA
+  tool.
 - **Benchmark telemetry collection must tolerate trace/diagnostic visibility
   lag.** A just-finished exercise turn is not allowed to lose phase timings
   merely because the CLI asks for `/api/traces/{turn_id}/diagnostics` a few

@@ -543,9 +543,10 @@ func TestNewClient_KeyResolutionCascade(t *testing.T) {
 	defer func() { KeyResolver = origResolver }()
 
 	keystore := map[string]string{
-		"custom_secret":     "key-from-explicit-ref",
-		"openai_api_key":    "key-from-conventional",
-		"anthropic_api_key": "key-from-conventional-anthropic",
+		"custom_secret":         "key-from-explicit-ref",
+		"openai_api_key":        "key-from-conventional",
+		"anthropic_api_key":     "key-from-conventional-anthropic",
+		"provider_key:deepseek": "key-from-legacy-go-provider-key",
 	}
 	KeyResolver = func(keystoreKey string) string {
 		return keystore[keystoreKey]
@@ -603,6 +604,19 @@ func TestNewClient_KeyResolutionCascade(t *testing.T) {
 	}
 	if c4.apiKey != "key-from-explicit-ref" {
 		t.Errorf("case 4: apiKey = %q, want key-from-explicit-ref", c4.apiKey)
+	}
+
+	// Case 5: legacy Go provider-key name remains readable for existing stores.
+	c5, err := NewClient(&Provider{
+		Name:   "deepseek",
+		URL:    "http://test",
+		Format: FormatOpenAI,
+	})
+	if err != nil {
+		t.Fatalf("case 5: %v", err)
+	}
+	if c5.apiKey != "key-from-legacy-go-provider-key" {
+		t.Errorf("case 5: apiKey = %q, want key-from-legacy-go-provider-key", c5.apiKey)
 	}
 }
 

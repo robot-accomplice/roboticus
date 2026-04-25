@@ -30,15 +30,15 @@ var setupCmd = &cobra.Command{
 		}
 
 		// 2. LLM provider.
-		fmt.Print("Primary LLM provider (ollama/openai/anthropic) [ollama]: ")
+		fmt.Print("Primary LLM provider (ollama/openai/anthropic/google/moonshot/openrouter/deepseek) [ollama]: ")
 		provider := "ollama"
 		if scanner.Scan() {
 			if v := strings.TrimSpace(strings.ToLower(scanner.Text())); v != "" {
 				switch v {
-				case "ollama", "openai", "anthropic":
+				case "ollama", "openai", "anthropic", "google", "moonshot", "openrouter", "deepseek":
 					provider = v
 				default:
-					return fmt.Errorf("unsupported provider %q — choose ollama, openai, or anthropic", v)
+					return fmt.Errorf("unsupported provider %q — choose ollama, openai, anthropic, google, moonshot, openrouter, or deepseek", v)
 				}
 			}
 		}
@@ -46,13 +46,13 @@ var setupCmd = &cobra.Command{
 		// 3. API key (for cloud providers).
 		var apiKey string
 		if provider != "ollama" {
-			envVar := strings.ToUpper(provider) + "_API_KEY"
-			fmt.Printf("API key (will be written as env ref %s): ", envVar)
+			keyName := provider + "_api_key"
+			fmt.Printf("API key (will be stored in keystore entry %s): ", keyName)
 			if scanner.Scan() {
 				apiKey = strings.TrimSpace(scanner.Text())
 			}
 			if apiKey == "" {
-				fmt.Fprintf(os.Stderr, "warning: no API key provided — set %s in your environment\n", envVar)
+				fmt.Fprintf(os.Stderr, "warning: no API key provided — set %s in the keystore later\n", keyName)
 			}
 		}
 
@@ -67,6 +67,16 @@ var setupCmd = &cobra.Command{
 
 		if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
 			return fmt.Errorf("failed to write config: %w", err)
+		}
+		if apiKey != "" {
+			ks, err := core.OpenKeystoreMachine()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "warning: API key not stored — failed to open keystore: %v\n", err)
+			} else if err := ks.Set(provider+"_api_key", apiKey); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: API key not stored — failed to update keystore: %v\n", err)
+			} else if err := ks.Save(); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: API key not stored — failed to save keystore: %v\n", err)
+			}
 		}
 
 		fmt.Printf("\nConfiguration written to %s\n", configPath)
@@ -88,14 +98,46 @@ func buildConfigTOML(name, provider, apiKey string) string {
 		sb.WriteString("url = \"https://api.openai.com\"\n")
 		sb.WriteString("tier = \"flagship\"\n")
 		sb.WriteString("format = \"openai\"\n")
-		sb.WriteString("api_key_env = \"OPENAI_API_KEY\"\n")
+		sb.WriteString("api_key_ref = \"openai_api_key\"\n")
 	case "anthropic":
 		sb.WriteString("primary = \"claude-sonnet-4-20250514\"\n\n")
 		sb.WriteString("[providers.anthropic]\n")
 		sb.WriteString("url = \"https://api.anthropic.com\"\n")
 		sb.WriteString("tier = \"flagship\"\n")
 		sb.WriteString("format = \"anthropic\"\n")
-		sb.WriteString("api_key_env = \"ANTHROPIC_API_KEY\"\n")
+		sb.WriteString("api_key_ref = \"anthropic_api_key\"\n")
+	case "google":
+		sb.WriteString("primary = \"google/gemini-3.1-pro-preview\"\n\n")
+		sb.WriteString("[providers.google]\n")
+		sb.WriteString("url = \"https://generativelanguage.googleapis.com\"\n")
+		sb.WriteString("tier = \"T3\"\n")
+		sb.WriteString("format = \"google\"\n")
+		sb.WriteString("api_key_ref = \"google_api_key\"\n")
+	case "moonshot":
+		sb.WriteString("primary = \"moonshot/kimi-k2.5\"\n\n")
+		sb.WriteString("[providers.moonshot]\n")
+		sb.WriteString("url = \"https://api.moonshot.ai\"\n")
+		sb.WriteString("tier = \"T2\"\n")
+		sb.WriteString("format = \"openai\"\n")
+		sb.WriteString("chat_path = \"/v1/chat/completions\"\n")
+		sb.WriteString("api_key_ref = \"moonshot_api_key\"\n")
+	case "openrouter":
+		sb.WriteString("primary = \"openrouter/google/gemini-3.1-pro-preview\"\n\n")
+		sb.WriteString("[providers.openrouter]\n")
+		sb.WriteString("url = \"https://openrouter.ai/api\"\n")
+		sb.WriteString("tier = \"T2\"\n")
+		sb.WriteString("format = \"openai\"\n")
+		sb.WriteString("chat_path = \"/v1/chat/completions\"\n")
+		sb.WriteString("auth_header = \"Authorization\"\n")
+		sb.WriteString("api_key_ref = \"openrouter_api_key\"\n")
+	case "deepseek":
+		sb.WriteString("primary = \"deepseek/deepseek-v4-pro\"\n\n")
+		sb.WriteString("[providers.deepseek]\n")
+		sb.WriteString("url = \"https://api.deepseek.com\"\n")
+		sb.WriteString("tier = \"T3\"\n")
+		sb.WriteString("format = \"openai\"\n")
+		sb.WriteString("chat_path = \"/chat/completions\"\n")
+		sb.WriteString("api_key_ref = \"deepseek_api_key\"\n")
 	default:
 		sb.WriteString("primary = \"llama3.2\"\n\n")
 		sb.WriteString("[providers.ollama]\n")
@@ -106,8 +148,7 @@ func buildConfigTOML(name, provider, apiKey string) string {
 	}
 
 	if apiKey != "" {
-		envVar := strings.ToUpper(provider) + "_API_KEY"
-		fmt.Fprintf(&sb, "\n# Set %s=%s in your environment.\n", envVar, apiKey)
+		fmt.Fprintf(&sb, "\n# API key provided during setup; it is stored in keystore entry %s_api_key.\n", provider)
 	}
 
 	return sb.String()

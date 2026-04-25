@@ -257,6 +257,10 @@ func resolveKeyStatus(providerName string, isLocal bool, apiKeyEnv string, ks *c
 		if val := ks.GetOrEmpty(conventional); val != "" {
 			return "configured", "keystore"
 		}
+		legacy := "provider_key:" + providerName
+		if val := ks.GetOrEmpty(legacy); val != "" {
+			return "configured", "keystore_legacy"
+		}
 	}
 
 	// No env var fallback — keys come from keystore only.

@@ -516,6 +516,21 @@ This file follows the same C4 conventions used elsewhere in the repo:
   The system is not allowed to select `openrouter` and later reinterpret the
   same target as direct `openai` because one code path joined the spec
   differently
+- provider onboarding must use the narrowest existing wire-format seam. A
+  provider with OpenAI-compatible chat completions is added as bundled provider
+  metadata (`url`, `chat_path`, `format`, key reference, cost/locality facts),
+  not as a bespoke client, unless its request/response contract cannot be
+  represented by the existing adapter.
+- provider key identity is canonical configuration, not UI folklore. The
+  operator-facing key-management API, setup wizard, daemon key resolver, and
+  status surfaces must converge on the Rust-compatible `<provider>_api_key`
+  keystore name while preserving compatibility with older Go
+  `provider_key:<name>` entries so existing credentials are not orphaned.
+- local keystore CLI commands are local secret-store operations, not daemon
+  RPCs. `roboticus keystore set/remove/import/list/status` must be able to
+  operate against the encrypted keystore while the daemon is stopped; the HTTP
+  provider-key routes are the dashboard/remote-management seam, not the only
+  write path for local operator credentials.
 - trace listings must preserve operator-usable turn identity: full turn ids
   remain directly copyable from the observability table, and truncation is
   allowed only as a presentation choice layered on top of the authoritative id

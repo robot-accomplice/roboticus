@@ -840,6 +840,17 @@ func TestClient_ChatURL_OpenAIResponses(t *testing.T) {
 	}
 }
 
+func TestClient_ChatURL_DeepSeekProviderPath(t *testing.T) {
+	client := &Client{provider: &Provider{
+		URL:      "https://api.deepseek.com",
+		Format:   FormatOpenAI,
+		ChatPath: "/chat/completions",
+	}}
+	if got := client.chatURL(); got != "https://api.deepseek.com/chat/completions" {
+		t.Errorf("DeepSeek chat URL = %q", got)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Client.setHeaders: query auth mode (should skip auth header), extra headers, custom auth header
 // ---------------------------------------------------------------------------

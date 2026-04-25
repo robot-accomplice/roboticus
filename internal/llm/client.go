@@ -65,6 +65,9 @@ func NewClient(p *Provider) (*Client, error) {
 			if apiKey == "" {
 				apiKey = KeyResolver(p.Name + "_api_key")
 			}
+			if apiKey == "" {
+				apiKey = KeyResolver("provider_key:" + p.Name)
+			}
 		}
 		// Non-local providers without a key will fail at request time,
 		// not at construction — this allows the service to start even
@@ -98,6 +101,9 @@ func NewClientWithHTTP(p *Provider, httpClient core.HTTPDoer) (*Client, error) {
 	// Keys from keystore only — no env var lookup.
 	if KeyResolver != nil && !p.IsLocal {
 		apiKey = KeyResolver(p.Name + "_api_key")
+		if apiKey == "" {
+			apiKey = KeyResolver("provider_key:" + p.Name)
+		}
 	}
 	return &Client{
 		provider:       p,

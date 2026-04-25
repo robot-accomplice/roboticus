@@ -108,7 +108,8 @@ Each provider is configured as a named section. User-defined providers override 
 | `url` | string | — | Base URL for the provider API. |
 | `tier` | string | — | Provider tier: `"T1"` (local), `"T2"` (proxy), `"T3"` (cloud). |
 | `format` | string | `""` | Wire format: `"openai"`, `"anthropic"`, `"google"`, `"ollama"`. |
-| `api_key_env` | string | `""` | Environment variable containing the API key. |
+| `api_key_env` | string | `""` | Legacy bundled-provider metadata only; runtime authentication uses the keystore. |
+| `api_key_ref` | string | `""` | Keystore key reference. Provider keys managed through the workspace API use `<provider>_api_key`; legacy `provider_key:<name>` entries are still read for compatibility. |
 | `chat_path` | string | `""` | Override for the chat completions endpoint path. |
 | `embedding_path` | string | `""` | Endpoint path for embeddings. |
 | `embedding_model` | string | `""` | Model name for embeddings. |
@@ -142,7 +143,24 @@ url = "http://localhost:11434"
 tier = "T1"
 format = "openai"
 is_local = true
+
+[providers.deepseek]
+url = "https://api.deepseek.com"
+tier = "T3"
+format = "openai"
+chat_path = "/chat/completions"
 ```
+
+DeepSeek is an OpenAI-compatible provider. Prefer provider-qualified model
+names such as `deepseek/deepseek-v4-pro` or `deepseek/deepseek-v4-flash` in
+`[models]`. The legacy aliases `deepseek-chat` and `deepseek-reasoner` remain
+available through DeepSeek for compatibility until their published deprecation
+date.
+
+The setup wizard supports the bundled cloud provider set directly: OpenAI,
+Anthropic, Google, Moonshot, OpenRouter, and DeepSeek. Local-host onboarding is
+still intentionally simpler than the Rust wizard; richer SGLang/Apertus
+detection remains separate from adding a cloud provider profile.
 
 ---
 

@@ -600,7 +600,7 @@ func TestMergeBundledProviders(t *testing.T) {
 	}
 
 	// Check specific known providers from bundled_providers.toml.
-	for _, name := range []string{"ollama", "openai", "anthropic", "google"} {
+	for _, name := range []string{"ollama", "openai", "anthropic", "google", "deepseek"} {
 		if _, ok := cfg.Providers[name]; !ok {
 			t.Errorf("missing bundled provider %q", name)
 		}
@@ -617,6 +617,17 @@ func TestMergeBundledProviders(t *testing.T) {
 	}
 	if cfg.Providers["anthropic"].ExtraHeaders["anthropic-version"] != "2023-06-01" {
 		t.Error("anthropic should have anthropic-version header")
+	}
+
+	deepseek := cfg.Providers["deepseek"]
+	if deepseek.URL != "https://api.deepseek.com" {
+		t.Errorf("deepseek URL = %q", deepseek.URL)
+	}
+	if deepseek.Format != "openai" {
+		t.Errorf("deepseek format = %q, want openai", deepseek.Format)
+	}
+	if deepseek.ChatPath != "/chat/completions" {
+		t.Errorf("deepseek chat path = %q, want /chat/completions", deepseek.ChatPath)
 	}
 }
 

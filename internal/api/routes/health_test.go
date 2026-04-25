@@ -175,13 +175,21 @@ func TestSetProviderKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := SetProviderKey(ks)
+	r := chi.NewRouter()
+	r.Put("/api/providers/{provider}/key", SetProviderKey(ks))
 	req := httptest.NewRequest("PUT", "/api/providers/openai/key", strings.NewReader(`{"key":"sk-test"}`))
 	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
+	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	got, err := ks.Get("openai_api_key")
+	if err != nil {
+		t.Fatalf("expected conventional provider key to be stored: %v", err)
+	}
+	if got != "sk-test" {
+		t.Fatalf("stored key = %q, want sk-test", got)
 	}
 }
 
