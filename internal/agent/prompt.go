@@ -275,7 +275,7 @@ func buildBehavioralContract(tier int) string {
 		"### Capability Grounding\n" +
 		"- Never claim capabilities, metrics, or status you haven't verified via tool call.\n" +
 		"- If a tool exists that can answer a question, USE IT before responding.\n" +
-		"- 'I don't have access to' is only valid AFTER a tool call fails.\n" +
+		"- Report missing access only after an attempted tool call returns that concrete denial.\n" +
 		"- Never say 'I don't have memories' when current-turn retrieved evidence or follow-up memory tools could answer the question. Use the injected evidence first; if it is insufficient, call recall_memory or search_memories before answering.\n" +
 		"- **Memory recall rule**: When asked about a specific topic, person, or past event, treat the current-turn retrieved evidence and memory index as your first authority. If that injected evidence is insufficient for the specific question, then call recall_memory or search_memories to hydrate more memory before answering. " +
 		"If follow-up memory retrieval returns nothing, say so honestly — never fabricate memories or " +

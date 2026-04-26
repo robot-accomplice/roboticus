@@ -69,3 +69,22 @@ func TestSetMemoryContext_DerivesStructuredContradictionItems(t *testing.T) {
 		t.Fatalf("expected contradiction to lower memory confidence, got %d", ve.MemoryConfidenceInfluence)
 	}
 }
+
+func TestSetMemoryContext_NoRetrievedEvidenceIsNeutralConfidence(t *testing.T) {
+	sess := New("s1", "a1", "bot")
+	sess.SetMemoryContext("[Active Memory]\n\n[Gaps]\n- no evidence retrieved from any tier\n")
+
+	ve := sess.VerificationEvidence()
+	if ve == nil {
+		t.Fatal("expected derived verification evidence")
+	}
+	if ve.HasEvidence {
+		t.Fatalf("no retrieved evidence should not set HasEvidence: %+v", ve)
+	}
+	if ve.MemoryGapKind != MemoryGapNoEvidence {
+		t.Fatalf("expected no-evidence gap kind, got %+v", ve.MemoryGapKind)
+	}
+	if ve.MemoryConfidenceInfluence != MemoryConfidenceNeutral {
+		t.Fatalf("expected absent memory to be neutral, got %d", ve.MemoryConfidenceInfluence)
+	}
+}

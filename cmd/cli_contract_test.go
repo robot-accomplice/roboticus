@@ -111,6 +111,55 @@ func TestCLI_Aliases(t *testing.T) {
 	}
 }
 
+func TestCLI_CommandGroups(t *testing.T) {
+	configureRootCommandGroups()
+	groups := make(map[string]string)
+	for _, group := range rootCmd.Groups() {
+		groups[group.ID] = group.Title
+	}
+	for id, title := range map[string]string{
+		cliGroupRuntime:      "Runtime & Operations",
+		cliGroupConfig:       "Configuration & Security",
+		cliGroupIntelligence: "Models, Agents & Memory",
+		cliGroupAutomation:   "Automation & Channels",
+		cliGroupAdmin:        "Administration & Maintenance",
+		cliGroupHelp:         "Help",
+	} {
+		if got := groups[id]; got != title {
+			t.Fatalf("command group %q = %q, want %q", id, got, title)
+		}
+	}
+
+	wantCommandGroups := map[string]string{
+		"serve":      cliGroupRuntime,
+		"daemon":     cliGroupRuntime,
+		"config":     cliGroupConfig,
+		"keystore":   cliGroupConfig,
+		"models":     cliGroupIntelligence,
+		"memory":     cliGroupIntelligence,
+		"channels":   cliGroupAutomation,
+		"cron":       cliGroupAutomation,
+		"admin":      cliGroupAdmin,
+		"update":     cliGroupAdmin,
+		"completion": cliGroupHelp,
+	}
+	cmds := commandMap(rootCmd)
+	for name, groupID := range wantCommandGroups {
+		cmd, ok := cmds[name]
+		if !ok {
+			t.Fatalf("command %q not registered", name)
+		}
+		if cmd.GroupID != groupID {
+			t.Fatalf("command %q group = %q, want %q", name, cmd.GroupID, groupID)
+		}
+	}
+	for _, cmd := range rootCmd.Commands() {
+		if cmd.IsAvailableCommand() && cmd.GroupID == "" {
+			t.Fatalf("available root command %q has no help group", cmd.Name())
+		}
+	}
+}
+
 // TestCLI_SubcommandSets verifies expected subcommands exist for each parent command.
 func TestCLI_SubcommandSets(t *testing.T) {
 	tests := []struct {

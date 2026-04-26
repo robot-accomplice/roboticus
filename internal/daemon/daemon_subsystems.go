@@ -322,61 +322,6 @@ func (d *Daemon) runMaintenanceHeartbeat(ctx context.Context) {
 	daemon.RunDistributed(ctx, intervals, tickCtxFn)
 }
 
-// runTelegramPoller polls the Telegram adapter for inbound messages via long polling.
-// Currently wired via config flag; kept for imminent Telegram channel enablement.
-func (d *Daemon) runTelegramPoller(ctx context.Context) { //nolint:unused // wired when telegram.polling=true
-	log.Info().Msg("telegram poller started")
-
-	tgAdapter := d.router.GetAdapter("telegram")
-	if tgAdapter == nil {
-		log.Warn().Msg("telegram adapter not registered, poller exiting")
-		return
-	}
-
-	// Clear any registered webhook so getUpdates polling works.
-	// Telegram returns 409 if both webhook and polling are active.
-	if tg, ok := tgAdapter.(*channel.TelegramAdapter); ok {
-		if err := tg.DeleteWebhook(ctx); err != nil {
-			log.Warn().Err(err).Msg("telegram: failed to delete webhook")
-		} else {
-			log.Info().Msg("telegram: webhook cleared, polling active")
-			time.Sleep(2 * time.Second) // Give Telegram API time to propagate
-		}
-	}
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-		// Telegram long-polls internally (30s timeout in getUpdates),
-		// so no ticker needed — Recv blocks until messages arrive.
-		msg, err := tgAdapter.Recv(ctx)
-		if err != nil {
-			errMsg := err.Error()
-			if strings.Contains(errMsg, "409") {
-				// 409 = "terminated by other getUpdates request".
-				// Another long-poll is still in-flight (previous process or our own).
-				// Back off for the poll timeout duration (30s) to let it expire.
-				log.Warn().Msg("telegram: 409 conflict (previous poll in-flight), waiting for expiry")
-				time.Sleep(35 * time.Second)
-			} else {
-				log.Warn().Err(err).Msg("telegram recv error")
-				time.Sleep(5 * time.Second)
-			}
-			continue
-		}
-		if msg == nil {
-			continue
-		}
-		m := *msg
-		d.bgWorker.Submit("inbound:telegram", func(bgCtx context.Context) {
-			d.handleInbound(bgCtx, m)
-		})
-	}
-}
-
 // discoverTelegramChatIDs extracts known Telegram chat IDs from existing
 // sessions in the database. This bootstraps the allowlist from prior
 // interactions so DenyOnEmpty works correctly without manual config.

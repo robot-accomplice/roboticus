@@ -34,6 +34,10 @@ This file follows the same C4 conventions used elsewhere in the repo:
 - shared low-level primitives such as hashing and ID/content normalization live
   at or below `internal/core`; `internal/db` is not allowed to depend upward on
   `internal/agent/*` for generic helpers
+- planned helper wrappers and dormant subsystem methods are not acceptable
+  architecture. If a path is not wired into live control flow or covered as a
+  compatibility contract, delete it and reintroduce it with tests when the
+  feature actually needs it.
 - release-shaped binaries get version truth from one authoritative build seam:
   CLI version is stamped into `cmd/internal/cmdutil.Version`, daemon banner
   version into `internal/daemon.version`, and CI/release/local helper build
@@ -427,6 +431,10 @@ This file follows the same C4 conventions used elsewhere in the repo:
   concrete entries must carry at least some observed entries into the final
   answer. Reflection is not allowed to replace authoritative inspection output
   with meta-claims that a list existed
+- recovered hard-guard failures remain RCA-visible. A final answer can be
+  usable after retry while the turn remains diagnostically degraded, but the
+  summary must expose a primary diagnosis such as recovered guard violation
+  instead of leaving operators with a blank cause
 - direct `execute_directly` turns are not allowed to terminate on promissory
   future-action scaffolding such as `let me check...` when no tool call or
   authoritative evidence was produced; the direct-execution seam must treat
@@ -605,6 +613,11 @@ This file follows the same C4 conventions used elsewhere in the repo:
 - placeholder assistant scaffolding such as `[assistant message]` or
   `[agent message]` must be dropped at the loop boundary so it cannot enter
   history, retries, RCA, or operator-visible output
+- CLI topology is an operator-facing architecture seam. Root help must group
+  commands by operator domain rather than exposing an undifferentiated command
+  wall, and existing top-level command paths must remain backward compatible
+  unless a later migration explicitly ships aliases/proxies and release notes
+  for every moved path
 - operator RCA on desktop is expected to read left-to-right as one bounded
   decision flow: macro mode uses compact blocks plus one dense top status
   banner, while turn conclusion and health may move to a separate bottom

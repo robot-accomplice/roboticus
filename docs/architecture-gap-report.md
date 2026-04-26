@@ -202,6 +202,16 @@ older architecture docs had left too generic:
   averages exclude invalid rows, or which denominator produced the displayed
   overall score. Aggregate quality truth must be computed once or labeled
   unambiguously at every presentation seam.
+- **CLI topology is an operator-facing architecture seam.** Root help must be
+  grouped by operator domain so command discovery does not degrade into an
+  undifferentiated command wall. Existing top-level command paths remain the
+  compatibility contract for v1.0.8; any later path migration must ship
+  explicit aliases or proxy commands for every moved surface.
+- **Dormant code is not architecture inventory.** Planned helper wrappers and
+  stale subsystem methods are not allowed to remain under `nolint:unused` or
+  "wired later" comments. If the live control flow has a canonical owner, the
+  unused alternate path must be deleted and reintroduced with tests only when a
+  real feature requires it.
 - **Partial intent exercise runs are scorecard patches, not replacement
   scorecards.** When an operator runs `models exercise --intent TOOL_USE` or
   any other intent slice, the fresh rows update only that model/intent slice in

@@ -350,6 +350,31 @@ func DeriveInterpretiveDiagnosticsSummary(summary TurnDiagnosticSummary, events 
 		operatorNarrative = strings.Join(parts, "; ")
 	}
 
+	if strings.TrimSpace(summary.PrimaryDiagnosis) == "" {
+		switch {
+		case guardRetry != nil:
+			summary.PrimaryDiagnosis = "guard_retry_recovered"
+			summary.DiagnosisConfidence = maxDiagnosticFloat64(summary.DiagnosisConfidence, 0.83)
+		case verifierRetry != nil:
+			summary.PrimaryDiagnosis = "verifier_retry_recovered"
+			summary.DiagnosisConfidence = maxDiagnosticFloat64(summary.DiagnosisConfidence, 0.78)
+		case replaySuppressed != nil || summary.ReplaySuppressionCount > 0:
+			summary.PrimaryDiagnosis = "side_effect_replay_suppressed"
+			summary.DiagnosisConfidence = maxDiagnosticFloat64(summary.DiagnosisConfidence, 0.86)
+		case loopTermination != nil:
+			if reason := diagnosticDetailString(loopTermination, "reason_code"); reason != "" {
+				summary.PrimaryDiagnosis = reason
+				summary.DiagnosisConfidence = maxDiagnosticFloat64(summary.DiagnosisConfidence, 0.82)
+			}
+		case callNormalizationFailed != nil:
+			summary.PrimaryDiagnosis = "tool_call_normalization_failed"
+			summary.DiagnosisConfidence = maxDiagnosticFloat64(summary.DiagnosisConfidence, 0.86)
+		case callNormalized != nil:
+			summary.PrimaryDiagnosis = "tool_call_normalized"
+			summary.DiagnosisConfidence = maxDiagnosticFloat64(summary.DiagnosisConfidence, 0.74)
+		}
+	}
+
 	summary.UserNarrative = userNarrative
 	summary.OperatorNarrative = operatorNarrative
 	return summary
@@ -597,6 +622,13 @@ func nonEmpty(value string, fallback string) string {
 }
 
 func maxDiagnosticInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func maxDiagnosticFloat64(a, b float64) float64 {
 	if a > b {
 		return a
 	}
