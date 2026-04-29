@@ -183,6 +183,138 @@ CREATE TABLE treasury_state (
 	}
 }
 
+func TestOpen_RepairsLegacyTaskEventsPayloadShape(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "legacy-task-events.db")
+
+	rawDB, err := sql.Open("sqlite", "file:"+dbPath)
+	if err != nil {
+		t.Fatalf("sql.Open legacy db: %v", err)
+	}
+	_, err = rawDB.Exec(`
+CREATE TABLE schema_version (
+	version INTEGER NOT NULL,
+	applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+INSERT INTO schema_version (version) VALUES (30);
+CREATE TABLE task_events (
+	id TEXT PRIMARY KEY,
+	task_id TEXT NOT NULL,
+	parent_task_id TEXT,
+	assigned_to TEXT,
+	event_type TEXT NOT NULL,
+	summary TEXT,
+	detail_json TEXT,
+	percentage REAL,
+	retry_count INTEGER NOT NULL DEFAULT 0,
+	created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);`)
+	if err != nil {
+		_ = rawDB.Close()
+		t.Fatalf("seed legacy task_events db: %v", err)
+	}
+	if err := rawDB.Close(); err != nil {
+		t.Fatalf("close legacy db: %v", err)
+	}
+
+	store, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open legacy task_events db: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	exists, err := store.columnExists("task_events", "payload_json")
+	if err != nil {
+		t.Fatalf("columnExists(task_events.payload_json): %v", err)
+	}
+	if !exists {
+		t.Fatal("task_events missing repaired payload_json column")
+	}
+
+	repo := NewTaskEventsRepository(store)
+	if err := repo.Append(context.Background(), TaskEventRow{
+		ID:          "evt-legacy-repair",
+		TaskID:      "task-legacy-repair",
+		EventType:   "created",
+		PayloadJSON: `{"status":"ok"}`,
+	}); err != nil {
+		t.Fatalf("append repaired task event: %v", err)
+	}
+
+	events, err := repo.ListRecent(context.Background(), "task-legacy-repair", 1)
+	if err != nil {
+		t.Fatalf("list repaired task events: %v", err)
+	}
+	if len(events) != 1 || events[0].PayloadJSON != `{"status":"ok"}` {
+		t.Fatalf("unexpected repaired task event rows: %+v", events)
+	}
+}
+
+func TestOpen_RepairsLegacyTaskEventsEventTypeConstraint(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "legacy-task-events-check.db")
+
+	rawDB, err := sql.Open("sqlite", "file:"+dbPath)
+	if err != nil {
+		t.Fatalf("sql.Open legacy db: %v", err)
+	}
+	_, err = rawDB.Exec(`
+CREATE TABLE schema_version (
+	version INTEGER NOT NULL,
+	applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+INSERT INTO schema_version (version) VALUES (30);
+CREATE TABLE task_events (
+	id TEXT PRIMARY KEY,
+	task_id TEXT NOT NULL,
+	parent_task_id TEXT,
+	assigned_to TEXT,
+	event_type TEXT NOT NULL CHECK (event_type IN ('pending', 'assigned', 'running', 'progress', 'completed', 'failed', 'cancelled', 'retry')),
+	payload_json TEXT NOT NULL DEFAULT '{}',
+	created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+INSERT INTO task_events (id, task_id, event_type, payload_json)
+VALUES ('evt-old', 'task-old', 'pending', '{"old":true}');`)
+	if err != nil {
+		_ = rawDB.Close()
+		t.Fatalf("seed legacy task_events constrained db: %v", err)
+	}
+	if err := rawDB.Close(); err != nil {
+		t.Fatalf("close legacy db: %v", err)
+	}
+
+	store, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open legacy constrained task_events db: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	repo := NewTaskEventsRepository(store)
+	if err := repo.Append(context.Background(), TaskEventRow{
+		ID:          "evt-workflow-completed",
+		TaskID:      "task-old",
+		EventType:   "workflow_completed",
+		PayloadJSON: `{"summary":"ok"}`,
+	}); err != nil {
+		t.Fatalf("append current workflow event after repair: %v", err)
+	}
+
+	events, err := repo.ListRecent(context.Background(), "task-old", 10)
+	if err != nil {
+		t.Fatalf("list repaired constrained task events: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("event count = %d, want 2: %+v", len(events), events)
+	}
+	seen := map[string]bool{}
+	for _, event := range events {
+		seen[event.EventType] = true
+	}
+	if !seen["workflow_completed"] || !seen["pending"] {
+		t.Fatalf("unexpected event types after repair: %+v", events)
+	}
+}
+
 func TestIsSubagentName(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()

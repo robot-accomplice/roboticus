@@ -87,6 +87,25 @@ func TestDeriveTurnEnvelopePolicy_SimpleDirectTaskUsesFocusedEnvelope(t *testing
 	}
 }
 
+func TestDeriveTurnEnvelopePolicy_GenericToolDemonstrationUsesFocusedEnvelope(t *testing.T) {
+	prompt := "Tell me about the tools you can use, pick one at random, and use it."
+	synthesis := SynthesizeTaskState(prompt, 1, nil)
+	policy := DeriveTurnEnvelopePolicy(prompt, synthesis, 1)
+
+	if policy.Weight != TurnWeightStandard {
+		t.Fatalf("weight = %q, want %q", policy.Weight, TurnWeightStandard)
+	}
+	if policy.AllowRetrieval {
+		t.Fatal("generic tool demonstration should not widen into memory retrieval")
+	}
+	if policy.ToolProfile != ToolProfileFocusedToolDemonstration {
+		t.Fatalf("tool profile = %q, want %q", policy.ToolProfile, ToolProfileFocusedToolDemonstration)
+	}
+	if policy.MaxTools != 8 {
+		t.Fatalf("max tools = %d, want 8", policy.MaxTools)
+	}
+}
+
 func TestDeriveTurnEnvelopePolicy_VerboseSingleStepAuthoringStillUsesFocusedEnvelope(t *testing.T) {
 	prompt := "Create a new Obsidian note named codex-live-test-2.md in the vault containing exactly: # Codex Live Test 2. Use the Obsidian vault tool if you have it. Do not ask for confirmation."
 	synthesis := SynthesizeTaskState(prompt, 1, nil)
@@ -759,6 +778,74 @@ func TestApplyToolPolicy_AuthorityMutationOverridesPin(t *testing.T) {
 		if d.Function.Name == "ingest_policy" {
 			t.Fatalf("pinned authority-mutating tool ingest_policy should be removed when AllowAuthorityMutation=false")
 		}
+	}
+}
+
+func TestApplyToolPolicy_RetrievalExclusionOverridesMemoryPin(t *testing.T) {
+	sess := session.New("sess-memory-pin-override", "agent-1", "Test")
+	pruner := &countingPolicyPruner{
+		pinned: []string{"search_memories", "recall_memory"},
+		fn: func(_ context.Context, _ *session.Session) ([]llm.ToolDef, agenttools.ToolSearchStats, error) {
+			return []llm.ToolDef{
+				{Type: "function", Function: llm.ToolFuncDef{Name: "search_memories"}},
+				{Type: "function", Function: llm.ToolFuncDef{Name: "recall_memory"}},
+				{Type: "function", Function: llm.ToolFuncDef{Name: "cron"}},
+				{Type: "function", Function: llm.ToolFuncDef{Name: "get_runtime_context"}},
+			}, agenttools.ToolSearchStats{CandidatesSelected: 4, EmbeddingStatus: "ok"}, nil
+		},
+	}
+	_, err := (TurnEnvelopePolicy{
+		Weight:         TurnWeightStandard,
+		MaxTools:       4,
+		ToolProfile:    ToolProfileFocusedScheduling,
+		AllowRetrieval: false,
+	}).applyToolPolicy(context.Background(), sess, pruner)
+	if err != nil {
+		t.Fatalf("applyToolPolicy: %v", err)
+	}
+	got := toolDefNamesForPolicy(sess.SelectedToolDefs())
+	if containsString(got, "search_memories") || containsString(got, "recall_memory") {
+		t.Fatalf("memory pins should not override focused scheduling retrieval exclusion; got %v", got)
+	}
+	if !containsString(got, "cron") {
+		t.Fatalf("focused scheduling surface should keep cron; got %v", got)
+	}
+}
+
+func TestApplyToolPolicy_ToolDemonstrationOverridesUnsafePins(t *testing.T) {
+	sess := session.New("sess-tool-demo-pin-override", "agent-1", "Test")
+	pruner := &countingPolicyPruner{
+		pinned: []string{"search_memories", "find_workflow", "orchestrate-subagents", "list-available-skills"},
+		fn: func(_ context.Context, _ *session.Session) ([]llm.ToolDef, agenttools.ToolSearchStats, error) {
+			return []llm.ToolDef{
+				{Type: "function", Function: llm.ToolFuncDef{Name: "list-available-skills"}},
+				{Type: "function", Function: llm.ToolFuncDef{Name: "orchestrate-subagents"}},
+				{Type: "function", Function: llm.ToolFuncDef{Name: "search_memories"}},
+				{Type: "function", Function: llm.ToolFuncDef{Name: "find_workflow"}},
+				{Type: "function", Function: llm.ToolFuncDef{Name: "inventory_projects"}},
+				{Type: "function", Function: llm.ToolFuncDef{Name: "get_runtime_context"}},
+			}, agenttools.ToolSearchStats{CandidatesSelected: 6, EmbeddingStatus: "ok"}, nil
+		},
+	}
+	_, err := (TurnEnvelopePolicy{
+		Weight:         TurnWeightStandard,
+		MaxTools:       8,
+		ToolProfile:    ToolProfileFocusedToolDemonstration,
+		AllowRetrieval: false,
+	}).applyToolPolicy(context.Background(), sess, pruner)
+	if err != nil {
+		t.Fatalf("applyToolPolicy: %v", err)
+	}
+	got := toolDefNamesForPolicy(sess.SelectedToolDefs())
+	if containsString(got, "search_memories") || containsString(got, "find_workflow") ||
+		containsString(got, "orchestrate-subagents") || containsString(got, "list-available-skills") {
+		t.Fatalf("tool demonstration should exclude memory/delegation/capability-inventory pins; got %v", got)
+	}
+	if !containsString(got, "inventory_projects") {
+		t.Fatalf("tool demonstration should retain bounded non-inventory proof tools; got %v", got)
+	}
+	if got[0] != "inventory_projects" {
+		t.Fatalf("first tool = %q, want inventory_projects ahead of inventory tools; got %v", got[0], got)
 	}
 }
 

@@ -17,6 +17,7 @@ package db
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/rs/zerolog/log"
 
@@ -966,6 +967,7 @@ func (s *Store) ensureOptionalColumns() error {
 		{Table: "cron_jobs", Column: "retry_count", ColType: "INTEGER", Default: "0"},
 		{Table: "cron_jobs", Column: "max_retries", ColType: "INTEGER", Default: "3"},
 		{Table: "cron_jobs", Column: "retry_delay_ms", ColType: "INTEGER", Default: "60000"},
+		{Table: "task_events", Column: "payload_json", ColType: "TEXT", Default: "'{}'"},
 		// treasury_state was introduced before the current full shape was stabilized.
 		// Older installs can carry a partial table forward while schema_version still
 		// reports current enough to skip the original CREATE TABLE migration.
@@ -1039,6 +1041,65 @@ func (s *Store) ensureOptionalColumns() error {
 		log.Info().Str("table", col.Table).Str("column", col.Column).Msg("added optional column")
 	}
 
+	if err := s.ensureTaskEventsEventTypeConstraintRemoved(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (s *Store) ensureTaskEventsEventTypeConstraintRemoved() error {
+	var ddl string
+	err := s.db.QueryRow(`SELECT COALESCE(sql, '') FROM sqlite_master WHERE type = 'table' AND name = 'task_events'`).Scan(&ddl)
+	if err != nil {
+		return err
+	}
+	normalized := strings.ToLower(ddl)
+	if !strings.Contains(normalized, "event_type") || !strings.Contains(normalized, " in ") {
+		return nil
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	stmts := []string{
+		`ALTER TABLE task_events RENAME TO task_events_legacy_repair`,
+		`DROP INDEX IF EXISTS idx_task_events_task_id`,
+		`DROP INDEX IF EXISTS idx_task_events_parent`,
+		`DROP INDEX IF EXISTS idx_task_events_assigned_to`,
+		`DROP INDEX IF EXISTS idx_task_events_created`,
+		`DROP INDEX IF EXISTS idx_task_events_type`,
+		`CREATE TABLE task_events (
+			id TEXT PRIMARY KEY,
+			task_id TEXT NOT NULL,
+			parent_task_id TEXT,
+			assigned_to TEXT,
+			event_type TEXT NOT NULL,
+			payload_json TEXT NOT NULL DEFAULT '{}',
+			created_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`INSERT INTO task_events (id, task_id, parent_task_id, assigned_to, event_type, payload_json, created_at)
+		 SELECT id, task_id, parent_task_id, assigned_to, event_type, COALESCE(payload_json, '{}'), created_at
+		   FROM task_events_legacy_repair`,
+		`DROP TABLE task_events_legacy_repair`,
+		`CREATE INDEX IF NOT EXISTS idx_task_events_task_id ON task_events(task_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_task_events_parent ON task_events(parent_task_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_task_events_assigned_to ON task_events(assigned_to)`,
+		`CREATE INDEX IF NOT EXISTS idx_task_events_created ON task_events(created_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_task_events_type ON task_events(event_type)`,
+	}
+	for _, stmt := range stmts {
+		if _, err := tx.Exec(stmt); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	log.Info().Str("table", "task_events").Msg("removed legacy event_type constraint")
 	return nil
 }
 

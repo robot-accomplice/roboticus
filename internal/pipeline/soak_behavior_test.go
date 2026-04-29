@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -20,6 +21,7 @@ type behaviorScenario struct {
 	// mockResponse is the canned LLM response for this scenario.
 	// The guard chain and pipeline post-processing run on it.
 	mockResponse string
+	toolResults  []ToolResultEntry
 	checks       []behaviorCheck
 }
 
@@ -197,7 +199,10 @@ func TestBehaviorSoak_LiveScenarios(t *testing.T) {
 		{
 			name:         "tool_random_use",
 			prompt:       "tell me about the tools you can use, pick one at random, and use it",
-			mockResponse: "I used the introspection tool and it returned the following status: 2 active sessions, memory utilization at 45%, and 5 available tools configured.",
+			mockResponse: "I picked ghola and used it to fetch the Metacritic homepage; it returned an HTML shell with status 200.",
+			toolResults: []ToolResultEntry{
+				{ToolName: "ghola", Output: "GET https://www.metacritic.com/ status=200 html=<html>...</html>"},
+			},
 			checks: []behaviorCheck{
 				behaviorCheckNotEmpty, behaviorCheckNoExecBlock, behaviorCheckNoStale, behaviorCheckNoForeignIdentity,
 				behaviorCheckContainsAny("tool-use evidence", []string{
@@ -219,7 +224,7 @@ func TestBehaviorSoak_LiveScenarios(t *testing.T) {
 		{
 			name:         "delegation",
 			prompt:       "order a subagent to list the markdown files and return the count only",
-			mockResponse: "Found 12 markdown files in the target directory.",
+			mockResponse: "12",
 			checks: []behaviorCheck{
 				behaviorCheckNotEmpty, behaviorCheckNoExecBlock, behaviorCheckNoInternalMetadata, behaviorCheckNoForeignIdentity,
 			},
@@ -239,6 +244,9 @@ func TestBehaviorSoak_LiveScenarios(t *testing.T) {
 			name:         "cron",
 			prompt:       "schedule a cron job that runs every 5 minutes and tell me exactly what was scheduled",
 			mockResponse: "Created cron job 'periodic-check' with schedule */5 * * * * — runs every 5 minutes. ID: cron-abc123.",
+			toolResults: []ToolResultEntry{
+				{ToolName: "cron", Output: "created cron job periodic-check with schedule */5 * * * *"},
+			},
 			checks: []behaviorCheck{
 				behaviorCheckNotEmpty, behaviorCheckNoExecBlock, behaviorCheckNoForeignIdentity,
 				behaviorCheckContainsAny("cron creation evidence", []string{
@@ -250,6 +258,9 @@ func TestBehaviorSoak_LiveScenarios(t *testing.T) {
 			name:         "tilde_distribution",
 			prompt:       "give me the file distribution in the folder ~",
 			mockResponse: "File distribution for /Users/jmachen: 42 directories found. Breakdown: Documents (15 files), Downloads (23 files), code (150+ files across multiple projects).",
+			toolResults: []ToolResultEntry{
+				{ToolName: "list_directory", Output: "Documents\nDownloads\ncode\n.roboticus"},
+			},
 			checks: []behaviorCheck{
 				behaviorCheckNotEmpty, behaviorCheckNoExecBlock, behaviorCheckNoForeignIdentity,
 				behaviorCheckContainsAny("distribution evidence", []string{
@@ -261,6 +272,9 @@ func TestBehaviorSoak_LiveScenarios(t *testing.T) {
 			name:         "folder_scan",
 			prompt:       "Now look in my Downloads folder",
 			mockResponse: "Scanning Downloads directory: found 23 files including 5 PDFs, 8 images, and 10 miscellaneous documents.",
+			toolResults: []ToolResultEntry{
+				{ToolName: "list_directory", Output: "/Users/jmachen/Downloads\nreport.pdf\nimage.png"},
+			},
 			checks: []behaviorCheck{
 				behaviorCheckNotEmpty, behaviorCheckNoExecBlock, behaviorCheckNoFilesystemDenial, behaviorCheckNoForeignIdentity,
 				behaviorCheckContainsAny("folder scan evidence", []string{
@@ -295,7 +309,7 @@ func TestBehaviorSoak_LiveScenarios(t *testing.T) {
 			// Build pipeline with mock executor returning this scenario's response.
 			pipe := New(PipelineDeps{
 				Store:    store,
-				Executor: &stubExecutor{response: sc.mockResponse},
+				Executor: &behaviorScenarioExecutor{response: sc.mockResponse, toolResults: sc.toolResults},
 				Guards:   DefaultGuardChain(),
 				BGWorker: testutil.BGWorker(t, 4),
 			})
@@ -427,6 +441,28 @@ type continuitySoakExecutor struct {
 	finalSession *Session
 }
 
+type behaviorScenarioExecutor struct {
+	response    string
+	toolResults []ToolResultEntry
+}
+
+func (e *behaviorScenarioExecutor) RunLoop(_ context.Context, session *Session) (string, int, error) {
+	for i, tr := range e.toolResults {
+		session.AddToolResult(
+			"scenario-tool-"+strconv.Itoa(i),
+			tr.ToolName,
+			tr.Output,
+			toolResultSignalsFailure(tr),
+		)
+	}
+	content := e.response
+	if content == "" {
+		content = "stub response"
+	}
+	session.AddAssistantMessage(content, nil)
+	return content, 1, nil
+}
+
 func (e *continuitySoakExecutor) RunLoop(_ context.Context, session *Session) (string, int, error) {
 	e.t.Helper()
 	latest := strings.ToLower(latestTurnExecutionContent(session))
@@ -453,6 +489,13 @@ func (e *continuitySoakExecutor) RunLoop(_ context.Context, session *Session) (s
 	if strings.Contains(latest, "where are the architecture documents") {
 		session.AddToolResult("repo-list", "list_directory", "cmd\ndocs\ninternal\nscripts\ntestutil", false)
 	}
+	if strings.Contains(latest, "review all of the subdirectories associated with the project") {
+		session.AddToolResult("repo-review-list", "list_directory", "cmd\ndocs\ninternal\nscripts\ntestutil", false)
+		session.AddToolResult("repo-review-read", "read_file", "docs/architecture-gap-report.md and docs/architecture-rules-diagrams.md inspected", false)
+	}
+	if strings.Contains(latest, "ghola tool") {
+		session.AddToolResult("ghola-fetch-initial", "ghola", "Metacritic main page retrieved headers and HTML shell", false)
+	}
 	if strings.Contains(latest, "use the evidence from the repo inspection") {
 		session.AddToolResult("arch-read", "read_file", "docs/architecture-gap-report.md and docs/architecture-rules-diagrams.md inspected", false)
 	}
@@ -461,6 +504,12 @@ func (e *continuitySoakExecutor) RunLoop(_ context.Context, session *Session) (s
 	}
 	if isStateContinuationEnvelope(latest) && strings.Contains(latest, "score elements") {
 		session.AddToolResult("browser-metacritic", "browser_navigate", "Playwright opened https://www.metacritic.com successfully", false)
+	}
+	if strings.Contains(latest, "playwright") {
+		session.AddToolResult("browser-metacritic-page", "browser_navigate", "Playwright opened https://www.metacritic.com successfully", false)
+	}
+	if strings.Contains(latest, "vampire crawlers") {
+		session.AddToolResult("browser-score-extract", "browser_evaluate", "Metacritic page inspected for Vampire Crawlers score elements", false)
 	}
 
 	content := continuityResponseForLatestUser(latest)
@@ -563,7 +612,7 @@ func continuityResponseForLatestUser(latest string) string {
 	case strings.Contains(latest, "use the evidence from the repo inspection"):
 		return "Using the repo evidence, the rule is that observed repository access remains authoritative until contradicted by a real tool or policy denial."
 	case strings.Contains(latest, "ghola tool"):
-		return "I can use ghola for the Metacritic page. If it only returns headers, the next action is to parse the retrieved HTML or use a browser-capable tool. Would you like me to proceed?"
+		return "I used ghola against the Metacritic page and retrieved HTML shell content with headers, so the next action is parsing the body or using a browser-capable tool."
 	case strings.Contains(latest, "first fetch only gave headers"):
 		return "The next step is to inspect page HTML/body content, not reset to a greeting or claim there are no browsing tools."
 	case strings.Contains(latest, "waiting patiently"):
@@ -571,7 +620,7 @@ func continuityResponseForLatestUser(latest string) string {
 	case strings.Contains(latest, "you said you were doing this"):
 		return "I will continue the exact pending extraction instead of treating this as a new conversation."
 	case strings.Contains(latest, "playwright"):
-		return "Playwright is an available browser surface and should be used when selected or explicitly requested."
+		return "I used Playwright to open the Metacritic page, confirming the browser-capable path is available for the current task."
 	case strings.Contains(latest, "vampire crawlers"):
 		return "I attempted to extract the Vampire Crawlers score; if the page lacks a direct score, I should inspect structured data and visible score elements next. Please confirm if I should proceed."
 	case strings.Contains(latest, "next step be"):

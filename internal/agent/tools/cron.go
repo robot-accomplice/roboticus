@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode"
 
 	"roboticus/internal/db"
 )
@@ -20,7 +21,7 @@ func (t *CronTool) ParameterSchema() json.RawMessage {
 		"type": "object",
 		"properties": {
 			"action":   {"type": "string", "enum": ["create", "list", "delete"], "description": "Action to perform"},
-			"name":     {"type": "string", "description": "Job name (for create)"},
+			"name":     {"type": "string", "description": "Job name (for create; derived from task if omitted)"},
 			"schedule": {"type": "string", "description": "Cron expression (for create)"},
 			"task":     {"type": "string", "description": "Task description / payload (for create)"},
 			"id":       {"type": "string", "description": "Job ID or name (for delete)"}
@@ -101,13 +102,15 @@ func (t *CronTool) list(ctx context.Context, tctx *Context) (*Result, error) {
 }
 
 func (t *CronTool) create(ctx context.Context, name, schedule, task string, tctx *Context) (*Result, error) {
-	if strings.TrimSpace(name) == "" {
-		return nil, fmt.Errorf("name is required for create")
+	name = strings.TrimSpace(name)
+	task = strings.TrimSpace(task)
+	if name == "" {
+		name = deriveCronJobName(task)
 	}
 	if strings.TrimSpace(schedule) == "" {
 		return nil, fmt.Errorf("schedule is required for create")
 	}
-	if strings.TrimSpace(task) == "" {
+	if task == "" {
 		return nil, fmt.Errorf("task is required for create")
 	}
 
@@ -134,6 +137,37 @@ func (t *CronTool) create(ctx context.Context, name, schedule, task string, tctx
 	}
 
 	return &Result{Output: fmt.Sprintf("Created cron job %q (id=%s, schedule=%s, delivery=%s/%s)", name, id, schedule, deliveryMode, deliveryChannel)}, nil
+}
+
+func deriveCronJobName(task string) string {
+	words := strings.Fields(task)
+	if len(words) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, 4)
+	for _, word := range words {
+		word = strings.Map(func(r rune) rune {
+			switch {
+			case unicode.IsLetter(r), unicode.IsDigit(r):
+				return unicode.ToLower(r)
+			case r == '-' || r == '_':
+				return r
+			default:
+				return -1
+			}
+		}, word)
+		if word == "" {
+			continue
+		}
+		parts = append(parts, word)
+		if len(parts) == 4 {
+			break
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, "-")
 }
 
 func (t *CronTool) delete(ctx context.Context, idOrName string, tctx *Context) (*Result, error) {

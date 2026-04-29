@@ -70,6 +70,16 @@ var guardRetryDirectives = map[string]RetryDirective{
 		TokenBudget: 0,
 		Instruction: "Do not ask the user to restate context that is already present in the conversation. Answer directly from the available context unless a truly missing detail blocks progress.",
 	},
+	"task_deferral": {
+		GuardName:   "task_deferral",
+		TokenBudget: 0,
+		Instruction: "Perform the requested action with the selected tools now. If execution is genuinely blocked, report the exact tool, policy, sandbox, or provider result that blocked it. Do not ask for confirmation unless a required input is actually missing.",
+	},
+	"output_contract": {
+		GuardName:   "output_contract",
+		TokenBudget: 0,
+		Instruction: "Return the requested output shape exactly. Do not add preface, explanation, bullets, or extra sentences unless the user requested them.",
+	},
 }
 
 // GetRetryDirective returns the retry directive for a guard, or nil if none exists.
@@ -170,7 +180,8 @@ func retryWithGuardsDetailed(
 			if len(lastViolations) > 0 {
 				prefix = fmt.Sprintf("%s by the %s guard", prefix, strings.Join(lastViolations, ", "))
 			}
-			session.AddSystemMessage(fmt.Sprintf("%s: %s. Please revise.", prefix, lastReason))
+			instruction := retryInstructionForViolations(lastViolations)
+			session.AddSystemMessage(fmt.Sprintf("%s: %s. %s", prefix, lastReason, instruction))
 		}
 
 		content, turns, err := executor.RunLoop(ctx, session)
@@ -215,6 +226,16 @@ func retryWithGuardsDetailed(
 	}
 	return run, fmt.Errorf("%w: after %d attempts, last reason: %s",
 		core.ErrGuardExhausted, policy.MaxRetries+1, lastReason)
+}
+
+func retryInstructionForViolations(violations []string) string {
+	for _, violation := range violations {
+		name := strings.TrimSpace(strings.SplitN(violation, ":", 2)[0])
+		if directive := GetRetryDirective(name); directive != nil && strings.TrimSpace(directive.Instruction) != "" {
+			return directive.Instruction
+		}
+	}
+	return "Please revise."
 }
 
 func applyGuardChainWithOptionalContext(guards *GuardChain, content string, guardCtx *GuardContext) ApplyResult {

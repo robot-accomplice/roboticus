@@ -380,6 +380,11 @@ func inspectionPromptHasResolvableTarget(prompt string) bool {
 		"home folder",
 		"home directory",
 		"my home",
+		"downloads folder",
+		"download folder",
+		"my downloads",
+		"desktop folder",
+		"documents folder",
 	})
 }
 

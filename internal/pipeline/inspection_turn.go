@@ -160,7 +160,38 @@ func resolveAliasedInspectionPaths(content, workspace string, allowedPaths []str
 		}
 	}
 
+	commonHomeAliases := map[string][]string{
+		"Downloads": []string{"downloads", "download folder", "downloads folder"},
+		"Desktop":   []string{"desktop", "desktop folder"},
+		"Documents": []string{"documents", "documents folder"},
+	}
+	for dir, markers := range commonHomeAliases {
+		if !containsAnyMarker(lower, markers) {
+			continue
+		}
+		if path := resolveHomeChildAlias(dir, workspace, allowedPaths); path != "" {
+			resolved = append(resolved, path)
+		}
+	}
+
 	return resolved
+}
+
+func resolveHomeChildAlias(dir, workspace string, allowedPaths []string) string {
+	home := currentUserHomeDir()
+	if home == "" {
+		return ""
+	}
+	candidate := filepath.Join(home, dir)
+	if path, ok := qualifyInspectionPath(candidate, workspace, allowedPaths); ok {
+		return path
+	}
+	for _, allowed := range allowedPaths {
+		if strings.EqualFold(filepath.Base(allowed), dir) {
+			return filepath.Clean(allowed)
+		}
+	}
+	return ""
 }
 
 var absolutePathCandidateRE = regexp.MustCompile(`/[^\n\r\t,;]+`)

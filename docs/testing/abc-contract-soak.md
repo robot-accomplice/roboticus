@@ -112,9 +112,17 @@ The RCA extraction must summarize every `guard_contract_evaluated` and
 The after lane is acceptable only if:
 
 - no baseline-passing behavior scenario regresses to failure
+- action-bearing prompts prove observed execution, explicit policy/sandbox/tool
+  blockage, or an intentionally non-executable contract; intent prose such as
+  "I will", "I can", "would you like", or generic instructions is not success
+- tool evidence is action-specific: generic ReAct activity, runtime-context
+  calls, memory recalls, and skill discovery are diagnostics but do not prove
+  that a requested filesystem, cron, browser, or skill action actually ran
 - no canned fallback text is introduced
 - false capability-denial markers do not increase
 - empty/no-answer outcomes do not increase
+- output-shape directives are enforced exactly enough to detect prose wrappers
+  around count-only, one-line, or acknowledge-and-wait requests
 - hard contract violations are visible in RCA when they happen
 - soft contract violations show recovery or recorded degradation instead of
   hidden retries

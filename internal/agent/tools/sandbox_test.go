@@ -64,13 +64,13 @@ func TestValidatePath(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name:      "allowed paths constraint - outside",
+			name:      "allowed paths do not narrow workspace root",
 			path:      filepath.Join(tmpDir, "forbidden/file.txt"),
 			workspace: tmpDir,
 			snapshot: &ToolSandboxSnapshot{
 				AllowedPaths: []string{filepath.Join(tmpDir, "allowed")},
 			},
-			wantErr: true,
+			wantErr: false,
 		},
 		{
 			name:      "no snapshot means no extra restriction",
@@ -113,6 +113,21 @@ func TestResolvePathAndValidatePath_ShareAllowedAbsoluteSemantics(t *testing.T) 
 
 	if err := ValidatePath(target, tmpDir, snapshot); err != nil {
 		t.Fatalf("ValidatePath: %v", err)
+	}
+}
+
+func TestResolvePath_AbsoluteWorkspacePathSurvivesExtraAllowedPaths(t *testing.T) {
+	workspace := t.TempDir()
+	externalAllowed := t.TempDir()
+	target := filepath.Join(workspace, "project")
+	snapshot := &ToolSandboxSnapshot{AllowedPaths: []string{externalAllowed}}
+
+	resolved, err := ResolvePath(target, workspace, snapshot)
+	if err != nil {
+		t.Fatalf("ResolvePath absolute workspace path with extra allowed paths: %v", err)
+	}
+	if resolved != canonicalSandboxPath(target) {
+		t.Fatalf("resolved = %q, want %q", resolved, canonicalSandboxPath(target))
 	}
 }
 

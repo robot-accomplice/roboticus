@@ -55,7 +55,7 @@ func TestOperationClassForName_v108CoverageGaps(t *testing.T) {
 		{"drop_table", OperationDataWrite},
 		{"query_table", OperationDataRead},
 		{"query_knowledge_graph", OperationMemoryRead},
-		{"find_workflow", OperationCapabilityInventory},
+		{"find_workflow", OperationMemoryRead},
 		{"introspect", OperationCapabilityInventory},
 		{"get_channel_health", OperationInspection},
 		{"compose-skill", OperationCapabilityInventory},

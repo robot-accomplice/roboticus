@@ -39,6 +39,14 @@ func TestDecideGuardRetryAfterProgress_AllowsExecutionCriticalGuard(t *testing.T
 	}
 }
 
+func TestGuardExhaustionMustFailClosedForActionAndShapeContracts(t *testing.T) {
+	for _, violation := range []string{"task_deferral", "output_contract"} {
+		if !guardExhaustionMustFailClosed([]string{violation}) {
+			t.Fatalf("guardExhaustionMustFailClosed(%q) = false, want true", violation)
+		}
+	}
+}
+
 func TestDecideVerifierRetryAfterProgress_SuppressesNarrativeOnlyIssues(t *testing.T) {
 	progress := ExecutionProgress{SuccessfulToolResults: 1, SuccessfulArtifactWrites: 1}
 	ctx := VerificationContext{PlannedAction: "execute_directly"}

@@ -27,6 +27,7 @@ const (
 	ToolProfileFocusedInspection        ToolProfile = "focused_inspection"
 	ToolProfileFocusedScheduling        ToolProfile = "focused_scheduling"
 	ToolProfileFocusedWebRead           ToolProfile = "focused_web_read"
+	ToolProfileFocusedToolDemonstration ToolProfile = "focused_tool_demonstration"
 )
 
 type TurnEnvelopePolicy struct {
@@ -51,6 +52,7 @@ func DeriveTurnEnvelopePolicy(content string, synthesis TaskSynthesis, sessionTu
 	requiresInspection := looksLikeFocusedInspectionTurn(content)
 	requiresAnalysisAuthoring := looksLikeInspectionBackedArtifactAuthoring(content)
 	requiresWebRead := looksLikePublicWebReadTurn(content)
+	requiresToolDemonstration := looksLikeToolDemonstrationTurn(lower)
 
 	switch {
 	case requiresWebRead:
@@ -62,6 +64,16 @@ func DeriveTurnEnvelopePolicy(content string, synthesis TaskSynthesis, sessionTu
 			AllowRetryExpansion: true,
 			ToolProfile:         ToolProfileFocusedWebRead,
 			Reason:              "public web/browser request should use a focused web-read tool envelope",
+		}
+	case requiresToolDemonstration:
+		return TurnEnvelopePolicy{
+			Weight:              TurnWeightStandard,
+			ContextBudget:       2048,
+			AllowRetrieval:      false,
+			MaxTools:            8,
+			AllowRetryExpansion: true,
+			ToolProfile:         ToolProfileFocusedToolDemonstration,
+			Reason:              "generic tool demonstration should use a bounded non-inventory tool surface",
 		}
 	case synthesis.Intent == "code" &&
 		synthesis.PlannedAction == "execute_directly" &&
@@ -348,6 +360,16 @@ func filterToolDefsForPolicy(defs []llm.ToolDef, policy TurnEnvelopePolicy, pinS
 			removed++
 			continue
 		}
+		if policy.ToolProfile != ToolProfileDefault &&
+			!policy.AllowRetrieval &&
+			agenttools.OperationClassForName(name) == agenttools.OperationMemoryRead {
+			removed++
+			continue
+		}
+		if policy.ToolProfile == ToolProfileFocusedToolDemonstration && !toolAllowedForPolicy(name, policy) {
+			removed++
+			continue
+		}
 		if !toolAllowedForPolicy(name, policy) && !pinned {
 			removed++
 			continue
@@ -474,6 +496,20 @@ func toolPriorityForPolicy(name string, policy TurnEnvelopePolicy) int {
 			return 4
 		}
 	}
+	if policy.ToolProfile == ToolProfileFocusedToolDemonstration {
+		switch agenttools.OperationClassForName(name) {
+		case agenttools.OperationWorkspaceInspect:
+			return 0
+		case agenttools.OperationArtifactRead, agenttools.OperationDataRead, agenttools.OperationWebRead:
+			return 1
+		case agenttools.OperationInspection:
+			return 2
+		case agenttools.OperationRuntimeContextRead:
+			return 3
+		default:
+			return 5
+		}
+	}
 	if policy.RequireArtifactWrite {
 		switch agenttools.OperationClassForName(name) {
 		case agenttools.OperationArtifactWrite:
@@ -574,9 +610,34 @@ func toolAllowedForPolicy(name string, policy TurnEnvelopePolicy) bool {
 		default:
 			return false
 		}
+	case ToolProfileFocusedToolDemonstration:
+		switch agenttools.OperationClassForName(name) {
+		case agenttools.OperationWorkspaceInspect,
+			agenttools.OperationArtifactRead,
+			agenttools.OperationDataRead,
+			agenttools.OperationWebRead,
+			agenttools.OperationInspection,
+			agenttools.OperationRuntimeContextRead:
+			return true
+		default:
+			return false
+		}
 	default:
 		return true
 	}
+}
+
+func looksLikeToolDemonstrationTurn(lower string) bool {
+	if strings.TrimSpace(lower) == "" {
+		return false
+	}
+	if !containsAnyMarker(lower, []string{"tool", "tools", "skill", "skills"}) {
+		return false
+	}
+	return containsAnyMarker(lower, []string{
+		"pick one", "choose one", "select one", "use one", "use it",
+		"pick a", "choose a", "select a", "at random", "random",
+	})
 }
 
 func looksLikePublicWebReadTurn(content string) bool {
@@ -610,11 +671,52 @@ func looksLikePublicWebReadTurn(content string) bool {
 }
 
 func looksLikeSchedulingTask(lower string) bool {
-	markers := []string{
-		"schedule ", "scheduled", "cron", "every ", "reminder",
+	if isContextSettingOnlyTurn(lower) {
+		return false
+	}
+	directMarkers := []string{
+		"schedule ", "scheduled", "reminder",
 		"quiet ticker", "ticker", "runs every",
 	}
-	return containsAnyMarker(lower, markers)
+	if containsAnyMarker(lower, directMarkers) {
+		return true
+	}
+	if strings.Contains(lower, "cron job") {
+		return true
+	}
+	return strings.Contains(lower, "cron") && containsAnyMarker(lower, []string{
+		"create", "set up", "setup", "add", "delete", "remove", "list", "run ",
+	})
+}
+
+func isContextSettingOnlyTurn(lower string) bool {
+	lower = strings.ToLower(strings.TrimSpace(lower))
+	if lower == "" {
+		return false
+	}
+	hasContextDefinition := containsAnyMarker(lower, []string{
+		"for the rest of this session",
+		"from now on",
+		"going forward",
+		"when i say",
+		"when i mention",
+		"means ",
+		"refer to",
+		"call this",
+		"call it",
+	})
+	if !hasContextDefinition {
+		return false
+	}
+	return containsAnyMarker(lower, []string{
+		"reply only",
+		"respond only",
+		"answer only",
+		"reply with only",
+		"respond with only",
+		"acknowledge",
+		"say noted",
+	})
 }
 
 func directExecutionPolicyReason(requireArtifactWrite, requiresInspection, requiresAnalysisAuthoring bool) string {

@@ -62,7 +62,7 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 BASE_URL = os.environ.get("BASE_URL", "http://localhost:18790").rstrip("/")
 # Soak tests are long-running by design — timeouts must be extraordinarily high.
@@ -828,6 +828,7 @@ def send_message(prompt: str, session_id: str = None, retries: int = 6) -> Dict[
             with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
                 body = json.loads(resp.read().decode("utf-8", "replace"))
             body["_latency_s"] = round(time.time() - started, 2)
+            attach_turn_tool_evidence(body)
             return body
         except urllib.error.HTTPError as e:
             retryable = e.code in (429, 500, 502, 503, 504)
@@ -837,6 +838,36 @@ def send_message(prompt: str, session_id: str = None, retries: int = 6) -> Dict[
         finally:
             stop_heartbeat.set()
             heartbeat_thread.join(timeout=1.0)
+
+
+def attach_turn_tool_evidence(body: Dict[str, object]) -> None:
+    """Attach authoritative tool-call telemetry for the returned turn.
+
+    The agent message response exposes a coarse ReAct turn count, but that is
+    not enough for behavior soaks: introspection, memory, or skill-discovery
+    calls are not proof that a requested action actually ran. The turn tools
+    endpoint gives the checker row-level evidence without making production
+    responses carry benchmark-only fields.
+    """
+    turn_id = str(body.get("turn_id") or "").strip()
+    if not turn_id:
+        body["_tool_calls"] = []
+        body["_tool_evidence_error"] = "missing turn_id"
+        return
+    req = urllib.request.Request(
+        BASE_URL + f"/api/turns/{urllib.parse.quote(turn_id)}/tools",
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            payload = json.loads(resp.read().decode("utf-8", "replace"))
+        calls = payload.get("tool_calls")
+        if not isinstance(calls, list):
+            calls = []
+        body["_tool_calls"] = calls
+    except Exception as err:
+        body["_tool_calls"] = []
+        body["_tool_evidence_error"] = str(err)
 
 
 def create_session(agent_id: str = AGENT_ID) -> str:
@@ -869,6 +900,87 @@ def has_execution_block(text: str) -> bool:
         or "i did not execute a delegated subagent task" in lower
         or "i did not execute a cron scheduling tool" in lower
     )
+
+
+def has_observed_tool_execution(resp: Dict[str, object]) -> bool:
+    return len(successful_tool_calls(resp)) > 0
+
+
+def successful_tool_calls(resp: Dict[str, object]) -> List[Dict[str, object]]:
+    calls = resp.get("_tool_calls")
+    if not isinstance(calls, list):
+        return []
+    successful: List[Dict[str, object]] = []
+    for call in calls:
+        if not isinstance(call, dict):
+            continue
+        if str(call.get("status") or "").lower() == "success":
+            successful.append(call)
+    return successful
+
+
+def successful_tool_names(resp: Dict[str, object]) -> List[str]:
+    return [
+        str(call.get("tool_name") or "").strip()
+        for call in successful_tool_calls(resp)
+        if str(call.get("tool_name") or "").strip()
+    ]
+
+
+def has_successful_tool(resp: Dict[str, object], allowed: Set[str]) -> bool:
+    return any(name in allowed for name in successful_tool_names(resp))
+
+
+def has_successful_tool_matching(resp: Dict[str, object], allowed: Set[str], marker: str) -> bool:
+    marker = marker.lower()
+    for call in successful_tool_calls(resp):
+        name = str(call.get("tool_name") or "").strip()
+        if name not in allowed:
+            continue
+        evidence = " ".join([
+            str(call.get("input") or ""),
+            str(call.get("output") or ""),
+        ]).lower()
+        if marker in evidence:
+            return True
+    return False
+
+
+def has_explicit_block_evidence(text: str) -> bool:
+    lower = text.lower()
+    blockers = [
+        "policy denied",
+        "policy denial",
+        "sandbox",
+        "not allowed",
+        "permission denied",
+        "access denied",
+        "tool failed",
+        "tool error",
+        "execution failed",
+        "blocked by",
+        "denied by",
+    ]
+    return any(marker in lower for marker in blockers)
+
+
+def has_promissory_or_confirmation_deferral(text: str) -> bool:
+    lower = text.lower()
+    markers = [
+        "i will ",
+        "i'll ",
+        "i can assist",
+        "i can help",
+        "i can provide",
+        "would you like",
+        "if you confirm",
+        "please confirm",
+        "let me know",
+        "to proceed",
+        "the command you'd typically use",
+        "you would replace",
+    ]
+    return any(marker in lower for marker in markers)
 
 
 def one_sentence_ack(text: str) -> bool:
@@ -923,11 +1035,18 @@ def check_no_exec_block(resp: Dict[str, object], content: str) -> Tuple[bool, st
 
 
 def check_ack(resp: Dict[str, object], content: str) -> Tuple[bool, str]:
-    ok = one_sentence_ack(content) and (
-        "acknowledge" in content.lower() or "acknowledged" in content.lower()
-        or "await" in content.lower()
-    )
-    return ok, "single-sentence acknowledgement"
+    lower = content.lower()
+    acknowledges = any(marker in lower for marker in [
+        "acknowledge",
+        "acknowledged",
+        "standing by",
+        "stand by",
+        "ready",
+        "waiting",
+        "here",
+    ])
+    ok = one_sentence_ack(content) and acknowledges and not has_promissory_or_confirmation_deferral(content)
+    return ok, "single-sentence acknowledgement/standby"
 
 
 def check_non_empty(resp: Dict[str, object], content: str) -> Tuple[bool, str]:
@@ -948,34 +1067,39 @@ def check_introspection_summary(resp: Dict[str, object], content: str) -> Tuple[
 
 def check_tool_use(resp: Dict[str, object], content: str) -> Tuple[bool, str]:
     lower = content.lower()
-    # Check react_turns > 1 (indicates tool was called in ReAct loop).
-    react_turns = resp.get("react_turns", 0)
-    if react_turns and int(react_turns) > 1:
-        return True, "react_turns > 1 (tool was executed)"
-    ok = (
-        "output" in lower
-        or "returned" in lower
-        or "result" in lower
-        or "available tools" in lower
-        or "directory" in lower
-        or "files" in lower
-        or "searched" in lower
-        or "found" in lower
-        or "executed" in lower
-        or "tool" in lower and ("revealed" in lower or "shows" in lower or "status" in lower)
-    )
-    return ok, "returns concrete tool-use evidence"
+    non_action_tools = {
+        "get_runtime_context",
+        "recall_memory",
+        "search_memories",
+        "get_memory_stats",
+        "list-available-skills",
+        "get_subagent_status",
+        "list-subagent-roster",
+        "task-status",
+        "list-open-tasks",
+    }
+    names = set(successful_tool_names(resp))
+    action_names = names - non_action_tools
+    if action_names and not has_promissory_or_confirmation_deferral(content):
+        return True, f"action tool executed: {', '.join(sorted(action_names))}"
+    if names and not action_names:
+        return False, f"only discovery/context tools executed: {', '.join(sorted(names))}"
+    if has_explicit_block_evidence(content):
+        return True, "tool execution explicitly blocked with evidence"
+    if (
+        "would you like" in lower
+        or "tell me what" in lower
+        or "i have access to" in lower
+        or has_promissory_or_confirmation_deferral(content)
+    ):
+        return False, "describes or offers a tool instead of using one"
+    return False, "no observed tool execution evidence"
 
 
 def check_count_only_output(_resp: Dict[str, object], content: str) -> Tuple[bool, str]:
     stripped = content.strip()
-    bare_number = bool(re.fullmatch(r"\d+", stripped))
-    has_count = bool(re.search(r"\b\d+\b", stripped)) and (
-        "count" in stripped.lower() or "found" in stripped.lower()
-        or "file" in stripped.lower() or "markdown" in stripped.lower()
-    )
-    ok = bare_number or has_count
-    return ok, "returns count-only numeric output" if bare_number else "returns count in natural language"
+    ok = bool(re.fullmatch(r"\d+", stripped))
+    return ok, "returns only a bare numeric count" if ok else "count-only prompt returned prose or non-numeric output"
 
 
 def check_history_recall(_resp: Dict[str, object], content: str) -> Tuple[bool, str]:
@@ -993,8 +1117,23 @@ def check_cron(resp: Dict[str, object], content: str) -> Tuple[bool, str]:
         "scheduled" in lower or "created" in lower or "cron job" in lower
         or "name:" in lower or "id:" in lower
     )
-    ok = has_schedule or has_creation
-    return ok, "cron scheduled with explicit expression" if ok else "no cron creation evidence"
+    negative = any(marker in lower for marker in [
+        "not executed",
+        "was not executed",
+        "can't provide the specifics",
+        "cannot provide the specifics",
+        "no current memory",
+        "typically use",
+        "if you confirm",
+        "replace <command>",
+    ])
+    if has_successful_tool(resp, {"cron"}) and has_schedule and has_creation and not negative:
+        return True, "cron scheduled with cron tool evidence"
+    if has_explicit_block_evidence(content):
+        return True, "cron execution explicitly blocked with evidence"
+    if has_observed_tool_execution(resp):
+        return False, f"tools executed but no cron creation evidence: {', '.join(successful_tool_names(resp))}"
+    return False, "no observed cron creation evidence"
 
 
 def check_distribution(path_hint: str) -> Check:
@@ -1039,13 +1178,19 @@ def check_folder_scan(path_hint: str) -> Check:
     def _check(resp: Dict[str, object], content: str) -> Tuple[bool, str]:
         lower = content.lower()
         path_lower = path_hint.lower()
+        if "please confirm" in lower or "exact path" in lower:
+            return False, f"asked for path confirmation instead of scanning {path_hint}"
         has_path = path_lower in lower or path_lower.replace("~/", "") in lower
         has_scan = (
             "scan" in lower or "files" in lower or "directory" in lower
             or "folder" in lower or "list" in lower or "results" in lower
         )
-        ok = has_path and has_scan
-        return ok, f"folder scan executed for {path_hint}"
+        filesystem_tools = {"list_directory", "glob_files", "read_file", "inventory_projects"}
+        ok = (
+            has_successful_tool_matching(resp, filesystem_tools, path_hint)
+            or has_explicit_block_evidence(content)
+        ) and has_path and has_scan
+        return ok, f"folder scan executed or explicitly blocked for {path_hint}"
     return _check
 
 
@@ -1376,9 +1521,14 @@ def run() -> int:
             "latency_s": resp.get("_latency_s"),
             "model": resp.get("model"),
             "session_id": resp.get("session_id"),
+            "turn_id": resp.get("turn_id"),
+            "react_turns": resp.get("react_turns"),
+            "tool_calls": resp.get("_tool_calls", []),
+            "tool_evidence_error": resp.get("_tool_evidence_error"),
             "passed": passed,
             "checks": checks,
-            "content": content[:500],  # truncate for report readability
+            "content_preview": content[:500],
+            "content": content,
         }
         results.append(row)
 

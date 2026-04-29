@@ -68,10 +68,10 @@ func OperationClassForName(name string) OperationClass {
 		return OperationTaskInspection
 	case "list-subagent-roster", "list-available-skills",
 		"introspect", "introspection",
-		"compose-skill", "find_workflow":
+		"compose-skill":
 		return OperationCapabilityInventory
 	case "recall_memory", "search_memories", "get_memory_stats",
-		"query_knowledge_graph":
+		"query_knowledge_graph", "find_workflow":
 		return OperationMemoryRead
 	case "compose-subagent", "orchestrate-subagents", "retry-task":
 		return OperationDelegation

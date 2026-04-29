@@ -203,6 +203,30 @@ older architecture docs had left too generic:
   authored inside the guard implementation. Operator-facing wording belongs to
   the normal response path or an approved policy/refusal surface, not a hidden
   fallback string.
+- **Output-shape requests are enforceable contracts, not style preferences.**
+  When the operator asks for a count-only answer, one sentence, one line, JSON,
+  bullets, or another bounded response shape, that shape is part of the turn
+  contract. Prompt guidance is not sufficient; the post-inference guard seam
+  must validate the returned shape against the normalized directive and request
+  scoped recovery when the model wraps an otherwise correct answer in prose.
+  Enforcement must not rewrite the answer into canned text; it either accepts
+  the model output, retries with the violated shape contract, or reports a
+  structured guard failure.
+- **Action-bearing prompts require action-specific evidence.** A ReAct loop,
+  runtime-context lookup, memory recall, skill discovery call, or other generic
+  introspection step proves that the framework was active, not that the
+  requested work was performed. If the turn asks to use a browser, schedule a
+  cron, inspect files, invoke a skill/tool, or perform another concrete action,
+  the guard/verifier seam must compare the requested capability class with
+  selected tools and actual tool results. The final answer can pass only when
+  a matching action tool succeeded, a concrete policy/tool/provider result
+  blocked the action, or the task was genuinely non-executable. Generic
+  confirmation requests and "I will do this next" prose are failures unless the
+  missing detail is truly unresolved.
+  This evidence guard is downstream of tool-surface establishment: if pruning
+  fails before any selected tool surface or tool result exists, RCA owns that
+  surface failure and the guard must not misclassify it as a model execution
+  failure.
 - **Benchmark scoring must become prompt-contract-aware.** Exercise scoring is
   not allowed to treat verbosity, generic structure, or intent-marker density
   as the primary truth source. The canonical scoring seam must evaluate the
@@ -226,6 +250,12 @@ older architecture docs had left too generic:
   requested work are diagnostic failure evidence, not successful tool use.
   Future-tense tool intent is useful RCA evidence, but it is a failed or
   degraded prompt outcome, not a pass.
+- **Generic tool-use prompts require non-inventory execution evidence.**
+  Capability inventory, skill listings, memory retrieval, and subagent status
+  checks can support a "tell me about tools" answer, but they do not satisfy
+  "pick one and use it." The contract is semantic rather than phrase-based:
+  finalization requires at least one bounded, non-inventory action/read tool
+  result or a concrete execution block.
 - **Action benchmark prompts must not reward hypothetical completion.** For
   execution/delegation prompts that ask the agent to create, write, schedule,
   orchestrate, refactor, or otherwise perform work, an answer that says it
@@ -630,6 +660,18 @@ older architecture docs had left too generic:
   applied-learning retrieval, while session-defined aliases such as “quiet
   ticker” must be treated as continuity retrieval problems so shorthand can be
   resolved from prior session context instead of being guessed or ignored.
+- **Scheduling words are not automatically scheduling actions.** The pipeline
+  must classify the speech act before demanding scheduling evidence. A turn
+  that defines session vocabulary or asks for a bounded acknowledgement, such
+  as “for the rest of this session, X means a cron job that runs every five
+  minutes; reply only with noted,” is a context-setting contract, not a request
+  to create a cron job now. Conversely, a direct scheduling request must still
+  require `cron` evidence or a concrete missing-input/tool/policy block.
+- **Scheduling metadata should not block complete scheduling intent.** If an
+  operator gives a complete cadence and task but omits only a human-friendly
+  job name, the cron tool may derive a deterministic label from the task rather
+  than forcing a retry loop. The derived name must be returned in tool evidence
+  so the operator can inspect or correct it.
 - **Inspection-shaped questions must share the same focused-inspection
   authority as imperative inspection turns.** Questions like `what's in the
   vault`, `show me the files`, or `what about the vault in your workspace`
@@ -653,6 +695,11 @@ older architecture docs had left too generic:
   question handling once the operator has supplied the concrete target.
   Alias-driven inventory questions such as `what are the most recently updated
   projects in my code folder` are also part of that seam; folder aliases like
+  `my Downloads folder` must trigger the same inspection-proof obligation as
+  `~/Downloads` when the effective sandbox allowlist exposes that directory.
+  If an alias cannot be resolved, the system may ask a precise clarifying
+  question; it may not preemptively ask for confirmation when the allowed path
+  is already known.
   `code folder` must resolve onto the same focused inspection path instead of
   widening into generic question/retrieval behavior.
 - **Filesystem destination resolution must use that same authority for authoring
@@ -1593,13 +1640,15 @@ concentric admission gates silently stripped tools the operator pinned via
    correct in isolation, but the composition silently dropped pinned tools when
    any gate misclassified them as `OperationUnknown` or when truncation cut off
    the tail of a list that included pinned entries.
-4. **`OperationClassForName` gaps.** Many registered tools (database tools
-   `query_table`/`create_table`/`insert_row`/`alter_table`/`drop_table`,
-   knowledge/workflow tools `query_knowledge_graph`/`find_workflow`,
-   introspection/composition tools `introspect`/`get_channel_health`/
-   `compose-skill`, and the unregistered web tools) fell through to
-   `OperationUnknown`. Focused profiles default-deny `OperationUnknown`, so
-   these tools were silently dropped on every focused turn.
+4. **`OperationClassForName` gaps and taxonomy drift.** Many registered tools
+   (database tools `query_table`/`create_table`/`insert_row`/`alter_table`/
+   `drop_table`, knowledge/procedural-memory tools `query_knowledge_graph`/
+   `find_workflow`, introspection/composition tools `introspect`/
+   `get_channel_health`/`compose-skill`, and the unregistered web tools) fell
+   through to `OperationUnknown` or were assigned to the wrong surface.
+   Focused profiles default-deny `OperationUnknown`, so unknown tools were
+   silently dropped; misclassified procedural-memory tools leaked into
+   no-retrieval turns and polluted action selection.
 5. **`AlwaysInclude` drift.** `obsidian_write` was pinned by
    `tools.DefaultToolSearchConfig` but missing from the runtime
    `core.ToolSearchConfig` defaults that `daemon.go` actually loaded; the
@@ -1629,7 +1678,14 @@ reachable on the turn surface.
    []string` interface; `applyToolPolicy` now reads pin names from the pruner
    and re-admits any pinned name dropped by `filterToolDefsForPolicy` or
    `MaxTools` truncation. Pin survival is now an architectural invariant of
-   the policy stage rather than a coincidence of ordering.
+   the policy stage rather than a coincidence of ordering. Pin survival does
+   not override explicit focused-envelope retrieval exclusions: memory-read
+   pins must still be removed when `AllowRetrieval=false`, because otherwise
+   action turns drift into stale retrieval instead of executing the
+   action-specific tool.
+   Generic tool-demonstration turns also get their own focused action surface:
+   inventory tools can be present for explanation, but they are ranked behind
+   safe non-inventory tools and cannot be the only proof of work.
 4. Reconcile `core.Config.ToolSearch.AlwaysInclude` defaults with
    `tools.DefaultToolSearchConfig().AlwaysInclude`; both lists now include
    `obsidian_write`. Pinning a name that is not registered remains a silent
@@ -1646,6 +1702,12 @@ reachable on the turn surface.
    in `capabilities.go`, and the unimplemented `BrowserExecutor` interface.
    The single approval surface is `policy.ApprovalManager`; the single tool
    dispatch is `Loop.act` calling `ToolRegistry.Get(...).Execute(...)`.
+
+8. Startup DB compatibility repair owns task-event schema drift. Older stores
+   that created `task_events` with a narrow `event_type IN (...)` CHECK
+   constraint must be rebuilt without that stale constraint during `Open()`,
+   preserving rows and current runtime event names instead of forcing runtime
+   tools to emit legacy-only vocabulary.
 
 These changes preserve the Rule 4.2/4.4 ownership shape: pipeline owns
 admission policy (operation-class allowlists, profile-aware pin survival,

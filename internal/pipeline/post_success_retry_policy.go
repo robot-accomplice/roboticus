@@ -91,6 +91,8 @@ func guardExhaustionMustFailClosed(violations []string) bool {
 		switch strings.TrimSpace(strings.SplitN(violation, ":", 2)[0]) {
 		case "execution_truth",
 			"filesystem_denial",
+			"task_deferral",
+			"output_contract",
 			"action_verification",
 			"config_protection",
 			"financial_action_truth":

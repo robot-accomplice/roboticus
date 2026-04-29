@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -197,6 +198,10 @@ func findSelfEchoAcrossHistory(content string, history []string) string {
 type OutputContractGuard struct{}
 
 var bulletCountRe = regexp.MustCompile(`(?i)(?:give me|list|provide|write)\s+(\d+)\s+(?:bullet|point|item|step|thing|reason|example)`)
+var countOnlyContractRe = regexp.MustCompile(`(?i)\b(?:return|respond|reply|answer|give me)\s+(?:with\s+)?(?:only\s+|just\s+)?(?:the\s+)?(?:number|count|digits?)\b|\b(?:only|just)\s+(?:the\s+)?(?:number|count|digits?)\b`)
+var oneSentenceContractRe = regexp.MustCompile(`(?i)\b(?:one|single)\s+sentence\b|\bin\s+one\s+sentence\b`)
+var replyOnlyLiteralRe = regexp.MustCompile(`(?i)\b(?:reply|respond|answer)\s+(?:with\s+only|only\s+with|only)\s+(?:the\s+word\s+|word\s+)?([a-z0-9_-]+)\b`)
+var bareDigitsRe = regexp.MustCompile(`^\d+$`)
 
 func (g *OutputContractGuard) Name() string { return "output_contract" }
 func (g *OutputContractGuard) Check(content string) GuardResult {
@@ -205,6 +210,34 @@ func (g *OutputContractGuard) Check(content string) GuardResult {
 func (g *OutputContractGuard) CheckWithContext(content string, ctx *GuardContext) GuardResult {
 	if ctx == nil || ctx.UserPrompt == "" {
 		return GuardResult{Passed: true}
+	}
+	trimmed := strings.TrimSpace(content)
+	if literal := replyOnlyLiteral(ctx.UserPrompt); literal != "" {
+		if strings.EqualFold(strings.Trim(trimmed, " \t\r\n.!,;:\"'`"), literal) && !strings.Contains(trimmed, "\n") {
+			return GuardResult{Passed: true}
+		}
+		return GuardResult{
+			Passed: false,
+			Retry:  true,
+			Reason: "response violated reply-only literal output contract",
+		}
+	}
+	if countOnlyContractRe.MatchString(ctx.UserPrompt) {
+		if bareDigitsRe.MatchString(trimmed) {
+			return GuardResult{Passed: true}
+		}
+		return GuardResult{
+			Passed: false,
+			Retry:  true,
+			Reason: "response violated count-only output contract",
+		}
+	}
+	if oneSentenceContractRe.MatchString(ctx.UserPrompt) && countSentences(trimmed) > 1 {
+		return GuardResult{
+			Passed: false,
+			Retry:  true,
+			Reason: "response violated one-sentence output contract",
+		}
 	}
 	matches := bulletCountRe.FindStringSubmatch(ctx.UserPrompt)
 	if matches == nil {
@@ -231,10 +264,52 @@ func (g *OutputContractGuard) CheckWithContext(content string, ctx *GuardContext
 	if actual != requested && actual > 0 {
 		return GuardResult{
 			Passed: false, Retry: true,
-			Reason: "requested " + matches[1] + " items but response has " + strings.TrimSpace(strings.Repeat(" ", 0)) + string(rune('0'+actual)),
+			Reason: "requested " + matches[1] + " items but response has " + strconv.Itoa(actual),
 		}
 	}
 	return GuardResult{Passed: true}
+}
+
+func replyOnlyLiteral(prompt string) string {
+	matches := replyOnlyLiteralRe.FindStringSubmatch(prompt)
+	if len(matches) < 2 {
+		return ""
+	}
+	literal := strings.ToLower(strings.TrimSpace(matches[1]))
+	switch literal {
+	case "the", "number", "count", "digit", "digits":
+		return ""
+	default:
+		return literal
+	}
+}
+
+func countSentences(content string) int {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return 0
+	}
+	count := 0
+	inSentence := false
+	for _, r := range content {
+		switch r {
+		case '.', '!', '?':
+			if inSentence {
+				count++
+				inSentence = false
+			}
+		case '\n':
+			continue
+		default:
+			if !strings.ContainsRune(" \t\r", r) {
+				inSentence = true
+			}
+		}
+	}
+	if inSentence {
+		count++
+	}
+	return count
 }
 
 // --- UserEchoGuard ---

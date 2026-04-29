@@ -256,6 +256,12 @@ func (a *prunerAdapter) resolvedSearchConfig(sess *session.Session) agenttools.T
 			"inventory_projects", "list_directory", "bash", "search_files", "glob_files", "read_file",
 			"write_file", "edit_file", "get_runtime_context",
 		)
+	case "focused_tool_demonstration":
+		// Capability snapshot text already describes tools. The proof path for
+		// a tool demonstration should stay on low-risk action/read tools.
+		cfg.AlwaysInclude = appendAlwaysInclude(cfg.AlwaysInclude,
+			"inventory_projects", "list_directory", "glob_files", "read_file", "get_runtime_context",
+		)
 	}
 	return cfg
 }

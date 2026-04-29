@@ -1104,6 +1104,21 @@ func TestCronTool_CreateAndList(t *testing.T) {
 	}
 }
 
+func TestCronTool_CreateDerivesNameFromTask(t *testing.T) {
+	store := testutil.TempStore(t)
+	tool := &CronTool{}
+	tctx := &Context{Store: store, AgentID: "agent1"}
+
+	result, err := tool.Execute(context.Background(),
+		`{"action":"create","schedule":"*/5 * * * *","task":"Run every 5 minutes"}`, tctx)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if !strings.Contains(result.Output, `"run-every-5-minutes"`) {
+		t.Fatalf("output should include derived job name, got: %q", result.Output)
+	}
+}
+
 func TestCronTool_CreateValidation(t *testing.T) {
 	store := testutil.TempStore(t)
 	tool := &CronTool{}
@@ -1114,7 +1129,6 @@ func TestCronTool_CreateValidation(t *testing.T) {
 		params string
 		errMsg string
 	}{
-		{"missing name", `{"action":"create","schedule":"* * * * *","task":"t"}`, "name is required"},
 		{"missing schedule", `{"action":"create","name":"j","task":"t"}`, "schedule is required"},
 		{"missing task", `{"action":"create","name":"j","schedule":"* * * * *"}`, "task is required"},
 	}

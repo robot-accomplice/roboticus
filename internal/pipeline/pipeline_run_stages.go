@@ -541,17 +541,11 @@ func (p *Pipeline) stageMemoryRetrieval(ctx context.Context, pc *pipelineContext
 		}
 	}
 
-	// Memory INDEX is the lightweight recall handle — it's injected on every
-	// turn regardless of retrieval strategy so the model can call
-	// recall_memory(id) on demand. Pre-v1.0.6 this was gated behind
-	// retrievalStrat.Strategy != "none", which meant early-turn/simple
-	// conversations got no index AND the daemon's buildAgentContext
-	// fallback then reconstructed one — creating a second production
-	// memory-assembly path outside the pipeline. The v1.0.6 architecture
-	// audit flagged that fallback as a "pipeline is single authority"
-	// violation. Fix: always populate the index here, then drop the
-	// daemon fallback (see daemon_adapters.go buildAgentContext).
-	if p.store != nil && !shouldKeepSocialTurnAmbientContextMinimal(pc.policy, pc.synthesis) {
+	// Memory INDEX is the lightweight recall handle for retrieval-enabled turns.
+	// When the turn envelope explicitly disables retrieval, long-term memory
+	// handles must stay out of the prompt; otherwise stale prior episodes can
+	// steer a focused action surface away from the current request.
+	if pc.policy.AllowRetrieval && p.store != nil && !shouldKeepSocialTurnAmbientContextMinimal(pc.policy, pc.synthesis) {
 		index := agenttools.BuildMemoryIndex(ctx, p.store, 20, pc.content)
 		if index == "" {
 			index = "[Memory Index: No memories stored yet. " +
@@ -562,7 +556,7 @@ func (p *Pipeline) stageMemoryRetrieval(ctx context.Context, pc *pipelineContext
 		pc.session.SetMemoryIndex(index)
 	}
 
-	if p.retriever != nil {
+	if pc.policy.AllowRetrieval && p.retriever != nil {
 		if activeContext := retrieveActiveMemoryContext(ctx, p.retriever, pc.session.ID, 512); activeContext != "" {
 			pc.session.SetMemoryContext(activeContext)
 			pc.tr.Annotate(TraceNSRetrieval+".active_context", true)
@@ -844,7 +838,24 @@ func (p *Pipeline) stageToolPruning(ctx context.Context, pc *pipelineContext) {
 	}
 	AnnotateToolSearchTrace(pc.tr, stats)
 	pc.tr.Annotate("turn_weight", string(pc.policy.Weight))
+	p.stageToolExecutionNote(pc)
 	pc.tr.EndSpan("ok")
+}
+
+func (p *Pipeline) stageToolExecutionNote(pc *pipelineContext) {
+	if pc == nil || pc.session == nil {
+		return
+	}
+	if pc.policy.ToolProfile != ToolProfileFocusedToolDemonstration {
+		return
+	}
+	note := strings.TrimSpace(pc.session.TurnExecutionNote())
+	actionNote := "This is a focused tool-demonstration turn: choose one selected non-inventory tool, execute it if possible, then report the tool name and observed result. Do not add generic follow-up offers unless a required input is missing."
+	if note != "" {
+		pc.session.SetTurnExecutionNote(note + "\n" + actionNote)
+		return
+	}
+	pc.session.SetTurnExecutionNote(actionNote)
 }
 
 // ── Stage 11.65: Hippocampus summary ───────────────────────────────────

@@ -99,6 +99,77 @@ func TestOutputContractGuard_WrongCount(t *testing.T) {
 	}
 }
 
+func TestOutputContractGuard_CountOnlyRejectsProseWrappedNumber(t *testing.T) {
+	g := &OutputContractGuard{}
+	ctx := &GuardContext{UserPrompt: "Count the markdown files under /Users/jmachen/code and return only the number."}
+	content := "There are 47 markdown files in the directory /Users/jmachen/code."
+	result := g.CheckWithContext(content, ctx)
+	if result.Passed {
+		t.Fatal("count-only contract should reject prose-wrapped numeric answer")
+	}
+	if !result.Retry {
+		t.Fatalf("expected retry for shape violation, got %#v", result)
+	}
+}
+
+func TestOutputContractGuard_CountOnlyAllowsBareDigits(t *testing.T) {
+	g := &OutputContractGuard{}
+	ctx := &GuardContext{UserPrompt: "Count the markdown files and reply with only the number."}
+	result := g.CheckWithContext("47", ctx)
+	if !result.Passed {
+		t.Fatalf("bare numeric answer should pass, got reason %q", result.Reason)
+	}
+}
+
+func TestOutputContractGuard_OneSentenceRejectsTwoSentenceAcknowledgement(t *testing.T) {
+	g := &OutputContractGuard{}
+	ctx := &GuardContext{UserPrompt: "Acknowledge this in one sentence and wait for my next instruction."}
+	content := "Good evening! I've acknowledged your request and will wait for your next instructions."
+	result := g.CheckWithContext(content, ctx)
+	if result.Passed {
+		t.Fatal("one-sentence contract should reject two-sentence acknowledgement")
+	}
+	if !result.Retry {
+		t.Fatalf("expected retry for sentence-count shape violation, got %#v", result)
+	}
+}
+
+func TestOutputContractGuard_OneSentenceAllowsSingleSentenceAcknowledgement(t *testing.T) {
+	g := &OutputContractGuard{}
+	ctx := &GuardContext{UserPrompt: "Acknowledge this in one sentence and wait for my next instruction."}
+	result := g.CheckWithContext("I acknowledge the request and will wait for your next instruction.", ctx)
+	if !result.Passed {
+		t.Fatalf("single-sentence acknowledgement should pass, got reason %q", result.Reason)
+	}
+}
+
+func TestOutputContractGuard_ReplyOnlyWithLiteralRejectsExtraProse(t *testing.T) {
+	g := &OutputContractGuard{}
+	ctx := &GuardContext{UserPrompt: "For the rest of this session, 'quiet ticker' means a cron job that runs every 5 minutes. Reply only with noted."}
+	result := g.CheckWithContext("Noted. I will remember that for later.", ctx)
+	if result.Passed {
+		t.Fatal("literal reply-only contract should reject extra prose")
+	}
+}
+
+func TestOutputContractGuard_ReplyOnlyWithLiteralAllowsExactWord(t *testing.T) {
+	g := &OutputContractGuard{}
+	ctx := &GuardContext{UserPrompt: "Reply with only the word retained."}
+	result := g.CheckWithContext("retained", ctx)
+	if !result.Passed {
+		t.Fatalf("exact literal output should pass, got reason %q", result.Reason)
+	}
+}
+
+func TestOutputContractGuard_ReplyOnlyWithAllowsOnlyWithWordOrder(t *testing.T) {
+	g := &OutputContractGuard{}
+	ctx := &GuardContext{UserPrompt: "For the rest of this session, 'quiet ticker' means a cron job that runs every 5 minutes. Reply only with noted."}
+	result := g.CheckWithContext("Noted.", ctx)
+	if !result.Passed {
+		t.Fatalf("reply-only literal with 'only with' word order should pass, got reason %q", result.Reason)
+	}
+}
+
 func TestUserEchoGuard_LongEcho(t *testing.T) {
 	g := &UserEchoGuard{}
 	user := "I need help understanding how the kubernetes pod scheduling algorithm works in large clusters"

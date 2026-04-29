@@ -61,6 +61,169 @@ func TestTaskDeferralGuard_RealToolUse(t *testing.T) {
 	}
 }
 
+func TestTaskDeferralGuard_SchedulingPromptRequiresCronEvidence(t *testing.T) {
+	g := &TaskDeferralGuard{}
+	ctx := &GuardContext{
+		UserPrompt:        "schedule a cron job that runs every 5 minutes and tell me exactly what was scheduled",
+		SelectedToolNames: []string{"cron", "get_runtime_context"},
+		ToolResults: []ToolResultEntry{
+			{ToolName: "get_runtime_context", Output: `{"workspace":"/tmp/workspace"}`},
+			{ToolName: "recall_memory", Output: "no relevant prior memory"},
+		},
+	}
+	result := g.CheckWithContext("You can add this cron syntax: */5 * * * *. Please confirm if you want me to proceed.", ctx)
+	if result.Passed {
+		t.Fatal("scheduling task should reject generic cron advice without cron tool evidence")
+	}
+	if !result.Retry {
+		t.Fatalf("expected retry for missing scheduling evidence, got %#v", result)
+	}
+}
+
+func TestTaskDeferralGuard_SchedulingPromptAllowsCronEvidence(t *testing.T) {
+	g := &TaskDeferralGuard{}
+	ctx := &GuardContext{
+		UserPrompt:        "schedule a cron job that runs every 5 minutes and tell me exactly what was scheduled",
+		SelectedToolNames: []string{"cron", "get_runtime_context"},
+		ToolResults: []ToolResultEntry{
+			{ToolName: "cron", Output: `Created cron job "quiet ticker" (id=job-1, schedule=*/5 * * * *, delivery=session/default)`},
+		},
+	}
+	result := g.CheckWithContext("Created the quiet ticker cron job with schedule */5 * * * *.", ctx)
+	if !result.Passed {
+		t.Fatalf("cron tool evidence should satisfy scheduling contract, got reason %q", result.Reason)
+	}
+}
+
+func TestTaskDeferralGuard_SchedulingAliasDefinitionIsContextSettingNotCronExecution(t *testing.T) {
+	g := &TaskDeferralGuard{}
+	ctx := &GuardContext{
+		UserPrompt:        "For the rest of this session, 'quiet ticker' means a cron job that runs every 5 minutes. Reply only with noted.",
+		SelectedToolNames: []string{"cron", "get_runtime_context"},
+	}
+	result := g.CheckWithContext("noted", ctx)
+	if !result.Passed {
+		t.Fatalf("context-setting alias definition should not require cron evidence, got reason %q", result.Reason)
+	}
+}
+
+func TestTaskDeferralGuard_GenericToolUseRequiresActionToolEvidence(t *testing.T) {
+	g := &TaskDeferralGuard{}
+	ctx := &GuardContext{
+		UserPrompt:        "Pick an enabled runtime tool relevant to security and use it.",
+		SelectedToolNames: []string{"list-available-skills", "ghola"},
+		ToolResults: []ToolResultEntry{
+			{ToolName: "list-available-skills", Output: "ClawdStrike: security analysis"},
+		},
+	}
+	result := g.CheckWithContext("ClawdStrike is the relevant tool. Please confirm if you want me to run it.", ctx)
+	if result.Passed {
+		t.Fatal("tool-use prompt should reject skill discovery without action-tool evidence")
+	}
+}
+
+func TestTaskDeferralGuard_GenericToolUseRejectsRuntimeInventoryEvidence(t *testing.T) {
+	g := &TaskDeferralGuard{}
+	ctx := &GuardContext{
+		UserPrompt:        "Tell me about the tools you can use, pick one at random, and use it.",
+		SelectedToolNames: []string{"list-available-skills", "get_subagent_status", "ghola"},
+		ToolResults: []ToolResultEntry{
+			{ToolName: "list-available-skills", Output: "ghola: web retrieval"},
+			{ToolName: "get_subagent_status", Output: "4 idle subagents"},
+		},
+	}
+	result := g.CheckWithContext("I listed the tools and checked subagent status.", ctx)
+	if result.Passed {
+		t.Fatal("runtime inventory/status tools should not satisfy a generic use-a-tool request")
+	}
+}
+
+func TestTaskDeferralGuard_GenericToolUseRequiresFinalObservedToolResult(t *testing.T) {
+	g := &TaskDeferralGuard{}
+	ctx := &GuardContext{
+		UserPrompt:        "Tell me about the tools you can use, pick one at random, and use it.",
+		SelectedToolNames: []string{"list-available-skills", "inventory_projects"},
+		ToolResults: []ToolResultEntry{
+			{ToolName: "list-available-skills", Output: "workspace skill catalog"},
+			{ToolName: "inventory_projects", Output: `{"project_count":1,"projects":[{"name":"Vault"}]}`},
+		},
+	}
+	result := g.CheckWithContext("I will randomly choose code-analysis-bug-hunting and proceed to use it.", ctx)
+	if result.Passed {
+		t.Fatal("generic tool-use prompt should reject final answers that ignore the executed tool result")
+	}
+}
+
+func TestTaskDeferralGuard_GenericToolUseAcceptsReportedObservedToolResult(t *testing.T) {
+	g := &TaskDeferralGuard{}
+	ctx := &GuardContext{
+		UserPrompt:        "Tell me about the tools you can use, pick one at random, and use it.",
+		SelectedToolNames: []string{"list-available-skills", "inventory_projects"},
+		ToolResults: []ToolResultEntry{
+			{ToolName: "list-available-skills", Output: "workspace skill catalog"},
+			{ToolName: "inventory_projects", Output: `{"project_count":1,"projects":[{"name":"Vault"}]}`},
+		},
+	}
+	result := g.CheckWithContext("I used inventory_projects to inspect the workspace project inventory and found one project: Vault.", ctx)
+	if !result.Passed {
+		t.Fatalf("reported non-inventory tool result should satisfy generic tool-use prompt, got reason %q", result.Reason)
+	}
+}
+
+func TestTaskDeferralGuard_GenericToolUseRejectsOpenEndedTailAfterAction(t *testing.T) {
+	g := &TaskDeferralGuard{}
+	ctx := &GuardContext{
+		UserPrompt:        "Tell me about the tools you can use, pick one at random, and use it.",
+		SelectedToolNames: []string{"list_directory", "get_runtime_context"},
+		ToolResults: []ToolResultEntry{
+			{ToolName: "list_directory", Output: "ARCHITECTURE.md\ndocs/"},
+		},
+	}
+	result := g.CheckWithContext("I used list_directory and found ARCHITECTURE.md and docs/. If you need more, let me know.", ctx)
+	if result.Passed {
+		t.Fatal("generic tool-use prompt should reject open-ended follow-up offers after successful tool execution")
+	}
+}
+
+func TestTaskDeferralGuard_GenericToolUseRejectsFutureTenseFinalizationAfterAction(t *testing.T) {
+	g := &TaskDeferralGuard{}
+	ctx := &GuardContext{
+		UserPrompt:        "Tell me about the tools you can use, pick one at random, and use it.",
+		SelectedToolNames: []string{"read_file", "glob_files"},
+		ToolResults: []ToolResultEntry{
+			{ToolName: "read_file", Output: "Target docs dir set to /Users/jmachen/code/roboticus/docs"},
+		},
+	}
+	result := g.CheckWithContext("I used read_file and observed the target docs directory. I will finalize this task now.", ctx)
+	if result.Passed {
+		t.Fatal("generic tool-use prompt should reject future-tense finalization after successful tool execution")
+	}
+}
+
+func TestTaskDeferralGuard_ResolvedFolderScanRequiresInspectionEvidence(t *testing.T) {
+	g := &TaskDeferralGuard{}
+	ctx := &GuardContext{
+		UserPrompt:        "Look in ~/Downloads and tell me the newest PDF file.",
+		SelectedToolNames: []string{"list_directory", "glob_files", "read_file"},
+	}
+	result := g.CheckWithContext("Should I use your default Downloads directory for this?", ctx)
+	if result.Passed {
+		t.Fatal("resolved folder scan should not ask for confirmation instead of using selected inspection tools")
+	}
+}
+
+func TestTaskDeferralGuard_DownloadsFolderAliasRequiresInspectionEvidence(t *testing.T) {
+	g := &TaskDeferralGuard{}
+	ctx := &GuardContext{
+		UserPrompt:        "Now look in my Downloads folder",
+		SelectedToolNames: []string{"list_directory", "glob_files", "read_file"},
+	}
+	result := g.CheckWithContext("Could you please confirm the exact path to your Downloads folder?", ctx)
+	if result.Passed {
+		t.Fatal("allowed common-folder alias should require inspection evidence instead of confirmation")
+	}
+}
+
 func TestClarificationDeflectionGuard_CannedRestatementRequest(t *testing.T) {
 	g := &ClarificationDeflectionGuard{}
 	ctx := &GuardContext{

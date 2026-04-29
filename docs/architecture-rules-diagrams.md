@@ -191,6 +191,17 @@ This file follows the same C4 conventions used elsewhere in the repo:
   phase, hard/soft/neutral severity, precondition state, violation state,
   recovery action, recovery attempt/window, recovery outcome, and confidence
   effect.
+- output-shape requests are runtime contracts. If the user asks for only a
+  number, one sentence, one line, JSON, bullets, or another bounded shape, the
+  post-inference guard seam validates that shape from the normalized prompt
+  contract. It may retry with scoped corrective guidance or surface structured
+  failure evidence, but it must not synthesize a fixed operator-facing answer.
+- action-bearing requests require capability-matched evidence. Generic ReAct
+  activity, runtime-context lookup, memory recall, and skill inventory calls do
+  not prove that filesystem, cron, browser, skill, or other requested actions
+  happened. Guards and verifiers compare requested capability class, selected
+  tool surface, and actual tool results before accepting a final answer or
+  treating a block as legitimate.
 - ABC-derived guard/RCA changes require a paired soak before release claims.
   The baseline and after lanes must share model configuration, scenario set,
   cache mode, server mode, and latency ceilings, and the isolated RCA database
@@ -761,6 +772,12 @@ This file follows the same C4 conventions used elsewhere in the repo:
 - scheduling is a focused execution seam. Requests to create or describe a cron
   schedule must pin the authoritative scheduling tool plus only minimal support
   tools; they are not allowed to widen into general exploratory tool surfaces.
+- scheduling vocabulary is not sufficient proof of scheduling intent. The
+  pipeline must distinguish context-setting turns that define an alias or
+  output contract from direct requests to create/list/delete scheduled work.
+  Context-setting turns may complete through the requested output contract;
+  direct scheduling turns require `cron` evidence or concrete missing-input,
+  tool, policy, or sandbox evidence.
 - sandbox allowlist checks must compare canonical path identity rather than raw
   string case so the same real path is not alternately allowed and denied across
   layers; that includes future child paths under symlinked roots, where the
@@ -772,9 +789,11 @@ This file follows the same C4 conventions used elsewhere in the repo:
 - filesystem tool schemas and descriptions must reflect the real sandbox
   contract: workspace-relative paths and absolute allowed paths are both valid
   when policy allows them.
-- explicit acknowledgement directives are shortcut-class work. A user request
-  to acknowledge in one sentence and wait should be satisfied by the shortcut
-  layer rather than left to open-ended model phrasing.
+- deterministic contract exits are not magic phrases or canned prose. A user
+  request to acknowledge in one sentence and wait may complete without a full
+  tool loop only when the requested contract is explicit, bounded, and contains
+  no action-bearing work. The runtime must derive that path from turn state and
+  contract shape, not from a brittle blessed phrase list.
 - tool execution truth is execution-owned: when the loop runs a tool, the tool
   audit trail and RCA counters must be written from that same execution event,
   not reconstructed later from session history
@@ -1041,6 +1060,13 @@ both policy filtering and `MaxTools` truncation, and approval classification
 runs at one dispatch site. The agent loop never invents its own admission
 logic.
 
+Pin survival is not a backdoor around explicit turn-envelope exclusions. If a
+focused action envelope disables retrieval, globally pinned memory tools such
+as `recall_memory` and `search_memories` must still be removed from that turn
+surface. The model should execute the action-specific tool first and use
+memory only when the task is genuinely continuity-shaped or the focused
+envelope explicitly permits retrieval.
+
 An operator explicitly naming a registered tool in the current request is a
 turn-local pin. Semantic ranking may order non-pinned tools, and policy may
 still deny or gate execution, but pruning cannot hide the named capability and
@@ -1058,6 +1084,24 @@ a public web/page read is still an action-bearing turn for tool-surface
 purposes; it may keep a small context budget, but it must not collapse the
 selected tool set to zero before pin survival runs.
 
+Generic tool-demonstration turns are action-bearing even when they begin with
+capability discovery language. If the operator asks the agent to describe tools
+and then "pick one" or "use one", the capability snapshot can support the
+description but capability-inventory tool calls are not proof of work and should
+not be exposed on the action surface. The turn envelope must expose bounded,
+low-risk execution/read tools, and the guard must require at least one
+non-inventory tool result or a concrete execution block before finalization.
+After such a tool result exists, finalization should summarize the selected
+tool and observed result directly. It must not append generic follow-up offers
+that make the action look unfinished unless a required input is genuinely
+missing.
+
+Procedural workflow lookup is memory retrieval, not live capability inventory.
+`find_workflow` searches procedural memory and may enrich retrieval-enabled
+turns, but it must not leak into no-retrieval focused surfaces as if it were a
+tool the agent can demonstrate. Otherwise stale workflow memory can redirect a
+simple tool-use request into an unrelated pseudo-action.
+
 RCA tool-surface telemetry is owned by the pipeline-selected tool set, not by
 later routing internals. The routing selector may see a partial request shape,
 but operator diagnostics must report the canonical selected tools from
@@ -1070,6 +1114,16 @@ capability unless that claim is backed by policy, sandbox, provider, or tool
 execution evidence. Guards therefore consume the selected tool surface as well
 as completed tool results: selected tools prove available capability; tool
 results prove what actually happened.
+Action-evidence guards fire only after the runtime has established a selected
+tool surface or actual tool results. If tool pruning itself fails before a
+surface exists, that is a tool-surface/RCA defect, not permission for the guard
+to invent a missing execution failure.
+
+The workspace root is the primary sandbox root, not an optional allowlist entry.
+Relative paths resolve under it, and absolute paths that canonicalize under the
+workspace root must remain valid even when additional `allowed_paths` are
+configured. Extra allowed paths widen the sandbox; they must not accidentally
+narrow the workspace.
 
 Guard retry diagnostics distinguish recovery from failure. A scheduled guard
 retry is evidence that the first answer was unsafe or untruthful, not proof that
@@ -1147,6 +1201,8 @@ Forbidden architectural moves:
   site
 - allowing `MaxTools` or `filterToolDefsForPolicy` to drop a tool that
   `AlwaysInclude` named for this turn
+- allowing an `AlwaysInclude` memory pin to override a focused action
+  envelope with `AllowRetrieval=false`
 - treating an explicit operator request such as `use the ghola tool` as plain
   semantic query text; registered named tools are per-turn pins, not embedding
   accidents
@@ -1156,6 +1212,9 @@ Forbidden architectural moves:
 - using lightweight/social-turn suppression to bypass pin survival; no channel
   path may convert an explicit tool or public-web request into a zero-tool
   conversational turn before policy admission has considered the pinned tools
+- treating `list-available-skills`, `get_subagent_status`, memory retrieval, or
+  runtime inventory as successful execution evidence for a generic "pick a tool
+  and use it" request; those are discovery aids, not the requested action
 - reporting `inference.routing.request_tool_count` from a synthetic or partial
   routing request when `session.SelectedToolDefs()` already contains the
   canonical turn surface
@@ -1164,7 +1223,24 @@ Forbidden architectural moves:
 - registering a built-in without classifying it; `OperationUnknown` is
   reserved for plugin/MCP tools that the registry has not described
 
-## 6.7 Supplementary Rule View — ReAct Reflection Memory Layering
+Focused scheduling tools may derive non-authoritative labels from the task
+payload when the user supplied a complete schedule and task but omitted a job
+name. A missing human-friendly name is metadata, not a reason to abandon a
+safe, otherwise fully specified scheduling action. The tool result must expose
+the derived name so the operator can audit, rename, or delete the job.
+
+## 6.7 Supplementary Rule View — Compatibility Repair Owns Schema Drift
+
+Startup compatibility repair must handle safe schema-shape drift that prevents
+normal operation after an upgrade. Optional-column repair is not enough when an
+older table carries a now-invalid CHECK constraint. If a live table contains
+stale validation that rejects current runtime-owned event names, `Open()` must
+repair that table shape idempotently, preserve existing rows, and log the
+repair. Runtime tools must not paper over schema drift with alternate event
+names because that would split the control-plane vocabulary between old and new
+stores.
+
+## 6.8 Supplementary Rule View — ReAct Reflection Memory Layering
 
 Reflection (TOTOF) and continuation are a *tighter* action-request lens layered
 on top of conversation memory. They do not replace conversation memory and

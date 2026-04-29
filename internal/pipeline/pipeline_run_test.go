@@ -192,6 +192,69 @@ func (s *stubRetriever) RetrieveActiveContext(_ context.Context, _ string, _ int
 	return s.active
 }
 
+func TestStageMemoryRetrieval_AllowRetrievalFalseSuppressesMemoryHandles(t *testing.T) {
+	pipe := New(PipelineDeps{Retriever: &stubRetriever{
+		result: "[Retrieved Evidence]\n- stale prior failure",
+		active: "[Working State]\n- stale active note",
+	}})
+	sess := NewSession("sess-no-retrieval", "agent-1", "Test")
+	pc := &pipelineContext{
+		session: sess,
+		content: "tell me about the tools you can use, pick one at random, and use it",
+		tr:      NewTraceRecorder(),
+		synthesis: TaskSynthesis{
+			Intent:          "question",
+			Complexity:      "simple",
+			RetrievalNeeded: true,
+		},
+		policy: TurnEnvelopePolicy{
+			ToolProfile:    ToolProfileFocusedToolDemonstration,
+			AllowRetrieval: false,
+		},
+	}
+
+	pipe.stageMemoryRetrieval(context.Background(), pc)
+
+	if got := sess.MemoryIndex(); got != "" {
+		t.Fatalf("memory index = %q, want empty when AllowRetrieval=false", got)
+	}
+	if got := sess.MemoryContext(); got != "" {
+		t.Fatalf("memory context = %q, want empty when AllowRetrieval=false", got)
+	}
+}
+
+func TestStageToolExecutionNote_FocusedToolDemonstration(t *testing.T) {
+	pipe := New(PipelineDeps{})
+	pipe.pruner = &countingPolicyPruner{
+		fn: func(_ context.Context, _ *Session) ([]llm.ToolDef, agenttools.ToolSearchStats, error) {
+			return []llm.ToolDef{
+				{Type: "function", Function: llm.ToolFuncDef{Name: "list_directory"}},
+				{Type: "function", Function: llm.ToolFuncDef{Name: "get_runtime_context"}},
+			}, agenttools.ToolSearchStats{CandidatesSelected: 2, EmbeddingStatus: "ok"}, nil
+		},
+	}
+	sess := NewSession("sess-tool-demo-note", "agent-1", "Test")
+	pc := &pipelineContext{
+		session: sess,
+		tr:      NewTraceRecorder(),
+		policy: TurnEnvelopePolicy{
+			ToolProfile:    ToolProfileFocusedToolDemonstration,
+			MaxTools:       4,
+			AllowRetrieval: false,
+		},
+	}
+
+	pipe.stageToolPruning(context.Background(), pc)
+
+	note := sess.TurnExecutionNote()
+	if !strings.Contains(note, "focused tool-demonstration turn") {
+		t.Fatalf("turn execution note = %q", note)
+	}
+	if !strings.Contains(note, "observed result") {
+		t.Fatalf("turn execution note should bind finalization to observed results, got %q", note)
+	}
+}
+
 func TestPipeline_Run_SimpleMessage(t *testing.T) {
 	store := testutil.TempStore(t)
 
