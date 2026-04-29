@@ -882,6 +882,8 @@ type extractedCodeArtifact struct {
 
 var fencedCodeRE = regexp.MustCompile("(?s)```([A-Za-z0-9_+-]*)\\s*\\n(.*?)```")
 
+const codeArtifactEvalTimeout = 10 * time.Second
+
 func extractPrimaryCodeArtifact(content string) extractedCodeArtifact {
 	matches := fencedCodeRE.FindAllStringSubmatch(content, -1)
 	best := extractedCodeArtifact{}
@@ -1115,7 +1117,7 @@ func TestReverseStringContract(t *testing.T) {
 		return false, false
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), codeArtifactEvalTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "go", "test", ".")
 	cmd.Dir = dir
@@ -1206,7 +1208,7 @@ for _inp, _want in cases:
 		return false, false
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), codeArtifactEvalTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "python3", sourcePath)
 	cmd.Dir = dir
