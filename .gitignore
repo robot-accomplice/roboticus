@@ -42,6 +42,7 @@ __pycache__/
 *.pyo
 
 .serena/**
+.cursor/
 roboticus
 
 # Ad-hoc ops/monitoring scripts (not part of the Go project)
