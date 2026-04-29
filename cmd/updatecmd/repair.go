@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 )
 
@@ -80,10 +79,8 @@ func cleanupStaleSidecars(execPath string, summary *RepairSummary) {
 			blocked++
 			continue
 		}
-		if runtime.GOOS == "windows" {
-			// A just-replaced running binary can remain locked on Windows. Try
-			// removal anyway; a sharing violation becomes manual-action evidence.
-		}
+		// A just-replaced running binary can remain locked on Windows. Try
+		// removal anyway; a sharing violation becomes manual-action evidence.
 		if err := os.Remove(path); err != nil {
 			blocked++
 			continue

@@ -685,9 +685,10 @@ func runUpdateAll(ctx context.Context, currentVersion string, yes, refreshConfig
 		return fmt.Errorf("failed to run pre-upgrade cleanup: %w", err)
 	}
 	for _, action := range preflight.Actions {
-		if action.Status == "repaired" {
+		switch action.Status {
+		case "repaired":
 			fmt.Printf("Repair: %s repaired (%s)\n", action.Name, action.Detail)
-		} else if action.Status == "needs_manual_action" {
+		case "needs_manual_action":
 			fmt.Printf("Repair: %s needs manual action (%s)\n", action.Name, action.Detail)
 		}
 	}

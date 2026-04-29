@@ -77,33 +77,6 @@ const (
 const reflectInstruction = "Post-observation reflection mode: tools are disabled. You are receiving a canonical TOTOF artifact: task, authoritative observed results, key tool outcomes, open issues, and a bounded finalization instruction. Interpret the artifact, finalize directly when the observed results are sufficient, and only if more execution is strictly required start the first line with CONTINUE_EXECUTION and then briefly explain what remains to be done."
 const continuationInstruction = "Post-observation continuation mode: you are resuming execution from a canonical continuation artifact rather than raw session replay. Use the authoritative observations, tool outcomes, and explicit remaining-work summary to decide the next bounded execution step. Continue execution only as far as needed to close the named remaining work, then return to observation/reflection."
 
-// stripContinueSentinel reports whether the given trimmed line begins with
-// the CONTINUE_EXECUTION control sentinel as a discrete token (terminated by
-// whitespace, end-of-line, or punctuation). When true, the returned string
-// is the remainder of the line after the sentinel and any leading
-// whitespace/punctuation, suitable for use as the continuation reason.
-//
-// The sentinel must be terminated to avoid matching unrelated identifiers
-// (e.g. "CONTINUE_EXECUTION_NOW" or "CONTINUE_EXECUTIONFOO") — those are
-// treated as ordinary content, not control text.
-func stripContinueSentinel(line string) (string, bool) {
-	if !strings.HasPrefix(line, reflectContinuePrefix) {
-		return line, false
-	}
-	after := line[len(reflectContinuePrefix):]
-	if after == "" {
-		return "", true
-	}
-	r, _ := utf8.DecodeRuneInString(after)
-	if !unicode.IsSpace(r) && !unicode.IsPunct(r) {
-		return line, false
-	}
-	rest := strings.TrimLeftFunc(after, func(r rune) bool {
-		return unicode.IsSpace(r) || unicode.IsPunct(r)
-	})
-	return strings.TrimSpace(rest), true
-}
-
 // continueSentinelSpan finds a discrete CONTINUE_EXECUTION control token in
 // model output. The token may appear at the start of a line or inline after
 // prose; either way it is framework control text, not user-visible prose.

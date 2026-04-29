@@ -203,7 +203,7 @@ func TestContextBuilder_TrailingOverlayPreservesWorkingMemory(t *testing.T) {
 	if overlayIdx != len(req.Messages)-1 {
 		t.Fatalf("overlay index = %d, want last index %d", overlayIdx, len(req.Messages)-1)
 	}
-	if !(memoryIdx < userIdx && indexIdx < userIdx && userIdx < overlayIdx) {
+	if memoryIdx >= userIdx || indexIdx >= userIdx || userIdx >= overlayIdx {
 		t.Fatalf("unexpected order: memory=%d index=%d user=%d overlay=%d", memoryIdx, indexIdx, userIdx, overlayIdx)
 	}
 }

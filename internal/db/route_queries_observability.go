@@ -392,13 +392,6 @@ func optionalColumnExpr(cols map[string]bool, col, fallback string) string {
 	return fallback
 }
 
-func optionalQualifiedColumnExpr(cols map[string]bool, qualifier, col, fallback string) string {
-	if cols[col] {
-		return qualifier + "." + col
-	}
-	return fallback
-}
-
 func safeSQLiteIdentifier(s string) bool {
 	if s == "" {
 		return false

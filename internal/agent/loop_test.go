@@ -1972,7 +1972,7 @@ func assertRequestContainsOrderedSystemContext(t *testing.T, req *llm.Request, m
 	if overlayIdx < 0 {
 		t.Fatalf("request missing trailing overlay %q", overlayNeedle)
 	}
-	if !(memoryIdx < overlayIdx && indexIdx < overlayIdx) {
+	if memoryIdx >= overlayIdx || indexIdx >= overlayIdx {
 		t.Fatalf("memory/index must precede trailing overlay: memory=%d index=%d overlay=%d", memoryIdx, indexIdx, overlayIdx)
 	}
 }
