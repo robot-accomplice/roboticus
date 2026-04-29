@@ -1091,10 +1091,10 @@ description but capability-inventory tool calls are not proof of work and should
 not be exposed on the action surface. The turn envelope must expose bounded,
 low-risk execution/read tools, and the guard must require at least one
 non-inventory tool result or a concrete execution block before finalization.
-After such a tool result exists, finalization should summarize the selected
-tool and observed result directly. It must not append generic follow-up offers
-that make the action look unfinished unless a required input is genuinely
-missing.
+After such a tool result exists, including a concrete tool error, finalization
+should summarize the selected tool and observed result directly. It must not
+append generic follow-up offers that make the action look unfinished unless a
+required input is genuinely missing.
 
 Procedural workflow lookup is memory retrieval, not live capability inventory.
 `find_workflow` searches procedural memory and may enrich retrieval-enabled

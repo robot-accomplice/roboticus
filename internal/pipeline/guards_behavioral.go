@@ -219,7 +219,7 @@ func genericToolDemonstrationIgnoresExecutedTool(ctx *GuardContext, content stri
 }
 
 func genericToolDemonstrationHasOpenEndedTail(ctx *GuardContext, content string) bool {
-	if len(nonInventorySuccessfulToolNames(ctx)) == 0 {
+	if len(nonInventoryToolResultNames(ctx)) == 0 {
 		return false
 	}
 	lower := strings.ToLower(content)
@@ -246,6 +246,21 @@ func nonInventorySuccessfulToolNames(ctx *GuardContext) []string {
 		if toolResultSignalsFailure(tr) {
 			continue
 		}
+		op := agenttools.OperationClassForName(tr.ToolName)
+		if isGenericIntrospectionOperation(op) {
+			continue
+		}
+		out = append(out, strings.TrimSpace(tr.ToolName))
+	}
+	return out
+}
+
+func nonInventoryToolResultNames(ctx *GuardContext) []string {
+	if ctx == nil {
+		return nil
+	}
+	out := make([]string, 0, len(ctx.ToolResults))
+	for _, tr := range ctx.ToolResults {
 		op := agenttools.OperationClassForName(tr.ToolName)
 		if isGenericIntrospectionOperation(op) {
 			continue

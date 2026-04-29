@@ -200,6 +200,21 @@ func TestTaskDeferralGuard_GenericToolUseRejectsFutureTenseFinalizationAfterActi
 	}
 }
 
+func TestTaskDeferralGuard_GenericToolUseRejectsOpenEndedTailAfterToolError(t *testing.T) {
+	g := &TaskDeferralGuard{}
+	ctx := &GuardContext{
+		UserPrompt:        "Tell me about the tools you can use, pick one at random, and use it.",
+		SelectedToolNames: []string{"read_file", "glob_files"},
+		ToolResults: []ToolResultEntry{
+			{ToolName: "read_file", Output: "error: failed to read file: open README.md: no such file or directory"},
+		},
+	}
+	result := g.CheckWithContext("I used read_file, but README.md does not exist. If you need another tool, let me know.", ctx)
+	if result.Passed {
+		t.Fatal("generic tool-use prompt should reject open-ended follow-up offers after concrete tool errors")
+	}
+}
+
 func TestTaskDeferralGuard_ResolvedFolderScanRequiresInspectionEvidence(t *testing.T) {
 	g := &TaskDeferralGuard{}
 	ctx := &GuardContext{
