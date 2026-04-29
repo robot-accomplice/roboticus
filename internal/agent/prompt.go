@@ -359,6 +359,7 @@ func buildRuntimeMetadataBlock(cfg PromptConfig) string {
 	// policy diverges from the real config — and operators have no
 	// way to act on a refusal that didn't surface a real denial reason.
 	sb.WriteString("- ATTEMPT then report. Do NOT refuse a tool operation based on your own assumptions about what the policy will allow. Call the tool; let the policy engine return the actual decision. If denied, surface the policy's exact reason so the operator can act on it.\n")
+	sb.WriteString("- When a tool is blocked, the result includes the exact policies: for engine denials, an \"Invoked policy:\" line (rule id such as `authority`, `path_protection`, `financial`, …) plus \"Policy denied:\" with the precise reason string; for approval blocks, `agent.approvals.blocked_tools`. Quote those identifiers and the denial reason verbatim when you explain the failure—then paraphrase remediation. Incorporate any operator steps the message gives (`channels.*` allowlists, `security.trusted_sender_ids`, `security.allowlist_authority`, etc.). Do not blame the remote website or imply the URL is unreachable unless the tool output is explicitly a transport or HTTP error from the fetch.\n")
 	// The user's count-style asks (e.g., "return only the number")
 	// also revealed the agent narrating around minimal-output requests.
 	// The directive below covers the format-discipline gap: when the

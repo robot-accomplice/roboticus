@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"testing"
 	"time"
+
+	"roboticus/internal/llm"
+	"roboticus/internal/session"
 )
 
 func TestTraceRecorder_BasicFlow(t *testing.T) {
@@ -66,5 +69,42 @@ func TestTraceRecorder_StagesJSON(t *testing.T) {
 	}
 	if len(stages) != 1 {
 		t.Errorf("got %d stages from JSON, want 1", len(stages))
+	}
+}
+
+func TestAnnotateSelectedToolSurfaceForRCA_OverridesSyntheticRoutingToolCount(t *testing.T) {
+	tr := NewTraceRecorder()
+	tr.BeginSpan("inference")
+	tr.Annotate(TraceNSInference+".routing.request_tool_count", 0)
+
+	sess := session.New("s1", "agent1", "Bot")
+	sess.SetSelectedToolDefs([]llm.ToolDef{
+		{Type: "function", Function: llm.ToolFuncDef{Name: "ghola"}},
+		{Type: "function", Function: llm.ToolFuncDef{Name: "get_runtime_context"}},
+	})
+
+	annotateSelectedToolSurfaceForRCA(tr, sess)
+	tr.Annotate(TraceNSInference+".routing.request_tool_count", 0)
+	annotateSelectedToolSurfaceForRCA(tr, sess)
+	trace := tr.Finish("turn-1", "api")
+	if len(trace.Stages) != 1 {
+		t.Fatalf("stages = %d, want 1", len(trace.Stages))
+	}
+	meta := trace.Stages[0].Metadata
+	if got := meta[TraceNSInference+".routing.request_tool_count"]; got != 2 {
+		t.Fatalf("request_tool_count = %#v, want 2", got)
+	}
+	if got := meta[TraceNSInference+".routing.selected_tool_count"]; got != 2 {
+		t.Fatalf("selected_tool_count = %#v, want 2", got)
+	}
+	if got := meta[TraceNSInference+".routing.tool_count_source"]; got != "session.selected_tool_defs" {
+		t.Fatalf("tool_count_source = %#v", got)
+	}
+	names, ok := meta[TraceNSInference+".routing.selected_tools"].([]string)
+	if !ok {
+		t.Fatalf("selected_tools = %#v, want []string", meta[TraceNSInference+".routing.selected_tools"])
+	}
+	if len(names) != 2 || names[0] != "ghola" || names[1] != "get_runtime_context" {
+		t.Fatalf("selected_tools = %#v", names)
 	}
 }

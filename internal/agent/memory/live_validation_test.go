@@ -18,7 +18,7 @@ import (
 //  1. Ingestion: Multiple turns with diverse content
 //  2. Embedding: Verify embeddings were generated at ingestion time
 //  3. Retrieval: Query-aware retrieval with precomputed embeddings
-//  4. Consolidation: Dedup, promotion, contradiction detection, backfill
+//  4. Memory Curation: Dedup, promotion, contradiction detection, backfill
 //  5. Entity extraction: Proper noun detection in natural language
 //  6. Cross-session continuity: Session summary promotion and injection
 //  7. Adaptive budgets: Surplus redistribution from empty tiers
@@ -178,7 +178,7 @@ func TestLiveValidation_FullPipeline(t *testing.T) {
 	}
 
 	// ═══════════════════════════════════════════════════════════════════
-	// PHASE 5: Consolidation — full pipeline execution
+	// PHASE 5: Memory Curation — full pipeline execution
 	// ═══════════════════════════════════════════════════════════════════
 
 	// Add some data to exercise consolidation phases.
@@ -202,6 +202,16 @@ func TestLiveValidation_FullPipeline(t *testing.T) {
 		`INSERT INTO semantic_memory (id, category, key, value)
 		 VALUES (?, 'knowledge', 'db_system', 'the system uses SQLite for persistence')`,
 		db.NewID())
+
+	// Session-close summary promotion happens before Memory Curation is allowed
+	// to clean inactive working-memory rows.
+	mgr.PromoteSessionSummary(ctx, sessionID)
+	if _, err := store.ExecContext(ctx,
+		`UPDATE sessions
+		    SET status = 'archived', updated_at = datetime('now', '-10 seconds')
+		  WHERE status = 'active'`); err != nil {
+		t.Fatalf("quiesce active sessions before memory curation: %v", err)
+	}
 
 	pipe := NewConsolidationPipeline()
 	pipe.MinInterval = 0
@@ -234,9 +244,6 @@ func TestLiveValidation_FullPipeline(t *testing.T) {
 	// ═══════════════════════════════════════════════════════════════════
 	// PHASE 6: Cross-session continuity
 	// ═══════════════════════════════════════════════════════════════════
-
-	// Promote the session summary.
-	mgr.PromoteSessionSummary(ctx, sessionID)
 
 	var summaryValue string
 	err = store.QueryRowContext(ctx,

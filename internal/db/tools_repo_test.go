@@ -38,6 +38,48 @@ func TestToolsRepository_RecordAndGet(t *testing.T) {
 	}
 }
 
+func TestToolsRepository_RecordIsIdempotentForDuplicateID(t *testing.T) {
+	store := testTempStore(t)
+	repo := NewToolsRepository(store)
+	ctx := context.Background()
+
+	seedTurnForTrace(t, store, "sess-1", "turn-1")
+
+	if err := repo.Record(ctx, ToolCallRow{
+		ID:         "turn-1:call-1",
+		TurnID:     "turn-1",
+		ToolName:   "list_directory",
+		Input:      `{"path":"."}`,
+		Output:     "first",
+		Status:     "running",
+		DurationMs: 1,
+	}); err != nil {
+		t.Fatalf("first Record: %v", err)
+	}
+	if err := repo.Record(ctx, ToolCallRow{
+		ID:         "turn-1:call-1",
+		TurnID:     "turn-1",
+		ToolName:   "list_directory",
+		Input:      `{"path":"."}`,
+		Output:     "second",
+		Status:     "success",
+		DurationMs: 42,
+	}); err != nil {
+		t.Fatalf("duplicate Record should update idempotently: %v", err)
+	}
+
+	calls, err := repo.ListByTurn(ctx, "turn-1")
+	if err != nil {
+		t.Fatalf("ListByTurn: %v", err)
+	}
+	if len(calls) != 1 {
+		t.Fatalf("duplicate execution id created %d rows, want 1", len(calls))
+	}
+	if calls[0].Output != "second" || calls[0].Status != "success" || calls[0].DurationMs != 42 {
+		t.Fatalf("row not updated idempotently: %+v", calls[0])
+	}
+}
+
 func TestToolsRepository_ListByTurn(t *testing.T) {
 	store := testTempStore(t)
 	repo := NewToolsRepository(store)

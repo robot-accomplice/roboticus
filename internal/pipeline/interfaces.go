@@ -91,3 +91,10 @@ type StreamPreparer interface {
 type ToolPruner interface {
 	PruneTools(ctx context.Context, session *session.Session) (defs []llm.ToolDef, stats agenttools.ToolSearchStats, err error)
 }
+
+// ToolCapabilityLexiconProvider is an optional companion interface for a
+// ToolPruner. It exposes the runtime tool capability vocabulary used by task
+// synthesis before pruning has selected the turn-local tool surface.
+type ToolCapabilityLexiconProvider interface {
+	ToolCapabilityLexicon() []string
+}

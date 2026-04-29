@@ -274,6 +274,8 @@ func DefaultConfig() Config {
 				"get_memory_stats",
 				"get_runtime_context",
 				"get_subagent_status",
+				"introspect",
+				"obsidian_write",
 				"list-subagent-roster",
 				"list-available-skills",
 				"compose-skill",

@@ -1,6 +1,7 @@
 package routes
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"roboticus/internal/pipeline"
 	"roboticus/testutil"
 )
 
@@ -88,6 +90,50 @@ func TestGetTrace_InvalidStagesJSON(t *testing.T) {
 	stages, ok := body["stages"].([]any)
 	if !ok || len(stages) != 0 {
 		t.Errorf("stages = %v, want empty array for invalid JSON", body["stages"])
+	}
+}
+
+func TestGetTrace_HealthAggregateFromStages(t *testing.T) {
+	store := testutil.TempStore(t)
+	_, _ = store.ExecContext(bgCtx, `INSERT INTO sessions (id, agent_id, scope_key) VALUES ('s1', 'a1', 'test')`)
+	_, _ = store.ExecContext(bgCtx, `INSERT INTO turns (id, session_id) VALUES ('t-ok', 's1')`)
+	_, _ = store.ExecContext(bgCtx, `INSERT INTO turns (id, session_id) VALUES ('t-bad', 's1')`)
+	_, _ = store.ExecContext(bgCtx, `INSERT INTO turns (id, session_id) VALUES ('t-object-bad', 's1')`)
+	_, _ = store.ExecContext(bgCtx,
+		`INSERT INTO pipeline_traces (id, turn_id, channel, total_ms, stages_json, created_at)
+		 VALUES ('p-ok', 't-ok', 'api', 100, '[{"name":"classify","outcome":"ok"},{"name":"cache_check","outcome":"miss"}]', datetime('now'))`)
+	_, _ = store.ExecContext(bgCtx,
+		`INSERT INTO pipeline_traces (id, turn_id, channel, total_ms, stages_json, created_at)
+		 VALUES ('p-bad', 't-bad', 'api', 100, '[{"name":"classify","outcome":"ok"},{"name":"infer","outcome":"error"}]', datetime('now'))`)
+	_, _ = store.ExecContext(bgCtx,
+		`INSERT INTO pipeline_traces (id, turn_id, channel, total_ms, stages_json, created_at)
+		 VALUES ('p-object-bad', 't-object-bad', 'api', 100, '[{"name":"classify","outcome":"ok"},{"name":"infer","outcome":{"Error":"LlmCallFailed"}}]', datetime('now'))`)
+
+	okRec := chiRequest("GET", "/traces/{turn_id}", "/traces/t-ok", "", GetTrace(store))
+	if okRec.Code != http.StatusOK {
+		t.Fatalf("ok trace status = %d, want 200", okRec.Code)
+	}
+	okHealth := jsonBody(t, okRec)["health"].(map[string]any)
+	if okHealth["aggregate"] != "positive" {
+		t.Fatalf("ok health = %v, want positive", okHealth)
+	}
+
+	badRec := chiRequest("GET", "/traces/{turn_id}", "/traces/t-bad", "", GetTrace(store))
+	if badRec.Code != http.StatusOK {
+		t.Fatalf("bad trace status = %d, want 200", badRec.Code)
+	}
+	badHealth := jsonBody(t, badRec)["health"].(map[string]any)
+	if badHealth["aggregate"] != "negative" {
+		t.Fatalf("bad health = %v, want negative", badHealth)
+	}
+
+	objectBadRec := chiRequest("GET", "/traces/{turn_id}", "/traces/t-object-bad", "", GetTrace(store))
+	if objectBadRec.Code != http.StatusOK {
+		t.Fatalf("object bad trace status = %d, want 200", objectBadRec.Code)
+	}
+	objectBadHealth := jsonBody(t, objectBadRec)["health"].(map[string]any)
+	if objectBadHealth["aggregate"] != "negative" {
+		t.Fatalf("object bad health = %v, want negative", objectBadHealth)
 	}
 }
 
@@ -362,6 +408,133 @@ func TestGetTurnContext_HappyPath(t *testing.T) {
 	if body["history_depth"].(float64) != 10 {
 		t.Errorf("history_depth = %v, want 10", body["history_depth"])
 	}
+}
+
+func TestGetTurnContext_IncludesRequestFootprintFromTrace(t *testing.T) {
+	store := testutil.TempStore(t)
+	_, _ = store.ExecContext(bgCtx, `INSERT INTO sessions (id, agent_id, scope_key) VALUES ('s1', 'a1', 'test')`)
+	_, _ = store.ExecContext(bgCtx, `INSERT INTO turns (id, session_id) VALUES ('t1', 's1')`)
+	_, _ = store.ExecContext(bgCtx,
+		`INSERT INTO context_snapshots (turn_id, complexity_level, token_budget, system_prompt_tokens, memory_tokens, history_tokens, history_depth, model)
+		 VALUES ('t1', 'L2', 8000, 500, 300, 1200, 10, 'gpt-4')`)
+	stages, err := json.Marshal([]pipeline.TraceSpan{{
+		Name:    "inference",
+		Outcome: "ok",
+		Metadata: map[string]any{
+			"inference.context_footprint.token_budget":    8000,
+			"inference.context_footprint.used_tokens":     2600,
+			"inference.context_footprint.unused_tokens":   5400,
+			"inference.context_footprint.overhead_tokens": 2500,
+			"inference.context_footprint.categories": map[string]any{
+				"system":       500,
+				"tools":        700,
+				"memory":       300,
+				"history":      1000,
+				"current_user": 100,
+				"unused":       5400,
+			},
+			"inference.context_footprint.details": map[string]any{
+				"tools": []any{
+					map[string]any{"kind": "tool", "name": "read_file", "tokens": 350, "preview": "Read a file"},
+				},
+			},
+		},
+	}})
+	if err != nil {
+		t.Fatalf("marshal stages: %v", err)
+	}
+	_, _ = store.ExecContext(bgCtx,
+		`INSERT INTO pipeline_traces (id, turn_id, session_id, channel, total_ms, stages_json, created_at)
+		 VALUES ('p1', 't1', 's1', 'api', 50, ?, datetime('now'))`, string(stages))
+
+	rec := chiRequest("GET", "/turns/{id}/context", "/turns/t1/context", "", GetTurnContext(store))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	body := jsonBody(t, rec)
+	if body["turn_id"] != "t1" {
+		t.Fatalf("turn_id = %#v, want t1", body["turn_id"])
+	}
+	fp, ok := body["footprint"].(map[string]any)
+	if !ok {
+		t.Fatalf("footprint = %#v, want object", body["footprint"])
+	}
+	if fp["source"] != "pipeline_trace" {
+		t.Fatalf("footprint source = %#v, want pipeline_trace", fp["source"])
+	}
+	segments, ok := fp["segments"].([]any)
+	if !ok || len(segments) == 0 {
+		t.Fatalf("segments = %#v, want non-empty list", fp["segments"])
+	}
+	var sawTools bool
+	for _, raw := range segments {
+		seg := raw.(map[string]any)
+		if seg["key"] != "tools" {
+			continue
+		}
+		sawTools = true
+		details := seg["details"].([]any)
+		if len(details) != 1 || details[0].(map[string]any)["name"] != "read_file" {
+			t.Fatalf("tool segment details = %#v", details)
+		}
+	}
+	if !sawTools {
+		t.Fatalf("segments missing tools: %#v", segments)
+	}
+}
+
+func TestGetTurnContext_FootprintBackfillsSelectedToolDetails(t *testing.T) {
+	store := testutil.TempStore(t)
+	_, _ = store.ExecContext(bgCtx, `INSERT INTO sessions (id, agent_id, scope_key) VALUES ('s1', 'a1', 'test')`)
+	_, _ = store.ExecContext(bgCtx, `INSERT INTO turns (id, session_id, model) VALUES ('t1', 's1', 'gpt-4o-mini')`)
+	stages, err := json.Marshal([]pipeline.TraceSpan{{
+		Name:    "inference",
+		Outcome: "ok",
+		Metadata: map[string]any{
+			"inference.context_footprint.token_budget":  8000,
+			"inference.context_footprint.used_tokens":   7000,
+			"inference.context_footprint.unused_tokens": 1000,
+			"inference.context_footprint.categories": map[string]any{
+				"system":       3000,
+				"tools":        0,
+				"current_user": 100,
+				"unused":       1000,
+			},
+			"inference.context_footprint.details": map[string]any{},
+			"inference.routing.selected_tools":    []any{"list_directory", "read_file"},
+		},
+	}})
+	if err != nil {
+		t.Fatalf("marshal stages: %v", err)
+	}
+	_, _ = store.ExecContext(bgCtx,
+		`INSERT INTO pipeline_traces (id, turn_id, session_id, channel, total_ms, stages_json, created_at)
+		 VALUES ('p1', 't1', 's1', 'api', 50, ?, datetime('now'))`, string(stages))
+
+	rec := chiRequest("GET", "/turns/{id}/context", "/turns/t1/context", "", GetTurnContext(store))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	body := jsonBody(t, rec)
+	if body["model"] != "gpt-4o-mini" {
+		t.Fatalf("model = %#v, want gpt-4o-mini", body["model"])
+	}
+	fp := body["footprint"].(map[string]any)
+	segments := fp["segments"].([]any)
+	for _, raw := range segments {
+		seg := raw.(map[string]any)
+		if seg["key"] != "tools" {
+			continue
+		}
+		details := seg["details"].([]any)
+		if len(details) != 2 {
+			t.Fatalf("tool details = %#v, want 2 selected tools", details)
+		}
+		return
+	}
+	t.Fatalf("segments missing tools: %#v", segments)
 }
 
 func TestGetTurnContext_NotFound(t *testing.T) {
@@ -654,6 +827,12 @@ func TestAnalyzeTurn_HappyPath(t *testing.T) {
 	analysis, ok := body["analysis"].(string)
 	if !ok {
 		t.Fatal("analysis should be a string summary")
+	}
+	if body["summary"] != analysis {
+		t.Fatalf("summary = %#v, want analysis alias", body["summary"])
+	}
+	if _, ok := body["recommendations"].([]any); !ok {
+		t.Fatalf("recommendations = %#v, want array", body["recommendations"])
 	}
 	_ = tips
 	_ = analysis

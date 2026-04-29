@@ -47,6 +47,55 @@ func (s *sequencedExecutor) RunLoop(_ context.Context, session *Session) (string
 	return content, 1, nil
 }
 
+type falseCapabilityDenialExecutor struct {
+	calls int
+}
+
+func (e *falseCapabilityDenialExecutor) RunLoop(_ context.Context, session *Session) (string, int, error) {
+	e.calls++
+	session.AddToolResult("repo-list", "list_directory", "ARCHITECTURE.md\narchitecture_rules.md\ndocs", false)
+	content := "The architecture documentation was located, but because tools are now disabled, I can't directly read or compare its content with the code implementation."
+	session.AddAssistantMessage(content, nil)
+	return content, 1, nil
+}
+
+type executionNoteCaptureExecutor struct {
+	responses []string
+	notes     []string
+	users     []string
+	calls     int
+}
+
+func (e *executionNoteCaptureExecutor) RunLoop(_ context.Context, session *Session) (string, int, error) {
+	e.notes = append(e.notes, session.TurnExecutionNote())
+	for i := len(session.Messages()) - 1; i >= 0; i-- {
+		if session.Messages()[i].Role == "user" {
+			e.users = append(e.users, session.Messages()[i].Content)
+			break
+		}
+	}
+	var content string
+	if e.calls < len(e.responses) {
+		content = e.responses[e.calls]
+	}
+	if content == "" {
+		content = "stub response"
+	}
+	e.calls++
+	session.AddAssistantMessage(content, nil)
+	return content, 1, nil
+}
+
+type memoryContextCaptureExecutor struct {
+	memoryContexts []string
+}
+
+func (e *memoryContextCaptureExecutor) RunLoop(_ context.Context, session *Session) (string, int, error) {
+	e.memoryContexts = append(e.memoryContexts, session.MemoryContext())
+	session.AddAssistantMessage("The answer is 4.", nil)
+	return "The answer is 4.", 1, nil
+}
+
 type mismatchedArtifactRetryExecutor struct {
 	calls int
 }
@@ -132,10 +181,15 @@ func (e *emptyAfterToolProgressExecutor) RunLoop(_ context.Context, session *Ses
 // stubRetriever is a minimal MemoryRetriever for pipeline tests.
 type stubRetriever struct {
 	result string
+	active string
 }
 
 func (s *stubRetriever) Retrieve(_ context.Context, _, _ string, _ int) string {
 	return s.result
+}
+
+func (s *stubRetriever) RetrieveActiveContext(_ context.Context, _ string, _ int) string {
+	return s.active
 }
 
 func TestPipeline_Run_SimpleMessage(t *testing.T) {
@@ -223,6 +277,27 @@ func TestPipeline_Run_UsesCallerSuppliedTurnID(t *testing.T) {
 	var stored string
 	if err := store.QueryRowContext(context.Background(), `SELECT id FROM turns WHERE id = ?`, turnID).Scan(&stored); err != nil {
 		t.Fatalf("query caller-supplied turn: %v", err)
+	}
+}
+
+func TestPipeline_Run_HardGuardExhaustionDoesNotReturnFalseCapabilityDenial(t *testing.T) {
+	store := testutil.TempStore(t)
+	exec := &falseCapabilityDenialExecutor{}
+	pipe := New(PipelineDeps{
+		Store:    store,
+		Executor: exec,
+		Guards:   DefaultGuardChain(),
+	})
+
+	outcome, err := pipe.Run(context.Background(), PresetAPI(), Input{
+		Content: "Please review all of the subdirectories associated with the project at ~/code/roboticus and try to locate the architecture documentation.",
+		AgentID: "test-agent",
+	})
+	if err == nil {
+		t.Fatalf("expected hard guard exhaustion error, got outcome content: %q", outcome.Content)
+	}
+	if exec.calls < 3 {
+		t.Fatalf("executor calls = %d, want at least 3 bounded attempts", exec.calls)
 	}
 }
 
@@ -738,5 +813,104 @@ func TestPipeline_StoresUserMessage(t *testing.T) {
 	_ = row.Scan(&msgCount)
 	if msgCount < 1 {
 		t.Error("user message should have been stored")
+	}
+}
+
+func TestPipeline_ShortFollowupExpansionDoesNotRewriteStoredUserMessage(t *testing.T) {
+	store := testutil.TempStore(t)
+	exec := &executionNoteCaptureExecutor{responses: []string{
+		"The next step is to inspect page HTML/body content for score elements. Please confirm if I should proceed.",
+		"I proceeded with the Metacritic score extraction.",
+	}}
+	pipe := New(PipelineDeps{Store: store, Executor: exec})
+	cfg := PresetAPI()
+	cfg.ShortFollowupExpansion = true
+
+	first, err := pipe.Run(context.Background(), cfg, Input{
+		Content: "Get the Metacritic score for Vampire Crawlers",
+		AgentID: "duncan",
+	})
+	if err != nil {
+		t.Fatalf("first run failed: %v", err)
+	}
+	_, err = pipe.Run(context.Background(), cfg, Input{
+		SessionID: first.SessionID,
+		Content:   "Please do",
+		AgentID:   "duncan",
+	})
+	if err != nil {
+		t.Fatalf("follow-up run failed: %v", err)
+	}
+
+	if len(exec.users) < 2 {
+		t.Fatalf("executor captured %d user turns, want at least 2", len(exec.users))
+	}
+	if exec.users[1] != "Please do" {
+		t.Fatalf("durable session user message = %q, want original follow-up", exec.users[1])
+	}
+	if len(exec.notes) < 2 || !strings.Contains(strings.ToLower(exec.notes[1]), "pending action confirmed") {
+		t.Fatalf("execution note did not receive resolved continuation context: %#v", exec.notes)
+	}
+
+	rows, err := store.QueryContext(context.Background(),
+		`SELECT content FROM session_messages WHERE session_id = ? AND role = 'user' ORDER BY created_at ASC`,
+		first.SessionID,
+	)
+	if err != nil {
+		t.Fatalf("query stored user messages: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var stored []string
+	for rows.Next() {
+		var content string
+		if err := rows.Scan(&content); err != nil {
+			t.Fatalf("scan stored user message: %v", err)
+		}
+		stored = append(stored, content)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate stored user messages: %v", err)
+	}
+	if len(stored) != 2 {
+		t.Fatalf("stored user message count = %d, want 2: %#v", len(stored), stored)
+	}
+	if stored[1] != "Please do" {
+		t.Fatalf("stored follow-up = %q, want original operator text", stored[1])
+	}
+	joined := strings.ToLower(strings.Join(stored, "\n"))
+	for _, marker := range []string{
+		"pending action confirmed",
+		"user follow-up is a pending-action continuation",
+		"previous assistant reply excerpt",
+	} {
+		if strings.Contains(joined, marker) {
+			t.Fatalf("stored user transcript contains framework scaffold %q: %#v", marker, stored)
+		}
+	}
+}
+
+func TestPipeline_LightweightTurnStillReceivesActiveWorkingMemory(t *testing.T) {
+	store := testutil.TempStore(t)
+	exec := &memoryContextCaptureExecutor{}
+	pipe := New(PipelineDeps{
+		Store:     store,
+		Executor:  exec,
+		Retriever: &stubRetriever{active: "[Active Memory]\n\n[Working State]\n- Current topic: arithmetic validation"},
+	})
+	cfg := PresetAPI()
+
+	_, err := pipe.Run(context.Background(), cfg, Input{
+		Content: "What is 2+2?",
+		AgentID: "duncan",
+	})
+	if err != nil {
+		t.Fatalf("pipeline run failed: %v", err)
+	}
+	if len(exec.memoryContexts) != 1 {
+		t.Fatalf("captured %d memory contexts, want 1", len(exec.memoryContexts))
+	}
+	if !strings.Contains(exec.memoryContexts[0], "Current topic: arithmetic validation") {
+		t.Fatalf("lightweight turn did not receive active working memory: %q", exec.memoryContexts[0])
 	}
 }

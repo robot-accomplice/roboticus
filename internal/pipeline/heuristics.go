@@ -12,6 +12,9 @@ package pipeline
 import (
 	"fmt"
 	"strings"
+
+	"roboticus/internal/llm"
+	"roboticus/internal/session"
 )
 
 // isShortFollowupForPreviousReply detects brief messages that reference the
@@ -43,34 +46,96 @@ func isShortReferentialExecutionFollowup(content string) bool {
 	if len(lower) > 96 {
 		return false
 	}
-	markers := []string{
-		"examine it",
-		"inspect it",
-		"scan it",
-		"read it",
-		"open it",
-		"look at it",
-		"look in it",
-		"check it",
-		"test that",
-		"test it",
-		"examine that",
-		"inspect that",
-		"scan that",
-		"read that",
-		"open that",
-		"look at that",
-		"look there",
-		"that folder",
-		"that directory",
-		"that section",
+	return hasExecutionVerb(lower) && hasReferentialTarget(lower)
+}
+
+func isShortStructuralActionReference(content string) bool {
+	lower := strings.TrimSpace(strings.ToLower(content))
+	if lower == "" || len(lower) > 160 || strings.Contains(lower, "?") {
+		return false
 	}
-	for _, m := range markers {
-		if lower == m || lower == m+"." || lower == m+" please" || strings.Contains(lower, m) {
+	if isClearlyNegativeContinuation(lower) {
+		return false
+	}
+	return hasExecutionVerb(lower) && referencesPriorAssistantAction(lower)
+}
+
+func hasExecutionVerb(lower string) bool {
+	for _, verb := range []string{
+		"audit", "check", "compare", "continue", "execute", "examine",
+		"extract", "inspect", "locate", "open", "parse", "pull",
+		"read", "review", "run", "scan", "test", "verify",
+	} {
+		if lower == verb || strings.Contains(lower, verb+" ") || strings.Contains(lower, " "+verb) {
 			return true
 		}
 	}
 	return false
+}
+
+func hasReferentialTarget(lower string) bool {
+	for _, target := range []string{
+		" it", " that", " there", " them", " folder", " directory", " section",
+	} {
+		if strings.Contains(" "+lower, target) {
+			return true
+		}
+	}
+	return false
+}
+
+func referencesPriorAssistantAction(lower string) bool {
+	for _, ref := range []string{
+		"next step", "next steps", "last message", "previous message",
+		"what you identified", "what you said", "your last",
+	} {
+		if strings.Contains(lower, ref) {
+			return true
+		}
+	}
+	return false
+}
+
+func isShortStateContinuation(content string) bool {
+	lower := strings.TrimSpace(strings.ToLower(content))
+	if lower == "" || len(lower) > 96 {
+		return false
+	}
+	if len(strings.Fields(lower)) > 6 {
+		return false
+	}
+	if strings.Contains(lower, "?") {
+		return false
+	}
+	if isClearlyNegativeContinuation(lower) {
+		return false
+	}
+	return true
+}
+
+func isClearlyNegativeContinuation(lower string) bool {
+	trimmed := strings.Trim(lower, " \t\r\n.!;:")
+	negative := []string{
+		"no",
+		"no thanks",
+		"not yet",
+		"stop",
+		"cancel",
+		"don't",
+		"do not",
+		"never mind",
+		"nevermind",
+	}
+	for _, marker := range negative {
+		if trimmed == marker || strings.HasPrefix(trimmed, marker+" ") {
+			return true
+		}
+	}
+	return false
+}
+
+func assistantProposedNextAction(content string) bool {
+	return session.DetectPendingActionArtifact(content) != nil
 }
 
 // isShortReactiveSarcasm detects brief sarcastic reactions (≤32 chars).
@@ -124,10 +189,7 @@ func ContextualizeShortFollowup(session *Session, content string) (string, bool)
 	isContradiction := isShortContradictionFollowup(content)
 	isFollowup := isShortFollowupForPreviousReply(content)
 	isReferentialExecution := isShortReferentialExecutionFollowup(content)
-
-	if !isSarcasm && !isContradiction && !isFollowup && !isReferentialExecution {
-		return content, false
-	}
+	isStructuralActionReference := isShortStructuralActionReference(content)
 
 	// Find last assistant message.
 	msgs := session.Messages()
@@ -141,6 +203,20 @@ func ContextualizeShortFollowup(session *Session, content string) (string, bool)
 
 	if previousAssistant == "" {
 		return content, isSarcasm || isContradiction
+	}
+
+	pending := session.PendingActionArtifact()
+	hasPendingActionState := pending != nil || assistantProposedNextAction(previousAssistant)
+	isStateContinuation := !isSarcasm &&
+		!isContradiction &&
+		!isFollowup &&
+		!isReferentialExecution &&
+		!isStructuralActionReference &&
+		hasPendingActionState &&
+		isShortStateContinuation(content)
+
+	if !isSarcasm && !isContradiction && !isFollowup && !isReferentialExecution && !isStructuralActionReference && !isStateContinuation {
+		return content, false
 	}
 
 	correction := isSarcasm || isContradiction
@@ -165,11 +241,27 @@ func ContextualizeShortFollowup(session *Session, content string) (string, bool)
 		), correction
 	}
 
-	if isReferentialExecution {
+	if isReferentialExecution || isStructuralActionReference || isStateContinuation {
+		if pending != nil {
+			originalTask := lastUserBeforeLastAssistant(session.Messages())
+			return fmt.Sprintf(
+				"PENDING ACTION CONFIRMED\n"+
+					"Confirmed next action: %s\n"+
+					"Instruction: execute the confirmed next action now; do not merely restate or re-answer the background task.\n"+
+					"Background task: %s\n"+
+					"Previous assistant reply excerpt: %s\n"+
+					"User confirmation: %s",
+				quoteOrUnknown(pending.ProposedAction),
+				quoteOrUnknown(originalTask),
+				quoteOrUnknown(pending.SourceAssistantExcerpt),
+				content,
+			), false
+		}
 		excerpt := truncateChars(previousAssistant, 360)
 		return fmt.Sprintf(
-			"User follow-up is a referential execution request. Resolve pronouns like 'it', 'that', or 'there' against the immediately previous assistant reply before acting. "+
-				"If the referenced target is a child of an allowed path, attempt the relevant tool instead of asking for separate configuration; the tool/policy result is authoritative.\n"+
+			"User follow-up is a state-based continuation or referential execution request. Resolve it against the immediately previous assistant reply before acting. "+
+				"If the previous assistant reply proposed a concrete next action, resume that pending action. If the request uses pronouns or references the prior response, resolve the target against the previous assistant reply. "+
+				"If the referenced target is a child of an allowed path or an already-retrieved artifact, attempt the relevant tool/parse step instead of asking for separate configuration; the tool/policy result is authoritative.\n"+
 				"Previous assistant reply excerpt:\n\"%s\"\n\nUser request:\n%s",
 			excerpt, content,
 		), false
@@ -192,4 +284,31 @@ func truncateChars(s string, maxChars int) string {
 		return s
 	}
 	return string(runes[:maxChars])
+}
+
+func lastUserBeforeLastAssistant(messages []llm.Message) string {
+	lastAssistant := -1
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "assistant" && strings.TrimSpace(messages[i].Content) != "" {
+			lastAssistant = i
+			break
+		}
+	}
+	if lastAssistant <= 0 {
+		return ""
+	}
+	for i := lastAssistant - 1; i >= 0; i-- {
+		if messages[i].Role == "user" && strings.TrimSpace(messages[i].Content) != "" {
+			return truncateChars(strings.TrimSpace(messages[i].Content), 360)
+		}
+	}
+	return ""
+}
+
+func quoteOrUnknown(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "(unknown)"
+	}
+	return fmt.Sprintf("%q", s)
 }

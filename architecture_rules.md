@@ -82,6 +82,25 @@ local patch. The correct first question is not "how do I fix this route?" but
 
 ## 4. Primary Architectural Requirements
 
+### 4.0 No canned user- or operator-facing prose
+
+#### Normative Requirements
+
+Implementations MUST NOT append, substitute, or inject fixed template prose into
+agent responses, guard-chain output, tool-result facades shown to users, or
+HTTP/API response bodies unless there is no alternative (for example, a body
+required verbatim by an external protocol).
+
+Implementations MUST prefer explanations grounded in model-generated text, tool
+results, structured errors, logs, or telemetry.
+
+#### Rationale
+
+Canned blocks override the model, hide the real denial or error, and train
+operators to distrust output. Policy and diagnostics already belong in tool
+results, structured events, and logs; user-visible text should trace to those
+sources.
+
 ### 4.1 Connector-Factory Boundary
 
 #### Normative Requirements
@@ -199,6 +218,19 @@ Differences between API, streaming, channel, and cron behavior MUST be
 expressed through `PipelineConfig` or an equivalent pipeline-owned policy
 surface. They MUST NOT be encoded by duplicating or omitting business logic in
 connectors.
+
+API and dashboard webchannels are distinct connector classes, not interchangeable
+paths. `/api/**` routes MUST be treated as externally addressable,
+independently permission-controlled control/data surfaces for remote management,
+automation, debugging, bootstrap, and explicit API-client actions. Dashboard
+webchannels MUST be treated as dashboard-private delivery channels for state
+snapshots and UI event streams.
+
+The dashboard MUST NOT use direct API polling as its normal interface control
+path. When the dashboard and an API route expose the same domain truth, both
+MUST consume the same shared producer/composition seam. A webchannel MUST NOT
+reimplement business logic, and an API route MUST NOT become the dashboard's
+implicit state bus.
 
 #### Rationale
 
@@ -517,6 +549,8 @@ silent boundary decay.
 
 AI coding assistants working in this repository:
 
+- MUST NOT add canned template prose to agent-visible surfaces (guards, stitched
+  responses, tool facades, APIs) except when unavoidable per an external protocol
 - MUST read `ARCHITECTURE.md` before changing pipeline or connector code
 - MUST treat connector logic growth as a likely architectural bug
 - MUST prefer shared-pipeline fixes over local handler patches
@@ -541,6 +575,8 @@ behavior is conservative at the boundary and decisive inside the correct owner.
 
 Reviewers, contributors, and AI assistants SHOULD ask all of the following:
 
+- Does this change inject canned user- or operator-facing prose where model or
+  tool-grounded output is expected?
 - Does this change add business logic to a connector?
 - Does this change duplicate a rule that already exists elsewhere?
 - If another channel were added tomorrow, would it inherit this behavior

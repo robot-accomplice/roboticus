@@ -21,6 +21,8 @@ Environment:
   SOAK_SESSION_ISOLATION        1=new session per scenario (default: 1)
   SOAK_AGENT_ID                 Agent ID for session creation (default: duncan)
   SOAK_REPORT_PATH              JSON report output path
+  SOAK_DB_SNAPSHOT_PATH         Optional retained state.db snapshot path.
+                                Default: <SOAK_REPORT_PATH>.state.db.
   SOAK_SERVER_MODE              external|clone|fresh (default: external)
   SOAK_SOURCE_ROOT              Source roboticus home for clone/fresh (default: ~/.roboticus)
   SOAK_REPO_ROOT                Repo root used to launch `go run . serve`
@@ -75,6 +77,7 @@ AGENT_ID = os.environ.get("SOAK_AGENT_ID", "duncan")
 REPORT_PATH = os.environ.get(
     "SOAK_REPORT_PATH", "/tmp/goboticus-agent-behavior-soak-report.json"
 )
+DB_SNAPSHOT_PATH = os.environ.get("SOAK_DB_SNAPSHOT_PATH", "").strip()
 SERVER_MODE = os.environ.get("SOAK_SERVER_MODE", "external").strip().lower()
 
 # v1.0.6: orthogonal cache toggles for "the same soak in two states."
@@ -236,6 +239,90 @@ def sha256_file(path: Path) -> Optional[str]:
         for chunk in iter(lambda: fh.read(1024 * 1024), b""):
             hasher.update(chunk)
     return hasher.hexdigest()
+
+
+def git_commit() -> str:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short=12", "HEAD"],
+            cwd=str(REPO_ROOT),
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        return result.stdout.strip() or "unknown"
+    except Exception:
+        return "unknown"
+
+
+def git_dirty() -> bool:
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=str(REPO_ROOT),
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        return bool(result.stdout.strip())
+    except Exception:
+        return True
+
+
+def first_toml_string(content: str, key: str) -> Optional[str]:
+    pattern = re.compile(rf"(?m)^\s*{re.escape(key)}\s*=\s*(['\"])(.*?)\1\s*(?:#.*)?$")
+    match = pattern.search(content)
+    if not match:
+        return None
+    return match.group(2)
+
+
+def config_evidence(config_path: Optional[Path]) -> Dict[str, object]:
+    evidence: Dict[str, object] = {
+        "agent_id": AGENT_ID,
+        "config_path": str(config_path) if config_path else None,
+        "config_sha256": sha256_file(config_path) if config_path else None,
+        "providers_file": None,
+        "providers_file_sha256": None,
+        "model": None,
+    }
+    if config_path is None or not config_path.exists():
+        return evidence
+    try:
+        text = config_path.read_text(encoding="utf-8")
+    except Exception:
+        return evidence
+    providers_file = first_toml_string(text, "providers_file")
+    model = first_toml_string(text, "model")
+    evidence["providers_file"] = providers_file
+    evidence["model"] = model
+    if providers_file:
+        provider_path = Path(providers_file).expanduser()
+        if not provider_path.is_absolute():
+            provider_path = config_path.parent / provider_path
+        evidence["providers_file_sha256"] = sha256_file(provider_path)
+    return evidence
+
+
+def copy_sqlite_snapshot(src: Path, dst: Path) -> None:
+    if not src.exists():
+        return
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        import sqlite3
+        source = sqlite3.connect(str(src))
+        try:
+            target = sqlite3.connect(str(dst))
+            try:
+                source.backup(target)
+            finally:
+                target.close()
+        finally:
+            source.close()
+    except Exception:
+        shutil.copy2(src, dst)
 
 
 def copy_if_exists(src: Path, dst: Path) -> None:
@@ -1306,14 +1393,40 @@ def run() -> int:
 
     total = len(results)
     failed = [r for r in results if not r["passed"]]
+    db_snapshot_path: Optional[Path] = None
+    if managed is not None:
+        # Stop the managed daemon before taking the RCA snapshot. The soak has
+        # finished issuing requests, and a quiet SQLite file is stronger
+        # evidence than a path into an about-to-be-deleted temp root.
+        stop_managed_server(managed)
+        snapshot_raw = DB_SNAPSHOT_PATH or (REPORT_PATH + ".state.db")
+        db_snapshot_path = Path(snapshot_raw).expanduser()
+        copy_sqlite_snapshot(managed.db_path, db_snapshot_path)
+    models_seen = sorted(
+        {
+            str(row.get("model"))
+            for row in results
+            if isinstance(row.get("model"), str) and str(row.get("model"))
+        }
+    )
     report = {
         "runtime": "goboticus",
         "base_url": BASE_URL,
         "server_mode": SERVER_MODE,
+        "git_commit": git_commit(),
+        "git_dirty": git_dirty(),
         "prompt_compression": PROMPT_COMPRESSION_MODE,
         "prompt_compression_ratio": PROMPT_COMPRESSION_RATIO,
+        "cache": {
+            "clear_cache": CLEAR_CACHE,
+            "bypass_cache": BYPASS_CACHE,
+        },
+        "session_isolation": SESSION_ISOLATION,
+        "scenario_filter": [scenario.name for scenario in scenarios],
         "timeout_s": TIMEOUT,
         "max_latency_s": MAX_LATENCY,
+        "models_seen": models_seen,
+        "config_evidence": config_evidence(managed.config_path if managed else None),
         "total": total,
         "passed": total - len(failed),
         "failed": len(failed),
@@ -1329,6 +1442,7 @@ def run() -> int:
             "workspace_path": str(managed.workspace_path),
             "pid_path": str(managed.pid_path),
             "server_log": str(managed.server_log),
+            "state_db_snapshot": str(db_snapshot_path) if db_snapshot_path else None,
             "backup_dir": str(managed.backup_dir),
             "real_config_sha256_before": managed.before_hashes["config"],
             "real_db_sha256_before": managed.before_hashes["db"],

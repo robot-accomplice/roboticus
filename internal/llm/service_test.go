@@ -23,6 +23,31 @@ func TestService_Status_Empty(t *testing.T) {
 	}
 }
 
+func TestServiceStatus_DoesNotReportClosedCircuitAsHealthy(t *testing.T) {
+	svc, err := NewService(ServiceConfig{
+		Providers: []Provider{{Name: "test", URL: "http://example.invalid", Format: FormatOpenAI}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	statuses := svc.Status()
+	if len(statuses) != 1 {
+		t.Fatalf("statuses = %d, want 1", len(statuses))
+	}
+	if statuses[0].State != CircuitClosed {
+		t.Fatalf("circuit state = %v, want closed", statuses[0].State)
+	}
+	if statuses[0].HealthState == "healthy" {
+		t.Fatal("closed circuit state must not be rendered as provider health")
+	}
+	if statuses[0].HealthState != "unknown" {
+		t.Fatalf("health_state = %q, want unknown without live probe", statuses[0].HealthState)
+	}
+	if statuses[0].Evidence == "" {
+		t.Fatal("status must include evidence source")
+	}
+}
+
 func TestService_Escalation_Init(t *testing.T) {
 	svc, _ := NewService(ServiceConfig{}, nil)
 	if svc.Escalation == nil {

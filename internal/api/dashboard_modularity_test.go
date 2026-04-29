@@ -143,6 +143,217 @@ func TestDashboard_TableLegibilityContract(t *testing.T) {
 	}
 }
 
+func TestDashboard_PromptPerformanceTuningContract(t *testing.T) {
+	data, err := os.ReadFile("dashboard_spa.html")
+	if err != nil {
+		t.Skipf("dashboard_spa.html not found: %v", err)
+	}
+	content := string(data)
+
+	required := []string{
+		`data-eff-tab="tuning"`,
+		`>Tuning</button>`,
+		`if (effTab === 'tuning')`,
+		`Quick Optimizations`,
+		`Semantic caching is already enabled`,
+		`No concrete action returned by analysis`,
+	}
+	for _, needle := range required {
+		if !strings.Contains(content, needle) {
+			t.Errorf("dashboard_spa.html missing prompt performance tuning contract string %q", needle)
+		}
+	}
+}
+
+func TestDashboard_WorkspaceOrchestratorShelterContract(t *testing.T) {
+	data, err := os.ReadFile("dashboard_spa.html")
+	if err != nil {
+		t.Skipf("dashboard_spa.html not found: %v", err)
+	}
+	content := string(data)
+
+	if strings.Count(content, `!== 'orchestrator'`) < 3 {
+		t.Fatal("workspace shelter logic must exclude orchestrators from idle-agent hiding and badge counts")
+	}
+	required := []string{
+		`stateKey === 'sleeping' ? 'sleeping'`,
+		`var isSleeping = isAgent && String(bot.state || '').toLowerCase() === 'sleeping'`,
+		`ctx.fillText('Z'`,
+		`eyeY - 1`,
+		`App._wsSubscribe(['workspace']);`,
+		`'workspace.snapshot': function(data)`,
+		`data-agents-tab="workspace">Workspace</button>`,
+		`agents-workspace-tab`,
+		`content.style.padding = '1.5rem'`,
+		`hash === 'workspace'`,
+	}
+	for _, needle := range required {
+		if !strings.Contains(content, needle) {
+			t.Errorf("dashboard_spa.html missing sleeping orchestrator contract string %q", needle)
+		}
+	}
+	if strings.Contains(content, `renderWorkspace: function() {
+      return api('/api/workspace/state')`) {
+		t.Fatal("workspace render must be websocket-driven, not direct API-driven")
+	}
+	if strings.Contains(content, `workspaceCanvasActive ? '0 0 0 0'`) {
+		t.Fatal("workspace tab must preserve the normal Agents content padding")
+	}
+}
+
+func TestDashboard_SessionsOwnContextTab(t *testing.T) {
+	data, err := os.ReadFile("dashboard_spa.html")
+	if err != nil {
+		t.Skipf("dashboard_spa.html not found: %v", err)
+	}
+	content := string(data)
+
+	required := []string{
+		`data-sessions-tab="list">List</button>`,
+		`data-sessions-tab="context">Context</button>`,
+		`hash === 'context'`,
+		`App._sessionsTab = 'context'`,
+		`var sessions = data.sessions || [];`,
+		`(s.turn_count || 0) > 0`,
+	}
+	for _, needle := range required {
+		if !strings.Contains(content, needle) {
+			t.Errorf("dashboard_spa.html missing sessions/context contract string %q", needle)
+		}
+	}
+	if strings.Contains(content, `href="#context" data-page="context"`) {
+		t.Fatal("Context must not be exposed as a top-level dashboard navigation item")
+	}
+}
+
+func TestDashboard_ContextFootprintGraphContract(t *testing.T) {
+	data, err := os.ReadFile("dashboard_spa.html")
+	if err != nil {
+		t.Skipf("dashboard_spa.html not found: %v", err)
+	}
+	content := string(data)
+
+	required := []string{
+		`function renderContextFootprint(ctx, compact)`,
+		`REQUEST CONTEXT FOOTPRINT`,
+		`ctx-k-tools`,
+		`.ctx-turn-detail .ctx-bar`,
+		`ctx-k-current_user`,
+		`ctx-k-unused`,
+		`data-footprint-target`,
+		`ctx-footprint-shell`,
+		`ctx-bar ctx-bar-vertical`,
+		`ctx-footprint-pane`,
+		`ctx-slice-label`,
+		`ctx-detail-metric`,
+		`ctx-footprint-detail`,
+		`seg.details`,
+		`zero-slice`,
+		`ctx-slice-compact`,
+		`ctx-slice-tiny`,
+		`data-slice-label`,
+		`style="flex-basis:' + displayPct + '%;color:var(--text)"`,
+		`details.length > 0 ? ' · ' + details.length + ' items' : ''`,
+		`classList.toggle('active', el === ctxSegment)`,
+		`No item-level details recorded for this segment.`,
+	}
+	for _, needle := range required {
+		if !strings.Contains(content, needle) {
+			t.Errorf("dashboard_spa.html missing context footprint graph contract string %q", needle)
+		}
+	}
+}
+
+func TestDashboard_ContextSessionInventoryContract(t *testing.T) {
+	data, err := os.ReadFile("dashboard_spa.html")
+	if err != nil {
+		t.Skipf("dashboard_spa.html not found: %v", err)
+	}
+	content := string(data)
+
+	required := []string{
+		`var turnCount = s.turn_count || 0;`,
+		`var messageCount = s.message_count || 0;`,
+		`var traceCount = s.trace_count || 0;`,
+		`var snapshotCount = s.snapshot_count || 0;`,
+		`var evidence = traceCount + ' traces / ' + snapshotCount + ' snapshots';`,
+		`var latest = s.last_activity_at || s.updated_at || s.created_at || '';`,
+		`<th>Volume</th><th>Evidence</th><th>Tokens</th><th>Cost</th><th>Latest Activity</th>`,
+		`+ turnCount + ' turns</span>`,
+		`+ messageCount + ' msgs</span>`,
+	}
+	for _, needle := range required {
+		if !strings.Contains(content, needle) {
+			t.Errorf("dashboard_spa.html missing context session inventory contract string %q", needle)
+		}
+	}
+}
+
+func TestDashboard_TurnAnalyzeUsesContextTurnIDContract(t *testing.T) {
+	data, err := os.ReadFile("dashboard_spa.html")
+	if err != nil {
+		t.Skipf("dashboard_spa.html not found: %v", err)
+	}
+	content := string(data)
+
+	required := []string{
+		`data-analyze-turn="' + esc(self._ctxActiveTurn.id) + '"`,
+		`api('/api/turns/' + encodeURIComponent(turnId) + '/analyze', { method: 'POST' })`,
+		`var found = App._ctxTurns.find(function(t) { return t.id === turnId; });`,
+	}
+	for _, needle := range required {
+		if !strings.Contains(content, needle) {
+			t.Errorf("dashboard_spa.html missing turn analyze ID contract string %q", needle)
+		}
+	}
+}
+
+func TestDashboard_TurnAnalyzeRendersCanonicalAnalysisPayload(t *testing.T) {
+	data, err := os.ReadFile("dashboard_spa.html")
+	if err != nil {
+		t.Skipf("dashboard_spa.html not found: %v", err)
+	}
+	content := string(data)
+
+	required := []string{
+		`var analysisText = r.analysis || r.summary || '';`,
+		`esc(analysisText || 'No analysis returned.')`,
+		`var tips = r.heuristic_tips || r.tips || [];`,
+		`No separate heuristic tips.`,
+	}
+	for _, needle := range required {
+		if !strings.Contains(content, needle) {
+			t.Errorf("dashboard_spa.html missing canonical turn analysis renderer string %q", needle)
+		}
+	}
+	if strings.Contains(content, `r.summary || 'No summary'`) {
+		t.Fatal("turn analysis renderer must not prefer obsolete summary field")
+	}
+	if strings.Contains(content, `var tips = r.tips || []`) {
+		t.Fatal("turn analysis renderer must prefer heuristic_tips from the canonical route contract")
+	}
+}
+
+func TestDashboard_RuntimeVersionVisibleInHeaderAndFooter(t *testing.T) {
+	data, err := os.ReadFile("dashboard_spa.html")
+	if err != nil {
+		t.Skipf("dashboard_spa.html not found: %v", err)
+	}
+	content := string(data)
+
+	required := []string{
+		`<div class="sidebar-footer">v<span id="version">&mdash;</span></div>`,
+		`<span>v<span id="runtime-version">&mdash;</span></span>`,
+		`var runtimeVersion = document.getElementById('runtime-version');`,
+		`if (runtimeVersion) runtimeVersion.textContent = healthData.version || 'unknown';`,
+	}
+	for _, needle := range required {
+		if !strings.Contains(content, needle) {
+			t.Errorf("dashboard_spa.html missing runtime version chrome contract string %q", needle)
+		}
+	}
+}
+
 func extractQuotedStrings(s string) []string {
 	var result []string
 	for {

@@ -637,6 +637,74 @@ func TestDiagnosticsStatusFromEvents_IgnoresAdvisoryStageLivenessWarning(t *test
 	}
 }
 
+func TestDiagnosticsStatusFromEvents_CleanGuardRetryRecoveryIsOK(t *testing.T) {
+	events := []TurnDiagnosticEvent{
+		{Type: "model_attempt_started", Status: "running"},
+		{Type: "model_attempt_finished", Status: "ok"},
+		{
+			Type:   "guard_retry_scheduled",
+			Status: "error",
+			Details: map[string]any{
+				"violations":   []string{"false_capability_denial"},
+				"retry_reason": "falsely denied capability despite selected tool surface",
+			},
+		},
+		{Type: "model_attempt_started", Status: "running"},
+		{Type: "model_attempt_finished", Status: "ok"},
+		{
+			Type:   "response_finalized",
+			Status: "ok",
+			Details: map[string]any{
+				"guard_violations": []string{},
+			},
+		},
+	}
+
+	status := diagnosticsStatusFromEvents(events)
+	if status != "ok" {
+		t.Fatalf("status = %q, want ok", status)
+	}
+
+	dr := NewTurnDiagnosticsRecorder("sess-1", "turn-recovered", "telegram")
+	dr.SetSummaryField("status", "degraded")
+	for _, ev := range events {
+		dr.RecordEvent(ev.Type, ev.Status, "", "", ev.Details)
+	}
+	summary, _, ok := dr.SnapshotForFlush("")
+	if !ok {
+		t.Fatal("expected diagnostics snapshot")
+	}
+	if summary.Status != "ok" {
+		t.Fatalf("snapshot status = %q, want ok", summary.Status)
+	}
+}
+
+func TestDiagnosticsStatusFromEvents_UnresolvedGuardRetryStaysDegraded(t *testing.T) {
+	events := []TurnDiagnosticEvent{
+		{Type: "model_attempt_started", Status: "running"},
+		{Type: "model_attempt_finished", Status: "ok"},
+		{
+			Type:   "guard_retry_scheduled",
+			Status: "error",
+			Details: map[string]any{
+				"violations": []string{"false_capability_denial"},
+			},
+		},
+		{
+			Type:   "response_finalized",
+			Status: "ok",
+			Details: map[string]any{
+				"guard_violations": []string{"false_capability_denial"},
+			},
+		},
+	}
+
+	status := diagnosticsStatusFromEvents(events)
+	if status != "degraded" {
+		t.Fatalf("status = %q, want degraded", status)
+	}
+}
+
 func TestPipelineRun_PersistsVerifierDiagnosticsAgainstTurnRecord(t *testing.T) {
 	store := testutil.TempStore(t)
 	exec := &sequencedExecutor{responses: []string{

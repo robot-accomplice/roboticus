@@ -24,6 +24,9 @@ import (
 func (d *Daemon) run() {
 	ctx, cancel := context.WithCancel(context.Background())
 	d.cancel = cancel
+	if d.skillInv != nil {
+		d.skillInv.StartWatchers(ctx, &d.wg)
+	}
 
 	// ── Startup Phase: MCP server connections (Rust parity) ──────────────
 	// Connect to all configured MCP servers with a 30-second timeout.
@@ -171,8 +174,9 @@ func (d *Daemon) run() {
 		}()
 	}
 
-	// Memory consolidation heartbeat — runs the dreaming cycle periodically.
-	// Matches Rust's heartbeat-triggered consolidation.
+	// Memory curation heartbeat — runs the post-turn memory lifecycle
+	// periodically. Consolidation is only the deduplication/promotion/distillation
+	// subset.
 	d.wg.Add(1)
 	go func() {
 		defer d.wg.Done()
@@ -239,7 +243,7 @@ func (d *Daemon) newConsolidationHeartbeat() (*schedule.HeartbeatDaemon, schedul
 				Int("deduped", report.Deduped).
 				Int("promoted", report.Promoted).
 				Int("pruned", report.Pruned).
-				Msg("memory consolidation completed")
+				Msg("memory curation completed")
 			return fmt.Sprintf("indexed=%d deduped=%d promoted=%d pruned=%d", report.Indexed, report.Deduped, report.Promoted, report.Pruned)
 		},
 	}
@@ -283,7 +287,7 @@ func (d *Daemon) newMaintenanceHeartbeat() (*schedule.HeartbeatDaemon, schedule.
 	}
 }
 
-// runConsolidationHeartbeat runs memory consolidation on a periodic schedule.
+// runConsolidationHeartbeat runs memory curation on a periodic schedule.
 // Matches Rust's heartbeat-triggered MemoryPrune signal.
 func (d *Daemon) runConsolidationHeartbeat(ctx context.Context) {
 	// Initial delay to let the system settle after startup.
@@ -294,7 +298,7 @@ func (d *Daemon) runConsolidationHeartbeat(ctx context.Context) {
 	}
 
 	daemon, intervals, tickCtxFn := d.newConsolidationHeartbeat()
-	log.Info().Dur("interval", intervals.Memory).Msg("memory consolidation heartbeat started")
+	log.Info().Dur("interval", intervals.Memory).Msg("memory curation heartbeat started")
 	daemon.RunDistributed(ctx, intervals, tickCtxFn)
 }
 

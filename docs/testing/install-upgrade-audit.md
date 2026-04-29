@@ -49,6 +49,32 @@ This preserves the correct contract:
 - explicit config refresh remains strict and checksum-verified
 - manual state repair is fallback-only for exceptional/operator-directed recovery
 
+## v1.0.8 Cleanup Contract
+
+The upgrade path and `mechanic --repair` must share the same safe cleanup
+primitives. A repaired install is only healthy when the command can explain what
+was repaired, what was skipped, and what still needs manual action.
+
+Required cleanup scope:
+
+- reconcile missing, legacy-named, or incomplete updater state from local
+  install artifacts
+- report and remove stale Windows updater sidecars when safe to delete
+- preserve customized provider and skill packs unless explicit refresh was
+  requested
+- repair known observability schema drift without requiring a database wipe
+- clean orphan ReAct trace rows and expose stale dead-letter state
+- remove stale or orphaned derived memory index/FTS rows after source memories
+  are quarantined, pruned, promoted, or otherwise made non-active
+- keep all repair steps idempotent so a second run reports skipped/unchanged
+  instead of performing another mutation
+
+`mechanic --repair` is the operator-facing recovery command for this class of
+install drift. v1.0.9 should extend mechanic with ranked diagnoses, repair
+recommendations, and reversible memory lifecycle repair as captured in
+[`v1.0.9-mechanic-memory-lifecycle-repair.md`](../plans/v1.0.9-mechanic-memory-lifecycle-repair.md),
+but v1.0.8 must keep the repair actions deterministic and bounded.
+
 ## Local Remediation Performed
 
 1. Verified local install state:
@@ -110,6 +136,9 @@ Before calling install/upgrade healthy, verify:
 6. explicit `--refresh-config` still fails on checksum mismatch
 7. release publication validates GitHub release assets and registry manifest coherence independently
 8. release-shaped binaries report the expected non-`dev` version from both `roboticus version` and startup surfaces
+9. stale Windows `.old*` sidecars are removed or reported as manual action
+10. `mechanic --repair` and `upgrade all` agree on updater-state reconciliation
+11. known observability schema drift is repaired in place rather than producing persistent 500s
 
 ## Follow-On Procedure Audit Work
 

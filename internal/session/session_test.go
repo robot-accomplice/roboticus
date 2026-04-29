@@ -106,6 +106,64 @@ func TestAddAssistantMessageWithPhase_TracksLatestAssistantProvenance(t *testing
 	}
 }
 
+func TestPendingActionArtifact_DerivedFromAssistantProceedPrompt(t *testing.T) {
+	s := New("sess-pending", "agent-1", "Duncan")
+	s.AddAssistantMessage("I need to proceed by examining the retrieved HTML content and extracting the relevant game scores. Please confirm if you would like me to proceed with this method.", nil)
+
+	artifact := s.PendingActionArtifact()
+	if artifact == nil {
+		t.Fatal("expected pending action artifact")
+	}
+	rendered := artifact.Render()
+	for _, want := range []string{
+		"PENDING ACTION",
+		"PROPOSED ACTION",
+		"retrieved HTML content",
+		"CONFIRMATION PROMPT",
+		"Please confirm",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("pending action artifact missing %q: %q", want, rendered)
+		}
+	}
+}
+
+func TestPendingActionArtifact_DerivedFromStructuredNextStepsWithoutConfirmationCue(t *testing.T) {
+	s := New("sess-structured-pending", "agent-1", "Duncan")
+	s.AddAssistantMessage(`The project contains architecture documents in docs/ and the repository root.
+
+Next Steps:
+1. Review ARCHITECTURE.md and architecture_rules.md.
+2. Compare those rules against cmd/, internal/, and docs/.
+3. Summarize architecture/documentation alignment.`, nil)
+
+	artifact := s.PendingActionArtifact()
+	if artifact == nil {
+		t.Fatal("expected pending action artifact from structured next steps")
+	}
+	if artifact.Evidence != "structured_next_steps" {
+		t.Fatalf("Evidence = %q, want structured_next_steps", artifact.Evidence)
+	}
+	for _, want := range []string{
+		"Review ARCHITECTURE.md",
+		"Compare those rules",
+		"Summarize architecture",
+	} {
+		if !strings.Contains(artifact.ProposedAction, want) {
+			t.Fatalf("ProposedAction missing %q: %q", want, artifact.ProposedAction)
+		}
+	}
+}
+
+func TestPendingActionArtifact_NotCreatedForOrdinarySuggestion(t *testing.T) {
+	s := New("sess-no-pending", "agent-1", "Duncan")
+	s.AddAssistantMessage("You could inspect the HTML next if useful.", nil)
+
+	if artifact := s.PendingActionArtifact(); artifact != nil {
+		t.Fatalf("ordinary suggestion should not create pending action: %#v", artifact)
+	}
+}
+
 func TestBuildTOTOF_UsesObservationWindowAndOpenIssues(t *testing.T) {
 	s := New("sess-4", "agent-1", "Duncan")
 	s.AddUserMessage("What is 2 + 2?")

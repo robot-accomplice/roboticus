@@ -115,6 +115,34 @@ func TestGetConfigSchema(t *testing.T) {
 	if len(routingMode.Enum) == 0 {
 		t.Error("expected models.routing.mode to have enum values")
 	}
+	for _, value := range routingMode.Enum {
+		if value == "round_robin" || value == "cost_aware" || value == "local_first" {
+			t.Fatalf("models.routing.mode advertised invalid core mode %q", value)
+		}
+	}
+
+	var modelPolicy *SchemaField
+	for i, f := range result.Fields {
+		if f.Name == "models.policy" {
+			modelPolicy = &result.Fields[i]
+			break
+		}
+	}
+	if modelPolicy == nil {
+		t.Fatal("expected models.policy object field in schema")
+	}
+	if len(modelPolicy.Properties["state"].Enum) == 0 {
+		t.Fatal("expected models.policy.state to expose enum metadata")
+	}
+	if len(modelPolicy.Properties["primary_reason_code"].Enum) == 0 {
+		t.Fatal("expected models.policy.primary_reason_code to expose enum metadata")
+	}
+	if len(modelPolicy.Properties["reason_codes"].ItemEnum) == 0 {
+		t.Fatal("expected models.policy.reason_codes to expose item enum metadata")
+	}
+	if modelPolicy.Properties["source"].Description == "" {
+		t.Fatal("expected models.policy.source to include explanatory metadata")
+	}
 
 	// Verify current == default when using DefaultConfig.
 	if agentName.Current != agentName.Default {

@@ -69,6 +69,11 @@ func (s *Session) BuildContinuationArtifact(remainingWork, continuationInstructi
 	}
 }
 
+// Messages converts the artifact into a minimal [system instruction, user
+// payload] pair. Prefer Render() and the agent loop's trailing-system-overlay
+// request path for LLM calls: Messages() drops full session history and is
+// retained only for legacy unit tests and gradual migration off synthetic
+// scaffolds.
 func (t TOTOF) Messages() []llm.Message {
 	payload := t.Render()
 	if payload == "" {
@@ -122,6 +127,9 @@ func (t TOTOF) Render() string {
 	return strings.TrimSpace(strings.Join(sections, "\n\n"))
 }
 
+// Messages converts the artifact into a minimal [system instruction, user
+// payload] pair. Prefer Render() and the trailing-system-overlay request path
+// — see TOTOF.Messages() deprecation note.
 func (c ContinuationArtifact) Messages() []llm.Message {
 	payload := c.Render()
 	if payload == "" {

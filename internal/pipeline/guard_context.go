@@ -21,6 +21,11 @@ type GuardContext struct {
 	// ToolResults are (tool_name, output) pairs from tool calls in this turn.
 	ToolResults []ToolResultEntry
 
+	// SelectedToolNames are the tool names selected for the current LLM request
+	// before execution. They prove capability availability; ToolResults prove
+	// execution outcome.
+	SelectedToolNames []string
+
 	// AgentName is the configured agent display name.
 	AgentName string
 
@@ -65,6 +70,7 @@ func toolOutputContainsAny(output string, markers []string) bool {
 }
 
 var policyOrSandboxDenialMarkers = []string{
+	"invoked policy:",
 	"policy denied:",
 	"not allowed",
 	"classified as forbidden",
@@ -119,6 +125,17 @@ func (gc *GuardContext) HasIntent(label string) bool {
 func (gc *GuardContext) HasToolResult(toolName string) bool {
 	for _, tr := range gc.ToolResults {
 		if tr.ToolName == toolName {
+			return true
+		}
+	}
+	return false
+}
+
+// HasSelectedTool returns true if the current request surface included the
+// named tool before model inference.
+func (gc *GuardContext) HasSelectedTool(toolName string) bool {
+	for _, name := range gc.SelectedToolNames {
+		if strings.EqualFold(strings.TrimSpace(name), strings.TrimSpace(toolName)) {
 			return true
 		}
 	}

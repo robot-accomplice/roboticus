@@ -83,6 +83,21 @@ func SkillCapabilityLexiconFromDB(store *db.Store) []string {
 	return corpus
 }
 
+// RuntimeCapabilityLexiconFromPruner returns capability-bearing text from the
+// live tool surface when the configured pruner exposes it. Task synthesis uses
+// this alongside DB-backed skill text so runtime tools are not misclassified as
+// missing skills before pruning/execution has a chance to run.
+func RuntimeCapabilityLexiconFromPruner(pruner ToolPruner) []string {
+	if pruner == nil {
+		return nil
+	}
+	provider, ok := pruner.(ToolCapabilityLexiconProvider)
+	if !ok {
+		return nil
+	}
+	return provider.ToolCapabilityLexicon()
+}
+
 // EnabledSkillSourcePathsFromDB returns concrete skill source files for enabled
 // skills that still have a loadable on-disk artifact.
 func EnabledSkillSourcePathsFromDB(store *db.Store) []string {

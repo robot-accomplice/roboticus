@@ -99,6 +99,95 @@ func TestExecutionTruthGuard_BlocksFalseGenericCapabilityDenialAfterToolEvidence
 	}
 }
 
+func TestExecutionTruthGuard_BlocksDisabledToolsClaimAfterToolEvidence(t *testing.T) {
+	g := &ExecutionTruthGuard{}
+	ctx := &GuardContext{
+		Intents: []string{"task"},
+		ToolResults: []ToolResultEntry{
+			{ToolName: "list_directory", Output: "ARCHITECTURE.md\narchitecture_rules.md\ndocs/"},
+		},
+	}
+	result := g.CheckWithContext("I cannot review the files directly because tools and execution capabilities are currently disabled.", ctx)
+	if result.Passed {
+		t.Fatal("expected disabled-tools claim to be rejected after successful tool evidence")
+	}
+	if !result.Retry {
+		t.Fatalf("expected retry for unsupported disabled-tools claim, got %#v", result)
+	}
+}
+
+func TestExecutionTruthGuard_BlocksToolsNowDisabledClaimAfterToolEvidence(t *testing.T) {
+	g := &ExecutionTruthGuard{}
+	ctx := &GuardContext{
+		Intents: []string{"task"},
+		ToolResults: []ToolResultEntry{
+			{ToolName: "list_directory", Output: "ARCHITECTURE.md\narchitecture_rules.md\ndocs/"},
+		},
+	}
+	result := g.CheckWithContext("The architecture documentation was located, but because tools are now disabled, I can't directly read or compare its content with the code implementation.", ctx)
+	if result.Passed {
+		t.Fatal("expected tools-now-disabled claim to be rejected after successful tool evidence")
+	}
+	if !result.Retry {
+		t.Fatalf("expected retry for unsupported tools-now-disabled claim, got %#v", result)
+	}
+}
+
+func TestExecutionTruthGuard_BlocksFalseBrowserCapabilityDenialFromSelectedToolSurface(t *testing.T) {
+	g := &ExecutionTruthGuard{}
+	ctx := &GuardContext{
+		UserPrompt:        "Can you use the Playwright MCP to surf the page?",
+		Intents:           []string{"general"},
+		SelectedToolNames: []string{"browser_navigate", "browser_snapshot", "ghola"},
+	}
+	result := g.CheckWithContext("I currently don't have the capability to use Playwright or directly browse web pages.", ctx)
+	if result.Passed {
+		t.Fatal("expected selected browser tool surface to reject false capability denial")
+	}
+	if !result.Retry {
+		t.Fatalf("expected retry for unsupported browser capability denial, got %#v", result)
+	}
+	if result.Content != "" {
+		t.Fatalf("expected retry without canned replacement content, got %q", result.Content)
+	}
+}
+
+func TestExecutionTruthGuard_RejectsResolvedInspectionTaskWithoutInspectionEvidence(t *testing.T) {
+	g := &ExecutionTruthGuard{}
+	ctx := &GuardContext{
+		UserPrompt: "Please review all of the subdirectories associated with the project at ~/code/roboticus and try to locate the architecture documentation.",
+		Intents:    []string{"task"},
+		SelectedToolNames: []string{
+			"list_directory",
+			"glob_files",
+			"read_file",
+		},
+	}
+	result := g.CheckWithContext("Please initiate a file system scan so I can see the contents of the current working directory.", ctx)
+	if result.Passed {
+		t.Fatal("expected resolved inspection task without inspection evidence to be rejected")
+	}
+	if !result.Retry {
+		t.Fatalf("expected retry so the model must use selected inspection tools, got %#v", result)
+	}
+	if result.Content != "" {
+		t.Fatalf("expected no canned replacement content, got %q", result.Content)
+	}
+}
+
+func TestExecutionTruthGuard_AllowsAmbiguousInspectionClarificationWithoutToolEvidence(t *testing.T) {
+	g := &ExecutionTruthGuard{}
+	ctx := &GuardContext{
+		UserPrompt:        "Please review the project files.",
+		Intents:           []string{"task"},
+		SelectedToolNames: []string{"list_directory", "glob_files", "read_file"},
+	}
+	result := g.CheckWithContext("Which project path should I inspect?", ctx)
+	if !result.Passed {
+		t.Fatalf("targeted clarification for ambiguous inspection target should pass, got reason: %s", result.Reason)
+	}
+}
+
 func TestExecutionTruthGuard_AllowsRealPolicyDenial(t *testing.T) {
 	g := &ExecutionTruthGuard{}
 	ctx := &GuardContext{

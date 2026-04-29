@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -75,5 +76,30 @@ func TestCheckForUpdate_DevBuildNeverClaimsUpToDate(t *testing.T) {
 	}
 	if upToDate {
 		t.Fatal("dev build should not report up to date")
+	}
+}
+
+func TestCheckForUpdate_404ClassifiedAsReleaseLookupFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	origURL := updateCheckURL
+	origClient := UpdateHTTPClient
+	updateCheckURL = server.URL
+	UpdateHTTPClient = server.Client()
+	defer func() {
+		updateCheckURL = origURL
+		UpdateHTTPClient = origClient
+	}()
+
+	_, _, err := checkForUpdate(context.Background(), "1.0.3")
+	if err == nil {
+		t.Fatal("expected release lookup error")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "release lookup failed") || !strings.Contains(msg, "404 Not Found") || !strings.Contains(msg, server.URL) {
+		t.Fatalf("unexpected 404 error: %v", err)
 	}
 }

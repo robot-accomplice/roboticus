@@ -26,6 +26,7 @@ const (
 	ToolProfileFocusedSourceCode        ToolProfile = "focused_source_code"
 	ToolProfileFocusedInspection        ToolProfile = "focused_inspection"
 	ToolProfileFocusedScheduling        ToolProfile = "focused_scheduling"
+	ToolProfileFocusedWebRead           ToolProfile = "focused_web_read"
 )
 
 type TurnEnvelopePolicy struct {
@@ -49,8 +50,19 @@ func DeriveTurnEnvelopePolicy(content string, synthesis TaskSynthesis, sessionTu
 	requiresScheduling := looksLikeSchedulingTask(lower)
 	requiresInspection := looksLikeFocusedInspectionTurn(content)
 	requiresAnalysisAuthoring := looksLikeInspectionBackedArtifactAuthoring(content)
+	requiresWebRead := looksLikePublicWebReadTurn(content)
 
 	switch {
+	case requiresWebRead:
+		return TurnEnvelopePolicy{
+			Weight:              TurnWeightStandard,
+			ContextBudget:       2048,
+			AllowRetrieval:      false,
+			MaxTools:            6,
+			AllowRetryExpansion: true,
+			ToolProfile:         ToolProfileFocusedWebRead,
+			Reason:              "public web/browser request should use a focused web-read tool envelope",
+		}
 	case synthesis.Intent == "code" &&
 		synthesis.PlannedAction == "execute_directly" &&
 		looksLikeSourceBackedCodeTask(content):
@@ -62,14 +74,6 @@ func DeriveTurnEnvelopePolicy(content string, synthesis TaskSynthesis, sessionTu
 			AllowRetryExpansion: true,
 			ToolProfile:         ToolProfileFocusedSourceCode,
 			Reason:              "source-backed code surgery should stay on a repo-grounded focused execution envelope",
-		}
-	case synthesis.Complexity == "complex" || synthesis.Intent == "code":
-		return TurnEnvelopePolicy{
-			Weight:              TurnWeightHeavy,
-			ContextBudget:       defaultTokenBudget,
-			AllowRetrieval:      true,
-			AllowRetryExpansion: false,
-			Reason:              "complex or action-oriented turn requires the full adaptive envelope",
 		}
 	case synthesis.Intent == "task" &&
 		synthesis.PlannedAction == "execute_directly" &&
@@ -86,7 +90,7 @@ func DeriveTurnEnvelopePolicy(content string, synthesis TaskSynthesis, sessionTu
 		}
 	case synthesis.Intent == "task" &&
 		synthesis.PlannedAction == "execute_directly" &&
-		(synthesis.Complexity == "simple" || requiresArtifactWrite):
+		(synthesis.Complexity == "simple" || requiresArtifactWrite || requiresInspection || requiresAnalysisAuthoring):
 		profile := toolProfileForTurn(requiresArtifactWrite, allowAuthorityMutation)
 		maxTools := 6
 		if requiresAnalysisAuthoring {
@@ -105,6 +109,14 @@ func DeriveTurnEnvelopePolicy(content string, synthesis TaskSynthesis, sessionTu
 			AllowAuthorityMutation: allowAuthorityMutation,
 			ToolProfile:            profile,
 			Reason:                 directExecutionPolicyReason(requiresArtifactWrite, requiresInspection, requiresAnalysisAuthoring),
+		}
+	case synthesis.Complexity == "complex" || synthesis.Intent == "code":
+		return TurnEnvelopePolicy{
+			Weight:              TurnWeightHeavy,
+			ContextBudget:       defaultTokenBudget,
+			AllowRetrieval:      true,
+			AllowRetryExpansion: false,
+			Reason:              "complex or action-oriented turn requires the full adaptive envelope",
 		}
 	case synthesis.Intent == "task":
 		return TurnEnvelopePolicy{
@@ -167,11 +179,28 @@ func shouldKeepSocialTurnAmbientContextMinimal(policy TurnEnvelopePolicy, synthe
 	return policy.Weight == TurnWeightLight && synthesis.Intent == "conversational"
 }
 
+// AlwaysIncluder is the optional interface a ToolPruner may implement to
+// declare which tool names are operator-pinned for a given session. The
+// pin set survives both `filterToolDefsForPolicy` (operation-class admit
+// list) and `MaxTools` truncation: a pinned name that the upstream pruner
+// returned must always reach the turn surface, regardless of policy
+// admission or truncation order.
+//
+// Authority-mutation pins are still subject to `policy.AllowAuthorityMutation`
+// — pinning a name that mutates the authority layer when the turn does not
+// allow it is treated as an operator misconfiguration and the pin is
+// honored in the loop's `OperationAuthorityWrite` filter rather than at
+// admission time.
+type AlwaysIncluder interface {
+	AlwaysIncluded(session *Session) []string
+}
+
 func (p TurnEnvelopePolicy) applyToolPolicy(ctx context.Context, session *Session, pruner ToolPruner) (agenttools.ToolSearchStats, error) {
 	if session == nil {
 		return agenttools.ToolSearchStats{}, nil
 	}
-	if p.LightweightToolSurface {
+	pinSet := pinSetFromPruner(pruner, session)
+	if p.LightweightToolSurface && len(pinSet) == 0 {
 		session.SetSelectedToolDefs([]llm.ToolDef{})
 		return agenttools.ToolSearchStats{
 			CandidatesSelected: 0,
@@ -185,24 +214,118 @@ func (p TurnEnvelopePolicy) applyToolPolicy(ctx context.Context, session *Sessio
 	if err != nil {
 		return stats, err
 	}
-	defs, filtered := filterToolDefsForPolicy(defs, p)
+
+	var filtered int
+	if p.ToolProfile == ToolProfileFocusedWebRead {
+		defs, filtered = filterToolDefsForFocusedWebRead(defs)
+	} else {
+		defs, filtered = filterToolDefsForPolicy(defs, p, pinSet)
+	}
 	if filtered > 0 {
 		stats.CandidatesPruned += filtered
 	}
 	stats.CandidatesSelected = len(defs)
 	if p.MaxTools > 0 && len(defs) > p.MaxTools {
-		original := len(defs)
-		defs = defs[:p.MaxTools]
-		stats.CandidatesSelected = len(defs)
-		if original > len(defs) {
-			stats.CandidatesPruned += original - len(defs)
+		defs = truncateRespectingPins(defs, p.MaxTools, pinSet)
+		if dropped := stats.CandidatesSelected - len(defs); dropped > 0 {
+			stats.CandidatesPruned += dropped
 		}
+		stats.CandidatesSelected = len(defs)
 	}
 	session.SetSelectedToolDefs(defs)
 	return stats, nil
 }
 
-func filterToolDefsForPolicy(defs []llm.ToolDef, policy TurnEnvelopePolicy) ([]llm.ToolDef, int) {
+func filterToolDefsForFocusedWebRead(defs []llm.ToolDef) ([]llm.ToolDef, int) {
+	if len(defs) == 0 {
+		return defs, 0
+	}
+	filtered := make([]llm.ToolDef, 0, len(defs))
+	removed := 0
+	for _, def := range defs {
+		if agenttools.OperationClassForName(def.Function.Name) == agenttools.OperationWebRead {
+			filtered = append(filtered, def)
+			continue
+		}
+		removed++
+	}
+	sort.SliceStable(filtered, func(i, j int) bool {
+		return toolPriorityForPolicy(filtered[i].Function.Name, TurnEnvelopePolicy{ToolProfile: ToolProfileFocusedWebRead}) <
+			toolPriorityForPolicy(filtered[j].Function.Name, TurnEnvelopePolicy{ToolProfile: ToolProfileFocusedWebRead})
+	})
+	return filtered, removed
+}
+
+func pinSetFromPruner(pruner ToolPruner, session *Session) map[string]struct{} {
+	pinned := make(map[string]struct{})
+	if includer, ok := pruner.(AlwaysIncluder); ok {
+		for _, raw := range includer.AlwaysIncluded(session) {
+			name := strings.ToLower(strings.TrimSpace(raw))
+			if name != "" {
+				pinned[name] = struct{}{}
+			}
+		}
+	}
+	return pinned
+}
+
+// truncateRespectingPins keeps the first MaxTools entries while ensuring
+// every pinned name that survived policy filtering remains in the result.
+// The pruner already ordered pins ahead of unpinned tools, but a downstream
+// re-sort (toolPriorityForPolicy) can interleave them. Pinned names that
+// fall outside the head of the slice replace the lowest-priority unpinned
+// tail entries.
+func truncateRespectingPins(defs []llm.ToolDef, maxTools int, pinSet map[string]struct{}) []llm.ToolDef {
+	if maxTools <= 0 || len(defs) <= maxTools {
+		return defs
+	}
+	if len(pinSet) == 0 {
+		return defs[:maxTools]
+	}
+
+	head := append([]llm.ToolDef(nil), defs[:maxTools]...)
+	headHasPin := func(name string) bool {
+		for _, def := range head {
+			if strings.EqualFold(strings.TrimSpace(def.Function.Name), name) {
+				return true
+			}
+		}
+		return false
+	}
+
+	for _, def := range defs[maxTools:] {
+		name := strings.ToLower(strings.TrimSpace(def.Function.Name))
+		if name == "" {
+			continue
+		}
+		if _, pinned := pinSet[name]; !pinned {
+			continue
+		}
+		if headHasPin(name) {
+			continue
+		}
+		// Replace the last non-pinned slot in the head with the pinned tool.
+		replaced := false
+		for i := len(head) - 1; i >= 0; i-- {
+			candidate := strings.ToLower(strings.TrimSpace(head[i].Function.Name))
+			if _, isPin := pinSet[candidate]; isPin {
+				continue
+			}
+			head[i] = def
+			replaced = true
+			break
+		}
+		if !replaced {
+			// All head slots are already pinned; widen the surface so the
+			// pin is preserved rather than silently dropped. This is
+			// preferable to violating pin semantics.
+			head = append(head, def)
+		}
+	}
+	return head
+}
+
+func filterToolDefsForPolicy(defs []llm.ToolDef, policy TurnEnvelopePolicy, pinSet map[string]struct{}) ([]llm.ToolDef, int) {
 	if len(defs) == 0 {
 		return defs, 0
 	}
@@ -211,15 +334,21 @@ func filterToolDefsForPolicy(defs []llm.ToolDef, policy TurnEnvelopePolicy) ([]l
 	removed := 0
 	for _, def := range defs {
 		name := strings.TrimSpace(def.Function.Name)
+		lower := strings.ToLower(name)
+		_, pinned := pinSet[lower]
 		if name == "" {
 			filtered = append(filtered, def)
 			continue
 		}
+		// Authority-layer mutation is the one admission rule that overrides
+		// pinning: if the operator pinned an authority-mutating tool on a
+		// turn that explicitly does not allow it, the pin loses. Everything
+		// else respects the pin.
 		if policy.RequireArtifactWrite && !policy.AllowAuthorityMutation && agenttools.MutatesAuthorityLayer(name) {
 			removed++
 			continue
 		}
-		if !toolAllowedForPolicy(name, policy) {
+		if !toolAllowedForPolicy(name, policy) && !pinned {
 			removed++
 			continue
 		}
@@ -321,6 +450,16 @@ func toolPriorityForPolicy(name string, policy TurnEnvelopePolicy) int {
 			return 5
 		}
 	}
+	if policy.ToolProfile == ToolProfileFocusedWebRead {
+		switch agenttools.OperationClassForName(name) {
+		case agenttools.OperationWebRead:
+			return 0
+		case agenttools.OperationMemoryRead:
+			return 1
+		default:
+			return 2
+		}
+	}
 	if policy.ToolProfile == ToolProfileFocusedInspection {
 		switch agenttools.OperationClassForName(name) {
 		case agenttools.OperationWorkspaceInspect:
@@ -371,7 +510,8 @@ func toolAllowedForPolicy(name string, policy TurnEnvelopePolicy) bool {
 		switch agenttools.OperationClassForName(name) {
 		case agenttools.OperationArtifactRead, agenttools.OperationWorkspaceInspect,
 			agenttools.OperationArtifactWrite, agenttools.OperationRuntimeContextRead,
-			agenttools.OperationExecution:
+			agenttools.OperationExecution,
+			agenttools.OperationDataRead:
 			return true
 		case agenttools.OperationMemoryRead:
 			return policy.AllowRetrieval
@@ -382,7 +522,9 @@ func toolAllowedForPolicy(name string, policy TurnEnvelopePolicy) bool {
 		switch agenttools.OperationClassForName(name) {
 		case agenttools.OperationWorkspaceInspect, agenttools.OperationArtifactRead,
 			agenttools.OperationArtifactWrite, agenttools.OperationRuntimeContextRead,
-			agenttools.OperationExecution:
+			agenttools.OperationExecution,
+			agenttools.OperationDataRead, agenttools.OperationWebRead,
+			agenttools.OperationCapabilityInventory, agenttools.OperationInspection:
 			return true
 		case agenttools.OperationMemoryRead:
 			return policy.AllowRetrieval
@@ -391,7 +533,9 @@ func toolAllowedForPolicy(name string, policy TurnEnvelopePolicy) bool {
 		}
 	case ToolProfileFocusedAuthoring:
 		switch agenttools.OperationClassForName(name) {
-		case agenttools.OperationArtifactWrite, agenttools.OperationArtifactRead, agenttools.OperationRuntimeContextRead:
+		case agenttools.OperationArtifactWrite, agenttools.OperationArtifactRead,
+			agenttools.OperationRuntimeContextRead,
+			agenttools.OperationDataRead, agenttools.OperationDataWrite:
 			return true
 		case agenttools.OperationMemoryRead:
 			return policy.AllowRetrieval
@@ -400,7 +544,11 @@ func toolAllowedForPolicy(name string, policy TurnEnvelopePolicy) bool {
 		}
 	case ToolProfileFocusedInspection:
 		switch agenttools.OperationClassForName(name) {
-		case agenttools.OperationWorkspaceInspect, agenttools.OperationArtifactRead, agenttools.OperationRuntimeContextRead:
+		case agenttools.OperationWorkspaceInspect, agenttools.OperationArtifactRead,
+			agenttools.OperationRuntimeContextRead,
+			agenttools.OperationDataRead, agenttools.OperationWebRead,
+			agenttools.OperationInspection, agenttools.OperationCapabilityInventory,
+			agenttools.OperationTaskInspection:
 			return true
 		case agenttools.OperationMemoryRead:
 			return policy.AllowRetrieval
@@ -409,16 +557,56 @@ func toolAllowedForPolicy(name string, policy TurnEnvelopePolicy) bool {
 		}
 	case ToolProfileFocusedScheduling:
 		switch agenttools.OperationClassForName(name) {
-		case agenttools.OperationScheduling, agenttools.OperationRuntimeContextRead:
+		case agenttools.OperationScheduling, agenttools.OperationRuntimeContextRead,
+			agenttools.OperationTaskInspection,
+			agenttools.OperationCapabilityInventory,
+			agenttools.OperationDelegation:
 			return true
-		case agenttools.OperationTaskInspection:
+		default:
+			return false
+		}
+	case ToolProfileFocusedWebRead:
+		switch agenttools.OperationClassForName(name) {
+		case agenttools.OperationWebRead:
 			return true
+		case agenttools.OperationMemoryRead:
+			return policy.AllowRetrieval
 		default:
 			return false
 		}
 	default:
 		return true
 	}
+}
+
+func looksLikePublicWebReadTurn(content string) bool {
+	normalized := strings.ToLower(content)
+	if strings.TrimSpace(normalized) == "" {
+		return false
+	}
+	if strings.Contains(normalized, "http://") ||
+		strings.Contains(normalized, "https://") ||
+		strings.Contains(normalized, "www.") {
+		return true
+	}
+	webSubjects := []string{"website", "web site", "webpage", "web page", "page", "site", "url", "metacritic", "browser", "playwright"}
+	webActions := []string{"fetch", "pull", "open", "browse", "surf", "navigate", "visit", "read", "search", "look up", "lookup", "find", "latest", "current", "use"}
+	hasSubject := false
+	for _, subject := range webSubjects {
+		if strings.Contains(normalized, subject) {
+			hasSubject = true
+			break
+		}
+	}
+	if !hasSubject {
+		return false
+	}
+	for _, action := range webActions {
+		if strings.Contains(normalized, action) {
+			return true
+		}
+	}
+	return false
 }
 
 func looksLikeSchedulingTask(lower string) bool {

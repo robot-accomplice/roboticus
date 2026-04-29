@@ -62,6 +62,7 @@ type Config struct {
 	Backups                  BackupsConfig        `json:"backups" toml:"backups" mapstructure:"backups"`
 	ContextBudget            ContextBudgetConfig  `json:"context_budget" toml:"context_budget" mapstructure:"context_budget"`
 	ToolSearch               ToolSearchConfig     `json:"tool_search" toml:"tool_search" mapstructure:"tool_search"`
+	WebTools                 WebToolsConfig       `json:"web_tools" toml:"web_tools" mapstructure:"web_tools"`
 	DisabledBundledProviders []string             `json:"disabled_bundled_providers" toml:"disabled_bundled_providers" mapstructure:"disabled_bundled_providers"`
 }
 

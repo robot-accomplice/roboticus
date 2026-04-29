@@ -261,7 +261,7 @@ relationship_budget = 10.0
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `workspace_only` | bool | `true` | Restrict file operations to the workspace directory. |
-| `deny_on_empty_allowlist` | bool | `true` | **Must be true.** Deny all paths when the allowlist is empty. Setting to `false` is a validation error. |
+| `deny_on_empty_allowlist` | bool | `true` | When `true` (default), deny all paths when the allowlist is empty (fail-closed). When `false`, fail-open: an empty allowlist does not deny everything. A warning is logged on load; use only if you accept the risk. |
 | `allowed_paths` | string[] | `[]` | Additional paths allowed for file operations (beyond workspace). |
 | `protected_paths` | string[] | `[]` | Patterns that are always blocked in tool arguments. |
 | `interpreter_allow` | string[] | `[]` | Allowed script interpreters for the bash tool. |
@@ -311,7 +311,7 @@ The configuration is validated on load. Validation errors prevent startup.
 9. Memory budgets must sum to 100.0 (± 0.01)
 10. `treasury.per_payment_cap` must be > 0
 11. `treasury.minimum_reserve` must be >= 0
-12. `security.deny_on_empty_allowlist` must be `true`
+12. If `security.deny_on_empty_allowlist` is `false` (fail-open), a warning is logged when the config is loaded or patched (validation still passes)
 13. All `security.script_allowed_paths` must be absolute paths
 14. `models.routing.mode` must be `"primary"` or `"metascore"`
 15. `models.routing.confidence_threshold` must be [0.0, 1.0]

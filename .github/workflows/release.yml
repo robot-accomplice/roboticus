@@ -145,7 +145,7 @@ jobs:
         run: |
           BINARY_NAME="roboticus${SUFFIX}"
           go build -trimpath \
-            -ldflags="-s -w -X roboticus/cmd/internal/cmdutil.Version=${BUILD_VERSION} -X roboticus/internal/daemon.version=${BUILD_VERSION}" \
+            -ldflags="-s -w -X roboticus/internal/version.Version=${BUILD_VERSION} -X roboticus/cmd/internal/cmdutil.Version=${BUILD_VERSION} -X roboticus/internal/daemon.version=${BUILD_VERSION}" \
             -o "${BINARY_NAME}" .
 
           RAW_NAME="roboticus-${GOOS}-${GOARCH}${SUFFIX}"

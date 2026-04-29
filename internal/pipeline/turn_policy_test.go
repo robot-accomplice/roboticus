@@ -238,6 +238,31 @@ func TestDeriveTurnEnvelopePolicy_PathProjectListingUsesFocusedInspectionEnvelop
 	}
 }
 
+func TestDeriveTurnEnvelopePolicy_ComplexRepoArchitectureReviewUsesFocusedInspectionEnvelope(t *testing.T) {
+	prompt := "Please review all of the subdirectories associated with the project at ~/code/roboticus and try to locate the architecture documentation. When you find it, review that documentation and compare it directly with the code. Then provide me with a summary of the alignment between architecture documentation and code implementation."
+	synthesis := SynthesizeTaskState(prompt, 1, nil)
+	policy := DeriveTurnEnvelopePolicy(prompt, synthesis, 1)
+
+	if synthesis.Intent != "task" {
+		t.Fatalf("intent = %q, want task", synthesis.Intent)
+	}
+	if synthesis.PlannedAction != "execute_directly" {
+		t.Fatalf("planned action = %q, want execute_directly", synthesis.PlannedAction)
+	}
+	if policy.Weight != TurnWeightStandard {
+		t.Fatalf("weight = %q, want %q", policy.Weight, TurnWeightStandard)
+	}
+	if policy.ToolProfile != ToolProfileFocusedInspection {
+		t.Fatalf("tool profile = %q, want %q", policy.ToolProfile, ToolProfileFocusedInspection)
+	}
+	if policy.AllowRetrieval {
+		t.Fatal("repo architecture inspection should not enable retrieval by default")
+	}
+	if !policy.AllowRetryExpansion {
+		t.Fatal("repo architecture inspection should allow retry expansion")
+	}
+}
+
 func TestDeriveTurnEnvelopePolicy_SourceBackedCodeUsesFocusedSourceCodeEnvelope(t *testing.T) {
 	prompt := "Refactor the configuration parser to support hot-reload with validation, rollback on failure, and emit structured change events."
 	synthesis := SynthesizeTaskState(prompt, 1, nil)
@@ -365,6 +390,89 @@ func TestTurnEnvelopePolicy_ApplyToolPolicyLightweightSuppressesTools(t *testing
 	}
 	if stats.EmbeddingStatus != "policy_lightweight" {
 		t.Fatalf("embedding status = %q, want policy_lightweight", stats.EmbeddingStatus)
+	}
+}
+
+func TestTurnEnvelopePolicy_LightweightDoesNotSuppressPinnedWebTool(t *testing.T) {
+	sess := session.New("sess-web", "agent-1", "Test")
+	sess.AddUserMessage("see if you can use the ghola tool to pull the main page of www.metacritic.com")
+	pruner := &countingPolicyPruner{
+		pinned: []string{"ghola"},
+		fn: func(_ context.Context, _ *session.Session) ([]llm.ToolDef, agenttools.ToolSearchStats, error) {
+			return []llm.ToolDef{{Type: "function", Function: llm.ToolFuncDef{Name: "ghola"}}}, agenttools.ToolSearchStats{
+				CandidatesSelected: 1,
+				EmbeddingStatus:    "ok",
+			}, nil
+		},
+	}
+
+	stats, err := (TurnEnvelopePolicy{
+		Weight:                 TurnWeightLight,
+		LightweightToolSurface: true,
+		MaxTools:               1,
+	}).applyToolPolicy(context.Background(), sess, pruner)
+	if err != nil {
+		t.Fatalf("applyToolPolicy: %v", err)
+	}
+	got := sess.SelectedToolDefs()
+	if len(got) != 1 || got[0].Function.Name != "ghola" {
+		t.Fatalf("selected tools = %+v, want pinned ghola", got)
+	}
+	if stats.EmbeddingStatus == "policy_lightweight" {
+		t.Fatal("pinned web tool must not be bypassed by lightweight suppression")
+	}
+}
+
+func TestDeriveTurnEnvelopePolicy_PublicWebReadUsesFocusedWebProfile(t *testing.T) {
+	synthesis := SynthesizeTaskState(
+		"Can you use the Playwright MCP to surf the page?",
+		1,
+		[]string{"browser playwright mcp page browse surf navigate"},
+	)
+	got := DeriveTurnEnvelopePolicy("Can you use the Playwright MCP to surf the page?", synthesis, 5)
+	if got.ToolProfile != ToolProfileFocusedWebRead {
+		t.Fatalf("ToolProfile = %q, want %q", got.ToolProfile, ToolProfileFocusedWebRead)
+	}
+	if got.AllowRetrieval {
+		t.Fatal("focused web-read probe should not retrieve stale memories before attempting web tools")
+	}
+}
+
+func TestApplyToolPolicy_FocusedWebReadExcludesRuntimeContext(t *testing.T) {
+	sess := session.New("sess-web-focused", "agent-1", "Test")
+	pruner := &countingPolicyPruner{
+		pinned: []string{"browser_snapshot", "browser_navigate"},
+		fn: func(_ context.Context, _ *session.Session) ([]llm.ToolDef, agenttools.ToolSearchStats, error) {
+			return []llm.ToolDef{
+				{Type: "function", Function: llm.ToolFuncDef{Name: "search_memories"}},
+				{Type: "function", Function: llm.ToolFuncDef{Name: "get_runtime_context"}},
+				{Type: "function", Function: llm.ToolFuncDef{Name: "browser_snapshot"}},
+				{Type: "function", Function: llm.ToolFuncDef{Name: "browser_navigate"}},
+			}, agenttools.ToolSearchStats{CandidatesSelected: 4, EmbeddingStatus: "ok"}, nil
+		},
+	}
+
+	stats, err := (TurnEnvelopePolicy{
+		Weight:         TurnWeightStandard,
+		ToolProfile:    ToolProfileFocusedWebRead,
+		AllowRetrieval: false,
+		MaxTools:       6,
+	}).applyToolPolicy(context.Background(), sess, pruner)
+	if err != nil {
+		t.Fatalf("applyToolPolicy: %v", err)
+	}
+	got := toolDefNamesForPolicy(sess.SelectedToolDefs())
+	if containsString(got, "get_runtime_context") {
+		t.Fatalf("selected tools = %v, want runtime self-inspection excluded", got)
+	}
+	if containsString(got, "search_memories") {
+		t.Fatalf("selected tools = %v, want memory retrieval excluded", got)
+	}
+	if !containsString(got, "browser_snapshot") || !containsString(got, "browser_navigate") {
+		t.Fatalf("selected tools = %v, want browser tools preserved", got)
+	}
+	if stats.CandidatesSelected != 2 {
+		t.Fatalf("selected count = %d, want 2", stats.CandidatesSelected)
 	}
 }
 
@@ -500,8 +608,10 @@ func TestTurnEnvelopePolicy_ApplyToolPolicyFocusedAnalysisAuthoringPinsInspectio
 }
 
 type countingPolicyPruner struct {
-	calls int
-	fn    func(context.Context, *session.Session) ([]llm.ToolDef, agenttools.ToolSearchStats, error)
+	calls   int
+	fn      func(context.Context, *session.Session) ([]llm.ToolDef, agenttools.ToolSearchStats, error)
+	pinned  []string
+	pinFunc func(*session.Session) []string
 }
 
 func (p *countingPolicyPruner) PruneTools(ctx context.Context, sess *session.Session) ([]llm.ToolDef, agenttools.ToolSearchStats, error) {
@@ -513,6 +623,143 @@ func (p *countingPolicyPruner) PruneTools(ctx context.Context, sess *session.Ses
 		CandidatesSelected: 1,
 		EmbeddingStatus:    "ok",
 	}, nil
+}
+
+func (p *countingPolicyPruner) AlwaysIncluded(sess *session.Session) []string {
+	if p.pinFunc != nil {
+		return p.pinFunc(sess)
+	}
+	return p.pinned
+}
+
+func toolDefNamesForPolicy(defs []llm.ToolDef) []string {
+	out := make([]string, 0, len(defs))
+	for _, def := range defs {
+		out = append(out, def.Function.Name)
+	}
+	return out
+}
+
+func containsString(items []string, want string) bool {
+	for _, item := range items {
+		if item == want {
+			return true
+		}
+	}
+	return false
+}
+
+// TestApplyToolPolicy_PinSurvivesProfileAdmitList verifies the v1.0.8
+// admission contract: when a tool name is operator-pinned via the
+// pruner's AlwaysIncluder surface, the policy stage MUST NOT drop it
+// even if the per-profile OperationClass admit list would normally
+// reject it. Authority-mutating tools remain the one explicit
+// exception (covered by AuthorityMutationOverridesPin below).
+func TestApplyToolPolicy_PinSurvivesProfileAdmitList(t *testing.T) {
+	sess := session.New("sess-pin-admit", "agent-1", "Test")
+	pruner := &countingPolicyPruner{
+		pinned: []string{"orchestrate-subagents"},
+		fn: func(_ context.Context, _ *session.Session) ([]llm.ToolDef, agenttools.ToolSearchStats, error) {
+			return []llm.ToolDef{
+				{Type: "function", Function: llm.ToolFuncDef{Name: "read_file"}},
+				{Type: "function", Function: llm.ToolFuncDef{Name: "orchestrate-subagents"}},
+			}, agenttools.ToolSearchStats{CandidatesSelected: 2, EmbeddingStatus: "ok"}, nil
+		},
+	}
+	_, err := (TurnEnvelopePolicy{
+		Weight:      TurnWeightStandard,
+		MaxTools:    4,
+		ToolProfile: ToolProfileFocusedInspection,
+	}).applyToolPolicy(context.Background(), sess, pruner)
+	if err != nil {
+		t.Fatalf("applyToolPolicy: %v", err)
+	}
+	got := sess.SelectedToolDefs()
+	names := make(map[string]bool, len(got))
+	for _, d := range got {
+		names[d.Function.Name] = true
+	}
+	if !names["orchestrate-subagents"] {
+		t.Fatalf("pinned tool dropped by FocusedInspection admit list; got %v", got)
+	}
+}
+
+// TestApplyToolPolicy_PinSurvivesMaxToolsTruncation verifies that pin
+// names returned by the pruner are not silently dropped when the
+// post-filter tool count exceeds MaxTools. The pinned name must reach
+// the loop's selected surface even if MaxTools requires displacing an
+// unpinned candidate.
+func TestApplyToolPolicy_PinSurvivesMaxToolsTruncation(t *testing.T) {
+	sess := session.New("sess-pin-trunc", "agent-1", "Test")
+	pruner := &countingPolicyPruner{
+		pinned: []string{"obsidian_write"},
+		fn: func(_ context.Context, _ *session.Session) ([]llm.ToolDef, agenttools.ToolSearchStats, error) {
+			return []llm.ToolDef{
+				{Type: "function", Function: llm.ToolFuncDef{Name: "read_file"}},
+				{Type: "function", Function: llm.ToolFuncDef{Name: "list_directory"}},
+				{Type: "function", Function: llm.ToolFuncDef{Name: "search_files"}},
+				{Type: "function", Function: llm.ToolFuncDef{Name: "glob_files"}},
+				{Type: "function", Function: llm.ToolFuncDef{Name: "get_runtime_context"}},
+				{Type: "function", Function: llm.ToolFuncDef{Name: "obsidian_write"}},
+			}, agenttools.ToolSearchStats{CandidatesSelected: 6, EmbeddingStatus: "ok"}, nil
+		},
+	}
+	_, err := (TurnEnvelopePolicy{
+		Weight:                 TurnWeightStandard,
+		MaxTools:               3,
+		RequireArtifactWrite:   true,
+		AllowAuthorityMutation: true,
+		ToolProfile:            ToolProfileFocusedAuthoring,
+	}).applyToolPolicy(context.Background(), sess, pruner)
+	if err != nil {
+		t.Fatalf("applyToolPolicy: %v", err)
+	}
+	got := sess.SelectedToolDefs()
+	if len(got) > 3+1 { // allow at most one slot widening to honor the pin
+		t.Fatalf("MaxTools truncation produced %d tools, want at most 4", len(got))
+	}
+	found := false
+	for _, d := range got {
+		if d.Function.Name == "obsidian_write" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("pin obsidian_write dropped during MaxTools truncation; got %v", got)
+	}
+}
+
+// TestApplyToolPolicy_AuthorityMutationOverridesPin verifies that
+// pinning is NOT a backdoor around the authority-mutation gate. When
+// the turn's policy explicitly disallows authority mutation, even a
+// pinned name that mutates the authority layer must be removed.
+func TestApplyToolPolicy_AuthorityMutationOverridesPin(t *testing.T) {
+	sess := session.New("sess-auth-override", "agent-1", "Test")
+	pruner := &countingPolicyPruner{
+		pinned: []string{"ingest_policy"},
+		fn: func(_ context.Context, _ *session.Session) ([]llm.ToolDef, agenttools.ToolSearchStats, error) {
+			return []llm.ToolDef{
+				{Type: "function", Function: llm.ToolFuncDef{Name: "ingest_policy"}},
+				{Type: "function", Function: llm.ToolFuncDef{Name: "obsidian_write"}},
+			}, agenttools.ToolSearchStats{CandidatesSelected: 2, EmbeddingStatus: "ok"}, nil
+		},
+	}
+	_, err := (TurnEnvelopePolicy{
+		Weight:                 TurnWeightStandard,
+		MaxTools:               4,
+		RequireArtifactWrite:   true,
+		AllowAuthorityMutation: false,
+		ToolProfile:            ToolProfileFocusedAuthoring,
+	}).applyToolPolicy(context.Background(), sess, pruner)
+	if err != nil {
+		t.Fatalf("applyToolPolicy: %v", err)
+	}
+	for _, d := range sess.SelectedToolDefs() {
+		if d.Function.Name == "ingest_policy" {
+			t.Fatalf("pinned authority-mutating tool ingest_policy should be removed when AllowAuthorityMutation=false")
+		}
+	}
 }
 
 func TestTurnEnvelopePolicy_ApplyToolPolicyStandardUsesPruner(t *testing.T) {

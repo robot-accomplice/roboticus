@@ -179,6 +179,26 @@ func (mr *Retriever) Retrieve(ctx context.Context, sessionID, query string, tota
 // dedicated method with that specific purpose — NOT resurrecting this
 // one under the same name.
 
+// RetrieveActiveContext returns the direct-injected short-term context for a
+// session without running semantic / episodic / procedural retrieval. This is
+// the conversational working-memory frame: it should be available before the
+// system decides whether a turn needs long-term enrichment.
+func (mr *Retriever) RetrieveActiveContext(ctx context.Context, sessionID string, totalTokens int) string {
+	if mr == nil || mr.store == nil {
+		return ""
+	}
+	workingText := ""
+	if budget := int(float64(totalTokens) * mr.budgets.Working); budget > 0 {
+		workingText = mr.retrieveWorkingMemory(ctx, sessionID, budget)
+	}
+	ambientText := mr.retrieveAmbientRecent(ctx, 2)
+	assembled := AssembleContext(ctx, mr.store, sessionID, nil, workingText, ambientText)
+	if assembled == nil {
+		return ""
+	}
+	return assembled.Format()
+}
+
 // RetrieveWithMetrics fetches memories and returns both the injected text
 // and observability metrics (Rust parity: retrieve_with_metrics).
 func (mr *Retriever) RetrieveWithMetrics(ctx context.Context, sessionID, query string, totalTokens int) (string, RetrievalMetrics) {

@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -127,6 +128,32 @@ func TestResolveInspectionTarget_TildeHomeAlias(t *testing.T) {
 	}
 	if len(resolution.ResolvedPaths) != 1 || resolution.ResolvedPaths[0] != home {
 		t.Fatalf("resolved paths = %v, want %q", resolution.ResolvedPaths, home)
+	}
+}
+
+func TestResolveInspectionTarget_TildeProjectDoesNotSwallowTrailingProse(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		t.Fatalf("UserHomeDir() failed: %v", err)
+	}
+	want := home + "/code/roboticus"
+	content := "Please review all of the subdirectories associated with the project at ~/code/roboticus and try to locate the architecture documentation."
+	if !looksLikeFocusedInspectionTurn(content) {
+		t.Fatal("repo architecture review should stay on focused inspection path")
+	}
+	resolution := ResolveInspectionTarget(
+		content,
+		"/Users/jmachen/.roboticus/workspace",
+		[]string{home + "/code"},
+	)
+	if resolution.ClarificationRequired {
+		t.Fatal("tilde project path should resolve without clarification")
+	}
+	if len(resolution.ResolvedPaths) != 1 || resolution.ResolvedPaths[0] != want {
+		t.Fatalf("resolved paths = %v, want %q", resolution.ResolvedPaths, want)
+	}
+	if strings.Contains(resolution.ResolvedPaths[0], " and ") {
+		t.Fatalf("resolved path swallowed prose: %q", resolution.ResolvedPaths[0])
 	}
 }
 

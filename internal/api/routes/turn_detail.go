@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -23,6 +24,29 @@ func GetTurnContext(store *db.Store) http.HandlerFunc {
 		err := row.Scan(&complexity, &budget, &sysTokens, &memTokens, &histTokens, &histDepth, &model)
 		if err != nil {
 			if err == sql.ErrNoRows {
+				model := ""
+				var tokIn, tokOut int64
+				var cost float64
+				_ = db.NewRouteQueries(store).GetTurnForAnalysis(r.Context(), turnID).Scan(&model, &tokIn, &tokOut, &cost)
+				if fp, ok := contextFootprintForTurn(r.Context(), store, turnID); ok {
+					writeJSON(w, http.StatusOK, map[string]any{
+						"turn_id":              turnID,
+						"system_tokens":        int64(0),
+						"system_prompt_tokens": int64(0),
+						"memory_tokens":        int64(0),
+						"history_tokens":       int64(0),
+						"total_tokens":         fp["used_tokens"],
+						"max_tokens":           fp["token_budget"],
+						"token_budget":         fp["token_budget"],
+						"complexity_level":     "unknown",
+						"history_depth":        int64(0),
+						"model":                model,
+						"snapshot":             false,
+						"source":               "pipeline_trace",
+						"footprint":            fp,
+					})
+					return
+				}
 				writeError(w, http.StatusNotFound, "turn context not found")
 				return
 			}
@@ -32,7 +56,12 @@ func GetTurnContext(store *db.Store) http.HandlerFunc {
 		st := derefInt64(sysTokens)
 		mt := derefInt64(memTokens)
 		ht := derefInt64(histTokens)
+		fp, ok := contextFootprintForTurn(r.Context(), store, turnID)
+		if !ok {
+			fp = legacyContextFootprint(budget, st, mt, ht)
+		}
 		writeJSON(w, http.StatusOK, map[string]any{
+			"turn_id":              turnID,
 			"system_tokens":        st,
 			"system_prompt_tokens": st,
 			"memory_tokens":        mt,
@@ -44,6 +73,8 @@ func GetTurnContext(store *db.Store) http.HandlerFunc {
 			"history_depth":        derefInt64(histDepth),
 			"model":                model,
 			"snapshot":             true,
+			"source":               "context_snapshot",
+			"footprint":            fp,
 		})
 	}
 }
@@ -275,15 +306,38 @@ func AnalyzeTurn(store *db.Store, llmSvc *llm.Service) http.HandlerFunc {
 			analysisText = pipeline.BuildHeuristicSummary(tips)
 		}
 
+		recommendations := turnRecommendationsFromTips(tips)
 		writeJSON(w, http.StatusOK, map[string]any{
-			"turn_id":        turnID,
-			"status":         "complete",
-			"heuristic_tips": tips,
-			"analysis":       analysisText,
-			"analysis_model": analysisModel,
-			"tokens_in":      analysisTokIn,
-			"tokens_out":     analysisTokOut,
-			"cost":           analysisCost,
+			"turn_id":         turnID,
+			"status":          "complete",
+			"heuristic_tips":  tips,
+			"analysis":        analysisText,
+			"summary":         analysisText,
+			"recommendations": recommendations,
+			"analysis_model":  analysisModel,
+			"tokens_in":       analysisTokIn,
+			"tokens_out":      analysisTokOut,
+			"cost":            analysisCost,
 		})
 	}
+}
+
+func turnRecommendationsFromTips(tips []pipeline.Tip) []map[string]any {
+	recommendations := make([]map[string]any, 0, len(tips))
+	for _, tip := range tips {
+		action := strings.TrimSpace(tip.Suggestion)
+		if action == "" {
+			action = strings.TrimSpace(tip.Message)
+		}
+		if action == "" {
+			continue
+		}
+		recommendations = append(recommendations, map[string]any{
+			"rule_name": tip.RuleName,
+			"severity":  tip.Severity,
+			"message":   tip.Message,
+			"action":    action,
+		})
+	}
+	return recommendations
 }

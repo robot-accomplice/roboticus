@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"roboticus/testutil"
@@ -95,6 +96,9 @@ func TestBuildMemoryIndex_WithEntries(t *testing.T) {
 
 	// Seed memory_index entries.
 	_, _ = store.ExecContext(ctx,
+		`INSERT INTO episodic_memory (id, classification, content, importance, memory_state)
+		 VALUES ('ep-1', 'test', 'Test memory about something', 5, 'active')`)
+	_, _ = store.ExecContext(ctx,
 		`INSERT INTO memory_index (id, source_table, source_id, summary, category, confidence)
 		 VALUES ('idx-1', 'episodic_memory', 'ep-1', 'Test memory about something', 'test', 0.9)`)
 
@@ -107,6 +111,41 @@ func TestBuildMemoryIndex_WithEntries(t *testing.T) {
 	}
 	if !contains(result, "recall") {
 		t.Error("should contain recall instruction")
+	}
+}
+
+func TestBuildMemoryIndex_FiltersInactiveSourceMemoryRows(t *testing.T) {
+	store := testutil.TempStore(t)
+	ctx := context.Background()
+
+	_, _ = store.ExecContext(ctx,
+		`INSERT INTO semantic_memory (id, category, key, value, memory_state)
+		 VALUES ('sem-stale', 'capability', 'playwright', 'I currently do not have the capability to use Playwright.', 'stale')`)
+	_, _ = store.ExecContext(ctx,
+		`INSERT INTO semantic_memory (id, category, key, value, memory_state)
+		 VALUES ('sem-active', 'capability', 'browser', 'Browser tools are available when selected for a turn.', 'active')`)
+	_, _ = store.ExecContext(ctx,
+		`INSERT INTO episodic_memory (id, classification, content, importance, memory_state)
+		 VALUES ('ep-stale', 'conversation', 'I cannot browse web pages.', 5, 'stale')`)
+	_, _ = store.ExecContext(ctx,
+		`INSERT INTO episodic_memory (id, classification, content, importance, memory_state)
+		 VALUES ('ep-promoted', 'conversation', 'Used browser_navigate to open https://example.com.', 5, 'promoted')`)
+	_, _ = store.ExecContext(ctx,
+		`INSERT INTO memory_index (id, source_table, source_id, summary, category, confidence) VALUES
+		 ('idx-stale-sem', 'semantic_memory', 'sem-stale', 'I currently do not have the capability to use Playwright.', 'capability', 1.0),
+		 ('idx-active-sem', 'semantic_memory', 'sem-active', 'Browser tools are available when selected for a turn.', 'capability', 0.9),
+		 ('idx-stale-ep', 'episodic_memory', 'ep-stale', 'I cannot browse web pages.', 'conversation', 1.0),
+		 ('idx-promoted-ep', 'episodic_memory', 'ep-promoted', 'Used browser_navigate to open https://example.com.', 'conversation', 0.8)`)
+
+	result := BuildMemoryIndex(ctx, store, 20, "playwright browser")
+	if strings.Contains(result, "do not have the capability") || strings.Contains(result, "cannot browse") {
+		t.Fatalf("stale source memory leaked into index:\n%s", result)
+	}
+	if !strings.Contains(result, "Browser tools are available") {
+		t.Fatalf("active semantic memory missing from index:\n%s", result)
+	}
+	if !strings.Contains(result, "browser_navigate") {
+		t.Fatalf("promoted episodic memory missing from index:\n%s", result)
 	}
 }
 

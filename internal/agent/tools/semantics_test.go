@@ -38,6 +38,71 @@ func TestOperationClassForName_InventoryProjectsIsWorkspaceInspect(t *testing.T)
 	}
 }
 
+// TestOperationClassForName_v108CoverageGaps covers tools that were
+// previously falling through to OperationUnknown and silently being
+// stripped by the policy stage. The v1.0.8 audit added explicit
+// classifications for database, knowledge-graph, introspection, and
+// web tools; this test pins those classifications so future drift
+// triggers a regression instead of a stealth admission downgrade.
+func TestOperationClassForName_v108CoverageGaps(t *testing.T) {
+	cases := []struct {
+		name string
+		want OperationClass
+	}{
+		{"create_table", OperationDataWrite},
+		{"insert_row", OperationDataWrite},
+		{"alter_table", OperationDataWrite},
+		{"drop_table", OperationDataWrite},
+		{"query_table", OperationDataRead},
+		{"query_knowledge_graph", OperationMemoryRead},
+		{"find_workflow", OperationCapabilityInventory},
+		{"introspect", OperationCapabilityInventory},
+		{"get_channel_health", OperationInspection},
+		{"compose-skill", OperationCapabilityInventory},
+		{"web_search", OperationWebRead},
+		{"http_fetch", OperationWebRead},
+		{"ghola", OperationWebRead},
+		{"browser_navigate", OperationWebRead},
+		{"browser_snapshot", OperationWebRead},
+		{"browser_click", OperationExecution},
+	}
+	for _, c := range cases {
+		if got := OperationClassForName(c.name); got != c.want {
+			t.Errorf("OperationClassForName(%q) = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// TestReadOnlyExploration_IncludesDataAndWebReads ensures the
+// read-only filter recognises the new OperationDataRead and
+// OperationWebRead classes so retrieval and exploration plans can
+// safely include them without being downgraded by the loop.
+func TestReadOnlyExploration_IncludesDataAndWebReads(t *testing.T) {
+	for _, name := range []string{"query_table", "web_search", "http_fetch", "ghola", "browser_navigate", "browser_snapshot"} {
+		if !IsReadOnlyExploration(name) {
+			t.Errorf("IsReadOnlyExploration(%q) = false, want true", name)
+		}
+	}
+}
+
+func TestMakesExecutionProgress_IncludesDataWrite(t *testing.T) {
+	if !MakesExecutionProgress("insert_row") {
+		t.Fatal("insert_row should make execution progress")
+	}
+}
+
+func TestReplayClassForName_DataWriteIsProtected(t *testing.T) {
+	if got := ReplayClassForName("insert_row"); got != ReplayProtected {
+		t.Fatalf("ReplayClassForName(insert_row) = %q, want %q", got, ReplayProtected)
+	}
+	if got := ReplayClassForName("query_table"); got != ReplaySafe {
+		t.Fatalf("ReplayClassForName(query_table) = %q, want %q", got, ReplaySafe)
+	}
+	if got := ReplayClassForName("web_search"); got != ReplaySafe {
+		t.Fatalf("ReplayClassForName(web_search) = %q, want %q", got, ReplaySafe)
+	}
+}
+
 func TestReplayFingerprintForCall_ArtifactWriteUsesPathIdentity(t *testing.T) {
 	first := ReplayFingerprintForCall("obsidian_write", `{"path":"Note.md","content":"# first"}`)
 	second := ReplayFingerprintForCall("obsidian_write", `{"path":"note.md","content":"# second"}`)

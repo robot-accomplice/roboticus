@@ -24,15 +24,16 @@ func ListTraces(store *db.Store) http.HandlerFunc {
 
 		traces := make([]map[string]any, 0)
 		for rows.Next() {
-			var id, turnID, channel, createdAt string
+			var id, turnID, channel, stagesJSON, createdAt string
 			var totalMs int64
-			if err := rows.Scan(&id, &turnID, &channel, &totalMs, &createdAt); err != nil {
+			if err := rows.Scan(&id, &turnID, &channel, &totalMs, &stagesJSON, &createdAt); err != nil {
 				writeError(w, http.StatusInternalServerError, "failed to read trace row")
 				return
 			}
 			traces = append(traces, map[string]any{
 				"id": id, "turn_id": turnID, "channel": channel,
 				"total_ms": totalMs, "created_at": createdAt,
+				"health": pipelineHealthFromStages(stagesJSON),
 			})
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -186,6 +187,7 @@ func GetTrace(store *db.Store) http.HandlerFunc {
 			"turn_id":      tid,
 			"channel":      channel,
 			"total_ms":     totalMs,
+			"health":       pipelineHealthFromStages(stagesJSON),
 			"stages":       stages,
 			"created_at":   createdAt,
 		})
@@ -280,7 +282,8 @@ func ReplayTrace(store *db.Store) http.HandlerFunc {
 			"replayed": true,
 			"trace": map[string]any{
 				"id": id, "turn_id": tid, "channel": channel,
-				"total_ms": totalMs, "stages": stages, "created_at": createdAt,
+				"total_ms": totalMs, "health": pipelineHealthFromStages(stagesJSON),
+				"stages": stages, "created_at": createdAt,
 			},
 		})
 	}
@@ -306,7 +309,8 @@ func GetTraceFlow(store *db.Store) http.HandlerFunc {
 
 		writeJSON(w, http.StatusOK, map[string]any{
 			"id": id, "turn_id": tid, "channel": channel,
-			"total_ms": totalMs, "stages": stages, "created_at": createdAt,
+			"total_ms": totalMs, "health": pipelineHealthFromStages(stagesJSON),
+			"stages": stages, "created_at": createdAt,
 			"format": "flow",
 		})
 	}

@@ -184,6 +184,51 @@ func TestPipeline_GatingAllowsRunAfterInterval(t *testing.T) {
 	}
 }
 
+func TestPipeline_SkipsMemoryCurationWhenSessionActive(t *testing.T) {
+	store := testutil.TempStore(t)
+	ctx := context.Background()
+	pipe := NewConsolidationPipeline()
+	pipe.MinInterval = 0
+
+	_, err := store.ExecContext(ctx,
+		`INSERT INTO sessions (id, agent_id, scope_key, status, created_at, updated_at)
+		 VALUES (?, ?, ?, 'active', datetime('now'), datetime('now'))`,
+		"sess-active-curation", "agent-1", "scope:active-curation")
+	if err != nil {
+		t.Fatalf("seed active session: %v", err)
+	}
+	seedEpisodic(t, store, "ep-active-1", "tool_event", "list_directory:/tmp stale derivable output", 5, nowStr())
+	seedEpisodic(t, store, "ep-active-2", "fact", "the cat sat on the mat in the sun", 5, nowStr())
+	seedEpisodic(t, store, "ep-active-3", "fact", "the cat sat on the mat in the sun today", 7, nowStr())
+
+	r := pipe.Run(ctx, store)
+	if r.DerivableStale != 0 || r.Indexed != 0 || r.Deduped != 0 || r.Promoted != 0 || r.Pruned != 0 || r.Orphaned != 0 {
+		t.Fatalf("active session should skip all memory curation mutation, got %+v", r)
+	}
+
+	var state string
+	if err := store.QueryRowContext(ctx, `SELECT memory_state FROM episodic_memory WHERE id = 'ep-active-1'`).Scan(&state); err != nil {
+		t.Fatalf("query derivable state: %v", err)
+	}
+	if state != "active" {
+		t.Fatalf("derivable memory state = %q, want active while non-quiescent", state)
+	}
+	if err := store.QueryRowContext(ctx, `SELECT memory_state FROM episodic_memory WHERE id = 'ep-active-2'`).Scan(&state); err != nil {
+		t.Fatalf("query duplicate state: %v", err)
+	}
+	if state != "active" {
+		t.Fatalf("duplicate candidate state = %q, want active while non-quiescent", state)
+	}
+
+	var logCount int
+	if err := store.QueryRowContext(ctx, `SELECT COUNT(*) FROM consolidation_log`).Scan(&logCount); err != nil {
+		t.Fatalf("query curation log: %v", err)
+	}
+	if logCount != 0 {
+		t.Fatalf("curation log count = %d, want 0 for skipped non-quiescent run", logCount)
+	}
+}
+
 func TestPipeline_Phase1_IndexBackfill(t *testing.T) {
 	store := testutil.TempStore(t)
 	ctx := context.Background()

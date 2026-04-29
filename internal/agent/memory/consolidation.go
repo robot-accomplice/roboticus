@@ -108,7 +108,8 @@ func jaccardSimilarity(a, b string) float64 {
 	return float64(intersection) / float64(union)
 }
 
-// ConsolidationReport holds per-phase counts from a consolidation run.
+// ConsolidationReport holds per-phase counts from a memory curation run.
+// The type name is retained for compatibility with existing call sites.
 type ConsolidationReport struct {
 	Indexed            int
 	Deduped            int
@@ -128,12 +129,14 @@ type ConsolidationReport struct {
 
 // LLMDistiller distills multiple episodic entries into a single semantic fact.
 // This interface enables LLM-assisted episodic-to-semantic promotion during
-// consolidation sleep-time compute.
+// quiescent memory curation.
 type LLMDistiller interface {
 	Distill(ctx context.Context, entries []string) (string, error)
 }
 
-// ConsolidationPipeline runs a multi-phase memory consolidation pipeline.
+// ConsolidationPipeline runs the multi-phase memory curation lifecycle. The
+// type name is retained for compatibility; Memory Consolidation is now the
+// deduplication/promotion/distillation subset of this broader lifecycle.
 type ConsolidationPipeline struct {
 	// MinInterval prevents running more than once per this duration.
 	MinInterval time.Duration
@@ -143,55 +146,50 @@ type ConsolidationPipeline struct {
 	// Distiller enables LLM-assisted episodic-to-semantic promotion.
 	// When nil, falls back to longest-entry heuristic.
 	Distiller LLMDistiller
-	// MaxDistillPerRun limits the number of LLM distillation calls per
-	// consolidation run for cost control. Default: 5.
+	// MaxDistillPerRun limits the number of LLM distillation calls per memory
+	// curation run for cost control. Default: 5.
 	MaxDistillPerRun int
 }
 
-// NewConsolidationPipeline creates a pipeline with a default 1-hour minimum interval.
+// NewConsolidationPipeline creates a memory curation pipeline with a default
+// 1-hour minimum interval. The function name is retained for compatibility.
 func NewConsolidationPipeline() *ConsolidationPipeline {
 	return &ConsolidationPipeline{
 		MinInterval: time.Hour,
 	}
 }
 
-// Run executes the consolidation pipeline and returns a report.
+// Run executes memory curation and returns a report.
 // Phase order:
 //   - Phase 0: Mark derivable tool outputs stale
 //   - Phase 1: Index backfill
-//   - Phase 2: Within-tier dedup + Obsidian vault scan
-//   - Phase 3: Episodic promotion
-//   - Phase 4: Confidence decay + Tier state sync
-//   - Phase 5: Importance decay
-//   - Phase 6: Pruning
-//   - Phase 7: Orphan cleanup
+//   - Phase 2: Embedding backfill + Obsidian vault scan
+//   - Phase 3: Memory consolidation (dedup, promotion, distillation)
+//   - Phase 4: Memory governance (supersession, tier/skill sync)
+//   - Phase 5: Confidence + importance decay
+//   - Phase 6: Pruning + orphan cleanup
 func (p *ConsolidationPipeline) Run(ctx context.Context, store *db.Store) ConsolidationReport {
 	var report ConsolidationReport
 
-	// Gate: check last consolidation time.
+	// Gate: check last curation time.
 	if !p.shouldRun(ctx, store) {
-		log.Debug().Msg("consolidation: skipped (ran recently)")
+		log.Debug().Msg("memory curation: skipped (ran recently)")
 		return report
 	}
 
-	// Phases 0-2: always run (index maintenance, safe to run during active sessions).
+	// Curation mutates memory and derived memory surfaces. Do not run any phase
+	// while a session is active; force bypasses interval gating only, not
+	// quiescence safety.
+	if !isQuiescent(ctx, store) {
+		log.Debug().Msg("memory curation: skipped (session active within 5s)")
+		return report
+	}
+
 	report.DerivableStale = p.Phase0_MarkDerivableStale(ctx, store)
 	report.Indexed = p.phaseIndexBackfill(ctx, store)
 	report.EmbeddingsBackfill = p.phaseEmbeddingBackfill(ctx, store)
 	report.ObsidianScanned = p.Phase2_ObsidianVaultScan(ctx, store)
-
-	// Rust parity: quiescence gate — skip data-moving phases (3+) if a session
-	// has been active in the last 5 seconds. Prevents consolidation from mutating
-	// memories while the agent is mid-conversation.
-	// Rust: consolidation.rs is_quiescent() gates phases 3-4.
-	quiescent := isQuiescent(ctx, store)
-	if !quiescent {
-		log.Debug().Msg("consolidation: skipping data-moving phases (session active within 5s)")
-	}
-
-	if quiescent {
-		report.Deduped = p.phaseWithinTierDedup(ctx, store)
-	}
+	report.Deduped = p.phaseWithinTierDedup(ctx, store)
 	report.Promoted = p.phaseEpisodicPromotion(ctx, store)
 	report.Distilled = p.phaseEpisodeDistillation(ctx, store)
 	report.Superseded = p.phaseContradictionDetection(ctx, store)
@@ -219,7 +217,7 @@ func (p *ConsolidationPipeline) Run(ctx context.Context, store *db.Store) Consol
 		Int("importance_decayed", report.ImportanceDecayed).
 		Int("pruned", report.Pruned).
 		Int("orphaned", report.Orphaned).
-		Msg("consolidation: complete")
+		Msg("memory curation: complete")
 
 	return report
 }

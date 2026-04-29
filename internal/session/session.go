@@ -26,6 +26,7 @@ type Session struct {
 	pendingCalls      []llm.ToolCall
 	memoryContext     string // Pre-retrieved memory block for cognitive scaffold (ARCHITECTURE.md §4).
 	memoryIndex       string // Pre-built memory index block for recall/search tool guidance.
+	turnExecutionNote string // Transient current-turn scaffold; not persisted or mined as transcript.
 	taskIntent        string
 	taskComplexity    string
 	taskPlannedAction string
@@ -44,6 +45,7 @@ type Session struct {
 	turnPolicyReason  string
 	sourceArtifacts   []string
 	inspectionTarget  string
+	inspectionRoots   []string
 	destinationTarget string
 
 	// v1.0.6 typed evidence artifact (see verification_evidence.go).
@@ -72,6 +74,7 @@ type Session struct {
 	selectedToolDefs   []llm.ToolDef
 	lastAssistantPhase string
 	continuation       *ContinuationArtifact
+	pendingAction      *PendingActionArtifact
 
 	// v1.0.6 hippocampus table summary for the current turn.
 	// Populated by the pipeline's hippocampus stage (see
@@ -121,6 +124,19 @@ func (s *Session) ConsumeContinuationArtifact() *ContinuationArtifact {
 	return artifact
 }
 
+// PendingActionArtifact returns typed assistant-proposed continuation state
+// for short operator confirmations such as "please do" or "continue".
+func (s *Session) PendingActionArtifact() *PendingActionArtifact {
+	if s.pendingAction != nil {
+		artifact := *s.pendingAction
+		return &artifact
+	}
+	if artifact := DetectPendingActionArtifact(s.LastAssistantContent()); artifact != nil {
+		return artifact
+	}
+	return nil
+}
+
 // SetMessages replaces the full message history.
 // The caller owns the replacement slice and should treat it as immutable after
 // handing it to the session.
@@ -160,6 +176,17 @@ func (s *Session) SetMemoryIndex(block string) { s.memoryIndex = block }
 
 // MemoryIndex returns the pre-built memory index block, if any.
 func (s *Session) MemoryIndex() string { return s.memoryIndex }
+
+// SetTurnExecutionNote stores execution-only current-turn context. This is
+// for framework-derived scaffolding such as short-followup expansion: it may
+// reach the model as a system note, but it must not become durable transcript
+// text, UI chat history, or memory-mining input.
+func (s *Session) SetTurnExecutionNote(note string) {
+	s.turnExecutionNote = note
+}
+
+// TurnExecutionNote returns execution-only current-turn context, if present.
+func (s *Session) TurnExecutionNote() string { return s.turnExecutionNote }
 
 // SetTaskVerificationHints stores pipeline-computed task state so later stages
 // can verify responses against structured intent/subgoals instead of re-deriving
@@ -252,6 +279,18 @@ func (s *Session) SetInspectionTargetSummary(summary string) { s.inspectionTarge
 // the current turn, if any.
 func (s *Session) InspectionTargetSummary() string { return s.inspectionTarget }
 
+// SetInspectionTargetRoots records resolved filesystem roots for the current
+// inspection turn. These are execution anchors, not transcript content.
+func (s *Session) SetInspectionTargetRoots(paths []string) {
+	s.inspectionRoots = append([]string(nil), paths...)
+}
+
+// InspectionTargetRoots returns resolved filesystem roots for the current
+// inspection turn. Callers must treat the result as immutable.
+func (s *Session) InspectionTargetRoots() []string {
+	return append([]string(nil), s.inspectionRoots...)
+}
+
 // SetDestinationTargetSummary records the authoritative destination hint for
 // the current turn's filesystem authoring, if any.
 func (s *Session) SetDestinationTargetSummary(summary string) { s.destinationTarget = summary }
@@ -298,6 +337,7 @@ func (s *Session) AddAssistantMessageWithPhase(content string, toolCalls []llm.T
 	})
 	s.pendingCalls = pendingToolCalls
 	s.lastAssistantPhase = phase
+	s.pendingAction = DetectPendingActionArtifact(content)
 }
 
 // AddToolResult appends a tool result message.

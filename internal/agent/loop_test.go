@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"roboticus/internal/agent/policy"
 	agenttools "roboticus/internal/agent/tools"
 	"roboticus/internal/core"
 	"roboticus/internal/llm"
@@ -450,24 +451,34 @@ func TestLoop_TEORReflectDisablesToolsAfterObservation(t *testing.T) {
 	if len(mock.requests[1].Tools) != 0 {
 		t.Fatalf("reflect request tools = %d, want 0", len(mock.requests[1].Tools))
 	}
+	// Contract: reflect request layers the TOTOF brief as a TRAILING
+	// SYSTEM OVERLAY on top of full conversation history rather than
+	// replacing history with a synthetic 2-message scaffold. The brief
+	// (reflect instruction + TOTOF.Render()) lands as system messages at
+	// the END of the request so it stays prominent as the model's most
+	// recent contextual instruction. See R-AGENT-195 / R-AGENT-199.
 	foundReflectInstruction := false
 	foundTOTOFTask := false
+	foundOriginalUserTask := false
 	for _, msg := range mock.requests[1].Messages {
 		if msg.Role == "system" && strings.Contains(msg.Content, "Post-observation reflection mode") {
 			foundReflectInstruction = true
 		}
-		if msg.Role == "user" && strings.Contains(msg.Content, "TASK") && strings.Contains(msg.Content, "KEY TOOL OUTCOMES") {
+		if msg.Role == "system" && strings.Contains(msg.Content, "TASK") && strings.Contains(msg.Content, "KEY TOOL OUTCOMES") {
 			foundTOTOFTask = true
 		}
-		if len(msg.ToolCalls) > 0 {
-			t.Fatalf("reflect request should not replay tool calls, found %d", len(msg.ToolCalls))
+		if msg.Role == "user" && strings.Contains(msg.Content, "run the tool and tell me what happened") {
+			foundOriginalUserTask = true
 		}
 	}
 	if !foundReflectInstruction {
 		t.Fatal("reflect request missing reflection contract system message")
 	}
 	if !foundTOTOFTask {
-		t.Fatal("reflect request missing TOTOF payload")
+		t.Fatal("reflect request missing TOTOF payload (must be a trailing system overlay, not a synthetic user message)")
+	}
+	if !foundOriginalUserTask {
+		t.Fatal("reflect request missing original user message — history was replaced instead of layered (regression)")
 	}
 }
 
@@ -574,35 +585,46 @@ func TestLoop_TEORReflectMayExplicitlyReopenExecution(t *testing.T) {
 	if len(mock.requests[1].Tools) != 0 {
 		t.Fatalf("reflect request tools = %d, want 0", len(mock.requests[1].Tools))
 	}
-	for _, msg := range mock.requests[1].Messages {
-		if len(msg.ToolCalls) > 0 {
-			t.Fatalf("reflect request should not replay tool calls, found %d", len(msg.ToolCalls))
-		}
-	}
 	if len(mock.requests[2].Tools) == 0 {
 		t.Fatal("post-reflection think request unexpectedly had no tools")
 	}
+	// Contract: continuation think request layers the continuation
+	// brief as a TRAILING SYSTEM OVERLAY on top of full conversation
+	// history (including prior assistant tool_calls and tool results).
+	// See R-AGENT-196 / R-AGENT-199.
 	foundContinuationInstruction := false
 	foundRemainingWork := false
+	foundOriginalUserTask := false
 	for _, msg := range mock.requests[2].Messages {
 		if msg.Role == "system" && strings.Contains(msg.Content, "Post-observation continuation mode") {
 			foundContinuationInstruction = true
 		}
-		if msg.Role == "user" && strings.Contains(msg.Content, "REMAINING WORK") {
+		if msg.Role == "system" && strings.Contains(msg.Content, "REMAINING WORK") {
 			foundRemainingWork = true
 		}
-		if len(msg.ToolCalls) > 0 {
-			t.Fatalf("post-reflection continuation request should not replay tool calls, found %d", len(msg.ToolCalls))
+		if msg.Role == "user" && strings.Contains(msg.Content, "perform the task completely") {
+			foundOriginalUserTask = true
 		}
 	}
 	if !foundContinuationInstruction {
 		t.Fatal("post-reflection continuation request missing continuation contract system message")
 	}
 	if !foundRemainingWork {
-		t.Fatal("post-reflection continuation request missing canonical continuation payload")
+		t.Fatal("post-reflection continuation request missing canonical continuation payload (must be a trailing system overlay)")
+	}
+	if !foundOriginalUserTask {
+		t.Fatal("post-reflection continuation request missing original user message — history was replaced instead of layered (regression)")
 	}
 	if got := session.LastAssistantContent(); got != "Done after explicit continuation." {
 		t.Fatalf("last assistant content = %q, want continued final answer", got)
+	}
+	// CONTINUE_EXECUTION sentinel must NEVER be persisted to session history.
+	// With prefix-only detection, a model that emitted prose before the
+	// sentinel would leak the entire response (sentinel and all) into chat.
+	for _, msg := range session.Messages() {
+		if strings.Contains(msg.Content, reflectContinuePrefix) {
+			t.Fatalf("session message contained literal %q sentinel: %q (regression — sentinel must be consumed by framework, never persisted)", reflectContinuePrefix, msg.Content)
+		}
 	}
 }
 
@@ -1551,5 +1573,658 @@ func TestLoop_FocusedAnalysisAuthoringEvidenceDoesNotCountAsExploratoryChurn(t *
 func TestTurnProfileCountsReadOnlyEvidenceAsProgress_FocusedSourceCode(t *testing.T) {
 	if !turnProfileCountsReadOnlyEvidenceAsProgress("focused_source_code") {
 		t.Fatal("focused source code profile should count bounded read-only evidence as progress")
+	}
+}
+
+// TestLoop_ApprovalManagerBlocksToolBeforeRegistry verifies the v1.0.8
+// wiring: when ApprovalManager.ClassifyTool reports ToolBlocked, the
+// loop must short-circuit BEFORE dispatching to the tool registry,
+// emit a `tool_call_blocked_by_approval` observer event, and never
+// invoke the underlying tool.
+func TestLoop_ApprovalManagerBlocksToolBeforeRegistry(t *testing.T) {
+	mock := &mockCompleter{
+		responses: []*llm.Response{
+			{
+				Model:    "kimi-k2-turbo-preview",
+				Provider: "moonshot",
+				ToolCalls: []llm.ToolCall{{
+					ID:   "call-blocked",
+					Type: "function",
+					Function: llm.ToolCallFunc{
+						Name:      "bash",
+						Arguments: `{"command":"echo hi"}`,
+					},
+				}},
+			},
+			{Model: "kimi-k2-turbo-preview", Provider: "moonshot", Content: "Halted."},
+		},
+	}
+	reg := NewToolRegistry()
+	bash := &bashTestTool{}
+	reg.Register(bash)
+	recorder := &recordingToolCallRecorder{}
+	approvals := policy.NewApprovalManager(policy.ApprovalsConfig{
+		Enabled:      true,
+		BlockedTools: []string{"bash"},
+	})
+	deps := LoopDeps{
+		LLM:       mock,
+		Tools:     reg,
+		Recorder:  recorder,
+		Approvals: approvals,
+		Context:   NewContextBuilder(DefaultContextConfig()),
+	}
+	loop := NewLoop(DefaultLoopConfig(), deps)
+
+	sess := NewSession("sess-blocked", "agent-1", "TestBot")
+	sess.SetSelectedToolDefs([]llm.ToolDef{
+		{Type: "function", Function: llm.ToolFuncDef{Name: "bash"}},
+	})
+	sess.AddUserMessage("run a command")
+	obs := &recordingObserver{}
+	ctx := llm.WithInferenceObserver(core.WithTurnID(context.Background(), "turn-blocked"), obs)
+
+	result, err := loop.Run(ctx, sess)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "Halted." {
+		t.Fatalf("result = %q, want Halted.", result)
+	}
+	if bash.calls != 0 {
+		t.Fatalf("bash invoked %d times despite block, want 0", bash.calls)
+	}
+	found := false
+	for _, ev := range obs.events {
+		if ev.eventType == "tool_call_blocked_by_approval" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected tool_call_blocked_by_approval event, got %+v", obs.events)
+	}
+}
+
+// TestLoop_ApprovalManagerGatedToolStillExecutes verifies the
+// transitional gating contract: until the human-in-the-loop approval
+// path is wired through the API layer, gated tools execute with a
+// warning observer event so operators can see the call in audit logs.
+func TestLoop_ApprovalManagerGatedToolStillExecutes(t *testing.T) {
+	mock := &mockCompleter{
+		responses: []*llm.Response{
+			{
+				Model:    "kimi-k2-turbo-preview",
+				Provider: "moonshot",
+				ToolCalls: []llm.ToolCall{{
+					ID:   "call-gated",
+					Type: "function",
+					Function: llm.ToolCallFunc{
+						Name:      "bash",
+						Arguments: `{"command":"echo hi"}`,
+					},
+				}},
+			},
+			{Model: "kimi-k2-turbo-preview", Provider: "moonshot", Content: "ok"},
+		},
+	}
+	reg := NewToolRegistry()
+	bash := &bashTestTool{}
+	reg.Register(bash)
+	approvals := policy.NewApprovalManager(policy.ApprovalsConfig{
+		Enabled:    true,
+		GatedTools: []string{"bash"},
+	})
+	loop := NewLoop(DefaultLoopConfig(), LoopDeps{
+		LLM:       mock,
+		Tools:     reg,
+		Approvals: approvals,
+		Context:   NewContextBuilder(DefaultContextConfig()),
+	})
+
+	sess := NewSession("sess-gated", "agent-1", "TestBot")
+	sess.SetSelectedToolDefs([]llm.ToolDef{
+		{Type: "function", Function: llm.ToolFuncDef{Name: "bash"}},
+	})
+	sess.AddUserMessage("run a command")
+	obs := &recordingObserver{}
+	ctx := llm.WithInferenceObserver(core.WithTurnID(context.Background(), "turn-gated"), obs)
+
+	if _, err := loop.Run(ctx, sess); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if bash.calls != 1 {
+		t.Fatalf("gated tool calls = %d, want 1", bash.calls)
+	}
+	found := false
+	for _, ev := range obs.events {
+		if ev.eventType == "tool_call_gated" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected tool_call_gated event, got %+v", obs.events)
+	}
+}
+
+func TestLoop_ReflectPreservesChatHistory(t *testing.T) {
+	contextBuilder := NewContextBuilder(DefaultContextConfig())
+	contextBuilder.SetTools([]llm.ToolDef{{
+		Type: "function",
+		Function: llm.ToolFuncDef{
+			Name:        "echo",
+			Description: "echo test tool",
+			Parameters:  json.RawMessage(`{"type":"object"}`),
+		},
+	}})
+
+	mock := &requestCapturingCompleter{
+		responses: []*llm.Response{
+			{
+				ToolCalls: []llm.ToolCall{{
+					ID:   "call-1",
+					Type: "function",
+					Function: llm.ToolCallFunc{
+						Name:      "echo",
+						Arguments: `{"message":"test"}`,
+					},
+				}},
+			},
+			{Content: "Reflection finalized."},
+		},
+	}
+	reg := NewToolRegistry()
+	reg.Register(&testTool{})
+	loop := NewLoop(DefaultLoopConfig(), LoopDeps{
+		LLM:     mock,
+		Tools:   reg,
+		Context: contextBuilder,
+	})
+
+	session := NewSession("sess-reflect-history", "agent-1", "TestBot")
+	session.AddUserMessage("run echo and reflect")
+
+	_, err := loop.Run(context.Background(), session)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(mock.requests) < 2 {
+		t.Fatalf("requests = %d, want >= 2", len(mock.requests))
+	}
+	refReq := mock.requests[1]
+	var sawUser, sawAssistantTool, sawTool bool
+	for _, msg := range refReq.Messages {
+		switch msg.Role {
+		case "user":
+			if strings.Contains(msg.Content, "run echo and reflect") {
+				sawUser = true
+			}
+		case "assistant":
+			if len(msg.ToolCalls) > 0 {
+				sawAssistantTool = true
+			}
+		case "tool":
+			if strings.Contains(msg.Content, "hello") {
+				sawTool = true
+			}
+		}
+	}
+	if !sawUser {
+		t.Fatal("reflect request missing original user turn (R-AGENT-195)")
+	}
+	if !sawAssistantTool {
+		t.Fatal("reflect request missing assistant tool-call message from history (R-AGENT-195)")
+	}
+	if !sawTool {
+		t.Fatal("reflect request missing tool result message from history (R-AGENT-195)")
+	}
+}
+
+func TestLoop_ReflectPreservesWorkingMemoryContext(t *testing.T) {
+	contextBuilder := NewContextBuilder(DefaultContextConfig())
+	contextBuilder.SetMemory("[Active Memory]\n\n[Working State]\n- durable task: audit skill use regression")
+	contextBuilder.SetMemoryIndex("[Memory Index]\n- recall_memory(\"skill-regression\")")
+	contextBuilder.SetTools([]llm.ToolDef{{
+		Type: "function",
+		Function: llm.ToolFuncDef{
+			Name:        "echo",
+			Description: "echo test tool",
+			Parameters:  json.RawMessage(`{"type":"object"}`),
+		},
+	}})
+
+	mock := &requestCapturingCompleter{
+		responses: []*llm.Response{
+			{
+				ToolCalls: []llm.ToolCall{{
+					ID:   "call-1",
+					Type: "function",
+					Function: llm.ToolCallFunc{
+						Name:      "echo",
+						Arguments: `{"message":"test"}`,
+					},
+				}},
+			},
+			{Content: "Reflection finalized with memory intact."},
+		},
+	}
+	reg := NewToolRegistry()
+	reg.Register(&testTool{})
+	loop := NewLoop(DefaultLoopConfig(), LoopDeps{
+		LLM:     mock,
+		Tools:   reg,
+		Context: contextBuilder,
+	})
+
+	session := NewSession("sess-reflect-memory", "agent-1", "TestBot")
+	session.AddUserMessage("run echo and keep our working memory")
+
+	if _, err := loop.Run(context.Background(), session); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(mock.requests) < 2 {
+		t.Fatalf("requests = %d, want >= 2", len(mock.requests))
+	}
+	assertRequestContainsOrderedSystemContext(t, mock.requests[1], "[Working State]", "[Memory Index]", "FINALIZATION INSTRUCTION")
+}
+
+func TestLoop_ContinuationPreservesChatHistory(t *testing.T) {
+	contextBuilder := NewContextBuilder(DefaultContextConfig())
+	contextBuilder.SetTools([]llm.ToolDef{{
+		Type: "function",
+		Function: llm.ToolFuncDef{
+			Name:        "echo",
+			Description: "echo test tool",
+			Parameters:  json.RawMessage(`{"type":"object"}`),
+		},
+	}})
+
+	mock := &requestCapturingCompleter{
+		responses: []*llm.Response{
+			{
+				ToolCalls: []llm.ToolCall{{
+					ID:   "call-1",
+					Type: "function",
+					Function: llm.ToolCallFunc{
+						Name:      "echo",
+						Arguments: `{"message":"test"}`,
+					},
+				}},
+			},
+			{Content: "CONTINUE_EXECUTION\nNeed another step."},
+			{Content: "Finished after continuation."},
+		},
+	}
+	reg := NewToolRegistry()
+	reg.Register(&testTool{})
+	loop := NewLoop(DefaultLoopConfig(), LoopDeps{
+		LLM:     mock,
+		Tools:   reg,
+		Context: contextBuilder,
+	})
+
+	session := NewSession("sess-continuation-history", "agent-1", "TestBot")
+	session.AddUserMessage("perform the task")
+
+	_, err := loop.Run(context.Background(), session)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(mock.requests) < 3 {
+		t.Fatalf("requests = %d, want >= 3", len(mock.requests))
+	}
+	contReq := mock.requests[2]
+	var sawUser, sawAssistantTool, sawTool bool
+	for _, msg := range contReq.Messages {
+		switch msg.Role {
+		case "user":
+			if strings.Contains(msg.Content, "perform the task") {
+				sawUser = true
+			}
+		case "assistant":
+			if len(msg.ToolCalls) > 0 {
+				sawAssistantTool = true
+			}
+		case "tool":
+			if strings.Contains(msg.Content, "hello") {
+				sawTool = true
+			}
+		}
+	}
+	if !sawUser || !sawAssistantTool || !sawTool {
+		t.Fatalf("continuation request missing history: user=%v assistant_tool=%v tool=%v (R-AGENT-196)", sawUser, sawAssistantTool, sawTool)
+	}
+}
+
+func TestLoop_ContinuationPreservesWorkingMemoryContext(t *testing.T) {
+	contextBuilder := NewContextBuilder(DefaultContextConfig())
+	contextBuilder.SetMemory("[Active Memory]\n\n[Working State]\n- durable task: continue after reflection")
+	contextBuilder.SetMemoryIndex("[Memory Index]\n- recall_memory(\"continuation-regression\")")
+	contextBuilder.SetTools([]llm.ToolDef{{
+		Type: "function",
+		Function: llm.ToolFuncDef{
+			Name:        "echo",
+			Description: "echo test tool",
+			Parameters:  json.RawMessage(`{"type":"object"}`),
+		},
+	}})
+
+	mock := &requestCapturingCompleter{
+		responses: []*llm.Response{
+			{
+				ToolCalls: []llm.ToolCall{{
+					ID:   "call-1",
+					Type: "function",
+					Function: llm.ToolCallFunc{
+						Name:      "echo",
+						Arguments: `{"message":"test"}`,
+					},
+				}},
+			},
+			{Content: "CONTINUE_EXECUTION\nNeed one more bounded pass."},
+			{Content: "Finished after continuation with memory intact."},
+		},
+	}
+	reg := NewToolRegistry()
+	reg.Register(&testTool{})
+	loop := NewLoop(DefaultLoopConfig(), LoopDeps{
+		LLM:     mock,
+		Tools:   reg,
+		Context: contextBuilder,
+	})
+
+	session := NewSession("sess-continuation-memory", "agent-1", "TestBot")
+	session.AddUserMessage("perform the task and preserve memory")
+
+	if _, err := loop.Run(context.Background(), session); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(mock.requests) < 3 {
+		t.Fatalf("requests = %d, want >= 3", len(mock.requests))
+	}
+	assertRequestContainsOrderedSystemContext(t, mock.requests[2], "[Working State]", "[Memory Index]", "CONTINUATION INSTRUCTION")
+}
+
+func assertRequestContainsOrderedSystemContext(t *testing.T, req *llm.Request, memoryNeedle, indexNeedle, overlayNeedle string) {
+	t.Helper()
+	memoryIdx, indexIdx, overlayIdx := -1, -1, -1
+	for i, msg := range req.Messages {
+		if msg.Role != "system" {
+			continue
+		}
+		if strings.Contains(msg.Content, memoryNeedle) {
+			memoryIdx = i
+		}
+		if strings.Contains(msg.Content, indexNeedle) {
+			indexIdx = i
+		}
+		if strings.Contains(msg.Content, overlayNeedle) {
+			overlayIdx = i
+		}
+	}
+	if memoryIdx < 0 {
+		t.Fatalf("request missing working-memory context %q (R-AGENT-202)", memoryNeedle)
+	}
+	if indexIdx < 0 {
+		t.Fatalf("request missing memory index %q (R-AGENT-202)", indexNeedle)
+	}
+	if overlayIdx < 0 {
+		t.Fatalf("request missing trailing overlay %q", overlayNeedle)
+	}
+	if !(memoryIdx < overlayIdx && indexIdx < overlayIdx) {
+		t.Fatalf("memory/index must precede trailing overlay: memory=%d index=%d overlay=%d", memoryIdx, indexIdx, overlayIdx)
+	}
+}
+
+func assertReflectMidMessageContinueLeavesNoSentinelInSession(t *testing.T) {
+	t.Helper()
+	assertReflectContinueLeavesNoSentinelInSession(t, "sess-mid-sentinel", "The observation window looks incomplete.\nCONTINUE_EXECUTION need one more evidence pass")
+}
+
+func assertReflectContinueLeavesNoSentinelInSession(t *testing.T, sessionID, reflectContent string) {
+	t.Helper()
+	contextBuilder := NewContextBuilder(DefaultContextConfig())
+	contextBuilder.SetTools([]llm.ToolDef{{
+		Type: "function",
+		Function: llm.ToolFuncDef{
+			Name:        "echo",
+			Description: "echo test tool",
+			Parameters:  json.RawMessage(`{"type":"object"}`),
+		},
+	}})
+
+	mock := &requestCapturingCompleter{
+		responses: []*llm.Response{
+			{
+				ToolCalls: []llm.ToolCall{{
+					ID:   "call-1",
+					Type: "function",
+					Function: llm.ToolCallFunc{
+						Name:      "echo",
+						Arguments: `{"message":"test"}`,
+					},
+				}},
+			},
+			{Content: reflectContent},
+			{Content: "All evidence collected; done."},
+		},
+	}
+	reg := NewToolRegistry()
+	reg.Register(&testTool{})
+	loop := NewLoop(DefaultLoopConfig(), LoopDeps{
+		LLM:     mock,
+		Tools:   reg,
+		Context: contextBuilder,
+	})
+
+	session := NewSession(sessionID, "agent-1", "TestBot")
+	session.AddUserMessage("run tool then finish")
+
+	result, err := loop.Run(context.Background(), session)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "All evidence collected; done." {
+		t.Fatalf("result = %q", result)
+	}
+	if len(mock.requests) != 3 {
+		t.Fatalf("requests = %d, want 3", len(mock.requests))
+	}
+	for _, msg := range session.Messages() {
+		if strings.Contains(msg.Content, reflectContinuePrefix) {
+			t.Fatalf("sentinel leaked into session: %q (R-AGENT-197)", msg.Content)
+		}
+	}
+}
+
+func TestLoop_ReflectDetectsMidMessageContinueExecution(t *testing.T) {
+	assertReflectMidMessageContinueLeavesNoSentinelInSession(t)
+}
+
+func TestLoop_ReflectDetectsInlineContinueExecution(t *testing.T) {
+	assertReflectContinueLeavesNoSentinelInSession(t, "sess-inline-sentinel", "The observation window looks incomplete. CONTINUE_EXECUTION need one more evidence pass")
+}
+
+func TestLoop_ReflectPromissoryExecutionContinuesInsteadOfFinalizing(t *testing.T) {
+	assertReflectContinueLeavesNoSentinelInSession(t, "sess-promissory-reflect", "The first page did not contain the exact score.\n\nNext, I will continue by using the browser tool to extract the score.")
+}
+
+func TestLoop_ReflectEmbeddedPromissoryExecutionContinuesInsteadOfFinalizing(t *testing.T) {
+	assertReflectContinueLeavesNoSentinelInSession(t, "sess-embedded-promissory-reflect", "The preliminary fetch did not provide the actual score. I will now proceed to use the browser tool to extract the relevant information.\n\nContinuing execution to extract the score.")
+}
+
+func TestLoop_ReflectNeverPersistsContinueExecutionSentinel(t *testing.T) {
+	t.Run("mid_line_sentinel", func(t *testing.T) {
+		assertReflectMidMessageContinueLeavesNoSentinelInSession(t)
+	})
+	t.Run("inline_sentinel", func(t *testing.T) {
+		assertReflectContinueLeavesNoSentinelInSession(t, "sess-never-sentinel-inline", "I will continue. CONTINUE_EXECUTION parse the retrieved HTML")
+	})
+	t.Run("empty_reflect_with_tool_synth", func(t *testing.T) {
+		contextBuilder := NewContextBuilder(DefaultContextConfig())
+		contextBuilder.SetTools([]llm.ToolDef{{
+			Type: "function",
+			Function: llm.ToolFuncDef{
+				Name:        "echo",
+				Description: "echo test tool",
+				Parameters:  json.RawMessage(`{"type":"object"}`),
+			},
+		}})
+		mock := &mockCompleter{
+			responses: []*llm.Response{
+				{
+					ToolCalls: []llm.ToolCall{{
+						ID:   "call-1",
+						Type: "function",
+						Function: llm.ToolCallFunc{
+							Name:      "echo",
+							Arguments: `{"message":"test"}`,
+						},
+					}},
+				},
+				{Content: ""},
+			},
+		}
+		reg := NewToolRegistry()
+		reg.Register(&testTool{})
+		loop := NewLoop(DefaultLoopConfig(), LoopDeps{
+			LLM:     mock,
+			Tools:   reg,
+			Context: contextBuilder,
+		})
+		session := NewSession("sess-never-sentinel-synth", "agent-1", "TestBot")
+		session.AddUserMessage("run echo")
+		if _, err := loop.Run(context.Background(), session); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		for _, msg := range session.Messages() {
+			if strings.Contains(msg.Content, reflectContinuePrefix) {
+				t.Fatalf("sentinel in session after synth path: %q (R-AGENT-198)", msg.Content)
+			}
+		}
+	})
+}
+
+func TestScrubControlSentinels_RemovesInlineSentinelText(t *testing.T) {
+	got := scrubControlSentinels("Useful prefix. CONTINUE_EXECUTION parse the retrieved HTML")
+	if got != "Useful prefix." {
+		t.Fatalf("scrubControlSentinels() = %q, want prefix only", got)
+	}
+}
+
+func TestLoop_ReflectBriefRendersFullTOTOFSections(t *testing.T) {
+	contextBuilder := NewContextBuilder(DefaultContextConfig())
+	contextBuilder.SetTools([]llm.ToolDef{{
+		Type: "function",
+		Function: llm.ToolFuncDef{
+			Name:        "echo",
+			Description: "echo test tool",
+			Parameters:  json.RawMessage(`{"type":"object"}`),
+		},
+	}})
+
+	mock := &requestCapturingCompleter{
+		responses: []*llm.Response{
+			{
+				ToolCalls: []llm.ToolCall{{
+					ID:   "call-1",
+					Type: "function",
+					Function: llm.ToolCallFunc{
+						Name:      "echo",
+						Arguments: `{"message":"test"}`,
+					},
+				}},
+			},
+			{Content: "ok"},
+		},
+	}
+	reg := NewToolRegistry()
+	reg.Register(&testTool{})
+	loop := NewLoop(DefaultLoopConfig(), LoopDeps{
+		LLM:     mock,
+		Tools:   reg,
+		Context: contextBuilder,
+	})
+
+	session := NewSession("sess-totof-sections", "agent-1", "TestBot")
+	session.AddUserMessage("invoke echo")
+
+	if _, err := loop.Run(context.Background(), session); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	refReq := mock.requests[1]
+	var brief string
+	for i := len(refReq.Messages) - 1; i >= 0; i-- {
+		m := refReq.Messages[i]
+		if m.Role != "system" {
+			continue
+		}
+		if strings.Contains(m.Content, "TASK\n") && strings.Contains(m.Content, "KEY TOOL OUTCOMES") {
+			brief = m.Content
+			break
+		}
+	}
+	if brief == "" {
+		t.Fatal("no trailing TOTOF system brief found (R-AGENT-199)")
+	}
+	for _, needle := range []string{
+		"TASK\n",
+		"AUTHORITATIVE OBSERVED RESULTS",
+		"KEY TOOL OUTCOMES",
+		"FINALIZATION INSTRUCTION",
+	} {
+		if !strings.Contains(brief, needle) {
+			t.Fatalf("TOTOF brief missing %q\n---\n%s", needle, brief)
+		}
+	}
+}
+
+func TestLoop_ReflectStillUsesSynthesizeFallbackOnEmptyContent(t *testing.T) {
+	contextBuilder := NewContextBuilder(DefaultContextConfig())
+	contextBuilder.SetTools([]llm.ToolDef{{
+		Type: "function",
+		Function: llm.ToolFuncDef{
+			Name:        "echo",
+			Description: "echo test tool",
+			Parameters:  json.RawMessage(`{"type":"object"}`),
+		},
+	}})
+
+	mock := &mockCompleter{
+		responses: []*llm.Response{
+			{
+				ToolCalls: []llm.ToolCall{{
+					ID:   "call-1",
+					Type: "function",
+					Function: llm.ToolCallFunc{
+						Name:      "echo",
+						Arguments: `{"message":"test"}`,
+					},
+				}},
+			},
+			{Content: ""},
+		},
+	}
+	reg := NewToolRegistry()
+	reg.Register(&testTool{})
+	loop := NewLoop(DefaultLoopConfig(), LoopDeps{
+		LLM:     mock,
+		Tools:   reg,
+		Context: contextBuilder,
+	})
+
+	session := NewSession("sess-synth-fallback-pin", "agent-1", "TestBot")
+	session.AddUserMessage("run the tool and summarize the result")
+
+	result, err := loop.Run(context.Background(), session)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.TrimSpace(result) != "hello" {
+		t.Fatalf("result = %q, want observed tool evidence (R-AGENT-200)", result)
+	}
+	if session.LastAssistantPhase() != "reflect" {
+		t.Fatalf("phase = %q, want reflect", session.LastAssistantPhase())
 	}
 }

@@ -82,7 +82,7 @@ func (r *SessionRepository) DeleteSession(ctx context.Context, sessionID string)
 
 	// 5. Delete pipeline traces and their react_traces.
 	_, _ = r.q.ExecContext(ctx,
-		`DELETE FROM react_traces WHERE trace_id IN (SELECT id FROM pipeline_traces WHERE session_id = ?)`,
+		`DELETE FROM react_traces WHERE pipeline_trace_id IN (SELECT id FROM pipeline_traces WHERE session_id = ?)`,
 		sessionID)
 	_, _ = r.q.ExecContext(ctx, `DELETE FROM pipeline_traces WHERE session_id = ?`, sessionID)
 

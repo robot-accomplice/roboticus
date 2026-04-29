@@ -125,7 +125,7 @@ func (g *ExecutionTruthGuard) CheckWithContext(content string, ctx *GuardContext
 
 	// Rust parity: truthfulness.rs — 11 relevant intents (not 3).
 	if len(ctx.Intents) > 0 {
-		relevant := false
+		relevant := selectedToolSurfaceMakesExecutionTruthRelevant(ctx)
 		for _, intent := range ctx.Intents {
 			switch intent {
 			case "execution", "task", "delegation", "cron",
@@ -141,6 +141,27 @@ func (g *ExecutionTruthGuard) CheckWithContext(content string, ctx *GuardContext
 		}
 		if !relevant {
 			return GuardResult{Passed: true}
+		}
+	}
+
+	// Check 0: Selected tools prove the capability is available even before a
+	// tool call has happened. The model may still report concrete policy/tool
+	// failures, but it cannot deny browser/web/tool capability while that tool
+	// surface is present and no denial evidence exists.
+	if len(ctx.SelectedToolNames) > 0 && !guardContextHasPolicyOrSandboxDenial(ctx) {
+		if len(ctx.ToolResults) == 0 && resolvedInspectionTaskRequiresEvidence(ctx) {
+			return GuardResult{
+				Passed: false,
+				Retry:  true,
+				Reason: "resolved filesystem inspection task finalized without inspection tool evidence; use the selected inspection tools or report the concrete tool/policy/sandbox denial",
+			}
+		}
+		if selectedToolSurfaceContradictsCapabilityDenial(ctx, content) {
+			return GuardResult{
+				Passed: false,
+				Retry:  true,
+				Reason: "falsely denied capability despite selected tool surface",
+			}
 		}
 	}
 
@@ -173,30 +194,12 @@ func (g *ExecutionTruthGuard) CheckWithContext(content string, ctx *GuardContext
 
 	// Check 2: Tools ran but model denies capability.
 	if len(ctx.ToolResults) > 0 {
-		for _, tr := range ctx.ToolResults {
-			if toolResultSignalsPolicyOrSandboxDenial(tr) {
-				return GuardResult{Passed: true}
-			}
+		if guardContextHasPolicyOrSandboxDenial(ctx) {
+			return GuardResult{Passed: true}
 		}
 		lower := strings.ToLower(content)
-		denialPatterns := []string{
-			"i'm unable to execute", "i am unable to execute",
-			"i don't have the ability",
-			"i do not have the ability",
-			"i can't execute", "i cannot execute",
-			"i can't run", "i cannot run",
-			"i don't have tools", "i do not have tools",
-			"i don't have access to tools", "i do not have access to tools",
-			"i don't have live web-search", "i do not have live web-search",
-			"i don't have web-search", "i do not have web-search",
-			"i don't have web search", "i do not have web search",
-			"i can't browse", "i cannot browse",
-			"i don't have access to the internet", "i do not have access to the internet",
-			"i don't have image-download tools", "i do not have image-download tools",
-			"outside my capabilities",
-		}
-		for _, denial := range denialPatterns {
-			if strings.Contains(lower, denial) {
+		for _, denial := range capabilityDenialPatterns {
+			if strings.Contains(lower, denial.phrase) {
 				return GuardResult{
 					Passed: false,
 					Retry:  true,
@@ -252,6 +255,183 @@ func (g *ExecutionTruthGuard) CheckWithContext(content string, ctx *GuardContext
 	}
 
 	return GuardResult{Passed: true}
+}
+
+type capabilityDenialKind string
+
+const (
+	capabilityDenialGeneric capabilityDenialKind = "generic"
+	capabilityDenialWeb     capabilityDenialKind = "web"
+	capabilityDenialExec    capabilityDenialKind = "exec"
+)
+
+type capabilityDenialPattern struct {
+	phrase string
+	kind   capabilityDenialKind
+}
+
+var capabilityDenialPatterns = []capabilityDenialPattern{
+	{"i'm unable to execute", capabilityDenialExec},
+	{"i am unable to execute", capabilityDenialExec},
+	{"i don't have the ability", capabilityDenialGeneric},
+	{"i do not have the ability", capabilityDenialGeneric},
+	{"i can't execute", capabilityDenialExec},
+	{"i cannot execute", capabilityDenialExec},
+	{"i can't run", capabilityDenialExec},
+	{"i cannot run", capabilityDenialExec},
+	{"i don't have tools", capabilityDenialGeneric},
+	{"i do not have tools", capabilityDenialGeneric},
+	{"tools and execution capabilities are currently disabled", capabilityDenialGeneric},
+	{"execution capabilities are currently disabled", capabilityDenialExec},
+	{"tools are currently disabled", capabilityDenialGeneric},
+	{"tools are now disabled", capabilityDenialGeneric},
+	{"tools are disabled", capabilityDenialGeneric},
+	{"i don't have access to tools", capabilityDenialGeneric},
+	{"i do not have access to tools", capabilityDenialGeneric},
+	{"i can't directly read or compare", capabilityDenialGeneric},
+	{"i cannot directly read or compare", capabilityDenialGeneric},
+	{"can't directly read or compare", capabilityDenialGeneric},
+	{"cannot directly read or compare", capabilityDenialGeneric},
+	{"i don't have live web-search", capabilityDenialWeb},
+	{"i do not have live web-search", capabilityDenialWeb},
+	{"i don't have web-search", capabilityDenialWeb},
+	{"i do not have web-search", capabilityDenialWeb},
+	{"i don't have web search", capabilityDenialWeb},
+	{"i do not have web search", capabilityDenialWeb},
+	{"i can't browse", capabilityDenialWeb},
+	{"i cannot browse", capabilityDenialWeb},
+	{"i don't have the capability to browse", capabilityDenialWeb},
+	{"i do not have the capability to browse", capabilityDenialWeb},
+	{"i don't have the capability to use playwright", capabilityDenialWeb},
+	{"i do not have the capability to use playwright", capabilityDenialWeb},
+	{"i don't have the capability to crawl", capabilityDenialWeb},
+	{"i do not have the capability to crawl", capabilityDenialWeb},
+	{"i don't have the capability to directly use playwright", capabilityDenialWeb},
+	{"i do not have the capability to directly use playwright", capabilityDenialWeb},
+	{"directly browse web pages", capabilityDenialWeb},
+	{"i can't use playwright", capabilityDenialWeb},
+	{"i cannot use playwright", capabilityDenialWeb},
+	{"i don't have access to the internet", capabilityDenialWeb},
+	{"i do not have access to the internet", capabilityDenialWeb},
+	{"i don't have image-download tools", capabilityDenialWeb},
+	{"i do not have image-download tools", capabilityDenialWeb},
+	{"outside my capabilities", capabilityDenialGeneric},
+}
+
+func selectedToolSurfaceMakesExecutionTruthRelevant(ctx *GuardContext) bool {
+	for _, name := range ctx.SelectedToolNames {
+		switch agenttools.OperationClassForName(name) {
+		case agenttools.OperationInspection,
+			agenttools.OperationRuntimeContextRead,
+			agenttools.OperationArtifactRead,
+			agenttools.OperationWorkspaceInspect,
+			agenttools.OperationCapabilityInventory,
+			agenttools.OperationTaskInspection,
+			agenttools.OperationMemoryRead,
+			agenttools.OperationDataRead,
+			agenttools.OperationWebRead,
+			agenttools.OperationExecution,
+			agenttools.OperationDelegation:
+			return true
+		}
+	}
+	return false
+}
+
+func guardContextHasPolicyOrSandboxDenial(ctx *GuardContext) bool {
+	for _, tr := range ctx.ToolResults {
+		if toolResultSignalsPolicyOrSandboxDenial(tr) {
+			return true
+		}
+	}
+	return false
+}
+
+func resolvedInspectionTaskRequiresEvidence(ctx *GuardContext) bool {
+	if ctx == nil || !looksLikeFocusedInspectionTurn(ctx.UserPrompt) {
+		return false
+	}
+	if !inspectionPromptHasResolvableTarget(ctx.UserPrompt) {
+		return false
+	}
+	for _, name := range ctx.SelectedToolNames {
+		if selectedToolNameSupportsInspectionEvidence(name) {
+			return true
+		}
+	}
+	return false
+}
+
+func inspectionPromptHasResolvableTarget(prompt string) bool {
+	if len(extractInspectionPathCandidates(prompt)) > 0 {
+		return true
+	}
+	lower := strings.ToLower(prompt)
+	return containsAnyMarker(lower, []string{
+		"current working directory",
+		"current directory",
+		"current repository",
+		"current repo",
+		"workspace",
+		"code folder",
+		"code directory",
+		"desktop vault",
+		"workspace vault",
+		"home folder",
+		"home directory",
+		"my home",
+	})
+}
+
+func selectedToolNameSupportsInspectionEvidence(name string) bool {
+	switch agenttools.OperationClassForName(name) {
+	case agenttools.OperationWorkspaceInspect,
+		agenttools.OperationArtifactRead,
+		agenttools.OperationInspection:
+		return true
+	default:
+		return false
+	}
+}
+
+func selectedToolSurfaceContradictsCapabilityDenial(ctx *GuardContext, content string) bool {
+	lower := strings.ToLower(content)
+	for _, denial := range capabilityDenialPatterns {
+		if !strings.Contains(lower, denial.phrase) {
+			continue
+		}
+		if selectedToolSurfaceProvesCapability(ctx, denial.kind) {
+			return true
+		}
+	}
+	return false
+}
+
+func selectedToolSurfaceProvesCapability(ctx *GuardContext, kind capabilityDenialKind) bool {
+	for _, name := range ctx.SelectedToolNames {
+		switch kind {
+		case capabilityDenialGeneric:
+			return true
+		case capabilityDenialWeb:
+			if selectedToolNameIsBrowserLike(name) || agenttools.OperationClassForName(name) == agenttools.OperationWebRead {
+				return true
+			}
+		case capabilityDenialExec:
+			if agenttools.OperationClassForName(name) == agenttools.OperationExecution {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func selectedToolNameIsBrowserLike(name string) bool {
+	lower := strings.ToLower(strings.TrimSpace(name))
+	return strings.HasPrefix(lower, "browser_") ||
+		strings.Contains(lower, "playwright") ||
+		lower == "ghola" ||
+		lower == "http_fetch" ||
+		lower == "web_search"
 }
 
 func persistentArtifactProofRequired(prompt string) bool {

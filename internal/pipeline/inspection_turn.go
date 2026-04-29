@@ -174,9 +174,7 @@ func extractInspectionPathCandidates(content string) []string {
 	}
 	out := make([]string, 0, len(matches)+len(tildeMatches))
 	for _, match := range matches {
-		candidate := strings.TrimSpace(match)
-		candidate = strings.Trim(candidate, "\"'`()[]{}<>")
-		candidate = strings.TrimRight(candidate, ".!?")
+		candidate := cleanInspectionPathCandidate(match)
 		if strings.Contains(candidate, "/Desktop ") && !strings.Contains(candidate, "/Desktop/") {
 			candidate = strings.Replace(candidate, "/Desktop ", "/Desktop/", 1)
 		}
@@ -188,14 +186,29 @@ func extractInspectionPathCandidates(content string) []string {
 		if len(match) < 2 {
 			continue
 		}
-		candidate := strings.TrimSpace(match[1])
-		candidate = strings.Trim(candidate, "\"'`()[]{}<>")
-		candidate = strings.TrimRight(candidate, ".!?")
+		candidate := cleanInspectionPathCandidate(match[1])
 		if candidate != "" {
 			out = append(out, candidate)
 		}
 	}
 	return out
+}
+
+func cleanInspectionPathCandidate(candidate string) string {
+	candidate = strings.TrimSpace(candidate)
+	candidate = strings.Trim(candidate, "\"'`()[]{}<>")
+	candidate = strings.TrimRight(candidate, ".!?")
+	lower := strings.ToLower(candidate)
+	for _, marker := range []string{
+		" and ", " then ", " when ", " where ", " which ", " that ",
+		" so ", " but ", " before ", " after ",
+	} {
+		if idx := strings.Index(lower, marker); idx >= 0 {
+			candidate = strings.TrimSpace(candidate[:idx])
+			break
+		}
+	}
+	return strings.TrimRight(candidate, ".!?")
 }
 
 func qualifyInspectionPath(candidate, workspace string, allowedPaths []string) (string, bool) {

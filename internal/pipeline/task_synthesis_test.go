@@ -139,6 +139,20 @@ func TestSynthesizeTaskState_CountPromptIsTaskNotConversation(t *testing.T) {
 	}
 }
 
+func TestSynthesizeTaskState_ComplexRepoInspectionStaysDirect(t *testing.T) {
+	prompt := "Please review all of the subdirectories associated with the project at ~/code/roboticus and try to locate the architecture documentation. When you find it, review that documentation and compare it directly with the code. Then provide me with a summary of the alignment between architecture documentation and code implementation."
+	result := SynthesizeTaskState(prompt, 1, nil)
+	if result.Intent != "task" {
+		t.Fatalf("intent = %q, want task", result.Intent)
+	}
+	if result.PlannedAction != "execute_directly" {
+		t.Fatalf("planned action = %q, want execute_directly", result.PlannedAction)
+	}
+	if result.RetrievalNeeded {
+		t.Fatal("focused repo inspection should not require memory retrieval")
+	}
+}
+
 func TestSynthesizeTaskState_OperationalCheckPromptIsTaskNotConversation(t *testing.T) {
 	result := SynthesizeTaskState("Check the health of all integrations.", 1, nil)
 	if result.Intent != "task" {
@@ -453,6 +467,26 @@ func TestSynthesizeTaskState_CapabilityFitRecognizesHyphenatedSkillConcepts(t *t
 	for _, missing := range result.MissingSkills {
 		if missing == "obsidian" || missing == "vault" {
 			t.Fatalf("missing skills unexpectedly includes %q", missing)
+		}
+	}
+}
+
+func TestSynthesizeTaskState_RuntimeToolLexiconPreventsMissingBrowserCapability(t *testing.T) {
+	result := SynthesizeTaskState(
+		"Can you use the Playwright MCP to surf the page?",
+		1,
+		[]string{
+			"browser_snapshot Capture accessibility snapshot of current browser page",
+			"browser playwright mcp page browse surf navigate screenshot snapshot",
+		},
+	)
+	if result.CapabilityFit < 0.75 {
+		t.Fatalf("capability fit = %v, want runtime browser capability recognized", result.CapabilityFit)
+	}
+	for _, missing := range result.MissingSkills {
+		switch missing {
+		case "playwright", "mcp", "surf", "page":
+			t.Fatalf("missing skills unexpectedly includes runtime tool capability %q", missing)
 		}
 	}
 }

@@ -167,8 +167,12 @@ func (p *Pipeline) stageSessionResolution(ctx context.Context, pc *pipelineConte
 
 	// Short-followup expansion (Rust parity: contextualize_short_followup).
 	pc.content = pc.input.Content
+	pc.storedContent = pc.input.Content
 	if pc.cfg.ShortFollowupExpansion {
 		pc.content, pc.correctionTurn = ContextualizeShortFollowup(pc.session, pc.content)
+		if strings.TrimSpace(pc.content) != strings.TrimSpace(pc.storedContent) {
+			pc.session.SetTurnExecutionNote(pc.content)
+		}
 	}
 
 	return nil, nil
@@ -179,17 +183,21 @@ func (p *Pipeline) stageSessionResolution(ctx context.Context, pc *pipelineConte
 func (p *Pipeline) stageMessageStorage(ctx context.Context, pc *pipelineContext) error {
 	pc.tr.BeginSpan("message_storage")
 	pc.msgID = db.NewID()
-	topicTag := p.deriveTopicTag(pc.session, pc.content)
+	storedContent := pc.storedContent
+	if strings.TrimSpace(storedContent) == "" {
+		storedContent = pc.content
+	}
+	topicTag := p.deriveTopicTag(pc.session, storedContent)
 	_, err := p.store.ExecContext(ctx,
 		`INSERT INTO session_messages (id, session_id, role, content, topic_tag)
 		 VALUES (?, ?, 'user', ?, ?)`,
-		pc.msgID, pc.session.ID, pc.content, topicTag,
+		pc.msgID, pc.session.ID, storedContent, topicTag,
 	)
 	if err != nil {
 		pc.tr.EndSpan("error")
 		return core.WrapError(core.ErrDatabase, "failed to store user message", err)
 	}
-	pc.session.AddUserMessage(pc.content)
+	pc.session.AddUserMessage(storedContent)
 	pc.tr.Annotate("msg_id", pc.msgID)
 	pc.tr.Annotate("topic_tag", topicTag)
 	pc.tr.Annotate("turn_count", pc.session.TurnCount())
@@ -250,6 +258,7 @@ func (p *Pipeline) stageDecomposition(ctx context.Context, pc *pipelineContext) 
 		if p.store != nil {
 			agentSkills = SkillCapabilityLexiconFromDB(p.store)
 		}
+		agentSkills = append(agentSkills, RuntimeCapabilityLexiconFromPruner(p.pruner)...)
 		pc.synthesis = SynthesizeTaskState(pc.content, pc.session.TurnCount(), agentSkills)
 		pc.policy = DeriveTurnEnvelopePolicy(pc.content, pc.synthesis, pc.session.TurnCount())
 		pc.session.SetTurnEnvelopePolicy(string(pc.policy.Weight), string(pc.policy.ToolProfile), pc.policy.Reason)
@@ -295,6 +304,11 @@ func (p *Pipeline) stageDecomposition(ctx context.Context, pc *pipelineContext) 
 			inspectionSummary = sourceCodeTarget.PromptSummary
 		}
 		pc.session.SetInspectionTargetSummary(inspectionSummary)
+		inspectionRoots := inspectionTarget.ResolvedPaths
+		if len(inspectionRoots) == 0 && strings.TrimSpace(sourceCodeTarget.ResolvedRoot) != "" {
+			inspectionRoots = []string{sourceCodeTarget.ResolvedRoot}
+		}
+		pc.session.SetInspectionTargetRoots(inspectionRoots)
 		pc.session.SetDestinationTargetSummary(destinationTarget.PromptSummary)
 
 		// Build and stash the unified perception artifact (Milestone 2)
@@ -548,6 +562,13 @@ func (p *Pipeline) stageMemoryRetrieval(ctx context.Context, pc *pipelineContext
 		pc.session.SetMemoryIndex(index)
 	}
 
+	if p.retriever != nil {
+		if activeContext := retrieveActiveMemoryContext(ctx, p.retriever, pc.session.ID, 512); activeContext != "" {
+			pc.session.SetMemoryContext(activeContext)
+			pc.tr.Annotate(TraceNSRetrieval+".active_context", true)
+		}
+	}
+
 	if p.retriever != nil && retrievalStrat.Strategy != "none" {
 		pc.tr.BeginSpan("memory_retrieval")
 		// M3.2: attach the active trace recorder to ctx so memory tier
@@ -614,6 +635,18 @@ func (p *Pipeline) stageMemoryRetrieval(ctx context.Context, pc *pipelineContext
 		pc.tr.Annotate(TraceNSRetrieval+".reason", retrievalStrat.Reason)
 		pc.tr.EndSpan("ok")
 	}
+}
+
+type activeMemoryRetriever interface {
+	RetrieveActiveContext(ctx context.Context, sessionID string, budget int) string
+}
+
+func retrieveActiveMemoryContext(ctx context.Context, retriever MemoryRetriever, sessionID string, budget int) string {
+	active, ok := retriever.(activeMemoryRetriever)
+	if !ok {
+		return ""
+	}
+	return active.RetrieveActiveContext(ctx, sessionID, budget)
 }
 
 // ── Stage 9: Delegated execution ───────────────────────────────────────

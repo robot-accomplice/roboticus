@@ -97,17 +97,21 @@ func GetDeadLetters(store *db.Store) http.HandlerFunc {
 		}
 		defer func() { _ = rows.Close() }()
 
-		var entries []map[string]string
+		rq := db.NewRouteQueries(store)
+		var entries []map[string]any
 		for rows.Next() {
-			var id, channel, recipient, content, createdAt string
+			var id, channel, recipient, content, nextRetryAt, createdAt string
 			var errMsg *string
-			if err := rows.Scan(&id, &channel, &recipient, &content, &errMsg, &createdAt); err != nil {
+			var attempts, maxAttempts int64
+			if err := rows.Scan(&id, &channel, &recipient, &content, &errMsg, &attempts, &maxAttempts, &nextRetryAt, &createdAt); err != nil {
 				writeError(w, http.StatusInternalServerError, "failed to read dead letter row")
 				return
 			}
-			e := map[string]string{
+			e := map[string]any{
 				"id": id, "channel": channel, "recipient": recipient,
-				"content": content, "created_at": createdAt,
+				"content": content, "attempts": attempts, "max_attempts": maxAttempts,
+				"next_retry_at": nextRetryAt, "created_at": createdAt,
+				"repair_actions": []string{"replay", "discard", "quarantine"},
 			}
 			if errMsg != nil {
 				e["error"] = *errMsg
@@ -115,9 +119,18 @@ func GetDeadLetters(store *db.Store) http.HandlerFunc {
 			entries = append(entries, e)
 		}
 		if entries == nil {
-			entries = []map[string]string{}
+			entries = []map[string]any{}
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"dead_letters": entries})
+		count, oldest, err := rq.DeadLetterSummary(r.Context())
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to summarize dead letters")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"dead_letters":      entries,
+			"count":             count,
+			"oldest_created_at": oldest,
+		})
 	}
 }
 
@@ -425,7 +438,11 @@ func ListSubagents(store *db.Store) http.HandlerFunc {
 			allSkillNames = append(allSkillNames, name)
 		}
 
-		agents, _, _, _ := buildSubagentRosterCards(r.Context(), rq, allSkillNames, "orchestrator")
+		agents, _, _, _, rosterErr := buildSubagentRosterCards(r.Context(), rq, allSkillNames, "orchestrator")
+		if rosterErr != nil {
+			writeError(w, http.StatusInternalServerError, "failed to query subagent roster")
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]any{"agents": agents})
 	}
 }

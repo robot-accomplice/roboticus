@@ -125,6 +125,113 @@ func TestContextualizeShortFollowup_ReferentialExecutionTask(t *testing.T) {
 	}
 }
 
+func TestContextualizeShortFollowup_PendingActionConfirmation(t *testing.T) {
+	sess := newTestSession("s-pending-action")
+	sess.AddUserMessage("Use the ghola tool to get the latest scores from Metacritic.")
+	sess.AddAssistantMessage("I need to proceed by examining the retrieved HTML content and extracting the relevant game scores. Please confirm if you would like me to proceed with this method.", nil)
+
+	expanded, correction := ContextualizeShortFollowup(sess, "Please do.")
+
+	if correction {
+		t.Fatal("pending action confirmation should not be treated as correction")
+	}
+	for _, want := range []string{
+		"PENDING ACTION CONFIRMED",
+		"Instruction: execute the confirmed next action now",
+		"Background task",
+		"Use the ghola tool",
+		"Confirmed next action",
+		"retrieved HTML content",
+		"extracting the relevant game scores",
+	} {
+		if !strings.Contains(expanded, want) {
+			t.Fatalf("expanded confirmation missing %q: %q", want, expanded)
+		}
+	}
+}
+
+func TestContextualizeShortFollowup_ExecutesStructuredNextStepsWithoutMagicPhrase(t *testing.T) {
+	sess := newTestSession("s-structured-next-steps")
+	sess.AddUserMessage("Please review the code and architecture docs.")
+	sess.AddAssistantMessage(`I found the architecture documentation.
+
+Next Steps:
+1. Review ARCHITECTURE.md and architecture_rules.md.
+2. Compare those rules directly with the code.
+3. Summarize alignment and gaps.`, nil)
+
+	expanded, correction := ContextualizeShortFollowup(sess, "Great, execute the next steps identified in your last message.")
+
+	if correction {
+		t.Fatal("structured next-step continuation should not be treated as correction")
+	}
+	for _, want := range []string{
+		"PENDING ACTION CONFIRMED",
+		"Instruction: execute the confirmed next action now",
+		"Background task",
+		"Review ARCHITECTURE.md",
+		"Compare those rules directly with the code",
+		"User confirmation: Great, execute the next steps identified in your last message.",
+	} {
+		if !strings.Contains(expanded, want) {
+			t.Fatalf("expanded structured continuation missing %q: %q", want, expanded)
+		}
+	}
+}
+
+func TestContextualizeShortFollowup_StateBasedContinuationWithoutMagicPhrase(t *testing.T) {
+	sess := newTestSession("s-state-continuation")
+	sess.AddUserMessage("Get the Metacritic score for Vampire Crawlers.")
+	sess.AddAssistantMessage("The next step is targeted parsing of score elements and structured data from the observed page.", nil)
+
+	expanded, correction := ContextualizeShortFollowup(sess, "Fine.")
+
+	if correction {
+		t.Fatal("state-based continuation should not be treated as correction")
+	}
+	for _, want := range []string{
+		"PENDING ACTION CONFIRMED",
+		"targeted parsing",
+		"observed page",
+		"User confirmation: Fine.",
+	} {
+		if !strings.Contains(expanded, want) {
+			t.Fatalf("expanded state continuation missing %q: %q", want, expanded)
+		}
+	}
+}
+
+func TestContextualizeShortFollowup_StateBasedContinuationAllowsNegativeStop(t *testing.T) {
+	sess := newTestSession("s-state-negative")
+	sess.AddUserMessage("Get the Metacritic score for Vampire Crawlers.")
+	sess.AddAssistantMessage("The next step is targeted parsing of score elements and structured data from the observed page.", nil)
+
+	expanded, correction := ContextualizeShortFollowup(sess, "No thanks.")
+
+	if correction {
+		t.Fatal("negative continuation should not be treated as correction")
+	}
+	if expanded != "No thanks." {
+		t.Fatalf("negative continuation should pass through, got %q", expanded)
+	}
+}
+
+func TestContextualizeShortFollowup_StateBasedContinuationDoesNotSwallowExplicitContextCorrection(t *testing.T) {
+	sess := newTestSession("s-state-context-correction")
+	sess.AddUserMessage("Focus on docs/architecture-gap-report.md and docs/architecture-rules-diagrams.md first")
+	sess.AddAssistantMessage("I will focus on docs/architecture-gap-report.md and docs/architecture-rules-diagrams.md, then compare those rules to code paths. Should I proceed with that comparison?", nil)
+
+	content := "The architecture documents are within the code repository you already reviewed"
+	expanded, correction := ContextualizeShortFollowup(sess, content)
+
+	if correction {
+		t.Fatal("context correction should not be treated as correction turn")
+	}
+	if expanded != content {
+		t.Fatalf("explicit context correction should pass through, got %q", expanded)
+	}
+}
+
 func TestContextualizeShortFollowup_NoHistory(t *testing.T) {
 	sess := newTestSession("s-empty")
 	expanded, correction := ContextualizeShortFollowup(sess, "sure")

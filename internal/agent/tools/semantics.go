@@ -27,6 +27,18 @@ const (
 	OperationExecution           OperationClass = "execution"
 	OperationMemoryRead          OperationClass = "memory_read"
 	OperationDelegation          OperationClass = "delegation"
+	// OperationDataRead covers reads against the hippocampus / structured
+	// data store (e.g. query_table). Treated as read-only exploration for
+	// replay and admission purposes.
+	OperationDataRead OperationClass = "data_read"
+	// OperationDataWrite covers schema or row mutations against the
+	// hippocampus (create_table, insert_row, alter_table, drop_table).
+	// Replay-protected; counts as execution progress.
+	OperationDataWrite OperationClass = "data_write"
+	// OperationWebRead covers external HTTP reads (web_search, http_fetch).
+	// Treated as read-only exploration; admitted in inspection and
+	// analysis-authoring profiles where external context is useful.
+	OperationWebRead OperationClass = "web_read"
 
 	ReplayUnknown   ReplayClass = "unknown"
 	ReplaySafe      ReplayClass = "safe"
@@ -50,15 +62,33 @@ func OperationClassForName(name string) OperationClass {
 		return OperationRuntimeContextRead
 	case "glob_files", "list_directory", "search_files", "inventory_projects":
 		return OperationWorkspaceInspect
+	case "get_channel_health":
+		return OperationInspection
 	case "task-status", "list-open-tasks", "get_subagent_status":
 		return OperationTaskInspection
-	case "list-subagent-roster", "list-available-skills":
+	case "list-subagent-roster", "list-available-skills",
+		"introspect", "introspection",
+		"compose-skill", "find_workflow":
 		return OperationCapabilityInventory
-	case "recall_memory", "search_memories", "get_memory_stats":
+	case "recall_memory", "search_memories", "get_memory_stats",
+		"query_knowledge_graph":
 		return OperationMemoryRead
 	case "compose-subagent", "orchestrate-subagents", "retry-task":
 		return OperationDelegation
 	case "bash", "echo":
+		return OperationExecution
+	case "query_table":
+		return OperationDataRead
+	case "create_table", "insert_row", "alter_table", "drop_table":
+		return OperationDataWrite
+	case "web_search", "http_fetch", "ghola",
+		"browser_navigate", "browser_snapshot", "browser_take_screenshot",
+		"browser_wait_for", "browser_tabs", "browser_console_messages",
+		"browser_network_requests":
+		return OperationWebRead
+	case "browser_click", "browser_type", "browser_fill_form", "browser_press_key",
+		"browser_select_option", "browser_hover", "browser_evaluate",
+		"browser_run_code", "browser_drag", "browser_drop", "browser_file_upload":
 		return OperationExecution
 	default:
 		return OperationUnknown
@@ -76,13 +106,16 @@ func ReplayClassForName(name string) ReplayClass {
 		OperationWorkspaceInspect,
 		OperationCapabilityInventory,
 		OperationTaskInspection,
-		OperationMemoryRead:
+		OperationMemoryRead,
+		OperationDataRead,
+		OperationWebRead:
 		return ReplaySafe
 	case OperationArtifactWrite,
 		OperationAuthorityWrite,
 		OperationScheduling,
 		OperationExecution,
-		OperationDelegation:
+		OperationDelegation,
+		OperationDataWrite:
 		return ReplayProtected
 	default:
 		return ReplayUnknown
@@ -144,7 +177,9 @@ func IsReadOnlyExploration(name string) bool {
 		OperationWorkspaceInspect,
 		OperationCapabilityInventory,
 		OperationTaskInspection,
-		OperationMemoryRead:
+		OperationMemoryRead,
+		OperationDataRead,
+		OperationWebRead:
 		return true
 	default:
 		return false
@@ -157,7 +192,8 @@ func MakesExecutionProgress(name string) bool {
 		OperationAuthorityWrite,
 		OperationScheduling,
 		OperationExecution,
-		OperationDelegation:
+		OperationDelegation,
+		OperationDataWrite:
 		return true
 	default:
 		return false

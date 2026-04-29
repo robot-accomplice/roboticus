@@ -79,7 +79,7 @@ func TestGetCapabilities(t *testing.T) {
 	}
 }
 
-func TestReloadSkills(t *testing.T) {
+func TestReloadSkillsInvokesRuntimeReload(t *testing.T) {
 	called := false
 	handler := ReloadSkills(func() error {
 		called = true

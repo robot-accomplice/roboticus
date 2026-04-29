@@ -55,7 +55,7 @@
 1. [System Overview](#1-system-overview)
 2. [Storage Layer](#2-storage-layer)
 3. [Ingestion Pipeline](#3-ingestion-pipeline)
-4. [Consolidation Pipeline](#4-consolidation-pipeline)
+4. [Memory Curation Pipeline](#4-memory-curation-pipeline)
 5. [Retrieval & Injection](#5-retrieval--injection)
 6. [Agent Tools & API](#6-agent-tools--api)
 7. [Agentic Retrieval Architecture (v1.0.5)](#7-agentic-retrieval-architecture)
@@ -172,9 +172,11 @@ consolidated the distinction.
    response is sent. Ingestion failures are degraded silently -- they never
    block the response path.
 
-4. **Continuous Consolidation.** A 60-second heartbeat runs 7 consolidation
-   phases: index sync, obsidian scan, dedup, tier sync, confidence decay,
-   pruning, orphan cleanup.
+4. **Continuous Memory Curation.** A heartbeat runs memory curation phases:
+   derivable cleanup, index hygiene, embedding backfill, Obsidian hygiene,
+   consolidation, governance, confidence/importance decay, pruning, and orphan
+   cleanup. `Consolidation` is a sub-phase name for deduplication, promotion,
+   and distillation; it is not the umbrella term.
 
 ---
 
@@ -423,33 +425,43 @@ Every `store_*` call triggers `auto_index() -> upsert_index_entry()`:
 
 ---
 
-## 4. Consolidation Pipeline
+## 4. Memory Curation Pipeline
 
-### 4.1 Seven Phases
+Memory Curation is the umbrella lifecycle that keeps stored memory useful after
+turns complete. See [Ubiquitous Language](ubiquitous-language.md) for the
+authoritative term boundary. Legacy API/CLI paths still use `consolidate` for
+compatibility, but operator-facing prose should call this Memory Curation.
+
+### 4.1 Curation Phases
 
 ```
-  60-second heartbeat
+  memory curation heartbeat
         |
         v
-  Phase 0: Legacy derivable cleanup (mark old tool outputs stale)
-  Phase 1: Index sync (backfill missing memory_index entries, up to 500)
-  Phase 2: Obsidian scan (index new vault notes, remove deleted)
-  Phase 3: Within-tier dedup [GATED ON QUIESCENCE]
+  Phase 0: Derivable cleanup (mark old tool outputs stale)
+  Phase 1: Index hygiene (backfill missing memory_index entries)
+  Phase 1b: Embedding backfill
+  Phase 2: Obsidian hygiene (decay stale vault index rows, remove deleted)
+  Phase 3: Memory consolidation [GATED ON QUIESCENCE]
             - Jaccard similarity >= 0.85
             - Never crosses tiers
             - Losers: stale (if has state) or tombstone confidence=-1.0
-  Phase 4: Tier-native index sync
+            - Episodic promotion
+            - Episode and relation distillation
+  Phase 4: Memory governance [GATED ON QUIESCENCE]
+            - Contradiction and supersession detection
+            - Tier-native index sync
             - Stale source -> confidence = 0.0
             - High-failure procedural (>80%) -> confidence = 0.1
             - Learned skills -> confidence = priority/100.0
-  Phase 5: Confidence decay [GATED TO ONCE PER 24 HOURS]
+  Phase 5: Confidence and importance decay [GATED ON QUIESCENCE]
             - factor = 0.995 (0.5% exponential)
             - Only entries with confidence > 0.1
             - ~596 days from 1.0 to prune threshold
-  Phase 6: Prune low confidence
+  Phase 6: Prune low confidence [GATED ON QUIESCENCE]
             - Threshold: 0.05
             - Preserves tombstones (confidence < 0) and system sentinels
-  Phase 7: Orphan cleanup
+  Phase 7: Orphan cleanup [GATED ON QUIESCENCE]
             - Index entries with no source row
             - Working memory for inactive sessions
             - Orphaned embeddings
@@ -463,7 +475,11 @@ SELECT COUNT(*) FROM sessions
 WHERE status = 'active' AND updated_at > datetime('now', '-5 seconds')
 ```
 
-Only Phase 3 (dedup) is gated. All other phases run unconditionally.
+Mutating curation phases are gated on quiescence. The system must not promote,
+distill, supersede, decay, prune, or delete memory while active turns are in
+flight. Safe read-only inspection may run while active; any write to memory or
+derived memory surfaces waits for quiescence or an explicit forced maintenance
+operation.
 
 ### 4.3 Confidence Lifecycle
 
@@ -628,7 +644,7 @@ back to the originating tool call.
 | GET | `/api/memory/semantic/{category}` | Category-filtered semantic |
 | GET | `/api/memory/search?q=<text>` | FTS5 + LIKE fallback search |
 | GET | `/api/memory/health` | Retrieval analytics |
-| POST | `/api/memory/consolidate` | Trigger consolidation |
+| POST | `/api/memory/consolidate` | Trigger memory curation through the legacy consolidate path |
 | POST | `/api/memory/reindex` | Backfill memory_index |
 
 ### 6.3 CLI Commands
@@ -711,6 +727,49 @@ Query → Decompose (compound → subgoals)
   preserving whether the pattern represented a success, a failure, or a mixed
   result instead of flattening everything into generic positive learnings
 - Not a retrieval tier — always injected directly into prompt as active state
+- Working memory is the short-term conversational/action frame. It is injected
+  as active context even when the turn envelope keeps semantic/episodic
+  retrieval disabled for a lightweight first pass.
+- The hippocampus/memory index is the mapping surface for discoverable
+  long-term memory. Semantic and episodic stores are hydrated through retrieval
+  or tools when the active frame is insufficient, contradictory, or explicitly
+  asks for historical enrichment; they are not bulk prompt context by default.
+
+### Reflection Layering (trailing system overlay)
+
+TOTOF and continuation artifacts are a **tighter action-request lens layered on
+top of conversation memory**, never a replacement for it. They exist to anchor
+tool-calling decisions on canonical observed results, prevent the loop from
+dead-ending in blank or canned output, and provide a complete self-improving
+cycle that knows when to finalize and when to continue.
+
+Layering rules (architectural invariants, enforced by tests):
+
+1. The brief is rendered via `TOTOF.Render()` /
+   `ContinuationArtifact.Render()` and injected as a **trailing system note**
+   at the END of the LLM request — after full `session.Messages()`.
+2. The full conversation history is preserved verbatim in the request. No
+   prior user/assistant/tool turn is dropped during reflect or continuation.
+2a. Pipeline-prepared active memory and memory index remain injected as system
+   notes in the same request. Preserving chat history is not sufficient if
+   `MemoryContext()` or `MemoryIndex()` are silently discarded.
+3. The brief is the LAST message in the request so it remains the model's
+   most recent contextual instruction (the "given everything above, here is
+   the canonical reflection brief" verdict).
+4. No synthetic user TASK message is created. The real user turn already
+   lives in `session.Messages()` and the brief's TASK section is just text.
+5. Reflection-mode "tools disabled" and continuation-mode "execute only as
+   far as the named remaining work" semantics live inside the instruction
+   text and stay unchanged.
+6. The `synthesizeFromToolResults` empty-response fallback in the agent loop
+   stays. Blank or canned output remains architecturally prohibited.
+7. Control sentinels (`CONTINUE_EXECUTION`) are line-anchored in detection
+   and scrubbed at every assistant-message-persist site so they never reach
+   operator-facing chat.
+
+The `ContextBuilder.BuildRequestWithTrailingSystemOverlay` API is the single
+seam responsible for layering reflect/continuation briefs on top of full
+session history. Reflection callers do not construct synthetic message lists.
 
 ---
 

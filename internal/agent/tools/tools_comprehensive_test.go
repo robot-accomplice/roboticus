@@ -1740,6 +1740,7 @@ func TestAllToolRiskLevels(t *testing.T) {
 		{NewIntrospectionTool("", "", func() []string { return nil }), RiskSafe},
 		{NewWebSearchTool("", ""), RiskCaution},
 		{NewHTTPFetchTool(), RiskCaution},
+		{NewGholaTool(""), RiskCaution},
 	}
 
 	for _, tc := range tests {

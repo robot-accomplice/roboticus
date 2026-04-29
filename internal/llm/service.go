@@ -1178,10 +1178,13 @@ func tierForParameterCount(size int) ModelTier {
 
 // ProviderStatus reports the health of each configured provider.
 type ProviderStatus struct {
-	Name    string       `json:"name"`
-	State   CircuitState `json:"state"`
-	Format  APIFormat    `json:"format"`
-	IsLocal bool         `json:"is_local"`
+	Name        string       `json:"name"`
+	State       CircuitState `json:"state"`
+	Format      APIFormat    `json:"format"`
+	IsLocal     bool         `json:"is_local"`
+	HealthState string       `json:"health_state"`
+	Evidence    string       `json:"evidence"`
+	Reason      string       `json:"reason,omitempty"`
 }
 
 // ResetBreaker resets the circuit breaker for a named provider.
@@ -1277,12 +1280,27 @@ func (s *Service) Status() []ProviderStatus {
 
 	for name, client := range s.providers {
 		cb := s.breakers.Get(name)
+		healthState, reason := providerHealthFromCircuit(cb.State())
 		statuses = append(statuses, ProviderStatus{
-			Name:    name,
-			State:   cb.State(),
-			Format:  client.provider.Format,
-			IsLocal: client.provider.IsLocal,
+			Name:        name,
+			State:       cb.State(),
+			Format:      client.provider.Format,
+			IsLocal:     client.provider.IsLocal,
+			HealthState: healthState,
+			Evidence:    "circuit_breaker_only",
+			Reason:      reason,
 		})
 	}
 	return statuses
+}
+
+func providerHealthFromCircuit(state CircuitState) (string, string) {
+	switch state {
+	case CircuitOpen:
+		return "unavailable", "circuit breaker is open"
+	case CircuitHalfOpen:
+		return "degraded", "circuit breaker is half-open"
+	default:
+		return "unknown", "no live provider reachability probe attached to this status"
+	}
 }

@@ -84,6 +84,7 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 		p.storeTurnDiagnostics(ctx, dr)
 		ctx = llm.WithInferenceObserver(ctx, dr)
 	}
+	annotateSelectedToolSurfaceForRCA(tr, session)
 
 	// Thread model override into context for the LLM service to read.
 	if cfg.ModelOverride != "" {
@@ -109,7 +110,7 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 	{
 		guardStart := time.Now()
 		liveRetryPolicy := DefaultRetryPolicy()
-		liveRetryPolicy.MaxRetries = 1
+		liveRetryPolicy.MaxRetries = 2
 		liveRetryPolicy.ErrorOnExhaust = false
 		guardRun, guardErr := retryWithGuardsDetailed(ctx, p.executor, session, activeGuards, liveRetryPolicy, func() *GuardContext {
 			return p.buildGuardContext(session)
@@ -134,6 +135,10 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 		result = guardRun.Content
 		turns = guardRun.Turns
 		guardRetried = guardRun.GuardRetried
+		if guardRetried && finalGuardResult.RetryRequested && guardExhaustionMustFailClosed(finalGuardResult.Violations) {
+			return nil, core.WrapError(core.ErrLLM, "inference failed",
+				fmt.Errorf("%w: after bounded retries, last reason: %s", core.ErrGuardExhausted, finalGuardResult.RetryReason))
+		}
 		if dr != nil && guardRetried {
 			dr.IncrementSummaryCounter("guard_retry_count", 1)
 			dr.RecordEvent("guard_retry_scheduled", "error",
@@ -212,6 +217,7 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 			AnnotateGuardTrace(tr, guardResults, chainType, guardDur)
 		}
 	}
+	annotateSelectedToolSurfaceForRCA(tr, session)
 
 	// Lightweight verifier pass: if the answer ignores clear evidence gaps,
 	// contradictions, or multi-part coverage, request one revision before we
@@ -418,6 +424,24 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 		ReactTurns:      turns,
 		inferenceParams: params,
 	}, nil
+}
+
+func annotateSelectedToolSurfaceForRCA(tr *TraceRecorder, session *Session) {
+	if tr == nil || session == nil {
+		return
+	}
+	selected := session.SelectedToolDefs()
+	names := make([]string, 0, len(selected))
+	for _, def := range selected {
+		name := strings.TrimSpace(def.Function.Name)
+		if name != "" {
+			names = append(names, name)
+		}
+	}
+	tr.Annotate(TraceNSInference+".routing.request_tool_count", len(selected))
+	tr.Annotate(TraceNSInference+".routing.selected_tool_count", len(selected))
+	tr.Annotate(TraceNSInference+".routing.selected_tools", names)
+	tr.Annotate(TraceNSInference+".routing.tool_count_source", "session.selected_tool_defs")
 }
 
 func concreteDiagnosticsRecorderFromContext(ctx context.Context) *TurnDiagnosticsRecorder {

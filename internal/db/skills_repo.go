@@ -27,6 +27,22 @@ type SkillRow struct {
 	RegistrySource      string
 }
 
+// DiscoveredSkillRow represents a file-backed runtime skill discovered during
+// inventory reconciliation. Discovery refreshes metadata but preserves any
+// existing operator enable/disable decision.
+type DiscoveredSkillRow struct {
+	Name           string
+	Kind           string
+	Description    string
+	SourcePath     string
+	ContentHash    string
+	TriggersJSON   string
+	ToolChainJSON  string
+	Version        string
+	Author         string
+	RegistrySource string
+}
+
 // SkillsRepository handles skill persistence.
 type SkillsRepository struct {
 	q Querier
@@ -64,6 +80,49 @@ func (r *SkillsRepository) Upsert(ctx context.Context, row SkillRow) error {
 		nullIfEmpty(row.ScriptPath), row.RiskLevel, boolToInt(row.Enabled),
 		nullIfEmpty(row.LastLoadedAt), row.Version, row.Author, row.RegistrySource)
 	return err
+}
+
+// UpsertDiscovered inserts a newly discovered file-backed skill as enabled, or
+// refreshes metadata for an existing row without changing its enabled state.
+func (r *SkillsRepository) UpsertDiscovered(ctx context.Context, row DiscoveredSkillRow) error {
+	_, err := r.q.ExecContext(ctx,
+		`INSERT INTO skills
+		 (id, name, kind, description, source_path, content_hash, triggers_json, tool_chain_json,
+		  risk_level, enabled, last_loaded_at, version, author, registry_source)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Caution', 1, datetime('now'), ?, ?, ?)
+		 ON CONFLICT(name) DO UPDATE SET
+		   kind = excluded.kind,
+		   description = excluded.description,
+		   source_path = excluded.source_path,
+		   content_hash = excluded.content_hash,
+		   triggers_json = excluded.triggers_json,
+		   tool_chain_json = excluded.tool_chain_json,
+		   last_loaded_at = datetime('now'),
+		   version = excluded.version,
+		   author = excluded.author,
+		   registry_source = excluded.registry_source`,
+		NewID(), row.Name, row.Kind, nullIfEmpty(row.Description), row.SourcePath, row.ContentHash,
+		nullIfEmpty(row.TriggersJSON), nullIfEmpty(row.ToolChainJSON),
+		stringOr(row.Version, "0.0.0"), stringOr(row.Author, "local"), stringOr(row.RegistrySource, "local"))
+	return err
+}
+
+// TouchSkillUsage records that a skill actually executed on the live path.
+func (r *SkillsRepository) TouchSkillUsage(ctx context.Context, name string) error {
+	res, err := r.q.ExecContext(ctx,
+		`UPDATE skills
+		    SET usage_count = usage_count + 1,
+		        last_used_at = datetime('now')
+		  WHERE name = ?`,
+		name)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrNoRowsAffected
+	}
+	return nil
 }
 
 // GetByName retrieves a skill by name. Returns nil if not found.
@@ -172,4 +231,11 @@ func (r *SkillsRepository) UpdateField(ctx context.Context, id, field, value str
 	_, err := r.q.ExecContext(ctx,
 		`UPDATE skills SET `+field+` = ? WHERE id = ?`, value, id)
 	return err
+}
+
+func stringOr(value, fallback string) string {
+	if value == "" {
+		return fallback
+	}
+	return value
 }

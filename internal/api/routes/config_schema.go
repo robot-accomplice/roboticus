@@ -10,14 +10,16 @@ import (
 
 // SchemaField describes a single config field for the settings UI.
 type SchemaField struct {
-	Name        string   `json:"name"`
-	Type        string   `json:"type"`
-	Default     any      `json:"default"`
-	Current     any      `json:"current"`
-	Section     string   `json:"section"`
-	Description string   `json:"description,omitempty"`
-	Enum        []string `json:"enum,omitempty"`
-	Immutable   bool     `json:"immutable,omitempty"`
+	Name        string                 `json:"name"`
+	Type        string                 `json:"type"`
+	Default     any                    `json:"default"`
+	Current     any                    `json:"current"`
+	Section     string                 `json:"section"`
+	Description string                 `json:"description,omitempty"`
+	Enum        []string               `json:"enum,omitempty"`
+	ItemEnum    []string               `json:"item_enum,omitempty"`
+	Properties  map[string]SchemaField `json:"properties,omitempty"`
+	Immutable   bool                   `json:"immutable,omitempty"`
 }
 
 // immutableSections lists top-level config sections that require a restart.
@@ -34,7 +36,7 @@ var knownEnums = map[string][]string{
 	"agent.composition_policy":        {"propose", "sequential", "parallel", "adaptive"},
 	"agent.skill_creation_rigor":      {"generate", "validate", "full"},
 	"agent.output_validation_policy":  {"strict", "sample", "off"},
-	"models.routing.mode":             {"primary", "fallback", "auto", "metascore", "round_robin", "cost_aware", "local_first"},
+	"models.routing.mode":             {"primary", "fallback", "auto", "routed", "metascore"},
 	"session.scope_mode":              {"agent", "peer", "group"},
 	"security.threat_caution_ceiling": {"low", "medium", "high", "critical"},
 	"security.allowlist_authority":    {"None", "Peer", "Operator", "Creator"},
@@ -43,6 +45,79 @@ var knownEnums = map[string][]string{
 	"context_budget.channel_minimum":  {"L0", "L1", "L2", "L3"},
 	"yield.protocol":                  {"aave", "compound"},
 	"yield.chain":                     {"base", "ethereum", "polygon"},
+}
+
+var modelPolicyReasonCodes = []string{
+	"benchmark_failure",
+	"latency_nonviable",
+	"operator_policy",
+	"provider_instability",
+	"tool_use_regression",
+	"user_preference",
+}
+
+var modelPolicySources = []string{
+	"benchmark",
+	"configured_policy",
+	"operator_policy",
+	"provider_pack",
+	"runtime_repair",
+}
+
+var objectFieldSchemas = map[string]map[string]SchemaField{
+	"models.policy": {
+		"state": {
+			Name:        "state",
+			Type:        "string",
+			Description: "Lifecycle state for this model in routing decisions.",
+			Enum:        []string{"enabled", "niche", "disabled", "benchmark_only"},
+		},
+		"primary_reason_code": {
+			Name:        "primary_reason_code",
+			Type:        "string",
+			Description: "Primary machine-readable reason explaining the model policy.",
+			Enum:        modelPolicyReasonCodes,
+		},
+		"reason_codes": {
+			Name:        "reason_codes",
+			Type:        "array",
+			Description: "Additional machine-readable reasons supporting the policy.",
+			ItemEnum:    modelPolicyReasonCodes,
+		},
+		"human_reason": {
+			Name:        "human_reason",
+			Type:        "string",
+			Description: "Operator-facing explanation for the policy decision.",
+		},
+		"evidence_refs": {
+			Name:        "evidence_refs",
+			Type:        "array",
+			Description: "Trace, benchmark, incident, or release evidence supporting this policy.",
+		},
+		"source": {
+			Name:        "source",
+			Type:        "string",
+			Description: "Authority that produced this policy entry.",
+			Enum:        modelPolicySources,
+		},
+	},
+	"models.role_eligibility": {
+		"orchestrator": {
+			Name:        "orchestrator",
+			Type:        "boolean",
+			Description: "Whether this model may serve operator-facing orchestration turns.",
+		},
+		"subagent": {
+			Name:        "subagent",
+			Type:        "boolean",
+			Description: "Whether this model may serve bounded subagent execution turns.",
+		},
+		"reason": {
+			Name:        "reason",
+			Type:        "string",
+			Description: "Operator-facing explanation for the role eligibility rule.",
+		},
+	},
 }
 
 // fieldDescriptions maps dotted field paths to human-readable descriptions.
@@ -92,7 +167,7 @@ var fieldDescriptions = map[string]string{
 	"session.scope_mode":                          "Session scoping: agent, peer, or group.",
 	"session.ttl_seconds":                         "Session time-to-live in seconds. 0 = no expiry.",
 	"security.workspace_only":                     "Restrict all file operations to the workspace.",
-	"security.deny_on_empty_allowlist":            "Deny all when allowlist is empty (fail-closed).",
+	"security.deny_on_empty_allowlist":            "When true (default), deny all when allowlist is empty. When false, fail-open (warning logged on load).",
 	"security.sandbox_required":                   "Require sandboxed execution for all tools.",
 	"wallet.chain_id":                             "Blockchain chain ID. Requires restart.",
 	"wallet.rpc_url":                              "RPC endpoint URL for blockchain. Requires restart.",
@@ -181,6 +256,7 @@ func walkStruct(defaultVal, currentVal reflect.Value, prefix, section string) []
 					Current:     valueToInterface(curField),
 					Section:     fieldSection,
 					Description: fieldDescriptions[dottedPath],
+					Properties:  objectFieldSchemas[dottedPath],
 				}
 				fields = append(fields, sf)
 			}

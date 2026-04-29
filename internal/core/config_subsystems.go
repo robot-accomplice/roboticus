@@ -103,6 +103,23 @@ type BrowserConfig struct {
 	Headless       bool   `json:"headless" toml:"headless" mapstructure:"headless"`
 }
 
+// WebToolsConfig holds settings for the web_search, http_fetch, and ghola
+// builtin tools. Network reach defaults to disabled; the operator must opt in.
+// WebSearch.URL is the SearXNG-compatible search endpoint, and APIKeyEnv names
+// the environment variable that supplies the auth header (kept out of the
+// on-disk config so the canonical config is safe to commit).
+//
+// GholaPath is the ghola binary name (looked up on PATH) or an absolute path;
+// empty means "ghola".
+type WebToolsConfig struct {
+	WebSearchEnabled bool   `json:"web_search_enabled" toml:"web_search_enabled" mapstructure:"web_search_enabled"`
+	WebSearchURL     string `json:"web_search_url" toml:"web_search_url" mapstructure:"web_search_url"`
+	WebSearchAPIKey  string `json:"web_search_api_key,omitempty" toml:"web_search_api_key" mapstructure:"web_search_api_key"`
+	HTTPFetchEnabled bool   `json:"http_fetch_enabled" toml:"http_fetch_enabled" mapstructure:"http_fetch_enabled"`
+	GholaEnabled     bool   `json:"ghola_enabled" toml:"ghola_enabled" mapstructure:"ghola_enabled"`
+	GholaPath        string `json:"ghola_path,omitempty" toml:"ghola_path" mapstructure:"ghola_path"`
+}
+
 // PersonalityConfig holds personality file paths.
 type PersonalityConfig struct {
 	OSPath       string `json:"os_path" toml:"os_path" mapstructure:"os_path"`

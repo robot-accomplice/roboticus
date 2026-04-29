@@ -329,6 +329,70 @@ func TestReflectOnTurn_UsesTurnDiagnosticsStatusForOutcomePolarity(t *testing.T)
 	}
 }
 
+func TestReflectOnTurn_GuardViolatingPartialEpisodeIsNonReinforcing(t *testing.T) {
+	store := testutil.TempStore(t)
+	p := &Pipeline{store: store}
+	ctx := context.Background()
+
+	sess, err := store.FindOrCreateSession(ctx, "agent-reflect-stale", "scope:reflect")
+	if err != nil {
+		t.Fatalf("FindOrCreateSession: %v", err)
+	}
+	if _, err := store.ExecContext(ctx,
+		`INSERT INTO turns (id, session_id) VALUES (?, ?)`,
+		"turn-reflect-stale", sess.ID,
+	); err != nil {
+		t.Fatalf("insert turn: %v", err)
+	}
+	if _, err := store.ExecContext(ctx,
+		`INSERT INTO turn_diagnostics (id, turn_id, session_id, channel, status)
+		 VALUES (?, ?, ?, 'api', 'degraded')`,
+		"td-reflect-stale", "turn-reflect-stale", sess.ID,
+	); err != nil {
+		t.Fatalf("insert turn diagnostics: %v", err)
+	}
+	if _, err := store.ExecContext(ctx,
+		`INSERT INTO pipeline_traces (id, turn_id, session_id, total_ms, stages_json, inference_params_json)
+		 VALUES ('pt-reflect-stale', ?, ?, 1200, '[]', ?)`,
+		"turn-reflect-stale", sess.ID,
+		(&InferenceParams{
+			ModelActual:     "openrouter/openai/gpt-4o-mini",
+			ReactTurns:      2,
+			GuardViolations: []string{"execution_truth"},
+			GuardRetried:    true,
+		}).JSON(),
+	); err != nil {
+		t.Fatalf("seed pipeline trace: %v", err)
+	}
+
+	live := session.New(sess.ID, sess.AgentID, "TestBot")
+	live.AddUserMessage("Can you use the Playwright MCP to surf the page?")
+	live.AddAssistantMessage("I cannot use Playwright in this session.", nil)
+
+	p.reflectOnTurn(ctx, "turn-reflect-stale", "Can you use the Playwright MCP to surf the page?", live, ExecutiveGrowthResult{})
+
+	var state, reason string
+	var importance int
+	if err := store.QueryRowContext(ctx,
+		`SELECT memory_state, COALESCE(state_reason, ''), importance
+		   FROM episodic_memory
+		  WHERE classification = 'episode_summary'
+		  ORDER BY created_at DESC, rowid DESC
+		  LIMIT 1`,
+	).Scan(&state, &reason, &importance); err != nil {
+		t.Fatalf("load episode summary disposition: %v", err)
+	}
+	if state != "stale" {
+		t.Fatalf("memory_state = %q, want stale", state)
+	}
+	if reason != "non-reinforcing episode outcome" {
+		t.Fatalf("state_reason = %q, want non-reinforcing episode outcome", reason)
+	}
+	if importance >= 8 {
+		t.Fatalf("importance = %d, want demoted non-reinforcing episode", importance)
+	}
+}
+
 func containsAll(haystack string, needles ...string) bool {
 	for _, needle := range needles {
 		if !strings.Contains(haystack, needle) {

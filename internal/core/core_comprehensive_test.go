@@ -260,11 +260,11 @@ func TestValidate_TreasuryMinimumReserve(t *testing.T) {
 	}
 }
 
-func TestValidate_SecurityDenyOnEmptyAllowlist(t *testing.T) {
+func TestValidate_SecurityDenyOnEmptyAllowlistFalseAllowed(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Security.Filesystem.DenyOnEmptyAllowlist = false
-	if err := cfg.Validate(); err == nil {
-		t.Error("deny_on_empty_allowlist=false should be invalid")
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("deny_on_empty_allowlist=false should validate: %v", err)
 	}
 }
 

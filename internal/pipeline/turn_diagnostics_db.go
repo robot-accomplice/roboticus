@@ -643,12 +643,36 @@ func boolToInt(v bool) int {
 }
 
 func diagnosticsStatusFromEvents(events []TurnDiagnosticEvent) string {
+	if diagnosticsEventsShowCleanGuardRecovery(events) {
+		return "ok"
+	}
 	for _, ev := range events {
 		if diagnosticEventMarksTurnDegraded(ev) {
 			return "degraded"
 		}
 	}
 	return "ok"
+}
+
+func diagnosticsEventsShowCleanGuardRecovery(events []TurnDiagnosticEvent) bool {
+	hasRecoverableGuardRetry := false
+	for _, ev := range events {
+		if !diagnosticEventMarksTurnDegraded(ev) {
+			continue
+		}
+		if ev.Type != "guard_retry_scheduled" {
+			return false
+		}
+		hasRecoverableGuardRetry = true
+	}
+	if !hasRecoverableGuardRetry {
+		return false
+	}
+	finalized := latestDiagnosticEvent(events, "response_finalized")
+	if finalized == nil || finalized.Status != "ok" {
+		return false
+	}
+	return len(diagnosticDetailStrings(finalized, "guard_violations")) == 0
 }
 
 func diagnosticEventMarksTurnDegraded(ev TurnDiagnosticEvent) bool {

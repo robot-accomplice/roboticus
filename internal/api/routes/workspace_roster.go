@@ -13,10 +13,10 @@ import (
 	"roboticus/internal/db"
 )
 
-func buildSubagentRosterCards(ctx context.Context, rq *db.RouteQueries, allSkillNames []string, supervisor string) ([]map[string]any, []string, int, int) {
+func buildSubagentRosterCards(ctx context.Context, rq *db.RouteQueries, allSkillNames []string, supervisor string) ([]map[string]any, []string, int, int, error) {
 	rows, err := rq.ListSubAgentRosterEnriched(ctx)
 	if err != nil {
-		return []map[string]any{}, []string{}, 0, 0
+		return []map[string]any{}, []string{}, 0, 0, err
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -24,13 +24,13 @@ func buildSubagentRosterCards(ctx context.Context, rq *db.RouteQueries, allSkill
 	var subordinateNames []string
 	var subagentCards []map[string]any
 	for rows.Next() {
-		var name, displayName, model, role, description string
+		var name, displayName, model, sourceRole, description string
 		var fallbackJSON, skillsJSON string
 		var enabled bool
 		var sessionCount int
 		var lastUsedAt, status *string
 		if err := rows.Scan(&name, &displayName, &model, &enabled,
-			&role, &description, &fallbackJSON, &skillsJSON,
+			&sourceRole, &description, &fallbackJSON, &skillsJSON,
 			&sessionCount, &lastUsedAt, &status); err != nil {
 			continue
 		}
@@ -56,6 +56,7 @@ func buildSubagentRosterCards(ctx context.Context, rq *db.RouteQueries, allSkill
 		if status != nil {
 			statusStr = *status
 		}
+		stateStr := subagentState(enabled, statusStr)
 
 		entry := map[string]any{
 			"id":              name,
@@ -65,7 +66,8 @@ func buildSubagentRosterCards(ctx context.Context, rq *db.RouteQueries, allSkill
 			"resolved_model":  model,
 			"model_mode":      "assigned",
 			"enabled":         enabled,
-			"role":            role,
+			"role":            "subagent",
+			"source_role":     sourceRole,
 			"description":     description,
 			"color":           "",
 			"fallback_models": fallbackModels,
@@ -74,6 +76,8 @@ func buildSubagentRosterCards(ctx context.Context, rq *db.RouteQueries, allSkill
 			"skills":          fixedSkills,
 			"session_count":   sessionCount,
 			"supervisor":      strings.ToLower(supervisor),
+			"state":           stateStr,
+			"activity":        subagentActivity(stateStr),
 			"status":          statusStr,
 		}
 		if lastUsedAt != nil {
@@ -87,7 +91,33 @@ func buildSubagentRosterCards(ctx context.Context, rq *db.RouteQueries, allSkill
 	if subordinateNames == nil {
 		subordinateNames = []string{}
 	}
-	return subagentCards, subordinateNames, subTotal, subRunning
+	return subagentCards, subordinateNames, subTotal, subRunning, rows.Err()
+}
+
+func subagentState(enabled bool, status string) string {
+	status = strings.ToLower(strings.TrimSpace(status))
+	if !enabled {
+		return "stopped"
+	}
+	switch status {
+	case "running", "working":
+		return "running"
+	case "error", "failed", "unhealthy":
+		return "unhealthy"
+	case "stopped", "disabled":
+		return "stopped"
+	default:
+		return "idle"
+	}
+}
+
+func subagentActivity(state string) string {
+	switch strings.ToLower(strings.TrimSpace(state)) {
+	case "running", "working":
+		return "working"
+	default:
+		return "idle"
+	}
 }
 
 // GetRoster returns the agent roster with rich personality data.
@@ -131,7 +161,13 @@ func GetRoster(store *db.Store, cfg *core.Config) http.HandlerFunc {
 		}
 
 		primaryName := primaryNameOrDefault(cfg)
-		subagentCards, subordinateNames, subTotal, subRunning := buildSubagentRosterCards(ctx, rq, allSkillNames, primaryName)
+		subagentCards, subordinateNames, subTotal, subRunning, rosterErr := buildSubagentRosterCards(ctx, rq, allSkillNames, primaryName)
+		if rosterErr != nil {
+			subagentCards = []map[string]any{}
+			subordinateNames = []string{}
+			subTotal = 0
+			subRunning = 0
+		}
 
 		// --- Build voice object ---
 		voice := rosterVoice(osConfig)
@@ -174,6 +210,7 @@ func GetRoster(store *db.Store, cfg *core.Config) http.HandlerFunc {
 		if primaryModel == "" {
 			primaryModel = "auto"
 		}
+		primaryState, primaryActivity := primaryAgentRuntimeState(ctx, rq)
 
 		primaryCard := map[string]any{
 			"id":              cfg.Agent.ID,
@@ -182,6 +219,9 @@ func GetRoster(store *db.Store, cfg *core.Config) http.HandlerFunc {
 			"role":            "orchestrator",
 			"model":           primaryModel,
 			"enabled":         true,
+			"state":           primaryState,
+			"status":          primaryState,
+			"activity":        primaryActivity,
 			"color":           "#6366f1",
 			"description":     description,
 			"voice":           voice,

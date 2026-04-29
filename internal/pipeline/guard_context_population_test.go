@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	agenttools "roboticus/internal/agent/tools"
+	"roboticus/internal/llm"
 	"roboticus/internal/session"
 	"roboticus/testutil"
 )
@@ -31,6 +32,7 @@ func TestBuildGuardContext_PopulatesPipelineHintsAndStoreBackedFields(t *testing
 	sess.AddUserMessage("who are you?")
 	sess.AddAssistantMessage("previous answer", nil)
 	sess.AddToolResult("call-1", "delegate_task", "subagent completed the audit", false)
+	sess.SetSelectedToolDefs([]llm.ToolDef{{Type: "function", Function: llm.ToolFuncDef{Name: "browser_snapshot"}}})
 	sess.SetTaskVerificationHints("model_identity", "simple", "delegate_to_specialist", nil)
 
 	ctx := pipe.buildGuardContext(sess)
@@ -48,6 +50,9 @@ func TestBuildGuardContext_PopulatesPipelineHintsAndStoreBackedFields(t *testing
 	}
 	if len(ctx.SubagentNames) != 1 || ctx.SubagentNames[0] != "codereviewer" {
 		t.Fatalf("SubagentNames = %v, want [codereviewer]", ctx.SubagentNames)
+	}
+	if len(ctx.SelectedToolNames) != 1 || ctx.SelectedToolNames[0] != "browser_snapshot" {
+		t.Fatalf("SelectedToolNames = %v, want [browser_snapshot]", ctx.SelectedToolNames)
 	}
 	if !ctx.DelegationProvenance.SubagentTaskStarted ||
 		!ctx.DelegationProvenance.SubagentTaskCompleted ||

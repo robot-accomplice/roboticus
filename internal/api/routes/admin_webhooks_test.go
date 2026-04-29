@@ -75,6 +75,9 @@ func TestWebhookTelegram_UsesAdapterNormalizedMessage(t *testing.T) {
 	if got := runner.inputs[0]; got.Platform != "telegram" || got.SenderID != "99" || got.ChatID != "111" || got.Content != "hello" {
 		t.Fatalf("unexpected input: %+v", got)
 	}
+	if runner.inputs[0].Claim == nil || !runner.inputs[0].Claim.SenderInAllowlist {
+		t.Fatalf("webhook input missing accepted-channel claim: %+v", runner.inputs[0].Claim)
+	}
 }
 
 func TestWebhookWhatsApp_UsesBatchParserAndSkipsEmptyContent(t *testing.T) {

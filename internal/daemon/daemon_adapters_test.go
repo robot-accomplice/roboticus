@@ -133,6 +133,169 @@ func TestToolPruningQuery_FocusedAnalysisAuthoringPinsAnalysisAndWriteTools(t *t
 	}
 }
 
+func TestPrunerAdapter_ExplicitRegisteredToolMentionPinsTool(t *testing.T) {
+	reg := agent.NewToolRegistry()
+	reg.Register(&tools.EchoTool{})
+	reg.Register(tools.NewGholaTool(""))
+
+	sess := session.New("s1", "agent1", "Bot")
+	sess.AddUserMessage("Use the ghola tool to pull the main page of https://www.metacritic.com")
+
+	pruner := &prunerAdapter{
+		tools: reg,
+		toolSearchCfg: tools.ToolSearchConfig{
+			TopK:        1,
+			TokenBudget: 10000,
+		},
+	}
+	defs, _, err := pruner.PruneTools(context.Background(), sess)
+	if err != nil {
+		t.Fatalf("PruneTools returned error: %v", err)
+	}
+	if len(defs) != 1 {
+		t.Fatalf("selected tools = %v, want exactly ghola", defs)
+	}
+	if got := defs[0].Function.Name; got != "ghola" {
+		t.Fatalf("selected tool = %q, want ghola", got)
+	}
+}
+
+func TestPrunerAdapter_ExplicitToolPinFeedsAlwaysIncluded(t *testing.T) {
+	reg := agent.NewToolRegistry()
+	reg.Register(&tools.EchoTool{})
+	reg.Register(tools.NewGholaTool(""))
+
+	sess := session.New("s1", "agent1", "Bot")
+	sess.AddUserMessage("Please reattempt the use of the ghola tool.")
+
+	pruner := &prunerAdapter{
+		tools: reg,
+		toolSearchCfg: tools.ToolSearchConfig{
+			TopK:        1,
+			TokenBudget: 10000,
+		},
+	}
+	got := pruner.AlwaysIncluded(sess)
+	if !containsString(got, "ghola") {
+		t.Fatalf("AlwaysIncluded = %v, want ghola", got)
+	}
+}
+
+func TestPrunerAdapter_PublicWebReadPinsRegisteredWebTool(t *testing.T) {
+	reg := agent.NewToolRegistry()
+	reg.Register(&tools.EchoTool{})
+	reg.Register(tools.NewGholaTool(""))
+
+	sess := session.New("s1", "agent1", "Bot")
+	sess.AddUserMessage("Can you pull the main page of www.metacritic.com?")
+
+	pruner := &prunerAdapter{
+		tools: reg,
+		toolSearchCfg: tools.ToolSearchConfig{
+			TopK:        1,
+			TokenBudget: 10000,
+		},
+	}
+	defs, _, err := pruner.PruneTools(context.Background(), sess)
+	if err != nil {
+		t.Fatalf("PruneTools returned error: %v", err)
+	}
+	if len(defs) != 1 {
+		t.Fatalf("selected tools = %v, want exactly ghola", defs)
+	}
+	if got := defs[0].Function.Name; got != "ghola" {
+		t.Fatalf("selected tool = %q, want ghola", got)
+	}
+}
+
+func TestPrunerAdapter_PlaywrightMCPWebRequestPinsBrowserTools(t *testing.T) {
+	reg := agent.NewToolRegistry()
+	reg.Register(&tools.EchoTool{})
+	reg.Register(tools.NewGholaTool(""))
+	reg.Register(stubTool{name: "browser_navigate", description: "Navigate to a URL"})
+	reg.Register(stubTool{name: "browser_snapshot", description: "Capture accessibility snapshot"})
+
+	sess := session.New("s1", "agent1", "Bot")
+	sess.AddUserMessage("Can you use the Playwright MCP to surf the page?")
+
+	pruner := &prunerAdapter{
+		tools: reg,
+		toolSearchCfg: tools.ToolSearchConfig{
+			TopK:        2,
+			TokenBudget: 10000,
+		},
+	}
+	defs, _, err := pruner.PruneTools(context.Background(), sess)
+	if err != nil {
+		t.Fatalf("PruneTools returned error: %v", err)
+	}
+	names := toolDefNames(defs)
+	if !containsString(names, "browser_navigate") {
+		t.Fatalf("selected tools = %v, want browser_navigate pinned for Playwright web request", names)
+	}
+	if containsString(names, "ghola") {
+		t.Fatalf("selected tools = %v, want Playwright-specific request to prefer browser tools over ghola", names)
+	}
+}
+
+func TestPrunerAdapterToolCapabilityLexiconIncludesBrowserAndGhola(t *testing.T) {
+	reg := agent.NewToolRegistry()
+	reg.Register(tools.NewGholaTool(""))
+	reg.Register(stubTool{name: "browser_navigate", description: "Navigate to a URL"})
+	reg.Register(stubTool{name: "browser_snapshot", description: "Capture accessibility snapshot"})
+
+	pruner := &prunerAdapter{tools: reg}
+	lexicon := strings.ToLower(strings.Join(pruner.ToolCapabilityLexicon(), " "))
+	for _, want := range []string{"ghola", "browser", "playwright", "mcp", "surf", "page"} {
+		if !strings.Contains(lexicon, want) {
+			t.Fatalf("ToolCapabilityLexicon missing %q in %q", want, lexicon)
+		}
+	}
+}
+
+func TestExplicitlyRequestedRegisteredTools_DoesNotPinIncidentalMentions(t *testing.T) {
+	got := explicitlyRequestedRegisteredTools("Audit bash scripts in this repo.", []string{"bash", "ghola"})
+	if len(got) != 0 {
+		t.Fatalf("explicitlyRequestedRegisteredTools returned %v, want no pins for incidental mention", got)
+	}
+}
+
+func toolDefNames(defs []llm.ToolDef) []string {
+	out := make([]string, 0, len(defs))
+	for _, def := range defs {
+		out = append(out, def.Function.Name)
+	}
+	return out
+}
+
+type stubTool struct {
+	name        string
+	description string
+}
+
+func (t stubTool) Name() string { return t.name }
+
+func (t stubTool) Description() string { return t.description }
+
+func (t stubTool) Risk() tools.RiskLevel { return tools.RiskSafe }
+
+func (t stubTool) ParameterSchema() json.RawMessage {
+	return json.RawMessage(`{"type":"object","properties":{}}`)
+}
+
+func (t stubTool) Execute(context.Context, string, *tools.Context) (*tools.Result, error) {
+	return &tools.Result{Output: "ok"}, nil
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
 // ---------------------------------------------------------------------------
 // ingestorAdapter
 // ---------------------------------------------------------------------------

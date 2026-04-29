@@ -14,6 +14,9 @@ go vet ./...                # Lint
 - Subagents are execution workers, not operator-facing personas. They should default to zero personality and prove work with concrete evidence, artifacts, or observations from the current run.
 - Subagents must never report directly to operators, including scheduled or cron-triggered subagent work. Scheduled subagent output is still input to orchestration, not a substitute for operator-facing reporting.
 
+## Product rules (non-negotiable)
+- **No canned user- or operator-facing prose**: Do not append, substitute, or inject fixed templates into agent answers, guard chains, tool wrappers, or API responses unless there is literally no alternative (for example, a mandatory protocol body required by an external spec). Ground explanations in model output, tool results, structured errors, logs, or telemetry—not boilerplate blocks.
+
 ## Architecture
 - **Connector-Factory pattern**: All business logic lives in `internal/pipeline/`. Channel adapters and HTTP routes are thin connectors.
 - Route handlers in `internal/api/routes/` must NOT import `internal/agent` directly — use interfaces or pass through pipeline. The architecture test (`architecture_test.go`) enforces this.

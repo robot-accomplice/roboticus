@@ -254,13 +254,16 @@ func SearchMemory(store *db.Store) http.HandlerFunc {
 	}
 }
 
-// TriggerConsolidation runs the memory consolidation pipeline on demand.
+// TriggerConsolidation runs memory curation on demand. The route keeps the
+// legacy "consolidate" path for compatibility; consolidation is now a sub-phase
+// of the broader memory curation lifecycle.
 func TriggerConsolidation(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		force, _ := strconv.ParseBool(r.URL.Query().Get("force"))
 		report := pipeline.RunMemoryConsolidation(r.Context(), store, force)
 		writeJSON(w, http.StatusOK, map[string]any{
-			"ok": true,
+			"ok":        true,
+			"operation": "memory_curation",
 			"report": map[string]any{
 				"indexed":            report.Indexed,
 				"deduped":            report.Deduped,

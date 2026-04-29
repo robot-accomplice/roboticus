@@ -45,6 +45,7 @@ type Daemon struct {
 	errBus      *core.ErrorBus
 	embedClient *llm.EmbeddingClient
 	memMgr      *memory.Manager
+	skillInv    *skillInventory
 
 	startupStart time.Time
 	errBusCancel context.CancelFunc
@@ -354,6 +355,17 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 	tools.Register(&agenttools.AlterTableTool{})
 	tools.Register(&agenttools.DropTableTool{})
 
+	// Web tools (opt-in: external network reach).
+	if cfg.WebTools.WebSearchEnabled {
+		tools.Register(agenttools.NewWebSearchTool(cfg.WebTools.WebSearchURL, cfg.WebTools.WebSearchAPIKey))
+	}
+	if cfg.WebTools.HTTPFetchEnabled {
+		tools.Register(agenttools.NewHTTPFetchTool())
+	}
+	if cfg.WebTools.GholaEnabled {
+		tools.Register(agenttools.NewGholaTool(cfg.WebTools.GholaPath))
+	}
+
 	bootStep(5, steps, "Identity resolved")
 	bootDetail("name", cfg.Agent.Name)
 	bootDetail("id", cfg.Agent.ID)
@@ -400,15 +412,15 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 	log.Info().Msg("[startup 6/12] policy engine + memory management ready")
 
 	// ── Phase 7: Skills ─────────────────────────────────────────────────
-	// Load skills from configured directory.
+	// Load skills through the live runtime inventory. File artifacts remain the
+	// executable source of truth; DB rows provide governance and metadata.
 	skillLoader := skills.NewLoader()
-	var loadedSkills []*skills.Skill
-	if cfg.Skills.Directory != "" {
-		loadedSkills = skillLoader.LoadFromDir(cfg.Skills.Directory)
-		log.Info().Int("count", len(loadedSkills)).Str("dir", cfg.Skills.Directory).Msg("loaded skills")
+	skillMatcher := skills.NewMatcher(nil)
+	skillInv := newSkillInventory(cfg, store, skillLoader, skillMatcher)
+	loadedSkills, err := skillInv.Reload(context.Background())
+	if err != nil {
+		return nil, fmt.Errorf("skill inventory reload: %w", err)
 	}
-	loadedSkills = mergeLoadedSkills(loadedSkills, skillLoader.LoadFromPaths(pipeline.EnabledSkillSourcePathsFromDB(store)))
-	skillMatcher := skills.NewMatcher(loadedSkills)
 
 	// Load personality files from workspace.
 	osCfg, err := core.LoadOsConfig(cfg.Agent.Workspace, "OS.toml")
@@ -619,18 +631,31 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 	// fall back to the Rust-parity defaults.
 	toolSearchCfg := resolveToolSearchConfig(cfg.ToolSearch)
 
+	// The approval manager must be constructed before the pipeline so
+	// the executor adapter can pass it into agent.LoopDeps. Previously
+	// this was instantiated in Phase 11 — too late for the loop to
+	// consult `ClassifyTool`, which is why blocked/gated tool lists were
+	// architectural dead code (closed in v1.0.8).
+	approvalMgr := policy.NewApprovalManager(policy.ApprovalsConfig{
+		Enabled:        cfg.Approvals.Enabled,
+		GatedTools:     cfg.Approvals.GatedTools,
+		BlockedTools:   cfg.Approvals.BlockedTools,
+		TimeoutSeconds: cfg.Approvals.TimeoutSeconds,
+	})
+
 	eventBus := api.NewEventBus(256)
 	pipe := pipeline.New(pipeline.PipelineDeps{
 		Store:     store,
 		LLM:       llmSvc,
 		Injection: &injectionAdapter{det: injection},
 		Retriever: &retrieverAdapter{r: retriever},
-		Skills:    &skillAdapter{matcher: skillMatcher, tools: tools},
+		Skills:    &skillAdapter{matcher: skillMatcher, tools: tools, store: store},
 		Executor: &executorAdapter{
 			llmSvc:          llmSvc,
 			store:           store,
 			tools:           tools,
 			policy:          policyEngine,
+			approvals:       approvalMgr,
 			injection:       injection,
 			memMgr:          memMgr,
 			embedClient:     embedClient,
@@ -640,6 +665,7 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 			cacheCfg:        &cfg.Cache,
 			maxTurnDuration: time.Duration(cfg.Agent.AutonomyMaxTurnDurationSecs) * time.Second,
 			toolRecorder:    &toolCallRecorderAdapter{store: store},
+			skillNames:      skillInv.Names,
 		},
 		Ingestor: &ingestorAdapter{m: memMgr},
 		Refiner:  &nicknameAdapter{llm: llmSvc, store: store},
@@ -652,6 +678,7 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 			promptConfig:  basePromptCfg,
 			budgetCfg:     &cfg.ContextBudget,
 			cacheCfg:      &cfg.Cache,
+			skillNames:    skillInv.Names,
 		},
 		Pruner: &prunerAdapter{
 			tools:         tools,
@@ -662,6 +689,7 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 			store:      store,
 			tools:      tools,
 			promptBase: basePromptCfg,
+			skillNames: skillInv.Names,
 		},
 		BGWorker:     bgWorker,
 		Embeddings:   embedClient,
@@ -686,12 +714,9 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 		log.Warn().Err(err).Msg("hippocampus sync failed")
 	}
 
-	approvalMgr := policy.NewApprovalManager(policy.ApprovalsConfig{
-		Enabled:        cfg.Approvals.Enabled,
-		GatedTools:     cfg.Approvals.GatedTools,
-		BlockedTools:   cfg.Approvals.BlockedTools,
-		TimeoutSeconds: cfg.Approvals.TimeoutSeconds,
-	})
+	// approvalMgr is constructed in Phase 10 above so the executor
+	// adapter can inject it into the agent loop. It is also exported via
+	// /api/approvals here for the UI; both consumers share one instance.
 
 	// Log ring buffer: captures structured logs for /api/logs endpoint.
 	logBuf := api.NewLogRingBuffer(5000)
@@ -729,6 +754,10 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 		Plugins:         pluginRegistry,
 		TelegramWebhook: telegramWebhook,
 		WhatsAppWebhook: whatsAppWebhook,
+		ReloadSkills: func(ctx context.Context) error {
+			_, err := skillInv.Reload(ctx)
+			return err
+		},
 	}
 
 	bootStep(11, steps, "Hippocampus, approvals, events ready")
@@ -769,6 +798,7 @@ func New(cfg *core.Config, opts BootOptions) (*Daemon, error) {
 		errBus:       errBus,
 		embedClient:  embedClient,
 		memMgr:       memMgr,
+		skillInv:     skillInv,
 		startupStart: startupStart,
 		errBusCancel: errBusCancel,
 		pidFilePath:  PIDFilePath(cfg),

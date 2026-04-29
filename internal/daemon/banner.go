@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"roboticus/internal/core"
+	buildversion "roboticus/internal/version"
 )
 
 // ---------------------------------------------------------------------------
@@ -21,7 +22,7 @@ import (
 var robotBanner string
 
 // version is set at build time via -ldflags.
-var version = "dev"
+var version = buildversion.Version
 
 // BootOptions controls the terminal display behavior during startup.
 // Wired from CLI flags (--color, --theme, --nerdmode, --no-draw).

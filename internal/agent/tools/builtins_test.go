@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -169,6 +170,53 @@ func TestListDirectoryTool_Execute_EmitsInspectionProof(t *testing.T) {
 	}
 	if proof.Count != 2 || proof.Empty {
 		t.Fatalf("proof count/empty = %+v", proof)
+	}
+}
+
+func TestInspectionReadTools_AnchorRelativePathsToActiveRoot(t *testing.T) {
+	workspace := t.TempDir()
+	project := t.TempDir()
+	if err := os.Mkdir(filepath.Join(project, "docs"), 0o755); err != nil {
+		t.Fatalf("seed docs dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "ARCHITECTURE.md"), []byte("architecture"), 0o644); err != nil {
+		t.Fatalf("seed architecture doc: %v", err)
+	}
+
+	tctx := &Context{
+		Workspace:    workspace,
+		PathAnchor:   project,
+		AllowedPaths: []string{project},
+	}
+	if _, err := (&ListDirectoryTool{}).Execute(context.Background(), `{"path":"docs"}`, tctx); err != nil {
+		t.Fatalf("list_directory should resolve relative path under inspection root: %v", err)
+	}
+	partiallyQualifiedDocs := filepath.Join(filepath.Base(filepath.Dir(project)), filepath.Base(project), "docs")
+	if _, err := (&ListDirectoryTool{}).Execute(context.Background(), `{"path":`+strconv.Quote(partiallyQualifiedDocs)+`}`, tctx); err != nil {
+		t.Fatalf("list_directory should normalize duplicated inspection-root suffix %q: %v", partiallyQualifiedDocs, err)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		t.Fatalf("UserHomeDir() failed: %v", err)
+	}
+	homeProject := filepath.Join(home, "code", "roboticus-test-anchor")
+	tctx.PathAnchor = homeProject
+	tctx.AllowedPaths = []string{filepath.Join(home, "code")}
+	resolved, err := tctx.ResolveReadPath("~/code/roboticus-test-anchor/docs")
+	if err != nil {
+		t.Fatalf("ResolveReadPath should normalize tilde shorthand under active inspection root: %v", err)
+	}
+	if resolved != filepath.Join(homeProject, "docs") {
+		t.Fatalf("resolved tilde shorthand = %q, want %q", resolved, filepath.Join(homeProject, "docs"))
+	}
+	tctx.PathAnchor = project
+	tctx.AllowedPaths = []string{project}
+	read, err := (&ReadFileTool{}).Execute(context.Background(), `{"path":"ARCHITECTURE.md"}`, tctx)
+	if err != nil {
+		t.Fatalf("read_file should resolve relative file under inspection root: %v", err)
+	}
+	if !strings.Contains(read.Output, "architecture") {
+		t.Fatalf("read output = %q", read.Output)
 	}
 }
 

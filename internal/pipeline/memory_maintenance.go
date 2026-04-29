@@ -9,22 +9,26 @@ import (
 	"roboticus/internal/llm"
 )
 
-// MemoryMaintenanceReport captures the outcome of operator-triggered memory maintenance.
+// MemoryMaintenanceReport captures the outcome of operator-triggered memory
+// maintenance.
 type MemoryMaintenanceReport struct {
+	// Consolidation keeps the legacy JSON shape for compatibility. The
+	// operator-facing operation is Memory Curation.
 	Consolidation agentmemory.ConsolidationReport `json:"consolidation"`
 	IndexBuilt    bool                            `json:"index_built"`
 	EntryCount    int                             `json:"entry_count"`
 	VectorIndex   db.VectorIndex                  `json:"-"` // built index for caller to attach to Retriever/Manager
 }
 
-// ConsolidationOpts configures optional consolidation dependencies.
+// ConsolidationOpts configures optional memory curation dependencies.
 type ConsolidationOpts struct {
 	EmbedClient *llm.EmbeddingClient
 	LLMService  *llm.Service
 }
 
-// RunMemoryConsolidation executes the production consolidation pipeline from the
-// canonical pipeline layer so API connectors stay thin.
+// RunMemoryConsolidation executes production Memory Curation from the canonical
+// pipeline layer so API connectors stay thin. The name is retained as a
+// compatibility alias for the legacy command/API path.
 func RunMemoryConsolidation(ctx context.Context, store *db.Store, force bool, opts ...ConsolidationOpts) agentmemory.ConsolidationReport {
 	pipe := agentmemory.NewConsolidationPipeline()
 	if force {

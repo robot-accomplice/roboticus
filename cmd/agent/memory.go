@@ -126,7 +126,7 @@ var memoryStatsCmd = &cobra.Command{
 
 var memoryConsolidateCmd = &cobra.Command{
 	Use:   "consolidate",
-	Short: "Run memory consolidation (dedup, decay, prune)",
+	Short: "Run memory curation (index hygiene, consolidation, governance)",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		data, err := cmdutil.APIPost("/api/memory/consolidate", nil)
 		if err != nil {
@@ -137,7 +137,7 @@ var memoryConsolidateCmd = &cobra.Command{
 			cmdutil.PrintJSON(data)
 			return nil
 		}
-		fmt.Printf("Memory consolidation complete:\n")
+		fmt.Printf("Memory curation complete:\n")
 		for k, v := range report {
 			fmt.Printf("  %-20s %v\n", k, v)
 		}
