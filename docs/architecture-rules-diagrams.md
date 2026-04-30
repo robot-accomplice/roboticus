@@ -147,6 +147,13 @@ This file follows the same C4 conventions used elsewhere in the repo:
   prior history, latest user input, and unused capacity. Model-native context
   limits may be shown only when provider metadata supplies them; otherwise the
   request envelope budget is the honest denominator.
+- RLM-supported Context-as-Environment Mode is the preferred direction for
+  large or dense corpora and reinforces the existing memory-as-index/tool
+  architecture: repositories, vaults, memory stores, trace sets, and benchmark
+  artifacts should remain inspectable through tools and typed intermediate
+  evidence instead of being bulk-injected, forced into prompt memory, or
+  lossy-summarized. Recursive model calls are optional later execution
+  strategy, not the default architecture.
 - exploratory baseline ceilings and release-gate latency SLOs are separate
   contracts: baseline timeouts classify observability limits, while release
   gates may enforce product latency thresholds

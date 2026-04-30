@@ -106,7 +106,7 @@ research influences include:
 | Roadmap area | Source |
 | ------------ | ------ |
 | Agent behavioral contracts, guard/RCA contract events, hard/soft recovery semantics | ["Agent Behavioral Contracts: Formal Specification and Runtime Enforcement for Reliable Autonomous AI Agents"](https://arxiv.org/pdf/2602.22302) |
-| Recursive memory, retrieval, and learned decomposition investigation | [Recursive Language Models](https://arxiv.org/html/2512.24601v1) |
+| Context-as-Environment Mode support for the existing memory-as-index/tool architecture, recursive memory/retrieval investigation, and learned decomposition gating | [Recursive Language Models](https://arxiv.org/html/2512.24601v1) |
 | Semantic-collapse defense, late-interaction retrieval, reranking, and agentic RAG roadmap work | [ColBERTv2](https://arxiv.org/abs/2112.01488), [Agentic RAG Survey](https://arxiv.org/abs/2501.09136), [A-RAG: Hierarchical Retrieval Interfaces](https://arxiv.org/html/2602.03442v1) |
 | Learning-loop closure and reusable tool-use procedure synthesis | [Autonomous tool-use learning in LLM agents](https://arxiv.org/abs/2603.05344) |
 

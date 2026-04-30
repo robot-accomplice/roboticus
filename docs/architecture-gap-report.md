@@ -38,6 +38,15 @@ older architecture docs had left too generic:
   fixed prompt overhead would exhaust the active turn envelope, the request
   builder must trim or classify that overhead deterministically and persist the
   final footprint so RCA can distinguish model weakness from framework pressure.
+- **Large context should remain inspectable environment, not prompt bulk.**
+  The RLM extraction for v1.0.8 supports the pre-existing Roboticus
+  memory-as-index/tool architecture. Context-as-Environment Mode is the
+  preferred direction for repositories, vaults, memory stores, trace sets, and
+  benchmark artifacts. The model should receive task, metadata, bounded tools,
+  selected evidence, and typed intermediate state. It should not receive a
+  lossy generic summary as the first move, an unbounded corpus dump, or forced
+  long-term memory injection. Recursive model calls remain deferred until RCA
+  and soaks can prove marginal value.
 - **Turn analysis must expose one stable operator-facing payload.**
   `/api/turns/{id}/analyze` may include compatibility aliases, but the route
   boundary owns the canonical analysis summary and recommendation list. The
