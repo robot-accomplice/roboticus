@@ -537,16 +537,17 @@ older architecture docs had left too generic:
   agent must attempt the filesystem tool and surface the real policy result;
   it must not ask for the subdirectory to be separately allowlisted unless an
   actual tool denial proves that narrower configuration is required.
-- **Operator path shorthand must normalize before model execution, not weaken
-  sandboxing.** Focused inspection target resolution may expand normal
+- **Operator path shorthand must normalize before policy and execution, not
+  weaken sandboxing.** Focused inspection target resolution may expand normal
   operator shorthand such as `~/code/roboticus` into a canonical absolute path
   only when that path is already inside the workspace or configured allowed
   roots. Natural-language prose following the path is not part of the target.
   Once an inspection root is resolved, follow-up read/list/search/glob calls
-  that repeat the same target with `~` shorthand must normalize back to the
-  resolved root instead of producing misleading home-shortcut denials. General
-  filesystem tools still reject unresolved `~` paths; the exception belongs to
-  the focused inspection target seam.
+  that repeat the same target with `~` shorthand must normalize back to a
+  canonical allowed absolute path before policy evaluation and tool execution
+  instead of producing misleading home-shortcut denials. General filesystem
+  tools still reject unresolved `~` paths; bounded alias normalization is a
+  sandbox-preserving canonicalization seam, not a broad home-directory bypass.
 - **Referential execution follow-ups need prior-turn grounding.** A request
   such as "examine it" after discussion of a vault subsection is task
   continuation, not a fresh ambiguous chat turn. Short-followup expansion must

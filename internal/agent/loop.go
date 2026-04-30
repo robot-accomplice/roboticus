@@ -968,6 +968,21 @@ func (l *Loop) act(ctx context.Context, session *Session) (Action, error) {
 		if execArgs == "" {
 			execArgs = tc.Function.Arguments
 		}
+		if normalizedArgs, changed := tctx.NormalizeAllowedFilesystemPathAliases(tc.Function.Name, execArgs); changed {
+			if obs := llm.InferenceObserverFromContext(ctx); obs != nil {
+				obs.RecordEvent("tool_call_path_alias_normalized", "info",
+					"filesystem path alias normalized before policy",
+					"The framework canonicalized an operator-facing filesystem path alias to an allowed absolute path before policy evaluation and tool execution.",
+					map[string]any{
+						"tool_call_id":  tc.ID,
+						"tool_name":     tc.Function.Name,
+						"original_args": execArgs,
+						"normalized":    normalizedArgs,
+					},
+				)
+			}
+			execArgs = normalizedArgs
+		}
 		replayFingerprint := agenttools.ReplayFingerprintForCall(tc.Function.Name, execArgs)
 		l.mu.Lock()
 		successCount := l.successfulCalls[replayFingerprint.Key]

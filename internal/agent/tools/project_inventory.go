@@ -55,7 +55,7 @@ func (t *ProjectInventoryTool) Execute(ctx context.Context, params string, tctx 
 		args.Limit = 200
 	}
 
-	root, err := resolvePath(tctx.Workspace, args.Root, tctx.AllowedPaths)
+	root, err := tctx.ResolveReadPath(args.Root)
 	if err != nil {
 		return nil, err
 	}

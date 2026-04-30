@@ -364,7 +364,7 @@ func (t *SearchFilesTool) Execute(_ context.Context, params string, tctx *Contex
 		args.Limit = 100
 	}
 
-	resolved, err := resolvePath(tctx.Workspace, args.Path, tctx.AllowedPaths)
+	resolved, err := tctx.ResolveReadPath(args.Path)
 	if err != nil {
 		return nil, err
 	}
@@ -464,7 +464,7 @@ func (t *GlobFilesTool) Execute(_ context.Context, params string, tctx *Context)
 		args.Limit = 500
 	}
 
-	resolved, err := resolvePath(tctx.Workspace, args.Path, tctx.AllowedPaths)
+	resolved, err := tctx.ResolveReadPath(args.Path)
 	if err != nil {
 		return nil, err
 	}

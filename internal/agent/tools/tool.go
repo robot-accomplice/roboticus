@@ -72,10 +72,8 @@ func (c *Context) ResolveReadPath(path string) (string, error) {
 		return "", fmt.Errorf("tool context is required")
 	}
 	root := c.Workspace
-	if c.PathAnchor != "" && strings.HasPrefix(strings.TrimSpace(path), "~") {
-		if expanded, ok := expandHomePath(path); ok && c.pathAllowedForActiveInspection(expanded) {
-			path = expanded
-		}
+	if normalized, ok := c.normalizeAllowedPathAlias(path); ok {
+		path = normalized
 	}
 	if c.PathAnchor != "" && !filepath.IsAbs(path) {
 		root = c.PathAnchor
@@ -84,7 +82,73 @@ func (c *Context) ResolveReadPath(path string) (string, error) {
 	return ResolvePath(path, root, &ToolSandboxSnapshot{AllowedPaths: c.AllowedPaths})
 }
 
-func (c *Context) pathAllowedForActiveInspection(path string) bool {
+// NormalizeAllowedFilesystemPathAliases canonicalizes operator-facing path
+// shorthand before policy evaluation. It does not grant authority: aliases are
+// rewritten only when their expanded absolute path is already covered by the
+// workspace, active inspection root, or configured allowed_paths.
+func (c *Context) NormalizeAllowedFilesystemPathAliases(toolName, args string) (string, bool) {
+	if c == nil || !toolAcceptsFilesystemPathAlias(toolName) || strings.TrimSpace(args) == "" {
+		return args, false
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(args), &fields); err != nil {
+		return args, false
+	}
+	changed := false
+	for _, key := range filesystemPathAliasKeys {
+		raw, ok := fields[key]
+		if !ok {
+			continue
+		}
+		var value string
+		if err := json.Unmarshal(raw, &value); err != nil {
+			continue
+		}
+		normalized, ok := c.normalizeAllowedPathAlias(value)
+		if !ok || normalized == value {
+			continue
+		}
+		encoded, err := json.Marshal(normalized)
+		if err != nil {
+			continue
+		}
+		fields[key] = encoded
+		changed = true
+	}
+	if !changed {
+		return args, false
+	}
+	encoded, err := json.Marshal(fields)
+	if err != nil {
+		return args, false
+	}
+	return string(encoded), true
+}
+
+var filesystemPathAliasKeys = []string{"path", "root", "file", "filepath", "filename", "directory", "dir"}
+
+func toolAcceptsFilesystemPathAlias(toolName string) bool {
+	switch toolName {
+	case "read_file", "write_file", "edit_file", "list_directory", "search_files", "glob_files", "inventory_projects":
+		return true
+	default:
+		return false
+	}
+}
+
+func (c *Context) normalizeAllowedPathAlias(path string) (string, bool) {
+	trimmed := strings.TrimSpace(path)
+	if !strings.HasPrefix(trimmed, "~") {
+		return path, false
+	}
+	expanded, ok := expandHomePath(trimmed)
+	if !ok || !c.pathAllowedForFilesystemAlias(expanded) {
+		return path, false
+	}
+	return filepath.Clean(expanded), true
+}
+
+func (c *Context) pathAllowedForFilesystemAlias(path string) bool {
 	if c == nil {
 		return false
 	}

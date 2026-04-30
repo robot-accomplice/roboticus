@@ -249,6 +249,12 @@ This file follows the same C4 conventions used elsewhere in the repo:
   allowed paths are roots, descendants inherit access unless a narrower deny or
   read/write distinction applies, and the model must attempt the relevant tool
   before claiming that an allowed subtree needs additional configuration
+- user-facing filesystem shorthand is input syntax, not runtime authority:
+  `~` aliases may be canonicalized only when they expand inside the workspace,
+  active inspection root, or configured allowed paths, and that
+  canonicalization must happen before policy evaluation and tool execution.
+  Unresolved home-directory aliases remain denied; bounded normalization
+  prevents false access blocks without broadening the sandbox.
 - short referential execution follow-ups such as "examine it", "inspect that",
   or "look there" must preserve the immediately prior assistant context so the
   pipeline can resolve the referenced vault/folder/section instead of treating

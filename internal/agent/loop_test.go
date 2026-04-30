@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -1112,6 +1114,103 @@ func TestLoop_RejectsToolCallOutsideSelectedToolSurface(t *testing.T) {
 	if !found {
 		t.Fatal("expected tool_call_blocked event")
 	}
+}
+
+func TestLoop_NormalizesAllowedTildePathBeforePolicy(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		t.Fatalf("UserHomeDir() failed: %v", err)
+	}
+	root, err := os.MkdirTemp(home, ".roboticus-loop-tilde-*")
+	if err != nil {
+		t.Fatalf("create home temp dir: %v", err)
+	}
+	defer func() { _ = os.RemoveAll(root) }()
+	if err := os.WriteFile(filepath.Join(root, "ARCHITECTURE.md"), []byte("architecture"), 0o644); err != nil {
+		t.Fatalf("seed file: %v", err)
+	}
+	tildePath := "~/" + filepath.Base(root) + "/ARCHITECTURE.md"
+
+	mock := &mockCompleter{
+		responses: []*llm.Response{
+			{
+				Model:    "kimi-k2-turbo-preview",
+				Provider: "moonshot",
+				ToolCalls: []llm.ToolCall{{
+					ID:   "call-read",
+					Type: "function",
+					Function: llm.ToolCallFunc{
+						Name:      "read_file",
+						Arguments: `{"path":` + quoteJSONString(t, tildePath) + `}`,
+					},
+				}},
+			},
+			{Model: "kimi-k2-turbo-preview", Provider: "moonshot", Content: "Done."},
+		},
+	}
+	reg := NewToolRegistry()
+	reg.Register(&agenttools.ReadFileTool{})
+	recorder := &recordingToolCallRecorder{}
+	cfg := policy.DefaultConfig()
+	cfg.WorkspaceOnly = true
+	cfg.AllowedPaths = []string{root}
+	deps := LoopDeps{
+		LLM:      mock,
+		Tools:    reg,
+		Recorder: recorder,
+		Policy:   policy.NewEngine(cfg),
+		Context:  NewContextBuilder(DefaultContextConfig()),
+	}
+	loop := NewLoop(DefaultLoopConfig(), deps)
+
+	session := NewSession("sess-tilde", "agent-1", "TestBot")
+	session.Workspace = t.TempDir()
+	session.AllowedPaths = []string{root}
+	session.Authority = core.AuthorityCreator
+	session.SetSelectedToolDefs([]llm.ToolDef{{Type: "function", Function: llm.ToolFuncDef{Name: "read_file"}}})
+	session.AddUserMessage("read the architecture document")
+	obs := &recordingObserver{}
+	ctx := llm.WithInferenceObserver(core.WithTurnID(context.Background(), "turn-tilde"), obs)
+
+	result, err := loop.Run(ctx, session)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "Done." {
+		t.Fatalf("result = %q, want Done.", result)
+	}
+	if len(recorder.records) == 0 {
+		t.Fatal("expected tool execution record")
+	}
+	first := recorder.records[0]
+	if first.Status != "success" {
+		t.Fatalf("tool status = %q output=%q", first.Status, first.Output)
+	}
+	if strings.Contains(first.Input, "~") {
+		t.Fatalf("policy/execution input still contains tilde: %q", first.Input)
+	}
+	if !strings.Contains(first.Input, filepath.Join(root, "ARCHITECTURE.md")) {
+		t.Fatalf("tool input = %q, want canonical path under %q", first.Input, root)
+	}
+	found := false
+	for _, ev := range obs.events {
+		if ev.eventType == "tool_call_path_alias_normalized" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected path alias normalization event")
+	}
+}
+
+func quoteJSONString(t *testing.T, s string) string {
+	t.Helper()
+	encoded, err := json.Marshal(s)
+	if err != nil {
+		t.Fatalf("marshal string: %v", err)
+	}
+	return string(encoded)
 }
 
 func TestLoop_SuppressesReplayOfSuccessfulSideEffectingToolCallsByProtectedResource(t *testing.T) {

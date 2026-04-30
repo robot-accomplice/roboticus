@@ -220,6 +220,60 @@ func TestInspectionReadTools_AnchorRelativePathsToActiveRoot(t *testing.T) {
 	}
 }
 
+func TestFilesystemPathAliases_NormalizeAllowedTildeBeforePolicy(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		t.Fatalf("UserHomeDir() failed: %v", err)
+	}
+	root, err := os.MkdirTemp(home, ".roboticus-tilde-alias-*")
+	if err != nil {
+		t.Fatalf("create home temp dir: %v", err)
+	}
+	defer func() { _ = os.RemoveAll(root) }()
+
+	tctx := &Context{
+		Workspace:    t.TempDir(),
+		AllowedPaths: []string{root},
+	}
+	tildePath := "~/" + filepath.Base(root) + "/ARCHITECTURE.md"
+	normalized, ok := tctx.NormalizeAllowedFilesystemPathAliases("read_file", `{"path":`+strconv.Quote(tildePath)+`}`)
+	if !ok {
+		t.Fatal("expected allowed tilde path to normalize")
+	}
+	if strings.Contains(normalized, "~") {
+		t.Fatalf("normalized args still contain tilde: %q", normalized)
+	}
+	if !strings.Contains(normalized, filepath.Join(root, "ARCHITECTURE.md")) {
+		t.Fatalf("normalized args = %q, want absolute allowed path under %q", normalized, root)
+	}
+
+	resolved, err := tctx.ResolveReadPath(tildePath)
+	if err != nil {
+		t.Fatalf("ResolveReadPath should accept allowed tilde alias without PathAnchor: %v", err)
+	}
+	if resolved != filepath.Join(root, "ARCHITECTURE.md") {
+		t.Fatalf("resolved = %q, want %q", resolved, filepath.Join(root, "ARCHITECTURE.md"))
+	}
+}
+
+func TestFilesystemPathAliases_LeaveUnallowedTildeDenied(t *testing.T) {
+	tctx := &Context{
+		Workspace:    t.TempDir(),
+		AllowedPaths: []string{t.TempDir()},
+	}
+	args := `{"path":"~/not-under-allowed-root/ARCHITECTURE.md"}`
+	normalized, ok := tctx.NormalizeAllowedFilesystemPathAliases("read_file", args)
+	if ok {
+		t.Fatalf("unexpected normalization for unallowed tilde path: %q", normalized)
+	}
+	if normalized != args {
+		t.Fatalf("args changed for unallowed path: %q", normalized)
+	}
+	if _, err := tctx.ResolveReadPath("~/not-under-allowed-root/ARCHITECTURE.md"); err == nil {
+		t.Fatal("unallowed tilde path should still be rejected")
+	}
+}
+
 func TestGlobFilesTool_Execute_EmitsInspectionProof(t *testing.T) {
 	ws := t.TempDir()
 	if err := os.WriteFile(filepath.Join(ws, "alpha.md"), []byte("A"), 0o644); err != nil {
