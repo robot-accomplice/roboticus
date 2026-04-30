@@ -54,6 +54,7 @@ create compatibility churn. New prose should still use the terms below.
 | **Message** | Stored user/assistant/tool content inside a session. | Do not use message ID where canonical turn ID is required. |
 | **Canonical Turn ID** | Stable ID established before execution and used across traces, tool calls, RCA, benchmark rows, and UI drill-down. | Do not derive only after a successful turn. |
 | **Execution-Only Context** | Framework scaffolding used for current-turn model/tool execution but not persisted as user transcript or mined as memory. | Do not store it in `session_messages` as operator-authored text. |
+| **Context-as-Environment Mode** | RLM-supported name for the existing Roboticus pattern where large or dense corpora, including long-term memory, are kept outside the prompt as inspectable tool-addressable environments with typed intermediate evidence. | Do not use as a synonym for recursive subagent/model calls, generic summarization, or forced long-term memory injection. |
 | **Pending Action** | Typed state that the assistant left a concrete unresolved next action. Short follow-ups bind to this state. | Do not make exact phrases such as `please do` the owner of continuation. |
 | **Continuation** | Resuming an unresolved current task/action from state and recent context. | Do not use for arbitrary retries or social chat. |
 | **Correction Turn** | Operator disputes, corrects, or redirects a prior answer. | Do not treat as praise or confirmation. |
