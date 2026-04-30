@@ -33,11 +33,15 @@ older architecture docs had left too generic:
   model-catalog metadata explicitly supplies a larger model-native context
   window.
 - **Context pressure must degrade elastic overhead before damaging the task.**
-  The latest user message remains non-negotiable, but memory, ambient notes,
-  overlays, and unpinned tool definitions are elastic request overhead. When
-  fixed prompt overhead would exhaust the active turn envelope, the request
-  builder must trim or classify that overhead deterministically and persist the
-  final footprint so RCA can distinguish model weakness from framework pressure.
+  Operator-authored messages remain non-negotiable continuity inputs. The
+  latest user message is the hardest invariant, but older user messages may
+  also contain active session constraints, correction context, or task state
+  that cannot be safely rewritten by lossy prompt compression. Assistant
+  history, memory, ambient notes, overlays, and unpinned tool definitions are
+  the elastic request surfaces. When fixed prompt overhead would exhaust the
+  active turn envelope, the request builder must trim or classify that overhead
+  deterministically and persist the final footprint so RCA can distinguish
+  model weakness from framework pressure.
 - **Large context should remain inspectable environment, not prompt bulk.**
   The RLM extraction for v1.0.8 supports the pre-existing Roboticus
   memory-as-index/tool architecture. Context-as-Environment Mode is the

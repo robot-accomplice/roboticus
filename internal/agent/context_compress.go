@@ -7,8 +7,7 @@
 //
 //   - the last user message is preserved verbatim
 //   - all system messages are preserved verbatim
-//   - only older conversational history (`user` / `assistant`) is
-//     eligible for llm.SmartCompress
+//   - only older assistant history is eligible for llm.SmartCompress
 //
 // That narrowing is deliberate. In Go, the system layer carries richer
 // memory, hippocampus, and checkpoint-style ambient context than the
@@ -45,7 +44,7 @@ import (
 // stable across the ports; consumers should NOT override it per call.
 const minCompressibleContentLen = 200
 
-// CompressContextMessages rewrites only compressible HISTORY messages
+// CompressContextMessages rewrites only compressible assistant HISTORY messages
 // whose content is at least minCompressibleContentLen into their
 // SmartCompress output at the given targetRatio. Mutates the messages
 // slice in place.
@@ -53,14 +52,15 @@ const minCompressibleContentLen = 200
 // Rust parity: roboticus-agent/src/context.rs::compress_context.
 //
 // Invariants the caller relies on:
-//   - The last user message is returned unchanged — its index in the
-//     slice does not move and its content is not rewritten. This keeps
-//     the current query intact for the model.
+//   - User messages are returned unchanged. Operator-authored turns may contain
+//     active session constraints, corrections, and output rules; they are not
+//     elastic compression material.
 //   - System messages are returned unchanged. This preserves the system
 //     prompt, memory block, memory index, hippocampus summaries, and
 //     any future checkpoint/system-note injections exactly as assembled.
 //   - Tool / structured payload messages are returned unchanged. Prompt
-//     compression is a history-quality valve, not a transport rewrite.
+//     compression is an assistant-history quality valve, not a transport
+//     rewrite.
 //   - No message is dropped or reordered. Only Content fields change.
 //   - When targetRatio is outside [0.1, 1.0], SmartCompress clamps it;
 //     this function does not clamp separately so there is a single
@@ -70,25 +70,13 @@ const minCompressibleContentLen = 200
 //     caller can use ratio==1.0 as a no-op marker without needing a
 //     separate gate.
 //
-// Safe to call on empty input; safe to call when no user message
-// exists (the preservation loop simply finds no target).
+// Safe to call on empty input.
 func CompressContextMessages(messages []llm.Message, targetRatio float64) {
 	if len(messages) == 0 {
 		return
 	}
 
-	lastUserIdx := -1
-	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role == "user" {
-			lastUserIdx = i
-			break
-		}
-	}
-
 	for i := range messages {
-		if i == lastUserIdx {
-			continue
-		}
 		if !isCompressibleHistoryMessage(messages[i]) {
 			continue
 		}
@@ -100,12 +88,5 @@ func CompressContextMessages(messages []llm.Message, targetRatio float64) {
 }
 
 func isCompressibleHistoryMessage(msg llm.Message) bool {
-	switch msg.Role {
-	case "assistant":
-		return true
-	case "user":
-		return true
-	default:
-		return false
-	}
+	return msg.Role == "assistant"
 }

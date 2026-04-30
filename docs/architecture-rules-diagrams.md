@@ -1540,8 +1540,8 @@ flowchart LR
 This view captures the validated v1.0.6 ownership rule for the inference
 artifact. Tool selection, memory preparation, checkpoint restore, and prompt
 assembly all converge into one `llm.Request`. The builder may compact or
-compress older conversational history, but it must preserve the latest user
-message and the higher-value system/memory surfaces.
+compress elastic assistant history, but it must preserve operator-authored
+user messages and the higher-value system/memory surfaces.
 
 ```mermaid
 flowchart LR
@@ -1556,10 +1556,10 @@ flowchart LR
     prune --> session
     session --> builder --> request --> router
 
-    note1["Latest user message survives verbatim"]
+    note1["Operator-authored user messages survive verbatim"]
     note2["Prompt-layer tool roster matches structured tool defs"]
     note3["Empty compacted history messages are dropped before inference"]
-    note4["Prompt compression is benchmark-only in v1.0.7\nafter failed history-bearing soak"]
+    note4["Prompt compression may only rewrite elastic assistant history"]
 
     builder -.-> note1
     builder -.-> note2

@@ -72,7 +72,7 @@ func TestBuildRequest_PromptCompressionPreservesSystemAndMemory(t *testing.T) {
 	}
 }
 
-func TestBuildRequest_PromptCompressionCompressesEarlierHistory(t *testing.T) {
+func TestBuildRequest_PromptCompressionPreservesOlderUserMessages(t *testing.T) {
 	cfg := DefaultContextConfig()
 	cfg.MaxTokens = 100000
 	cfg.PromptCompression = true
@@ -100,10 +100,7 @@ func TestBuildRequest_PromptCompressionCompressesEarlierHistory(t *testing.T) {
 			}
 			assistantSeen = true
 		case "user":
-			if strings.Contains(msg.Content, "older user context token") {
-				if msg.Content == longOlderUser || len(msg.Content) >= len(longOlderUser) {
-					t.Fatalf("older user history was not compressed: len=%d want <%d", len(msg.Content), len(longOlderUser))
-				}
+			if msg.Content == longOlderUser {
 				olderUserSeen = true
 			}
 		}
@@ -112,7 +109,7 @@ func TestBuildRequest_PromptCompressionCompressesEarlierHistory(t *testing.T) {
 		t.Fatal("did not observe assistant history in request")
 	}
 	if !olderUserSeen {
-		t.Fatal("did not observe compressed older user history in request")
+		t.Fatal("did not observe verbatim older user history in request")
 	}
 }
 
