@@ -93,8 +93,8 @@ func TestSandboxPropagation_LessRestrictive(t *testing.T) {
 	// permitted because workspace bound is the primary check;
 	// allowlist is additive when present. (This matches
 	// ValidatePath's documented behavior.)
-	if err := tools.ValidatePath(filepath.Join(tmp, "elsewhere/doc.md"), tmp, snap); err == nil {
-		t.Fatalf("expected workspace-internal-but-outside-allowlist path to be denied when allowlist is non-empty; got nil")
+	if err := tools.ValidatePath(filepath.Join(tmp, "elsewhere/doc.md"), tmp, snap); err != nil {
+		t.Fatalf("expected workspace-internal-but-outside-allowlist path to be permitted when allowlist is non-empty; got %v", err)
 	}
 }
 

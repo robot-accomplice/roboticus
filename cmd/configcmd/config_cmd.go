@@ -111,6 +111,7 @@ var configLintCmd = &cobra.Command{
 			fmt.Printf("FAIL: validation error in %s:\n  %v\n", path, err)
 			return err
 		}
+		core.WarnEmptyFilesystemAllowlistFailureOpen(&cfg)
 
 		fmt.Printf("OK: %s is valid (%d bytes, %d sections)\n", path, len(data), countSections(data))
 		return nil

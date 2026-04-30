@@ -34,7 +34,17 @@ func NewToolsRepository(q Querier) *ToolsRepository {
 func (r *ToolsRepository) Record(ctx context.Context, row ToolCallRow) error {
 	_, err := r.q.ExecContext(ctx,
 		`INSERT INTO tool_calls (id, turn_id, tool_name, input, output, skill_id, skill_name, skill_hash, status, duration_ms)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+             turn_id = excluded.turn_id,
+             tool_name = excluded.tool_name,
+             input = excluded.input,
+             output = excluded.output,
+             skill_id = excluded.skill_id,
+             skill_name = excluded.skill_name,
+             skill_hash = excluded.skill_hash,
+             status = excluded.status,
+             duration_ms = excluded.duration_ms`,
 		row.ID, row.TurnID, row.ToolName, row.Input,
 		nullIfEmpty(row.Output), nullIfEmpty(row.SkillID), nullIfEmpty(row.SkillName), nullIfEmpty(row.SkillHash),
 		row.Status, row.DurationMs)

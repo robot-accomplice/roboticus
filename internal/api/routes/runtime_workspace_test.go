@@ -292,6 +292,10 @@ func TestGetRoster_DefaultAgent(t *testing.T) {
 	if first["role"] != "orchestrator" {
 		t.Errorf("role = %v, want orchestrator", first["role"])
 	}
+	if first["state"] != "sleeping" || first["status"] != "sleeping" || first["activity"] != "idle" {
+		t.Errorf("primary runtime fields = state %v status %v activity %v, want sleeping/sleeping/idle",
+			first["state"], first["status"], first["activity"])
+	}
 }
 
 func TestGetRoster_WithSeededAgents(t *testing.T) {
@@ -357,6 +361,12 @@ func TestRosterAndSubagentListShareProjection(t *testing.T) {
 		if rosterSub[key] != listSub[key] {
 			t.Fatalf("%s mismatch: roster=%v list=%v", key, rosterSub[key], listSub[key])
 		}
+	}
+	if rosterSub["role"] != "subagent" || listSub["role"] != "subagent" {
+		t.Fatalf("legacy sub_agents row not normalized to subagent role: roster=%v list=%v", rosterSub["role"], listSub["role"])
+	}
+	if rosterSub["source_role"] != "specialist" || listSub["source_role"] != "specialist" {
+		t.Fatalf("legacy source role not preserved: roster=%v list=%v", rosterSub["source_role"], listSub["source_role"])
 	}
 }
 
@@ -524,15 +534,18 @@ func TestListSessionTurns_Empty(t *testing.T) {
 	}
 }
 
-func TestListSessionTurns_WithMessages(t *testing.T) {
+func TestListSessionTurns_UsesCanonicalTurnIDs(t *testing.T) {
 	store := testutil.TempStore(t)
 	_, _ = store.ExecContext(bgCtx, `INSERT INTO sessions (id, agent_id, scope_key) VALUES ('s1', 'agent1', 'test')`)
 	_, _ = store.ExecContext(bgCtx,
 		`INSERT INTO session_messages (id, session_id, role, content, created_at)
-		 VALUES ('m1', 's1', 'user', 'hello', datetime('now'))`)
+		 VALUES ('m1', 's1', 'user', 'hello', '2026-04-28 10:00:00')`)
 	_, _ = store.ExecContext(bgCtx,
 		`INSERT INTO session_messages (id, session_id, role, content, created_at)
-		 VALUES ('m2', 's1', 'assistant', 'hi there', datetime('now'))`)
+		 VALUES ('m2', 's1', 'assistant', 'hi there', '2026-04-28 10:01:00')`)
+	_, _ = store.ExecContext(bgCtx,
+		`INSERT INTO turns (id, session_id, model, tokens_in, tokens_out, cost, created_at)
+		 VALUES ('t1', 's1', 'test-model', 10, 5, 0.001, '2026-04-28 10:00:01')`)
 
 	r := chi.NewRouter()
 	r.Get("/sessions/{id}/turns", ListSessionTurns(store))
@@ -543,12 +556,18 @@ func TestListSessionTurns_WithMessages(t *testing.T) {
 
 	body := jsonBody(t, rec)
 	turns := body["turns"].([]any)
-	if len(turns) != 2 {
-		t.Fatalf("expected 2 turns, got %d", len(turns))
+	if len(turns) != 1 {
+		t.Fatalf("expected 1 turn, got %d", len(turns))
 	}
 	first := turns[0].(map[string]any)
-	if first["role"] != "user" {
-		t.Errorf("first turn role = %v, want user", first["role"])
+	if first["id"] != "t1" {
+		t.Fatalf("turn id = %v, want canonical turn id t1", first["id"])
+	}
+	if first["id"] == "m1" || first["id"] == "m2" {
+		t.Fatalf("message id leaked into turn inventory: %v", first["id"])
+	}
+	if first["content"] != "hello" {
+		t.Errorf("content = %v, want nearest user message", first["content"])
 	}
 }
 

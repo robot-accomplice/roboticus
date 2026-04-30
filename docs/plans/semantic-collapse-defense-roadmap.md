@@ -1,5 +1,11 @@
 # Semantic Collapse Defense Roadmap
 
+Research attribution: this roadmap draws on the retrieval and agentic RAG
+source set listed in [Research References](#research-references), especially
+[ColBERTv2](https://arxiv.org/abs/2112.01488) for late interaction and
+compression, the [Agentic RAG Survey](https://arxiv.org/abs/2501.09136), and
+[A-RAG: Hierarchical Retrieval Interfaces](https://arxiv.org/html/2602.03442v1).
+
 > **Purpose**: Progressive hardening of Roboticus memory retrieval against
 > semantic collapse — the geometric degradation of retrieval precision as
 > corpus size grows beyond ~10K entries in high-dimensional embedding space.

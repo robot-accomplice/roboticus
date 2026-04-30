@@ -300,6 +300,50 @@ func TestStoreTurnDiagnostics_DerivesInterpretiveNarratives(t *testing.T) {
 	}
 }
 
+func TestStoreTurnDiagnostics_DerivesRecoveredGuardDiagnosis(t *testing.T) {
+	store := testutil.TempStore(t)
+	pipe := New(PipelineDeps{Store: store})
+	dr := NewTurnDiagnosticsRecorder("sess-1", "turn-guard-recovered", "api")
+	dr.SetSummaryField("status", "degraded")
+	dr.RecordEvent("model_attempt_started", "running", "", "", map[string]any{
+		"provider": "openrouter",
+		"model":    "openai/gpt-4o-mini",
+	})
+	dr.RecordTimedEvent("model_attempt_finished", "ok", "", "", time.Now().Add(-10*time.Millisecond), "", map[string]any{
+		"provider": "openrouter",
+		"model":    "openai/gpt-4o-mini",
+	})
+	dr.IncrementSummaryCounter("guard_retry_count", 1)
+	dr.RecordEvent("guard_retry_scheduled", "error", "", "", map[string]any{
+		"violations":   []string{"execution_truth"},
+		"retry_reason": "omitted concrete inspection results from final answer",
+	})
+	dr.RecordEvent("model_attempt_started", "running", "", "", map[string]any{
+		"provider": "openrouter",
+		"model":    "openai/gpt-4o-mini",
+	})
+	dr.RecordTimedEvent("model_attempt_finished", "ok", "", "", time.Now().Add(-5*time.Millisecond), "", map[string]any{
+		"provider": "openrouter",
+		"model":    "openai/gpt-4o-mini",
+	})
+	pipe.storeTurnDiagnostics(context.Background(), dr)
+
+	var diagnosis string
+	var confidence float64
+	if err := store.QueryRowContext(context.Background(),
+		`SELECT primary_diagnosis, diagnosis_confidence FROM turn_diagnostics WHERE turn_id = ?`,
+		"turn-guard-recovered",
+	).Scan(&diagnosis, &confidence); err != nil {
+		t.Fatalf("query diagnosis: %v", err)
+	}
+	if diagnosis != "guard_retry_recovered" {
+		t.Fatalf("primary_diagnosis = %q, want guard_retry_recovered", diagnosis)
+	}
+	if confidence < 0.8 {
+		t.Fatalf("diagnosis_confidence = %.2f, want >= 0.8", confidence)
+	}
+}
+
 func TestStoreTurnDiagnostics_DerivesNoProgressTerminationNarrative(t *testing.T) {
 	store := testutil.TempStore(t)
 	pipe := New(PipelineDeps{Store: store})
@@ -590,6 +634,74 @@ func TestDiagnosticsStatusFromEvents_IgnoresAdvisoryStageLivenessWarning(t *test
 	status := diagnosticsStatusFromEvents(events)
 	if status != "ok" {
 		t.Fatalf("status = %q, want ok", status)
+	}
+}
+
+func TestDiagnosticsStatusFromEvents_CleanGuardRetryRecoveryIsOK(t *testing.T) {
+	events := []TurnDiagnosticEvent{
+		{Type: "model_attempt_started", Status: "running"},
+		{Type: "model_attempt_finished", Status: "ok"},
+		{
+			Type:   "guard_retry_scheduled",
+			Status: "error",
+			Details: map[string]any{
+				"violations":   []string{"false_capability_denial"},
+				"retry_reason": "falsely denied capability despite selected tool surface",
+			},
+		},
+		{Type: "model_attempt_started", Status: "running"},
+		{Type: "model_attempt_finished", Status: "ok"},
+		{
+			Type:   "response_finalized",
+			Status: "ok",
+			Details: map[string]any{
+				"guard_violations": []string{},
+			},
+		},
+	}
+
+	status := diagnosticsStatusFromEvents(events)
+	if status != "ok" {
+		t.Fatalf("status = %q, want ok", status)
+	}
+
+	dr := NewTurnDiagnosticsRecorder("sess-1", "turn-recovered", "telegram")
+	dr.SetSummaryField("status", "degraded")
+	for _, ev := range events {
+		dr.RecordEvent(ev.Type, ev.Status, "", "", ev.Details)
+	}
+	summary, _, ok := dr.SnapshotForFlush("")
+	if !ok {
+		t.Fatal("expected diagnostics snapshot")
+	}
+	if summary.Status != "ok" {
+		t.Fatalf("snapshot status = %q, want ok", summary.Status)
+	}
+}
+
+func TestDiagnosticsStatusFromEvents_UnresolvedGuardRetryStaysDegraded(t *testing.T) {
+	events := []TurnDiagnosticEvent{
+		{Type: "model_attempt_started", Status: "running"},
+		{Type: "model_attempt_finished", Status: "ok"},
+		{
+			Type:   "guard_retry_scheduled",
+			Status: "error",
+			Details: map[string]any{
+				"violations": []string{"false_capability_denial"},
+			},
+		},
+		{
+			Type:   "response_finalized",
+			Status: "ok",
+			Details: map[string]any{
+				"guard_violations": []string{"false_capability_denial"},
+			},
+		},
+	}
+
+	status := diagnosticsStatusFromEvents(events)
+	if status != "degraded" {
+		t.Fatalf("status = %q, want degraded", status)
 	}
 }
 

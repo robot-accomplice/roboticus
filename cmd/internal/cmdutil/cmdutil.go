@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/viper"
 
 	"roboticus/internal/core"
+	buildversion "roboticus/internal/version"
 )
 
 // APIBaseURL returns the base URL for API calls.
@@ -269,11 +270,15 @@ func LoadConfig() (core.Config, error) {
 	if err := viper.Unmarshal(&cfg); err != nil {
 		return cfg, fmt.Errorf("failed to parse config: %w", err)
 	}
-	cfg.MergeBundledProviders()
 	cfg.NormalizePaths()
+	if err := cfg.MergeProviderPackFromFile(cfg.ProvidersFile); err != nil {
+		return cfg, err
+	}
+	cfg.MergeBundledProviders()
 	if err := cfg.Validate(); err != nil {
 		return cfg, err
 	}
+	core.WarnEmptyFilesystemAllowlistFailureOpen(&cfg)
 	return cfg, nil
 }
 
@@ -282,9 +287,10 @@ func EnsureParentDir(path string) error {
 	return os.MkdirAll(filepath.Dir(path), 0o700)
 }
 
-// Version is injected at build time via -ldflags "-X roboticus/cmd/internal/cmdutil.Version=YYYY.MM.DD".
-// Defaults to "dev" for local builds.
-var Version = "dev"
+// Version mirrors the canonical runtime version. Release builds should stamp
+// roboticus/internal/version.Version; this symbol remains for compatibility
+// with older local build scripts and tests.
+var Version = buildversion.Version
 
 // EffectiveConfigPath returns the config file path from viper or the default location.
 //

@@ -74,3 +74,62 @@ func TestKeystoreRekeyCmd_RejectsMismatchedConfirmation(t *testing.T) {
 		t.Fatalf("keystore file should still exist: %v", err)
 	}
 }
+
+func TestKeystoreSetCmd_WritesLocalKeystoreWithoutDaemon(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("ROBOTICUS_MASTER_KEY", "test-pass")
+
+	if err := keystoreSetCmd.RunE(keystoreSetCmd, []string{"deepseek", "sk-test"}); err != nil {
+		t.Fatalf("keystore set: %v", err)
+	}
+
+	path := filepath.Join(home, ".roboticus", "keystore.enc")
+	ks, err := core.OpenKeystore(core.KeystoreConfig{Path: path, Passphrase: "test-pass"})
+	if err != nil {
+		t.Fatalf("open keystore: %v", err)
+	}
+	got, err := ks.Get("deepseek_api_key")
+	if err != nil {
+		t.Fatalf("get deepseek_api_key: %v", err)
+	}
+	if got != "sk-test" {
+		t.Fatalf("deepseek_api_key = %q, want sk-test", got)
+	}
+}
+
+func TestKeystoreRemoveCmd_RemovesConventionalAndLegacyProviderKeys(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("ROBOTICUS_MASTER_KEY", "test-pass")
+
+	path := filepath.Join(home, ".roboticus", "keystore.enc")
+	ks, err := core.OpenKeystore(core.KeystoreConfig{Path: path, Passphrase: "test-pass"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ks.Set("deepseek_api_key", "new"); err != nil {
+		t.Fatal(err)
+	}
+	if err := ks.Set("provider_key:deepseek", "legacy"); err != nil {
+		t.Fatal(err)
+	}
+	if err := ks.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := keystoreRemoveCmd.RunE(keystoreRemoveCmd, []string{"deepseek"}); err != nil {
+		t.Fatalf("keystore remove: %v", err)
+	}
+
+	ks2, err := core.OpenKeystore(core.KeystoreConfig{Path: path, Passphrase: "test-pass"})
+	if err != nil {
+		t.Fatalf("open keystore: %v", err)
+	}
+	if ks2.GetOrEmpty("deepseek_api_key") != "" {
+		t.Fatal("deepseek_api_key should have been removed")
+	}
+	if ks2.GetOrEmpty("provider_key:deepseek") != "" {
+		t.Fatal("legacy provider_key:deepseek should have been removed")
+	}
+}

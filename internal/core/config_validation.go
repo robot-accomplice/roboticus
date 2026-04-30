@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/rs/zerolog/log"
 )
 
 // Validate checks the config for required fields and constraint violations.
@@ -76,9 +78,6 @@ func (c *Config) Validate() error {
 	}
 
 	// Security.
-	if !c.Security.Filesystem.DenyOnEmptyAllowlist {
-		return fmt.Errorf("%w: security.filesystem.deny_on_empty_allowlist=false is not allowed (fail-open)", ErrConfig)
-	}
 	for _, p := range c.Security.ScriptAllowedPaths {
 		if !filepath.IsAbs(p) {
 			return fmt.Errorf("%w: security.script_allowed_paths entries must be absolute, got %q", ErrConfig, p)
@@ -172,10 +171,20 @@ func (c *Config) Validate() error {
 	return nil
 }
 
+// WarnEmptyFilesystemAllowlistFailureOpen logs when deny_on_empty_allowlist is false
+// (fail-open: an empty allowlist does not deny all paths). Default remains true.
+func WarnEmptyFilesystemAllowlistFailureOpen(c *Config) {
+	if c == nil || c.Security.Filesystem.DenyOnEmptyAllowlist {
+		return
+	}
+	log.Warn().Msg("security.filesystem.deny_on_empty_allowlist=false: empty tool allowlist will not deny all paths (fail-open); confirm security.filesystem settings are intentional")
+}
+
 // NormalizePaths expands ~ in all path-valued fields.
 func (c *Config) NormalizePaths() {
 	c.Database.Path = expandTilde(c.Database.Path)
 	c.Agent.Workspace = expandTilde(c.Agent.Workspace)
+	c.ProvidersFile = expandTilde(c.ProvidersFile)
 	c.Server.LogDir = expandTilde(c.Server.LogDir)
 	c.Skills.Directory = expandTilde(c.Skills.Directory)
 	c.Wallet.Path = expandTilde(c.Wallet.Path)

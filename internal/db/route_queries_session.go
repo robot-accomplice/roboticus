@@ -10,8 +10,26 @@ import (
 // ListSessions returns sessions with basic metadata.
 func (rq *RouteQueries) ListSessions(ctx context.Context, limit int) (*sql.Rows, error) {
 	return rq.q.QueryContext(ctx,
-		`SELECT id, agent_id, scope_key, status, nickname, created_at, updated_at
-		 FROM sessions ORDER BY created_at DESC LIMIT ?`, limit)
+		`SELECT s.id, s.agent_id, s.scope_key, s.status, s.nickname, s.created_at, s.updated_at,
+		        COALESCE(COUNT(t.id), 0) AS turn_count,
+		        (SELECT COUNT(*) FROM session_messages sm WHERE sm.session_id = s.id) AS message_count,
+		        (SELECT COUNT(*) FROM pipeline_traces pt WHERE pt.session_id = s.id) AS trace_count,
+		        (SELECT COUNT(*)
+		           FROM context_snapshots cs
+		           JOIN turns st ON st.id = cs.turn_id
+		          WHERE st.session_id = s.id) AS snapshot_count,
+		        COALESCE(SUM(COALESCE(t.tokens_in, 0) + COALESCE(t.tokens_out, 0)), 0) AS total_tokens,
+		        COALESCE(SUM(COALESCE(t.cost, 0)), 0) AS total_cost,
+		        MAX(
+		          COALESCE(s.updated_at, s.created_at),
+		          COALESCE((SELECT MAX(sm.created_at) FROM session_messages sm WHERE sm.session_id = s.id), s.created_at),
+		          COALESCE((SELECT MAX(st.created_at) FROM turns st WHERE st.session_id = s.id), s.created_at),
+		          COALESCE((SELECT MAX(pt.created_at) FROM pipeline_traces pt WHERE pt.session_id = s.id), s.created_at)
+		        ) AS last_activity_at
+		   FROM sessions s
+		   LEFT JOIN turns t ON t.session_id = s.id
+		  GROUP BY s.id, s.agent_id, s.scope_key, s.status, s.nickname, s.created_at, s.updated_at
+		  ORDER BY s.created_at DESC LIMIT ?`, limit)
 }
 
 // GetSession returns a single session by ID.
@@ -48,15 +66,6 @@ func (rq *RouteQueries) LatestPipelineTraceTime(ctx context.Context) (sql.NullSt
 	err := rq.q.QueryRowContext(ctx,
 		`SELECT MAX(created_at) FROM pipeline_traces`).Scan(&ts)
 	return ts, err
-}
-
-// ListSubAgentWorkspace returns enriched subagent data for the workspace page.
-func (rq *RouteQueries) ListSubAgentWorkspace(ctx context.Context) (*sql.Rows, error) {
-	return rq.q.QueryContext(ctx,
-		`SELECT name, COALESCE(display_name, name) AS display_name, model, enabled,
-		        COALESCE(role, 'specialist') AS role, COALESCE(description, '') AS description,
-		        session_count, last_used_at, updated_at
-		 FROM sub_agents ORDER BY name`)
 }
 
 // ActiveTaskSummary returns the current active task goal and completion percentage.
@@ -133,7 +142,7 @@ func (rq *RouteQueries) ListTurnsForAnalysis(ctx context.Context, sessionID stri
 // ContextSnapshotForTurn returns context snapshot data for a turn.
 func (rq *RouteQueries) ContextSnapshotForTurn(ctx context.Context, turnID string) *sql.Row {
 	return rq.q.QueryRowContext(ctx,
-		`SELECT COALESCE(max_tokens, 0), COALESCE(system_tokens, 0), COALESCE(memory_tokens, 0),
+		`SELECT COALESCE(token_budget, 0), COALESCE(system_prompt_tokens, 0), COALESCE(memory_tokens, 0),
 		        COALESCE(history_tokens, 0), COALESCE(history_depth, 0)
 		 FROM context_snapshots WHERE turn_id = ?`, turnID)
 }
@@ -156,12 +165,23 @@ func (rq *RouteQueries) SessionFeedbackGrades(ctx context.Context, sessionID str
 // SessionTurnsWithMessages returns session turns joined with messages.
 func (rq *RouteQueries) SessionTurnsWithMessages(ctx context.Context, sessionID string) (*sql.Rows, error) {
 	return rq.q.QueryContext(ctx,
-		`SELECT sm.id, sm.role, sm.content, sm.created_at,
+		`SELECT t.id,
+		        'turn' AS role,
+		        COALESCE((
+		          SELECT sm.content
+		            FROM session_messages sm
+		           WHERE sm.session_id = t.session_id
+		             AND sm.role = 'user'
+		             AND sm.created_at <= t.created_at
+		           ORDER BY sm.created_at DESC
+		           LIMIT 1
+		        ), '') AS content,
+		        t.created_at,
 		        COALESCE(t.model, ''), COALESCE(t.cost, 0.0),
 		        COALESCE(t.tokens_in, 0), COALESCE(t.tokens_out, 0)
-		 FROM session_messages sm
-		 LEFT JOIN turns t ON t.id = sm.id AND t.session_id = sm.session_id
-		 WHERE sm.session_id = ? ORDER BY sm.created_at`, sessionID)
+		   FROM turns t
+		  WHERE t.session_id = ?
+		  ORDER BY t.created_at`, sessionID)
 }
 
 // SessionFeedback returns turn feedback for a session.
@@ -208,7 +228,7 @@ func (rq *RouteQueries) TurnToolCalls(ctx context.Context, turnID string) (*sql.
 // TurnContextSnapshot returns the context snapshot for a turn.
 func (rq *RouteQueries) TurnContextSnapshot(ctx context.Context, turnID string) *sql.Row {
 	return rq.q.QueryRowContext(ctx,
-		`SELECT max_tokens, system_tokens, memory_tokens, history_tokens, history_depth, tools_count
+		`SELECT token_budget, system_prompt_tokens, memory_tokens, history_tokens, history_depth, 0
 		 FROM context_snapshots WHERE turn_id = ?`, turnID)
 }
 
@@ -284,7 +304,7 @@ func (rq *RouteQueries) GetTurnForAnalysis(ctx context.Context, turnID string) *
 // GetContextSnapshotForAnalysis returns context snapshot data for turn analysis.
 func (rq *RouteQueries) GetContextSnapshotForAnalysis(ctx context.Context, turnID string) *sql.Row {
 	return rq.q.QueryRowContext(ctx,
-		`SELECT COALESCE(max_tokens, 0), COALESCE(system_tokens, 0), COALESCE(memory_tokens, 0),
+		`SELECT COALESCE(token_budget, 0), COALESCE(system_prompt_tokens, 0), COALESCE(memory_tokens, 0),
 		        COALESCE(history_tokens, 0), COALESCE(history_depth, 0), COALESCE(complexity_level, '')
 		 FROM context_snapshots WHERE turn_id = ?`, turnID)
 }

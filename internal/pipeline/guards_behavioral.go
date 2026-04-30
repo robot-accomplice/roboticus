@@ -3,6 +3,8 @@ package pipeline
 import (
 	"regexp"
 	"strings"
+
+	agenttools "roboticus/internal/agent/tools"
 )
 
 // --- SubagentClaimGuard ---
@@ -83,7 +85,31 @@ func (g *TaskDeferralGuard) Check(content string) GuardResult {
 	return GuardResult{Passed: true}
 }
 func (g *TaskDeferralGuard) CheckWithContext(content string, ctx *GuardContext) GuardResult {
-	if ctx == nil || len(ctx.ToolResults) == 0 {
+	if ctx == nil {
+		return GuardResult{Passed: true}
+	}
+	if requiresActionSpecificEvidence(ctx) && guardContextHasActionSurface(ctx) && !hasRequestedActionEvidence(ctx) && !hasConcreteActionBlock(ctx, content) {
+		return GuardResult{
+			Passed: false,
+			Retry:  true,
+			Reason: "action-bearing turn finalized without action-specific tool evidence or concrete block",
+		}
+	}
+	if requiresGenericToolDemonstrationEvidence(ctx) && genericToolDemonstrationIgnoresExecutedTool(ctx, content) {
+		return GuardResult{
+			Passed: false,
+			Retry:  true,
+			Reason: "generic tool-use turn ignored the executed non-inventory tool result",
+		}
+	}
+	if requiresGenericToolDemonstrationEvidence(ctx) && genericToolDemonstrationHasOpenEndedTail(ctx, content) {
+		return GuardResult{
+			Passed: false,
+			Retry:  true,
+			Reason: "generic tool-use turn appended an open-ended follow-up after successful tool execution",
+		}
+	}
+	if len(ctx.ToolResults) == 0 {
 		return GuardResult{Passed: true}
 	}
 	// Rust parity: behavioral.rs INTROSPECTION_TOOLS — 7 tools (no get_channel_health).
@@ -132,6 +158,207 @@ func (g *TaskDeferralGuard) CheckWithContext(content string, ctx *GuardContext) 
 		}
 	}
 	return GuardResult{Passed: true}
+}
+
+func requiresActionSpecificEvidence(ctx *GuardContext) bool {
+	if ctx == nil || strings.TrimSpace(ctx.UserPrompt) == "" {
+		return false
+	}
+	if requestedActionClass(ctx) != agenttools.OperationUnknown {
+		return true
+	}
+	lower := strings.ToLower(ctx.UserPrompt)
+	return containsAnyMarker(lower, []string{
+		"use the", "use a", "use an", "run the", "invoke", "call the",
+		"use it", "pick", "reattempt", "try the", "execute",
+	}) && containsAnyMarker(lower, []string{
+		"tool", "tools", "skill", "skills", "ghola", "playwright", "browser",
+	})
+}
+
+func requiresGenericToolDemonstrationEvidence(ctx *GuardContext) bool {
+	return ctx != nil &&
+		guardContextHasActionSurface(ctx) &&
+		requiresActionSpecificEvidence(ctx) &&
+		requestedActionClass(ctx) == agenttools.OperationUnknown
+}
+
+func guardContextHasActionSurface(ctx *GuardContext) bool {
+	if ctx == nil {
+		return false
+	}
+	return len(ctx.SelectedToolNames) > 0 || len(ctx.ToolResults) > 0
+}
+
+func requestedActionClass(ctx *GuardContext) agenttools.OperationClass {
+	lower := strings.ToLower(ctx.UserPrompt)
+	switch {
+	case looksLikeSchedulingTask(lower):
+		return agenttools.OperationScheduling
+	case looksLikePublicWebReadTurn(ctx.UserPrompt):
+		return agenttools.OperationWebRead
+	case looksLikeFocusedInspectionTurn(ctx.UserPrompt) && inspectionPromptHasResolvableTarget(ctx.UserPrompt):
+		return agenttools.OperationWorkspaceInspect
+	default:
+		return agenttools.OperationUnknown
+	}
+}
+
+func genericToolDemonstrationIgnoresExecutedTool(ctx *GuardContext, content string) bool {
+	executed := nonInventorySuccessfulToolNames(ctx)
+	if len(executed) == 0 {
+		return false
+	}
+	lower := strings.ToLower(content)
+	for _, name := range executed {
+		if contentMentionsExecutedTool(lower, name) {
+			return false
+		}
+	}
+	return true
+}
+
+func genericToolDemonstrationHasOpenEndedTail(ctx *GuardContext, content string) bool {
+	if len(nonInventoryToolResultNames(ctx)) == 0 {
+		return false
+	}
+	lower := strings.ToLower(content)
+	return containsAnyMarker(lower, []string{
+		"i will ",
+		"i'll ",
+		"if you need",
+		"let me know",
+		"would you like",
+		"what else",
+		"anything else",
+		"need further",
+		"need specific actions",
+		"another inquiry",
+	})
+}
+
+func nonInventorySuccessfulToolNames(ctx *GuardContext) []string {
+	if ctx == nil {
+		return nil
+	}
+	out := make([]string, 0, len(ctx.ToolResults))
+	for _, tr := range ctx.ToolResults {
+		if toolResultSignalsFailure(tr) {
+			continue
+		}
+		op := agenttools.OperationClassForName(tr.ToolName)
+		if isGenericIntrospectionOperation(op) {
+			continue
+		}
+		out = append(out, strings.TrimSpace(tr.ToolName))
+	}
+	return out
+}
+
+func nonInventoryToolResultNames(ctx *GuardContext) []string {
+	if ctx == nil {
+		return nil
+	}
+	out := make([]string, 0, len(ctx.ToolResults))
+	for _, tr := range ctx.ToolResults {
+		op := agenttools.OperationClassForName(tr.ToolName)
+		if isGenericIntrospectionOperation(op) {
+			continue
+		}
+		out = append(out, strings.TrimSpace(tr.ToolName))
+	}
+	return out
+}
+
+func contentMentionsExecutedTool(lowerContent, toolName string) bool {
+	name := strings.ToLower(strings.TrimSpace(toolName))
+	if name == "" {
+		return false
+	}
+	if strings.Contains(lowerContent, name) ||
+		strings.Contains(lowerContent, strings.ReplaceAll(name, "_", " ")) ||
+		strings.Contains(lowerContent, strings.ReplaceAll(name, "-", " ")) {
+		return true
+	}
+	switch name {
+	case "inventory_projects":
+		return containsAnyMarker(lowerContent, []string{"project inventory", "inventoried", "workspace project", "projects in"})
+	case "list_directory":
+		return containsAnyMarker(lowerContent, []string{"listed", "directory", "folder contains", "files in"})
+	case "glob_files":
+		return containsAnyMarker(lowerContent, []string{"matched files", "glob", "files matching", "found files"})
+	case "read_file":
+		return containsAnyMarker(lowerContent, []string{"read_file", "read file", "file content"})
+	case "ghola", "http_fetch", "web_search":
+		return containsAnyMarker(lowerContent, []string{"fetched", "searched", "web", "page"})
+	default:
+		return false
+	}
+}
+
+func hasRequestedActionEvidence(ctx *GuardContext) bool {
+	requested := requestedActionClass(ctx)
+	for _, tr := range ctx.ToolResults {
+		if toolResultSignalsFailure(tr) {
+			continue
+		}
+		if toolResultMatchesRequestedAction(requested, tr.ToolName) {
+			return true
+		}
+	}
+	return false
+}
+
+func toolResultMatchesRequestedAction(requested agenttools.OperationClass, toolName string) bool {
+	actual := agenttools.OperationClassForName(toolName)
+	if requested == agenttools.OperationUnknown {
+		return !isGenericIntrospectionOperation(actual)
+	}
+	switch requested {
+	case agenttools.OperationScheduling:
+		return actual == agenttools.OperationScheduling
+	case agenttools.OperationWebRead:
+		return actual == agenttools.OperationWebRead ||
+			(actual == agenttools.OperationExecution && selectedToolNameIsBrowserLike(toolName))
+	case agenttools.OperationWorkspaceInspect:
+		return actual == agenttools.OperationWorkspaceInspect ||
+			actual == agenttools.OperationArtifactRead ||
+			actual == agenttools.OperationInspection
+	default:
+		return actual == requested
+	}
+}
+
+func isGenericIntrospectionOperation(op agenttools.OperationClass) bool {
+	switch op {
+	case agenttools.OperationRuntimeContextRead,
+		agenttools.OperationCapabilityInventory,
+		agenttools.OperationMemoryRead,
+		agenttools.OperationTaskInspection:
+		return true
+	default:
+		return false
+	}
+}
+
+func hasConcreteActionBlock(ctx *GuardContext, content string) bool {
+	lower := strings.ToLower(content)
+	if !containsAnyMarker(lower, []string{
+		"error", "failed", "denied", "blocked", "not allowed", "policy", "sandbox",
+		"unavailable", "couldn't", "could not", "cannot", "can't",
+	}) {
+		return false
+	}
+	requested := requestedActionClass(ctx)
+	for _, tr := range ctx.ToolResults {
+		if !toolResultSignalsFailure(tr) {
+			continue
+		}
+		if requested == agenttools.OperationUnknown || toolResultMatchesRequestedAction(requested, tr.ToolName) {
+			return true
+		}
+	}
+	return guardContextHasPolicyOrSandboxDenial(ctx)
 }
 
 // --- ClarificationDeflectionGuard ---

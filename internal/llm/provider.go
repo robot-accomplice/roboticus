@@ -49,6 +49,7 @@ type Message struct {
 	Name         string          `json:"name,omitempty"`
 	Metadata     json.RawMessage `json:"metadata,omitempty"`
 	TopicTag     string          `json:"-"` // Set by pipeline; not sent to provider.
+	ContextKind  string          `json:"-"` // Request-footprint category; not sent to provider.
 }
 
 // ToolCall represents a tool invocation requested by the model.
@@ -162,6 +163,9 @@ type Request struct {
 	// for each Complete call, including post-tool and reflection calls, and is
 	// distinct from whole-turn or CLI wait budgets. Not sent to the provider.
 	ModelCallTimeout time.Duration `json:"-"`
+	// ContextBudget is the active turn-envelope budget used to assemble this
+	// request. It is internal RCA/dashboard evidence and is not sent to providers.
+	ContextBudget int `json:"-"`
 }
 
 // Response is a provider-agnostic inference response.

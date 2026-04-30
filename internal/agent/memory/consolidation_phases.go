@@ -287,7 +287,11 @@ func (p *ConsolidationPipeline) markDeduped(ctx context.Context, store *db.Store
 // Phase 3: Episodic to Semantic promotion — find recurring themes in episodic memories.
 func (p *ConsolidationPipeline) phaseEpisodicPromotion(ctx context.Context, store *db.Store) int {
 	rows, err := store.QueryContext(ctx,
-		`SELECT id, content, classification FROM episodic_memory WHERE memory_state = 'active'`)
+		`SELECT id, content, classification FROM episodic_memory
+		 WHERE memory_state = 'active'
+		   AND content NOT LIKE '%Outcome: partial%'
+		   AND content NOT LIKE '%Outcome: failure%'
+		   AND content NOT LIKE '%GuardViolations:%'`)
 	if err != nil {
 		return 0
 	}

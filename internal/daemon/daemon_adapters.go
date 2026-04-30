@@ -3,9 +3,11 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/rs/zerolog/log"
 
@@ -130,6 +132,7 @@ type capabilitySummaryAdapter struct {
 	store      *db.Store
 	tools      *agent.ToolRegistry
 	promptBase agent.PromptConfig
+	skillNames func() []string
 }
 
 func (a *capabilitySummaryAdapter) Summarize(ctx context.Context, sess *session.Session, query string) string {
@@ -143,6 +146,9 @@ func (a *capabilitySummaryAdapter) Summarize(ctx context.Context, sess *session.
 	if a.tools != nil {
 		cfg.ToolNames = a.tools.Names()
 		cfg.ToolDescs = a.tools.NamesWithDescriptions()
+	}
+	if a.skillNames != nil {
+		cfg.Skills = a.skillNames()
 	}
 	return buildCapabilitySummary(ctx, a.store, cfg, nil, query)
 }
@@ -158,21 +164,261 @@ func (a *capabilitySummaryAdapter) Summarize(ctx context.Context, sess *session.
 // errors upward (planned for the CEIL remediation pass).
 func (a *prunerAdapter) PruneTools(ctx context.Context, sess *session.Session) ([]llm.ToolDef, agenttools.ToolSearchStats, error) {
 	query := toolPruningQuery(sess)
+	cfg := a.resolvedSearchConfig(sess)
+	defs, stats := agenttools.SelectToolDefs(ctx, a.tools, a.embedClient, query, cfg)
+	return defs, stats, nil
+}
+
+// ToolCapabilityLexicon exposes the live runtime tool vocabulary to pipeline
+// task synthesis. This keeps capability-fit telemetry aligned with the same
+// registry later used by PruneTools and prompt construction.
+func (a *prunerAdapter) ToolCapabilityLexicon() []string {
+	if a == nil || a.tools == nil {
+		return nil
+	}
+	pairs := a.tools.NamesWithDescriptions()
+	corpus := make([]string, 0, len(pairs)*2+8)
+	hasWebRead := false
+	hasBrowser := false
+	for _, pair := range pairs {
+		name := strings.TrimSpace(pair[0])
+		desc := strings.TrimSpace(pair[1])
+		if name != "" {
+			corpus = append(corpus, name)
+		}
+		if desc != "" {
+			corpus = append(corpus, desc)
+		}
+		if agenttools.OperationClassForName(name) == agenttools.OperationWebRead {
+			hasWebRead = true
+		}
+		lowerName := strings.ToLower(name)
+		lowerDesc := strings.ToLower(desc)
+		if strings.Contains(lowerName, "browser") || strings.Contains(lowerDesc, "browser") {
+			hasBrowser = true
+		}
+	}
+	if hasWebRead {
+		corpus = append(corpus, "web website webpage page url http fetch search browse surf navigate visit latest current")
+	}
+	if hasBrowser {
+		corpus = append(corpus, "browser playwright mcp page browse surf navigate screenshot snapshot")
+	}
+	return corpus
+}
+
+// AlwaysIncluded implements pipeline.AlwaysIncluder so the policy stage
+// can preserve operator-pinned tool names through `filterToolDefsForPolicy`
+// (operation-class admit list) and `MaxTools` truncation. The set is the
+// same one PruneTools constructs from the session-derived overlays, so the
+// pin contract observed by the agent loop matches the pin contract observed
+// by the ranker.
+func (a *prunerAdapter) AlwaysIncluded(sess *session.Session) []string {
+	if a == nil {
+		return nil
+	}
+	cfg := a.resolvedSearchConfig(sess)
+	if len(cfg.AlwaysInclude) == 0 {
+		return nil
+	}
+	out := make([]string, len(cfg.AlwaysInclude))
+	copy(out, cfg.AlwaysInclude)
+	return out
+}
+
+// resolvedSearchConfig produces the per-session ToolSearchConfig used both
+// by PruneTools (to drive ranking) and by AlwaysIncluded (to declare the
+// pin set to the policy stage). Centralizing the overlay here keeps the
+// pin contract observed by the ranker and the policy stage in sync.
+func (a *prunerAdapter) resolvedSearchConfig(sess *session.Session) agenttools.ToolSearchConfig {
 	cfg := a.toolSearchCfg
-	if sess != nil && len(sess.SourceArtifacts()) > 0 {
+	if sess == nil {
+		return cfg
+	}
+	if a != nil && a.tools != nil {
+		cfg.AlwaysInclude = appendAlwaysInclude(
+			cfg.AlwaysInclude,
+			explicitlyRequestedRegisteredTools(latestUserMessageContent(sess), a.tools.Names())...,
+		)
+		cfg.AlwaysInclude = appendAlwaysInclude(
+			cfg.AlwaysInclude,
+			requestedWebReadRegisteredTools(latestUserMessageContent(sess), a.tools.Names())...,
+		)
+	}
+	if len(sess.SourceArtifacts()) > 0 {
 		cfg.AlwaysInclude = appendAlwaysInclude(cfg.AlwaysInclude, "read_file")
 	}
-	if sess != nil && sess.TurnToolProfile() == "focused_inspection" {
+	switch sess.TurnToolProfile() {
+	case "focused_inspection":
 		cfg.AlwaysInclude = appendAlwaysInclude(cfg.AlwaysInclude, "glob_files", "list_directory", "read_file")
-	}
-	if sess != nil && sess.TurnToolProfile() == "focused_analysis_authoring" {
+	case "focused_analysis_authoring":
 		cfg.AlwaysInclude = appendAlwaysInclude(cfg.AlwaysInclude,
 			"inventory_projects", "list_directory", "bash", "search_files", "glob_files", "read_file",
 			"write_file", "edit_file", "get_runtime_context",
 		)
+	case "focused_tool_demonstration":
+		// Capability snapshot text already describes tools. The proof path for
+		// a tool demonstration should stay on low-risk action/read tools.
+		cfg.AlwaysInclude = appendAlwaysInclude(cfg.AlwaysInclude,
+			"inventory_projects", "list_directory", "glob_files", "read_file", "get_runtime_context",
+		)
 	}
-	defs, stats := agenttools.SelectToolDefs(ctx, a.tools, a.embedClient, query, cfg)
-	return defs, stats, nil
+	return cfg
+}
+
+func requestedWebReadRegisteredTools(query string, registered []string) []string {
+	normalizedQuery := normalizeToolMentionText(query)
+	if normalizedQuery == "" || len(registered) == 0 || !isPublicWebReadRequest(normalizedQuery) {
+		return nil
+	}
+	preferBrowser := containsNormalizedPhrase(normalizedQuery, "playwright") ||
+		containsNormalizedPhrase(normalizedQuery, "browser") ||
+		containsNormalizedPhrase(normalizedQuery, "mcp")
+	out := make([]string, 0, len(registered))
+	for _, name := range registered {
+		if agenttools.OperationClassForName(name) == agenttools.OperationWebRead {
+			if preferBrowser && !strings.Contains(strings.ToLower(name), "browser") {
+				continue
+			}
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+func isPublicWebReadRequest(normalizedQuery string) bool {
+	if containsNormalizedPhrase(normalizedQuery, "http") ||
+		containsNormalizedPhrase(normalizedQuery, "https") ||
+		containsNormalizedPhrase(normalizedQuery, "www") {
+		return true
+	}
+	webSubjects := []string{"website", "web site", "webpage", "web page", "page", "site", "url", "metacritic"}
+	webActions := []string{"fetch", "pull", "open", "browse", "surf", "navigate", "visit", "read", "search", "look up", "lookup", "find", "latest", "current", "use"}
+	hasSubject := false
+	for _, subject := range webSubjects {
+		if containsNormalizedPhrase(normalizedQuery, subject) {
+			hasSubject = true
+			break
+		}
+	}
+	if !hasSubject {
+		return false
+	}
+	for _, action := range webActions {
+		if containsNormalizedPhrase(normalizedQuery, action) {
+			return true
+		}
+	}
+	return false
+}
+
+func explicitlyRequestedRegisteredTools(query string, registered []string) []string {
+	normalizedQuery := normalizeToolMentionText(query)
+	if normalizedQuery == "" || len(registered) == 0 || !containsToolRequestVerb(normalizedQuery) {
+		return nil
+	}
+	queryWords := strings.Fields(normalizedQuery)
+	out := make([]string, 0, len(registered))
+	for _, name := range registered {
+		needle := normalizeToolMentionText(name)
+		if needle == "" {
+			continue
+		}
+		if explicitToolMention(normalizedQuery, queryWords, needle) {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+func explicitToolMention(normalizedQuery string, queryWords []string, normalizedToolName string) bool {
+	for _, verb := range []string{"use", "using", "call", "invoke", "run"} {
+		if containsNormalizedPhrase(normalizedQuery, verb+" "+normalizedToolName) ||
+			containsNormalizedPhrase(normalizedQuery, verb+" the "+normalizedToolName) ||
+			containsNormalizedPhrase(normalizedQuery, verb+" "+normalizedToolName+" tool") ||
+			containsNormalizedPhrase(normalizedQuery, verb+" the "+normalizedToolName+" tool") {
+			return true
+		}
+	}
+	if !containsToolNounNearName(queryWords, strings.Fields(normalizedToolName), 4) {
+		return false
+	}
+	for _, verb := range []string{"reattempt", "retry", "try", "use", "using", "call", "invoke", "run"} {
+		if containsNormalizedPhrase(normalizedQuery, verb) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsToolRequestVerb(normalizedQuery string) bool {
+	for _, verb := range []string{"use", "using", "call", "invoke", "run", "reattempt", "retry", "try"} {
+		if containsNormalizedPhrase(normalizedQuery, verb) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsToolNounNearName(queryWords, nameWords []string, maxDistance int) bool {
+	if len(queryWords) == 0 || len(nameWords) == 0 {
+		return false
+	}
+	for i := 0; i <= len(queryWords)-len(nameWords); i++ {
+		matched := true
+		for j, word := range nameWords {
+			if queryWords[i+j] != word {
+				matched = false
+				break
+			}
+		}
+		if !matched {
+			continue
+		}
+		for k, word := range queryWords {
+			if word != "tool" {
+				continue
+			}
+			if absInt(k-i) <= maxDistance || absInt(k-(i+len(nameWords)-1)) <= maxDistance {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func normalizeToolMentionText(text string) string {
+	text = strings.ToLower(strings.TrimSpace(text))
+	var b strings.Builder
+	b.Grow(len(text))
+	lastSpace := true
+	for _, r := range text {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+			lastSpace = false
+			continue
+		}
+		if !lastSpace {
+			b.WriteByte(' ')
+			lastSpace = true
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func containsNormalizedPhrase(haystack, needle string) bool {
+	needle = strings.TrimSpace(needle)
+	if haystack == "" || needle == "" {
+		return false
+	}
+	return strings.Contains(" "+haystack+" ", " "+needle+" ")
+}
+
+func absInt(v int) int {
+	if v < 0 {
+		return -v
+	}
+	return v
 }
 
 // latestUserMessageContent returns the Content of the most recent user
@@ -670,6 +916,7 @@ type executorAdapter struct {
 	store           *db.Store
 	tools           *agent.ToolRegistry
 	policy          *policy.Engine
+	approvals       *policy.ApprovalManager
 	injection       *agent.InjectionDetector
 	memMgr          *memory.Manager
 	embedClient     *llm.EmbeddingClient
@@ -679,10 +926,15 @@ type executorAdapter struct {
 	cacheCfg        *core.CacheConfig
 	maxTurnDuration time.Duration
 	toolRecorder    agent.ToolCallRecorder
+	skillNames      func() []string
 }
 
 func (a *executorAdapter) RunLoop(ctx context.Context, sess *session.Session) (string, int, error) {
-	ctxBuilder := buildAgentContext(ctx, sess, a.store, a.tools, a.embedClient, a.toolSearchCfg, a.promptConfig, a.budgetCfg, a.cacheCfg)
+	promptCfg := a.promptConfig
+	if a.skillNames != nil {
+		promptCfg.Skills = a.skillNames()
+	}
+	ctxBuilder := buildAgentContext(ctx, sess, a.store, a.tools, a.embedClient, a.toolSearchCfg, promptCfg, a.budgetCfg, a.cacheCfg)
 
 	loopCfg := agent.DefaultLoopConfig()
 	if a.maxTurnDuration > 0 {
@@ -693,6 +945,7 @@ func (a *executorAdapter) RunLoop(ctx context.Context, sess *session.Session) (s
 		Tools:     a.tools,
 		Recorder:  a.toolRecorder,
 		Policy:    a.policy,
+		Approvals: a.approvals,
 		Injection: a.injection,
 		Memory:    a.memMgr,
 		Context:   ctxBuilder,
@@ -786,6 +1039,7 @@ func (a *nicknameAdapter) Refine(ctx context.Context, session *session.Session) 
 type skillAdapter struct {
 	matcher *skills.Matcher
 	tools   *agent.ToolRegistry
+	store   *db.Store
 }
 
 func (a *skillAdapter) TryMatch(ctx context.Context, session *session.Session, content string) *pipeline.Outcome {
@@ -796,6 +1050,7 @@ func (a *skillAdapter) TryMatch(ctx context.Context, session *session.Session, c
 
 	switch skill.Type {
 	case skills.Instruction:
+		a.touchSkillUsage(ctx, skill.Name())
 		// Instruction skills return their body directly as the response.
 		return &pipeline.Outcome{
 			SessionID: session.ID,
@@ -854,10 +1109,20 @@ func (a *skillAdapter) executeToolChain(ctx context.Context, sess *session.Sessi
 	if lastOutput == "" {
 		lastOutput = fmt.Sprintf("Skill %q completed successfully.", skill.Name())
 	}
+	a.touchSkillUsage(ctx, skill.Name())
 
 	return &pipeline.Outcome{
 		SessionID: sess.ID,
 		Content:   lastOutput,
+	}
+}
+
+func (a *skillAdapter) touchSkillUsage(ctx context.Context, name string) {
+	if a == nil || a.store == nil || strings.TrimSpace(name) == "" {
+		return
+	}
+	if err := db.NewSkillsRepository(a.store).TouchSkillUsage(ctx, name); err != nil && !errors.Is(err, db.ErrNoRowsAffected) {
+		log.Debug().Err(err).Str("skill", name).Msg("skill usage touch failed")
 	}
 }
 
@@ -898,10 +1163,15 @@ type streamAdapter struct {
 	promptConfig  agent.PromptConfig
 	budgetCfg     *core.ContextBudgetConfig
 	cacheCfg      *core.CacheConfig
+	skillNames    func() []string
 }
 
 func (a *streamAdapter) PrepareStream(ctx context.Context, sess *session.Session) (*llm.Request, error) {
-	ctxBuilder := buildAgentContext(ctx, sess, a.store, a.tools, a.embedClient, a.toolSearchCfg, a.promptConfig, a.budgetCfg, a.cacheCfg)
+	promptCfg := a.promptConfig
+	if a.skillNames != nil {
+		promptCfg.Skills = a.skillNames()
+	}
+	ctxBuilder := buildAgentContext(ctx, sess, a.store, a.tools, a.embedClient, a.toolSearchCfg, promptCfg, a.budgetCfg, a.cacheCfg)
 	req := ctxBuilder.BuildRequest(sess)
 	req.Stream = true
 	return req, nil

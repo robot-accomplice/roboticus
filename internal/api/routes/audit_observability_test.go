@@ -495,6 +495,54 @@ func TestDelegationOutcomes_EmptyResult(t *testing.T) {
 	}
 }
 
+func TestDelegationOutcomes_OldSchemaWithoutOptionalColumns(t *testing.T) {
+	store := testutil.TempStore(t)
+	if _, err := store.ExecContext(bgCtx, `DROP TABLE delegation_outcomes`); err != nil {
+		t.Fatalf("drop table: %v", err)
+	}
+	if _, err := store.ExecContext(bgCtx, `CREATE TABLE delegation_outcomes (
+		id TEXT PRIMARY KEY,
+		turn_id TEXT NOT NULL,
+		session_id TEXT NOT NULL,
+		task_description TEXT NOT NULL,
+		pattern TEXT NOT NULL DEFAULT 'none',
+		assigned_agents_json TEXT NOT NULL DEFAULT '[]',
+		success INTEGER NOT NULL DEFAULT 0,
+		created_at TEXT NOT NULL DEFAULT (datetime('now'))
+	)`); err != nil {
+		t.Fatalf("create old table: %v", err)
+	}
+	if _, err := store.ExecContext(bgCtx,
+		`INSERT INTO delegation_outcomes (id, turn_id, session_id, task_description, pattern, assigned_agents_json, success)
+		 VALUES ('old1', 't1', 's1', 'legacy delegation', 'direct', '["agent-a"]', 1)`); err != nil {
+		t.Fatalf("insert old row: %v", err)
+	}
+
+	handler := DelegationOutcomes(store)
+	req := httptest.NewRequest("GET", "/api/observability/delegations?limit=10", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	body := jsonBody(t, rec)
+	outcomes := body["outcomes"].([]any)
+	if len(outcomes) != 1 {
+		t.Fatalf("got %d outcomes, want 1", len(outcomes))
+	}
+	first := outcomes[0].(map[string]any)
+	if first["duration_ms"].(float64) != 0 {
+		t.Fatalf("duration_ms = %v, want compatibility fallback 0", first["duration_ms"])
+	}
+	if first["subtask_count"].(float64) != 0 {
+		t.Fatalf("subtask_count = %v, want compatibility fallback 0", first["subtask_count"])
+	}
+	if _, ok := first["quality_score"]; ok {
+		t.Fatal("quality_score should be absent for old schema without quality_score")
+	}
+}
+
 func TestDelegationOutcomes_QueryFailure(t *testing.T) {
 	store := testutil.TempStore(t)
 	if _, err := store.ExecContext(bgCtx, `DROP TABLE delegation_outcomes`); err != nil {
@@ -573,6 +621,49 @@ func TestDelegationStats_Empty(t *testing.T) {
 	}
 	if body["success_rate"].(float64) != 0 {
 		t.Errorf("success_rate = %v, want 0 when no data", body["success_rate"])
+	}
+}
+
+func TestDelegationStats_OldSchemaWithoutDurationOrQuality(t *testing.T) {
+	store := testutil.TempStore(t)
+	if _, err := store.ExecContext(bgCtx, `DROP TABLE delegation_outcomes`); err != nil {
+		t.Fatalf("drop table: %v", err)
+	}
+	if _, err := store.ExecContext(bgCtx, `CREATE TABLE delegation_outcomes (
+		id TEXT PRIMARY KEY,
+		turn_id TEXT NOT NULL,
+		session_id TEXT NOT NULL,
+		task_description TEXT NOT NULL,
+		pattern TEXT NOT NULL DEFAULT 'none',
+		assigned_agents_json TEXT NOT NULL DEFAULT '[]',
+		success INTEGER NOT NULL DEFAULT 0,
+		created_at TEXT NOT NULL DEFAULT (datetime('now'))
+	)`); err != nil {
+		t.Fatalf("create old table: %v", err)
+	}
+	if _, err := store.ExecContext(bgCtx,
+		`INSERT INTO delegation_outcomes (id, turn_id, session_id, task_description, assigned_agents_json, success)
+		 VALUES ('old1', 't1', 's1', 'legacy delegation', '["agent-a"]', 1)`); err != nil {
+		t.Fatalf("insert old row: %v", err)
+	}
+
+	handler := DelegationStats(store)
+	req := httptest.NewRequest("GET", "/api/observability/delegation-stats", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	body := jsonBody(t, rec)
+	if body["total_delegations"].(float64) != 1 {
+		t.Fatalf("total_delegations = %v, want 1", body["total_delegations"])
+	}
+	if body["avg_duration_ms"].(float64) != 0 {
+		t.Fatalf("avg_duration_ms = %v, want compatibility fallback 0", body["avg_duration_ms"])
+	}
+	if body["avg_quality"].(float64) != 0 {
+		t.Fatalf("avg_quality = %v, want compatibility fallback 0", body["avg_quality"])
 	}
 }
 

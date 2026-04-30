@@ -49,6 +49,14 @@ func SynthesizeTaskState(content string, sessionTurns int, agentSkills []string)
 			confidence = 0.65
 		}
 	}
+	if looksLikeFocusedInspectionTurn(content) ||
+		looksLikeInspectionBackedArtifactAuthoring(content) ||
+		looksLikeSourceBackedCodeTask(content) {
+		action = "execute_directly"
+		if confidence < 0.8 {
+			confidence = 0.8
+		}
+	}
 
 	// Retrieval decision: action turns only pull memory when there is an
 	// explicit continuity/context signal. Simple direct tasks should not widen

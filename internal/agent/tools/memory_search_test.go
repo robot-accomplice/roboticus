@@ -153,10 +153,16 @@ func TestBuildMemoryIndex_QueryAware(t *testing.T) {
 
 	// Seed a Palm-related index entry at moderate confidence.
 	_, _ = store.ExecContext(ctx,
+		`INSERT INTO semantic_memory (id, category, key, value, confidence, memory_state)
+		 VALUES ('sem-palm', 'project', 'Palm USD', 'Palm USD project details and timeline', 0.7, 'active')`)
+	_, _ = store.ExecContext(ctx,
 		`INSERT INTO memory_index (id, source_table, source_id, summary, category, confidence)
 		 VALUES ('idx-palm', 'semantic_memory', 'sem-palm', 'Palm USD project details and timeline', 'project', 0.7)`)
 
 	// Seed a higher-confidence unrelated entry.
+	_, _ = store.ExecContext(ctx,
+		`INSERT INTO semantic_memory (id, category, key, value, confidence, memory_state)
+		 VALUES ('sem-other', 'general', 'unrelated', 'Unrelated high confidence entry', 0.95, 'active')`)
 	_, _ = store.ExecContext(ctx,
 		`INSERT INTO memory_index (id, source_table, source_id, summary, category, confidence)
 		 VALUES ('idx-other', 'semantic_memory', 'sem-other', 'Unrelated high confidence entry', 'general', 0.95)`)
@@ -192,6 +198,9 @@ func TestBuildMemoryIndex_ToolNoiseFiltered(t *testing.T) {
 
 	// Seed one real entry.
 	_, _ = store.ExecContext(ctx,
+		`INSERT INTO semantic_memory (id, category, key, value, confidence, memory_state)
+		 VALUES ('sem-1', 'programming', 'go-concurrency', 'Go concurrency patterns', 0.8, 'active')`)
+	_, _ = store.ExecContext(ctx,
 		`INSERT INTO memory_index (id, source_table, source_id, summary, category, confidence)
 		 VALUES ('idx-real', 'semantic_memory', 'sem-1', 'Go concurrency patterns', 'programming', 0.8)`)
 
@@ -214,6 +223,9 @@ func TestBuildMemoryIndex_IncludesSearchInstruction(t *testing.T) {
 	store := testutil.TempStore(t)
 	ctx := context.Background()
 
+	_, _ = store.ExecContext(ctx,
+		`INSERT INTO semantic_memory (id, category, key, value, confidence, memory_state)
+		 VALUES ('sem-1', 'test', 'test-entry', 'Test entry', 0.8, 'active')`)
 	_, _ = store.ExecContext(ctx,
 		`INSERT INTO memory_index (id, source_table, source_id, summary, category, confidence)
 		 VALUES ('idx-1', 'semantic_memory', 'sem-1', 'Test entry', '', 0.8)`)

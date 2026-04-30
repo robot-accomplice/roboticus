@@ -226,6 +226,48 @@ func TestExerciseModel_FiltersSingleIntent(t *testing.T) {
 	}
 }
 
+func TestExerciseModel_FiltersExactPromptRowAndSkipsWarmup(t *testing.T) {
+	store := testutil.TempStore(t)
+	runner := &stubExerciseRunner{}
+	cfg := &core.Config{
+		Providers: map[string]core.ProviderConfig{
+			"ollama": {IsLocal: true},
+		},
+	}
+
+	handler := ExerciseModel(runner, store, cfg, "ExerciseBot")
+	req := httptest.NewRequest(http.MethodPost, "/api/models/exercise", strings.NewReader(`{"model":"ollama/test-model","prompt_row":"TOOL_USE:C2","warmup_mode":"skip"}`))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if got, want := len(runner.inputs), 1; got != want {
+		t.Fatalf("pipeline calls = %d, want %d", got, want)
+	}
+	wantPrompt := "Look up how many sessions were created today by querying the database."
+	if runner.inputs[0].Content != wantPrompt {
+		t.Fatalf("prompt = %q, want %q", runner.inputs[0].Content, wantPrompt)
+	}
+	body := jsonBody(t, rec)
+	if int(body["total"].(float64)) != 1 {
+		t.Fatalf("total = %v, want 1", body["total"])
+	}
+	warmup := body["warmup"].(map[string]any)
+	if skipped, _ := warmup["Skipped"].(bool); !skipped {
+		t.Fatalf("warmup should be skipped by request")
+	}
+	var persisted int
+	row := store.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM exercise_results WHERE model = ? AND intent_class = ? AND complexity = ?`, "ollama/test-model", "TOOL_USE", "moderate")
+	if err := row.Scan(&persisted); err != nil {
+		t.Fatalf("scan exercise_results: %v", err)
+	}
+	if persisted != 1 {
+		t.Fatalf("persisted rows = %d, want 1", persisted)
+	}
+}
+
 func TestExerciseModel_RejectsUnknownIntent(t *testing.T) {
 	store := testutil.TempStore(t)
 	runner := &stubExerciseRunner{}
@@ -323,6 +365,170 @@ func TestExerciseRunLifecycleRoutes_PersistHistory(t *testing.T) {
 	}
 	if results != 1 {
 		t.Fatalf("results = %d, want 1", results)
+	}
+}
+
+func TestRescoreExerciseResults_ClassifiesLegacyTransportErrors(t *testing.T) {
+	store := testutil.TempStore(t)
+	ctx := context.Background()
+	if err := db.InsertBaselineRun(ctx, store, db.BaselineRunRow{
+		RunID:      "run-legacy",
+		Initiator:  "test",
+		Status:     "completed",
+		ModelCount: 1,
+		Models:     []string{"ollama/broken"},
+		Iterations: 1,
+	}); err != nil {
+		t.Fatalf("InsertBaselineRun: %v", err)
+	}
+	if err := db.InsertExerciseResult(ctx, store, db.ExerciseResultRow{
+		ID:          "row-legacy-error",
+		RunID:       "run-legacy",
+		Model:       "ollama/broken",
+		IntentClass: "TOOL_USE",
+		Complexity:  "trivial",
+		Prompt:      "What is 2 + 2?",
+		Quality:     0,
+		LatencyMs:   12,
+		Passed:      false,
+		ErrorMsg:    "API error: internal error",
+	}); err != nil {
+		t.Fatalf("InsertExerciseResult: %v", err)
+	}
+
+	handler := RescoreExerciseResults(store)
+	req := httptest.NewRequest(http.MethodPost, "/api/models/exercise/rescore", strings.NewReader(`{"models":["ollama/broken"]}`))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("rescore status = %d, want 200", rec.Code)
+	}
+
+	var quality float64
+	var passed int
+	var resultClass string
+	if err := store.QueryRowContext(ctx, `SELECT quality, passed, COALESCE(result_class, '') FROM exercise_results WHERE id = ?`, "row-legacy-error").Scan(&quality, &passed, &resultClass); err != nil {
+		t.Fatalf("query rescored row: %v", err)
+	}
+	if quality != 0 || passed != 0 || resultClass != string(llm.ExerciseOutcomeTransportError) {
+		t.Fatalf("rescored row = quality %.2f passed %d class %q, want 0/0/transport_error", quality, passed, resultClass)
+	}
+
+	entries := db.ExerciseScorecard(ctx, store)
+	if len(entries) != 0 {
+		t.Fatalf("legacy transport error should be validity-only scorecard evidence, got %#v", entries)
+	}
+}
+
+func TestRescoreExerciseResults_ClassifiesLegacyBlankZeroFailuresAsAmbiguous(t *testing.T) {
+	store := testutil.TempStore(t)
+	ctx := context.Background()
+	if err := db.InsertBaselineRun(ctx, store, db.BaselineRunRow{
+		RunID:      "run-legacy-blank",
+		Initiator:  "test",
+		Status:     "completed",
+		ModelCount: 1,
+		Models:     []string{"ollama/broken"},
+		Iterations: 1,
+	}); err != nil {
+		t.Fatalf("InsertBaselineRun: %v", err)
+	}
+	if err := db.InsertExerciseResult(ctx, store, db.ExerciseResultRow{
+		ID:          "row-legacy-blank",
+		RunID:       "run-legacy-blank",
+		Model:       "ollama/broken",
+		IntentClass: "TOOL_USE",
+		Complexity:  "trivial",
+		Prompt:      "What is 2 + 2?",
+		Quality:     0,
+		LatencyMs:   12,
+		Passed:      false,
+	}); err != nil {
+		t.Fatalf("InsertExerciseResult: %v", err)
+	}
+
+	handler := RescoreExerciseResults(store)
+	req := httptest.NewRequest(http.MethodPost, "/api/models/exercise/rescore", strings.NewReader(`{"models":["ollama/broken"]}`))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("rescore status = %d, want 200", rec.Code)
+	}
+
+	var quality float64
+	var passed int
+	var resultClass string
+	if err := store.QueryRowContext(ctx, `SELECT quality, passed, COALESCE(result_class, '') FROM exercise_results WHERE id = ?`, "row-legacy-blank").Scan(&quality, &passed, &resultClass); err != nil {
+		t.Fatalf("query rescored row: %v", err)
+	}
+	if quality != 0 || passed != 0 || resultClass != string(llm.ExerciseOutcomeValidityAmbiguous) {
+		t.Fatalf("rescored row = quality %.2f passed %d class %q, want 0/0/validity_ambiguous", quality, passed, resultClass)
+	}
+
+	entries := db.ExerciseScorecard(ctx, store)
+	if len(entries) != 0 {
+		t.Fatalf("legacy blank-zero failure should be validity-only scorecard evidence, got %#v", entries)
+	}
+}
+
+func TestRescoreExerciseResults_AppliesDefaultQualityFloor(t *testing.T) {
+	store := testutil.TempStore(t)
+	ctx := context.Background()
+	if err := db.InsertBaselineRun(ctx, store, db.BaselineRunRow{
+		RunID:      "run-low-quality",
+		Initiator:  "test",
+		Status:     "completed",
+		ModelCount: 1,
+		Models:     []string{"model-low"},
+		Iterations: 1,
+	}); err != nil {
+		t.Fatalf("InsertBaselineRun: %v", err)
+	}
+	lowQualityResponse := "tool_call tool_call tool_call: this response intentionally avoids the requested answer and keeps expanding with irrelevant procedural language instead of returning the fact. It is verbose enough to violate the concise direct-fact contract and contains prohibited tool-call wording."
+	if err := db.InsertExerciseResult(ctx, store, db.ExerciseResultRow{
+		ID:          "row-low-quality",
+		RunID:       "run-low-quality",
+		Model:       "model-low",
+		IntentClass: "TOOL_USE",
+		Complexity:  "trivial",
+		Prompt:      "What is 2 + 2?",
+		Content:     lowQualityResponse,
+		Quality:     0.90,
+		LatencyMs:   12,
+		Passed:      true,
+		ResultClass: string(llm.ExerciseOutcomeCleanPass),
+	}); err != nil {
+		t.Fatalf("InsertExerciseResult: %v", err)
+	}
+
+	handler := RescoreExerciseResults(store)
+	req := httptest.NewRequest(http.MethodPost, "/api/models/exercise/rescore", strings.NewReader(`{"models":["model-low"]}`))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("rescore status = %d, want 200", rec.Code)
+	}
+
+	var quality float64
+	var passed int
+	var resultClass string
+	if err := store.QueryRowContext(ctx, `SELECT quality, passed, COALESCE(result_class, '') FROM exercise_results WHERE id = ?`, "row-low-quality").Scan(&quality, &passed, &resultClass); err != nil {
+		t.Fatalf("query rescored row: %v", err)
+	}
+	wantQuality := llm.ScoreExerciseResponse(llm.ResolveExercisePrompt("What is 2 + 2?", llm.IntentToolUse, llm.ComplexityTrivial), lowQualityResponse)
+	if wantQuality >= llm.DefaultExercisePassQualityFloor {
+		t.Fatalf("test fixture scored %.2f; need below %.2f", wantQuality, llm.DefaultExercisePassQualityFloor)
+	}
+	if quality != wantQuality || passed != 0 || resultClass != string(llm.ExerciseOutcomeQualityGateFailure) {
+		t.Fatalf("rescored row = quality %.2f passed %d class %q, want %.2f/0/quality_gate_failure", quality, passed, resultClass, wantQuality)
+	}
+
+	entries := db.ExerciseScorecard(ctx, store)
+	if len(entries) != 1 {
+		t.Fatalf("scorecard entries = %d, want 1", len(entries))
+	}
+	if entries[0].AvgQuality != wantQuality {
+		t.Fatalf("scorecard quality = %.2f, want preserved low-quality evidence %.2f", entries[0].AvgQuality, wantQuality)
 	}
 }
 

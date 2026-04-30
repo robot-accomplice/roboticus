@@ -21,6 +21,11 @@ type GuardContext struct {
 	// ToolResults are (tool_name, output) pairs from tool calls in this turn.
 	ToolResults []ToolResultEntry
 
+	// SelectedToolNames are the tool names selected for the current LLM request
+	// before execution. They prove capability availability; ToolResults prove
+	// execution outcome.
+	SelectedToolNames []string
+
 	// AgentName is the configured agent display name.
 	AgentName string
 
@@ -65,6 +70,7 @@ func toolOutputContainsAny(output string, markers []string) bool {
 }
 
 var policyOrSandboxDenialMarkers = []string{
+	"invoked policy:",
 	"policy denied:",
 	"not allowed",
 	"classified as forbidden",
@@ -74,6 +80,7 @@ var policyOrSandboxDenialMarkers = []string{
 	"approval denied",
 	"approval required",
 	"absolute paths must be in allowed_paths list",
+	"not in allowed paths",
 	"home-directory shortcuts are not allowed",
 	"path escapes workspace boundary",
 	"path resolves outside workspace",
@@ -124,6 +131,17 @@ func (gc *GuardContext) HasToolResult(toolName string) bool {
 	return false
 }
 
+// HasSelectedTool returns true if the current request surface included the
+// named tool before model inference.
+func (gc *GuardContext) HasSelectedTool(toolName string) bool {
+	for _, name := range gc.SelectedToolNames {
+		if strings.EqualFold(strings.TrimSpace(name), strings.TrimSpace(toolName)) {
+			return true
+		}
+	}
+	return false
+}
+
 // ContextualGuard extends Guard with access to rich context.
 // Guards that need user prompt, intents, tool results, or subagent names
 // should implement this interface. The GuardChain auto-detects and passes
@@ -147,6 +165,13 @@ func (gc *GuardChain) ApplyFullWithContext(content string, ctx *GuardContext) Ap
 		}
 		if !gr.Passed {
 			result.Violations = append(result.Violations, g.Name())
+			result.ContractEvents = append(result.ContractEvents, buildGuardContractEvent(g.Name(), gr))
+			if gr.Blocked || gr.Verdict == GuardBlocked {
+				result.Blocked = true
+				result.BlockReason = gr.Reason
+				result.Content = ""
+				return result
+			}
 			if gr.Retry {
 				result.RetryRequested = true
 				result.RetryReason = gr.Reason

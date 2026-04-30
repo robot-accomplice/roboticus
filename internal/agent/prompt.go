@@ -275,7 +275,7 @@ func buildBehavioralContract(tier int) string {
 		"### Capability Grounding\n" +
 		"- Never claim capabilities, metrics, or status you haven't verified via tool call.\n" +
 		"- If a tool exists that can answer a question, USE IT before responding.\n" +
-		"- 'I don't have access to' is only valid AFTER a tool call fails.\n" +
+		"- Report missing access only after an attempted tool call returns that concrete denial.\n" +
 		"- Never say 'I don't have memories' when current-turn retrieved evidence or follow-up memory tools could answer the question. Use the injected evidence first; if it is insufficient, call recall_memory or search_memories before answering.\n" +
 		"- **Memory recall rule**: When asked about a specific topic, person, or past event, treat the current-turn retrieved evidence and memory index as your first authority. If that injected evidence is insufficient for the specific question, then call recall_memory or search_memories to hydrate more memory before answering. " +
 		"If follow-up memory retrieval returns nothing, say so honestly — never fabricate memories or " +
@@ -335,7 +335,7 @@ func buildRuntimeMetadataBlock(cfg PromptConfig) string {
 		fmt.Fprintf(&sb, "- Agent version: %s\n", cfg.Version)
 	}
 	sb.WriteString("\n### Tool Operations\n")
-	sb.WriteString("- File tools default to the workspace root. Use relative paths unless the user specifies an absolute destination that falls under an allowed path.\n")
+	sb.WriteString("- File tools default to the workspace root. Use relative paths unless the user specifies an absolute destination that falls under an allowed path. Allowed paths are roots: their child files and subdirectories inherit access unless a narrower policy denies them.\n")
 	if promptHasTool(cfg.ToolNames, "write_file") || promptHasTool(cfg.ToolNames, "edit_file") {
 		sb.WriteString("- `write_file` and `edit_file` may target either workspace-relative paths or absolute paths that fall under an allowed destination from `get_runtime_context` or the destination-target hint.\n")
 	}
@@ -359,6 +359,7 @@ func buildRuntimeMetadataBlock(cfg PromptConfig) string {
 	// policy diverges from the real config — and operators have no
 	// way to act on a refusal that didn't surface a real denial reason.
 	sb.WriteString("- ATTEMPT then report. Do NOT refuse a tool operation based on your own assumptions about what the policy will allow. Call the tool; let the policy engine return the actual decision. If denied, surface the policy's exact reason so the operator can act on it.\n")
+	sb.WriteString("- When a tool is blocked, the result includes the exact policies: for engine denials, an \"Invoked policy:\" line (rule id such as `authority`, `path_protection`, `financial`, …) plus \"Policy denied:\" with the precise reason string; for approval blocks, `agent.approvals.blocked_tools`. Quote those identifiers and the denial reason verbatim when you explain the failure—then paraphrase remediation. Incorporate any operator steps the message gives (`channels.*` allowlists, `security.trusted_sender_ids`, `security.allowlist_authority`, etc.). Do not blame the remote website or imply the URL is unreachable unless the tool output is explicitly a transport or HTTP error from the fetch.\n")
 	// The user's count-style asks (e.g., "return only the number")
 	// also revealed the agent narrating around minimal-output requests.
 	// The directive below covers the format-discipline gap: when the

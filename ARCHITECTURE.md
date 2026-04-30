@@ -4,6 +4,23 @@ This document defines the non-negotiable architectural principles for the
 Roboticus codebase. Every contributor — human or AI — must follow these
 principles. Deviations are bugs and must be corrected before merge.
 
+The shared product and architecture vocabulary lives in
+[`docs/ubiquitous-language.md`](docs/ubiquitous-language.md). New docs, logs,
+CLI help, UI labels, and comments should use those terms unless a legacy API or
+symbol name is being preserved for compatibility.
+
+## 0. No canned user- or operator-facing prose
+
+Roboticus **must not** append, substitute, or inject fixed template text into
+agent answers, guard-chain output, tool surfaces shown to operators, or HTTP/API
+bodies **unless** there is literally no alternative (for example, a response
+shape mandated verbatim by an external protocol).
+
+Explanations **must** be grounded in model-generated content, tool results,
+structured errors, logs, or telemetry—not boilerplate blocks appended after
+inference. This is permanent product policy; see also `AGENTS.md` /
+`CLAUDE.md` (**Product rules**).
+
 ---
 
 ## 1. Connector-Factory Pattern
@@ -44,6 +61,21 @@ Connectors do exactly three things:
 Connectors contain **zero business logic**. If you find yourself writing an
 `if` statement in a connector that isn't about parsing or formatting, the
 logic belongs in the factory.
+
+### API vs dashboard webchannels
+
+`/api/**` routes are externally addressable control and data surfaces. Even
+when they are served from the same daemon as the dashboard, they must be treated
+as independently permission-controlled interfaces for remote management,
+automation, debugging, bootstrap, and integration clients.
+
+Dashboard webchannels are not API aliases. They are dashboard-internal delivery
+channels for state snapshots and UI event streams. The dashboard may consume
+shared producers through websocket/webchannel topics, but it must not drive its
+normal interface state by direct API polling or by reconstructing state from
+API route-specific payloads. If the dashboard and an API route expose the same
+domain truth, both must call the same producer/composition seam; neither surface
+owns separate business logic.
 
 ### How to verify compliance
 

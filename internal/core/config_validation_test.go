@@ -97,15 +97,11 @@ func TestConfig_Validate_TreasuryLimitsPositive(t *testing.T) {
 	}
 }
 
-func TestConfig_Validate_DenyOnEmptyAllowlist(t *testing.T) {
+func TestConfig_Validate_DenyOnEmptyAllowlistFalseAllowed(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Security.Filesystem.DenyOnEmptyAllowlist = false
-	err := cfg.Validate()
-	if err == nil {
-		t.Fatal("expected validation error for deny_on_empty_allowlist=false")
-	}
-	if !strings.Contains(err.Error(), "deny_on_empty_allowlist") {
-		t.Errorf("unexpected error message: %v", err)
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("deny_on_empty_allowlist=false is allowed (fail-open), got: %v", err)
 	}
 }
 

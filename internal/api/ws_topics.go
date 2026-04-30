@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -9,12 +10,12 @@ import (
 )
 
 // BuildTopicSnapshots creates snapshot functions for each dashboard topic.
-// Each snapshot invokes the existing HTTP handler via httptest, ensuring zero
-// divergence between HTTP and WebSocket data paths.
+// Interface-driving topics should call shared producers directly. Legacy
+// management/debug topics may still project existing HTTP handlers until they
+// are moved behind producers.
 func BuildTopicSnapshots(state *AppState) map[string]TopicSnapshotFunc {
 	// Map topic names to their corresponding HTTP handler factories.
 	handlers := map[string]http.HandlerFunc{
-		TopicWorkspace:   routes.GetWorkspaceState(state.Store, state.Config),
 		TopicAgentStatus: routes.AgentStatus(state.LLM, state.Config),
 		TopicModels:      routes.GetAvailableModels(state.LLM),
 		TopicSessions:    routes.ListSessions(state.Store),
@@ -43,6 +44,19 @@ func BuildTopicSnapshots(state *AppState) map[string]TopicSnapshotFunc {
 		snapshots[topic] = func() any {
 			return invokeHandler(h)
 		}
+	}
+
+	snapshots[TopicWorkspace] = func() any {
+		payload, err := routes.BuildWorkspaceStatePayload(
+			context.Background(),
+			state.Store,
+			state.Config,
+		)
+		if err != nil {
+			payload["compatibility_status"] = "degraded"
+			payload["error"] = err.Error()
+		}
+		return payload
 	}
 
 	// Composite stats snapshot.

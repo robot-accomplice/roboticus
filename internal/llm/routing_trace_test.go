@@ -38,11 +38,12 @@ func TestServiceComplete_AnnotatesRoutingFromActualRequest(t *testing.T) {
 	tr := &traceCapture{}
 	ctx := WithRoutingTracer(context.Background(), tr)
 	req := &Request{
-		AgentRole: "orchestrator",
+		AgentRole:     "orchestrator",
+		ContextBudget: 512,
 		Messages: []Message{
-			{Role: "system", Content: "system context"},
-			{Role: "assistant", Content: "prior assistant turn"},
-			{Role: "user", Content: "please analyze this request"},
+			{Role: "system", Content: "system context", ContextKind: ContextKindSystem},
+			{Role: "assistant", Content: "prior assistant turn", ContextKind: ContextKindHistory},
+			{Role: "user", Content: "please analyze this request", ContextKind: ContextKindCurrentUser},
 		},
 		Tools: []ToolDef{
 			{Type: "function", Function: ToolFuncDef{Name: "echo", Description: "Echo"}},
@@ -67,6 +68,23 @@ func TestServiceComplete_AnnotatesRoutingFromActualRequest(t *testing.T) {
 	}
 	if got := tr.values["inference.routing.winner"]; got != "cloud-model/cloud-model" {
 		t.Fatalf("routing.winner = %#v want cloud-model/cloud-model", got)
+	}
+	if got := tr.values["inference.context_footprint.token_budget"]; got != 512 {
+		t.Fatalf("context_footprint.token_budget = %#v want 512", got)
+	}
+	categories, ok := tr.values["inference.context_footprint.categories"].(map[string]int)
+	if !ok {
+		t.Fatalf("context_footprint.categories = %#v, want map[string]int", tr.values["inference.context_footprint.categories"])
+	}
+	if categories[ContextKindSystem] <= 0 || categories[ContextKindCurrentUser] <= 0 || categories[ContextKindTools] <= 0 {
+		t.Fatalf("context categories missing expected counts: %#v", categories)
+	}
+	details, ok := tr.values["inference.context_footprint.details"].(map[string][]ContextFootprintDetail)
+	if !ok {
+		t.Fatalf("context_footprint.details = %#v, want detail map", tr.values["inference.context_footprint.details"])
+	}
+	if len(details[ContextKindTools]) != 1 || details[ContextKindTools][0].Name != "echo" {
+		t.Fatalf("tool details = %#v, want echo tool", details[ContextKindTools])
 	}
 }
 

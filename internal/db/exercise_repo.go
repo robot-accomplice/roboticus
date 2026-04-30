@@ -247,6 +247,17 @@ func ExerciseScorecard(ctx context.Context, store *Store) []ExerciseScorecardEnt
 		              ORDER BY created_at DESC, rowid DESC
 		            ) AS rn
 		     FROM exercise_results
+		     WHERE NOT (
+		       COALESCE(result_class, '') IN ('transport_error', 'provider_timeout', 'validity_ambiguous')
+		       OR (COALESCE(result_class, '') = '' AND TRIM(COALESCE(error_msg, '')) <> '')
+		       OR (
+		         COALESCE(result_class, '') = ''
+		         AND TRIM(COALESCE(error_msg, '')) = ''
+		         AND TRIM(COALESCE(content, '')) = ''
+		         AND COALESCE(passed, 0) = 0
+		         AND COALESCE(quality, 0) = 0
+		       )
+		     )
 		   )
 		   WHERE rn = 1
 		 )
@@ -262,6 +273,17 @@ func ExerciseScorecard(ctx context.Context, store *Store) []ExerciseScorecardEnt
 		         ON e.model = lr.model
 		        AND e.intent_class = lr.intent_class
 		        AND e.run_id = lr.run_id
+		 WHERE NOT (
+		   COALESCE(e.result_class, '') IN ('transport_error', 'provider_timeout', 'validity_ambiguous')
+		   OR (COALESCE(e.result_class, '') = '' AND TRIM(COALESCE(e.error_msg, '')) <> '')
+		   OR (
+		     COALESCE(e.result_class, '') = ''
+		     AND TRIM(COALESCE(e.error_msg, '')) = ''
+		     AND TRIM(COALESCE(e.content, '')) = ''
+		     AND COALESCE(e.passed, 0) = 0
+		     AND COALESCE(e.quality, 0) = 0
+		   )
+		 )
 		 GROUP BY e.model, e.intent_class
 		 ORDER BY e.model, e.intent_class`)
 	if err != nil {
@@ -324,7 +346,7 @@ func LatestExerciseResults(ctx context.Context, store *Store, model string) []Ex
 // rescoring. When models is empty, all models are included. When runID is
 // non-empty, results are limited to that run.
 func ListExerciseResultsForRescore(ctx context.Context, store *Store, models []string, runID string) []ExerciseResultRow {
-	query := `SELECT id, run_id, COALESCE(turn_id, ''), model, intent_class, complexity, prompt, content, quality, latency_ms, passed, COALESCE(error_msg, ''), created_at,
+	query := `SELECT id, run_id, COALESCE(turn_id, ''), model, intent_class, complexity, prompt, content, quality, latency_ms, passed, COALESCE(result_class, ''), COALESCE(error_msg, ''), created_at,
 	        COALESCE(resource_start_json, ''), COALESCE(resource_end_json, ''),
 	        COALESCE(model_state_start_json, ''), COALESCE(model_state_end_json, '')
 	 FROM exercise_results`
@@ -363,7 +385,7 @@ func ListExerciseResultsForRescore(ctx context.Context, store *Store, models []s
 		var resourceStartRaw, resourceEndRaw string
 		var modelStateStartRaw, modelStateEndRaw string
 		if err := rows.Scan(&r.ID, &r.RunID, &r.TurnID, &r.Model, &r.IntentClass, &r.Complexity,
-			&r.Prompt, &r.Content, &r.Quality, &r.LatencyMs, &passed, &r.ErrorMsg, &r.CreatedAt,
+			&r.Prompt, &r.Content, &r.Quality, &r.LatencyMs, &passed, &r.ResultClass, &r.ErrorMsg, &r.CreatedAt,
 			&resourceStartRaw, &resourceEndRaw, &modelStateStartRaw, &modelStateEndRaw); err == nil {
 			r.Passed = passed == 1
 			r.ResourceStart = hostresources.FromJSON(resourceStartRaw)
@@ -378,16 +400,16 @@ func ListExerciseResultsForRescore(ctx context.Context, store *Store, models []s
 
 // UpdateExerciseResultScore updates the persisted quality/pass classification
 // for a single exercise row after rescoring.
-func UpdateExerciseResultScore(ctx context.Context, store *Store, id string, quality float64, passed bool) error {
+func UpdateExerciseResultScore(ctx context.Context, store *Store, id string, quality float64, passed bool, resultClass string) error {
 	passedInt := 0
 	if passed {
 		passedInt = 1
 	}
 	_, err := store.ExecContext(ctx,
 		`UPDATE exercise_results
-		    SET quality = ?, passed = ?
+		    SET quality = ?, passed = ?, result_class = NULLIF(?, '')
 		  WHERE id = ?`,
-		quality, passedInt, id,
+		quality, passedInt, resultClass, id,
 	)
 	if err != nil {
 		log.Warn().Err(err).Str("id", id).Msg("exercise: failed to update rescored result")

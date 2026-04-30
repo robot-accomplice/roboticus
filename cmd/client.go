@@ -31,7 +31,3 @@ func apiDelete(path string) error {
 func printJSON(data any) {
 	cmdutil.PrintJSON(data)
 }
-
-func _outputTable(headers []string, rows [][]string) { //nolint:unused // planned for CLI list commands
-	cmdutil.OutputTable(headers, rows)
-}

@@ -14,6 +14,9 @@ go vet ./...                # Lint
 - Route handlers in `internal/api/routes/` must NOT import `internal/agent` directly — use interfaces or pass through pipeline. The architecture test (`architecture_test.go`) enforces this.
 - All pipeline invocations should use `pipeline.RunPipeline()` (the package-level wrapper), not `p.Run()` directly.
 
+## Product rules (non-negotiable)
+- **No canned user- or operator-facing prose**: Do not append, substitute, or inject fixed templates into agent answers, guard chains, tool wrappers, or API responses unless there is literally no alternative (for example, a mandatory protocol body required by an external spec). Ground explanations in model output, tool results, structured errors, logs, or telemetry—not boilerplate blocks.
+
 ## Lessons Learned
 
 ### Connector-Factory Architecture Enforcement

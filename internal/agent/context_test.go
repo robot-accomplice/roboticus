@@ -124,3 +124,86 @@ func TestIsSocialFiller(t *testing.T) {
 		}
 	}
 }
+
+func TestContextBuilder_BuildRequestWithTrailingSystemOverlay_LayersAfterHistory(t *testing.T) {
+	cb := NewContextBuilder(DefaultContextConfig())
+	cb.SetSystemPrompt("base system prompt")
+	sess := NewSession("ctx-overlay-sess", "agent-1", "TestBot")
+	sess.AddUserMessage("user asks something")
+	sess.AddAssistantMessage("assistant replies", nil)
+
+	req := cb.BuildRequestWithTrailingSystemOverlay(sess, []string{"overlay note A", "overlay note B"})
+	msgs := req.Messages
+	if len(msgs) < 4 {
+		t.Fatalf("len(messages)=%d, want at least base system + user + assistant + 2 overlay", len(msgs))
+	}
+	n := len(msgs)
+	if msgs[n-2].Role != "system" || msgs[n-2].Content != "overlay note A" {
+		t.Fatalf("penultimate msg role=%q content=%q", msgs[n-2].Role, msgs[n-2].Content)
+	}
+	if msgs[n-1].Role != "system" || msgs[n-1].Content != "overlay note B" {
+		t.Fatalf("last msg role=%q content=%q", msgs[n-1].Role, msgs[n-1].Content)
+	}
+	userIdx, asstIdx := -1, -1
+	for i, m := range msgs {
+		if m.Role == "user" && strings.Contains(m.Content, "user asks something") {
+			userIdx = i
+		}
+		if m.Role == "assistant" && m.Content == "assistant replies" {
+			asstIdx = i
+		}
+	}
+	if userIdx < 0 || asstIdx < 0 {
+		t.Fatalf("history not found: userIdx=%d asstIdx=%d", userIdx, asstIdx)
+	}
+	if asstIdx >= n-2 {
+		t.Fatalf("conversation history must precede trailing overlay (assistant at %d, overlay starts at %d)", asstIdx, n-2)
+	}
+}
+
+func TestContextBuilder_TrailingOverlayPreservesWorkingMemory(t *testing.T) {
+	cb := NewContextBuilder(DefaultContextConfig())
+	cb.SetSystemPrompt("base system prompt")
+	cb.SetMemory("[Active Memory]\n\n[Working State]\n- Release focus: preserve durable continuity")
+	cb.SetMemoryIndex("[Memory Index]\n- recall_memory(\"abc123\") release continuity note")
+
+	sess := NewSession("ctx-overlay-memory", "agent-1", "TestBot")
+	sess.AddUserMessage("continue from our prior release plan")
+	sess.AddAssistantMessage("I will preserve the plan context.", nil)
+
+	req := cb.BuildRequestWithTrailingSystemOverlay(sess, []string{"TOTOF reflection brief"})
+
+	var memoryIdx, indexIdx, userIdx, overlayIdx = -1, -1, -1, -1
+	for i, msg := range req.Messages {
+		if msg.Role != "system" && msg.Role != "user" {
+			continue
+		}
+		if strings.Contains(msg.Content, "[Working State]") {
+			memoryIdx = i
+		}
+		if strings.Contains(msg.Content, "[Memory Index]") {
+			indexIdx = i
+		}
+		if msg.Role == "user" && strings.Contains(msg.Content, "prior release plan") {
+			userIdx = i
+		}
+		if msg.Role == "system" && msg.Content == "TOTOF reflection brief" {
+			overlayIdx = i
+		}
+	}
+	if memoryIdx < 0 {
+		t.Fatal("trailing overlay request dropped active working memory (R-AGENT-202)")
+	}
+	if indexIdx < 0 {
+		t.Fatal("trailing overlay request dropped memory index (R-AGENT-202)")
+	}
+	if userIdx < 0 {
+		t.Fatal("trailing overlay request dropped conversation history")
+	}
+	if overlayIdx != len(req.Messages)-1 {
+		t.Fatalf("overlay index = %d, want last index %d", overlayIdx, len(req.Messages)-1)
+	}
+	if memoryIdx >= userIdx || indexIdx >= userIdx || userIdx >= overlayIdx {
+		t.Fatalf("unexpected order: memory=%d index=%d user=%d overlay=%d", memoryIdx, indexIdx, userIdx, overlayIdx)
+	}
+}

@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -124,7 +125,7 @@ func (g *ExecutionTruthGuard) CheckWithContext(content string, ctx *GuardContext
 
 	// Rust parity: truthfulness.rs — 11 relevant intents (not 3).
 	if len(ctx.Intents) > 0 {
-		relevant := false
+		relevant := selectedToolSurfaceMakesExecutionTruthRelevant(ctx)
 		for _, intent := range ctx.Intents {
 			switch intent {
 			case "execution", "task", "delegation", "cron",
@@ -135,8 +136,32 @@ func (g *ExecutionTruthGuard) CheckWithContext(content string, ctx *GuardContext
 				relevant = true
 			}
 		}
+		if inspectionListingCoverageRequired(ctx.UserPrompt) {
+			relevant = true
+		}
 		if !relevant {
 			return GuardResult{Passed: true}
+		}
+	}
+
+	// Check 0: Selected tools prove the capability is available even before a
+	// tool call has happened. The model may still report concrete policy/tool
+	// failures, but it cannot deny browser/web/tool capability while that tool
+	// surface is present and no denial evidence exists.
+	if len(ctx.SelectedToolNames) > 0 && !guardContextHasPolicyOrSandboxDenial(ctx) {
+		if len(ctx.ToolResults) == 0 && resolvedInspectionTaskRequiresEvidence(ctx) {
+			return GuardResult{
+				Passed: false,
+				Retry:  true,
+				Reason: "resolved filesystem inspection task finalized without inspection tool evidence; use the selected inspection tools or report the concrete tool/policy/sandbox denial",
+			}
+		}
+		if selectedToolSurfaceContradictsCapabilityDenial(ctx, content) {
+			return GuardResult{
+				Passed: false,
+				Retry:  true,
+				Reason: "falsely denied capability despite selected tool surface",
+			}
 		}
 	}
 
@@ -169,18 +194,12 @@ func (g *ExecutionTruthGuard) CheckWithContext(content string, ctx *GuardContext
 
 	// Check 2: Tools ran but model denies capability.
 	if len(ctx.ToolResults) > 0 {
-		for _, tr := range ctx.ToolResults {
-			if toolResultSignalsPolicyOrSandboxDenial(tr) {
-				return GuardResult{Passed: true}
-			}
+		if guardContextHasPolicyOrSandboxDenial(ctx) {
+			return GuardResult{Passed: true}
 		}
 		lower := strings.ToLower(content)
-		denialPatterns := []string{
-			"i cannot", "i'm unable to", "i don't have the ability",
-			"i can't execute", "i cannot run",
-		}
-		for _, denial := range denialPatterns {
-			if strings.Contains(lower, denial) {
+		for _, denial := range capabilityDenialPatterns {
+			if strings.Contains(lower, denial.phrase) {
 				return GuardResult{
 					Passed: false,
 					Retry:  true,
@@ -199,6 +218,18 @@ func (g *ExecutionTruthGuard) CheckWithContext(content string, ctx *GuardContext
 				Passed: false,
 				Retry:  true,
 				Reason: "claimed persistent artifact creation without artifact-writing tool evidence",
+			}
+		}
+	}
+
+	// Check 2c: Inspection-backed listing/reporting turns must surface concrete
+	// observed entries, not only meta-claims that a list existed.
+	if inspectionListingCoverageRequired(ctx.UserPrompt) {
+		if entries := inspectionEvidenceEntries(ctx.ToolResults); len(entries) > 0 && !contentMentionsObservedInspectionEntry(content, entries) {
+			return GuardResult{
+				Passed: false,
+				Retry:  true,
+				Reason: "omitted concrete inspection results from final answer",
 			}
 		}
 	}
@@ -224,6 +255,188 @@ func (g *ExecutionTruthGuard) CheckWithContext(content string, ctx *GuardContext
 	}
 
 	return GuardResult{Passed: true}
+}
+
+type capabilityDenialKind string
+
+const (
+	capabilityDenialGeneric capabilityDenialKind = "generic"
+	capabilityDenialWeb     capabilityDenialKind = "web"
+	capabilityDenialExec    capabilityDenialKind = "exec"
+)
+
+type capabilityDenialPattern struct {
+	phrase string
+	kind   capabilityDenialKind
+}
+
+var capabilityDenialPatterns = []capabilityDenialPattern{
+	{"i'm unable to execute", capabilityDenialExec},
+	{"i am unable to execute", capabilityDenialExec},
+	{"i don't have the ability", capabilityDenialGeneric},
+	{"i do not have the ability", capabilityDenialGeneric},
+	{"i can't execute", capabilityDenialExec},
+	{"i cannot execute", capabilityDenialExec},
+	{"i can't run", capabilityDenialExec},
+	{"i cannot run", capabilityDenialExec},
+	{"i don't have tools", capabilityDenialGeneric},
+	{"i do not have tools", capabilityDenialGeneric},
+	{"tools and execution capabilities are currently disabled", capabilityDenialGeneric},
+	{"execution capabilities are currently disabled", capabilityDenialExec},
+	{"tools are currently disabled", capabilityDenialGeneric},
+	{"tools are now disabled", capabilityDenialGeneric},
+	{"tools are disabled", capabilityDenialGeneric},
+	{"i don't have access to tools", capabilityDenialGeneric},
+	{"i do not have access to tools", capabilityDenialGeneric},
+	{"i can't directly read or compare", capabilityDenialGeneric},
+	{"i cannot directly read or compare", capabilityDenialGeneric},
+	{"can't directly read or compare", capabilityDenialGeneric},
+	{"cannot directly read or compare", capabilityDenialGeneric},
+	{"i don't have live web-search", capabilityDenialWeb},
+	{"i do not have live web-search", capabilityDenialWeb},
+	{"i don't have web-search", capabilityDenialWeb},
+	{"i do not have web-search", capabilityDenialWeb},
+	{"i don't have web search", capabilityDenialWeb},
+	{"i do not have web search", capabilityDenialWeb},
+	{"i can't browse", capabilityDenialWeb},
+	{"i cannot browse", capabilityDenialWeb},
+	{"i don't have the capability to browse", capabilityDenialWeb},
+	{"i do not have the capability to browse", capabilityDenialWeb},
+	{"i don't have the capability to use playwright", capabilityDenialWeb},
+	{"i do not have the capability to use playwright", capabilityDenialWeb},
+	{"i don't have the capability to crawl", capabilityDenialWeb},
+	{"i do not have the capability to crawl", capabilityDenialWeb},
+	{"i don't have the capability to directly use playwright", capabilityDenialWeb},
+	{"i do not have the capability to directly use playwright", capabilityDenialWeb},
+	{"directly browse web pages", capabilityDenialWeb},
+	{"i can't use playwright", capabilityDenialWeb},
+	{"i cannot use playwright", capabilityDenialWeb},
+	{"i don't have access to the internet", capabilityDenialWeb},
+	{"i do not have access to the internet", capabilityDenialWeb},
+	{"i don't have image-download tools", capabilityDenialWeb},
+	{"i do not have image-download tools", capabilityDenialWeb},
+	{"outside my capabilities", capabilityDenialGeneric},
+}
+
+func selectedToolSurfaceMakesExecutionTruthRelevant(ctx *GuardContext) bool {
+	for _, name := range ctx.SelectedToolNames {
+		switch agenttools.OperationClassForName(name) {
+		case agenttools.OperationInspection,
+			agenttools.OperationRuntimeContextRead,
+			agenttools.OperationArtifactRead,
+			agenttools.OperationWorkspaceInspect,
+			agenttools.OperationCapabilityInventory,
+			agenttools.OperationTaskInspection,
+			agenttools.OperationMemoryRead,
+			agenttools.OperationDataRead,
+			agenttools.OperationWebRead,
+			agenttools.OperationExecution,
+			agenttools.OperationDelegation:
+			return true
+		}
+	}
+	return false
+}
+
+func guardContextHasPolicyOrSandboxDenial(ctx *GuardContext) bool {
+	for _, tr := range ctx.ToolResults {
+		if toolResultSignalsPolicyOrSandboxDenial(tr) {
+			return true
+		}
+	}
+	return false
+}
+
+func resolvedInspectionTaskRequiresEvidence(ctx *GuardContext) bool {
+	if ctx == nil || !looksLikeFocusedInspectionTurn(ctx.UserPrompt) {
+		return false
+	}
+	if !inspectionPromptHasResolvableTarget(ctx.UserPrompt) {
+		return false
+	}
+	for _, name := range ctx.SelectedToolNames {
+		if selectedToolNameSupportsInspectionEvidence(name) {
+			return true
+		}
+	}
+	return false
+}
+
+func inspectionPromptHasResolvableTarget(prompt string) bool {
+	if len(extractInspectionPathCandidates(prompt)) > 0 {
+		return true
+	}
+	lower := strings.ToLower(prompt)
+	return containsAnyMarker(lower, []string{
+		"current working directory",
+		"current directory",
+		"current repository",
+		"current repo",
+		"workspace",
+		"code folder",
+		"code directory",
+		"desktop vault",
+		"workspace vault",
+		"home folder",
+		"home directory",
+		"my home",
+		"downloads folder",
+		"download folder",
+		"my downloads",
+		"desktop folder",
+		"documents folder",
+	})
+}
+
+func selectedToolNameSupportsInspectionEvidence(name string) bool {
+	switch agenttools.OperationClassForName(name) {
+	case agenttools.OperationWorkspaceInspect,
+		agenttools.OperationArtifactRead,
+		agenttools.OperationInspection:
+		return true
+	default:
+		return false
+	}
+}
+
+func selectedToolSurfaceContradictsCapabilityDenial(ctx *GuardContext, content string) bool {
+	lower := strings.ToLower(content)
+	for _, denial := range capabilityDenialPatterns {
+		if !strings.Contains(lower, denial.phrase) {
+			continue
+		}
+		if selectedToolSurfaceProvesCapability(ctx, denial.kind) {
+			return true
+		}
+	}
+	return false
+}
+
+func selectedToolSurfaceProvesCapability(ctx *GuardContext, kind capabilityDenialKind) bool {
+	for _, name := range ctx.SelectedToolNames {
+		switch kind {
+		case capabilityDenialGeneric:
+			return true
+		case capabilityDenialWeb:
+			if selectedToolNameIsBrowserLike(name) || agenttools.OperationClassForName(name) == agenttools.OperationWebRead {
+				return true
+			}
+		case capabilityDenialExec:
+			if agenttools.OperationClassForName(name) == agenttools.OperationExecution {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func selectedToolNameIsBrowserLike(name string) bool {
+	lower := strings.ToLower(strings.TrimSpace(name))
+	return strings.HasPrefix(lower, "browser_") ||
+		strings.Contains(lower, "playwright") ||
+		lower == "ghola" ||
+		lower == "http_fetch" ||
+		lower == "web_search"
 }
 
 func persistentArtifactProofRequired(prompt string) bool {
@@ -254,6 +467,71 @@ func hasSuccessfulArtifactWriteEvidence(results []ToolResultEntry) bool {
 			return true
 		}
 		return true
+	}
+	return false
+}
+
+func inspectionListingCoverageRequired(prompt string) bool {
+	lower := strings.ToLower(prompt)
+	actionMarkers := []string{"list", "report", "summarize", "summary", "top-level", "entries", "contents", "what is there", "what's there"}
+	targetMarkers := []string{"directory", "folder", "path", "vault", "files", "entries", "contents"}
+	return containsAnyMarker(lower, actionMarkers) && containsAnyMarker(lower, targetMarkers)
+}
+
+func inspectionEvidenceEntries(results []ToolResultEntry) []string {
+	entries := make([]string, 0, 8)
+	for _, tr := range results {
+		if !inspectionToolProvidesListing(tr.ToolName) || toolResultSignalsFailure(tr) {
+			continue
+		}
+		for _, line := range strings.Split(tr.Output, "\n") {
+			entry := normalizeInspectionEntry(line)
+			if entry == "" {
+				continue
+			}
+			entries = append(entries, entry)
+			if len(entries) >= 12 {
+				return entries
+			}
+		}
+	}
+	return entries
+}
+
+func inspectionToolProvidesListing(toolName string) bool {
+	name := strings.ToLower(toolName)
+	return strings.Contains(name, "glob") ||
+		strings.Contains(name, "list") ||
+		strings.Contains(name, "search") ||
+		strings.Contains(name, "inventory") ||
+		strings.Contains(name, "inspect")
+}
+
+func normalizeInspectionEntry(line string) string {
+	entry := strings.TrimSpace(line)
+	entry = strings.TrimPrefix(entry, "- ")
+	entry = strings.TrimPrefix(entry, "* ")
+	entry = strings.Trim(entry, "`'\" ")
+	if entry == "" || strings.HasPrefix(entry, "{") || strings.HasPrefix(entry, "[") {
+		return ""
+	}
+	entry = strings.TrimRight(entry, "/")
+	base := filepath.Base(entry)
+	if base == "." || base == string(filepath.Separator) {
+		return ""
+	}
+	return base
+}
+
+func contentMentionsObservedInspectionEntry(content string, entries []string) bool {
+	lower := strings.ToLower(content)
+	for _, entry := range entries {
+		if len(entry) < 3 {
+			continue
+		}
+		if strings.Contains(lower, strings.ToLower(entry)) {
+			return true
+		}
 	}
 	return false
 }
@@ -388,6 +666,13 @@ var filesystemDenialPatterns = []string{
 	"don't have access to your files",
 	"as an ai, i don't have access to your files",
 	"as an ai text-based interface, i'm not able to directly access",
+	"need the path added to the allowed list",
+	"need this path added to the allowed list",
+	"need it added to the allowed list",
+	"path added to the allowed list before i can",
+	"need the path added to allowed_paths",
+	"must be added to allowed_paths",
+	"needs to be added to allowed_paths",
 }
 
 func (g *FilesystemDenialGuard) Name() string { return "filesystem_denial" }

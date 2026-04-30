@@ -274,7 +274,7 @@ func sameModel(a, b string) bool {
 
 func canonicalModelName(s string) string {
 	s = strings.TrimSpace(strings.ToLower(s))
-	for _, prefix := range []string{"ollama/", "openrouter/", "openai/", "anthropic/", "google/", "moonshot/"} {
+	for _, prefix := range []string{"ollama/", "openrouter/", "openai/", "anthropic/", "google/", "moonshot/", "deepseek/"} {
 		if strings.HasPrefix(s, prefix) {
 			return strings.TrimPrefix(s, prefix)
 		}

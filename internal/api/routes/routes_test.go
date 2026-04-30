@@ -158,6 +158,13 @@ func TestGetRecommendations_ReturnsSignals(t *testing.T) {
 	if len(recommendations) == 0 {
 		t.Fatal("expected non-empty recommendations")
 	}
+	first, ok := recommendations[0].(map[string]any)
+	if !ok {
+		t.Fatal("first recommendation is not an object")
+	}
+	if strings.TrimSpace(first["action"].(string)) == "" {
+		t.Fatal("recommendation action should not be blank")
+	}
 }
 
 func TestGenerateRecommendations_DelegatesToAnalysis(t *testing.T) {
@@ -185,10 +192,22 @@ func TestGenerateRecommendations_DelegatesToAnalysis(t *testing.T) {
 	if first["category"] != "observability" {
 		t.Fatalf("first recommendation category = %v, want observability", first["category"])
 	}
+	if body["message"] == "" {
+		t.Fatal("deep analysis should return a visible message")
+	}
+	if body["analysis_generated_at"] == "" {
+		t.Fatal("deep analysis should return generation timestamp")
+	}
+	if actions, ok := body["actions"].([]any); !ok || len(actions) == 0 {
+		t.Fatalf("deep analysis actions = %v, want non-empty array", body["actions"])
+	}
 }
 
 func TestGetWorkspaceState(t *testing.T) {
 	store := testutil.TempStore(t)
+	_, _ = store.ExecContext(bgCtx,
+		`INSERT INTO sub_agents (id, name, model, role, enabled, status, created_at)
+		 VALUES ('worker-1', 'worker_one', 'auto', 'subagent', 1, 'registered', datetime('now'))`)
 	handler := GetWorkspaceState(store, testConfig())
 	req := httptest.NewRequest("GET", "/api/workspace/state", nil)
 	rec := httptest.NewRecorder()
@@ -200,6 +219,62 @@ func TestGetWorkspaceState(t *testing.T) {
 	}
 	if body["goroutines"].(float64) < 1 {
 		t.Error("goroutines should be >= 1")
+	}
+	if body["idle_agents_count"].(float64) != 1 {
+		t.Fatalf("idle_agents_count = %v, want only the non-orchestrator worker", body["idle_agents_count"])
+	}
+	agents := body["agents"].([]any)
+	orchestrator := agents[0].(map[string]any)
+	if orchestrator["role"] != "orchestrator" {
+		t.Fatalf("first workspace agent role = %v, want orchestrator", orchestrator["role"])
+	}
+	if orchestrator["state"] != "sleeping" && orchestrator["state"] != "running" {
+		t.Fatalf("orchestrator state = %v, want sleeping or running", orchestrator["state"])
+	}
+}
+
+func TestGetWorkspaceState_OldSubagentSchemaStillListsWorkers(t *testing.T) {
+	store := testutil.TempStore(t)
+	_, _ = store.ExecContext(bgCtx, `DROP TABLE sub_agents`)
+	_, err := store.ExecContext(bgCtx, `CREATE TABLE sub_agents (
+		id TEXT PRIMARY KEY,
+		name TEXT NOT NULL,
+		display_name TEXT,
+		model TEXT NOT NULL DEFAULT '',
+		role TEXT NOT NULL DEFAULT 'specialist',
+		description TEXT,
+		skills_json TEXT,
+		enabled INTEGER NOT NULL DEFAULT 1,
+		session_count INTEGER NOT NULL DEFAULT 0,
+		created_at TEXT NOT NULL DEFAULT (datetime('now')),
+		fallback_models_json TEXT NOT NULL DEFAULT '[]',
+		last_used_at TEXT
+	)`)
+	if err != nil {
+		t.Fatalf("create old sub_agents schema: %v", err)
+	}
+	_, err = store.ExecContext(bgCtx,
+		`INSERT INTO sub_agents (id, name, model, role, enabled, created_at)
+		 VALUES ('worker-old', 'old_worker', 'auto', 'subagent', 1, datetime('now'))`)
+	if err != nil {
+		t.Fatalf("seed old subagent: %v", err)
+	}
+
+	handler := GetWorkspaceState(store, testConfig())
+	req := httptest.NewRequest("GET", "/api/workspace/state", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	body := jsonBody(t, rec)
+	if body["idle_agents_count"].(float64) != 1 {
+		t.Fatalf("idle_agents_count = %v, want 1", body["idle_agents_count"])
+	}
+	agents := body["agents"].([]any)
+	if len(agents) != 2 {
+		t.Fatalf("agents = %d, want orchestrator + old schema worker", len(agents))
 	}
 }
 

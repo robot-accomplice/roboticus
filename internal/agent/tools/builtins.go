@@ -56,7 +56,7 @@ func (t *ReadFileTool) Execute(_ context.Context, params string, tctx *Context) 
 		return nil, fmt.Errorf("invalid params: %w", err)
 	}
 
-	resolved, err := resolvePath(tctx.Workspace, args.Path, tctx.AllowedPaths)
+	resolved, err := tctx.ResolveReadPath(args.Path)
 	if err != nil {
 		return nil, err
 	}
@@ -117,7 +117,7 @@ func (t *WriteFileTool) Execute(_ context.Context, params string, tctx *Context)
 		return nil, err
 	}
 
-	resolved, err := resolvePath(tctx.Workspace, args.Path, tctx.AllowedPaths)
+	resolved, err := tctx.ResolveReadPath(args.Path)
 	if err != nil {
 		return nil, err
 	}
@@ -257,7 +257,7 @@ func (t *EditFileTool) Execute(_ context.Context, params string, tctx *Context) 
 		return nil, err
 	}
 
-	resolved, err := resolvePath(tctx.Workspace, args.Path, tctx.AllowedPaths)
+	resolved, err := tctx.ResolveReadPath(args.Path)
 	if err != nil {
 		return nil, err
 	}
@@ -308,7 +308,7 @@ func (t *ListDirectoryTool) Execute(_ context.Context, params string, tctx *Cont
 		_ = json.Unmarshal([]byte(params), &args)
 	}
 
-	resolved, err := resolvePath(tctx.Workspace, args.Path, tctx.AllowedPaths)
+	resolved, err := tctx.ResolveReadPath(args.Path)
 	if err != nil {
 		return nil, err
 	}
@@ -562,7 +562,10 @@ func (t *RuntimeContextTool) ParameterSchema() json.RawMessage {
 }
 func (t *RuntimeContextTool) Execute(_ context.Context, _ string, tctx *Context) (*Result, error) {
 	relativeRule := "relative paths resolve inside the workspace root"
-	absoluteRule := "absolute paths must fall under an allowed path"
+	if strings.TrimSpace(tctx.PathAnchor) != "" {
+		relativeRule = "relative read/list/search/glob paths resolve inside the active inspection root"
+	}
+	absoluteRule := "absolute paths must fall under an allowed path; allowed paths are roots, so child files and subdirectories inherit access unless a narrower policy denies them"
 	protected := "none"
 	if len(tctx.ProtectedReadOnlyPaths) > 0 {
 		protected = strings.Join(tctx.ProtectedReadOnlyPaths, ", ")
@@ -570,6 +573,7 @@ func (t *RuntimeContextTool) Execute(_ context.Context, _ string, tctx *Context)
 	info := fmt.Sprintf(`Agent: %s
 Session: %s
 Workspace: %s
+Active Inspection Root: %s
 Channel: %s
 Allowed Paths: %s
 Effective Path Policy: %s; %s
@@ -577,6 +581,7 @@ Protected Read-Only Inputs: %s`,
 		tctx.AgentID,
 		tctx.SessionID,
 		tctx.Workspace,
+		emptyAsNone(tctx.PathAnchor),
 		tctx.Channel,
 		strings.Join(tctx.AllowedPaths, ", "),
 		relativeRule,
@@ -584,6 +589,13 @@ Protected Read-Only Inputs: %s`,
 		protected,
 	)
 	return &Result{Output: info}, nil
+}
+
+func emptyAsNone(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return "none"
+	}
+	return s
 }
 
 // --- Helpers ---

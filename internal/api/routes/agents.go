@@ -6,39 +6,21 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"roboticus/internal/core"
 	"roboticus/internal/db"
 )
 
-// ListAgents returns all registered agents from the sub_agents table.
-func ListAgents(store *db.Store) http.HandlerFunc {
+// ListAgents returns the shared operator agent registry projection.
+func ListAgents(store *db.Store, cfgs ...*core.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		rows, err := db.NewRouteQueries(store).ListAgentsFull(r.Context())
+		var cfg *core.Config
+		if len(cfgs) > 0 {
+			cfg = cfgs[0]
+		}
+		agents, err := buildAgentRegistryView(r.Context(), store, cfg)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to query agents")
 			return
-		}
-		defer func() { _ = rows.Close() }()
-
-		agents := make([]map[string]any, 0)
-		for rows.Next() {
-			var id, name, model, role, createdAt string
-			var displayName, description *string
-			var enabled bool
-			if err := rows.Scan(&id, &name, &displayName, &model, &role, &description, &enabled, &createdAt); err != nil {
-				writeError(w, http.StatusInternalServerError, "failed to read agent row")
-				return
-			}
-			a := map[string]any{
-				"id": id, "name": name, "model": model,
-				"role": role, "enabled": enabled, "created_at": createdAt,
-			}
-			if displayName != nil {
-				a["display_name"] = *displayName
-			}
-			if description != nil {
-				a["description"] = *description
-			}
-			agents = append(agents, a)
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"agents": agents})
 	}

@@ -260,6 +260,7 @@ func TestDefaultToolSearchConfig_MatchesRustParity(t *testing.T) {
 		"get_memory_stats":      true, // Rust parity
 		"get_runtime_context":   true, // Rust parity
 		"get_subagent_status":   true, // broader Go-native status surface
+		"introspect":            true, // canonical runtime capability discovery
 		"list-subagent-roster":  true, // restored runtime inventory surface
 		"list-available-skills": true, // restored runtime inventory surface
 		"compose-skill":         true, // restored runtime skill composition surface
@@ -276,6 +277,37 @@ func TestDefaultToolSearchConfig_MatchesRustParity(t *testing.T) {
 		if !wantIncludes[name] {
 			t.Fatalf("AlwaysInclude contains unexpected %q; want one of %v", name, wantIncludes)
 		}
+	}
+}
+
+func TestSearchAndPrune_PreservesCapabilityDiscoveryPinsWithoutEmbeddings(t *testing.T) {
+	tools := []*ToolDescriptor{
+		{Name: "irrelevant", Source: ToolSourceBuiltIn, TokenCost: 10},
+		{Name: "recall_memory", Source: ToolSourceBuiltIn, TokenCost: 10},
+		{Name: "search_memories", Source: ToolSourceBuiltIn, TokenCost: 10},
+		{Name: "get_memory_stats", Source: ToolSourceBuiltIn, TokenCost: 10},
+		{Name: "get_runtime_context", Source: ToolSourceBuiltIn, TokenCost: 10},
+		{Name: "get_subagent_status", Source: ToolSourceBuiltIn, TokenCost: 10},
+		{Name: "introspect", Source: ToolSourceBuiltIn, TokenCost: 10},
+		{Name: "list-subagent-roster", Source: ToolSourceBuiltIn, TokenCost: 10},
+		{Name: "list-available-skills", Source: ToolSourceBuiltIn, TokenCost: 10},
+		{Name: "compose-skill", Source: ToolSourceBuiltIn, TokenCost: 10},
+	}
+
+	cfg := DefaultToolSearchConfig()
+	cfg.TopK = 3
+	cfg.TokenBudget = 30
+	cfg.AlwaysInclude = []string{"introspect", "list-available-skills", "compose-skill"}
+
+	selected, stats := SearchAndPrune(tools, nil, cfg)
+	names := extractNames(selected)
+	for _, want := range cfg.AlwaysInclude {
+		if !containsName(names, want) {
+			t.Fatalf("capability-discovery pin %q dropped with no query embedding; selected=%v", want, names)
+		}
+	}
+	if stats.EmbeddingStatus != "no_query_embedding" {
+		t.Fatalf("embedding status = %q, want no_query_embedding", stats.EmbeddingStatus)
 	}
 }
 

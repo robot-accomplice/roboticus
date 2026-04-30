@@ -41,8 +41,7 @@ func ResolvePath(path, workspace string, snapshot *ToolSandboxSnapshot) (string,
 			return "", fmt.Errorf("invalid workspace: %w", err)
 		}
 		absWorkspace = canonicalSandboxPath(absWorkspace)
-		if pathWithinSandboxRoot(cleanPath, absWorkspace) &&
-			(snapshot == nil || len(snapshot.AllowedPaths) == 0) {
+		if pathWithinSandboxRoot(cleanPath, absWorkspace) {
 			return cleanPath, nil
 		}
 		if snapshot != nil {

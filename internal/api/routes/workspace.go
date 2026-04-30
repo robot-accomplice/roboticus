@@ -18,128 +18,93 @@ import (
 // GetWorkspaceState returns live runtime state for the workspace page.
 func GetWorkspaceState(store *db.Store, cfg *core.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		dbStats := store.Stats()
-		rq := db.NewRouteQueries(store)
-		sessionCount, err := rq.CountActiveSessions(r.Context())
+		resp, err := BuildWorkspaceStatePayload(r.Context(), store, cfg)
 		if err != nil {
-			log.Warn().Err(err).Msg("failed to query active session count")
-		}
-
-		// Primary agent is always first.
-		primaryName := cfg.Agent.Name
-		if primaryName == "" {
-			primaryName = "roboticus"
-		}
-		primaryModel := cfg.Models.Primary
-		if primaryModel == "" {
-			primaryModel = "auto"
-		}
-
-		// Derive activity from recent pipeline traces (last 30s = working).
-		primaryActivity := "idle"
-		if active, err := rq.HasRecentActivity(r.Context(), 30); err == nil && active {
-			primaryActivity = "inference"
-		}
-
-		agents := []map[string]any{
-			{
-				"name":     strings.ToLower(primaryName),
-				"id":       cfg.Agent.ID,
-				"model":    primaryModel,
-				"enabled":  true,
-				"state":    "running",
-				"activity": primaryActivity,
-				"color":    "#6366f1",
-				"role":     "orchestrator",
-			},
-		}
-
-		// Append subagents from DB (enriched query for workspace canvas).
-		agentRows, err := rq.ListSubAgentWorkspace(r.Context())
-		if err == nil {
-			defer func() { _ = agentRows.Close() }()
-			for agentRows.Next() {
-				var name, displayName, model, role, description string
-				var enabled bool
-				var sessionCount int
-				var lastUsedAt, updatedAt *string
-				if err := agentRows.Scan(&name, &displayName, &model, &enabled,
-					&role, &description, &sessionCount, &lastUsedAt, &updatedAt); err != nil {
-					break
-				}
-				state := "stopped"
-				if enabled {
-					state = "running"
-				}
-				entry := map[string]any{
-					"name":          name,
-					"display_name":  displayName,
-					"model":         model,
-					"enabled":       enabled,
-					"state":         state,
-					"activity":      "idle",
-					"color":         "",
-					"role":          role,
-					"description":   description,
-					"session_count": sessionCount,
-				}
-				if lastUsedAt != nil {
-					entry["last_used_at"] = *lastUsedAt
-				}
-				if updatedAt != nil {
-					entry["updated_at"] = *updatedAt
-				}
-				agents = append(agents, entry)
-			}
-		}
-
-		// Fetch last pipeline trace timestamp for last_event_at.
-		var lastEventAt *string
-		if traceTS, err := rq.LatestPipelineTraceTime(r.Context()); err == nil && traceTS.Valid {
-			lastEventAt = &traceTS.String
-		}
-
-		// Fetch active task summary if any task is in-progress.
-		var activeTaskSummary *string
-		var activeTaskPercentage *int
-		if goal, pct, err := rq.ActiveTaskSummary(r.Context()); err == nil && goal != "" {
-			activeTaskSummary = &goal
-			activeTaskPercentage = &pct
-		}
-
-		// Systems/workstations for workspace canvas (Rust parity).
-		systems := []map[string]any{
-			{"id": "llm", "name": "LLM Inference", "kind": "Inference", "x": 0.18, "y": 0.22},
-			{"id": "memory", "name": "Memory", "kind": "Storage", "x": 0.82, "y": 0.22},
-			{"id": "exec", "name": "Code Execution", "kind": "Execution", "x": 0.18, "y": 0.78},
-			{"id": "blockchain", "name": "Blockchain", "kind": "Blockchain", "x": 0.82, "y": 0.78},
-			{"id": "web", "name": "Web / APIs", "kind": "Tool", "x": 0.50, "y": 0.12},
-			{"id": "files", "name": "File System", "kind": "Tool", "x": 0.50, "y": 0.88},
-			{"id": "tools_plugins", "name": "Tools / Plugins", "kind": "Plugin", "x": 0.965, "y": 0.50},
-			{"id": "shelter", "name": "Idle Agents", "kind": "Shelter", "x": 0.035, "y": 0.50},
-		}
-
-		resp := map[string]any{
-			"uptime":          time.Since(processStartTime).Seconds(),
-			"goroutines":      runtime.NumGoroutine(),
-			"connections":     dbStats.OpenConnections,
-			"active_sessions": sessionCount,
-			"db_in_use":       dbStats.InUse,
-			"db_idle":         dbStats.Idle,
-			"status":          "running",
-			"agents":          agents,
-			"systems":         systems,
-			"updated_at":      time.Now().UTC().Format(time.RFC3339),
-		}
-		if lastEventAt != nil {
-			resp["last_event_at"] = *lastEventAt
-		}
-		if activeTaskSummary != nil {
-			resp["active_task_summary"] = *activeTaskSummary
-			resp["active_task_percentage"] = *activeTaskPercentage
+			log.Warn().Err(err).Msg("workspace state built with degraded registry")
 		}
 		writeJSON(w, http.StatusOK, resp)
 	}
+}
+
+// BuildWorkspaceStatePayload builds the shared workspace topic/API payload.
+// WebSocket topics call this directly; the HTTP route is a management/debug
+// projection over the same producer, not the dashboard control path.
+func BuildWorkspaceStatePayload(ctx context.Context, store *db.Store, cfg *core.Config) (map[string]any, error) {
+	dbStats := store.Stats()
+	rq := db.NewRouteQueries(store)
+	sessionCount, err := rq.CountActiveSessions(ctx)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to query active session count")
+	}
+
+	agents, registryErr := buildAgentRegistryView(ctx, store, cfg)
+	if registryErr != nil {
+		log.Warn().Err(registryErr).Msg("failed to query agent registry")
+	}
+
+	// Fetch last pipeline trace timestamp for last_event_at.
+	var lastEventAt *string
+	if traceTS, err := rq.LatestPipelineTraceTime(ctx); err == nil && traceTS.Valid {
+		lastEventAt = &traceTS.String
+	}
+
+	// Fetch active task summary if any task is in-progress.
+	var activeTaskSummary *string
+	var activeTaskPercentage *int
+	if goal, pct, err := rq.ActiveTaskSummary(ctx); err == nil && goal != "" {
+		activeTaskSummary = &goal
+		activeTaskPercentage = &pct
+	}
+
+	// Systems/workstations for workspace canvas (Rust parity).
+	systems := []map[string]any{
+		{"id": "llm", "name": "LLM Inference", "kind": "Inference", "x": 0.18, "y": 0.22},
+		{"id": "memory", "name": "Memory", "kind": "Storage", "x": 0.82, "y": 0.22},
+		{"id": "exec", "name": "Code Execution", "kind": "Execution", "x": 0.18, "y": 0.78},
+		{"id": "blockchain", "name": "Blockchain", "kind": "Blockchain", "x": 0.82, "y": 0.78},
+		{"id": "web", "name": "Web / APIs", "kind": "Tool", "x": 0.50, "y": 0.12},
+		{"id": "files", "name": "File System", "kind": "Tool", "x": 0.50, "y": 0.88},
+		{"id": "tools_plugins", "name": "Tools / Plugins", "kind": "Plugin", "x": 0.965, "y": 0.50},
+		{"id": "shelter", "name": "Idle Agents", "kind": "Shelter", "x": 0.035, "y": 0.50},
+	}
+
+	resp := map[string]any{
+		"uptime":          time.Since(processStartTime).Seconds(),
+		"goroutines":      runtime.NumGoroutine(),
+		"connections":     dbStats.OpenConnections,
+		"active_sessions": sessionCount,
+		"db_in_use":       dbStats.InUse,
+		"db_idle":         dbStats.Idle,
+		"status":          "running",
+		"agents":          agents,
+		"systems":         systems,
+		"updated_at":      time.Now().UTC().Format(time.RFC3339),
+	}
+	if lastEventAt != nil {
+		resp["last_event_at"] = *lastEventAt
+	}
+	if activeTaskSummary != nil {
+		resp["active_task_summary"] = *activeTaskSummary
+		resp["active_task_percentage"] = *activeTaskPercentage
+	}
+	resp["idle_agents_count"] = countIdleNonOrchestratorAgents(agents)
+	return resp, registryErr
+}
+
+func countIdleNonOrchestratorAgents(agents []map[string]any) int {
+	count := 0
+	for _, agent := range agents {
+		role, _ := agent["role"].(string)
+		if strings.EqualFold(role, "orchestrator") {
+			continue
+		}
+		state, _ := agent["state"].(string)
+		activity, _ := agent["activity"].(string)
+		if strings.EqualFold(state, "idle") || strings.EqualFold(activity, "idle") || strings.TrimSpace(activity) == "" {
+			count++
+		}
+	}
+	return count
 }
 
 // applyConfigPatch delegates to core.ApplyConfigPatch — the canonical config
@@ -249,7 +214,7 @@ func SetProviderKey(ks *core.Keystore) http.HandlerFunc {
 			writeError(w, http.StatusServiceUnavailable, "keystore not initialized")
 			return
 		}
-		if err := ks.Set("provider_key:"+provider, req.Key); err != nil {
+		if err := ks.Set(provider+"_api_key", req.Key); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -269,7 +234,9 @@ func DeleteProviderKey(ks *core.Keystore) http.HandlerFunc {
 			writeError(w, http.StatusServiceUnavailable, "keystore not initialized")
 			return
 		}
-		if err := ks.Delete("provider_key:" + provider); err != nil {
+		conventionalErr := ks.Delete(provider + "_api_key")
+		legacyErr := ks.Delete("provider_key:" + provider)
+		if conventionalErr != nil && legacyErr != nil {
 			writeError(w, http.StatusNotFound, "provider key not found")
 			return
 		}

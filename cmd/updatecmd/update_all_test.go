@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -40,6 +41,9 @@ func TestFindAssetURL(t *testing.T) {
 	_, err = findAssetURL(rel, "roboticus-windows-amd64.exe")
 	if err == nil {
 		t.Fatal("expected error for missing asset")
+	}
+	if !strings.Contains(err.Error(), "missing required asset") || !strings.Contains(err.Error(), "roboticus-windows-amd64.exe") {
+		t.Fatalf("missing asset error lacks diagnostics: %v", err)
 	}
 }
 

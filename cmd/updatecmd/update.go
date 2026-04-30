@@ -680,10 +680,17 @@ func runUpdateAll(ctx context.Context, currentVersion string, yes, refreshConfig
 
 	configPath := cmdutil.EffectiveConfigPath()
 	registryURL := ResolveRegistryURL(configPath)
-	if _, repaired, err := reconcileUpdateState(configPath, currentVersion); err != nil {
-		return fmt.Errorf("failed to reconcile updater state: %w", err)
-	} else if repaired {
-		fmt.Println("Recovered updater state from existing local install.")
+	preflight, err := RunInstallCleanup(ctx, configPath, currentVersion)
+	if err != nil {
+		return fmt.Errorf("failed to run pre-upgrade cleanup: %w", err)
+	}
+	for _, action := range preflight.Actions {
+		switch action.Status {
+		case "repaired":
+			fmt.Printf("Repair: %s repaired (%s)\n", action.Name, action.Detail)
+		case "needs_manual_action":
+			fmt.Printf("Repair: %s needs manual action (%s)\n", action.Name, action.Detail)
+		}
 	}
 	binaryChanged := false
 	if !upToDate || normalizeVersion(currentVersion) == "dev" {
@@ -750,6 +757,15 @@ func runUpdateAll(ctx context.Context, currentVersion string, yes, refreshConfig
 	}
 	if err := updateMaintenance(configPath); err != nil {
 		return fmt.Errorf("post-update maintenance failed: %w", err)
+	}
+	if postflight, err := RunInstallCleanup(ctx, configPath, normalizeVersion(rel.TagName)); err != nil {
+		return fmt.Errorf("post-upgrade cleanup failed: %w", err)
+	} else {
+		for _, action := range postflight.Actions {
+			if action.Status == "needs_manual_action" {
+				fmt.Printf("Repair: %s needs manual action (%s)\n", action.Name, action.Detail)
+			}
+		}
 	}
 
 	if !binaryChanged && !providersChanged && !skillsChanged {
@@ -977,7 +993,7 @@ func checkForUpdate(ctx context.Context, currentVersion string) (LatestRelease, 
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return LatestRelease{}, false, fmt.Errorf("update check returned %s", resp.Status)
+		return LatestRelease{}, false, fmt.Errorf("release lookup failed at %s: %s", updateCheckURL, resp.Status)
 	}
 
 	var rel LatestRelease
@@ -1013,7 +1029,7 @@ func findAssetURL(rel LatestRelease, name string) (string, error) {
 			return a.BrowserDownloadURL, nil
 		}
 	}
-	return "", fmt.Errorf("release %s has no asset named %q", rel.TagName, name)
+	return "", fmt.Errorf("release %s missing required asset %q", rel.TagName, name)
 }
 
 // downloadFile fetches a URL into a temp file and returns its path.

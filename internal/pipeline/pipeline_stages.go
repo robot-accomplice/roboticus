@@ -84,6 +84,7 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 		p.storeTurnDiagnostics(ctx, dr)
 		ctx = llm.WithInferenceObserver(ctx, dr)
 	}
+	annotateSelectedToolSurfaceForRCA(tr, session)
 
 	// Thread model override into context for the LLM service to read.
 	if cfg.ModelOverride != "" {
@@ -109,12 +110,24 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 	{
 		guardStart := time.Now()
 		liveRetryPolicy := DefaultRetryPolicy()
-		liveRetryPolicy.MaxRetries = 1
+		liveRetryPolicy.MaxRetries = 2
 		liveRetryPolicy.ErrorOnExhaust = false
 		guardRun, guardErr := retryWithGuardsDetailed(ctx, p.executor, session, activeGuards, liveRetryPolicy, func() *GuardContext {
 			return p.buildGuardContext(session)
 		}, decideGuardRetryAfterProgress)
 		if guardErr != nil {
+			if dr != nil && len(guardRun.FinalGuardResult.ContractEvents) > 0 {
+				dr.RecordEvent("guard_contract_evaluated", guardContractEventStatus(guardRun.FinalGuardResult.ContractEvents),
+					"guard contract violation blocked the response",
+					"The response violated a hard guard contract and was blocked without substituting canned prose.",
+					map[string]any{
+						"violations":      guardRun.FinalGuardResult.Violations,
+						"block_reason":    guardRun.FinalGuardResult.BlockReason,
+						"contract_events": guardContractEventDetails(guardRun.FinalGuardResult.ContractEvents, "blocked"),
+					},
+				)
+				p.storeTurnDiagnostics(ctx, dr)
+			}
 			return nil, core.WrapError(core.ErrLLM, "inference failed", guardErr)
 		}
 		guardResult := guardRun.InitialGuardResult
@@ -122,14 +135,30 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 		result = guardRun.Content
 		turns = guardRun.Turns
 		guardRetried = guardRun.GuardRetried
+		if guardRetried && finalGuardResult.RetryRequested && guardExhaustionMustFailClosed(finalGuardResult.Violations) {
+			return nil, core.WrapError(core.ErrLLM, "inference failed",
+				fmt.Errorf("%w: after bounded retries, last reason: %s", core.ErrGuardExhausted, finalGuardResult.RetryReason))
+		}
 		if dr != nil && guardRetried {
 			dr.IncrementSummaryCounter("guard_retry_count", 1)
 			dr.RecordEvent("guard_retry_scheduled", "error",
 				"guard chain requested a retry",
 				"The first answer violated a guard, so the system tried again.",
 				map[string]any{
-					"violations":   guardRun.InitialGuardResult.Violations,
-					"retry_reason": guardRun.InitialGuardResult.RetryReason,
+					"violations":      guardRun.InitialGuardResult.Violations,
+					"retry_reason":    guardRun.InitialGuardResult.RetryReason,
+					"contract_events": guardContractEventDetails(guardRun.InitialGuardResult.ContractEvents, "scheduled"),
+				},
+			)
+			p.storeTurnDiagnostics(ctx, dr)
+		}
+		if dr != nil && !guardRetried && len(guardRun.InitialGuardResult.ContractEvents) > 0 {
+			dr.RecordEvent("guard_contract_evaluated", guardContractEventStatus(guardRun.InitialGuardResult.ContractEvents),
+				"guard contract violation recorded without retry",
+				"The response violated a guard contract; the finding was recorded as structured RCA evidence without scheduling a retry.",
+				map[string]any{
+					"violations":      guardRun.InitialGuardResult.Violations,
+					"contract_events": guardContractEventDetails(guardRun.InitialGuardResult.ContractEvents, "recorded"),
 				},
 			)
 			p.storeTurnDiagnostics(ctx, dr)
@@ -145,6 +174,7 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 					"suppression_reason": guardRun.RetrySuppressReason,
 					"successful_tools":   progress.SuccessfulToolResults,
 					"artifact_writes":    progress.SuccessfulArtifactWrites,
+					"contract_events":    guardContractEventDetails(guardRun.InitialGuardResult.ContractEvents, "suppressed"),
 				},
 			)
 			p.storeTurnDiagnostics(ctx, dr)
@@ -187,6 +217,7 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 			AnnotateGuardTrace(tr, guardResults, chainType, guardDur)
 		}
 	}
+	annotateSelectedToolSurfaceForRCA(tr, session)
 
 	// Lightweight verifier pass: if the answer ignores clear evidence gaps,
 	// contradictions, or multi-part coverage, request one revision before we
@@ -198,6 +229,19 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 			Allow:  false,
 			Reason: "turn already completed reflective finalization after successful execution; generic verifier retry would violate the R-TEOR-R boundary",
 		}
+	}
+	if !verifyResult.Passed && !verifyRetryDisposition.Allow && dr != nil {
+		dr.RecordEvent("verifier_contract_evaluated", "warning",
+			"verifier contract finding recorded without retry",
+			"The answer had verifier concerns, but the retry policy preserved the best available task-specific response and recorded the finding as RCA evidence.",
+			map[string]any{
+				"issues":             verifyResult.RetryMessage(),
+				"issue_codes":        verifySummary.IssueCodes,
+				"suppression_reason": verifyRetryDisposition.Reason,
+				"contract_events":    verifierContractEventDetails(verifyResult, verifyRetryDisposition),
+			},
+		)
+		p.storeTurnDiagnostics(ctx, dr)
 	}
 	if !verifyResult.Passed && verifyRetryDisposition.Allow {
 		retryPlan := buildVerifierRetryPlan(verifyResult, verifyCtx, session.SelectedToolDefs())
@@ -218,6 +262,7 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 					"proof_gap_claims":  verifySummary.ProofGapCount,
 					"reconciled_claims": verifySummary.ReconciledCount,
 					"correction_plan":   formatVerifierRetryCorrectionSummary(retryPlan),
+					"contract_events":   verifierContractEventDetails(verifyResult, verifyRetryDisposition),
 				},
 			)
 			p.storeTurnDiagnostics(ctx, dr)
@@ -379,6 +424,24 @@ func (p *Pipeline) runStandardInferenceWithTrace(ctx context.Context, cfg Config
 		ReactTurns:      turns,
 		inferenceParams: params,
 	}, nil
+}
+
+func annotateSelectedToolSurfaceForRCA(tr *TraceRecorder, session *Session) {
+	if tr == nil || session == nil {
+		return
+	}
+	selected := session.SelectedToolDefs()
+	names := make([]string, 0, len(selected))
+	for _, def := range selected {
+		name := strings.TrimSpace(def.Function.Name)
+		if name != "" {
+			names = append(names, name)
+		}
+	}
+	tr.Annotate(TraceNSInference+".routing.request_tool_count", len(selected))
+	tr.Annotate(TraceNSInference+".routing.selected_tool_count", len(selected))
+	tr.Annotate(TraceNSInference+".routing.selected_tools", names)
+	tr.Annotate(TraceNSInference+".routing.tool_count_source", "session.selected_tool_defs")
 }
 
 func concreteDiagnosticsRecorderFromContext(ctx context.Context) *TurnDiagnosticsRecorder {

@@ -1,6 +1,10 @@
 package pipeline
 
-import agenttools "roboticus/internal/agent/tools"
+import (
+	"strings"
+
+	agenttools "roboticus/internal/agent/tools"
+)
 
 // ExecutionProgress captures whether the current turn has already made
 // substantive tool-backed progress. Guard and verifier retry policy use this
@@ -80,6 +84,22 @@ func guardRetryRemainsBlockingAfterProgress(name string) bool {
 	default:
 		return false
 	}
+}
+
+func guardExhaustionMustFailClosed(violations []string) bool {
+	for _, violation := range violations {
+		switch strings.TrimSpace(strings.SplitN(violation, ":", 2)[0]) {
+		case "execution_truth",
+			"filesystem_denial",
+			"task_deferral",
+			"output_contract",
+			"action_verification",
+			"config_protection",
+			"financial_action_truth":
+			return true
+		}
+	}
+	return false
 }
 
 func decideVerifierRetryAfterProgress(result VerificationResult, ctx VerificationContext, progress ExecutionProgress) RetryDisposition {

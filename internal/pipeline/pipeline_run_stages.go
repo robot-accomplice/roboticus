@@ -167,8 +167,12 @@ func (p *Pipeline) stageSessionResolution(ctx context.Context, pc *pipelineConte
 
 	// Short-followup expansion (Rust parity: contextualize_short_followup).
 	pc.content = pc.input.Content
+	pc.storedContent = pc.input.Content
 	if pc.cfg.ShortFollowupExpansion {
 		pc.content, pc.correctionTurn = ContextualizeShortFollowup(pc.session, pc.content)
+		if strings.TrimSpace(pc.content) != strings.TrimSpace(pc.storedContent) {
+			pc.session.SetTurnExecutionNote(pc.content)
+		}
 	}
 
 	return nil, nil
@@ -179,17 +183,21 @@ func (p *Pipeline) stageSessionResolution(ctx context.Context, pc *pipelineConte
 func (p *Pipeline) stageMessageStorage(ctx context.Context, pc *pipelineContext) error {
 	pc.tr.BeginSpan("message_storage")
 	pc.msgID = db.NewID()
-	topicTag := p.deriveTopicTag(pc.session, pc.content)
+	storedContent := pc.storedContent
+	if strings.TrimSpace(storedContent) == "" {
+		storedContent = pc.content
+	}
+	topicTag := p.deriveTopicTag(pc.session, storedContent)
 	_, err := p.store.ExecContext(ctx,
 		`INSERT INTO session_messages (id, session_id, role, content, topic_tag)
 		 VALUES (?, ?, 'user', ?, ?)`,
-		pc.msgID, pc.session.ID, pc.content, topicTag,
+		pc.msgID, pc.session.ID, storedContent, topicTag,
 	)
 	if err != nil {
 		pc.tr.EndSpan("error")
 		return core.WrapError(core.ErrDatabase, "failed to store user message", err)
 	}
-	pc.session.AddUserMessage(pc.content)
+	pc.session.AddUserMessage(storedContent)
 	pc.tr.Annotate("msg_id", pc.msgID)
 	pc.tr.Annotate("topic_tag", topicTag)
 	pc.tr.Annotate("turn_count", pc.session.TurnCount())
@@ -250,6 +258,7 @@ func (p *Pipeline) stageDecomposition(ctx context.Context, pc *pipelineContext) 
 		if p.store != nil {
 			agentSkills = SkillCapabilityLexiconFromDB(p.store)
 		}
+		agentSkills = append(agentSkills, RuntimeCapabilityLexiconFromPruner(p.pruner)...)
 		pc.synthesis = SynthesizeTaskState(pc.content, pc.session.TurnCount(), agentSkills)
 		pc.policy = DeriveTurnEnvelopePolicy(pc.content, pc.synthesis, pc.session.TurnCount())
 		pc.session.SetTurnEnvelopePolicy(string(pc.policy.Weight), string(pc.policy.ToolProfile), pc.policy.Reason)
@@ -295,6 +304,11 @@ func (p *Pipeline) stageDecomposition(ctx context.Context, pc *pipelineContext) 
 			inspectionSummary = sourceCodeTarget.PromptSummary
 		}
 		pc.session.SetInspectionTargetSummary(inspectionSummary)
+		inspectionRoots := inspectionTarget.ResolvedPaths
+		if len(inspectionRoots) == 0 && strings.TrimSpace(sourceCodeTarget.ResolvedRoot) != "" {
+			inspectionRoots = []string{sourceCodeTarget.ResolvedRoot}
+		}
+		pc.session.SetInspectionTargetRoots(inspectionRoots)
 		pc.session.SetDestinationTargetSummary(destinationTarget.PromptSummary)
 
 		// Build and stash the unified perception artifact (Milestone 2)
@@ -527,17 +541,11 @@ func (p *Pipeline) stageMemoryRetrieval(ctx context.Context, pc *pipelineContext
 		}
 	}
 
-	// Memory INDEX is the lightweight recall handle — it's injected on every
-	// turn regardless of retrieval strategy so the model can call
-	// recall_memory(id) on demand. Pre-v1.0.6 this was gated behind
-	// retrievalStrat.Strategy != "none", which meant early-turn/simple
-	// conversations got no index AND the daemon's buildAgentContext
-	// fallback then reconstructed one — creating a second production
-	// memory-assembly path outside the pipeline. The v1.0.6 architecture
-	// audit flagged that fallback as a "pipeline is single authority"
-	// violation. Fix: always populate the index here, then drop the
-	// daemon fallback (see daemon_adapters.go buildAgentContext).
-	if p.store != nil && !shouldKeepSocialTurnAmbientContextMinimal(pc.policy, pc.synthesis) {
+	// Memory INDEX is the lightweight recall handle for retrieval-enabled turns.
+	// When the turn envelope explicitly disables retrieval, long-term memory
+	// handles must stay out of the prompt; otherwise stale prior episodes can
+	// steer a focused action surface away from the current request.
+	if pc.policy.AllowRetrieval && p.store != nil && !shouldKeepSocialTurnAmbientContextMinimal(pc.policy, pc.synthesis) {
 		index := agenttools.BuildMemoryIndex(ctx, p.store, 20, pc.content)
 		if index == "" {
 			index = "[Memory Index: No memories stored yet. " +
@@ -546,6 +554,13 @@ func (p *Pipeline) stageMemoryRetrieval(ctx context.Context, pc *pipelineContext
 				"use search_memories(query) to check; otherwise be honest that you don't have stored memories about it yet.]"
 		}
 		pc.session.SetMemoryIndex(index)
+	}
+
+	if pc.policy.AllowRetrieval && p.retriever != nil {
+		if activeContext := retrieveActiveMemoryContext(ctx, p.retriever, pc.session.ID, 512); activeContext != "" {
+			pc.session.SetMemoryContext(activeContext)
+			pc.tr.Annotate(TraceNSRetrieval+".active_context", true)
+		}
 	}
 
 	if p.retriever != nil && retrievalStrat.Strategy != "none" {
@@ -614,6 +629,18 @@ func (p *Pipeline) stageMemoryRetrieval(ctx context.Context, pc *pipelineContext
 		pc.tr.Annotate(TraceNSRetrieval+".reason", retrievalStrat.Reason)
 		pc.tr.EndSpan("ok")
 	}
+}
+
+type activeMemoryRetriever interface {
+	RetrieveActiveContext(ctx context.Context, sessionID string, budget int) string
+}
+
+func retrieveActiveMemoryContext(ctx context.Context, retriever MemoryRetriever, sessionID string, budget int) string {
+	active, ok := retriever.(activeMemoryRetriever)
+	if !ok {
+		return ""
+	}
+	return active.RetrieveActiveContext(ctx, sessionID, budget)
 }
 
 // ── Stage 9: Delegated execution ───────────────────────────────────────
@@ -811,7 +838,24 @@ func (p *Pipeline) stageToolPruning(ctx context.Context, pc *pipelineContext) {
 	}
 	AnnotateToolSearchTrace(pc.tr, stats)
 	pc.tr.Annotate("turn_weight", string(pc.policy.Weight))
+	p.stageToolExecutionNote(pc)
 	pc.tr.EndSpan("ok")
+}
+
+func (p *Pipeline) stageToolExecutionNote(pc *pipelineContext) {
+	if pc == nil || pc.session == nil {
+		return
+	}
+	if pc.policy.ToolProfile != ToolProfileFocusedToolDemonstration {
+		return
+	}
+	note := strings.TrimSpace(pc.session.TurnExecutionNote())
+	actionNote := "This is a focused tool-demonstration turn: choose one selected non-inventory tool, execute it if possible, then report the tool name and observed result. Do not add generic follow-up offers unless a required input is missing."
+	if note != "" {
+		pc.session.SetTurnExecutionNote(note + "\n" + actionNote)
+		return
+	}
+	pc.session.SetTurnExecutionNote(actionNote)
 }
 
 // ── Stage 11.65: Hippocampus summary ───────────────────────────────────

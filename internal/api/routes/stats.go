@@ -32,16 +32,17 @@ func GetCosts(store *db.Store) http.HandlerFunc {
 				return
 			}
 			costs = append(costs, map[string]any{
-				"id":         id,
-				"model":      model,
-				"provider":   provider,
-				"cost":       cost,
-				"tokens_in":  tokensIn,
-				"tokens_out": tokensOut,
-				"created_at": createdAt,
-				"cached":     cached == 1,
-				"latency_ms": latencyMs,
-				"error":      nil,
+				"id":          id,
+				"model":       model,
+				"provider":    provider,
+				"cost":        cost,
+				"cost_source": inferCostSource(cost, tokensIn, tokensOut, cached == 1),
+				"tokens_in":   tokensIn,
+				"tokens_out":  tokensOut,
+				"created_at":  createdAt,
+				"cached":      cached == 1,
+				"latency_ms":  latencyMs,
+				"error":       nil,
 			})
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"costs": costs})
@@ -197,6 +198,7 @@ func GetEfficiency(store *db.Store) http.HandlerFunc {
 				"cost": map[string]any{
 					"total":              cost,
 					"effective_per_turn": costPerTurn,
+					"source":             aggregateCostSource(cost, cnt, tokIn, tokOut),
 					"cache_savings":      0.0,
 					"per_output_token": func() float64 {
 						if tokOut > 0 {
@@ -279,6 +281,32 @@ func GetEfficiency(store *db.Store) http.HandlerFunc {
 			},
 		})
 	}
+}
+
+func inferCostSource(cost float64, tokensIn, tokensOut int64, cached bool) string {
+	if cached {
+		return "cached"
+	}
+	if cost == 0 && tokensIn == 0 && tokensOut == 0 {
+		return "unknown"
+	}
+	if cost == 0 {
+		return "zero_or_unpriced"
+	}
+	return "estimated"
+}
+
+func aggregateCostSource(cost float64, requests, tokensIn, tokensOut int64) string {
+	if requests == 0 {
+		return "unavailable"
+	}
+	if cost == 0 && tokensIn == 0 && tokensOut == 0 {
+		return "unknown"
+	}
+	if cost == 0 {
+		return "zero_or_unpriced"
+	}
+	return "estimated"
 }
 
 // GetModelSelections returns model selection events for the decision graph.
@@ -375,6 +403,7 @@ func GetRecommendations(store *db.Store) http.HandlerFunc {
 				"type":     "observability",
 				"priority": "low",
 				"message":  "No inference traffic recorded in the selected period; gather more traffic before tuning routing or cache settings.",
+				"action":   "Run representative inference traffic or a targeted model exercise before changing tuning controls.",
 			})
 		} else {
 			if cacheRate < 20 {
@@ -382,6 +411,7 @@ func GetRecommendations(store *db.Store) http.HandlerFunc {
 					"type":     "cache",
 					"priority": "medium",
 					"message":  "Cache hit rate is low; review prompt normalization and cache TTLs to improve reuse.",
+					"action":   "Enable semantic caching only if responses are safe to reuse, then re-check cache hit rate after new traffic.",
 					"value":    cacheRate,
 				})
 			}
@@ -390,6 +420,7 @@ func GetRecommendations(store *db.Store) http.HandlerFunc {
 					"type":     "latency",
 					"priority": "high",
 					"message":  "Average latency is elevated; investigate provider health, fallback churn, and routing thresholds.",
+					"action":   "Inspect provider health and routing diagnostics before lowering model quality or tightening timeouts.",
 					"value":    avgLatency,
 				})
 			}
@@ -398,6 +429,7 @@ func GetRecommendations(store *db.Store) http.HandlerFunc {
 					"type":     "cost",
 					"priority": "medium",
 					"message":  "Average cost per request is high; audit routed model choices and fallback usage.",
+					"action":   "Compare recent routed models against task complexity and move cheap models earlier only where quality remains acceptable.",
 					"value":    totalCost / float64(requests),
 				})
 			}
@@ -406,6 +438,7 @@ func GetRecommendations(store *db.Store) http.HandlerFunc {
 					"type":     "context",
 					"priority": "medium",
 					"message":  "Average token volume is high; trim context windows or increase pruning for long-running sessions.",
+					"action":   "Review context-budget settings and memory retrieval volume for high-token turns before reducing model capability.",
 					"value":    float64(totalTokens) / float64(requests),
 				})
 			}
@@ -425,7 +458,7 @@ func GetRecommendations(store *db.Store) http.HandlerFunc {
 				"category":         rec["type"],
 				"priority":         priority,
 				"explanation":      title,
-				"action":           "",
+				"action":           rec["action"],
 				"estimated_impact": map[string]any{},
 			}
 			if v, ok := rec["value"]; ok {
@@ -444,13 +477,6 @@ func GetRecommendations(store *db.Store) http.HandlerFunc {
 				"cache_hit_rate": cacheRate,
 			},
 		})
-	}
-}
-
-// GenerateRecommendations triggers deep analysis.
-func GenerateRecommendations(store *db.Store) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		GetRecommendations(store).ServeHTTP(w, r)
 	}
 }
 

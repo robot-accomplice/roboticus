@@ -130,50 +130,6 @@ func TestTraceRecorder_FinishWithActiveSpan(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// guard_fallback.go — summarizeQuery long string
-// ---------------------------------------------------------------------------
-
-func TestSummarizeQuery_Short(t *testing.T) {
-	q := "What is 2+2?"
-	got := summarizeQuery(q)
-	if got != q {
-		t.Errorf("short query should be returned as-is, got %q", got)
-	}
-}
-
-func TestSummarizeQuery_Long(t *testing.T) {
-	// Build a query longer than 100 chars.
-	long := ""
-	for len(long) < 120 {
-		long += "abcdefghijklmnop "
-	}
-	got := summarizeQuery(long)
-	if len(got) != 103 { // 100 + "..."
-		t.Errorf("expected truncated to 103, got len=%d", len(got))
-	}
-}
-
-func TestFallbackResponse_WithUserMessage(t *testing.T) {
-	sess := NewSession("s1", "agent1", "TestBot")
-	sess.AddUserMessage("What is the weather?")
-	result := fallbackResponse(sess, "rejected content", "test_guard", "unsafe")
-	if result.Content == "" {
-		t.Error("fallback should produce content")
-	}
-	if result.SessionID != "s1" {
-		t.Errorf("session ID = %q, want s1", result.SessionID)
-	}
-}
-
-func TestFallbackResponse_NoUserMessage(t *testing.T) {
-	sess := NewSession("s2", "agent1", "TestBot")
-	result := fallbackResponse(sess, "rejected", "guard_x", "reason_y")
-	if result.Content == "" {
-		t.Error("fallback should produce content")
-	}
-}
-
-// ---------------------------------------------------------------------------
 // guard_registry.go — Chain with different presets
 // ---------------------------------------------------------------------------
 

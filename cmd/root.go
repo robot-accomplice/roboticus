@@ -36,8 +36,20 @@ var rootCmd = &cobra.Command{
 	Long:  `Roboticus is an autonomous agent runtime with multi-channel chat, LLM orchestration, memory, and tool execution.`,
 }
 
+const (
+	cliGroupRuntime      = "runtime"
+	cliGroupConfig       = "config"
+	cliGroupIntelligence = "intelligence"
+	cliGroupAutomation   = "automation"
+	cliGroupAdmin        = "admin"
+	cliGroupHelp         = "help"
+)
+
+var rootCommandGroupsAdded bool
+
 // Execute adds all child commands to the root command and sets flags.
 func Execute() {
+	configureRootCommandGroups()
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}
@@ -68,6 +80,7 @@ func init() {
 
 	// Register commands from domain subpackages.
 	registerSubpackageCommands()
+	configureRootCommandGroups()
 }
 
 // registerSubpackageCommands adds all commands from domain subpackages to rootCmd.
@@ -83,6 +96,69 @@ func registerSubpackageCommands() {
 	rootCmd.AddCommand(tuicmd.Commands()...)
 	rootCmd.AddCommand(updatecmd.Commands()...)
 	rootCmd.AddCommand(servecmd.Commands()...)
+}
+
+func configureRootCommandGroups() {
+	if !rootCommandGroupsAdded {
+		rootCmd.AddGroup(
+			&cobra.Group{ID: cliGroupRuntime, Title: "Runtime & Operations"},
+			&cobra.Group{ID: cliGroupConfig, Title: "Configuration & Security"},
+			&cobra.Group{ID: cliGroupIntelligence, Title: "Models, Agents & Memory"},
+			&cobra.Group{ID: cliGroupAutomation, Title: "Automation & Channels"},
+			&cobra.Group{ID: cliGroupAdmin, Title: "Administration & Maintenance"},
+			&cobra.Group{ID: cliGroupHelp, Title: "Help"},
+		)
+		rootCmd.SetHelpCommandGroupID(cliGroupHelp)
+		rootCmd.SetCompletionCommandGroupID(cliGroupHelp)
+		rootCommandGroupsAdded = true
+	}
+
+	commandGroups := map[string]string{
+		"serve":      cliGroupRuntime,
+		"status":     cliGroupRuntime,
+		"mechanic":   cliGroupRuntime,
+		"check":      cliGroupRuntime,
+		"logs":       cliGroupRuntime,
+		"daemon":     cliGroupRuntime,
+		"service":    cliGroupRuntime,
+		"web":        cliGroupRuntime,
+		"tui":        cliGroupRuntime,
+		"init":       cliGroupConfig,
+		"setup":      cliGroupConfig,
+		"config":     cliGroupConfig,
+		"profile":    cliGroupConfig,
+		"auth":       cliGroupConfig,
+		"keystore":   cliGroupConfig,
+		"security":   cliGroupConfig,
+		"wallet":     cliGroupConfig,
+		"models":     cliGroupIntelligence,
+		"circuit":    cliGroupIntelligence,
+		"agents":     cliGroupIntelligence,
+		"sessions":   cliGroupIntelligence,
+		"memory":     cliGroupIntelligence,
+		"skills":     cliGroupIntelligence,
+		"plugins":    cliGroupIntelligence,
+		"mcp":        cliGroupIntelligence,
+		"ingest":     cliGroupIntelligence,
+		"schedule":   cliGroupAutomation,
+		"cron":       cliGroupAutomation,
+		"channels":   cliGroupAutomation,
+		"admin":      cliGroupAdmin,
+		"metrics":    cliGroupAdmin,
+		"update":     cliGroupAdmin,
+		"upgrade":    cliGroupAdmin,
+		"version":    cliGroupAdmin,
+		"migrate":    cliGroupAdmin,
+		"defrag":     cliGroupAdmin,
+		"reset":      cliGroupAdmin,
+		"uninstall":  cliGroupAdmin,
+		"completion": cliGroupHelp,
+	}
+	for _, command := range rootCmd.Commands() {
+		if groupID, ok := commandGroups[command.Name()]; ok {
+			command.GroupID = groupID
+		}
+	}
 }
 
 func initConfig() {

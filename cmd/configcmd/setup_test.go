@@ -29,11 +29,14 @@ func TestBuildConfigTOML_OpenAI(t *testing.T) {
 	if !strings.Contains(out, `[providers.openai]`) {
 		t.Error("expected [providers.openai] section")
 	}
-	if !strings.Contains(out, `api_key_env = "OPENAI_API_KEY"`) {
-		t.Error("expected OPENAI_API_KEY env ref")
+	if !strings.Contains(out, `api_key_ref = "openai_api_key"`) {
+		t.Error("expected openai_api_key keystore ref")
 	}
-	if !strings.Contains(out, "OPENAI_API_KEY=sk-test-key") {
-		t.Error("expected API key comment in output")
+	if strings.Contains(out, "sk-test-key") {
+		t.Error("config output must not include raw API key")
+	}
+	if !strings.Contains(out, "keystore entry openai_api_key") {
+		t.Error("expected keystore storage comment in output")
 	}
 }
 
@@ -42,18 +45,86 @@ func TestBuildConfigTOML_Anthropic(t *testing.T) {
 	if !strings.Contains(out, `format = "anthropic"`) {
 		t.Error("expected anthropic format")
 	}
-	if !strings.Contains(out, `api_key_env = "ANTHROPIC_API_KEY"`) {
-		t.Error("expected ANTHROPIC_API_KEY env ref")
+	if !strings.Contains(out, `api_key_ref = "anthropic_api_key"`) {
+		t.Error("expected anthropic_api_key keystore ref")
 	}
-	if !strings.Contains(out, "ANTHROPIC_API_KEY=sk-ant-xxx") {
-		t.Error("expected API key comment in output")
+	if strings.Contains(out, "sk-ant-xxx") {
+		t.Error("config output must not include raw API key")
+	}
+	if !strings.Contains(out, "keystore entry anthropic_api_key") {
+		t.Error("expected keystore storage comment in output")
 	}
 }
 
 func TestBuildConfigTOML_NoAPIKey(t *testing.T) {
 	out := buildConfigTOML("Bot", "openai", "")
 	// Should NOT contain the API key comment section.
-	if strings.Contains(out, "Set OPENAI_API_KEY=") {
+	if strings.Contains(out, "keystore entry openai_api_key") {
 		t.Error("should not include API key comment when key is empty")
+	}
+}
+
+func TestBuildConfigTOML_DeepSeek(t *testing.T) {
+	out := buildConfigTOML("Deep", "deepseek", "sk-deepseek")
+	if !strings.Contains(out, `primary = "deepseek/deepseek-v4-flash"`) {
+		t.Error("expected provider-qualified current DeepSeek primary model")
+	}
+	if !strings.Contains(out, `[providers.deepseek]`) {
+		t.Error("expected [providers.deepseek] section")
+	}
+	if !strings.Contains(out, `url = "https://api.deepseek.com"`) {
+		t.Error("expected DeepSeek base URL")
+	}
+	if !strings.Contains(out, `chat_path = "/chat/completions"`) {
+		t.Error("expected DeepSeek chat completions path")
+	}
+	if !strings.Contains(out, `api_key_ref = "deepseek_api_key"`) {
+		t.Error("expected deepseek_api_key keystore ref")
+	}
+	if strings.Contains(out, "sk-deepseek") {
+		t.Error("config output must not include raw DeepSeek API key")
+	}
+}
+
+func TestBuildConfigTOML_AdditionalBundledCloudProviders(t *testing.T) {
+	tests := []struct {
+		provider string
+		want     []string
+	}{
+		{
+			provider: "google",
+			want: []string{
+				`primary = "google/gemini-3.1-pro-preview"`,
+				`[providers.google]`,
+				`format = "google"`,
+				`api_key_ref = "google_api_key"`,
+			},
+		},
+		{
+			provider: "moonshot",
+			want: []string{
+				`primary = "moonshot/kimi-k2.5"`,
+				`[providers.moonshot]`,
+				`chat_path = "/v1/chat/completions"`,
+				`api_key_ref = "moonshot_api_key"`,
+			},
+		},
+		{
+			provider: "openrouter",
+			want: []string{
+				`primary = "openrouter/google/gemini-3.1-pro-preview"`,
+				`[providers.openrouter]`,
+				`auth_header = "Authorization"`,
+				`api_key_ref = "openrouter_api_key"`,
+			},
+		},
+	}
+	for _, tc := range tests {
+		out := buildConfigTOML("Cloud", tc.provider, "")
+		for _, want := range tc.want {
+			if !strings.Contains(out, want) {
+				t.Errorf("%s config missing %q:\n%s", tc.provider, want, out)
+			}
+		}
 	}
 }

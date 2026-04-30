@@ -9,33 +9,36 @@ import (
 
 // Config is the top-level application configuration, loaded from TOML.
 type Config struct {
-	Agent      AgentConfig               `json:"agent" toml:"agent" mapstructure:"agent"`
-	Server     ServerConfig              `json:"server" toml:"server" mapstructure:"server"`
-	Database   DatabaseConfig            `json:"database" toml:"database" mapstructure:"database"`
-	Models     ModelsConfig              `json:"models" toml:"models" mapstructure:"models"`
-	Providers  map[string]ProviderConfig `json:"providers" toml:"providers" mapstructure:"providers"`
-	Memory     MemoryConfig              `json:"memory" toml:"memory" mapstructure:"memory"`
-	Cache      CacheConfig               `json:"cache" toml:"cache" mapstructure:"cache"`
-	Treasury   TreasuryConfig            `json:"treasury" toml:"treasury" mapstructure:"treasury"`
-	Channels   ChannelsConfig            `json:"channels" toml:"channels" mapstructure:"channels"`
-	Security   SecurityConfig            `json:"security" toml:"security" mapstructure:"security"`
-	Skills     SkillsConfig              `json:"skills" toml:"skills" mapstructure:"skills"`
-	Session    SessionConfig             `json:"session" toml:"session" mapstructure:"session"`
-	Wallet     WalletConfig              `json:"wallet" toml:"wallet" mapstructure:"wallet"`
-	Plugins    PluginsConfig             `json:"plugins" toml:"plugins" mapstructure:"plugins"`
-	Approvals  ApprovalsConfig           `json:"approvals" toml:"approvals" mapstructure:"approvals"`
-	Abuse      AbuseConfig               `json:"abuse" toml:"abuse" mapstructure:"abuse"`
-	RateLimit  RateLimitConfig           `json:"rate_limit" toml:"rate_limit" mapstructure:"rate_limit"`
-	MCP        MCPConfig                 `json:"mcp" toml:"mcp" mapstructure:"mcp"`
-	Matrix     MatrixChannelConfig       `json:"matrix" toml:"matrix" mapstructure:"matrix"`
-	Sandbox    SandboxCfg                `json:"sandbox" toml:"sandbox" mapstructure:"sandbox"`
-	Classifier ClassifierConfig          `json:"classifier" toml:"classifier" mapstructure:"classifier"`
-	Planner    PlannerConfig             `json:"planner" toml:"planner" mapstructure:"planner"`
-	Themes     ThemesConfig              `json:"themes" toml:"themes" mapstructure:"themes"`
-	DKIM       DKIMConfig                `json:"dkim" toml:"dkim" mapstructure:"dkim"`
-	CORS       CORSConfig                `json:"cors" toml:"cors" mapstructure:"cors"`
-	Revenue    RevenueConfig             `json:"revenue" toml:"revenue" mapstructure:"revenue"`
-	Heartbeat  HeartbeatConfig           `json:"heartbeat" toml:"heartbeat" mapstructure:"heartbeat"`
+	Agent     AgentConfig               `json:"agent" toml:"agent" mapstructure:"agent"`
+	Server    ServerConfig              `json:"server" toml:"server" mapstructure:"server"`
+	Database  DatabaseConfig            `json:"database" toml:"database" mapstructure:"database"`
+	Models    ModelsConfig              `json:"models" toml:"models" mapstructure:"models"`
+	Providers map[string]ProviderConfig `json:"providers" toml:"providers" mapstructure:"providers"`
+	// ProvidersFile points at the refreshable provider metadata pack.
+	// Operator config wins over this pack; the pack wins over embedded defaults.
+	ProvidersFile string              `json:"providers_file,omitempty" toml:"providers_file" mapstructure:"providers_file"`
+	Memory        MemoryConfig        `json:"memory" toml:"memory" mapstructure:"memory"`
+	Cache         CacheConfig         `json:"cache" toml:"cache" mapstructure:"cache"`
+	Treasury      TreasuryConfig      `json:"treasury" toml:"treasury" mapstructure:"treasury"`
+	Channels      ChannelsConfig      `json:"channels" toml:"channels" mapstructure:"channels"`
+	Security      SecurityConfig      `json:"security" toml:"security" mapstructure:"security"`
+	Skills        SkillsConfig        `json:"skills" toml:"skills" mapstructure:"skills"`
+	Session       SessionConfig       `json:"session" toml:"session" mapstructure:"session"`
+	Wallet        WalletConfig        `json:"wallet" toml:"wallet" mapstructure:"wallet"`
+	Plugins       PluginsConfig       `json:"plugins" toml:"plugins" mapstructure:"plugins"`
+	Approvals     ApprovalsConfig     `json:"approvals" toml:"approvals" mapstructure:"approvals"`
+	Abuse         AbuseConfig         `json:"abuse" toml:"abuse" mapstructure:"abuse"`
+	RateLimit     RateLimitConfig     `json:"rate_limit" toml:"rate_limit" mapstructure:"rate_limit"`
+	MCP           MCPConfig           `json:"mcp" toml:"mcp" mapstructure:"mcp"`
+	Matrix        MatrixChannelConfig `json:"matrix" toml:"matrix" mapstructure:"matrix"`
+	Sandbox       SandboxCfg          `json:"sandbox" toml:"sandbox" mapstructure:"sandbox"`
+	Classifier    ClassifierConfig    `json:"classifier" toml:"classifier" mapstructure:"classifier"`
+	Planner       PlannerConfig       `json:"planner" toml:"planner" mapstructure:"planner"`
+	Themes        ThemesConfig        `json:"themes" toml:"themes" mapstructure:"themes"`
+	DKIM          DKIMConfig          `json:"dkim" toml:"dkim" mapstructure:"dkim"`
+	CORS          CORSConfig          `json:"cors" toml:"cors" mapstructure:"cors"`
+	Revenue       RevenueConfig       `json:"revenue" toml:"revenue" mapstructure:"revenue"`
+	Heartbeat     HeartbeatConfig     `json:"heartbeat" toml:"heartbeat" mapstructure:"heartbeat"`
 
 	// New roboticus-compatible sections.
 	CircuitBreaker           CircuitBreakerConfig `json:"circuit_breaker" toml:"circuit_breaker" mapstructure:"circuit_breaker"`
@@ -59,6 +62,7 @@ type Config struct {
 	Backups                  BackupsConfig        `json:"backups" toml:"backups" mapstructure:"backups"`
 	ContextBudget            ContextBudgetConfig  `json:"context_budget" toml:"context_budget" mapstructure:"context_budget"`
 	ToolSearch               ToolSearchConfig     `json:"tool_search" toml:"tool_search" mapstructure:"tool_search"`
+	WebTools                 WebToolsConfig       `json:"web_tools" toml:"web_tools" mapstructure:"web_tools"`
 	DisabledBundledProviders []string             `json:"disabled_bundled_providers" toml:"disabled_bundled_providers" mapstructure:"disabled_bundled_providers"`
 }
 

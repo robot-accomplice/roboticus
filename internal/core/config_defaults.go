@@ -62,7 +62,8 @@ func DefaultConfig() Config {
 				EscalationLatencyBudgetMs: 3000,
 			},
 		},
-		Providers: make(map[string]ProviderConfig),
+		Providers:     make(map[string]ProviderConfig),
+		ProvidersFile: filepath.Join(dataDir, "providers.toml"),
 		Memory: MemoryConfig{
 			WorkingBudget:            30,
 			EpisodicBudget:           25,
@@ -273,6 +274,8 @@ func DefaultConfig() Config {
 				"get_memory_stats",
 				"get_runtime_context",
 				"get_subagent_status",
+				"introspect",
+				"obsidian_write",
 				"list-subagent-roster",
 				"list-available-skills",
 				"compose-skill",

@@ -49,4 +49,5 @@ var completionFishCmd = &cobra.Command{
 func init() {
 	completionCmd.AddCommand(completionBashCmd, completionZshCmd, completionFishCmd)
 	rootCmd.AddCommand(completionCmd)
+	configureRootCommandGroups()
 }

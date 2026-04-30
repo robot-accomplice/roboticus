@@ -22,6 +22,28 @@ older architecture docs had left too generic:
   user message, align prompt-layer tool guidance with the structured tool list,
   and drop empty compacted history before inference. Baseline/exercise now uses
   that same runtime request path rather than a direct-LLM bypass.
+- **Context pressure must be request-footprint truth, not dashboard inference.**
+  The final `llm.Request` assembly path owns token-footprint attribution for
+  system/personality prompt, tool definitions, active memory, memory index,
+  ambient runtime/checkpoint notes, transient execution overlays, conversation
+  history, latest user input, and unused budget. Dashboard Context views and
+  RCA reports may project that artifact, but they must not reconstruct context
+  pressure from incomplete `context_snapshots` rows or generic "high pressure"
+  labels. The denominator is the active turn envelope budget unless provider
+  model-catalog metadata explicitly supplies a larger model-native context
+  window.
+- **Context pressure must degrade elastic overhead before damaging the task.**
+  The latest user message remains non-negotiable, but memory, ambient notes,
+  overlays, and unpinned tool definitions are elastic request overhead. When
+  fixed prompt overhead would exhaust the active turn envelope, the request
+  builder must trim or classify that overhead deterministically and persist the
+  final footprint so RCA can distinguish model weakness from framework pressure.
+- **Turn analysis must expose one stable operator-facing payload.**
+  `/api/turns/{id}/analyze` may include compatibility aliases, but the route
+  boundary owns the canonical analysis summary and recommendation list. The
+  dashboard must not have to guess whether `analysis`, `summary`,
+  `heuristic_tips`, or `recommendations` is the authoritative field for the
+  same analyzable turn.
 - **Workflow control-plane seams are now part of architecture truth.** Release
   publication, repository-dispatch notifications, prerelease gating, security
   tool installation, and release-completion reporting are not allowed to depend
@@ -39,10 +61,29 @@ older architecture docs had left too generic:
   structured turn artifacts (`tool_calls`, `pipeline_traces`,
   `model_selection_events`, structured `episodic_memory.content_json`) instead
   of re-deriving durable state from lossy text summaries.
+- **Magic phrases are diagnostic hints, not control flow.** v1.0.8 continuity
+  failures showed that exact operator phrases such as `please do` cannot be the
+  mechanism that decides whether an agent resumes work, asks a question, or
+  resets to social chat. Free-form text may still require lexical detectors, but
+  the primary decision must come from structured state: prior task, prior
+  assistant action candidates, observed tool/capability evidence, unresolved
+  gaps, and whether the new user turn is a correction, cancellation, new task,
+  or continuation. Phrase catalogs without that state are architecture debt.
+- **Ubiquitous language is now architecture-owned.** v1.0.8 adds
+  `docs/ubiquitous-language.md` so terms such as Connector, Factory, Unified
+  Pipeline, R-TEOR-R, ROVER, Memory Curation, Memory Consolidation, selected
+  tool surface, provider pack, RCA, and repair primitive have one source of
+  truth. Terminology drift is not cosmetic when it changes ownership
+  boundaries.
 - **Security/policy truth ownership is sharper.** Stage 8 owns claim
   composition, policy/tool runtime own what actually happened, and
   post-inference guards are no longer allowed to overwrite legitimate
   policy/sandbox denials with fabricated canned outcomes.
+- **No canned operator-facing output (permanent).** User-visible text must not
+  be augmented with fixed template prose after inference except when an external
+  protocol mandates a specific body; grounding remains model output, tool
+  results, and structured errors (`ARCHITECTURE.md` §0, `architecture_rules.md`
+  §4.0).
 - **Webhook ingress ownership is sharper.** Telegram and WhatsApp routes no
   longer own transport JSON parsing; adapters own normalization and WhatsApp
   verification/signature checks, while routes only bridge normalized inbound
@@ -55,6 +96,12 @@ older architecture docs had left too generic:
   instead of leaked business flow. Architecture enforcement must follow that
   connector surface rather than pinning the unified pipeline-path requirement
   to one historical filename after the split.
+- **Benchmark route sub-surfaces stay bounded.** Exercise execution,
+  historical rescore, scorecard reads, and RCA/classification views are distinct
+  connector surfaces even when they share persistence helpers. Rescore logic is
+  not allowed to accrete inside the main exercise route file merely because it
+  operates on exercise rows; bounded files are part of keeping the connector
+  layer honest.
 - **Verification coverage must derive one canonical subgoal set.** The verifier
   and executive-plan seam is not allowed to count both the unsplit whole prompt
   and the later conjunction-split parts as separate requested subgoals. Coverage,
@@ -137,6 +184,49 @@ older architecture docs had left too generic:
   provider/model adapters must render that artifact safely for the active
   thinking/tool-call mode. Otherwise a successful `E/O/R` cycle can still be
   lost when continuation inherits provider-fragile assistant/tool-call replay.
+- **Guard and verifier findings must become contract evidence, not prose
+  substitutions.** The ABC paper, ["Agent Behavioral Contracts: Formal
+  Specification and Runtime Enforcement for Reliable Autonomous AI
+  Agents"](https://arxiv.org/pdf/2602.22302), is useful because it exposes the
+  weakness in the current guard seam: `violations`, `retry`, and `reason` are
+  insufficient RCA evidence. v1.0.8 uses the existing canonical diagnostics
+  event stream as the first contract-event seam. Guard/verifier findings must
+  carry contract id/group, `R-TEOR-R` phase, hard/soft/neutral severity,
+  precondition state, violation state, recovery action, recovery
+  attempt/window, outcome, and confidence effect. This is intentionally not a
+  broad DSL yet; it is a diagnostic data model that lets RCA distinguish hard
+  failure, recoverable deviation, neutral non-events, and drift over time.
+- **Canned guard rewrites are an architecture violation.** A guard may strip
+  unsafe internal markers, request scoped recovery, block with structured
+  failure evidence, or preserve the best available observed answer with RCA
+  concerns. It may not replace the model's answer with fixed user-facing prose
+  authored inside the guard implementation. Operator-facing wording belongs to
+  the normal response path or an approved policy/refusal surface, not a hidden
+  fallback string.
+- **Output-shape requests are enforceable contracts, not style preferences.**
+  When the operator asks for a count-only answer, one sentence, one line, JSON,
+  bullets, or another bounded response shape, that shape is part of the turn
+  contract. Prompt guidance is not sufficient; the post-inference guard seam
+  must validate the returned shape against the normalized directive and request
+  scoped recovery when the model wraps an otherwise correct answer in prose.
+  Enforcement must not rewrite the answer into canned text; it either accepts
+  the model output, retries with the violated shape contract, or reports a
+  structured guard failure.
+- **Action-bearing prompts require action-specific evidence.** A ReAct loop,
+  runtime-context lookup, memory recall, skill discovery call, or other generic
+  introspection step proves that the framework was active, not that the
+  requested work was performed. If the turn asks to use a browser, schedule a
+  cron, inspect files, invoke a skill/tool, or perform another concrete action,
+  the guard/verifier seam must compare the requested capability class with
+  selected tools and actual tool results. The final answer can pass only when
+  a matching action tool succeeded, a concrete policy/tool/provider result
+  blocked the action, or the task was genuinely non-executable. Generic
+  confirmation requests and "I will do this next" prose are failures unless the
+  missing detail is truly unresolved.
+  This evidence guard is downstream of tool-surface establishment: if pruning
+  fails before any selected tool surface or tool result exists, RCA owns that
+  surface failure and the guard must not misclassify it as a model execution
+  failure.
 - **Benchmark scoring must become prompt-contract-aware.** Exercise scoring is
   not allowed to treat verbosity, generic structure, or intent-marker density
   as the primary truth source. The canonical scoring seam must evaluate the
@@ -150,6 +240,29 @@ older architecture docs had left too generic:
   task-satisfying answers such as time, arithmetic, greeting, and direct-fact
   prompts are not allowed to score poorly just because they omit irrelevant
   execution/delegation markers or refuse to pad themselves with prose.
+- **Required-tool benchmark prompts require observed evidence, not promises.**
+  For prompts whose contract says tool use is required, a response that only
+  says it will query, inspect, search, or check something is not successful
+  tool use. Scoring must prefer explicit observed results, tool-output
+  markers, or concrete file/database/session facts. Legitimate negative
+  results such as "no README exists" can satisfy a lookup prompt, but access
+  failures, missing allowlist configuration, or tool failures that prevent the
+  requested work are diagnostic failure evidence, not successful tool use.
+  Future-tense tool intent is useful RCA evidence, but it is a failed or
+  degraded prompt outcome, not a pass.
+- **Generic tool-use prompts require non-inventory execution evidence.**
+  Capability inventory, skill listings, memory retrieval, and subagent status
+  checks can support a "tell me about tools" answer, but they do not satisfy
+  "pick one and use it." The contract is semantic rather than phrase-based:
+  finalization requires at least one bounded, non-inventory action/read tool
+  result or a concrete execution block.
+- **Action benchmark prompts must not reward hypothetical completion.** For
+  execution/delegation prompts that ask the agent to create, write, schedule,
+  orchestrate, refactor, or otherwise perform work, an answer that says it
+  cannot complete the action and then describes what it would do is diagnostic
+  evidence, not successful task completion. Honest blockage should remain
+  visible in RCA, but the benchmark score must not present it as a clean model
+  efficacy pass.
 - **Historical benchmark artifacts must be rescorable.** Because
   `exercise_results` persists prompt identity and raw response content, scoring
   changes are not allowed to force blind reruns by default. The benchmark seam
@@ -162,6 +275,16 @@ older architecture docs had left too generic:
   averages exclude invalid rows, or which denominator produced the displayed
   overall score. Aggregate quality truth must be computed once or labeled
   unambiguously at every presentation seam.
+- **CLI topology is an operator-facing architecture seam.** Root help must be
+  grouped by operator domain so command discovery does not degrade into an
+  undifferentiated command wall. Existing top-level command paths remain the
+  compatibility contract for v1.0.8; any later path migration must ship
+  explicit aliases or proxy commands for every moved surface.
+- **Dormant code is not architecture inventory.** Planned helper wrappers and
+  stale subsystem methods are not allowed to remain under `nolint:unused` or
+  "wired later" comments. If the live control flow has a canonical owner, the
+  unused alternate path must be deleted and reintroduced with tests only when a
+  real feature requires it.
 - **Partial intent exercise runs are scorecard patches, not replacement
   scorecards.** When an operator runs `models exercise --intent TOOL_USE` or
   any other intent slice, the fresh rows update only that model/intent slice in
@@ -216,11 +339,83 @@ older architecture docs had left too generic:
   stricter latency SLOs, but they must classify slow-valid rows differently
   from empty provider timeouts, pipeline failures, verifier defects, and scoring
   defects.
+- **Scope diagnosis requires exact row replay and explicit warm-up control.**
+  Intent slices are useful, but they are still too broad when investigating one
+  suspicious inference such as `TOOL_USE:C2`. The exercise orchestrator must
+  accept a canonical row selector and a warm-up policy so CLI/API callers can
+  replay one prompt without paying unrelated local cold-start cost unless that
+  cost is the diagnostic question.
 - **Exercise rows must persist row-level outcome class.** `passed=false` is not
   an RCA diagnosis. Benchmark persistence must distinguish at least clean pass,
   slow pass, provider timeout, transport/API failure, empty response, and
   quality-gate failure so scorecards can separate model behavior from harness
   failure and release-gate policy.
+- **Benchmark comparison evidence must exclude invalid transport cohorts.**
+  Rows that failed before an evaluable model response path, including API
+  transport failures and provider/model-call timeouts, are validity and
+  availability evidence. They must stay persisted for RCA, host/provider
+  diagnosis, and operator incident review, but they must not be counted as
+  exercised efficacy coverage, must not overwrite older valid intent evidence,
+  and must not appear as `7/7` observed quality evidence with all-zero scores.
+  Explicit empty model responses and prompt-contract quality failures are
+  different: those are evaluable model behavior. Legacy rows with blank
+  content, zero quality, failed status, no error, and no result class are not
+  explicit empty-response evidence; they are ambiguous pre-classification
+  failures and must not be resurrected as all-zero efficacy coverage. By
+  default, evaluable benchmark rows with quality below `0.50` are quality-gate
+  failures; they do not pass, but their actual measured quality still
+  contributes to aggregate efficacy so a `0.42` row remains a `0.42` signal
+  instead of disappearing or collapsing to zero.
+- **Benchmark progress rendering must not stream raw model artifacts.** The CLI
+  progress row is an operator telemetry surface, not a transcript renderer.
+  Multiline answers, fenced code blocks, tabs, carriage returns, ANSI/control
+  sequences, and Markdown fence delimiters from the model response must be
+  neutralized into a bounded single-line preview before they are printed next
+  to `[N/M] INTENT:Cx ...`. The raw response remains mandatory persisted
+  evidence for rescoring and RCA, but it is not allowed to corrupt the live
+  benchmark row structure or make the next prompt appear inside the previous
+  model's answer.
+- **Provider onboarding must prefer refreshable provider-pack metadata over
+  binary changes.** Providers that fit an existing wire contract belong in
+  `providers.toml`, not hard-coded Go setup branches or bespoke clients. Binary
+  changes are justified only when a provider requires a new wire format,
+  authentication mechanism, streaming contract, tool-call shape, or runtime
+  capability that the declarative provider profile cannot express. Endpoint
+  URLs, chat paths, provider tiers, key references, cost hints, model-name
+  examples, deprecation notes, and compatibility aliases should be updateable
+  through the provider pack so provider drift does not force a Roboticus
+  release.
+- **Provider compatibility quirks need a declarative behavior profile.**
+  "OpenAI-compatible" is not precise enough for routing, tool parsing, and RCA:
+  implementations vary in tool-call JSON, argument encoding, response shape,
+  thinking-mode controls, and truncation failure modes. Known deviations such
+  as Kimi responses dropping a trailing `}` from JSON tool-call text should be
+  represented as provider-profile parsing/repair rules that are visible in
+  configuration and RCA, not hidden as model-specific conditionals.
+- **Provider key references must match the operator key-management seam.** Rust
+  stores dashboard/API provider secrets under `<provider>_api_key`; older Go
+  code stored them under `provider_key:<name>`. The Go path must converge on
+  the Rust-compatible name and retain read/delete compatibility for legacy
+  entries, otherwise status surfaces, setup snippets, and daemon request
+  authentication can disagree about whether a provider is configured.
+- **Local keystore CLI commands must not require a running daemon.** Provider
+  key writes are local secret-store mutations. Requiring
+  `roboticus keystore set <provider>` to call the HTTP API makes initial
+  provider setup impossible when the daemon is not already authenticated and
+  running. The CLI should update the encrypted keystore directly while the API
+  route remains the dashboard/remote-management path.
+- **CLI command topology is too flat for continued growth.** The current
+  top-level command surface mixes lifecycle, auth/secrets, model diagnostics,
+  channels, memory, scheduling, plugins, wallet, and maintenance as peers. That
+  shape was tolerable during parity catch-up, but it is now discoverability debt
+  and should be collapsed into intuitive operator categories with aliases kept
+  for backward compatibility.
+- **Ollama baseline all-zero cohorts are a release regression.** The benchmark
+  harness must distinguish unavailable/unloaded Ollama models, local-provider
+  transport errors, warm-up failures, and real model-quality failures without
+  collapsing multiple local models into misleading `0%` efficacy rows. This is
+  a v1.0.8 release blocker because baseline comparisons are now a primary RCA
+  tool.
 - **Benchmark telemetry collection must tolerate trace/diagnostic visibility
   lag.** A just-finished exercise turn is not allowed to lose phase timings
   merely because the CLI asks for `/api/traces/{turn_id}/diagnostics` a few
@@ -245,6 +440,23 @@ older architecture docs had left too generic:
   terminal answer. The loop may finalize from observed tool/result evidence,
   or it may return a real error, but it must not persist an empty assistant
   response after work was actually performed.
+- **Guard exhaustion must not synthesize canned prose.** When guard retries are
+  exhausted, the runtime may return a structured guard-exhausted error, retry
+  with scoped corrective guidance, or finalize from authoritative observed
+  evidence. It is not allowed to emit deterministic user-facing fallback prose
+  such as “let me try again” or “could you rephrase” as if it were the model's
+  task answer.
+- **Agent behavioral contracts are now an active guardrail replacement
+  candidate.** The ABC paper, ["Agent Behavioral Contracts: Formal
+  Specification and Runtime Enforcement for Reliable Autonomous AI
+  Agents"](https://arxiv.org/pdf/2602.22302), frames contracts as
+  preconditions, invariants, governance policies, and recovery mechanisms. That
+  maps directly onto the current guard/reflection/RCA pain point. v1.0.8 should
+  evaluate whether today's guardrail categories can be re-expressed as
+  contract-shaped runtime evidence with explicit hard/soft severity, recovery
+  windows, satisfaction probabilities, and drift metrics. The goal is not
+  paper-driven feature creep; it is to extract mechanisms that make agent and
+  memory behavior measurably more reliable and easier to diagnose.
 - **Verifier retry suppression requires non-empty final content.** Suppressing
   a verifier retry after substantive execution progress is only valid when the
   pipeline has a task-specific answer to preserve. If the current result is
@@ -264,11 +476,26 @@ older architecture docs had left too generic:
 - **Coding evaluation must graduate from prose scoring to artifact truth.**
   For prompts that ask for runnable code, the benchmark is not allowed to stop
   at “sounds code-aware.” The active release seam must extract the submitted
-  artifact, attempt parse / typecheck / compile where feasible, and run bounded
-  input/output correctness checks before explanation/style heuristics are
-  allowed to influence the coding score. Richer multi-language semantic
-  evaluators remain roadmap work, but artifact correctness is now active
-  benchmark architecture rather than deferred aspiration.
+  artifact and attempt parse / typecheck / compile where feasible before
+  explanation/style heuristics are allowed to influence the coding score.
+  Bounded input/output execution should be universally available through a
+  first-class sandboxed evaluation seam shared by benchmark scoring, RCA, and
+  future agent fitness checks. The prohibition is not on universal execution;
+  it is on hiding model-generated code execution inside generic scoring helpers
+  without sandbox ownership, resource limits, language/runtime policy, and
+  persisted evaluator evidence. Until that universal seam is in place, scoring
+  may use parse/typecheck/static functional checks but must report that it did
+  not execute input/output cases. Richer multi-language semantic evaluators
+  remain roadmap work, but artifact correctness is now active benchmark
+  architecture rather than deferred aspiration.
+- **The first executable coding evaluators are deliberately narrow.** v1.0.8
+  may execute reverse-string Go and Python artifact rows through bounded
+  temporary harnesses because that prompt has deterministic input/output
+  cases. Go currently covers `string -> string`; Python covers both
+  `string -> string` and single-list-argument in-place mutation variants. This
+  is not a general sandbox claim. Additional languages or problem shapes must
+  add evaluator contracts, timeout/resource policy, and regression coverage
+  instead of expanding ad hoc string heuristics.
 - **Source-backed code execution is its own focused class.** Prompts such as
   `refactor the configuration parser`, `fix the failing cache implementation`,
   or other current-repository code surgery are not allowed to fall into the
@@ -284,6 +511,42 @@ older architecture docs had left too generic:
   - keep retrieval neutral unless continuity/evidence requirements are explicit
   Source-backed code refactors are repository-grounded execution, not generic
   “heavy code” work.
+- **Allowed filesystem roots must be explained as roots, not exact files.**
+  The enforcement layer already treats descendants of an allowed root as
+  allowed, but model-facing runtime context must say that explicitly. When a
+  user points to a subdirectory of a previously observed allowed root, the
+  agent must attempt the filesystem tool and surface the real policy result;
+  it must not ask for the subdirectory to be separately allowlisted unless an
+  actual tool denial proves that narrower configuration is required.
+- **Operator path shorthand must normalize before model execution, not weaken
+  sandboxing.** Focused inspection target resolution may expand normal
+  operator shorthand such as `~/code/roboticus` into a canonical absolute path
+  only when that path is already inside the workspace or configured allowed
+  roots. Natural-language prose following the path is not part of the target.
+  Once an inspection root is resolved, follow-up read/list/search/glob calls
+  that repeat the same target with `~` shorthand must normalize back to the
+  resolved root instead of producing misleading home-shortcut denials. General
+  filesystem tools still reject unresolved `~` paths; the exception belongs to
+  the focused inspection target seam.
+- **Referential execution follow-ups need prior-turn grounding.** A request
+  such as "examine it" after discussion of a vault subsection is task
+  continuation, not a fresh ambiguous chat turn. Short-followup expansion must
+  carry the previous assistant excerpt and instruct the model to resolve the
+  referent before acting, while still letting the policy/tool layer be the
+  final authority on whether the resolved path is accessible.
+- **Continuation resolution must be state-first, not magic-word-first.** The
+  primary signal is whether the previous assistant left an unresolved proposed
+  action, observed artifact, or narrowed task. A short operator response after
+  that state exists should preserve and resolve the pending work unless it is
+  clearly negative, corrective, sarcastic, or a new explicit task. Phrase
+  catalogs may help identify obvious cases, but they are not the authority.
+- **Continuation scaffolding must not rewrite the operator transcript.** The
+  pipeline may expand a short follow-up into execution-only context for task
+  synthesis, tool selection, retrieval, and inference, but `session_messages`
+  must persist the operator-authored text exactly as received after safety
+  sanitization. Durable memory, UI transcripts, and forensic review need the
+  real conversation, not framework-injected continuation instructions
+  masquerading as user messages.
 - **High-lift semantic evaluators remain deferred roadmap work.** Richer
   evaluators that inspect tool traces, structured outputs, and prompt-class
   semantic contracts more deeply are valid benchmark architecture pressure,
@@ -324,7 +587,10 @@ older architecture docs had left too generic:
   runtime context) for direct inspection work. That same authority must also
   resolve common operator path aliases such as `~`, “home folder”, and other
   allowed-root shorthands instead of silently downgrading them into
-  conversational turns.
+  conversational turns. Once a concrete root is active, later relative paths
+  that repeat the tail of that root, such as `code/roboticus/docs` while
+  inspecting `/Users/.../code/roboticus`, are still root-relative inspection
+  requests and must not double-join the project path.
 - **Imperative operational checks are tasks, not conversation.**
   Short imperative prompts such as `check the health of all integrations`,
   `inspect the runtime`, or `verify the current status` are not allowed to
@@ -339,6 +605,31 @@ older architecture docs had left too generic:
   must emit one shared typed evidence artifact (scope, count, emptiness) so
   direct-execution inspection turns can distinguish useful progress from
   dead-end exploration on one central seam.
+- **Resolved inspection turns cannot finalize without inspection evidence.**
+  When task synthesis has enough information to resolve an inspection target
+  and the selected tool surface includes filesystem/read tools, the final
+  answer must be grounded in inspection tool evidence or in a concrete
+  tool/policy/sandbox denial. Asking the operator to initiate the filesystem
+  scan, claiming a missing scan is needed, or otherwise finalizing with zero
+  inspection calls is a framework failure, not acceptable clarification.
+- **Hard guard exhaustion must fail closed.** Guard retries are the recovery
+  path for trust defects, not permission to return the last bad answer. If a
+  response still violates a hard guard such as false capability denial after
+  bounded retry, the turn must fail with RCA evidence rather than leaking a
+  known-false operator-facing statement.
+- **Focused inspection and source-backed code review are not delegation
+  fallbacks.** Generic capability-fit heuristics are not allowed to upcast a
+  concrete repository/filesystem inspection into `delegate_to_specialist`
+  merely because the prompt is broad or uses words not present in the skill
+  index. The orchestrator already has the authoritative read-only inspection
+  surface; delegation may be used only as an explicit bounded execution step
+  after that direct surface has produced evidence, not as a replacement for it.
+- **Focused direct-execution profiles outrank generic complexity fallback.**
+  A repo architecture/code review can be complex and still need the focused
+  inspection envelope. Turn policy must choose the focused read-only surface
+  for resolved direct inspection before the generic heavy/default branch runs,
+  otherwise `read_file`/`glob_files` can disappear from the selected request
+  surface and the model is pushed into deferral or false capability denial.
 - **Bounded multi-step direct execution must not be mistaken for churn.**
   Once task synthesis chooses `execute_directly` for a bounded inspection,
   analysis, or report-authoring turn, the loop is not allowed to treat every
@@ -369,6 +660,18 @@ older architecture docs had left too generic:
   applied-learning retrieval, while session-defined aliases such as “quiet
   ticker” must be treated as continuity retrieval problems so shorthand can be
   resolved from prior session context instead of being guessed or ignored.
+- **Scheduling words are not automatically scheduling actions.** The pipeline
+  must classify the speech act before demanding scheduling evidence. A turn
+  that defines session vocabulary or asks for a bounded acknowledgement, such
+  as “for the rest of this session, X means a cron job that runs every five
+  minutes; reply only with noted,” is a context-setting contract, not a request
+  to create a cron job now. Conversely, a direct scheduling request must still
+  require `cron` evidence or a concrete missing-input/tool/policy block.
+- **Scheduling metadata should not block complete scheduling intent.** If an
+  operator gives a complete cadence and task but omits only a human-friendly
+  job name, the cron tool may derive a deterministic label from the task rather
+  than forcing a retry loop. The derived name must be returned in tool evidence
+  so the operator can inspect or correct it.
 - **Inspection-shaped questions must share the same focused-inspection
   authority as imperative inspection turns.** Questions like `what's in the
   vault`, `show me the files`, or `what about the vault in your workspace`
@@ -392,6 +695,11 @@ older architecture docs had left too generic:
   question handling once the operator has supplied the concrete target.
   Alias-driven inventory questions such as `what are the most recently updated
   projects in my code folder` are also part of that seam; folder aliases like
+  `my Downloads folder` must trigger the same inspection-proof obligation as
+  `~/Downloads` when the effective sandbox allowlist exposes that directory.
+  If an alias cannot be resolved, the system may ask a precise clarifying
+  question; it may not preemptively ask for confirmation when the allowed path
+  is already known.
   `code folder` must resolve onto the same focused inspection path instead of
   widening into generic question/retrieval behavior.
 - **Filesystem destination resolution must use that same authority for authoring
@@ -422,12 +730,13 @@ older architecture docs had left too generic:
   destinations. Prompt/tool metadata must expose the real confinement rule or
   the model will manufacture false access denials on valid authoring requests.
 - **Release-shaped binaries must derive version truth from one build seam.**
-  CI, release packaging, and local release-helper builds are not allowed to
-  stamp different or nonexistent CLI version symbols. `roboticus version` must
-  read from the same injected `cmd/internal/cmdutil.Version` symbol that the
-  release workflow stamps, while the daemon banner continues to read from
-  `internal/daemon.version`. A release-shaped binary that still reports `dev`
-  is a deployment-truth defect, not harmless metadata drift.
+  CI, release packaging, local release-helper builds, daemon startup, API
+  health, A2A discovery, and dashboard footer rendering must all read the same
+  shared runtime version from `internal/version.Version`. Legacy stamped
+  symbols may remain as compatibility mirrors during migration, but no
+  operator-facing surface may hardcode a historical fallback such as `0.1.0`.
+  A release-shaped binary that still reports `dev` is a deployment-truth
+  defect, not harmless metadata drift.
 - **Release-gate hygiene must stay behavior-neutral.**
   Dead helper seams, unused parser remnants, and mechanical staticcheck drift
   are not allowed to accumulate on the release branch. Lint cleanup at this
@@ -935,6 +1244,13 @@ older architecture docs had left too generic:
   matcher/tool surface or mark it unavailable for a concrete reason that every
   other layer can see. DB-backed skill catalogs, filesystem-backed runtime
   matchers, and config-gated tool registration must not drift independently.
+- **Skill inventory must be live, not boot-time.**
+  File-backed skills installed by an operator, catalog flow, or agent-authored
+  compose flow must become usable in the current daemon without restart. The
+  live inventory owner must refresh the matcher, prompt skill list, capability
+  fit corpus, introspection output, and UI-facing availability state from the
+  same reconciliation pass. `/api/skills/reload` must perform that reload; it
+  is not allowed to be a directory readability check.
 - **Guard-context temporal atomicity must hold.**
   Cross-turn guards are not allowed to compare a completion against assistant
   content already emitted inside the same turn. `PreviousAssistant` and
@@ -1161,6 +1477,247 @@ they are not the release-driving backlog anymore.
 
 ---
 
+## Reflect/Continuation Drops Working Memory — CLOSED
+
+**Severity**: HIGH
+**Architectural principle violated**: ReAct reflection and continuation are a
+tighter action-request lens layered on top of conversation memory; they are not
+allowed to replace conversation memory or leak control sentinels into
+operator-facing chat.
+
+**What the audit surfaced**:
+
+Two structural defects in `internal/agent/loop.go` that together broke working
+memory continuity for any turn that produced tool-backed observations:
+
+1. **Reflect and continuation paths replaced full chat history with a
+   synthetic 2-message scaffold.** Reflect (TOTOF) and continuation paths both
+   built the next LLM request via
+   `ContextBuilder.BuildRequestWithMessages(session, totof.Messages())` (and
+   the equivalent for continuation). `BuildRequestWithMessages` discarded
+   `session.Messages()` entirely and used only the synthetic
+   `[system: instruction, user: TASK + observed + outcomes]` pair. Every prior
+   user/assistant/tool message was invisible to the model for the duration of
+   reflect and continuation. Across multi-turn sessions this manifested as the
+   agent asking "which three games?" immediately after the user listed three
+   games — the prior user turn was no longer in the model's prompt.
+2. **`CONTINUE_EXECUTION` sentinel matching was brittle and leaked to chat.**
+   Sentinel detection used `strings.HasPrefix(strings.TrimSpace(content),
+   "CONTINUE_EXECUTION")`. When the model emitted any prose before the sentinel
+   (the common case), the prefix check failed, the loop fell through to the
+   final-answer persistence path, and the entire response — including the
+   literal `CONTINUE_EXECUTION` control token — was persisted as the
+   user-visible final answer.
+
+These two defects compounded: continuity damage from history replacement made
+the model more likely to produce reasoning prose that prefixed the sentinel,
+which then leaked through the brittle prefix check.
+
+**Why this matters**: TOTOF and continuation are not noise. They anchor the
+model on canonical observed results so tool-calling decisions are grounded in
+evidence, prevent dead-ending the action-request loop in blank or canned
+output (via the `synthesizeFromToolResults` fallback), and provide a complete,
+self-improving loop that knows when to finalize and when to continue. Their
+value depends on running as a *tighter* lens layered on top of full
+conversational memory, not in a vacuum that erases continuity.
+
+**Design contract (codified with the working-memory / reflect-overlay fix)**:
+
+- TOTOF / continuation brief is a **trailing system overlay**: positioned
+  AFTER full conversation history in the LLM request, never before.
+- The brief is the LAST message in the request so it stays prominent as the
+  model's most recent contextual instruction (the "given everything above,
+  here is the canonical reflection brief" verdict).
+- Full `session.Messages()` is preserved verbatim — every prior
+  user/assistant/tool turn remains visible.
+- Synthetic user TASK messages are removed entirely. The real user turn
+  already lives in `session.Messages()` and `lastUserTask()` was just
+  re-extracting from it.
+- TOTOF `Render()` text is unchanged: TASK / AUTHORITATIVE OBSERVED RESULTS /
+  KEY TOOL OUTCOMES / OPEN ISSUES / FINALIZATION INSTRUCTION.
+- Reflection-mode "tools disabled" and continuation-mode "execute only as far
+  as the named remaining work" semantics remain in their respective
+  instruction strings.
+- The `synthesizeFromToolResults` empty-response fallback stays; blank/canned
+  output is still architecturally prohibited.
+- Control sentinels (`CONTINUE_EXECUTION` and any future ones) must never
+  reach a `session.AddAssistantMessage*` site. Detection treats any discrete
+  sentinel token in model output as framework control text, including inline
+  emissions after prose, and assistant persistence sites must scrub surviving
+  control text so a sentinel survival becomes a logged warning rather than a
+  user-visible leak.
+
+**Fix direction (implemented)**:
+
+1. Add `ContextBuilder.BuildRequestWithTrailingSystemOverlay(session,
+   overlay []string)` that builds the request from full `session.Messages()`
+   and appends each overlay string as a system message at the END of the
+   message list. Overlay tokens participate in the same budget accounting
+   path memory and ambient system notes already use.
+2. Migrate the reflect path to call the trailing-overlay builder with overlay
+   = `[reflectInstruction, totof.Render()]`; stop calling `totof.Messages()`.
+3. Migrate the continuation think path the same way with overlay =
+   `[continuationInstruction, continuation.Render()]`.
+4. Replace `strings.HasPrefix(trimmed, reflectContinuePrefix)` with a
+   line-aware `detectContinueExecution(content) (taken bool, remainder
+   string)` that anchors the sentinel to the start of any line. When taken,
+   the prose-before-sentinel is dropped along with the sentinel itself; the
+   framework consumed the response and the user sees only the eventual
+   finalizing answer.
+5. Add a `scrubControlSentinels(content) string` defensive pass invoked at
+   every assistant-message-persist site so a sentinel survival logs a warning
+   and persists only the cleaned content.
+6. Remove `BuildRequestWithMessages`. The loop is its only caller and the
+   trailing-overlay path replaces it.
+
+These changes preserve the `R-TEOR-R` boundary (reflection consumes canonical
+TOTOF state, continuation consumes a canonical continuation artifact), keep
+TOTOF prominent as the action-request decision lens, and restore working
+memory continuity for the operator-facing conversation.
+
+**Additional regression exposure after repair attempts**:
+
+The first repair closed the most obvious continuity loss — dropped
+`session.Messages()` — but that alone is not sufficient. Working memory
+durability depends on two independent streams reaching reflect and continuation:
+
+1. full conversational history (`session.Messages()`)
+2. pipeline-prepared active memory (`Session.MemoryContext()` and
+   `Session.MemoryIndex()`)
+
+If either stream is lost, the model can still appear to have "context" while
+silently losing durable operator state. The reflect/continuation overlay seam
+therefore has a stronger invariant: `BuildRequestWithTrailingSystemOverlay`
+must preserve memory and memory-index system notes as well as chat history, and
+tests must fail if TOTOF or continuation ever become a synthetic replacement
+for working state.
+
+The same audit exposed a capability-discovery seam adjacent to the skill-use
+regression: `introspect` is registered and classified, but was not pinned in
+the default operational `AlwaysInclude` set. In embedding-failure or
+tight-pruning conditions, that allowed the runtime's own capability discovery
+tool to disappear while the agent was being asked about skills/tools. That is a
+systemic capability-truth failure, not a model behavior issue.
+
+The live ghola transcript exposed the sibling seam: when an operator explicitly
+names a registered tool (`use the ghola tool ...`), semantic pruning still
+treated that name as ordinary query text. If embeddings failed, were stale, or
+ranked another tool higher, the named tool could disappear from the LLM tool
+surface and the model could drift into an unrelated capability such as graph
+lookup. Explicit operator-named tools are therefore per-turn pins: the pruner
+may still apply policy and authority gates, but it is not allowed to hide the
+registered tool before the model has a chance to call it.
+
+---
+
+## Tool Execution Interface Drift (Discovered During v1.0.8 Audit)
+
+**Severity**: HIGH
+**Architectural principle violated**: tool execution must have one authoritative
+admission, classification, and approval seam
+
+**What the audit surfaced**:
+
+The agent tool-execution interface had degraded across multiple seams. Built-in
+tools that operators believed were available were unreachable, and several
+concentric admission gates silently stripped tools the operator pinned via
+`AlwaysInclude`:
+
+1. **Unregistered built-ins.** `WebSearchTool` and `HTTPFetchTool` were fully
+   implemented in `internal/agent/tools/web.go` (with SSRF defenses and tests)
+   but never registered in `internal/daemon/daemon.go`. Operators saw no
+   `web_search` or `http_fetch` tool at runtime regardless of profile.
+2. **Dead approval surface.** `agent.ExecutionRegistry` and a duplicate
+   `agent.ApprovalManager` (in `internal/agent/capabilities.go`) defined a
+   policy-aware unified-dispatch path that was never instantiated. The real
+   approval manager lived under `internal/agent/policy.ApprovalManager`, was
+   constructed at daemon boot, but `ClassifyTool` had no production callers.
+   `cfg.Approvals.GatedTools` and `cfg.Approvals.BlockedTools` were therefore
+   inert at the actual tool-dispatch site in the agent loop.
+3. **Concentric admission gates**. `SelectToolDefs` (semantic ranker) →
+   `filterToolDefsForPolicy` (operation-class admit list) → `MaxTools`
+   truncation → `toolAllowedForTurnSurface` (final loop check). Each layer was
+   correct in isolation, but the composition silently dropped pinned tools when
+   any gate misclassified them as `OperationUnknown` or when truncation cut off
+   the tail of a list that included pinned entries.
+4. **`OperationClassForName` gaps and taxonomy drift.** Many registered tools
+   (database tools `query_table`/`create_table`/`insert_row`/`alter_table`/
+   `drop_table`, knowledge/procedural-memory tools `query_knowledge_graph`/
+   `find_workflow`, introspection/composition tools `introspect`/
+   `get_channel_health`/`compose-skill`, and the unregistered web tools) fell
+   through to `OperationUnknown` or were assigned to the wrong surface.
+   Focused profiles default-deny `OperationUnknown`, so unknown tools were
+   silently dropped; misclassified procedural-memory tools leaked into
+   no-retrieval turns and polluted action selection.
+5. **`AlwaysInclude` drift.** `obsidian_write` was pinned by
+   `tools.DefaultToolSearchConfig` but missing from the runtime
+   `core.ToolSearchConfig` defaults that `daemon.go` actually loaded; the
+   pruner default and the operator-effective default disagreed.
+6. **Pinning semantics violated.** `applyToolPolicy.MaxTools` truncation took
+   the first `MaxTools` items of a sorted list with no awareness of the pin
+   set, so an operator-pinned tool that landed below position N was dropped.
+7. **Unimplemented `BrowserExecutor`.** A `BrowserExecutor` interface lived in
+   the dead `capabilities.go` surface with no implementation and no consumers.
+
+**Why this matters**: operators cannot reason about tool availability if the
+admission rules silently disagree with both the operator config and the tool
+registry. A tool that is registered, pinned, and policy-permitted must be
+reachable on the turn surface.
+
+**Fix direction (closed in v1.0.8)**:
+
+1. Make every registered built-in classified in `OperationClassForName` —
+   introduce explicit `OperationDataRead`, `OperationDataWrite`, and
+   `OperationWebRead` classes for hippocampus and HTTP-bound tools, and reuse
+   existing classes where appropriate. `OperationUnknown` is now reserved for
+   plugin/MCP tools that the registry has not described.
+2. Allow the new operation classes through the relevant focused profiles in
+   `toolAllowedForPolicy`, and admit `OperationDelegation` under
+   `ToolProfileFocusedScheduling` so `retry-task` can reach the surface.
+3. Extend `pipeline.ToolPruner` with an optional `AlwaysIncluded(session)
+   []string` interface; `applyToolPolicy` now reads pin names from the pruner
+   and re-admits any pinned name dropped by `filterToolDefsForPolicy` or
+   `MaxTools` truncation. Pin survival is now an architectural invariant of
+   the policy stage rather than a coincidence of ordering. Pin survival does
+   not override explicit focused-envelope retrieval exclusions: memory-read
+   pins must still be removed when `AllowRetrieval=false`, because otherwise
+   action turns drift into stale retrieval instead of executing the
+   action-specific tool.
+   Generic tool-demonstration turns also get their own focused action surface:
+   inventory tools can be present for explanation, but they are ranked behind
+   safe non-inventory tools and cannot be the only proof of work.
+4. Reconcile `core.Config.ToolSearch.AlwaysInclude` defaults with
+   `tools.DefaultToolSearchConfig().AlwaysInclude`; both lists now include
+   `obsidian_write`. Pinning a name that is not registered remains a silent
+   no-op by design (Obsidian-disabled deployments simply never expose the
+   tool).
+5. Add a `core.WebToolsConfig` section and register `WebSearchTool` and
+   `HTTPFetchTool` in `daemon.go` when web tools are enabled.
+6. Wire `policy.ApprovalManager.ClassifyTool` into the agent loop dispatch
+   site. Blocked tools fail closed with a structured rejection result before
+   policy-engine evaluation. Gated tools currently log and execute with a
+   warning until the operator approval-flow is pipeline-owned (Rule 4.2/4.4)
+   — the gating signal is now real even though operator UX is still pending.
+7. Delete the dead `agent.ExecutionRegistry`, duplicate `agent.ApprovalManager`
+   in `capabilities.go`, and the unimplemented `BrowserExecutor` interface.
+   The single approval surface is `policy.ApprovalManager`; the single tool
+   dispatch is `Loop.act` calling `ToolRegistry.Get(...).Execute(...)`.
+
+8. Startup DB compatibility repair owns task-event schema drift. Older stores
+   that created `task_events` with a narrow `event_type IN (...)` CHECK
+   constraint must be rebuilt without that stale constraint during `Open()`,
+   preserving rows and current runtime event names instead of forcing runtime
+   tools to emit legacy-only vocabulary.
+
+These changes preserve the Rule 4.2/4.4 ownership shape: pipeline owns
+admission policy (operation-class allowlists, profile-aware pin survival,
+approval classification), the agent loop owns dispatch and policy evaluation,
+and the registry is a dumb catalog. Approval UX (gated approvals, request
+lifecycle) remains an open architectural item for a future release; the
+classification signal is now live and ready for that consumer.
+
+---
+
 ## Release Control Plane Drift (Discovered After v1.0.6 Tagging)
 
 **Severity**: HIGH
@@ -1199,6 +1756,27 @@ source tag looks.
 8. release notifications must be best-effort unless explicitly configured;
    missing SMTP/Discord secrets are not proof that published artifacts are
    incomplete
+
+**v1.0.8 install repair addendum**:
+
+Upgrade and local repair are one ownership seam, not two unrelated command
+paths. `roboticus upgrade all` may replace the binary, reconcile provider and
+skill state, and run post-upgrade maintenance; `roboticus mechanic --repair`
+must be able to re-run the same safe cleanup primitives later if an existing
+install is already drifted. Cleanup actions must be idempotent and explicitly
+reported as repaired, skipped, needs manual action, or failed. Silent cleanup
+that changes operator state without evidence is an architecture defect.
+
+**v1.0.8 pending-action addendum**:
+
+Operator confirmations are not generic social turns when the previous assistant
+left an unresolved proposed next action. The session boundary must preserve
+typed pending-action state when available, but continuity is not allowed to
+depend only on exact phrases like `please do`, `go ahead`, or `continue`. If the
+previous assistant proposed a concrete next step, a short non-question response
+must be resolved against that state unless it is clearly negative, corrective,
+sarcastic, or a new explicit task. Greeting shortcuts are architecturally
+incorrect while unresolved action state exists.
 
 ---
 
@@ -1526,6 +2104,123 @@ release-specific patching:
 That is an architectural shift toward durable, machine-consumable turn state.
 It materially lowers the risk of future drift caused by helper-specific string
 formats becoming accidental downstream contracts.
+
+### v1.0.8 Channel-Independent Tool Surface Truth
+The Telegram Metacritic/Playwright regression exposed a new but precise
+architecture violation: the connector path correctly entered
+`pipeline.RunPipeline`, but the turn-envelope optimization still collapsed
+short channel prompts into a zero-tool lightweight surface before registered
+tool pins were considered. That let the model claim missing web/browser
+capability even though `ghola` and Playwright MCP tools were registered.
+
+The corrected ownership rule is:
+
+- connector paths remain thin and share `pipeline.RunPipeline`
+- explicit registered-tool mentions and public-web/page requests are turn-local
+  pins owned by the pruner
+- lightweight/social-turn optimization may reduce budget, but cannot bypass pin
+  discovery or collapse the selected tool surface to zero when pins exist
+- accepted channel messages carry the same trust claim regardless of whether
+  they arrived through polling or webhook delivery; the adapter/parser is the
+  allowlist boundary, and the connector must not silently discard that evidence
+- channel-specific behavior is not allowed to define a second capability truth
+  path; API, Telegram, webhooks, and polling all consume the same selected tool
+  surface semantics
+- post-inference truth guards consume the selected tool surface as capability
+  evidence, not only completed tool calls. A model may report a selected tool's
+  concrete failure, denial, or missing target, but it cannot truthfully claim
+  missing browser/web/tool capability while that capability is present on the
+  selected surface and no policy/tool evidence contradicts it
+- task synthesis consumes the unified capability lexicon used by runtime tool
+  selection and prompt construction, not only DB-backed skill text. Registered
+  MCP, browser, ghola, web-channel, and built-in tools are capability evidence
+  before execution; synthesis may report execution uncertainty, but it must not
+  classify registered runtime tool words as missing skills
+- explicit public-web/browser/Playwright requests use a focused web-read turn
+  envelope. The proof path is a web-channel/browser tool attempt, not broad
+  runtime self-inspection; generic operational tools are therefore excluded from
+  that surface unless specifically requested
+- guard retries are recoverable diagnostic events. When the final response is
+  selected cleanly and no guard violation remains, RCA must preserve the
+  `guard_retry_recovered` diagnosis without falsely classifying the whole turn
+  as degraded
+- agent inventory has the same single-source requirement. The workspace canvas
+  and Agents page may render different projections, but they must consume one
+  roster composition seam rather than separately reconstructing orchestrator and
+  subagent lists. Dashboard delivery is websocket-topic owned; HTTP routes may
+  expose the same truth for management/debug/bootstrap, but the interface must
+  not use direct API polling as its control path
+- `sub_agents` table membership is the runtime truth that a row is a taskable
+  subagent. Legacy role labels such as `specialist`, `worker`, or route-local
+  aliases may be preserved as `source_role` metadata, but UI and API roster
+  projections must normalize the operational `role` to `subagent` so
+  Workspace, Agents: Roster, and Agents: List cannot disagree about whether a
+  worker exists
+- Workspace is an Agents projection, not a separate top-level ownership plane.
+  The dashboard may keep the canvas rendering distinct, but navigation and
+  state flow should treat it as an Agents tab backed by the same websocket
+  roster snapshot. Because it is now a tab, Workspace must preserve the same
+  Agents page chrome, spacing, and transition behavior as Roster and List; only
+  the tab body may switch to the canvas layout
+- Context is a Sessions projection, not a separate top-level ownership plane.
+  Session conversation lists and context/turn forensics may render different
+  projections, but they must consume the same session inventory truth. A
+  Context empty state may only claim no recorded turns when the session
+  inventory includes reliable turn counts or an explicit turn lookup proves it
+- Context session selection must include high-level forensic coverage before
+  the operator opens a session. At minimum the picker must expose turn count,
+  message count, trace/snapshot coverage, latest activity, and token/cost totals
+  when known, so operators can distinguish rich sessions from historical rows
+  that cannot produce context-footprint detail.
+- Session context drill-down must use canonical turn identity end to end.
+  `session_messages.id` is not a turn id. Any UI action that loads turn
+  context, tools, model selection, feedback, or analysis must be backed by
+  `turns.id` from the session-turn inventory; message IDs may be displayed as
+  transcript evidence but cannot drive turn-forensics routes.
+- Session context drill-down must prefer request-footprint evidence from
+  pipeline traces when durable `context_snapshots` rows are missing or stale.
+  A missing snapshot is a coverage state, not proof that the turn lacks context
+  diagnostics.
+- Session context footprint projection must make context pressure visually
+  inspectable, not merely numerically reported. The turn-detail view should
+  render the request footprint as a vertical allocation bar whose slice heights
+  reflect each slice's percentage of available context. Do not inflate
+  zero-token or tiny slices for label convenience; exact values for small slices
+  belong in the slice-selected detail pane beside the bar.
+  The selected slice must have an explicit visual indicator so operators can
+  connect aggregate budget pressure to the exact system, tools, memory,
+  history, user, reflection, or unused-budget payload behind it.
+- Turn analysis rendering must follow the route contract. `/api/turns/{id}/analyze`
+  returns `analysis` and `heuristic_tips`; dashboard renderers must not invent
+  a parallel `summary`/`tips` contract that silently degrades successful
+  analysis into "No summary."
+- Runtime version must be visible in the persistent dashboard chrome. The
+  sidebar footer may carry the canonical version, but the header must also
+  expose the same health-derived runtime version so small screens, collapsed
+  sidebars, and scroll states do not hide deployment truth.
+- API and dashboard webchannels are independently permissioned surfaces, not
+  synonyms. `/api/**` means externally addressable API/control/data access and
+  must be secured as such. Dashboard webchannels are dashboard-private state and
+  event delivery lanes; they may share producers with API routes, but they are
+  not API calls and must not inherit API permission assumptions by accident
+- memory-index injection is part of retrieval, not a loophole around memory
+  state. Stale, pruned, deduped, and otherwise non-active memories must not be
+  surfaced through `memory_index` just because the derived index row still
+  exists; focused web/browser turns are especially sensitive because mutable
+  current web state should be proven by tools rather than reinforced by stale
+  recollections
+- mixed human-agent continuity must be tested as a durable session, not as
+  isolated prompt/response cases. Normal operator interaction starts broad,
+  narrows through clarification, uses tools, waits, resumes with shorthand, and
+  expects prior observed facts to remain authoritative. The soak gate must
+  model at least 25 turns of that pattern so context resets and false access or
+  capability denials are caught before release. The same interaction must stay
+  available to post-turn memory mining so useful relationship, workflow, and
+  project context can be persisted or deliberately ignored by policy instead
+  of disappearing with the prompt window.
+
+This is not a Telegram-specific fix. It closes a systemic gap where an
+optimization layer could outrank operator intent and runtime capability truth.
 
 ---
 

@@ -340,8 +340,11 @@ Each benchmark run must preserve enough evidence for this checklist:
 - raw or canonical provider failure envelope
 - host-resource snapshot
 - provider/model runtime-state snapshot
+- evidence eligibility: whether the row is efficacy evidence, validity-only
+  evidence, or excluded from ranking
 - latency
 - grader rationale
+- bounded single-line CLI preview, with raw response retained separately
 - final RCA bucket assignment
 
 ## Output Expectations

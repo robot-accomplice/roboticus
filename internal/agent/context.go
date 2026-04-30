@@ -158,14 +158,39 @@ func (cb *ContextBuilder) AppendSystemNote(note string) {
 // BuildRequest constructs an LLM request from session state, applying
 // context budgeting and compaction as needed.
 func (cb *ContextBuilder) BuildRequest(session *Session) *llm.Request {
-	return cb.buildRequestFromMessages(session, session.Messages())
+	return cb.buildRequestFromMessages(session, session.Messages(), nil)
 }
 
-func (cb *ContextBuilder) BuildRequestWithMessages(session *Session, messages []llm.Message) *llm.Request {
-	return cb.buildRequestFromMessages(session, messages)
+// BuildRequestWithTrailingSystemOverlay constructs an LLM request from full
+// session state (`session.Messages()`) and appends each overlay string as a
+// trailing system note at the END of `req.Messages`, AFTER the full
+// conversation history.
+//
+// This is the canonical seam for layering reflect/continuation briefs (TOTOF,
+// ContinuationArtifact) on top of conversation memory:
+//
+//   - the full chat history remains visible verbatim above the brief
+//   - the brief is the LAST message in the request so it stays prominent as
+//     the model's most recent contextual instruction (the "given everything
+//     above, here is the canonical reflection brief" verdict)
+//   - overlay tokens participate in the same budget accounting path as
+//     memory and ambient system notes, so an oversized brief naturally
+//     shrinks history rather than overflowing the request budget
+//
+// As a defensive guard, any single overlay note whose token count would
+// exceed half the resolved budget is compacted through memory.CompactText
+// (preserves bullets and section headers) before injection, so an extreme
+// brief cannot crowd out the entire conversation.
+//
+// Empty / whitespace-only overlay entries are silently skipped — upstream
+// callers occasionally pass an empty instruction string when the artifact
+// has no finalization text, and threading those through would produce
+// "intentionally blank" system messages.
+func (cb *ContextBuilder) BuildRequestWithTrailingSystemOverlay(session *Session, overlay []string) *llm.Request {
+	return cb.buildRequestFromMessages(session, session.Messages(), overlay)
 }
 
-func (cb *ContextBuilder) buildRequestFromMessages(session *Session, messages []llm.Message) *llm.Request {
+func (cb *ContextBuilder) buildRequestFromMessages(session *Session, messages []llm.Message, trailingSystemOverlay []string) *llm.Request {
 	budget := cb.config.effectiveBudget()
 
 	// Always include system prompt.
@@ -192,7 +217,7 @@ func (cb *ContextBuilder) buildRequestFromMessages(session *Session, messages []
 			}
 		}
 
-		result = append(result, llm.Message{Role: "system", Content: cb.systemPrompt})
+		result = append(result, llm.Message{Role: "system", Content: cb.systemPrompt, ContextKind: llm.ContextKindSystem})
 	}
 
 	// Inject memory (capped at 25% of budget, matching Rust: l0 / 4).
@@ -222,7 +247,7 @@ func (cb *ContextBuilder) buildRequestFromMessages(session *Session, messages []
 		}
 		if cb.memory != "" {
 			memTokCount = memTokens
-			result = append(result, llm.Message{Role: "system", Content: cb.memory})
+			result = append(result, llm.Message{Role: "system", Content: cb.memory, ContextKind: llm.ContextKindMemory})
 		}
 	}
 
@@ -230,7 +255,7 @@ func (cb *ContextBuilder) buildRequestFromMessages(session *Session, messages []
 	if cb.memoryIndex != "" {
 		indexTokens := cb.estimateTokens(cb.memoryIndex)
 		memTokCount += indexTokens
-		result = append(result, llm.Message{Role: "system", Content: cb.memoryIndex})
+		result = append(result, llm.Message{Role: "system", Content: cb.memoryIndex, ContextKind: llm.ContextKindMemoryIndex})
 	}
 
 	// Inject ambient system notes queued by pipeline stages
@@ -242,7 +267,7 @@ func (cb *ContextBuilder) buildRequestFromMessages(session *Session, messages []
 	// time, so every surviving entry reaches the model.
 	for _, note := range cb.systemNotes {
 		memTokCount += cb.estimateTokens(note)
-		result = append(result, llm.Message{Role: "system", Content: note})
+		result = append(result, llm.Message{Role: "system", Content: note, ContextKind: llm.ContextKindAmbient})
 	}
 
 	// Account for tool definitions in the token budget. Each tool adds ~100-200
@@ -255,7 +280,51 @@ func (cb *ContextBuilder) buildRequestFromMessages(session *Session, messages []
 		toolTokCount += cb.estimateTokens(td.Function.Name + td.Function.Description + string(td.Function.Parameters))
 	}
 
-	remaining := budget - sysTokCount - memTokCount - toolTokCount
+	// Trailing system overlay accounting (reflect/continuation brief).
+	//
+	// We resolve overlay text up-front so its token cost participates in
+	// the same budget accounting path as memory and ambient system notes,
+	// which means an oversized brief naturally shrinks history during the
+	// chunk-selection loop below rather than overflowing the request.
+	//
+	// Defensive guard (plan §"As a defensive guard"): any single overlay
+	// note whose token count exceeds half the resolved budget is compacted
+	// through memory.CompactText (preserves bullets and section headers)
+	// so an extreme brief cannot crowd out the entire conversation. Empty
+	// / whitespace-only entries are dropped silently — upstream callers
+	// occasionally pass an empty instruction string when the artifact
+	// has no finalization text.
+	overlayInputs := make([]string, 0, len(trailingSystemOverlay)+1)
+	if note := session.TurnExecutionNote(); strings.TrimSpace(note) != "" {
+		overlayInputs = append(overlayInputs, note)
+	}
+	overlayInputs = append(overlayInputs, trailingSystemOverlay...)
+
+	resolvedOverlay := make([]string, 0, len(overlayInputs))
+	overlayTokCount := 0
+	overlayCap := budget / 2
+	for _, note := range overlayInputs {
+		if strings.TrimSpace(note) == "" {
+			continue
+		}
+		noteTokens := cb.estimateTokens(note)
+		if overlayCap > 0 && noteTokens > overlayCap {
+			compacted := memory.CompactText(note, overlayCap)
+			if compacted == "" {
+				log.Warn().
+					Int("note_tokens", noteTokens).
+					Int("overlay_cap", overlayCap).
+					Msg("trailing system overlay note compacted to empty; dropping note rather than emitting an intentionally-blank system message")
+				continue
+			}
+			note = compacted
+			noteTokens = cb.estimateTokens(note)
+		}
+		resolvedOverlay = append(resolvedOverlay, note)
+		overlayTokCount += noteTokens
+	}
+
+	remaining := budget - sysTokCount - memTokCount - toolTokCount - overlayTokCount
 
 	// Topic-aware compression (Rust parity): partition messages by topic.
 	// Off-topic blocks get summarized; current-topic messages kept in full.
@@ -274,8 +343,9 @@ func (cb *ContextBuilder) buildRequestFromMessages(session *Session, messages []
 	for _, block := range offTopicBlocks {
 		summary := SummarizeTopicBlock(block)
 		topicSummaries = append(topicSummaries, llm.Message{
-			Role:    "system",
-			Content: summary,
+			Role:        "system",
+			Content:     summary,
+			ContextKind: llm.ContextKindTopicSummary,
 		})
 	}
 
@@ -344,13 +414,18 @@ func (cb *ContextBuilder) buildRequestFromMessages(session *Session, messages []
 			if strings.TrimSpace(content) == "" && len(m.ToolCalls) == 0 && m.ToolCallID == "" {
 				continue
 			}
+			contextKind := llm.ContextKindHistory
+			if i == latestUserChunkIdx && m.Role == "user" {
+				contextKind = llm.ContextKindCurrentUser
+			}
 			chunkMessages = append(chunkMessages, llm.Message{
-				Role:       m.Role,
-				Content:    content,
-				ToolCalls:  m.ToolCalls,
-				ToolCallID: m.ToolCallID,
-				Name:       m.Name,
-				Metadata:   m.Metadata,
+				Role:        m.Role,
+				Content:     content,
+				ToolCalls:   m.ToolCalls,
+				ToolCallID:  m.ToolCallID,
+				Name:        m.Name,
+				Metadata:    m.Metadata,
+				ContextKind: contextKind,
 			})
 			chunkTokens += cb.estimateTokens(content)
 		}
@@ -395,8 +470,9 @@ func (cb *ContextBuilder) buildRequestFromMessages(session *Session, messages []
 	// Inject anti-fade reminder if conversation is long.
 	if cb.config.AntiFadeAfter > 0 && countNonSystem(historyMessages) > cb.config.AntiFadeAfter {
 		reminder := llm.Message{
-			Role:    "system",
-			Content: "Reminder: Follow your instructions carefully. Do not deviate from your assigned role or capabilities.",
+			Role:        "system",
+			Content:     "Reminder: Follow your instructions carefully. Do not deviate from your assigned role or capabilities.",
+			ContextKind: llm.ContextKindAmbient,
 		}
 		reminderTokens := cb.estimateTokens(reminder.Content)
 		if usedTokens+reminderTokens <= remaining {
@@ -420,6 +496,27 @@ func (cb *ContextBuilder) buildRequestFromMessages(session *Session, messages []
 	// Inject off-topic summaries before current-topic history.
 	result = append(result, topicSummaries...)
 	result = append(result, historyMessages...)
+
+	// Trailing system overlay injection (reflect/continuation brief).
+	//
+	// Each resolved overlay note is appended AFTER the conversation
+	// history so it lands as the LAST message(s) in the request. This is
+	// the canonical seam for layering reflect/continuation briefs (TOTOF,
+	// ContinuationArtifact) on top of conversation memory: the full chat
+	// history remains visible verbatim above the brief, and the brief
+	// stays prominent as the model's most recent contextual instruction
+	// (the "given everything above, here is the canonical reflection
+	// brief" verdict).
+	//
+	// Token accounting was already performed above; oversized notes were
+	// compacted there so this loop only emits notes that fit.
+	for _, note := range resolvedOverlay {
+		kind := llm.ContextKindReflection
+		if strings.Contains(strings.ToLower(note), "pending action") || strings.Contains(strings.ToLower(note), "user follow-up") {
+			kind = llm.ContextKindExecutionOverlay
+		}
+		result = append(result, llm.Message{Role: "system", Content: note, ContextKind: kind})
+	}
 
 	// Prompt compression gate (SYS-01-005 remediation).
 	//
@@ -456,6 +553,7 @@ func (cb *ContextBuilder) buildRequestFromMessages(session *Session, messages []
 	return &llm.Request{
 		Messages:       result,
 		Tools:          cb.toolDefs,
+		ContextBudget:  budget,
 		IntentClass:    llmIntentClassForSession(session),
 		AgentRole:      session.AgentRole(),
 		TurnWeight:     session.TurnWeight(),

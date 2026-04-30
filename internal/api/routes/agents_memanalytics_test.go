@@ -30,8 +30,12 @@ func TestListAgents_Empty(t *testing.T) {
 	}
 	body := jsonBody(t, rec)
 	agents := body["agents"].([]any)
-	if len(agents) != 0 {
-		t.Errorf("got %d agents, want 0", len(agents))
+	if len(agents) != 1 {
+		t.Errorf("got %d agents, want primary orchestrator only", len(agents))
+	}
+	first := agents[0].(map[string]any)
+	if first["role"] != "orchestrator" {
+		t.Errorf("role = %v, want orchestrator", first["role"])
 	}
 }
 
@@ -60,14 +64,23 @@ func TestListAgents_WithData(t *testing.T) {
 	}
 	body := jsonBody(t, rec)
 	agents := body["agents"].([]any)
-	if len(agents) != 2 {
-		t.Errorf("got %d agents, want 2", len(agents))
+	if len(agents) != 3 {
+		t.Errorf("got %d agents, want orchestrator + 2 subagents", len(agents))
 	}
 
-	// First result should be the most recently created.
+	// First result is always the operator-facing orchestrator.
 	first := agents[0].(map[string]any)
-	if first["name"] != "reviewer" && first["name"] != "coder" {
-		t.Errorf("unexpected name: %v", first["name"])
+	if first["role"] != "orchestrator" {
+		t.Errorf("first role = %v, want orchestrator", first["role"])
+	}
+	for _, raw := range agents[1:] {
+		agent := raw.(map[string]any)
+		if agent["role"] != "subagent" {
+			t.Fatalf("sub_agents row %q role = %v, want normalized subagent", agent["name"], agent["role"])
+		}
+		if agent["source_role"] == "" {
+			t.Fatalf("sub_agents row %q missing source_role metadata", agent["name"])
+		}
 	}
 }
 

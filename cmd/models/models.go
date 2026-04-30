@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/spf13/cobra"
 
@@ -41,7 +42,7 @@ func currentGitRevision() string {
 	return strings.TrimSpace(string(out))
 }
 
-func startExerciseRun(models []string, iterations int, config map[string]any, intentClass string) (string, error) {
+func startExerciseRun(models []string, iterations int, config map[string]any, intentClass, promptFilter, warmupMode string) (string, error) {
 	payload := map[string]any{
 		"initiator":          "cli",
 		"models":             models,
@@ -49,8 +50,18 @@ func startExerciseRun(models []string, iterations int, config map[string]any, in
 		"config_fingerprint": exerciseConfigFingerprint(config),
 		"git_revision":       currentGitRevision(),
 	}
+	notes := ""
 	if strings.TrimSpace(intentClass) != "" {
-		payload["notes"] = "intent filter: " + intentClass
+		notes = "intent filter: " + intentClass
+	}
+	if strings.TrimSpace(promptFilter) != "" {
+		notes = strings.TrimSpace(fmt.Sprintf("%s prompt filter: %s", notes, promptFilter))
+	}
+	if strings.TrimSpace(warmupMode) != "" && warmupMode != string(llm.ExerciseWarmupAuto) {
+		notes = strings.TrimSpace(fmt.Sprintf("%s warmup: %s", notes, warmupMode))
+	}
+	if notes != "" {
+		payload["notes"] = notes
 	}
 	resp, err := cmdutil.APIPost("/api/models/exercise/runs", payload)
 	if err != nil {
@@ -476,6 +487,10 @@ FLAGS:
                    confidence. Default: 1.
   --intent NAME    Exercise only one canonical intent slice from the
                    matrix (for example TOOL_USE or MEMORY_RECALL).
+  --prompt ROW     Exercise one exact canonical prompt row, e.g. TOOL_USE:C2.
+  --warmup MODE    Warm-up policy: auto, skip, or force. Auto preserves
+                   current baseline behavior; skip is useful for focused
+                   scoring/classification diagnosis on local models.
   --new-only       Skip models that already have baseline data. Only
                    applies when no model args are given.
   --flush          Flush all existing quality observations before
@@ -497,6 +512,15 @@ scored latency averages. Cloud models skip warm-up.`,
 		newOnly, _ := cmd.Flags().GetBool("new-only")
 		flush, _ := cmd.Flags().GetBool("flush")
 		intentName, _ := cmd.Flags().GetString("intent")
+		promptFilter, _ := cmd.Flags().GetString("prompt")
+		warmupModeRaw, _ := cmd.Flags().GetString("warmup")
+		warmupMode := llm.ExerciseWarmupMode(strings.ToLower(strings.TrimSpace(warmupModeRaw)))
+		if warmupMode == "" {
+			warmupMode = llm.ExerciseWarmupAuto
+		}
+		if warmupMode != llm.ExerciseWarmupAuto && warmupMode != llm.ExerciseWarmupSkip && warmupMode != llm.ExerciseWarmupForce {
+			return fmt.Errorf("invalid warmup mode %q (want auto, skip, or force)", warmupModeRaw)
+		}
 		var intentFilter *llm.IntentClass
 		intentLabel := ""
 		if strings.TrimSpace(intentName) != "" {
@@ -506,6 +530,16 @@ scored latency averages. Cloud models skip warm-up.`,
 			}
 			intentFilter = &intent
 			intentLabel = intent.String()
+		}
+		promptFilter = strings.ToUpper(strings.TrimSpace(promptFilter))
+		if promptFilter != "" {
+			rowIntent, _, err := llm.ParseExerciseRowSelector(promptFilter)
+			if err != nil {
+				return err
+			}
+			if intentFilter != nil && rowIntent != *intentFilter {
+				return fmt.Errorf("prompt row %s conflicts with intent filter %s", promptFilter, intentLabel)
+			}
 		}
 
 		config, err := cmdutil.APIGet("/api/config")
@@ -536,6 +570,9 @@ scored latency averages. Cloud models skip warm-up.`,
 				}
 			}
 		}
+		if promptFilter != "" {
+			promptCount = 1
+		}
 		totalPrompts := promptCount * iterations
 		fmt.Printf("\n  Exercising %d model(s):\n", len(models))
 		for _, m := range models {
@@ -547,6 +584,12 @@ scored latency averages. Cloud models skip warm-up.`,
 		}
 		if intentFilter != nil {
 			fmt.Printf("  Intent filter: %s\n", intentLabel)
+		}
+		if promptFilter != "" {
+			fmt.Printf("  Prompt filter: %s\n", promptFilter)
+		}
+		if warmupMode != llm.ExerciseWarmupAuto {
+			fmt.Printf("  Warm-up mode: %s\n", warmupMode)
 		}
 		fmt.Printf("  %d prompts × %d iteration(s) = %d scored calls per model.\n", promptCount, iterations, totalPrompts)
 		if flush && len(args) == 0 {
@@ -568,7 +611,7 @@ scored latency averages. Cloud models skip warm-up.`,
 		}
 
 		// Dispatch to the business-logic orchestrator.
-		runID, err := startExerciseRun(models, iterations, config, intentLabel)
+		runID, err := startExerciseRun(models, iterations, config, intentLabel, promptFilter, string(warmupMode))
 		if err != nil {
 			return fmt.Errorf("start exercise run: %w", err)
 		}
@@ -584,6 +627,7 @@ scored latency averages. Cloud models skip warm-up.`,
 		req := llm.ExerciseRequest{
 			Models:       models,
 			IntentFilter: intentFilter,
+			PromptFilter: promptFilter,
 			Iterations:   iterations,
 			SendPrompt:   cliPromptSender,
 			SendWarmup:   cliWarmupSender(config),
@@ -604,6 +648,7 @@ scored latency averages. Cloud models skip warm-up.`,
 				}
 				return &snapshot
 			},
+			WarmupMode:   warmupMode,
 			IsLocal:      func(m string) bool { return llm.ExerciseModelIsLocal(exerciseCfg, m) },
 			ModelTimeout: func(m string) time.Duration { return llm.ExerciseModelTimeout(exerciseCfg, m) },
 		}
@@ -853,26 +898,73 @@ func renderPromptProgress(o llm.PromptOutcome) {
 	latencyLabel := formatPromptLatency(o)
 	switch {
 	case o.Err != nil:
-		fmt.Printf("FAIL  %s  %v\n", formatOutcomeClass(o.OutcomeClass), o.Err)
+		fmt.Printf("FAIL  %s  %s\n", formatOutcomeClass(o.OutcomeClass), formatExercisePreview(o.Err.Error(), 80))
 	case !o.Passed && strings.TrimSpace(o.Content) == "":
 		fmt.Printf("FAIL  %s  %s%s\n", formatOutcomeClass(o.OutcomeClass), latencyLabel, formatModelStateSummary(o.ModelStateEnd))
 	case !o.Passed:
-		preview := strings.TrimSpace(o.Content)
-		if len(preview) > 50 {
-			preview = preview[:50] + "..."
-		}
+		preview := formatExercisePreview(o.Content, 50)
 		fmt.Printf("FAIL  %s  %s: %s%s\n", formatOutcomeClass(o.OutcomeClass), latencyLabel, preview, formatModelStateSummary(o.ModelStateEnd))
 	default:
-		preview := o.Content
-		if len(preview) > 50 {
-			preview = preview[:50] + "..."
-		}
+		preview := formatExercisePreview(o.Content, 50)
 		label := ""
 		if o.OutcomeClass == llm.ExerciseOutcomeSlowPass {
 			label = "  slow"
 		}
 		fmt.Printf("PASS%s  Q=%.2f  %s: %s\n", label, o.Quality, latencyLabel, preview)
 	}
+}
+
+func formatExercisePreview(content string, maxRunes int) string {
+	preview := strings.TrimSpace(stripANSIEscapeSequences(content))
+	if preview == "" {
+		return ""
+	}
+	var b strings.Builder
+	for _, r := range preview {
+		switch {
+		case r == '\n' || r == '\r' || r == '\t':
+			b.WriteByte(' ')
+		case r == '`':
+			b.WriteByte('\'')
+		case unicode.IsControl(r):
+			b.WriteByte(' ')
+		default:
+			b.WriteRune(r)
+		}
+	}
+	preview = strings.Join(strings.Fields(b.String()), " ")
+	if preview == "" || maxRunes <= 0 {
+		return preview
+	}
+	count := 0
+	for idx := range preview {
+		if count == maxRunes {
+			return strings.TrimSpace(preview[:idx]) + "..."
+		}
+		count++
+	}
+	return preview
+}
+
+func stripANSIEscapeSequences(content string) string {
+	var b strings.Builder
+	for i := 0; i < len(content); i++ {
+		if content[i] != 0x1b {
+			b.WriteByte(content[i])
+			continue
+		}
+		if i+1 < len(content) && content[i+1] == '[' {
+			i += 2
+			for i < len(content) {
+				c := content[i]
+				if c >= 0x40 && c <= 0x7e {
+					break
+				}
+				i++
+			}
+		}
+	}
+	return b.String()
 }
 
 func formatOutcomeClass(class llm.ExerciseOutcomeClass) string {
@@ -1126,11 +1218,8 @@ func buildComparisonRows(report llm.ExerciseReport, config map[string]any) []com
 		}
 		cr.Exercised = true
 		ensureComparisonMaps(&cr)
-		freshIntents := make(map[string]struct{}, len(r.IntentQuality)+len(r.Latencies))
+		freshIntents := make(map[string]struct{}, len(r.IntentQuality))
 		for intent := range r.IntentQuality {
-			freshIntents[intent] = struct{}{}
-		}
-		for intent := range r.Latencies {
 			freshIntents[intent] = struct{}{}
 		}
 		for intent := range freshIntents {
@@ -1598,6 +1687,8 @@ func init() {
 	// for the merge rationale.
 	modelsExerciseCmd.Flags().IntP("iterations", "n", 1, "Number of iterations over the prompt matrix")
 	modelsExerciseCmd.Flags().String("intent", "", "Exercise only one canonical intent class from the matrix")
+	modelsExerciseCmd.Flags().String("prompt", "", "Exercise one exact canonical prompt row, e.g. TOOL_USE:C2")
+	modelsExerciseCmd.Flags().String("warmup", string(llm.ExerciseWarmupAuto), "Warm-up policy: auto, skip, or force")
 	modelsExerciseCmd.Flags().Float64("min-quality", 0, "Minimum quality threshold (0.0-1.0) — flag models below this for removal")
 	modelsExerciseCmd.Flags().Bool("new-only", false, "Only exercise models with no existing baseline data (ignored when explicit args are given)")
 	modelsExerciseCmd.Flags().Bool("flush", false, "Flush ALL existing quality observations before exercising (preserves the old `baseline` command's reset-first semantics)")

@@ -405,6 +405,7 @@ func BuildMemoryIndex(ctx context.Context, store *db.Store, limit int, query ...
 			 FROM memory_index
 			 WHERE confidence > 0.1
 			   AND source_table != 'system'
+			   `+activeMemoryIndexSourceFilter("memory_index")+`
 			   AND summary LIKE ?`+toolNoiseFilter()+`
 			 ORDER BY confidence DESC, created_at DESC
 			 LIMIT ?`, likePattern, querySlots)
@@ -435,7 +436,8 @@ func BuildMemoryIndex(ctx context.Context, store *db.Store, limit int, query ...
 					 JOIN memory_index mi ON mi.source_table = fts.source_table AND mi.source_id = fts.source_id
 					 WHERE memory_fts MATCH ?
 					   AND mi.confidence > 0.1
-					   AND mi.source_table != 'system'`+toolNoiseFilter()+`
+					   AND mi.source_table != 'system'
+					   `+activeMemoryIndexSourceFilter("mi")+toolNoiseFilter()+`
 					 LIMIT ?`, ftsQuery, remaining)
 				if err == nil {
 					for rows.Next() {
@@ -460,7 +462,8 @@ func BuildMemoryIndex(ctx context.Context, store *db.Store, limit int, query ...
 		rows, err := store.QueryContext(ctx,
 			`SELECT id, source_table, summary, COALESCE(category, '') FROM memory_index
 			 WHERE confidence > 0.1
-			   AND source_table != 'system'`+toolNoiseFilter()+`
+			   AND source_table != 'system'
+			   `+activeMemoryIndexSourceFilter("memory_index")+toolNoiseFilter()+`
 			 ORDER BY
 			   CASE source_table
 			     WHEN 'semantic_memory' THEN 1
@@ -512,6 +515,29 @@ func BuildMemoryIndex(ctx context.Context, store *db.Store, limit int, query ...
 		"for relevant entries and call recall_memory(id). If nothing matches, call " +
 		"search_memories(query) to search the full memory store. " +
 		"NEVER fabricate, synthesize, or guess at memory content."
+}
+
+func activeMemoryIndexSourceFilter(alias string) string {
+	return fmt.Sprintf(`
+		   AND (
+		     %s.source_table NOT IN ('semantic_memory', 'semantic', 'episodic_memory', 'episodic')
+		     OR (
+		       %s.source_table IN ('semantic_memory', 'semantic')
+		       AND EXISTS (
+		         SELECT 1 FROM semantic_memory sm
+		          WHERE sm.id = %s.source_id
+		            AND sm.memory_state = 'active'
+		       )
+		     )
+		     OR (
+		       %s.source_table IN ('episodic_memory', 'episodic')
+		       AND EXISTS (
+		         SELECT 1 FROM episodic_memory em
+		          WHERE em.id = %s.source_id
+		            AND em.memory_state IN ('active', 'promoted')
+		       )
+		     )
+		   )`, alias, alias, alias, alias, alias)
 }
 
 // toolNoiseFilter returns SQL AND clauses that exclude tool-output noise from the memory index.

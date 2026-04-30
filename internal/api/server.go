@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -42,6 +41,7 @@ type AppState struct {
 	Browser         *browser.Browser
 	TelegramWebhook routesWebhookBatchParser
 	WhatsAppWebhook routesWhatsAppWebhook
+	ReloadSkills    func(context.Context) error
 }
 
 type routesWebhookBatchParser interface {
@@ -225,17 +225,9 @@ func NewServer(ctx context.Context, cfg ServerConfig, state *AppState) *http.Ser
 		// Skills.
 		r.Get("/api/skills", routes.ListSkills(state.Store))
 		r.Post("/api/skills/reload", routes.ReloadSkills(func() error {
-			// Reload skills from the configured directory by re-scanning.
-			dir := state.Config.Skills.Directory
-			if dir == "" {
-				return nil
+			if state.ReloadSkills != nil {
+				return state.ReloadSkills(context.Background())
 			}
-			// Count files to confirm the directory is accessible.
-			entries, err := os.ReadDir(dir)
-			if err != nil {
-				return fmt.Errorf("skills directory %q: %w", dir, err)
-			}
-			_ = entries
 			return nil
 		}))
 		r.Delete("/api/skills/{id}", routes.DeleteSkill(state.Store))
@@ -429,7 +421,7 @@ func NewServer(ctx context.Context, cfg ServerConfig, state *AppState) *http.Ser
 		r.Delete("/api/subagents/{name}", routes.DeleteSubagent(state.Store))
 
 		// Agents.
-		r.Get("/api/agents", routes.ListAgents(state.Store))
+		r.Get("/api/agents", routes.ListAgents(state.Store, state.Config))
 		r.Post("/api/agents/{id}/start", routes.StartAgent(state.Store))
 		r.Post("/api/agents/{id}/stop", routes.StopAgent(state.Store))
 		r.Post("/api/a2a/hello", routes.A2AHello())

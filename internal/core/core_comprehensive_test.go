@@ -260,11 +260,11 @@ func TestValidate_TreasuryMinimumReserve(t *testing.T) {
 	}
 }
 
-func TestValidate_SecurityDenyOnEmptyAllowlist(t *testing.T) {
+func TestValidate_SecurityDenyOnEmptyAllowlistFalseAllowed(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Security.Filesystem.DenyOnEmptyAllowlist = false
-	if err := cfg.Validate(); err == nil {
-		t.Error("deny_on_empty_allowlist=false should be invalid")
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("deny_on_empty_allowlist=false should validate: %v", err)
 	}
 }
 
@@ -600,7 +600,7 @@ func TestMergeBundledProviders(t *testing.T) {
 	}
 
 	// Check specific known providers from bundled_providers.toml.
-	for _, name := range []string{"ollama", "openai", "anthropic", "google"} {
+	for _, name := range []string{"ollama", "openai", "anthropic", "google", "deepseek"} {
 		if _, ok := cfg.Providers[name]; !ok {
 			t.Errorf("missing bundled provider %q", name)
 		}
@@ -617,6 +617,17 @@ func TestMergeBundledProviders(t *testing.T) {
 	}
 	if cfg.Providers["anthropic"].ExtraHeaders["anthropic-version"] != "2023-06-01" {
 		t.Error("anthropic should have anthropic-version header")
+	}
+
+	deepseek := cfg.Providers["deepseek"]
+	if deepseek.URL != "https://api.deepseek.com" {
+		t.Errorf("deepseek URL = %q", deepseek.URL)
+	}
+	if deepseek.Format != "openai" {
+		t.Errorf("deepseek format = %q, want openai", deepseek.Format)
+	}
+	if deepseek.ChatPath != "/chat/completions" {
+		t.Errorf("deepseek chat path = %q, want /chat/completions", deepseek.ChatPath)
 	}
 }
 
@@ -639,6 +650,50 @@ func TestMergeBundledProviders_UserOverride(t *testing.T) {
 	// Other bundled providers should still be added.
 	if _, ok := cfg.Providers["openai"]; !ok {
 		t.Error("non-overridden bundled providers should be added")
+	}
+}
+
+func TestMergeProviderPackFromFile_PrecedesBundledDefaults(t *testing.T) {
+	dir := t.TempDir()
+	pack := filepath.Join(dir, "providers.toml")
+	if err := os.WriteFile(pack, []byte(`
+[providers.deepseek]
+url = "https://pack.deepseek.test"
+tier = "T3"
+format = "openai"
+chat_path = "/chat/completions"
+api_key_ref = "deepseek_api_key"
+
+[providers.example]
+url = "https://example.test"
+tier = "T3"
+format = "openai"
+chat_path = "/v1/chat/completions"
+`), 0o600); err != nil {
+		t.Fatalf("write provider pack: %v", err)
+	}
+
+	cfg := DefaultConfig()
+	cfg.Providers = map[string]ProviderConfig{
+		"deepseek": {URL: "https://operator.deepseek.test"},
+	}
+
+	if err := cfg.MergeProviderPackFromFile(pack); err != nil {
+		t.Fatalf("MergeProviderPackFromFile: %v", err)
+	}
+	cfg.MergeBundledProviders()
+
+	if cfg.Providers["deepseek"].URL != "https://operator.deepseek.test" {
+		t.Fatal("operator provider URL should win over provider pack and bundled defaults")
+	}
+	if cfg.Providers["deepseek"].ChatPath != "/chat/completions" {
+		t.Fatal("provider pack should fill missing operator provider fields")
+	}
+	if cfg.Providers["example"].URL != "https://example.test" {
+		t.Fatal("provider pack should add providers absent from operator config")
+	}
+	if _, ok := cfg.Providers["openai"]; !ok {
+		t.Fatal("bundled providers should remain final fallback")
 	}
 }
 

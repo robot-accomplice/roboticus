@@ -4,6 +4,13 @@ These diagrams are the visual companion to
 [architecture_rules.md](/Users/jmachen/code/roboticus/architecture_rules.md)
 and [ARCHITECTURE.md](/Users/jmachen/code/roboticus/ARCHITECTURE.md).
 
+Shared terminology is defined in
+[ubiquitous-language.md](/Users/jmachen/code/roboticus/docs/ubiquitous-language.md).
+New architecture prose, diagnostics, UI labels, and operator-facing command
+descriptions should use that vocabulary. In particular, **Memory Curation** is
+the umbrella lifecycle for memory post-processing; **Memory Consolidation** is
+only the sub-phase that deduplicates, promotes, or distills memory.
+
 They are intentionally optimized for:
 
 - thin-connector comprehension
@@ -31,13 +38,21 @@ This file follows the same C4 conventions used elsewhere in the repo:
 - parity preserves what is best: if a heuristic fallback exists only because an
   indexed corpus is incomplete, fix the corpus and retire the heuristic rather
   than downgrading the live path to mimic an older baseline
+- user- and operator-facing surfaces must not receive canned template prose
+  appended or substituted after inference except when a protocol leaves no
+  alternative; see `ARCHITECTURE.md` §0 and `architecture_rules.md` §4.0
 - shared low-level primitives such as hashing and ID/content normalization live
   at or below `internal/core`; `internal/db` is not allowed to depend upward on
   `internal/agent/*` for generic helpers
+- planned helper wrappers and dormant subsystem methods are not acceptable
+  architecture. If a path is not wired into live control flow or covered as a
+  compatibility contract, delete it and reintroduce it with tests when the
+  feature actually needs it.
 - release-shaped binaries get version truth from one authoritative build seam:
-  CLI version is stamped into `cmd/internal/cmdutil.Version`, daemon banner
-  version into `internal/daemon.version`, and CI/release/local helper build
-  paths are not allowed to drift from that contract
+  `internal/version.Version`. CLI output, daemon banner, API health, A2A
+  discovery, and dashboard footer rendering are projections of that same value;
+  compatibility stamped symbols may exist temporarily but cannot be a second
+  source of truth.
 - release publication and downstream release notifications must derive from one
   explicit tag authority under both tag-push and manual rerun paths; critical
   release control flow is not allowed to depend on opaque third-party action
@@ -54,6 +69,9 @@ This file follows the same C4 conventions used elsewhere in the repo:
   admin surfaces are not allowed to collapse into one monolithic route file
 - unified pipeline-path enforcement follows the whole connector surface for a
   route family, not one legacy filename after a bounded split
+- benchmark route sub-surfaces such as exercise execution, historical rescore,
+  scorecard reads, and RCA classification stay split into bounded connector
+  files; rescore is not allowed to bloat the main exercise route handler file
 - verification coverage, executive-plan growth, and retry guidance must all
   consume one canonical subgoal set; the framework is not allowed to count the
   whole prompt and its conjunction-split parts as separate requested goals
@@ -65,12 +83,23 @@ This file follows the same C4 conventions used elsewhere in the repo:
 - benchmark scoring truth starts from the prompt contract, not generic
   verbosity or marker density; concise direct answers are not allowed to score
   poorly just because they omit irrelevant execution/delegation language
+- required-tool benchmark prompts require observed evidence or explicit blocked
+  evidence; legitimate negative results can satisfy lookup prompts, but access
+  failures or configuration/tool failures that block the requested work are RCA
+  evidence, not successful tool-use evidence
+- action-oriented execution/delegation benchmark prompts must distinguish
+  completed work from blocked or hypothetical work; blocked prose remains RCA
+  evidence but cannot be scored as a clean completion pass
 - historical benchmark rows must remain rescorable when prompt identity and raw
   response content are persisted; scoring-regime changes are not allowed to
   force blind reruns by default
 - benchmark aggregate quality must keep one explicit denominator contract:
   summary and scorecard views are not allowed to silently disagree about
   whether failures counted as zeroes or were excluded from an average
+- benchmark pass/fail has a default evaluable-quality floor of `0.50`; rows
+  below that floor are quality-gate failures, but their measured quality still
+  contributes to aggregate efficacy because they are model behavior evidence,
+  not validity incidents
 - partial benchmark exercise runs update only the exercised model/intent slice;
   comparison rows must preserve untouched historical intent evidence and
   recompute aggregate quality/latency from the merged scorecard instead of
@@ -88,20 +117,55 @@ This file follows the same C4 conventions used elsewhere in the repo:
   completes; scorecards are not allowed to drop phase timing silently just
   because trace/diagnostic persistence became visible slightly after the main
   response returned
+- request context footprint is an execution artifact, not a dashboard guess.
+  Context views must render the final request-owned footprint from trace
+  metadata when no durable `context_snapshots` row exists, and missing snapshot
+  coverage must be labeled separately from missing context evidence.
+- turn analysis routes return a stable summary/recommendation contract in
+  addition to lower-level heuristic details; dashboard controls are not allowed
+  to render empty "No summary" states for turns that exist and can be analyzed
+  heuristically.
 - benchmark exercise timeout policy must be prompt-aware: trivial/direct rows
   and complex multi-step `T-E-O-R` rows are not allowed to share one flat
   cloud timeout, and the benchmark client's wait budget must remain distinct
   from the server-side execution budget
+- benchmark scope diagnosis must support exact canonical row replay
+  (`INTENT:Cn`) through the shared exercise orchestrator, not just broad intent
+  slices, so RCA can isolate one suspect inference without re-running unrelated
+  prompts
+- benchmark warm-up policy must be explicit operator input. Normal baselines
+  include local warm-up, but scope diagnosis may bypass warm-up when the
+  question is scoring/classification rather than cold-start behavior.
 - benchmark model-call timeout is a per-inference-call budget, not a whole-row
   stopwatch. If a task requires think, tool observation, and reflection calls,
   the model/provider timer resets after each completed inference while total row
   wall-clock remains separately reported
+- context-window pressure is emitted by the final request assembly/routing seam,
+  not guessed by the dashboard. Sessions > Context renders a stacked footprint
+  of the active turn envelope budget: system/personality prompt, tools, memory,
+  memory index, ambient runtime/checkpoint notes, execution/reflection overlays,
+  prior history, latest user input, and unused capacity. Model-native context
+  limits may be shown only when provider metadata supplies them; otherwise the
+  request envelope budget is the honest denominator.
 - exploratory baseline ceilings and release-gate latency SLOs are separate
   contracts: baseline timeouts classify observability limits, while release
   gates may enforce product latency thresholds
 - exercise rows persist an explicit outcome class such as clean pass, slow
   pass, provider timeout, transport/API failure, empty response, or
   quality-gate failure; pass/fail alone is not RCA truth
+- benchmark efficacy scorecards must distinguish evaluable model behavior from
+  benchmark validity incidents: transport/API failures and provider timeouts
+  remain persisted RCA evidence, but they are not allowed to count as exercised
+  efficacy coverage or overwrite prior per-intent model evidence in comparison
+  tables
+- legacy unclassified blank zero rows are validity-ambiguous and must not be
+  resurrected as all-zero efficacy coverage; explicit `empty_response` rows may
+  still count as model behavior evidence
+- benchmark progress rows are operator telemetry, not artifact transport:
+  untrusted model text rendered inline by the CLI must be reduced to a bounded
+  single-line preview with control sequences, line breaks, tabs, and Markdown
+  fence delimiters neutralized; full raw content belongs in persisted exercise
+  artifacts and RCA joins, never in the live progress row
 - benchmark exercise rows persist canonical `turn_id` for every new prompt
   result so RCA, trace views, and scorecards join on one authoritative turn
   identity instead of timestamp/proximity heuristics
@@ -110,6 +174,46 @@ This file follows the same C4 conventions used elsewhere in the repo:
   inferred only from successful pipeline output
 - after authoritative tool observation, empty reflection is not a valid final
   answer: the loop must finalize from observed evidence or return a real error
+- guard exhaustion is not a license to synthesize deterministic user-facing
+  fallback prose; exhausted guards return structured failure evidence, retry
+  through scoped corrective guidance, or preserve authoritative observed
+  evidence
+- Agent Behavioral Contracts are an active v1.0.8 evaluation path for replacing
+  ad hoc guardrail methodology with explicit precondition, invariant,
+  governance, recovery, satisfaction, and drift evidence where that improves
+  measured reliability. Source credit:
+  ["Agent Behavioral Contracts: Formal Specification and Runtime Enforcement
+  for Reliable Autonomous AI Agents"](https://arxiv.org/pdf/2602.22302).
+- guard and verifier findings must emit contract-shaped RCA evidence before
+  they ask for retry or rewrite behavior. The first implementation seam is
+  structured event details on `turn_diagnostic_events`, not a broad operator
+  DSL or a new persistence table. Required fields are contract id/group,
+  phase, hard/soft/neutral severity, precondition state, violation state,
+  recovery action, recovery attempt/window, recovery outcome, and confidence
+  effect.
+- output-shape requests are runtime contracts. If the user asks for only a
+  number, one sentence, one line, JSON, bullets, or another bounded shape, the
+  post-inference guard seam validates that shape from the normalized prompt
+  contract. It may retry with scoped corrective guidance or surface structured
+  failure evidence, but it must not synthesize a fixed operator-facing answer.
+- action-bearing requests require capability-matched evidence. Generic ReAct
+  activity, runtime-context lookup, memory recall, and skill inventory calls do
+  not prove that filesystem, cron, browser, skill, or other requested actions
+  happened. Guards and verifiers compare requested capability class, selected
+  tool surface, and actual tool results before accepting a final answer or
+  treating a block as legitimate.
+- ABC-derived guard/RCA changes require a paired soak before release claims.
+  The baseline and after lanes must share model configuration, scenario set,
+  cache mode, server mode, and latency ceilings, and the isolated RCA database
+  must be retained so contract severity, recovery outcome, phase, and
+  confidence-effect metrics can be compared rather than inferred from chat
+  transcripts alone. ABC gains or losses may only be claimed from comparisons
+  marked valid for attribution; otherwise the output is diagnostic but
+  causally confounded.
+- canned user-facing guard rewrites are forbidden. A hard guard may block,
+  retry with scoped corrective guidance, or preserve useful observed evidence
+  with a structured violation, but it may not synthesize fixed prose as the
+  operator answer.
 - verifier retry suppression after execution progress requires non-empty final
   content; a suppressed retry may preserve a weak task-specific answer, but it
   must not persist a blank assistant message under an `ok` turn
@@ -120,15 +224,54 @@ This file follows the same C4 conventions used elsewhere in the repo:
   client/request context; client cancellation is not allowed to erase RCA
   artifacts for an already-started turn
 - coding prompts that request runnable artifacts are not allowed to be graded
-  primarily by prose quality; artifact parse/typecheck/compile and bounded
-  input/output correctness precede explanation/style in the active benchmark
-  architecture
+  primarily by prose quality; artifact parse/typecheck/compile precedes
+  explanation/style, and bounded input/output execution should be universally
+  available through a shared sandboxed evaluator seam. Generic scoring helpers
+  may call that seam, but they must not own ad hoc execution policy.
+- the initial executable coding evaluators are contract-bound: reverse-string
+  Go and Python artifact rows may run through temporary bounded harnesses
+  because the prompt defines deterministic input/output cases. Wider evaluator
+  support must add an explicit contract and tests before use.
 - source-backed code surgery is not generic heavy code work. Refactor/fix/debug
   turns over the current repository must use a repo-grounded focused profile
   that anchors on the actual source root, prioritizes authoritative source
   reads and bounded inspection over repo-inventory theater, treats productive
   read/list/glob steps as progress, and keeps retrieval neutral unless
   continuity/evidence cues are explicit
+- runtime filesystem guidance must expose inherited allowed-root semantics:
+  allowed paths are roots, descendants inherit access unless a narrower deny or
+  read/write distinction applies, and the model must attempt the relevant tool
+  before claiming that an allowed subtree needs additional configuration
+- short referential execution follow-ups such as "examine it", "inspect that",
+  or "look there" must preserve the immediately prior assistant context so the
+  pipeline can resolve the referenced vault/folder/section instead of treating
+  the turn as a disconnected generic request
+- short confirmations such as "please do", "go ahead", and "continue" must
+  bind to typed pending-action state when available, but continuation is a
+  state-resolution problem rather than a magic-word problem. When the previous
+  assistant left a concrete unresolved next action, short non-question operator
+  responses preserve that state unless they are clearly negative, corrective,
+  sarcastic, or a new explicit task. The greeting/social shortcut path is not
+  allowed to fire while unresolved action state exists.
+- Magic phrases are not an acceptable behavior owner. Exact phrase catalogs may
+  exist only as low-confidence detector hints, external protocol tokens,
+  safety/security evidence, or compatibility parsers with tests and an explicit
+  retirement path. Continuity, capability truth, guard recovery, and benchmark
+  scoring must first consume structured state: previous task, assistant
+  commitment/action candidates, observed tool results, runtime capability
+  evidence, and explicit unresolved gaps. If a behavior cannot be justified
+  without matching one exact operator phrase, the architecture is wrong.
+- Working memory is the short-term conversational/action frame and must be
+  injected before every non-terminal inference as active context. The
+  hippocampus/memory index is the mapping surface for discoverable long-term
+  semantic and episodic memory. Semantic/episodic memory is hydrated only when
+  the active context is insufficient, contradictory, or explicitly asks for
+  historical enrichment; it is not dumped into every turn merely because
+  working memory is always present.
+- short-followup expansion is execution-only scaffolding. It may feed task
+  synthesis, retrieval, tool selection, and inference, but persisted
+  `session_messages` must keep the operator-authored text so UI transcripts,
+  memory mining, and RCA do not confuse framework instructions for user intent.
 - session resolution must not continue on a phantom explicit `session_id`;
   body-scoped session ids either resolve to a durable `sessions` row or fail
   cleanly as not found before message persistence begins
@@ -158,9 +301,19 @@ This file follows the same C4 conventions used elsewhere in the repo:
   unavailable unless that conclusion is derived from the active tool surface,
   sandbox policy, network policy, or provider capability state and is visible
   in RCA
+- generic capability denial is not a safe fallback. If the turn has successful
+  runtime/tool evidence, reflection may report a bounded missing capability
+  only when a concrete policy, sandbox, network, provider, or tool error proves
+  that limitation; otherwise the guard seam must retry or degrade the answer
+  as unsupported capability denial
 - allowed-path reasoning must be subtree-aware: if an allowed root has already
   admitted `/a/b`, then `/a/b/c` is readable by default unless a narrower deny
   rule, mode distinction, or policy guard says otherwise
+- filesystem inspection root identity must survive the whole turn. Once the
+  pipeline resolves `/Users/.../roboticus` or another allowed inspection root,
+  follow-up relative read/list/search/glob tool calls within that turn must
+  anchor to that resolved root rather than silently falling back to the generic
+  workspace root.
 - user correction turns must update the active task interpretation before
   response generation. Corrections such as "section, not session" are not
   license to invent unrelated server/config work
@@ -307,6 +460,11 @@ This file follows the same C4 conventions used elsewhere in the repo:
 - explicit path-clarification follow-ups (`the vault in question is at /path`)
   stay on that same focused-inspection seam once the target noun + path are
   present; they do not drop back into generic question routing
+- explicit inspection paths may use operator shorthand such as
+  `~/code/roboticus`, but the path resolver must canonicalize the shorthand and
+  strip trailing natural-language prose before inference; the tool layer only
+  accepts that shorthand later when it normalizes to the already-resolved active
+  inspection root or an allowed root
 - alias-driven inventory questions (`projects in my code folder`, `files in my
   workspace folder`) stay on that same seam once the alias resolves to an
   allowlisted inspection target
@@ -352,6 +510,14 @@ This file follows the same C4 conventions used elsewhere in the repo:
 - read-only inspection turns may report discovered filenames and paths from
   authoritative inspection evidence without triggering authored-artifact claim
   checks; `artifact_set_overclaim` belongs to output-contract / mutation turns
+- read-only inspection turns that are asked to list, report, or summarize
+  concrete entries must carry at least some observed entries into the final
+  answer. Reflection is not allowed to replace authoritative inspection output
+  with meta-claims that a list existed
+- recovered hard-guard failures remain RCA-visible. A final answer can be
+  usable after retry while the turn remains diagnostically degraded, but the
+  summary must expose a primary diagnosis such as recovered guard violation
+  instead of leaving operators with a blank cause
 - direct `execute_directly` turns are not allowed to terminate on promissory
   future-action scaffolding such as `let me check...` when no tool call or
   authoritative evidence was produced; the direct-execution seam must treat
@@ -498,6 +664,28 @@ This file follows the same C4 conventions used elsewhere in the repo:
   The system is not allowed to select `openrouter` and later reinterpret the
   same target as direct `openai` because one code path joined the spec
   differently
+- provider onboarding must use the narrowest existing wire-format seam. A
+  provider with OpenAI-compatible chat completions is added as refreshable
+  provider-pack metadata (`url`, `chat_path`, `format`, key reference,
+  cost/locality facts), not as a bespoke client, unless its request/response
+  contract cannot be represented by the existing adapter. Embedded bundled
+  providers are fallback bootstrap data; `providers.toml` is the preferred
+  provider update channel.
+- provider compatibility quirks are owned by the same provider-profile seam.
+  If an implementation claims an existing standard but consistently varies in
+  parsing-sensitive behavior, such as malformed text tool-call JSON that needs
+  bounded brace repair, the quirk belongs in declarative provider metadata and
+  RCA evidence instead of scattered model-name conditionals.
+- provider key identity is canonical configuration, not UI folklore. The
+  operator-facing key-management API, setup wizard, daemon key resolver, and
+  status surfaces must converge on the Rust-compatible `<provider>_api_key`
+  keystore name while preserving compatibility with older Go
+  `provider_key:<name>` entries so existing credentials are not orphaned.
+- local keystore CLI commands are local secret-store operations, not daemon
+  RPCs. `roboticus keystore set/remove/import/list/status` must be able to
+  operate against the encrypted keystore while the daemon is stopped; the HTTP
+  provider-key routes are the dashboard/remote-management seam, not the only
+  write path for local operator credentials.
 - trace listings must preserve operator-usable turn identity: full turn ids
   remain directly copyable from the observability table, and truncation is
   allowed only as a presentation choice layered on top of the authoritative id
@@ -508,6 +696,11 @@ This file follows the same C4 conventions used elsewhere in the repo:
 - placeholder assistant scaffolding such as `[assistant message]` or
   `[agent message]` must be dropped at the loop boundary so it cannot enter
   history, retries, RCA, or operator-visible output
+- CLI topology is an operator-facing architecture seam. Root help must group
+  commands by operator domain rather than exposing an undifferentiated command
+  wall, and existing top-level command paths must remain backward compatible
+  unless a later migration explicitly ships aliases/proxies and release notes
+  for every moved path
 - operator RCA on desktop is expected to read left-to-right as one bounded
   decision flow: macro mode uses compact blocks plus one dense top status
   banner, while turn conclusion and health may move to a separate bottom
@@ -555,6 +748,20 @@ This file follows the same C4 conventions used elsewhere in the repo:
   first-class evidence. A prompt that asks what the user told the agent earlier
   in the same session is not allowed to degrade into generic memory-search gaps
   when the needed facts are already present in session history.
+- Sessions > Context session selection is a forensic inventory, not a blind
+  ID list. Rows must show high-level evidence coverage such as turns, messages,
+  traces, snapshots, latest activity, and token/cost totals when available
+  before the operator opens turn detail.
+- Sessions > Context turn actions must use canonical `turns.id` values, never
+  `session_messages.id` values. Message IDs are transcript evidence only; they
+  are not valid route keys for turn context, analysis, tools, diagnostics, or
+  feedback.
+- Sessions > Context turn analysis must render the canonical analysis payload.
+  The route returns `analysis` and `heuristic_tips`; dashboard code may keep
+  legacy aliases as fallbacks, but the primary contract is not `summary`/`tips`.
+- The dashboard must expose runtime version truth in persistent chrome. Sidebar
+  footer and header version chips both read the same `/api/health` version
+  field so collapsed/hidden sidebars do not hide deployment identity.
 - once continuity evidence exists in the current session, generic retrieval
   gaps must not outrank it during verification.
 - memory retrieval is a confidence modifier, not a universal proof gate.
@@ -565,6 +772,12 @@ This file follows the same C4 conventions used elsewhere in the repo:
 - scheduling is a focused execution seam. Requests to create or describe a cron
   schedule must pin the authoritative scheduling tool plus only minimal support
   tools; they are not allowed to widen into general exploratory tool surfaces.
+- scheduling vocabulary is not sufficient proof of scheduling intent. The
+  pipeline must distinguish context-setting turns that define an alias or
+  output contract from direct requests to create/list/delete scheduled work.
+  Context-setting turns may complete through the requested output contract;
+  direct scheduling turns require `cron` evidence or concrete missing-input,
+  tool, policy, or sandbox evidence.
 - sandbox allowlist checks must compare canonical path identity rather than raw
   string case so the same real path is not alternately allowed and denied across
   layers; that includes future child paths under symlinked roots, where the
@@ -576,9 +789,11 @@ This file follows the same C4 conventions used elsewhere in the repo:
 - filesystem tool schemas and descriptions must reflect the real sandbox
   contract: workspace-relative paths and absolute allowed paths are both valid
   when policy allows them.
-- explicit acknowledgement directives are shortcut-class work. A user request
-  to acknowledge in one sentence and wait should be satisfied by the shortcut
-  layer rather than left to open-ended model phrasing.
+- deterministic contract exits are not magic phrases or canned prose. A user
+  request to acknowledge in one sentence and wait may complete without a full
+  tool loop only when the requested contract is explicit, bounded, and contains
+  no action-bearing work. The runtime must derive that path from turn state and
+  contract shape, not from a brittle blessed phrase list.
 - tool execution truth is execution-owned: when the loop runs a tool, the tool
   audit trail and RCA counters must be written from that same execution event,
   not reconstructed later from session history
@@ -770,33 +985,331 @@ flowchart LR
 
 ## 6.5 Supplementary Rule View — Capability Truth Ownership
 
-Capability truth must be singular. The system is not allowed to show an
-enabled skill in the UI, miss it in capability fit, omit it from the live
+Capability truth must be singular and live. The system is not allowed to show
+an enabled skill in the UI, miss it in capability fit, omit it from the live
 runtime matcher, and still tell the model it might exist. One authoritative
-inventory must drive every downstream seam, and any config-gated capability
-must degrade visibly and consistently when its runtime precondition is absent.
+runtime inventory must reconcile file-backed skill artifacts, DB policy and
+metadata, built-in runtime capabilities, and config preconditions. That
+inventory must refresh after skill file changes, catalog installs, agent-authored
+skills, DB enable/disable changes, and explicit reload requests. Any capability
+that cannot be instantiated must degrade visibly and consistently with an
+unavailable reason rather than remaining an enabled phantom.
 
 ```mermaid
 flowchart LR
-    store["Authoritative Skill Inventory\n(DB rows + source paths + enabled state)"]
-    loader["Runtime Skill Loader\n(live matcher + prompt inventory)"]
+    store["Skill Control Plane\n(DB policy, usage, provenance)"]
+    files["Skill Artifacts\n(files + hashes + triggers)"]
+    inventory["Live Runtime Inventory\n(reconciled, refreshable truth)"]
     cfg["Runtime Config Preconditions\n(vault path, allowed paths, feature flags)"]
     tools["Live Tool Registry"]
     synthesis["Task Synthesis / Capability Fit"]
     prompt["Prompt Guidance"]
     ui["Operator UI / Skills Surface"]
 
-    store --> loader
-    store --> synthesis
-    store --> ui
-    cfg --> loader
+    store --> inventory
+    files --> inventory
+    cfg --> inventory
     cfg --> tools
-    loader --> prompt
-    loader --> tools
+    inventory --> synthesis
+    inventory --> prompt
+    inventory --> ui
+    inventory --> tools
     tools --> synthesis
     tools --> prompt
     tools --> ui
 ```
+
+Agent roster truth follows the same rule. The operator-facing orchestrator and
+taskable subagents are one registry view, not separate workspace and Agents-page
+inventories. The dashboard is driven by websocket topic snapshots, not direct
+HTTP polling. Workspace canvas, Agents page, `/api/agents`, `/api/subagents`,
+and roster controls may project the registry differently, but they must retrieve
+from the same composition seam and classify orchestrator, running subagent,
+stopped subagent, unhealthy subagent, and discovered external agent explicitly.
+HTTP routes are management/debug/bootstrap surfaces; they are not the dashboard
+control plane.
+Rows stored in `sub_agents` are operationally subagents even when legacy role
+labels say `specialist` or another synonym; those labels are metadata, not a
+second classification source. Workspace belongs under Agents as a canvas tab,
+not as an independent top-level agent inventory owner. As an Agents tab it must
+keep the same tab chrome and padded content frame as Roster and List, with only
+the tab body switching to the canvas layout.
+
+Context follows the same ownership rule under Sessions. The conversation list
+and context/turn forensic views are session projections, so Context belongs as
+a Sessions tab and its empty states must be driven by authoritative session
+turn counts or explicit turn queries, never by absent UI-only fields.
+
+Agent behavior fitness requires mixed-mode continuity evidence. Single-turn
+guard checks are not enough: a normal session starts broad, narrows through
+clarification, interleaves tools with chat, and resumes work through shorthand.
+Release soaks must include a durable 25+ turn sequence that proves observed
+tool facts, repository access, and pending assistant-proposed actions remain
+available across the interaction. That sequence must also reach the post-turn
+memory mining seam so durable memory can preserve useful continuity over time
+instead of relying only on transient conversation history.
+The soak must verify state-based continuation resolution, not only a fixed list
+of accepted follow-up phrases.
+
+## 6.6 Supplementary Rule View — Tool Execution Admission Ownership
+
+Tool admission is a single ordered pipeline, not a stack of independent
+filters that quietly disagree with each other. Every registered built-in is
+classified by `OperationClassForName`, every operator-pinned tool survives
+both policy filtering and `MaxTools` truncation, and approval classification
+runs at one dispatch site. The agent loop never invents its own admission
+logic.
+
+Pin survival is not a backdoor around explicit turn-envelope exclusions. If a
+focused action envelope disables retrieval, globally pinned memory tools such
+as `recall_memory` and `search_memories` must still be removed from that turn
+surface. The model should execute the action-specific tool first and use
+memory only when the task is genuinely continuity-shaped or the focused
+envelope explicitly permits retrieval.
+
+An operator explicitly naming a registered tool in the current request is a
+turn-local pin. Semantic ranking may order non-pinned tools, and policy may
+still deny or gate execution, but pruning cannot hide the named capability and
+then allow the model to invent a different tool path or claim the capability
+does not exist.
+
+The same rule applies to clear public-web read tasks when a web-read tool is
+registered. URL fetches, explicit website/page reads, and latest/current web
+lookup requests must surface registered `OperationWebRead` tools before the
+model is asked to answer. Policy can still deny the call, but absence of a web
+tool on the prompt surface is not allowed to masquerade as model incapability.
+Lightweight turn optimization is not allowed to override either of these pin
+rules. A short Telegram/API/web prompt that names a registered tool or asks for
+a public web/page read is still an action-bearing turn for tool-surface
+purposes; it may keep a small context budget, but it must not collapse the
+selected tool set to zero before pin survival runs.
+
+Generic tool-demonstration turns are action-bearing even when they begin with
+capability discovery language. If the operator asks the agent to describe tools
+and then "pick one" or "use one", the capability snapshot can support the
+description but capability-inventory tool calls are not proof of work and should
+not be exposed on the action surface. The turn envelope must expose bounded,
+low-risk execution/read tools, and the guard must require at least one
+non-inventory tool result or a concrete execution block before finalization.
+After such a tool result exists, including a concrete tool error, finalization
+should summarize the selected tool and observed result directly. It must not
+append generic follow-up offers that make the action look unfinished unless a
+required input is genuinely missing.
+
+Procedural workflow lookup is memory retrieval, not live capability inventory.
+`find_workflow` searches procedural memory and may enrich retrieval-enabled
+turns, but it must not leak into no-retrieval focused surfaces as if it were a
+tool the agent can demonstrate. Otherwise stale workflow memory can redirect a
+simple tool-use request into an unrelated pseudo-action.
+
+RCA tool-surface telemetry is owned by the pipeline-selected tool set, not by
+later routing internals. The routing selector may see a partial request shape,
+but operator diagnostics must report the canonical selected tools from
+`session.SelectedToolDefs()` and the execution audit rows from `tool_calls`.
+
+Selected tools are capability evidence before execution. A final answer may
+truthfully report that a selected tool failed, was denied by policy, or still
+needs a concrete target, but it may not claim the agent lacks the selected
+capability unless that claim is backed by policy, sandbox, provider, or tool
+execution evidence. Guards therefore consume the selected tool surface as well
+as completed tool results: selected tools prove available capability; tool
+results prove what actually happened.
+Action-evidence guards fire only after the runtime has established a selected
+tool surface or actual tool results. If tool pruning itself fails before a
+surface exists, that is a tool-surface/RCA defect, not permission for the guard
+to invent a missing execution failure.
+
+The workspace root is the primary sandbox root, not an optional allowlist entry.
+Relative paths resolve under it, and absolute paths that canonicalize under the
+workspace root must remain valid even when additional `allowed_paths` are
+configured. Extra allowed paths widen the sandbox; they must not accidentally
+narrow the workspace.
+
+Guard retry diagnostics distinguish recovery from failure. A scheduled guard
+retry is evidence that the first answer was unsafe or untruthful, not proof that
+the completed turn failed. If the final response has no remaining guard
+violations, RCA records the recovery diagnosis but leaves the turn status
+healthy.
+
+Task synthesis must use the same runtime capability inventory that later feeds
+tool pruning and prompt construction. Skill inventory alone is not capability
+truth: MCP tools, built-in tools, ghola, browser tools, and web-channel tools
+are runtime capabilities even when no matching skill file exists. A registered
+runtime tool may still fail at execution time, but task synthesis must not mark
+its capability words as missing before the selected tool surface has had a
+chance to execute.
+
+Explicit public-web, page, browser, or Playwright requests use a focused
+web-read envelope. That surface admits web-channel tools and browser-read tools
+instead of broad runtime introspection, because the requested proof is an
+attempt to access the web target, not a generic self-inventory answer.
+
+Dashboard webchannels are not public API aliases. `/api/**` denotes an
+externally addressable API/control/data surface with its own permission model;
+webchannels are dashboard-private state and event delivery lanes. When both
+surfaces need the same truth, they share a producer. The dashboard must not use
+direct API polling as its normal control path, and webchannels must not
+reimplement API route logic.
+
+Memory-index rows are derived recall handles, not independent truth. Index
+queries must verify source memory state before injecting entries into the model
+prompt. Stale/pruned/deduped source memories are non-reinforcing and must stay
+out of the prompt even if an old `memory_index` row still matches the request.
+
+```mermaid
+flowchart TD
+    subgraph composition["Composition Root"]
+        registry["Tool Registry\n(internal/agent/tools)"]
+        approvals["policy.ApprovalManager\n(Gated/Blocked classification)"]
+        cfg["core.Config\n(ToolSearch.AlwaysInclude, Approvals, WebTools)"]
+    end
+
+    subgraph pipeline["Pipeline (admission policy owner)"]
+        synth["Task Synthesis\n(skill + runtime tool capability lexicon)"]
+        prune["ToolPruner.PruneTools\n(semantic rank + AlwaysInclude pin)"]
+        polfilter["filterToolDefsForPolicy\n(per-profile OperationClass admit list)"]
+        pinsurv["Pin Survival\n(re-admit AlwaysInclude after filter+truncate)"]
+        maxtools["MaxTools Truncation\n(non-pin tail only)"]
+        surface["session.SetSelectedToolDefs\n(authoritative turn surface)"]
+    end
+
+    subgraph loop["Agent Loop (dispatch owner)"]
+        admit["toolAllowedForTurnSurface\n(reject anything not on the surface)"]
+        approval["ApprovalManager.ClassifyTool\n(Blocked = hard deny, Gated = log+execute)"]
+        polEval["policy.Engine.EvaluateWithTools\n(per-call policy check)"]
+        execute["ToolRegistry.Get(name).Execute\n(dispatch)"]
+    end
+
+    cfg --> registry
+    cfg --> approvals
+    registry --> synth
+    cfg --> prune
+    registry --> prune
+    prune --> polfilter
+    polfilter --> pinsurv
+    pinsurv --> maxtools
+    maxtools --> surface
+    surface --> admit
+    admit --> approval
+    approval --> polEval
+    polEval --> execute
+```
+
+Forbidden architectural moves:
+
+- bypassing `OperationClassForName` with ad-hoc name checks at the admission
+  site
+- allowing `MaxTools` or `filterToolDefsForPolicy` to drop a tool that
+  `AlwaysInclude` named for this turn
+- allowing an `AlwaysInclude` memory pin to override a focused action
+  envelope with `AllowRetrieval=false`
+- treating an explicit operator request such as `use the ghola tool` as plain
+  semantic query text; registered named tools are per-turn pins, not embedding
+  accidents
+- relying on semantic ranking alone for clear public-web read tasks; registered
+  web-read tools are per-turn pins for URL fetch, website/page read, latest,
+  current, browse, and web-search style requests
+- using lightweight/social-turn suppression to bypass pin survival; no channel
+  path may convert an explicit tool or public-web request into a zero-tool
+  conversational turn before policy admission has considered the pinned tools
+- treating `list-available-skills`, `get_subagent_status`, memory retrieval, or
+  runtime inventory as successful execution evidence for a generic "pick a tool
+  and use it" request; those are discovery aids, not the requested action
+- reporting `inference.routing.request_tool_count` from a synthetic or partial
+  routing request when `session.SelectedToolDefs()` already contains the
+  canonical turn surface
+- introducing a parallel approval surface (the dead `agent.ExecutionRegistry`
+  and `agent.ApprovalManager` were removed in v1.0.8 for exactly this reason)
+- registering a built-in without classifying it; `OperationUnknown` is
+  reserved for plugin/MCP tools that the registry has not described
+
+Focused scheduling tools may derive non-authoritative labels from the task
+payload when the user supplied a complete schedule and task but omitted a job
+name. A missing human-friendly name is metadata, not a reason to abandon a
+safe, otherwise fully specified scheduling action. The tool result must expose
+the derived name so the operator can audit, rename, or delete the job.
+
+## 6.7 Supplementary Rule View — Compatibility Repair Owns Schema Drift
+
+Startup compatibility repair must handle safe schema-shape drift that prevents
+normal operation after an upgrade. Optional-column repair is not enough when an
+older table carries a now-invalid CHECK constraint. If a live table contains
+stale validation that rejects current runtime-owned event names, `Open()` must
+repair that table shape idempotently, preserve existing rows, and log the
+repair. Runtime tools must not paper over schema drift with alternate event
+names because that would split the control-plane vocabulary between old and new
+stores.
+
+## 6.8 Supplementary Rule View — ReAct Reflection Memory Layering
+
+Reflection (TOTOF) and continuation are a *tighter* action-request lens layered
+on top of conversation memory. They do not replace conversation memory and
+they are not allowed to leak control sentinels into operator-facing chat. The
+brief is the LAST message in the LLM request so it stays prominent as the
+model's most recent contextual instruction; the full chat history sits intact
+above it.
+
+```mermaid
+flowchart TD
+    subgraph session["Session State"]
+        history["session.Messages\n(full user/assistant/tool history)"]
+        artifact["TOTOF / ContinuationArtifact\n(canonical observed-results brief)"]
+    end
+
+    subgraph builder["ContextBuilder (request owner)"]
+        overlay["BuildRequestWithTrailingSystemOverlay\n(history + budget + trailing system notes)"]
+    end
+
+    subgraph request["LLM Request (ordered)"]
+        sys["1. System prompt"]
+        mem["2. Memory + ambient system notes"]
+        chat["3. FULL conversation history"]
+        brief["4. Reflect/continuation brief (LAST)"]
+    end
+
+    subgraph loop["Agent Loop (sentinel discipline)"]
+        detect["detectContinueExecution\n(line-anchored, mid-message tolerant)"]
+        scrub["scrubControlSentinels\n(belt-and-braces at every persist site)"]
+        persist["session.AddAssistantMessage*\n(only cleaned content)"]
+    end
+
+    history --> overlay
+    artifact --> overlay
+    overlay --> sys
+    overlay --> mem
+    overlay --> chat
+    overlay --> brief
+    brief --> detect
+    detect --> scrub
+    scrub --> persist
+```
+
+Forbidden architectural moves:
+
+- replacing `session.Messages()` with a synthetic 2-message
+  `[system, user-TASK]` scaffold for reflect or continuation
+- preserving chat history while dropping active `MemoryContext` /
+  `MemoryIndex`; working memory is part of the continuity contract, not an
+  optional prompt embellishment
+- placing the TOTOF brief BEFORE the conversation (it must be the trailing
+  system note so it remains the most recent contextual instruction)
+- synthesizing a fake user message for reflect/continuation when the real
+  user turn already exists in `session.Messages()`
+- detecting `CONTINUE_EXECUTION` only as a strict `HasPrefix` of trimmed
+  content; the sentinel may follow prose lines and detection must be
+  line-anchored
+- persisting any assistant message that contains a control sentinel without
+  scrubbing it first
+- weakening TOTOF's `Render()` text or removing the
+  `synthesizeFromToolResults` empty-response fallback in pursuit of
+  simpler control flow; the lens stays sharp, the loop stays self-correcting
+
+Capability-discovery corollary:
+
+- runtime capability discovery (`introspect`, skill inventory, subagent
+  roster, runtime context) must remain available under embedding failure and
+  focused tool-pruning conditions; otherwise the agent can falsely conclude it
+  lacks skills or tools that the runtime actually registered
 
 ## 7. Supplementary Rule View — Delegation And Orchestration Ownership
 
@@ -1503,7 +2016,7 @@ User Query
     Post-Turn:
     ├── Reflection (episode summary → episodic_memory)
     ├── Procedure Detection (tool sequences → learned_skills)
-    └── Consolidation (dreaming: promote, decay, prune)
+    └── Memory Curation (consolidate, govern, decay, prune)
 ```
 
 ### Memory Type Roles

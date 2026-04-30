@@ -28,6 +28,14 @@ Roboticus is an autonomous agent runtime that ships as a single Go binary backed
 
 **Multi-model routing** | **5-tier memory** | **8 channels** | **25-guard output pipeline** | **On-chain wallet** | **Full dashboard SPA**
 
+### Universal product rule
+
+**No canned user- or operator-facing prose:** the runtime does not append or
+substitute fixed template blocks into agent answers, guards, or APIs except when
+a protocol leaves no alternative. Explanations trace to the model, tool results,
+and structured errors—not boilerplate stitched in after inference. (See
+`ARCHITECTURE.md` §0, `architecture_rules.md` §4.0, and `AGENTS.md` / `CLAUDE.md`.)
+
 ---
 
 ## What Makes Roboticus Different
@@ -86,6 +94,25 @@ Most agent frameworks are libraries you call. Roboticus is a **runtime you deplo
 ```
 
 **Connector-Factory pattern**: All business logic lives in the pipeline. Channel adapters and HTTP routes are thin connectors that parse input, call `pipeline.RunPipeline()`, and format output. Route handlers never import the agent package directly. This is enforced by architecture tests.
+
+---
+
+## Research Attribution
+
+Roboticus roadmap items that adopt or investigate whitepaper ideas must credit
+the source at the point where the idea enters the product plan. Current tracked
+research influences include:
+
+| Roadmap area | Source |
+| ------------ | ------ |
+| Agent behavioral contracts, guard/RCA contract events, hard/soft recovery semantics | ["Agent Behavioral Contracts: Formal Specification and Runtime Enforcement for Reliable Autonomous AI Agents"](https://arxiv.org/pdf/2602.22302) |
+| Recursive memory, retrieval, and learned decomposition investigation | [Recursive Language Models](https://arxiv.org/html/2512.24601v1) |
+| Semantic-collapse defense, late-interaction retrieval, reranking, and agentic RAG roadmap work | [ColBERTv2](https://arxiv.org/abs/2112.01488), [Agentic RAG Survey](https://arxiv.org/abs/2501.09136), [A-RAG: Hierarchical Retrieval Interfaces](https://arxiv.org/html/2602.03442v1) |
+| Learning-loop closure and reusable tool-use procedure synthesis | [Autonomous tool-use learning in LLM agents](https://arxiv.org/abs/2603.05344) |
+
+When research-derived mechanisms become implementation work, claims must be
+validated by Roboticus evidence: benchmarks, RCA, soaks, regression tests, or
+release gates. Attribution is credit, not proof.
 
 ---
 
@@ -157,7 +184,7 @@ The exercise matrix tests 20 prompts across 4 intent classes (Execution, Delegat
 
 Hybrid search combining FTS5 full-text matching with cosine similarity of embeddings, weighted by configurable `hybrid_weight` (default 0.5). Budget allocation per tier: working 30%, episodic 25%, semantic 20%, procedural 15%, relationship 10%.
 
-### Consolidation
+### Memory Curation
 
 7-phase background pipeline:
 
@@ -169,7 +196,9 @@ Hybrid search combining FTS5 full-text matching with cosine similarity of embedd
 6. Importance decay (episodic, after 7-day grace)
 7. Orphan cleanup (FTS, embeddings, inactive working memory)
 
-Quiescence gate skips dedup if a session was active in the last 5 seconds.
+Memory consolidation is the deduplication/promotion/distillation subset of
+Memory Curation. Quiescence gates mutating curation work so active
+conversations are not competing with memory lifecycle changes.
 
 ---
 
@@ -375,6 +404,12 @@ per_payment_cap = 1.0
 workspace_only = true
 deny_on_empty_allowlist = true
 
+# Optional: external network tools (off by default). Install ghola separately; same authority policy as http_fetch (RiskCaution).
+[web_tools]
+http_fetch_enabled = false
+ghola_enabled = false
+# ghola_path = "/usr/local/bin/ghola"
+
 [skills]
 sandbox_env = true
 hot_reload = true
@@ -424,7 +459,7 @@ Pre-configured and available without TOML entries:
 | `GET` | `/api/memory/episodic` | Episodic memory (importance-ranked) |
 | `GET` | `/api/memory/semantic` | Semantic knowledge store |
 | `GET` | `/api/memory/search?q=` | Cross-tier hybrid search |
-| `POST` | `/api/memory/consolidate` | Trigger consolidation pipeline |
+| `POST` | `/api/memory/consolidate` | Trigger memory curation pipeline |
 
 ### Scheduling & Administration
 
@@ -450,7 +485,7 @@ roboticus/
 ├── cmd/                    # CLI commands (~40 commands)
 ├── internal/
 │   ├── agent/              # Agent loop, memory, retrieval, policy, skills, tools
-│   │   ├── memory/         # 5-tier memory + consolidation (7 phases)
+│   │   ├── memory/         # 5-tier memory + curation lifecycle
 │   │   ├── orchestration/  # Multi-agent decomposition
 │   │   ├── policy/         # 7-rule policy engine
 │   │   ├── skills/         # Skill loader + hot-reload

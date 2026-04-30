@@ -33,17 +33,42 @@ func ListSessions(store *db.Store) http.HandlerFunc {
 		for rows.Next() {
 			var id, agentID, scopeKey, status, createdAt, updatedAt string
 			var nickname *string
-			if err := rows.Scan(&id, &agentID, &scopeKey, &status, &nickname, &createdAt, &updatedAt); err != nil {
+			var turnCount, messageCount, traceCount, snapshotCount, totalTokens int64
+			var totalCost float64
+			var lastActivityAt string
+			if err := rows.Scan(
+				&id,
+				&agentID,
+				&scopeKey,
+				&status,
+				&nickname,
+				&createdAt,
+				&updatedAt,
+				&turnCount,
+				&messageCount,
+				&traceCount,
+				&snapshotCount,
+				&totalTokens,
+				&totalCost,
+				&lastActivityAt,
+			); err != nil {
 				writeError(w, http.StatusInternalServerError, "failed to read session row")
 				return
 			}
 			s := map[string]any{
-				"id":         id,
-				"agent_id":   agentID,
-				"scope":      scopeKey,
-				"status":     status,
-				"created_at": createdAt,
-				"updated_at": updatedAt,
+				"id":               id,
+				"agent_id":         agentID,
+				"scope":            scopeKey,
+				"status":           status,
+				"created_at":       createdAt,
+				"updated_at":       updatedAt,
+				"turn_count":       turnCount,
+				"message_count":    messageCount,
+				"trace_count":      traceCount,
+				"snapshot_count":   snapshotCount,
+				"total_tokens":     totalTokens,
+				"total_cost":       totalCost,
+				"last_activity_at": lastActivityAt,
 			}
 			if nickname != nil {
 				s["nickname"] = *nickname

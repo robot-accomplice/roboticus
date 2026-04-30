@@ -27,6 +27,13 @@ func inboundToPipelineInput(msg channel.InboundMessage) pipeline.Input {
 		Platform: msg.Platform,
 		SenderID: msg.SenderID,
 		ChatID:   msg.ChatID,
+		Claim: &pipeline.ChannelClaimContext{
+			SenderID:            msg.SenderID,
+			ChatID:              msg.ChatID,
+			Platform:            msg.Platform,
+			SenderInAllowlist:   true,
+			AllowlistConfigured: true,
+		},
 	}
 }
 

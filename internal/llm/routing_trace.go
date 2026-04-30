@@ -93,6 +93,7 @@ func annotateRoutingDecision(ctx context.Context, svc *Service, req *Request, ta
 	tr.Annotate("inference.routing.agent_role", normalizeAgentRole(req.AgentRole))
 	tr.Annotate("inference.routing.request_message_count", len(req.Messages))
 	tr.Annotate("inference.routing.request_tool_count", len(req.Tools))
+	annotateContextFootprint(tr, req)
 	tr.Annotate("inference.routing.policy_state", normalizeModelState(target.State))
 	tr.Annotate("inference.routing.policy_source", strings.TrimSpace(target.PolicySource))
 	tr.Annotate("inference.routing.primary_reason_code", strings.TrimSpace(target.PrimaryReasonCode))
@@ -112,4 +113,18 @@ func annotateRoutingDecision(ctx context.Context, svc *Service, req *Request, ta
 	if reason := strings.TrimSpace(target.EligibilityReason); reason != "" {
 		tr.Annotate("inference.routing.eligibility_reason", reason)
 	}
+}
+
+func annotateContextFootprint(tr RoutingTracer, req *Request) {
+	if tr == nil || req == nil {
+		return
+	}
+	fp := RequestContextFootprint(req)
+	tr.Annotate("inference.context_footprint.token_budget", fp.TokenBudget)
+	tr.Annotate("inference.context_footprint.used_tokens", fp.UsedTokens)
+	tr.Annotate("inference.context_footprint.unused_tokens", fp.UnusedTokens)
+	tr.Annotate("inference.context_footprint.overhead_tokens", fp.OverheadTokens)
+	tr.Annotate("inference.context_footprint.overhead_pct", fp.OverheadPercent)
+	tr.Annotate("inference.context_footprint.categories", fp.Categories)
+	tr.Annotate("inference.context_footprint.details", fp.Details)
 }

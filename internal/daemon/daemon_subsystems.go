@@ -24,6 +24,9 @@ import (
 func (d *Daemon) run() {
 	ctx, cancel := context.WithCancel(context.Background())
 	d.cancel = cancel
+	if d.skillInv != nil {
+		d.skillInv.StartWatchers(ctx, &d.wg)
+	}
 
 	// ── Startup Phase: MCP server connections (Rust parity) ──────────────
 	// Connect to all configured MCP servers with a 30-second timeout.
@@ -171,8 +174,9 @@ func (d *Daemon) run() {
 		}()
 	}
 
-	// Memory consolidation heartbeat — runs the dreaming cycle periodically.
-	// Matches Rust's heartbeat-triggered consolidation.
+	// Memory curation heartbeat — runs the post-turn memory lifecycle
+	// periodically. Consolidation is only the deduplication/promotion/distillation
+	// subset.
 	d.wg.Add(1)
 	go func() {
 		defer d.wg.Done()
@@ -239,7 +243,7 @@ func (d *Daemon) newConsolidationHeartbeat() (*schedule.HeartbeatDaemon, schedul
 				Int("deduped", report.Deduped).
 				Int("promoted", report.Promoted).
 				Int("pruned", report.Pruned).
-				Msg("memory consolidation completed")
+				Msg("memory curation completed")
 			return fmt.Sprintf("indexed=%d deduped=%d promoted=%d pruned=%d", report.Indexed, report.Deduped, report.Promoted, report.Pruned)
 		},
 	}
@@ -283,7 +287,7 @@ func (d *Daemon) newMaintenanceHeartbeat() (*schedule.HeartbeatDaemon, schedule.
 	}
 }
 
-// runConsolidationHeartbeat runs memory consolidation on a periodic schedule.
+// runConsolidationHeartbeat runs memory curation on a periodic schedule.
 // Matches Rust's heartbeat-triggered MemoryPrune signal.
 func (d *Daemon) runConsolidationHeartbeat(ctx context.Context) {
 	// Initial delay to let the system settle after startup.
@@ -294,7 +298,7 @@ func (d *Daemon) runConsolidationHeartbeat(ctx context.Context) {
 	}
 
 	daemon, intervals, tickCtxFn := d.newConsolidationHeartbeat()
-	log.Info().Dur("interval", intervals.Memory).Msg("memory consolidation heartbeat started")
+	log.Info().Dur("interval", intervals.Memory).Msg("memory curation heartbeat started")
 	daemon.RunDistributed(ctx, intervals, tickCtxFn)
 }
 
@@ -320,61 +324,6 @@ func (d *Daemon) runMaintenanceHeartbeat(ctx context.Context) {
 	daemon, intervals, tickCtxFn := d.newMaintenanceHeartbeat()
 	log.Info().Dur("interval", intervals.Memory).Msg("maintenance heartbeat started")
 	daemon.RunDistributed(ctx, intervals, tickCtxFn)
-}
-
-// runTelegramPoller polls the Telegram adapter for inbound messages via long polling.
-// Currently wired via config flag; kept for imminent Telegram channel enablement.
-func (d *Daemon) runTelegramPoller(ctx context.Context) { //nolint:unused // wired when telegram.polling=true
-	log.Info().Msg("telegram poller started")
-
-	tgAdapter := d.router.GetAdapter("telegram")
-	if tgAdapter == nil {
-		log.Warn().Msg("telegram adapter not registered, poller exiting")
-		return
-	}
-
-	// Clear any registered webhook so getUpdates polling works.
-	// Telegram returns 409 if both webhook and polling are active.
-	if tg, ok := tgAdapter.(*channel.TelegramAdapter); ok {
-		if err := tg.DeleteWebhook(ctx); err != nil {
-			log.Warn().Err(err).Msg("telegram: failed to delete webhook")
-		} else {
-			log.Info().Msg("telegram: webhook cleared, polling active")
-			time.Sleep(2 * time.Second) // Give Telegram API time to propagate
-		}
-	}
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-		// Telegram long-polls internally (30s timeout in getUpdates),
-		// so no ticker needed — Recv blocks until messages arrive.
-		msg, err := tgAdapter.Recv(ctx)
-		if err != nil {
-			errMsg := err.Error()
-			if strings.Contains(errMsg, "409") {
-				// 409 = "terminated by other getUpdates request".
-				// Another long-poll is still in-flight (previous process or our own).
-				// Back off for the poll timeout duration (30s) to let it expire.
-				log.Warn().Msg("telegram: 409 conflict (previous poll in-flight), waiting for expiry")
-				time.Sleep(35 * time.Second)
-			} else {
-				log.Warn().Err(err).Msg("telegram recv error")
-				time.Sleep(5 * time.Second)
-			}
-			continue
-		}
-		if msg == nil {
-			continue
-		}
-		m := *msg
-		d.bgWorker.Submit("inbound:telegram", func(bgCtx context.Context) {
-			d.handleInbound(bgCtx, m)
-		})
-	}
 }
 
 // discoverTelegramChatIDs extracts known Telegram chat IDs from existing

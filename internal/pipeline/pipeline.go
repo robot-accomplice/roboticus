@@ -505,6 +505,12 @@ func (p *Pipeline) buildGuardContext(session *Session) *GuardContext {
 		AgentName: session.AgentName,
 	}
 
+	for _, def := range session.SelectedToolDefs() {
+		if name := strings.TrimSpace(def.Function.Name); name != "" {
+			ctx.SelectedToolNames = append(ctx.SelectedToolNames, name)
+		}
+	}
+
 	if intent := strings.TrimSpace(session.TaskIntent()); intent != "" {
 		ctx.Intents = append(ctx.Intents, intent)
 	}

@@ -28,8 +28,9 @@
 //   mcp_latency_penalty = 0.05
 //   always_include = ["recall_memory", "search_memories",
 //                     "get_memory_stats", "get_runtime_context",
-//                     "get_subagent_status", "list-subagent-roster",
-//                     "list-available-skills", "compose-skill"]
+//                     "get_subagent_status", "introspect",
+//                     "list-subagent-roster", "list-available-skills",
+//                     "compose-skill"]
 //
 // Rust's equivalent has no TOML section — Go's is an Improvement (operator
 // overridability), recorded as an Intentional Deviation in System 02.
@@ -157,6 +158,7 @@ func DefaultToolSearchConfig() ToolSearchConfig {
 			"get_memory_stats",
 			"get_runtime_context",
 			"get_subagent_status",
+			"introspect",
 			"obsidian_write",
 			"list-subagent-roster",
 			"list-available-skills",

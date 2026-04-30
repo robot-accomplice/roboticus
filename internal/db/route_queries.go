@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"fmt"
 )
 
 // RouteQueries provides read-only query methods that route handlers need.
@@ -145,13 +146,22 @@ func (rq *RouteQueries) ListSubAgentRoster(ctx context.Context) (*sql.Rows, erro
 // ListSubAgentRosterEnriched returns enriched subagent data for the roster endpoint.
 // Includes fallback models, skills, session counts, and status for Rust parity.
 func (rq *RouteQueries) ListSubAgentRosterEnriched(ctx context.Context) (*sql.Rows, error) {
+	cols, err := rq.tableColumns(ctx, "sub_agents")
+	if err != nil {
+		return nil, err
+	}
+	sessionCountExpr := optionalColumnExpr(cols, "session_count", "0")
+	lastUsedExpr := optionalColumnExpr(cols, "last_used_at", "NULL")
+	statusExpr := optionalColumnExpr(cols, "status", "'registered'")
+	fallbackModelsExpr := optionalColumnExpr(cols, "fallback_models_json", "'[]'")
+	skillsExpr := optionalColumnExpr(cols, "skills_json", "'[]'")
 	return rq.q.QueryContext(ctx,
-		`SELECT name, COALESCE(display_name, name) AS display_name, model, enabled,
+		fmt.Sprintf(`SELECT name, COALESCE(display_name, name) AS display_name, model, enabled,
 		        COALESCE(role, 'specialist') AS role, COALESCE(description, '') AS description,
-		        COALESCE(fallback_models_json, '[]') AS fallback_models_json,
-		        COALESCE(skills_json, '[]') AS skills_json,
-		        session_count, last_used_at, status
-		 FROM sub_agents ORDER BY name`)
+		        COALESCE(%s, '[]') AS fallback_models_json,
+		        COALESCE(%s, '[]') AS skills_json,
+		        %s, %s, %s
+		 FROM sub_agents ORDER BY name`, fallbackModelsExpr, skillsExpr, sessionCountExpr, lastUsedExpr, statusExpr))
 }
 
 // ListSkillNamesAndKinds returns skill name, kind, and enabled for roster breakdown.
@@ -263,8 +273,20 @@ func (rq *RouteQueries) ListPairedDevicesFull(ctx context.Context) (*sql.Rows, e
 // ListDeadLetters returns dead-lettered delivery queue items.
 func (rq *RouteQueries) ListDeadLetters(ctx context.Context, limit int) (*sql.Rows, error) {
 	return rq.q.QueryContext(ctx,
-		`SELECT id, channel, recipient_id, content, last_error, created_at
+		`SELECT id, channel, recipient_id, content, last_error, attempts, max_attempts, next_retry_at, created_at
 		 FROM delivery_queue WHERE status = 'dead_letter' ORDER BY created_at DESC LIMIT ?`, limit)
+}
+
+func (rq *RouteQueries) DeadLetterSummary(ctx context.Context) (count int64, oldestCreatedAt string, err error) {
+	var oldest sql.NullString
+	err = rq.q.QueryRowContext(ctx,
+		`SELECT COUNT(*), MIN(created_at)
+		   FROM delivery_queue
+		  WHERE status = 'dead_letter'`).Scan(&count, &oldest)
+	if oldest.Valid {
+		oldestCreatedAt = oldest.String
+	}
+	return
 }
 
 // --- Wallet ---

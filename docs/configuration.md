@@ -101,14 +101,30 @@ per_provider_timeout_seconds = 30
 
 ## `[providers.<name>]` — LLM Provider Configuration
 
-Each provider is configured as a named section. User-defined providers override bundled defaults.
+Provider metadata is intentionally configuration-owned. New providers that use
+an existing wire format should normally be added through `providers.toml` or
+the operator's local config, not through a binary update. Binary changes are
+reserved for new client protocols, authentication modes, streaming behavior,
+or provider-specific parsing semantics that cannot yet be expressed
+declaratively.
+
+`providers_file` points to the refreshable provider pack. It defaults to
+`~/.roboticus/providers.toml`. At runtime, precedence is:
+
+1. Provider entries in the operator's main `roboticus.toml`.
+2. Provider entries from `providers_file`.
+3. Embedded bundled provider defaults.
+
+Each provider is configured as a named section. Higher-precedence entries fill
+or override lower-precedence defaults.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `url` | string | — | Base URL for the provider API. |
 | `tier` | string | — | Provider tier: `"T1"` (local), `"T2"` (proxy), `"T3"` (cloud). |
 | `format` | string | `""` | Wire format: `"openai"`, `"anthropic"`, `"google"`, `"ollama"`. |
-| `api_key_env` | string | `""` | Environment variable containing the API key. |
+| `api_key_env` | string | `""` | Legacy bundled-provider metadata only; runtime authentication uses the keystore. |
+| `api_key_ref` | string | `""` | Keystore key reference. Provider keys managed through the workspace API use `<provider>_api_key`; legacy `provider_key:<name>` entries are still read for compatibility. |
 | `chat_path` | string | `""` | Override for the chat completions endpoint path. |
 | `embedding_path` | string | `""` | Endpoint path for embeddings. |
 | `embedding_model` | string | `""` | Model name for embeddings. |
@@ -142,7 +158,38 @@ url = "http://localhost:11434"
 tier = "T1"
 format = "openai"
 is_local = true
+
+[providers.deepseek]
+url = "https://api.deepseek.com"
+tier = "T3"
+format = "openai"
+chat_path = "/chat/completions"
 ```
+
+DeepSeek is an OpenAI-compatible provider. Prefer provider-qualified model
+names in `[models]`:
+
+| Model | Status | Notes |
+|-------|--------|-------|
+| `deepseek/deepseek-v4-flash` | Current | Non-thinking compatibility target for deprecated `deepseek-chat`. |
+| `deepseek/deepseek-v4-pro` | Current | Higher-capability model; DeepSeek examples show it with thinking enabled. |
+| `deepseek/deepseek-chat` | Deprecated 2026-07-24 | Compatibility alias for `deepseek-v4-flash` non-thinking mode. |
+| `deepseek/deepseek-reasoner` | Deprecated 2026-07-24 | Compatibility alias for `deepseek-v4-flash` thinking mode. |
+
+Provider/model availability and deprecation status should be refreshed through
+the provider pack when possible. The main config should only pin a specific
+model when the operator intentionally chooses it for routing.
+
+Provider compatibility quirks are also provider metadata. If an ostensibly
+OpenAI-compatible provider consistently varies from the shared contract, such
+as returning text tool-call JSON that needs bounded truncation repair, that
+behavior should be documented in the provider profile and surfaced in RCA
+rather than silently embedded as a model-specific code path.
+
+The setup wizard supports the bundled cloud provider set directly: OpenAI,
+Anthropic, Google, Moonshot, OpenRouter, and DeepSeek. Local-host onboarding is
+still intentionally simpler than the Rust wizard; richer SGLang/Apertus
+detection remains separate from adding a cloud provider profile.
 
 ---
 
@@ -214,7 +261,7 @@ relationship_budget = 10.0
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `workspace_only` | bool | `true` | Restrict file operations to the workspace directory. |
-| `deny_on_empty_allowlist` | bool | `true` | **Must be true.** Deny all paths when the allowlist is empty. Setting to `false` is a validation error. |
+| `deny_on_empty_allowlist` | bool | `true` | When `true` (default), deny all paths when the allowlist is empty (fail-closed). When `false`, fail-open: an empty allowlist does not deny everything. A warning is logged on load; use only if you accept the risk. |
 | `allowed_paths` | string[] | `[]` | Additional paths allowed for file operations (beyond workspace). |
 | `protected_paths` | string[] | `[]` | Patterns that are always blocked in tool arguments. |
 | `interpreter_allow` | string[] | `[]` | Allowed script interpreters for the bash tool. |
@@ -264,7 +311,7 @@ The configuration is validated on load. Validation errors prevent startup.
 9. Memory budgets must sum to 100.0 (± 0.01)
 10. `treasury.per_payment_cap` must be > 0
 11. `treasury.minimum_reserve` must be >= 0
-12. `security.deny_on_empty_allowlist` must be `true`
+12. If `security.deny_on_empty_allowlist` is `false` (fail-open), a warning is logged when the config is loaded or patched (validation still passes)
 13. All `security.script_allowed_paths` must be absolute paths
 14. `models.routing.mode` must be `"primary"` or `"metascore"`
 15. `models.routing.confidence_threshold` must be [0.0, 1.0]

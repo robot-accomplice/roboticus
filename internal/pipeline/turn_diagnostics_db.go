@@ -350,6 +350,31 @@ func DeriveInterpretiveDiagnosticsSummary(summary TurnDiagnosticSummary, events 
 		operatorNarrative = strings.Join(parts, "; ")
 	}
 
+	if strings.TrimSpace(summary.PrimaryDiagnosis) == "" {
+		switch {
+		case guardRetry != nil:
+			summary.PrimaryDiagnosis = "guard_retry_recovered"
+			summary.DiagnosisConfidence = maxDiagnosticFloat64(summary.DiagnosisConfidence, 0.83)
+		case verifierRetry != nil:
+			summary.PrimaryDiagnosis = "verifier_retry_recovered"
+			summary.DiagnosisConfidence = maxDiagnosticFloat64(summary.DiagnosisConfidence, 0.78)
+		case replaySuppressed != nil || summary.ReplaySuppressionCount > 0:
+			summary.PrimaryDiagnosis = "side_effect_replay_suppressed"
+			summary.DiagnosisConfidence = maxDiagnosticFloat64(summary.DiagnosisConfidence, 0.86)
+		case loopTermination != nil:
+			if reason := diagnosticDetailString(loopTermination, "reason_code"); reason != "" {
+				summary.PrimaryDiagnosis = reason
+				summary.DiagnosisConfidence = maxDiagnosticFloat64(summary.DiagnosisConfidence, 0.82)
+			}
+		case callNormalizationFailed != nil:
+			summary.PrimaryDiagnosis = "tool_call_normalization_failed"
+			summary.DiagnosisConfidence = maxDiagnosticFloat64(summary.DiagnosisConfidence, 0.86)
+		case callNormalized != nil:
+			summary.PrimaryDiagnosis = "tool_call_normalized"
+			summary.DiagnosisConfidence = maxDiagnosticFloat64(summary.DiagnosisConfidence, 0.74)
+		}
+	}
+
 	summary.UserNarrative = userNarrative
 	summary.OperatorNarrative = operatorNarrative
 	return summary
@@ -603,6 +628,13 @@ func maxDiagnosticInt(a, b int) int {
 	return b
 }
 
+func maxDiagnosticFloat64(a, b float64) float64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
 func boolToInt(v bool) int {
 	if v {
 		return 1
@@ -611,12 +643,36 @@ func boolToInt(v bool) int {
 }
 
 func diagnosticsStatusFromEvents(events []TurnDiagnosticEvent) string {
+	if diagnosticsEventsShowCleanGuardRecovery(events) {
+		return "ok"
+	}
 	for _, ev := range events {
 		if diagnosticEventMarksTurnDegraded(ev) {
 			return "degraded"
 		}
 	}
 	return "ok"
+}
+
+func diagnosticsEventsShowCleanGuardRecovery(events []TurnDiagnosticEvent) bool {
+	hasRecoverableGuardRetry := false
+	for _, ev := range events {
+		if !diagnosticEventMarksTurnDegraded(ev) {
+			continue
+		}
+		if ev.Type != "guard_retry_scheduled" {
+			return false
+		}
+		hasRecoverableGuardRetry = true
+	}
+	if !hasRecoverableGuardRetry {
+		return false
+	}
+	finalized := latestDiagnosticEvent(events, "response_finalized")
+	if finalized == nil || finalized.Status != "ok" {
+		return false
+	}
+	return len(diagnosticDetailStrings(finalized, "guard_violations")) == 0
 }
 
 func diagnosticEventMarksTurnDegraded(ev TurnDiagnosticEvent) bool {

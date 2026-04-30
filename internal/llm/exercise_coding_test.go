@@ -117,3 +117,79 @@ func TestScoreCoding_ArtifactBearingPromptPenalizesBrokenGoSyntax(t *testing.T) 
 		t.Fatalf("valid Go artifact (%.2f) should outscore broken artifact (%.2f)", validScore, brokenScore)
 	}
 }
+
+func TestScoreCoding_ReverseStringGoRewardsTypeCheckedFunctionalArtifact(t *testing.T) {
+	prompt := ResolveExercisePrompt(
+		"Write a function in any language that reverses a string in-place and explain one edge case to watch for.",
+		IntentCoding,
+		ComplexitySimple,
+	)
+
+	valid := "```go\nfunc reverseString(s string) string {\n\trunes := []rune(s)\n\tfor i, j := 0, len(runes)-1; i < j; i, j = i+1, j-1 {\n\t\trunes[i], runes[j] = runes[j], runes[i]\n\t}\n\treturn string(runes)\n}\n```\nEdge case: combining marks."
+	identity := "```go\nfunc reverseString(s string) string {\n\treturn s\n}\n```\nEdge case: empty strings."
+	broken := "```go\nfunc reverseString(s string) string {\n\trunes := []rune(s)\n\treturn string(runes)\n```\nEdge case: Unicode."
+
+	validScore := ScoreExerciseResponse(prompt, valid)
+	identityScore := ScoreExerciseResponse(prompt, identity)
+	brokenScore := ScoreExerciseResponse(prompt, broken)
+
+	if validScore < 0.80 {
+		t.Fatalf("valid reverse-string artifact scored %.2f; want >= 0.80", validScore)
+	}
+	if identityScore >= validScore {
+		t.Fatalf("typechecked but non-reversing artifact (%.2f) must score below valid artifact (%.2f)", identityScore, validScore)
+	}
+	if identityScore > 0.70 {
+		t.Fatalf("typechecked but non-reversing artifact scored %.2f; want <= 0.70", identityScore)
+	}
+	if brokenScore >= identityScore {
+		t.Fatalf("broken artifact (%.2f) must score below typechecked non-reversing artifact (%.2f)", brokenScore, identityScore)
+	}
+}
+
+func TestScoreCoding_ReverseStringGoUsesBoundedInputOutputExecution(t *testing.T) {
+	prompt := ResolveExercisePrompt(
+		"Write a function in any language that reverses a string in-place and explain one edge case to watch for.",
+		IntentCoding,
+		ComplexitySimple,
+	)
+
+	valid := "```go\nfunc reverseString(s string) string {\n\trunes := []rune(s)\n\tfor i, j := 0, len(runes)-1; i < j; i, j = i+1, j-1 {\n\t\trunes[i], runes[j] = runes[j], runes[i]\n\t}\n\treturn string(runes)\n}\n```\nEdge case: combining marks."
+	identity := "```go\nfunc reverseString(s string) string {\n\treturn s\n}\n```\nEdge case: empty strings."
+
+	validScore := ScoreExerciseResponse(prompt, valid)
+	identityScore := ScoreExerciseResponse(prompt, identity)
+
+	if validScore < 0.90 {
+		t.Fatalf("input/output-correct artifact scored %.2f; want >= 0.90", validScore)
+	}
+	if identityScore > 0.55 {
+		t.Fatalf("typechecked but input/output-incorrect artifact scored %.2f; want <= 0.55", identityScore)
+	}
+}
+
+func TestScoreCoding_ReverseStringPythonUsesBoundedInputOutputExecution(t *testing.T) {
+	prompt := ResolveExercisePrompt(
+		"Write a function in any language that reverses a string in-place and explain one edge case to watch for.",
+		IntentCoding,
+		ComplexitySimple,
+	)
+
+	valid := "```python\ndef reverse_string(s):\n    return s[::-1]\n```\nEdge case: combining marks."
+	inPlace := "```python\ndef reverse_string(s: list) -> None:\n    left, right = 0, len(s) - 1\n    while left < right:\n        s[left], s[right] = s[right], s[left]\n        left += 1\n        right -= 1\n```\nEdge case: empty lists."
+	identity := "```python\ndef reverse_string(s):\n    return s\n```\nEdge case: empty strings."
+
+	validScore := ScoreExerciseResponse(prompt, valid)
+	inPlaceScore := ScoreExerciseResponse(prompt, inPlace)
+	identityScore := ScoreExerciseResponse(prompt, identity)
+
+	if validScore < 0.90 {
+		t.Fatalf("input/output-correct Python artifact scored %.2f; want >= 0.90", validScore)
+	}
+	if inPlaceScore < 0.90 {
+		t.Fatalf("input/output-correct in-place Python artifact scored %.2f; want >= 0.90", inPlaceScore)
+	}
+	if identityScore > 0.55 {
+		t.Fatalf("input/output-incorrect Python artifact scored %.2f; want <= 0.55", identityScore)
+	}
+}

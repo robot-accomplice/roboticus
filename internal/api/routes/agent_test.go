@@ -45,6 +45,9 @@ func TestAgentCard(t *testing.T) {
 	if body["name"] != "roboticus" {
 		t.Errorf("name = %v", body["name"])
 	}
+	if body["version"] != "dev" {
+		t.Errorf("version = %v, want dev", body["version"])
+	}
 }
 
 func TestHealth(t *testing.T) {
@@ -59,6 +62,9 @@ func TestHealth(t *testing.T) {
 	body := jsonBody(t, rec)
 	if body["status"] != "ok" {
 		t.Errorf("status = %v", body["status"])
+	}
+	if body["version"] != "dev" {
+		t.Errorf("version = %v, want dev", body["version"])
 	}
 }
 

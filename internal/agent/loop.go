@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/rs/zerolog/log"
 
@@ -74,6 +76,80 @@ const (
 
 const reflectInstruction = "Post-observation reflection mode: tools are disabled. You are receiving a canonical TOTOF artifact: task, authoritative observed results, key tool outcomes, open issues, and a bounded finalization instruction. Interpret the artifact, finalize directly when the observed results are sufficient, and only if more execution is strictly required start the first line with CONTINUE_EXECUTION and then briefly explain what remains to be done."
 const continuationInstruction = "Post-observation continuation mode: you are resuming execution from a canonical continuation artifact rather than raw session replay. Use the authoritative observations, tool outcomes, and explicit remaining-work summary to decide the next bounded execution step. Continue execution only as far as needed to close the named remaining work, then return to observation/reflection."
+
+// continueSentinelSpan finds a discrete CONTINUE_EXECUTION control token in
+// model output. The token may appear at the start of a line or inline after
+// prose; either way it is framework control text, not user-visible prose.
+func continueSentinelSpan(content string) (start int, end int, ok bool) {
+	offset := 0
+	for {
+		idx := strings.Index(content[offset:], reflectContinuePrefix)
+		if idx < 0 {
+			return 0, 0, false
+		}
+		start = offset + idx
+		end = start + len(reflectContinuePrefix)
+		beforeOK := start == 0
+		if !beforeOK {
+			r, _ := utf8.DecodeLastRuneInString(content[:start])
+			beforeOK = unicode.IsSpace(r) || unicode.IsPunct(r)
+		}
+		afterOK := end == len(content)
+		if !afterOK {
+			r, _ := utf8.DecodeRuneInString(content[end:])
+			afterOK = unicode.IsSpace(r) || unicode.IsPunct(r)
+		}
+		if beforeOK && afterOK {
+			return start, end, true
+		}
+		offset = end
+	}
+}
+
+// detectContinueExecution scans response content for a discrete
+// CONTINUE_EXECUTION control sentinel. When found, the function returns
+// taken=true and the response remainder after the sentinel marker.
+//
+// Leading prose and the sentinel token are consumed by the framework as
+// control text and must NEVER be persisted via session.AddAssistantMessage*.
+// See R-AGENT-197 / R-AGENT-198 for the regression contract.
+func detectContinueExecution(content string) (taken bool, remainder string) {
+	if content == "" {
+		return false, ""
+	}
+	_, end, ok := continueSentinelSpan(content)
+	if !ok {
+		return false, ""
+	}
+	return true, strings.TrimLeftFunc(content[end:], func(r rune) bool {
+		return unicode.IsSpace(r) || unicode.IsPunct(r)
+	})
+}
+
+// scrubControlSentinels removes any stray CONTINUE_EXECUTION sentinel and
+// the line it appears on from content destined for user-visible
+// persistence. This is a belt-and-braces guard so a future model behavior
+// change cannot leak the framework control token into chat — even if the
+// upstream line-aware detector is bypassed by a code path that does not
+// route through reflect.
+//
+// Returning an empty string is acceptable: callers downstream of this
+// function are expected to treat empty content as "nothing to persist"
+// rather than "persist a blank assistant turn."
+func scrubControlSentinels(content string) string {
+	if !strings.Contains(content, reflectContinuePrefix) {
+		return content
+	}
+	start, _, ok := continueSentinelSpan(content)
+	if !ok {
+		return content
+	}
+	log.Warn().
+		Str("sentinel", reflectContinuePrefix).
+		Int("content_len", len(content)).
+		Msg("scrubbing CONTINUE_EXECUTION sentinel from user-visible assistant content; the control-token detector should have caught this earlier — investigate the upstream call path")
+	return strings.TrimSpace(content[:start])
+}
 
 // LoopConfig controls the ReAct loop behavior.
 type LoopConfig struct {
@@ -168,6 +244,7 @@ type Loop struct {
 	tools      *ToolRegistry
 	recorder   ToolCallRecorder
 	policy     *policy.Engine
+	approvals  *policy.ApprovalManager
 	injection  *InjectionDetector
 	memory     *memory.Manager
 	context    *ContextBuilder
@@ -177,10 +254,17 @@ type Loop struct {
 
 // LoopDeps bundles the dependencies for a Loop.
 type LoopDeps struct {
-	LLM         llm.Completer
-	Tools       *ToolRegistry
-	Recorder    ToolCallRecorder
-	Policy      *policy.Engine
+	LLM      llm.Completer
+	Tools    *ToolRegistry
+	Recorder ToolCallRecorder
+	Policy   *policy.Engine
+	// Approvals classifies tool names against the operator-configured
+	// blocked/gated lists before dispatch. nil means approval gating is
+	// disabled (the loop falls through to the policy engine and the
+	// registry as before). Wired in v1.0.8 to close the dead-code gap
+	// where `policy.ApprovalManager.ClassifyTool` had no production
+	// callers despite being instantiated by the daemon.
+	Approvals   *policy.ApprovalManager
 	Injection   *InjectionDetector
 	Memory      *memory.Manager
 	Context     *ContextBuilder
@@ -213,6 +297,7 @@ func NewLoop(cfg LoopConfig, deps LoopDeps) *Loop {
 		tools:           deps.Tools,
 		recorder:        deps.Recorder,
 		policy:          deps.Policy,
+		approvals:       deps.Approvals,
 		injection:       deps.Injection,
 		memory:          deps.Memory,
 		context:         deps.Context,
@@ -399,10 +484,26 @@ func (l *Loop) think(ctx context.Context, session *Session) (Action, error) {
 	}
 
 	// Build context-aware request.
+	//
+	// Working-memory / trailing-overlay: when a continuation artifact is present,
+	// we layer the continuation brief as a TRAILING SYSTEM OVERLAY on top
+	// of the full session history rather than replacing history with a
+	// synthetic 2-message scaffold. Previously the continuation path
+	// called BuildRequestWithMessages(session, continuation.Messages()),
+	// which dropped every prior user/assistant/tool turn for the
+	// duration of the continuation think — the model lost the original
+	// user task and was answering a synthetic re-extraction of it
+	// instead of the real conversation.
+	//
+	// Architecture-rule anchor: docs/architecture-rules-diagrams.md
+	// §6.7 "ReAct Reflection Memory Layering". TOTOF / continuation are
+	// a tighter action-request lens layered on top of conversation
+	// memory, never a replacement.
 	continuation := session.ConsumeContinuationArtifact()
 	var req *llm.Request
 	if continuation != nil {
-		req = l.context.BuildRequestWithMessages(session, continuation.Messages())
+		overlay := []string{continuationInstruction, continuation.Render()}
+		req = l.context.BuildRequestWithTrailingSystemOverlay(session, overlay)
 	} else {
 		req = l.context.BuildRequest(session)
 	}
@@ -484,7 +585,7 @@ func (l *Loop) think(ctx context.Context, session *Session) (Action, error) {
 		if nonTerminalFiller {
 			return ActionFinish, nil
 		}
-		session.AddAssistantMessageWithPhase(resp.Content, nil, "think")
+		session.AddAssistantMessageWithPhase(scrubControlSentinels(resp.Content), nil, "think")
 		return ActionFinish, nil
 	}
 	if nonTerminalFiller {
@@ -503,8 +604,24 @@ func (l *Loop) think(ctx context.Context, session *Session) (Action, error) {
 		if nonTerminalFiller {
 			content = ""
 		}
-		session.AddAssistantMessageWithPhase(content, resp.ToolCalls, "think")
+		session.AddAssistantMessageWithPhase(scrubControlSentinels(content), resp.ToolCalls, "think")
 		return ActionAct, nil
+	}
+
+	if promissoryOnly && toolResultsSeen > 0 {
+		artifact := session.BuildContinuationArtifact(strings.TrimSpace(resp.Content), continuationInstruction)
+		session.SetContinuationArtifact(&artifact)
+		if obs := llm.InferenceObserverFromContext(ctx); obs != nil {
+			obs.RecordEvent("think_continues_execution", "warning",
+				"post-tool think returned promissory execution text",
+				"The normal think phase described a future execution step after tool evidence instead of finalizing, so the framework treated it as continuation state.",
+				map[string]any{
+					"source": "promissory_think",
+					"reason": strings.TrimSpace(resp.Content),
+				},
+			)
+		}
+		return ActionThink, nil
 	}
 
 	// Final placeholder-only content is malformed model output; retry instead of
@@ -514,7 +631,14 @@ func (l *Loop) think(ctx context.Context, session *Session) (Action, error) {
 	}
 
 	// Add assistant response to session history.
-	session.AddAssistantMessageWithPhase(resp.Content, nil, "think")
+	//
+	// Defensive scrub: the line-aware detectContinueExecution lives in
+	// the reflect phase, not here. If the model nevertheless emits the
+	// sentinel during a normal think turn (e.g. a regression in prompt
+	// shaping), scrubControlSentinels strips it before persistence so
+	// the literal control token never reaches user-visible chat
+	// (R-AGENT-198).
+	session.AddAssistantMessageWithPhase(scrubControlSentinels(resp.Content), nil, "think")
 
 	// No tool calls — this is a final response.
 	return ActionFinish, nil
@@ -535,15 +659,24 @@ func (l *Loop) reflect(ctx context.Context, session *Session) (Action, error) {
 		return ActionFinish, core.NewError(ErrMaxTurns, fmt.Sprintf("exceeded max turns (%d)", maxTurns))
 	}
 
+	// Build the reflect request from full session history with the TOTOF
+	// brief as a trailing system overlay. Previously reflect built a
+	// synthetic 2-message scaffold from
+	// totof.Messages(), which replaced history entirely and severed
+	// conversation continuity for the duration of the reflect call.
+	//
+	// We clear req.Tools after construction because reflectInstruction
+	// declares "tools are disabled" — the request must not advertise
+	// tool definitions or the model can ignore that directive. This
+	// matches prior reflect behavior (no Tools on the synthetic reflect
+	// request) while preserving full conversation memory.
+	//
+	// Architecture-rule anchor: docs/architecture-rules-diagrams.md
+	// §6.7 "ReAct Reflection Memory Layering".
 	totof := session.BuildTOTOF(reflectInstruction)
-	req := &llm.Request{
-		Messages:       totof.Messages(),
-		IntentClass:    llmIntentClassForSession(session),
-		AgentRole:      session.AgentRole(),
-		TurnWeight:     session.TurnWeight(),
-		TaskIntent:     session.TaskIntent(),
-		TaskComplexity: session.TaskComplexity(),
-	}
+	overlay := []string{reflectInstruction, totof.Render()}
+	req := l.context.BuildRequestWithTrailingSystemOverlay(session, overlay)
+	req.Tools = nil
 
 	lastUserSnippet := lastRoleSnippet(req.Messages, "user", 200)
 	log.Info().
@@ -577,8 +710,20 @@ func (l *Loop) reflect(ctx context.Context, session *Session) (Action, error) {
 		Msg("agent loop: reflection response received")
 
 	trimmed := strings.TrimSpace(resp.Content)
-	if strings.HasPrefix(trimmed, reflectContinuePrefix) {
-		remainder := strings.TrimSpace(strings.TrimPrefix(trimmed, reflectContinuePrefix))
+
+	// Line-aware sentinel detection. The legacy detector used
+	// strings.HasPrefix on the entire trimmed response, which failed when
+	// the model emitted reasoning before the sentinel and leaked the
+	// entire response (including the literal CONTINUE_EXECUTION token)
+	// to user-visible chat. detectContinueExecution scans every line,
+	// so prose-then-sentinel emissions are still classified correctly.
+	//
+	// When taken=true, the leading prose AND the sentinel itself are
+	// consumed by the framework as control text and MUST NOT be persisted
+	// via session.AddAssistantMessage*. Only the remainder (the model's
+	// stated reason for continuing) is forwarded — and that, too, lives
+	// only inside the continuation artifact, never the chat transcript.
+	if taken, remainder := detectContinueExecution(resp.Content); taken {
 		artifact := session.BuildContinuationArtifact(remainder, continuationInstruction)
 		session.SetContinuationArtifact(&artifact)
 		if obs := llm.InferenceObserverFromContext(ctx); obs != nil {
@@ -608,8 +753,28 @@ func (l *Loop) reflect(ctx context.Context, session *Session) (Action, error) {
 				},
 			)
 		}
-		session.AddAssistantMessageWithPhase(resp.Content, resp.ToolCalls, "reflect")
+		// Defensive scrub: the line-aware detector above already returned
+		// false here, so the sentinel should not be present — but we
+		// scrub regardless so a future model behavior change cannot leak
+		// the framework control token into chat (R-AGENT-198).
+		session.AddAssistantMessageWithPhase(scrubControlSentinels(resp.Content), resp.ToolCalls, "reflect")
 		return ActionAct, nil
+	}
+
+	if isPromissoryAssistantContent(trimmed) && toolResultCount(session) > 0 {
+		artifact := session.BuildContinuationArtifact(trimmed, continuationInstruction)
+		session.SetContinuationArtifact(&artifact)
+		if obs := llm.InferenceObserverFromContext(ctx); obs != nil {
+			obs.RecordEvent("reflection_continues_execution", "warning",
+				"post-observation reflection returned promissory execution text",
+				"The post-observation reflection phase described a future execution step instead of finalizing from evidence, so the framework treated it as continuation state.",
+				map[string]any{
+					"source": "promissory_reflection",
+					"reason": trimmed,
+				},
+			)
+		}
+		return ActionThink, nil
 	}
 
 	if trimmed == "" {
@@ -622,7 +787,7 @@ func (l *Loop) reflect(ctx context.Context, session *Session) (Action, error) {
 		return ActionFinish, nil
 	}
 
-	session.AddAssistantMessageWithPhase(resp.Content, nil, "reflect")
+	session.AddAssistantMessageWithPhase(scrubControlSentinels(resp.Content), nil, "reflect")
 	return ActionFinish, nil
 }
 
@@ -732,6 +897,7 @@ func (l *Loop) act(ctx context.Context, session *Session) (Action, error) {
 			AgentID:                session.AgentID,
 			AgentName:              session.AgentName,
 			Workspace:              session.Workspace,
+			PathAnchor:             singleInspectionRoot(session),
 			AllowedPaths:           session.AllowedPaths,
 			ProtectedReadOnlyPaths: session.SourceArtifacts(),
 			Channel:                session.Channel,
@@ -849,6 +1015,57 @@ func (l *Loop) act(ctx context.Context, session *Session) (Action, error) {
 			continue
 		}
 
+		// Approval gating. Blocked tools are rejected outright; gated
+		// tools currently log a warning and proceed (the human-approval
+		// flow is owned by the API/UX layer in pipeline). This is the
+		// single authoritative call site for `policy.ApprovalManager.
+		// ClassifyTool` — the loop must consult the manager before the
+		// policy engine so blocked tools never reach the registry, and
+		// before recording a "denied" outcome that mixes blocked with
+		// policy-denied semantics.
+		if l.approvals != nil {
+			switch l.approvals.ClassifyTool(tc.Function.Name) {
+			case policy.ToolBlocked:
+				l.resetReadOnlyExploration()
+				output := policy.FormatBlockedToolResult(tc.Function.Name)
+				session.AddToolResult(tc.ID, tc.Function.Name, output, true)
+				if obs := llm.InferenceObserverFromContext(ctx); obs != nil {
+					obs.RecordEvent("tool_call_blocked_by_approval", "error",
+						"tool call blocked by approval policy",
+						"The framework rejected a tool call because the operator listed the tool under approvals.blocked_tools.",
+						map[string]any{
+							"tool_call_id": tc.ID,
+							"tool_name":    tc.Function.Name,
+							"reason_code":  "tool_blocked",
+						},
+					)
+				}
+				l.recordToolExecution(ctx, ToolExecutionRecord{
+					TurnID:     core.TurnIDFromCtx(ctx),
+					ToolCallID: tc.ID,
+					ToolName:   tc.Function.Name,
+					Input:      execArgs,
+					Output:     output,
+					Status:     "blocked",
+				})
+				log.Warn().Str("tool", tc.Function.Name).Str("session", session.ID).Msg("tool call blocked by approval classification")
+				continue
+			case policy.ToolGated:
+				if obs := llm.InferenceObserverFromContext(ctx); obs != nil {
+					obs.RecordEvent("tool_call_gated", "warning",
+						"gated tool executed without explicit approval",
+						"The framework executed a tool that was configured as gated. Until human-in-the-loop approvals are wired through the API layer, gated tools proceed with a warning so the operator sees the call in audit logs.",
+						map[string]any{
+							"tool_call_id": tc.ID,
+							"tool_name":    tc.Function.Name,
+							"reason_code":  "tool_gated",
+						},
+					)
+				}
+				log.Warn().Str("tool", tc.Function.Name).Str("session", session.ID).Msg("gated tool executed without explicit approval flow")
+			}
+		}
+
 		// Policy check.
 		if l.policy != nil {
 			decision := l.policy.EvaluateWithTools(&policy.ToolCallRequest{
@@ -858,7 +1075,7 @@ func (l *Loop) act(ctx context.Context, session *Session) (Action, error) {
 			}, l.tools)
 			if decision.Denied() {
 				l.resetReadOnlyExploration()
-				result := fmt.Sprintf("Policy denied: %s", decision.Reason)
+				result := policy.FormatDeniedToolResult(tc.Function.Name, decision, session.Authority, session.SecurityClaim)
 				session.AddToolResult(tc.ID, tc.Function.Name, result, true)
 				l.recordToolExecution(ctx, ToolExecutionRecord{
 					TurnID:     core.TurnIDFromCtx(ctx),
@@ -974,6 +1191,17 @@ func (l *Loop) act(ctx context.Context, session *Session) (Action, error) {
 	}
 
 	return ActionObserve, nil
+}
+
+func singleInspectionRoot(session *Session) string {
+	if session == nil {
+		return ""
+	}
+	roots := session.InspectionTargetRoots()
+	if len(roots) != 1 {
+		return ""
+	}
+	return strings.TrimSpace(roots[0])
 }
 
 func toolAllowedForTurnSurface(session *Session, toolName string) bool {
@@ -1099,6 +1327,14 @@ func isPromissoryAssistantContent(content string) bool {
 		strings.HasPrefix(trimmed, "let me inspect"),
 		strings.HasPrefix(trimmed, "let me look"),
 		strings.HasPrefix(trimmed, "let me take a look"),
+		strings.HasPrefix(trimmed, "next, i will"),
+		strings.HasPrefix(trimmed, "next i will"),
+		strings.HasPrefix(trimmed, "i will now"),
+		strings.HasPrefix(trimmed, "i'll now"),
+		strings.HasPrefix(trimmed, "i will proceed"),
+		strings.HasPrefix(trimmed, "i'll proceed"),
+		strings.HasPrefix(trimmed, "i will continue"),
+		strings.HasPrefix(trimmed, "i'll continue"),
 		strings.HasPrefix(trimmed, "i'll check"),
 		strings.HasPrefix(trimmed, "i will check"),
 		strings.HasPrefix(trimmed, "i'll inspect"),
@@ -1106,7 +1342,23 @@ func isPromissoryAssistantContent(content string) bool {
 		strings.HasPrefix(trimmed, "i'll look"),
 		strings.HasPrefix(trimmed, "i will look"),
 		strings.HasPrefix(trimmed, "i'll take a look"),
-		strings.HasPrefix(trimmed, "i will take a look"):
+		strings.HasPrefix(trimmed, "i will take a look"),
+		strings.Contains(trimmed, "\nnext, i will"),
+		strings.Contains(trimmed, "\nnext i will"),
+		strings.Contains(trimmed, "\ni will continue"),
+		strings.Contains(trimmed, "\ni'll continue"),
+		strings.Contains(trimmed, "\ni will proceed"),
+		strings.Contains(trimmed, "\ni'll proceed"),
+		strings.Contains(trimmed, " i will proceed"),
+		strings.Contains(trimmed, " i'll proceed"),
+		strings.Contains(trimmed, " i will now proceed"),
+		strings.Contains(trimmed, " i'll now proceed"),
+		strings.Contains(trimmed, " i will now use"),
+		strings.Contains(trimmed, " i'll now use"),
+		strings.Contains(trimmed, " i will now continue"),
+		strings.Contains(trimmed, " i'll now continue"),
+		strings.Contains(trimmed, "continuing execution"),
+		strings.Contains(trimmed, "executing the next step"):
 		return true
 	default:
 		return false

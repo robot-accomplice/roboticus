@@ -3,6 +3,8 @@ package db
 import (
 	"context"
 	"database/sql"
+	"fmt"
+	"strings"
 )
 
 // --- Pipeline Traces ---
@@ -76,10 +78,16 @@ func (rq *RouteQueries) ListCronRuns(ctx context.Context, limit int) (*sql.Rows,
 
 // ListDelegationOutcomes returns recent delegation outcomes.
 func (rq *RouteQueries) ListDelegationOutcomes(ctx context.Context, limit int) (*sql.Rows, error) {
+	cols, err := rq.tableColumns(ctx, "delegation_outcomes")
+	if err != nil {
+		return nil, err
+	}
+	durationExpr := optionalColumnExpr(cols, "duration_ms", "0")
+	qualityExpr := optionalColumnExpr(cols, "quality_score", "NULL")
 	return rq.q.QueryContext(ctx,
-		`SELECT id, session_id, turn_id, task_description, assigned_agents_json,
-		        pattern, duration_ms, success, quality_score, created_at
-		 FROM delegation_outcomes ORDER BY created_at DESC LIMIT ?`, limit)
+		fmt.Sprintf(`SELECT id, session_id, turn_id, task_description, assigned_agents_json,
+		        pattern, %s, success, %s, created_at
+		 FROM delegation_outcomes ORDER BY created_at DESC LIMIT ?`, durationExpr, qualityExpr), limit)
 }
 
 // --- Model Selection Events ---
@@ -175,13 +183,34 @@ func (rq *RouteQueries) RateLimitCurrent(ctx context.Context) (slowdown, quarant
 // ListSessionsWithFlightRecords returns sessions that have at least one react_traces record.
 func (rq *RouteQueries) ListSessionsWithFlightRecords(ctx context.Context, limit int) (*sql.Rows, error) {
 	return rq.q.QueryContext(ctx,
-		`SELECT DISTINCT s.id, s.agent_id, s.scope_key, s.status, s.nickname, s.created_at, s.updated_at
+		`SELECT s.id, s.agent_id, s.scope_key, s.status, s.nickname, s.created_at, s.updated_at,
+		        COALESCE(COUNT(t.id), 0) AS turn_count,
+		        (SELECT COUNT(*) FROM session_messages sm WHERE sm.session_id = s.id) AS message_count,
+		        (SELECT COUNT(*) FROM pipeline_traces pt WHERE pt.session_id = s.id) AS trace_count,
+		        (SELECT COUNT(*)
+		           FROM context_snapshots cs
+		           JOIN turns st ON st.id = cs.turn_id
+		          WHERE st.session_id = s.id) AS snapshot_count,
+		        COALESCE(SUM(COALESCE(t.tokens_in, 0) + COALESCE(t.tokens_out, 0)), 0) AS total_tokens,
+		        COALESCE(SUM(COALESCE(t.cost, 0)), 0) AS total_cost,
+		        MAX(
+		          COALESCE(s.updated_at, s.created_at),
+		          COALESCE((SELECT MAX(sm.created_at) FROM session_messages sm WHERE sm.session_id = s.id), s.created_at),
+		          COALESCE((SELECT MAX(st.created_at) FROM turns st WHERE st.session_id = s.id), s.created_at),
+		          COALESCE((SELECT MAX(pt.created_at) FROM pipeline_traces pt WHERE pt.session_id = s.id), s.created_at)
+		        ) AS last_activity_at
 		 FROM sessions s
+		 LEFT JOIN turns t ON t.session_id = s.id
 		 WHERE EXISTS (
 		     SELECT 1 FROM react_traces rt
 		     JOIN pipeline_traces pt ON pt.id = rt.pipeline_trace_id
 		     WHERE pt.session_id = s.id
+		 ) OR EXISTS (
+		     SELECT 1 FROM pipeline_traces pt
+		     WHERE pt.session_id = s.id
+		       AND COALESCE(pt.react_trace_json, '') NOT IN ('', '{}', 'null')
 		 )
+		 GROUP BY s.id, s.agent_id, s.scope_key, s.status, s.nickname, s.created_at, s.updated_at
 		 ORDER BY s.created_at DESC LIMIT ?`, limit)
 }
 
@@ -190,7 +219,7 @@ func (rq *RouteQueries) ListSessionsWithFlightRecords(ctx context.Context, limit
 // ListTracesSimple returns traces with fewer columns for the trace list.
 func (rq *RouteQueries) ListTracesSimple(ctx context.Context, limit int) (*sql.Rows, error) {
 	return rq.q.QueryContext(ctx,
-		`SELECT id, turn_id, channel, total_ms, created_at
+		`SELECT id, turn_id, channel, total_ms, stages_json, created_at
 		 FROM pipeline_traces ORDER BY created_at DESC LIMIT ?`, limit)
 }
 
@@ -204,10 +233,19 @@ func (rq *RouteQueries) GetTraceByTurnID(ctx context.Context, turnID string) *sq
 // GetReactTraceByTurnID returns a ReAct trace by joining through pipeline_traces.
 func (rq *RouteQueries) GetReactTraceByTurnID(ctx context.Context, turnID string) *sql.Row {
 	return rq.q.QueryRowContext(ctx,
-		`SELECT rt.id, rt.pipeline_trace_id, rt.react_json, rt.created_at
-		 FROM react_traces rt
-		 JOIN pipeline_traces pt ON pt.id = rt.pipeline_trace_id
-		 WHERE pt.turn_id = ? LIMIT 1`, turnID)
+		`SELECT id, pipeline_trace_id, react_json, created_at
+		   FROM (
+		     SELECT rt.id, rt.pipeline_trace_id, rt.react_json, rt.created_at, 0 AS priority
+		       FROM react_traces rt
+		       JOIN pipeline_traces pt ON pt.id = rt.pipeline_trace_id
+		      WHERE pt.turn_id = ?
+		     UNION ALL
+		     SELECT pt.id || '-react-sidecar', pt.id, COALESCE(pt.react_trace_json, '{}'), pt.created_at, 1 AS priority
+		       FROM pipeline_traces pt
+		      WHERE pt.turn_id = ?
+		        AND COALESCE(pt.react_trace_json, '') NOT IN ('', '{}', 'null')
+		   )
+		  ORDER BY priority LIMIT 1`, turnID, turnID)
 }
 
 // GetTraceByIDOrTurnID returns a pipeline trace by either id or turn_id.
@@ -236,24 +274,45 @@ func (rq *RouteQueries) CountPipelineTraces(ctx context.Context) (int64, error) 
 
 // ListDelegationOutcomesDetailed returns delegation outcomes with subtask_count.
 func (rq *RouteQueries) ListDelegationOutcomesDetailed(ctx context.Context, limit int) (*sql.Rows, error) {
+	cols, err := rq.tableColumns(ctx, "delegation_outcomes")
+	if err != nil {
+		return nil, err
+	}
+	subtaskExpr := optionalColumnExpr(cols, "subtask_count", "0")
+	durationExpr := optionalColumnExpr(cols, "duration_ms", "0")
+	qualityExpr := optionalColumnExpr(cols, "quality_score", "NULL")
 	return rq.q.QueryContext(ctx,
-		`SELECT id, turn_id, session_id, task_description, subtask_count,
-		        pattern, assigned_agents_json, duration_ms, success, quality_score, created_at
-		 FROM delegation_outcomes ORDER BY created_at DESC LIMIT ?`, limit)
+		fmt.Sprintf(`SELECT id, turn_id, session_id, task_description, %s,
+		        pattern, assigned_agents_json, %s, success, %s, created_at
+		 FROM delegation_outcomes ORDER BY created_at DESC LIMIT ?`,
+			subtaskExpr, durationExpr, qualityExpr), limit)
 }
 
 // DelegationTotals returns aggregate delegation stats.
 func (rq *RouteQueries) DelegationTotals(ctx context.Context) (total, successful int64, avgDuration float64, err error) {
+	cols, colErr := rq.tableColumns(ctx, "delegation_outcomes")
+	if colErr != nil {
+		err = colErr
+		return
+	}
+	durationExpr := optionalColumnExpr(cols, "duration_ms", "0")
 	err = rq.q.QueryRowContext(ctx,
-		`SELECT COUNT(*), COALESCE(SUM(success), 0), COALESCE(AVG(duration_ms), 0)
-		 FROM delegation_outcomes`).Scan(&total, &successful, &avgDuration)
+		fmt.Sprintf(`SELECT COUNT(*), COALESCE(SUM(success), 0), COALESCE(AVG(%s), 0)
+		 FROM delegation_outcomes`, durationExpr)).Scan(&total, &successful, &avgDuration)
 	return
 }
 
 // DelegationAvgQuality returns average quality score from delegation outcomes.
 func (rq *RouteQueries) DelegationAvgQuality(ctx context.Context) (float64, error) {
+	cols, err := rq.tableColumns(ctx, "delegation_outcomes")
+	if err != nil {
+		return 0, err
+	}
+	if !cols["quality_score"] {
+		return 0, nil
+	}
 	var avg float64
-	err := rq.q.QueryRowContext(ctx,
+	err = rq.q.QueryRowContext(ctx,
 		`SELECT COALESCE(AVG(quality_score), 0) FROM delegation_outcomes WHERE quality_score IS NOT NULL`).Scan(&avg)
 	return avg, err
 }
@@ -270,16 +329,21 @@ type AgentDelegationStats struct {
 // PerAgentDelegationStats unpacks assigned_agents_json with json_each()
 // to compute per-agent success rates from delegation_outcomes.
 func (rq *RouteQueries) PerAgentDelegationStats(ctx context.Context) ([]AgentDelegationStats, error) {
+	cols, err := rq.tableColumns(ctx, "delegation_outcomes")
+	if err != nil {
+		return nil, err
+	}
+	durationExpr := optionalColumnExpr(cols, "duration_ms", "0")
 	rows, err := rq.q.QueryContext(ctx,
-		`SELECT
+		fmt.Sprintf(`SELECT
 			j.value AS agent_name,
 			COUNT(*) AS total,
 			COALESCE(SUM(d.success), 0) AS successful,
 			CASE WHEN COUNT(*) > 0 THEN CAST(SUM(d.success) AS REAL) / COUNT(*) ELSE 0 END AS success_rate,
-			COALESCE(AVG(d.duration_ms), 0) AS avg_duration
+			COALESCE(AVG(%s), 0) AS avg_duration
 		 FROM delegation_outcomes d, json_each(d.assigned_agents_json) j
 		 GROUP BY j.value
-		 ORDER BY total DESC`)
+		 ORDER BY total DESC`, durationExpr))
 	if err != nil {
 		return nil, err
 	}
@@ -294,6 +358,51 @@ func (rq *RouteQueries) PerAgentDelegationStats(ctx context.Context) ([]AgentDel
 		result = append(result, s)
 	}
 	return result, rows.Err()
+}
+
+func (rq *RouteQueries) tableColumns(ctx context.Context, table string) (map[string]bool, error) {
+	if !safeSQLiteIdentifier(table) {
+		return nil, fmt.Errorf("unsafe table identifier %q", table)
+	}
+	rows, err := rq.q.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	cols := map[string]bool{}
+	for rows.Next() {
+		var cid int
+		var name, colType string
+		var notNull int
+		var defaultValue any
+		var pk int
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &defaultValue, &pk); err != nil {
+			return nil, err
+		}
+		cols[name] = true
+	}
+	return cols, rows.Err()
+}
+
+func optionalColumnExpr(cols map[string]bool, col, fallback string) string {
+	if cols[col] {
+		return col
+	}
+	return fallback
+}
+
+func safeSQLiteIdentifier(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r == '_' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			continue
+		}
+		return false
+	}
+	return !strings.HasPrefix(s, "sqlite_")
 }
 
 // --- Policy / Audit ---

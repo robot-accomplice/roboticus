@@ -13,6 +13,7 @@ import (
 	"roboticus/internal/core"
 	"roboticus/internal/db"
 	"roboticus/internal/llm"
+	buildversion "roboticus/internal/version"
 )
 
 // Health returns the health check endpoint handler.
@@ -22,10 +23,13 @@ func Health(store *db.Store, llmSvc *llm.Service, cfg ...*core.Config) http.Hand
 		if llmSvc != nil {
 			for _, p := range llmSvc.Status() {
 				providers = append(providers, map[string]any{
-					"name":     p.Name,
-					"state":    p.State,
-					"format":   p.Format,
-					"is_local": p.IsLocal,
+					"name":         p.Name,
+					"state":        p.State,
+					"health_state": p.HealthState,
+					"evidence":     p.Evidence,
+					"reason":       p.Reason,
+					"format":       p.Format,
+					"is_local":     p.IsLocal,
 				})
 			}
 		}
@@ -50,7 +54,7 @@ func Health(store *db.Store, llmSvc *llm.Service, cfg ...*core.Config) http.Hand
 			"status":         "ok",
 			"uptime":         time.Since(processStartTime).String(),
 			"uptime_seconds": time.Since(processStartTime).Seconds(),
-			"version":        "0.1.0",
+			"version":        buildversion.Version,
 			"agent":          agentName,
 			"go":             runtime.Version(),
 			"providers":      providers,
@@ -68,7 +72,7 @@ func AgentCard() http.HandlerFunc {
 			"name":        "roboticus",
 			"description": "Autonomous AI agent runtime",
 			"url":         "https://github.com/roboticus",
-			"version":     "0.1.0",
+			"version":     buildversion.Version,
 			"capabilities": []string{
 				"chat",
 				"tool-use",

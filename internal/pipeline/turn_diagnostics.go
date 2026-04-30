@@ -283,8 +283,9 @@ func (r *TurnDiagnosticsRecorder) SnapshotForFlush(finalStatus string) (TurnDiag
 			summary.RecommendationsJSON = string(buf)
 		}
 	}
-	if summary.Status == "" || summary.Status == "running" || summary.Status == "ok" {
-		summary.Status = diagnosticsStatusFromEvents(r.events)
+	derivedStatus := diagnosticsStatusFromEvents(r.events)
+	if summary.Status == "" || summary.Status == "running" || summary.Status == "ok" || (summary.Status == "degraded" && derivedStatus == "ok") {
+		summary.Status = derivedStatus
 	}
 	newEvents := make([]TurnDiagnosticEvent, len(r.events[r.flushedEvents:]))
 	for i, ev := range r.events[r.flushedEvents:] {

@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"roboticus/internal/core"
@@ -204,5 +205,50 @@ func TestGuardRetryDetailed_SuppressesNarrativeOnlyRetryAfterExecutionProgress(t
 	}
 	if result.RetrySuppressReason == "" {
 		t.Fatal("RetrySuppressReason should explain why the retry was suppressed")
+	}
+}
+
+type captureRetryInstructionExecutor struct {
+	calls      int
+	lastSystem string
+}
+
+func (e *captureRetryInstructionExecutor) RunLoop(_ context.Context, sess *Session) (string, int, error) {
+	e.calls++
+	messages := sess.Messages()
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "system" {
+			e.lastSystem = messages[i].Content
+			break
+		}
+	}
+	return "I'll do that next.", 1, nil
+}
+
+type namedRetryGuard struct{ name string }
+
+func (g namedRetryGuard) Name() string { return g.name }
+func (g namedRetryGuard) Check(string) GuardResult {
+	return GuardResult{Passed: false, Retry: true, Reason: "missing action evidence"}
+}
+
+func TestGuardRetryDetailed_UsesGuardSpecificRetryInstruction(t *testing.T) {
+	executor := &captureRetryInstructionExecutor{}
+	chain := NewGuardChain(namedRetryGuard{name: "task_deferral"})
+	policy := DefaultRetryPolicy()
+	policy.MaxRetries = 1
+	policy.ErrorOnExhaust = false
+	sess := NewSession("s", "a", "n")
+	sess.AddUserMessage("schedule the quiet ticker")
+
+	_, err := retryWithGuardsDetailed(context.Background(), executor, sess, chain, policy, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if executor.calls != 2 {
+		t.Fatalf("executor calls = %d, want 2", executor.calls)
+	}
+	if !strings.Contains(executor.lastSystem, "Perform the requested action with the selected tools now") {
+		t.Fatalf("retry instruction = %q, want task_deferral directive", executor.lastSystem)
 	}
 }

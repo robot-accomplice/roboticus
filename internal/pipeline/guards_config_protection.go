@@ -31,8 +31,19 @@ func (g *ConfigProtectionGuard) CheckWithContext(content string, ctx *GuardConte
 		if pattern, matched := security.MatchProtectedConfigPattern(outputLower); matched {
 			return GuardResult{
 				Passed:  false,
-				Content: "I cannot modify security-sensitive configuration settings through tool calls.",
+				Blocked: true,
 				Reason:  "config_protection: tool attempted to modify " + pattern,
+				Verdict: GuardBlocked,
+				ContractEvent: newGuardContractEvent(
+					"config_protection",
+					"security",
+					"observe",
+					"hard",
+					"tool execution must not mutate security-sensitive configuration",
+					"tool attempted to modify "+pattern,
+					"block",
+					"-1",
+				),
 			}
 		}
 	}

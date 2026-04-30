@@ -20,7 +20,8 @@ type pipelineContext struct {
 
 	// State accumulated across stages.
 	session          *Session
-	content          string // may be mutated by injection sanitization, short-followup expansion
+	content          string // execution content; may be expanded for short-followup context
+	storedContent    string // operator-authored transcript content after safety sanitization
 	msgID            string
 	turnID           string
 	taskID           string

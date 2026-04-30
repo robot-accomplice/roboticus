@@ -111,3 +111,19 @@ func TestSample_CloudProviderManaged(t *testing.T) {
 		t.Fatalf("provider should be configured: %+v", got)
 	}
 }
+
+func TestSample_DeepSeekProviderQualifiedModel(t *testing.T) {
+	cfg := &core.Config{
+		Providers: map[string]core.ProviderConfig{
+			"deepseek": {URL: "https://api.deepseek.com", Format: "openai", IsLocal: false},
+		},
+	}
+
+	got := Sample(context.Background(), cfg, "deepseek/example-model")
+	if got.StateClass != "provider_managed" {
+		t.Fatalf("state_class = %q, want provider_managed", got.StateClass)
+	}
+	if !got.ProviderConfigured {
+		t.Fatalf("provider should be configured: %+v", got)
+	}
+}

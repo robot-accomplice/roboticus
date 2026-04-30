@@ -67,6 +67,7 @@ func ApplyConfigPatch(ctx context.Context, store DBExecer, patch map[string]any)
 	if err := merged.Validate(); err != nil {
 		return path, fmt.Errorf("validation failed: %w", err)
 	}
+	WarnEmptyFilesystemAllowlistFailureOpen(&merged)
 
 	// Persist patch to identity table for audit trail.
 	if store != nil {

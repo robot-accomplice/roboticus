@@ -46,3 +46,18 @@ func TestConfigValidate(t *testing.T) {
 		t.Error("empty database path should be invalid")
 	}
 }
+
+// TestWebToolsConfigDefaultsAreSafe verifies that the new WebTools
+// config block ships with conservative defaults: the unfiltered
+// http_fetch tool stays disabled by default so operators must
+// explicitly opt in. web_search may be enabled because it is read-only
+// against an external search endpoint that the operator configures.
+func TestWebToolsConfigDefaultsAreSafe(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.WebTools.HTTPFetchEnabled {
+		t.Fatal("WebTools.HTTPFetchEnabled defaults to true; expected false so operators opt in explicitly")
+	}
+	if cfg.WebTools.GholaEnabled {
+		t.Fatal("WebTools.GholaEnabled defaults to true; expected false so operators opt in explicitly")
+	}
+}

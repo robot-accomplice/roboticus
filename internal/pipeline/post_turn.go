@@ -218,13 +218,16 @@ func (p *Pipeline) reflectOnTurn(ctx context.Context, turnID, userContent string
 		return
 	}
 
-	// Store as episodic memory with high importance.
+	// Store as episodic memory. Failed or guard-violating episodes are retained
+	// for auditability but excluded from active retrieval so bad outcomes do not
+	// become reinforcing evidence for the same future task.
 	formatted := summary.FormatForStorage()
 	summaryJSON := summary.JSON()
+	importance, memoryState, stateReason := episodeMemoryDisposition(summary)
 	_, err := p.store.ExecContext(ctx,
-		`INSERT INTO episodic_memory (id, classification, content, content_json, importance)
-		 VALUES (?, 'episode_summary', ?, ?, 8)`,
-		db.NewID(), formatted, summaryJSON)
+		`INSERT INTO episodic_memory (id, classification, content, content_json, importance, memory_state, state_reason)
+		 VALUES (?, 'episode_summary', ?, ?, ?, ?, ?)`,
+		db.NewID(), formatted, summaryJSON, importance, memoryState, stateReason)
 	if err != nil {
 		log.Debug().Err(err).Msg("reflection: failed to store episode summary")
 	} else {
@@ -245,6 +248,17 @@ func (p *Pipeline) reflectOnTurn(ctx context.Context, turnID, userContent string
 			},
 		)
 	}
+}
+
+func episodeMemoryDisposition(summary *agentmemory.EpisodeSummary) (importance int, memoryState, stateReason string) {
+	if summary == nil {
+		return 1, "stale", "empty episode summary"
+	}
+	outcome := strings.ToLower(strings.TrimSpace(summary.Outcome))
+	if outcome == "failure" || outcome == "partial" || !summary.VerifierPassed || len(summary.GuardViolations) > 0 {
+		return 2, "stale", "non-reinforcing episode outcome"
+	}
+	return 8, "active", ""
 }
 
 func (p *Pipeline) loadReflectionTurnStatus(ctx context.Context, turnID string) string {

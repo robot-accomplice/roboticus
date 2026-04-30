@@ -14,8 +14,17 @@ func TestConfigProtectionGuard_BlocksSensitiveKey(t *testing.T) {
 	if result.Passed {
 		t.Fatal("expected guard to block config mutation of api_key")
 	}
-	if result.Content == "" {
-		t.Fatal("expected replacement content")
+	if !result.Blocked {
+		t.Fatal("expected guard to structurally block config mutation")
+	}
+	if result.Content != "" {
+		t.Fatalf("expected no canned replacement content, got %q", result.Content)
+	}
+	if result.ContractEvent.ContractID != "config_protection" {
+		t.Fatalf("contract id = %q, want config_protection", result.ContractEvent.ContractID)
+	}
+	if result.ContractEvent.ContractGroup != "security" {
+		t.Fatalf("contract group = %q, want security", result.ContractEvent.ContractGroup)
 	}
 }
 
