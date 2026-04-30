@@ -863,7 +863,15 @@ func (p *Pipeline) loadSession(ctx context.Context, input Input) (*Session, erro
 	}
 
 	rows, err := p.store.QueryContext(ctx,
-		`SELECT role, content FROM session_messages WHERE session_id = ? ORDER BY created_at ASC LIMIT 50`,
+		`SELECT role, content
+		   FROM (
+		     SELECT rowid, role, content, created_at
+		       FROM session_messages
+		      WHERE session_id = ?
+		      ORDER BY datetime(created_at) DESC, rowid DESC
+		      LIMIT 50
+		   )
+		  ORDER BY datetime(created_at) ASC, rowid ASC`,
 		input.SessionID,
 	)
 	if err != nil {

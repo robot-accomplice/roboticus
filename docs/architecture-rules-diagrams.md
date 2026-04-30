@@ -755,6 +755,10 @@ This file follows the same C4 conventions used elsewhere in the repo:
   first-class evidence. A prompt that asks what the user told the agent earlier
   in the same session is not allowed to degrade into generic memory-search gaps
   when the needed facts are already present in session history.
+- bounded durable session-history reloads must keep the newest continuity tail
+  and then restore chronological order. Loading the oldest messages in a long
+  session drops live pending actions and recent tool observations, which makes
+  short confirmations look like disconnected social turns.
 - Sessions > Context session selection is a forensic inventory, not a blind
   ID list. Rows must show high-level evidence coverage such as turns, messages,
   traces, snapshots, latest activity, and token/cost totals when available

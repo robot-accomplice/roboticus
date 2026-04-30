@@ -42,6 +42,12 @@ older architecture docs had left too generic:
   active turn envelope, the request builder must trim or classify that overhead
   deterministically and persist the final footprint so RCA can distinguish
   model weakness from framework pressure.
+- **Session reload must preserve the recent continuity tail.** Any bounded
+  history load from durable `session_messages` must select the newest relevant
+  messages and then present them chronologically. Loading the oldest prefix of a
+  long session erases live pending actions, corrections, and latest tool
+  observations, which makes state-based continuity impossible and incorrectly
+  routes short confirmations into generic conversation.
 - **Large context should remain inspectable environment, not prompt bulk.**
   The RLM extraction for v1.0.8 supports the pre-existing Roboticus
   memory-as-index/tool architecture. Context-as-Environment Mode is the
@@ -1789,7 +1795,10 @@ depend only on exact phrases like `please do`, `go ahead`, or `continue`. If the
 previous assistant proposed a concrete next step, a short non-question response
 must be resolved against that state unless it is clearly negative, corrective,
 sarcastic, or a new explicit task. Greeting shortcuts are architecturally
-incorrect while unresolved action state exists.
+incorrect while unresolved action state exists. The durable history loader is
+part of this contract: bounded reloads must keep the newest session tail before
+short-followup expansion runs, otherwise the pending-action detector is denied
+the evidence it needs.
 
 ---
 

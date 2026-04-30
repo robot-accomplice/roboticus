@@ -9,6 +9,7 @@ import (
 	"roboticus/internal/agent"
 	agenttools "roboticus/internal/agent/tools"
 	"roboticus/internal/core"
+	"roboticus/internal/db"
 	"roboticus/internal/llm"
 	"roboticus/testutil"
 )
@@ -949,6 +950,81 @@ func TestPipeline_ShortFollowupExpansionDoesNotRewriteStoredUserMessage(t *testi
 	} {
 		if strings.Contains(joined, marker) {
 			t.Fatalf("stored user transcript contains framework scaffold %q: %#v", marker, stored)
+		}
+	}
+}
+
+func TestPipeline_LoadSessionUsesRecentTailForPendingActionContinuity(t *testing.T) {
+	store := testutil.TempStore(t)
+	exec := &executionNoteCaptureExecutor{responses: []string{
+		"I reviewed the architecture documentation against the code implementation.",
+	}}
+	pipe := New(PipelineDeps{Store: store, Executor: exec})
+	ctx := context.Background()
+	cfg := PresetAPI()
+	cfg.ShortFollowupExpansion = true
+
+	sessID := db.NewID()
+	if _, err := store.ExecContext(ctx,
+		`INSERT INTO sessions (id, agent_id, scope_key, status) VALUES (?, ?, ?, 'active')`,
+		sessID, "duncan", "test:"+sessID,
+	); err != nil {
+		t.Fatalf("insert session: %v", err)
+	}
+	for i := 0; i < 55; i++ {
+		role := "user"
+		if i%2 == 1 {
+			role = "assistant"
+		}
+		if _, err := store.ExecContext(ctx,
+			`INSERT INTO session_messages (id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, datetime('now', ? || ' seconds'))`,
+			db.NewID(), sessID, role, "old filler message", -120+i,
+		); err != nil {
+			t.Fatalf("insert filler message %d: %v", i, err)
+		}
+	}
+	if _, err := store.ExecContext(ctx,
+		`INSERT INTO session_messages (id, session_id, role, content, created_at) VALUES (?, ?, 'user', ?, datetime('now', '-2 seconds'))`,
+		db.NewID(), sessID, "Please review all subdirectories and compare architecture docs with code.",
+	); err != nil {
+		t.Fatalf("insert user task: %v", err)
+	}
+	if _, err := store.ExecContext(ctx,
+		`INSERT INTO session_messages (id, session_id, role, content, created_at) VALUES (?, ?, 'assistant', ?, datetime('now', '-1 seconds'))`,
+		db.NewID(), sessID, `I located ARCHITECTURE.md and architecture_rules.md.
+
+Next Steps:
+1. Read ARCHITECTURE.md and architecture_rules.md.
+2. Review the implementation under cmd/ and internal/.
+3. Summarize alignment between the documentation and code.
+
+If you'd like me to proceed with reviewing the architecture documentation in detail and comparing it to the implementation in the code, please confirm!`,
+	); err != nil {
+		t.Fatalf("insert pending assistant action: %v", err)
+	}
+
+	_, err := pipe.Run(ctx, cfg, Input{
+		SessionID: sessID,
+		Content:   "confirme",
+		AgentID:   "duncan",
+		AgentName: "Duncan",
+	})
+	if err != nil {
+		t.Fatalf("follow-up run failed: %v", err)
+	}
+
+	if len(exec.notes) < 1 {
+		t.Fatalf("executor notes = %d, want at least 1: %#v", len(exec.notes), exec.notes)
+	}
+	note := strings.ToLower(exec.notes[0])
+	for _, want := range []string{
+		"pending action confirmed",
+		"read architecture.md",
+		"review the implementation under cmd/ and internal/",
+		"user confirmation: confirme",
+	} {
+		if !strings.Contains(note, want) {
+			t.Fatalf("recent pending-action note missing %q: %q", want, exec.notes[0])
 		}
 	}
 }

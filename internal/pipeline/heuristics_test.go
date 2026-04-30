@@ -201,6 +201,35 @@ func TestContextualizeShortFollowup_StateBasedContinuationWithoutMagicPhrase(t *
 	}
 }
 
+func TestContextualizeShortFollowup_StateBasedContinuationTypoConfirmation(t *testing.T) {
+	sess := newTestSession("s-state-continuation-typo")
+	sess.AddUserMessage("Please review all subdirectories and compare architecture docs with code.")
+	sess.AddAssistantMessage(`I located ARCHITECTURE.md and architecture_rules.md.
+
+Next Steps:
+1. Read ARCHITECTURE.md and architecture_rules.md.
+2. Review the implementation under cmd/ and internal/.
+3. Summarize alignment between the documentation and code.
+
+If you'd like me to proceed with reviewing the architecture documentation in detail and comparing it to the implementation in the code, please confirm!`, nil)
+
+	expanded, correction := ContextualizeShortFollowup(sess, "confirme")
+
+	if correction {
+		t.Fatal("typo/non-English low-information confirmation should not be treated as correction")
+	}
+	for _, want := range []string{
+		"PENDING ACTION CONFIRMED",
+		"Read ARCHITECTURE.md",
+		"Review the implementation under cmd/ and internal/",
+		"User confirmation: confirme",
+	} {
+		if !strings.Contains(expanded, want) {
+			t.Fatalf("expanded state continuation missing %q: %q", want, expanded)
+		}
+	}
+}
+
 func TestContextualizeShortFollowup_StateBasedContinuationAllowsNegativeStop(t *testing.T) {
 	sess := newTestSession("s-state-negative")
 	sess.AddUserMessage("Get the Metacritic score for Vampire Crawlers.")
